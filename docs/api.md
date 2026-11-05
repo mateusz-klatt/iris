@@ -4,8 +4,9 @@ The contract between `iris serve` and its clients: `iris hook`, `iris mcp`, `iri
 `iris guard` and the web UI. Behaviour is defined in `docs/architecture.md`. This file fixes the
 names so that independently built parts meet.
 
-Requests and responses are JSON. Authentication is `Authorization: Bearer <token>`. All writes
-that a client may retry carry a client-chosen `key` (D9). Errors look like this:
+Requests and responses are JSON. Authentication is `Authorization: Bearer <token>`. Retryable message and explicit-claim creation carry a client-chosen `key` (D9). Touch uses
+`tool_call_id`; lifecycle calls are idempotent by session/generation, and release and ack
+are idempotent by fence and delivery attempt respectively. Errors look like this:
 
 ```json
 {"error":{"code":"conflict","message":"human readable","details":{}}}
@@ -23,7 +24,7 @@ Codes: `unauthorized`, `bad_request`, `not_found`, `conflict`, `key_reused`, `un
 {"client":"claude","session_id":"...","host":"...","cwd":"...","worktree":"...",
  "remote_url":"...","root_commit":"...","branch":"...","parent_session_id":"",
  "client_pid":123,"client_pid_start_ms":1793917887311,"single_session":true,
- "source":"hook"}
+ "source":"hook","generation":0}
 ```
 
 Response:
@@ -36,6 +37,10 @@ Response:
             "expires_at":"..."}],
  "unread":0}
 ```
+
+For recovery after a hub restart, reattach with the same `session_id` and the last returned
+`generation`. A recovering session without that generation returns `lost`; an expired
+generation cannot be reattached. `generation:0` starts or resumes a non-recovering session.
 
 `POST /v1/bind` resolves a stdio MCP process to an Execution, following D6.
 
@@ -81,7 +86,8 @@ Response, always 200 when the request is valid:
 It returns `{"fence":12,"token":"...","expires_at":null}`, or 409 `conflict` with the conflicts in
 `details`.
 
-`POST /v1/claims/release` takes `{"execution_id":"...","generation":1,"fence":12}`, or `"all":true`.
+`POST /v1/claims/release` takes `{"execution_id":"...","generation":1,"fence":12}`, or `"all":true`. An optional `token` validates the complete stream/epoch fence returned
+by explicit claim creation. Generation and ownership are always checked.
 
 `GET /v1/claims?repository_id=...` lists live claims.
 
@@ -123,7 +129,11 @@ nothing beyond those.
 ```
 
 If `after` is older than the log keeps, it returns `{"reset":true,"high_water":200,...}`, and the
-client must take a snapshot.
+client must take a snapshot. The response includes `snapshot` with live `claims` and
+`unread` count captured in the same transaction as `high_water`. Optional `stream` detects
+a changed stream identity. Optional `consumer_id` persists a monotonic cursor; lower
+`after` values never move that stored cursor backwards. These parameters also apply to
+watch; a reset frame instructs the consumer to fetch the events snapshot.
 
 `GET /v1/watch?execution_id=...&after=123` upgrades to a WebSocket. Authentication is the bearer
 token with subprotocol `iris.v1`, or subprotocols `iris.wake` and the ticket. Each text frame is:
