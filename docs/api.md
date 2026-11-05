@@ -41,6 +41,8 @@ Response:
 For recovery after a hub restart, reattach with the same `session_id` and the last returned
 `generation`. A recovering session without that generation returns `lost`; an expired
 generation cannot be reattached. `generation:0` starts or resumes a non-recovering session.
+Recovery keeps claim ownership and expiry but rotates fence numbers; use the `claims`
+in the reattachment response. Old fence numbers and tokens are invalid.
 
 `POST /v1/bind` resolves a stdio MCP process to an Execution, following D6.
 
