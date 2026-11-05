@@ -23,6 +23,7 @@ type ticket struct {
 	execution  string
 	generation int64
 	expires    time.Time
+	used       bool
 }
 type Hub struct {
 	store   *store.Store
@@ -194,7 +195,7 @@ func (h *Hub) wakeTicket(w http.ResponseWriter, r *http.Request) {
 			delete(h.tickets, k)
 		}
 	}
-	h.tickets[key] = ticket{req.ExecutionID, req.Generation, expires}
+	h.tickets[key] = ticket{execution: req.ExecutionID, generation: req.Generation, expires: expires}
 	h.mu.Unlock()
 	scheme := "ws"
 	if r.TLS != nil {
@@ -225,6 +226,7 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 		protocols[i] = strings.TrimSpace(protocols[i])
 	}
 	protocol := "iris.v1"
+	ticketKey := ""
 	if h.authorized(r) {
 		if !offered(protocols, "iris.v1") {
 			writeError(w, &store.Error{Code: "bad_request", Message: "iris.v1 subprotocol required"})
@@ -236,9 +238,11 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 		h.mu.Lock()
 		if offered(protocols, "iris.wake") {
 			for _, p := range protocols {
-				if t, ok := h.tickets[p]; ok && t.execution == req.ExecutionID && t.expires.After(h.now()) {
+				if t, ok := h.tickets[p]; ok && !t.used && t.execution == req.ExecutionID && t.expires.After(h.now()) {
 					req.Generation = t.generation
-					delete(h.tickets, p)
+					t.used = true
+					h.tickets[p] = t
+					ticketKey = p
 					valid = true
 					break
 				}
@@ -265,6 +269,16 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 	initial := true
 	for {
 		changes := h.store.Changes()
+		if ticketKey != "" {
+			h.mu.Lock()
+			t, exists := h.tickets[ticketKey]
+			valid := exists && t.expires.After(h.now())
+			h.mu.Unlock()
+			if !valid {
+				_ = conn.Close(websocket.StatusPolicyViolation, "wake ticket expired or rotated")
+				return
+			}
+		}
 		if _, err = h.store.Call(ctx, "validate", req); err != nil {
 			_ = conn.Close(websocket.StatusPolicyViolation, "Execution lease lost")
 			return

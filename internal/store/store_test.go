@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -64,6 +66,12 @@ func number(v any) int64 {
 		return n
 	case float64:
 		return int64(n)
+	case json.Number:
+		value, err := n.Int64()
+		if err != nil {
+			panic(err)
+		}
+		return value
 	}
 	panic(fmt.Sprintf("number: %T", v))
 }
@@ -496,4 +504,99 @@ func TestParentAndSlots(t *testing.T) {
 	call(t, s, "end", a)
 	call(t, s, "end", a)
 	expectError(t, s, "heartbeat", Request{ExecutionID: a.ExecutionID, Generation: 1, Source: "shim"}, "lost")
+}
+
+// Exit during a write transaction without Close: SQLite must retain the committed
+// delivery/outbox and discard the uncommitted tail after the OS releases the lock.
+func TestCrashRecovery(t *testing.T) {
+	if file := os.Getenv("IRIS_CORE_CRASH_DB"); file != "" {
+		s, err := Open(file, nil)
+		if err != nil {
+			os.Exit(20)
+		}
+		a, _ := session(t, s, 1)
+		_, b := session(t, s, 2)
+		msg := a
+		msg.Key = "committed"
+		msg.To = []string{b["agent"].(map[string]any)["name"].(string)}
+		msg.Body = "durable"
+		call(t, s, "messages", msg)
+		_ = s.transact(context.Background(), func(tx *transaction) error {
+			if _, err := tx.exec("INSERT INTO Message VALUES('uncommitted',?,'subject','tail',1)", a.ExecutionID); err != nil {
+				os.Exit(21)
+			}
+			os.Exit(27)
+			return nil
+		})
+		os.Exit(22)
+	}
+	file := filepath.Join(t.TempDir(), "crash.db")
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(exe, "-test.run=^TestCrashRecovery$")
+	cmd.Env = append(os.Environ(), "IRIS_CORE_CRASH_DB="+file)
+	err = cmd.Run()
+	var exit *exec.ExitError
+	if !errors.As(err, &exit) || exit.ExitCode() != 27 {
+		t.Fatalf("crash helper: %v", err)
+	}
+	s, err := Open(file, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer s.Close()
+	counts := call(t, s, "status", Request{})["counts"].(map[string]int)
+	if counts["Message"] != 1 || counts["Delivery"] != 1 {
+		t.Fatal(counts)
+	}
+	out := call(t, s, "sessions", Request{Client: "codex", Host: "host", Cwd: "/repo/w2", SessionID: "2", Generation: 1})
+	r := Request{ExecutionID: out["execution_id"].(string), Generation: 1}
+	if len(call(t, s, "inbox", r)["deliveries"].([]map[string]any)) != 1 {
+		t.Fatal("delivery lost on crash")
+	}
+	if len(call(t, s, "events", r)["events"].([]map[string]any)) != 1 {
+		t.Fatal("committed outbox event lost")
+	}
+}
+
+func TestOutboxNotificationFollowsCommit(t *testing.T) {
+	s, _, _ := testStore(t)
+	a, out := session(t, s, 1)
+	agent := out["agent"].(map[string]any)["id"].(string)
+	changed := s.Changes()
+	err := s.transact(context.Background(), func(tx *transaction) error {
+		if err := tx.event(agent, a.ExecutionID, "inbox_changed", "test"); err != nil {
+			return err
+		}
+		select {
+		case <-changed:
+			t.Fatal("notification escaped uncommitted transaction")
+		default:
+		}
+		return fmt.Errorf("rollback")
+	})
+	if err == nil {
+		t.Fatal("failure not injected")
+	}
+	select {
+	case <-changed:
+		t.Fatal("rolled-back event notified")
+	default:
+	}
+	if len(call(t, s, "events", a)["events"].([]map[string]any)) != 0 {
+		t.Fatal("rolled-back event exposed")
+	}
+	if err = s.transact(context.Background(), func(tx *transaction) error { return tx.event(agent, a.ExecutionID, "inbox_changed", "committed") }); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-changed:
+	default:
+		t.Fatal("committed event did not notify")
+	}
+	if len(call(t, s, "events", a)["events"].([]map[string]any)) != 1 {
+		t.Fatal("notification preceded committed outbox")
+	}
 }

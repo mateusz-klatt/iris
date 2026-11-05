@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -89,8 +90,28 @@ func Open(filename string, clock Clock) (*Store, error) {
 	if err = os.MkdirAll(filepath.Dir(abs), 0700); err != nil {
 		return nil, err
 	}
+	if real, evalErr := filepath.EvalSymlinks(abs); evalErr == nil {
+		abs = real
+	} else if !errors.Is(evalErr, os.ErrNotExist) {
+		return nil, evalErr
+	} else {
+		parent, evalErr := filepath.EvalSymlinks(filepath.Dir(abs))
+		if evalErr != nil {
+			return nil, evalErr
+		}
+		abs = filepath.Join(parent, filepath.Base(abs))
+	}
 	lock, err := lockDatabase(abs + ".lock")
 	if err != nil {
+		return nil, err
+	}
+	file, err := os.OpenFile(abs, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		unlockDatabase(lock)
+		return nil, err
+	}
+	if err = file.Close(); err != nil {
+		unlockDatabase(lock)
 		return nil, err
 	}
 	db, err := sql.Open("sqlite", abs)
@@ -245,7 +266,9 @@ func (t *transaction) cached(e execution, key, route string, request any) (map[s
 		return nil, false, fail("key_reused", "retry key was used for a different request")
 	}
 	var out map[string]any
-	err = json.Unmarshal([]byte(result), &out)
+	decoder := json.NewDecoder(strings.NewReader(result))
+	decoder.UseNumber()
+	err = decoder.Decode(&out)
 	return out, true, err
 }
 func (t *transaction) remember(e execution, key, route string, request any, result any) error {
