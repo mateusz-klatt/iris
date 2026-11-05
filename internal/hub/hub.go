@@ -217,6 +217,7 @@ func offered(protocols []string, p string) bool {
 }
 func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 	req, err := decode(w, r)
+	req.Limit = boundedPageSize // paging is internal to the socket; never skip a partial page
 	if err != nil {
 		writeError(w, err)
 		return
@@ -285,6 +286,7 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 		}
 		result, err := h.store.Call(ctx, "events", req)
 		if err != nil {
+			_ = conn.Close(websocket.StatusPolicyViolation, "Execution stream unavailable")
 			return
 		}
 		high := result["high_water"].(int64)
@@ -313,6 +315,7 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 			if initial && len(events) == 0 {
 				snapshot, err := h.store.Call(ctx, "attention", req)
 				if err != nil {
+					_ = conn.Close(websocket.StatusPolicyViolation, "Execution stream unavailable")
 					return
 				}
 				if snapshot["unread"].(int) > 0 {
