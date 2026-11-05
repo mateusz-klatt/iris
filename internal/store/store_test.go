@@ -292,6 +292,12 @@ func TestRecoverSameGeneration(t *testing.T) {
 	release.Fence = number(old["fence"])
 	release.Token = old["token"].(string)
 	expectError(t, n, "release", release, "conflict")
+	release.Token = ""
+	expectError(t, n, "release", release, "conflict")
+	current := out["claims"].([]map[string]any)
+	if len(current) != 1 || number(current[0]["fence"]) <= number(old["fence"]) {
+		t.Fatal("recovery reused an old fence", out)
+	}
 	call(t, n, "touch", touchRequest(a, "after-recovery", "held"))
 }
 func TestDeliveryRetryAckAndCrash(t *testing.T) {

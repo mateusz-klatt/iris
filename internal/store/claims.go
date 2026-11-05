@@ -244,7 +244,7 @@ func (t *transaction) touch(r Request) (map[string]any, error) {
 		out["message"] = "Iris: ignored paths are advisory only and did not take automatic claims."
 	}
 	if len(conflicts) > 0 {
-		if action == "ask" && e.Client != "claude" && e.Client != "cursor" {
+		if action == "ask" && e.Client != "claude" {
 			action = "deny"
 		}
 		out["action"] = action

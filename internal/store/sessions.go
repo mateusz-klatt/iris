@@ -201,8 +201,14 @@ func (t *transaction) session(r Request) (map[string]any, error) {
 		e.Epoch = t.s.epoch
 		e.Recovery = sql.NullInt64{}
 		e.Deadline = t.s.clock.Tick() + lease
-		// Recovered claims acquire the new epoch; old complete fence tokens remain invalid.
-		if _, err = t.exec("UPDATE Claim SET boot_epoch=? WHERE execution_id=? AND revoked_ms IS NULL", t.s.epoch, e.ID); err != nil {
+		// Rotate the numeric fence as well as the epoch: release accepts a fence
+		// without a complete token, so retaining the number would admit zombies.
+		if _, err = t.exec(`INSERT INTO Claim(execution_id,repository_id,kind,path,origin,boot_epoch,expires_ms)
+            SELECT execution_id,repository_id,kind,path,origin,?,expires_ms FROM Claim
+            WHERE execution_id=? AND revoked_ms IS NULL AND boot_epoch<>?`, t.s.epoch, e.ID, t.s.epoch); err != nil {
+			return nil, err
+		}
+		if _, err = t.exec("UPDATE Claim SET revoked_ms=? WHERE execution_id=? AND revoked_ms IS NULL AND boot_epoch<>?", t.s.clock.Now().UnixMilli(), e.ID, t.s.epoch); err != nil {
 			return nil, err
 		}
 		return t.sessionResponse(e, lease)
