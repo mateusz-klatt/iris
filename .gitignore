@@ -1,0 +1,10 @@
+dist/
+node_modules/
+*.db
+*.db-wal
+*.db-shm
+.DS_Store
+/iris
+/iris.exe
+/web/dist/
+coverage.out
