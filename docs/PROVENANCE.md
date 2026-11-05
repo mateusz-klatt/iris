@@ -55,8 +55,10 @@ something its licence restricts.
 | `web/index.html` | Excluded | Came from upstream |
 | `ui/src/legacy.ts`, `ui/src/legacy.css`, `ui/vite.legacy.config.ts` | Excluded | Exist to integrate with the old server-rendered viewer |
 
-The commit that imports frontend code names the source commit and lists the files taken.
-The API layer is rewritten for Iris rather than imported.
+The frontend was imported verbatim from fork commit `e145c81`, as the commit that adds `web/`
+records. `ui/package-lock.json` was left out because it is generated. `ui/src/mail.ts` and
+`ui/src/account.ts` were taken only as a starting point: they encode the old server's API and are
+rewritten against the Iris API.
 
 ## How agents were used
 

@@ -1,0 +1,1299 @@
+import {
+  isNotificationSoundName,
+  type NotificationSoundName,
+} from "./notificationSound";
+
+export const projectsEndpoint = "/mail/api/v1/projects";
+export const inboxEndpoint = "/mail/api/v1/inbox";
+export const searchEndpoint = "/mail/api/v1/search";
+export const mailEventsEndpoint = "/mail/events";
+
+export const inboxPageSize = 50;
+export const searchPageSize = 50;
+export const threadPageSize = 50;
+
+const maximumInlineImageBytes = 2 * 1024 * 1024;
+const maximumInlineImageBase64Length = Math.ceil(maximumInlineImageBytes / 3) * 4;
+
+export function isCanonicalInlineRasterImageSource(source: string): boolean {
+  const formats = [
+    ["data:image/png;base64,", (raw: string) => raw.startsWith("\x89PNG\r\n\x1a\n")],
+    ["data:image/jpeg;base64,", (raw: string) => raw.startsWith("\xff\xd8\xff")],
+    [
+      "data:image/gif;base64,",
+      (raw: string) => raw.startsWith("GIF87a") || raw.startsWith("GIF89a"),
+    ],
+    [
+      "data:image/webp;base64,",
+      (raw: string) =>
+        raw.length >= 12 && raw.startsWith("RIFF") && raw.slice(8, 12) === "WEBP",
+    ],
+  ] as const;
+
+  if (source !== source.trim()) {
+    return false;
+  }
+  for (const [prefix, signatureMatches] of formats) {
+    if (!source.startsWith(prefix)) {
+      continue;
+    }
+    const payload = source.slice(prefix.length);
+    if (payload.length === 0 || payload.length > maximumInlineImageBase64Length) {
+      return false;
+    }
+    try {
+      const raw = window.atob(payload);
+      return (
+        raw.length > 0 &&
+        raw.length <= maximumInlineImageBytes &&
+        window.btoa(raw) === payload &&
+        signatureMatches(raw)
+      );
+    } catch {
+      return false;
+    }
+  }
+  return false;
+}
+
+const markdownLinkSchemes = new Set(["http", "https", "mailto"]);
+// The control range is intentional: browser URL parsing strips some of these
+// characters before protocol handling, so they must fail closed here.
+// eslint-disable-next-line no-control-regex
+const markdownControlCharacters = /[\u0000-\u001f\u007f-\u009f]/u;
+const markdownEncodedControlCharacters =
+  /%(?:0[0-9a-f]|1[0-9a-f]|7f)|%c2%(?:8[0-9a-f]|9[0-9a-f])/iu;
+const markdownScheme = /^([a-z][a-z0-9+.-]*):/iu;
+
+function hasUnsafeMarkdownLinkEncoding(target: string): boolean {
+  try {
+    const decoded = decodeURIComponent(target);
+    return (
+      markdownControlCharacters.test(decoded) ||
+      markdownEncodedControlCharacters.test(decoded)
+    );
+  } catch {
+    return true;
+  }
+}
+
+export function isSafeMarkdownLinkTarget(target: string): boolean {
+  if (
+    target.length === 0 ||
+    target !== target.trim() ||
+    hasUnsafeMarkdownLinkEncoding(target) ||
+    target.includes("#") ||
+    target.startsWith("//") ||
+    target.startsWith("\\")
+  ) {
+    return false;
+  }
+
+  const scheme = markdownScheme.exec(target)?.[1]?.toLowerCase();
+  return scheme === undefined || markdownLinkSchemes.has(scheme);
+}
+
+export function markdownUrlTransform(
+  url: string,
+  key: string,
+): string | undefined {
+  if (key === "src") {
+    return isCanonicalInlineRasterImageSource(url) ? url : undefined;
+  }
+  if (key === "href") {
+    return isSafeMarkdownLinkTarget(url) ? url : undefined;
+  }
+  return undefined;
+}
+
+export type AccessRole = "admin" | "operator" | "viewer";
+export type Importance = "low" | "normal" | "high" | "urgent";
+export type DeliveryStatus =
+  | "published"
+  | "pending"
+  | "quarantined"
+  | "busy"
+  | "deferred";
+export type SearchScope = "all" | "subject" | "body";
+export type SearchOrder = "relevance" | "newest";
+const maximumRememberedReplyAttempts = 64;
+
+export function replyIdempotencyKeyFor(
+  attempts: Map<string, string>,
+  fingerprint: string,
+): string {
+  const existing = attempts.get(fingerprint);
+  if (existing !== undefined) {
+    return existing;
+  }
+  if (attempts.size >= maximumRememberedReplyAttempts) {
+    const oldestFingerprint = attempts.keys().next().value as string;
+    attempts.delete(oldestFingerprint);
+  }
+  const key = `human-ui:${window.crypto.randomUUID()}`;
+  attempts.set(fingerprint, key);
+  return key;
+}
+
+export interface MailProject {
+  id: number;
+  slug: string;
+  human_key: string;
+  created_at: string;
+  archived_at: string | null;
+  role: AccessRole;
+  can_reply: boolean;
+}
+
+export interface ProjectsPage {
+  items: MailProject[];
+  total: number;
+}
+
+export interface MailRecipientAgent {
+  agent_id: number;
+  agent_generation: string;
+  name: string;
+  display_name: string | null;
+  /**
+   * Vocabulary word from `set_agent_notify_sound`, not an audio resource. The
+   * browser synthesises the tone; nothing is ever fetched from a host a
+   * colleague chose.
+   */
+  notify_sound: NotificationSoundName | null;
+}
+
+export interface ProjectAgentsPage {
+  project_id: number;
+  project_generation: string;
+  items: MailRecipientAgent[];
+  total: number;
+}
+
+export type AgentDirectoryPurpose = "addressable" | "profile";
+
+export interface AgentProfileMutationInput {
+  expected_project_generation: string;
+  expected_agent_generation: string;
+  expected_display_name: string | null;
+  expected_notify_sound: NotificationSoundName | null;
+  display_name: string | null;
+  notify_sound: NotificationSoundName;
+}
+
+export interface AgentProfileMutation {
+  changed: boolean;
+  agent_id: number;
+  agent_generation: string;
+  agent_name: string;
+  display_name: string | null;
+  notify_sound: NotificationSoundName;
+}
+
+export interface ComposeRecipientReference {
+  agent_id: number;
+  expected_agent_generation: string;
+}
+
+export type ReservationScopeState =
+  | "execution_scoped"
+  | "legacy_unscoped"
+  | "orphaned";
+
+export interface ReservationClaim {
+  id: number;
+  project_id: number;
+  project_slug: string;
+  /** Null once the owning agent row is gone; the claim outlives it on purpose. */
+  holder_name: string | null;
+  holder_display_name: string | null;
+  path_pattern: string;
+  exclusive: boolean;
+  reason: string;
+  created_ts: string;
+  /**
+   * Null only when the stored value cannot be parsed. The claim is still live
+   * and still applies -- it is reported without its expiry rather than hidden.
+   */
+  expires_ts: string | null;
+  origin: string;
+  scope_state: ReservationScopeState;
+}
+
+export interface ReservationsPage {
+  items: ReservationClaim[];
+  next_cursor: string | null;
+}
+
+export interface InboxMessage {
+  id: number;
+  project_id: number;
+  project_slug: string;
+  subject: string;
+  sender: string;
+  sender_name: string;
+  sender_display_name: string | null;
+  /**
+   * The sender's chosen tone, from `set_agent_notify_sound`. It travels on the
+   * message because the reader needs it wherever messages appear, and the
+   * recipient directory that could otherwise supply it is fetched only on the
+   * compose route.
+   */
+  sender_notify_sound: string | null;
+  importance: Importance;
+  thread_id: string | null;
+  reply_to: number | null;
+  created_ts: string;
+  ack_required: boolean;
+  can_reply: boolean;
+}
+
+export interface InboxPage {
+  items: InboxMessage[];
+  next_cursor: string | null;
+  total: number;
+}
+
+export interface SearchResult extends InboxMessage {
+  snippet: string;
+}
+
+export interface SearchPage {
+  items: SearchResult[];
+  next_cursor: string | null;
+}
+
+export interface ThreadPage {
+  items: MessageDetail[];
+  next_cursor: string | null;
+  subject: string;
+  total: number;
+}
+
+export interface MessageAttachment {
+  type: string | null;
+  media_type: string | null;
+  size_bytes: number | null;
+}
+
+export interface ReplyTarget {
+  agent_id: number;
+  agent_generation: string;
+  project_id: number;
+  project_generation: string;
+  canonical_name: string;
+}
+
+export interface MessageDetail extends InboxMessage {
+  body_md: string;
+  to: string[];
+  cc: string[];
+  attachments: MessageAttachment[];
+  reply_target: ReplyTarget | null;
+}
+
+export interface DeliveryResult {
+  id: string;
+  status: DeliveryStatus;
+  reused: boolean;
+  message_id: number | null;
+  commit_sha: string | null;
+  next_attempt_ts: string | null;
+}
+
+export interface ComposeMessageInput {
+  idempotency_key: string;
+  expected_project_generation: string;
+  recipients: ComposeRecipientReference[];
+  subject: string;
+  body_md: string;
+  thread_id: string | null;
+}
+
+export interface ReplyMessageInput {
+  idempotency_key: string;
+  expected_sender_agent_id: number;
+  expected_sender_agent_generation: string;
+  expected_sender_project_id: number;
+  expected_sender_project_generation: string;
+  body_md: string;
+}
+
+export type MailRoute =
+  | { view: "projects" }
+  | { view: "inbox"; projectId: number | null }
+  | {
+      view: "search";
+      query: string;
+      projectId: number | null;
+      scope: SearchScope;
+      order: SearchOrder;
+    }
+  | { view: "message"; projectId: number; messageId: number }
+  | { view: "thread"; projectId: number; threadId: string }
+  | { view: "reservations"; projectId: number | null };
+
+interface FetchOptions {
+  signal?: AbortSignal;
+}
+
+interface InboxOptions extends FetchOptions {
+  cursor?: string;
+  projectId?: number;
+}
+
+interface SearchOptions extends FetchOptions {
+  query: string;
+  projectId?: number;
+  scope: SearchScope;
+  order: SearchOrder;
+  cursor?: string;
+}
+
+interface ThreadOptions extends FetchOptions {
+  cursor?: string;
+}
+
+export class MailHttpError extends Error {
+  constructor(
+    readonly status: number,
+    readonly code: string | null = null,
+  ) {
+    super(`Mail request failed with HTTP ${status}.`);
+    this.name = "MailHttpError";
+  }
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function record(value: unknown, label: string): Record<string, unknown> {
+  if (!isRecord(value)) {
+    throw new TypeError(`Invalid ${label}.`);
+  }
+  return value;
+}
+
+function exactRecord(
+  value: unknown,
+  label: string,
+  expectedKeys: readonly string[],
+): Record<string, unknown> {
+  const candidate = record(value, label);
+  const expected = new Set(expectedKeys);
+  if (Object.keys(candidate).some((key) => !expected.has(key))) {
+    throw new TypeError(`Invalid ${label}.`);
+  }
+  return candidate;
+}
+
+function stringValue(value: unknown, label: string): string {
+  if (typeof value !== "string") {
+    throw new TypeError(`Invalid ${label}.`);
+  }
+  return value;
+}
+
+function nullableString(value: unknown, label: string): string | null {
+  if (value !== null && typeof value !== "string") {
+    throw new TypeError(`Invalid ${label}.`);
+  }
+  return value;
+}
+
+function nullableNotificationSound(
+  value: unknown,
+  label: string,
+): NotificationSoundName | null {
+  const sound = nullableString(value, label);
+  if (sound !== null && !isNotificationSoundName(sound)) {
+    throw new TypeError(`Invalid ${label}.`);
+  }
+  return sound;
+}
+
+function positiveInteger(value: unknown, label: string): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    value <= 0
+  ) {
+    throw new TypeError(`Invalid ${label}.`);
+  }
+  return value;
+}
+
+function nonNegativeInteger(value: unknown, label: string): number {
+  if (
+    typeof value !== "number" ||
+    !Number.isSafeInteger(value) ||
+    value < 0
+  ) {
+    throw new TypeError(`Invalid ${label}.`);
+  }
+  return value;
+}
+
+function booleanValue(value: unknown, label: string): boolean {
+  if (typeof value !== "boolean") {
+    throw new TypeError(`Invalid ${label}.`);
+  }
+  return value;
+}
+
+function generationValue(value: unknown, label: string): string {
+  const generation = stringValue(value, label);
+  if (!/^[0-9a-f]{64}$/u.test(generation)) {
+    throw new TypeError(`Invalid ${label}.`);
+  }
+  return generation;
+}
+
+function validTimestamp(value: unknown, label: string): string {
+  const timestamp = stringValue(value, label);
+  if (timestamp.length === 0 || Number.isNaN(Date.parse(timestamp))) {
+    throw new TypeError(`Invalid ${label}.`);
+  }
+  return timestamp;
+}
+
+function nullableTimestamp(value: unknown, label: string): string | null {
+  if (value === null) {
+    return null;
+  }
+  return validTimestamp(value, label);
+}
+
+function accessRole(value: unknown): AccessRole {
+  if (value !== "admin" && value !== "operator" && value !== "viewer") {
+    throw new TypeError("Invalid project access role.");
+  }
+  return value;
+}
+
+function importance(value: unknown): Importance {
+  if (value !== "low" && value !== "normal" && value !== "high" && value !== "urgent") {
+    throw new TypeError("Invalid message importance.");
+  }
+  return value;
+}
+
+function reservationScopeState(value: unknown): ReservationScopeState {
+  if (
+    value !== "execution_scoped" &&
+    value !== "legacy_unscoped" &&
+    value !== "orphaned"
+  ) {
+    throw new TypeError("Invalid reservation scope state.");
+  }
+  return value;
+}
+
+const reservationKeys = [
+  "id",
+  "project_id",
+  "project_slug",
+  "holder_name",
+  "holder_display_name",
+  "path_pattern",
+  "exclusive",
+  "reason",
+  "created_ts",
+  "expires_ts",
+  "origin",
+  "scope_state",
+] as const;
+
+export function parseReservationsPage(payload: unknown): ReservationsPage {
+  const response = exactRecord(payload, "reservations response", [
+    "items",
+    "next_cursor",
+  ]);
+  if (!Array.isArray(response.items)) {
+    throw new TypeError("Invalid reservation items.");
+  }
+  return {
+    items: response.items.map((value) => {
+      const candidate = exactRecord(value, "reservation", reservationKeys);
+      return {
+        id: positiveInteger(candidate.id, "reservation id"),
+        project_id: positiveInteger(candidate.project_id, "reservation project id"),
+        project_slug: stringValue(candidate.project_slug, "reservation project slug"),
+        holder_name: nullableString(candidate.holder_name, "reservation holder"),
+        holder_display_name: nullableString(
+          candidate.holder_display_name,
+          "reservation holder display name",
+        ),
+        path_pattern: stringValue(candidate.path_pattern, "reservation path"),
+        exclusive: booleanValue(candidate.exclusive, "reservation exclusivity"),
+        reason: stringValue(candidate.reason, "reservation reason"),
+        created_ts: stringValue(candidate.created_ts, "reservation created"),
+        expires_ts: nullableString(candidate.expires_ts, "reservation expiry"),
+        origin: stringValue(candidate.origin, "reservation origin"),
+        scope_state: reservationScopeState(candidate.scope_state),
+      };
+    }),
+    next_cursor: nullableString(response.next_cursor, "reservations cursor"),
+  };
+}
+
+function deliveryStatus(value: unknown): DeliveryStatus {
+  if (
+    value !== "published" &&
+    value !== "pending" &&
+    value !== "quarantined" &&
+    value !== "busy" &&
+    value !== "deferred"
+  ) {
+    throw new TypeError("Invalid delivery status.");
+  }
+  return value;
+}
+
+function stringArray(value: unknown, label: string): string[] {
+  if (!Array.isArray(value) || !value.every((item) => typeof item === "string")) {
+    throw new TypeError(`Invalid ${label}.`);
+  }
+  return value;
+}
+
+function nullablePositiveInteger(value: unknown, label: string): number | null {
+  if (value === null) {
+    return null;
+  }
+  return positiveInteger(value, label);
+}
+
+const inboxMessageKeys = [
+  "id",
+  "project_id",
+  "project_slug",
+  "subject",
+  "sender",
+  "sender_name",
+  "sender_display_name",
+  "sender_notify_sound",
+  "importance",
+  "thread_id",
+  "reply_to",
+  "created_ts",
+  "ack_required",
+  "can_reply",
+] as const;
+
+function parseInboxMessage(
+  value: unknown,
+  additionalKeys: readonly string[] = [],
+): InboxMessage {
+  const candidate = exactRecord(
+    value,
+    "inbox message",
+    [...inboxMessageKeys, ...additionalKeys],
+  );
+  return {
+    id: positiveInteger(candidate.id, "message id"),
+    project_id: positiveInteger(candidate.project_id, "message project id"),
+    project_slug: stringValue(candidate.project_slug, "message project slug"),
+    subject: stringValue(candidate.subject, "message subject"),
+    sender: stringValue(candidate.sender, "message sender"),
+    sender_name: stringValue(candidate.sender_name, "sender name"),
+    sender_display_name: nullableString(
+      candidate.sender_display_name,
+      "sender display name",
+    ),
+    sender_notify_sound: nullableString(
+      candidate.sender_notify_sound,
+      "sender notify sound",
+    ),
+    importance: importance(candidate.importance),
+    thread_id: nullableString(candidate.thread_id, "message thread id"),
+    reply_to: nullablePositiveInteger(candidate.reply_to, "reply-to id"),
+    created_ts: validTimestamp(candidate.created_ts, "message timestamp"),
+    ack_required: booleanValue(candidate.ack_required, "acknowledgement flag"),
+    can_reply: booleanValue(candidate.can_reply, "reply permission"),
+  };
+}
+
+function parseAttachment(value: unknown): MessageAttachment {
+  const candidate = exactRecord(value, "message attachment", [
+    "type",
+    "media_type",
+    "size_bytes",
+  ]);
+  const rawSize = candidate.size_bytes;
+  return {
+    type: nullableString(candidate.type, "attachment type"),
+    media_type: nullableString(candidate.media_type, "attachment media type"),
+    size_bytes:
+      rawSize === null ? null : nonNegativeInteger(rawSize, "attachment size"),
+  };
+}
+
+function parseReplyTarget(value: unknown): ReplyTarget | null {
+  if (value === null) {
+    return null;
+  }
+  const candidate = exactRecord(value, "reply target", [
+    "agent_id",
+    "agent_generation",
+    "project_id",
+    "project_generation",
+    "canonical_name",
+  ]);
+  return {
+    agent_id: positiveInteger(candidate.agent_id, "reply target agent id"),
+    agent_generation: generationValue(
+      candidate.agent_generation,
+      "reply target agent generation",
+    ),
+    project_id: positiveInteger(candidate.project_id, "reply target project id"),
+    project_generation: generationValue(
+      candidate.project_generation,
+      "reply target project generation",
+    ),
+    canonical_name: stringValue(
+      candidate.canonical_name,
+      "reply target canonical name",
+    ),
+  };
+}
+
+export function parseProjects(payload: unknown): ProjectsPage {
+  const response = exactRecord(payload, "projects response", ["items", "total"]);
+  if (!Array.isArray(response.items)) {
+    throw new TypeError("Invalid project items.");
+  }
+  const items = response.items.map((value) => {
+    const candidate = exactRecord(value, "project", [
+      "id",
+      "slug",
+      "human_key",
+      "created_at",
+      "archived_at",
+      "role",
+      "can_reply",
+    ]);
+    return {
+      id: positiveInteger(candidate.id, "project id"),
+      slug: stringValue(candidate.slug, "project slug"),
+      human_key: stringValue(candidate.human_key, "project key"),
+      created_at: validTimestamp(candidate.created_at, "project creation timestamp"),
+      archived_at: nullableTimestamp(candidate.archived_at, "project archive timestamp"),
+      role: accessRole(candidate.role),
+      can_reply: booleanValue(candidate.can_reply, "project reply permission"),
+    };
+  });
+  return {
+    items,
+    total: nonNegativeInteger(response.total, "project total"),
+  };
+}
+
+export function parseProjectAgents(payload: unknown): ProjectAgentsPage {
+  const response = exactRecord(payload, "project agents response", [
+    "project_id",
+    "project_generation",
+    "items",
+    "total",
+  ]);
+  if (!Array.isArray(response.items)) {
+    throw new TypeError("Invalid project agent items.");
+  }
+  return {
+    project_id: positiveInteger(response.project_id, "agent project id"),
+    project_generation: generationValue(
+      response.project_generation,
+      "agent project generation",
+    ),
+    items: response.items.map((value) => {
+      const candidate = exactRecord(value, "project agent", [
+        "agent_id",
+        "agent_generation",
+        "name",
+        "display_name",
+        "notify_sound",
+      ]);
+      return {
+        agent_id: positiveInteger(candidate.agent_id, "recipient agent id"),
+        agent_generation: generationValue(
+          candidate.agent_generation,
+          "recipient agent generation",
+        ),
+        name: stringValue(candidate.name, "agent name"),
+        display_name: nullableString(candidate.display_name, "agent display name"),
+        notify_sound: nullableNotificationSound(
+          candidate.notify_sound,
+          "agent notify sound",
+        ),
+      };
+    }),
+    total: nonNegativeInteger(response.total, "project agent total"),
+  };
+}
+
+export function parseAgentProfileMutation(
+  payload: unknown,
+): AgentProfileMutation {
+  const response = exactRecord(payload, "agent profile response", [
+    "changed",
+    "agent_id",
+    "agent_generation",
+    "agent_name",
+    "display_name",
+    "notify_sound",
+  ]);
+  if (!isNotificationSoundName(response.notify_sound)) {
+    throw new TypeError("Invalid agent profile notify sound.");
+  }
+  return {
+    changed: booleanValue(response.changed, "agent profile changed"),
+    agent_id: positiveInteger(response.agent_id, "agent profile id"),
+    agent_generation: generationValue(
+      response.agent_generation,
+      "agent profile generation",
+    ),
+    agent_name: stringValue(response.agent_name, "agent profile name"),
+    display_name: nullableString(
+      response.display_name,
+      "agent profile display name",
+    ),
+    notify_sound: response.notify_sound,
+  };
+}
+
+export function parseInboxPage(payload: unknown): InboxPage {
+  const candidate = exactRecord(payload, "inbox response", [
+    "items",
+    "next_cursor",
+    "total",
+  ]);
+  if (!Array.isArray(candidate.items)) {
+    throw new TypeError("Invalid inbox items.");
+  }
+  return {
+    items: candidate.items.map((value) => parseInboxMessage(value)),
+    next_cursor: nullableString(candidate.next_cursor, "inbox cursor"),
+    total: nonNegativeInteger(candidate.total, "inbox total"),
+  };
+}
+
+export function parseSearchPage(payload: unknown): SearchPage {
+  const candidate = exactRecord(payload, "search response", [
+    "items",
+    "next_cursor",
+  ]);
+  if (!Array.isArray(candidate.items)) {
+    throw new TypeError("Invalid search items.");
+  }
+  return {
+    items: candidate.items.map((value) => {
+      const summary = parseInboxMessage(value, ["snippet"]);
+      const result = exactRecord(value, "search result", [
+        ...inboxMessageKeys,
+        "snippet",
+      ]);
+      return {
+        ...summary,
+        snippet: stringValue(result.snippet, "search snippet"),
+      };
+    }),
+    next_cursor: nullableString(candidate.next_cursor, "search cursor"),
+  };
+}
+
+export function parseMessageDetail(payload: unknown): MessageDetail {
+  const detailKeys = [
+    "body_md",
+    "to",
+    "cc",
+    "attachments",
+    "reply_target",
+  ] as const;
+  const summary = parseInboxMessage(payload, detailKeys);
+  const candidate = exactRecord(payload, "message detail", [
+    ...inboxMessageKeys,
+    ...detailKeys,
+  ]);
+  if (!Array.isArray(candidate.attachments)) {
+    throw new TypeError("Invalid message attachments.");
+  }
+  return {
+    ...summary,
+    body_md: stringValue(candidate.body_md, "message body"),
+    to: stringArray(candidate.to, "message to recipients"),
+    cc: stringArray(candidate.cc, "message cc recipients"),
+    attachments: candidate.attachments.map(parseAttachment),
+    reply_target: parseReplyTarget(candidate.reply_target),
+  };
+}
+
+export function parseThreadPage(payload: unknown): ThreadPage {
+  const candidate = exactRecord(payload, "thread response", [
+    "items",
+    "next_cursor",
+    "subject",
+    "total",
+  ]);
+  if (!Array.isArray(candidate.items)) {
+    throw new TypeError("Invalid thread items.");
+  }
+  const subject = stringValue(candidate.subject, "thread subject");
+  return {
+    items: candidate.items.map((value) => parseMessageDetail(value)),
+    next_cursor: nullableString(candidate.next_cursor, "thread cursor"),
+    subject,
+    total: nonNegativeInteger(candidate.total, "thread total"),
+  };
+}
+
+export function parseDeliveryResult(payload: unknown): DeliveryResult {
+  const candidate = exactRecord(payload, "delivery response", [
+    "id",
+    "status",
+    "reused",
+    "message_id",
+    "commit_sha",
+    "next_attempt_ts",
+  ]);
+  const id = stringValue(candidate.id, "delivery id");
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(
+      id,
+    )
+  ) {
+    throw new TypeError("Invalid delivery id.");
+  }
+  const commitSha = nullableString(candidate.commit_sha, "delivery commit");
+  if (commitSha !== null && !/^[0-9a-f]{40}$/u.test(commitSha)) {
+    throw new TypeError("Invalid delivery commit.");
+  }
+  return {
+    id,
+    status: deliveryStatus(candidate.status),
+    reused: booleanValue(candidate.reused, "delivery reuse flag"),
+    message_id: nullablePositiveInteger(candidate.message_id, "delivery message id"),
+    commit_sha: commitSha,
+    next_attempt_ts: nullableTimestamp(
+      candidate.next_attempt_ts,
+      "delivery next attempt timestamp",
+    ),
+  };
+}
+
+async function mailHttpError(response: Response): Promise<MailHttpError> {
+  let code: string | null = null;
+  try {
+    const payload = record(await response.json(), "mail error");
+    const detail = payload.detail;
+    if (isRecord(detail) && typeof detail.code === "string") {
+      code = detail.code;
+    }
+  } catch {
+    // Status remains authoritative when a proxy or server returns no JSON.
+  }
+  return new MailHttpError(response.status, code);
+}
+
+async function mailRequest<T>(
+  endpoint: string,
+  parser: (payload: unknown) => T,
+  options: FetchOptions = {},
+): Promise<T> {
+  const response = await fetch(new URL(endpoint, window.location.origin), {
+    method: "GET",
+    cache: "no-store",
+    credentials: "same-origin",
+    headers: { Accept: "application/json" },
+    signal: options.signal,
+  });
+  if (!response.ok) {
+    throw await mailHttpError(response);
+  }
+  return parser(await response.json());
+}
+
+export function loadProjects(options: FetchOptions = {}): Promise<ProjectsPage> {
+  return mailRequest(projectsEndpoint, parseProjects, options);
+}
+
+export const reservationsEndpoint = "/mail/api/v1/reservations";
+
+export async function loadReservations(
+  options: FetchOptions & { projectId?: number | null; cursor?: string | null } = {},
+): Promise<ReservationsPage> {
+  const { projectId, cursor, ...fetchOptions } = options;
+  const query = new URLSearchParams();
+  if (projectId !== undefined && projectId !== null) {
+    query.set("project_id", String(positiveInteger(projectId, "reservation project id")));
+  }
+  if (cursor !== undefined && cursor !== null) {
+    query.set("cursor", cursor);
+  }
+  const suffix = query.toString();
+  return mailRequest(
+    suffix === "" ? reservationsEndpoint : `${reservationsEndpoint}?${suffix}`,
+    parseReservationsPage,
+    fetchOptions,
+  );
+}
+
+export async function loadProjectAgents(
+  projectId: number,
+  options: FetchOptions & { purpose?: AgentDirectoryPurpose } = {},
+): Promise<ProjectAgentsPage> {
+  positiveInteger(projectId, "agent project id");
+  const { purpose = "addressable", ...fetchOptions } = options;
+  const purposeQuery = purpose === "profile" ? "?purpose=profile" : "";
+  const page = await mailRequest(
+    `/mail/api/v1/projects/${projectId}/agents${purposeQuery}`,
+    parseProjectAgents,
+    fetchOptions,
+  );
+  if (page.project_id !== projectId) {
+    throw new TypeError("Invalid agent project id.");
+  }
+  return page;
+}
+
+export function loadInbox(options: InboxOptions = {}): Promise<InboxPage> {
+  const url = new URL(inboxEndpoint, window.location.origin);
+  url.searchParams.set("limit", String(inboxPageSize));
+  if (options.cursor !== undefined) {
+    url.searchParams.set("cursor", options.cursor);
+  }
+  if (options.projectId !== undefined) {
+    url.searchParams.set("project_id", String(options.projectId));
+  }
+  return mailRequest(url.pathname + url.search, parseInboxPage, options);
+}
+
+export function loadSearch(options: SearchOptions): Promise<SearchPage> {
+  const url = new URL(searchEndpoint, window.location.origin);
+  url.searchParams.set("q", options.query);
+  url.searchParams.set("scope", options.scope);
+  url.searchParams.set("order", options.order);
+  url.searchParams.set("limit", String(searchPageSize));
+  if (options.projectId !== undefined) {
+    url.searchParams.set("project_id", String(options.projectId));
+  }
+  if (options.cursor !== undefined) {
+    url.searchParams.set("cursor", options.cursor);
+  }
+  return mailRequest(url.pathname + url.search, parseSearchPage, options);
+}
+
+export function loadMessage(
+  projectId: number,
+  messageId: number,
+  options: FetchOptions = {},
+): Promise<MessageDetail> {
+  return mailRequest(
+    `/mail/api/v1/projects/${projectId}/messages/${messageId}`,
+    parseMessageDetail,
+    options,
+  );
+}
+
+export async function loadThread(
+  projectId: number,
+  threadId: string,
+  options: ThreadOptions = {},
+): Promise<ThreadPage> {
+  positiveInteger(projectId, "thread project id");
+  if (!isValidThreadIdentifier(threadId)) {
+    throw new TypeError("Invalid thread id.");
+  }
+  const url = new URL(
+    `/mail/api/v1/projects/${projectId}/threads`,
+    window.location.origin,
+  );
+  url.searchParams.set("thread_id", threadId);
+  url.searchParams.set("limit", String(threadPageSize));
+  if (options.cursor !== undefined) {
+    url.searchParams.set("cursor", options.cursor);
+  }
+  const page = await mailRequest(
+    url.pathname + url.search,
+    parseThreadPage,
+    options,
+  );
+  if (
+    page.items.some(
+      (message) =>
+        message.project_id !== projectId ||
+        (message.thread_id !== threadId &&
+          !isNumericThreadStarter(message, threadId)),
+    )
+  ) {
+    throw new TypeError("Invalid thread message identity.");
+  }
+  return page;
+}
+
+async function mailMutationRequest<T>(
+  endpoint: string,
+  body: unknown,
+  parser: (payload: unknown) => T,
+  method: "PATCH" | "POST" = "POST",
+): Promise<T> {
+  const response = await fetch(new URL(endpoint, window.location.origin), {
+    method,
+    cache: "no-store",
+    credentials: "same-origin",
+    headers: {
+      Accept: "application/json",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  if (!response.ok) {
+    throw await mailHttpError(response);
+  }
+  return parser(await response.json());
+}
+
+export async function saveAgentProfile(
+  projectId: number,
+  agentId: number,
+  expectedAgentName: string,
+  input: AgentProfileMutationInput,
+): Promise<AgentProfileMutation> {
+  positiveInteger(projectId, "agent profile project id");
+  positiveInteger(agentId, "agent profile agent id");
+  const result = await mailMutationRequest(
+    `/mail/api/v1/projects/${projectId}/agents/${agentId}/profile`,
+    input,
+    parseAgentProfileMutation,
+    "PATCH",
+  );
+  if (
+    result.agent_id !== agentId ||
+    result.agent_generation !== input.expected_agent_generation ||
+    result.agent_name !== expectedAgentName
+  ) {
+    throw new TypeError("Invalid agent profile identity.");
+  }
+  return result;
+}
+
+export function composeMessage(
+  projectId: number,
+  input: ComposeMessageInput,
+): Promise<DeliveryResult> {
+  positiveInteger(projectId, "compose project id");
+  return mailMutationRequest(
+    `/mail/api/v1/projects/${projectId}/messages`,
+    input,
+    parseDeliveryResult,
+  );
+}
+
+export function replyToMessage(
+  projectId: number,
+  messageId: number,
+  input: ReplyMessageInput,
+): Promise<DeliveryResult> {
+  positiveInteger(projectId, "reply project id");
+  positiveInteger(messageId, "reply message id");
+  return mailMutationRequest(
+    `/mail/api/v1/projects/${projectId}/messages/${messageId}/replies`,
+    input,
+    parseDeliveryResult,
+  );
+}
+
+export function loadDeliveryStatus(
+  deliveryId: string,
+  options: FetchOptions = {},
+): Promise<DeliveryResult> {
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(
+      deliveryId,
+    )
+  ) {
+    throw new TypeError("Invalid delivery id.");
+  }
+  return mailRequest(
+    `/mail/api/v1/deliveries/${deliveryId}`,
+    parseDeliveryResult,
+    options,
+  );
+}
+
+export function retryDelivery(deliveryId: string): Promise<DeliveryResult> {
+  if (
+    !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/u.test(
+      deliveryId,
+    )
+  ) {
+    throw new TypeError("Invalid delivery id.");
+  }
+  return mailMutationRequest(
+    `/mail/api/v1/deliveries/${deliveryId}/retry`,
+    {},
+    parseDeliveryResult,
+  );
+}
+
+function routeInteger(value: string | undefined): number | null {
+  if (value === undefined || !/^\d+$/.test(value)) {
+    return null;
+  }
+  const parsed = Number(value);
+  return Number.isSafeInteger(parsed) && parsed > 0 ? parsed : null;
+}
+
+// URL decoding can otherwise turn malformed or control-bearing path segments
+// into ambiguous route identities.  Count Unicode code points, not UTF-16 code
+// units, so the browser and Python endpoint enforce the same 128-character cap.
+// eslint-disable-next-line no-control-regex
+const threadControlCharacters = /[\u0000-\u001f\u007f-\u009f]/u;
+const canonicalNumericThreadIdentifier = /^[1-9][0-9]{0,18}$/u;
+const maximumSqliteInteger = 9_223_372_036_854_775_807n;
+
+function isNumericThreadStarter(
+  message: MessageDetail,
+  threadId: string,
+): boolean {
+  if (
+    !canonicalNumericThreadIdentifier.test(threadId)
+  ) {
+    return false;
+  }
+  const numericId = BigInt(threadId);
+  if (numericId > maximumSqliteInteger) {
+    return false;
+  }
+  const browserId = Number(numericId);
+  return Number.isSafeInteger(browserId) && message.id === browserId;
+}
+
+function isValidThreadIdentifier(value: string): boolean {
+  if (
+    value.length === 0 ||
+    value === "." ||
+    value === ".." ||
+    [...value].length > 128 ||
+    threadControlCharacters.test(value)
+  ) {
+    return false;
+  }
+  try {
+    encodeURIComponent(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function decodedThreadIdentifier(value: string): string | null {
+  try {
+    const decoded = decodeURIComponent(value);
+    return isValidThreadIdentifier(decoded) ? decoded : null;
+  } catch {
+    return null;
+  }
+}
+
+export function parseMailRoute(hash: string): MailRoute {
+  const normalized = hash.startsWith("#") ? hash.slice(1) : hash;
+  const hasQueryDelimiter = normalized.includes("?");
+  const [path = "", query = ""] = normalized.split("?", 2);
+  if (path === "projects") {
+    return { view: "projects" };
+  }
+  if (path === "inbox" || path === "") {
+    const projectId = routeInteger(new URLSearchParams(query).get("project") ?? undefined);
+    return { view: "inbox", projectId };
+  }
+  if (path === "reservations") {
+    return {
+      view: "reservations",
+      projectId: routeInteger(new URLSearchParams(query).get("project") ?? undefined),
+    };
+  }
+  if (path === "search") {
+    const params = new URLSearchParams(query);
+    const rawQuery = params.get("q") ?? "";
+    const rawScope = params.get("scope");
+    const rawOrder = params.get("order");
+    return {
+      view: "search",
+      query: rawQuery.length <= 256 ? rawQuery : "",
+      projectId: routeInteger(params.get("project") ?? undefined),
+      scope:
+        rawScope === "subject" || rawScope === "body" ? rawScope : "all",
+      order: rawOrder === "newest" ? "newest" : "relevance",
+    };
+  }
+  const parts = path.split("/");
+  if (parts[0] === "message" && parts.length === 3) {
+    const projectId = routeInteger(parts[1]);
+    const messageId = routeInteger(parts[2]);
+    if (projectId !== null && messageId !== null) {
+      return { view: "message", projectId, messageId };
+    }
+  }
+  if (parts[0] === "thread" && parts.length === 3 && !hasQueryDelimiter) {
+    const projectId = routeInteger(parts[1]);
+    const threadId = decodedThreadIdentifier(parts[2]!);
+    if (
+      projectId !== null &&
+      parts[1] === String(projectId) &&
+      threadId !== null &&
+      parts[2] === encodeURIComponent(threadId)
+    ) {
+      return { view: "thread", projectId, threadId };
+    }
+  }
+  return { view: "inbox", projectId: null };
+}
+
+export function mailThreadRouteHash(
+  projectId: number,
+  threadId: string,
+): string | null {
+  if (
+    !Number.isSafeInteger(projectId) ||
+    projectId <= 0 ||
+    !isValidThreadIdentifier(threadId)
+  ) {
+    return null;
+  }
+  return `#thread/${projectId}/${encodeURIComponent(threadId)}`;
+}
+
+export function mailRouteHash(route: MailRoute): string {
+  if (route.view === "projects") {
+    return "#projects";
+  }
+  if (route.view === "message") {
+    return `#message/${route.projectId}/${route.messageId}`;
+  }
+  if (route.view === "thread") {
+    const threadHash = mailThreadRouteHash(route.projectId, route.threadId);
+    if (threadHash === null) {
+      throw new TypeError("Invalid thread route id.");
+    }
+    return threadHash;
+  }
+  if (route.view === "reservations") {
+    return route.projectId === null
+      ? "#reservations"
+      : `#reservations?project=${route.projectId}`;
+  }
+  if (route.view === "search") {
+    const params = new URLSearchParams();
+    if (route.query !== "") {
+      params.set("q", route.query);
+    }
+    if (route.projectId !== null) {
+      params.set("project", String(route.projectId));
+    }
+    params.set("scope", route.scope);
+    params.set("order", route.order);
+    return `#search?${params.toString()}`;
+  }
+  return route.projectId === null ? "#inbox" : `#inbox?project=${route.projectId}`;
+}
