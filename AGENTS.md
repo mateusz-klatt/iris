@@ -22,14 +22,15 @@ invariants in section 5 are requirements. A change of direction goes in `docs/ad
 ## Commands
 
 ```sh
-make test     # go vet and go test -race
-make build    # web UI, then the binary
+make test     # go vet and go test, without cgo
+make race     # go test -race, which needs a C toolchain on some platforms
+make build    # the binary
 make fixtures # replays captured client payloads through the hook adapters
 ```
 
 ## Rules for code
 
-- `CGO_ENABLED=0`, always. No dependency that needs a C compiler at build time.
+- Release builds use `CGO_ENABLED=0`. No dependency may need a C compiler.
 - No shell scripts as application logic. Logic lives in Go.
 - `iris hook` never breaks a session. See D3: it catches everything, keeps to its deadline and
   always produces valid output for that client.

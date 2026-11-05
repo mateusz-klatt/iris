@@ -29,7 +29,7 @@ brew install mateusz-klatt/tap/iris
 iris setup
 ```
 
-Installation from source needs Go, and Node to build the web UI:
+Building from source needs Go:
 
 ```sh
 make build
