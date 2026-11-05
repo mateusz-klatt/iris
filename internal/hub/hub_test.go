@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -276,4 +277,41 @@ func TestTransportAndInputGuards(t *testing.T) {
 		t.Fatal(resp.StatusCode)
 	}
 	request(t, s, "POST", "/v1/messages", map[string]any{"body": strings.Repeat("x", 70<<10)}, 413)
+}
+
+func TestConnectedWakeTicketRevocation(t *testing.T) {
+	h, s := setup(t)
+	b := register(t, s, 1)
+	base := time.Now()
+	var seconds atomic.Int64
+	h.now = func() time.Time { return base.Add(time.Duration(seconds.Load()) * time.Second) }
+	open := func() *websocket.Conn {
+		ticket := request(t, s, "POST", "/v1/wake-tickets", authority(b), 200)
+		raw := ticket["protocols"].([]any)
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		conn, _, err := websocket.Dial(ctx, ticket["url"].(string), &websocket.DialOptions{Subprotocols: []string{raw[0].(string), raw[1].(string)}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { conn.CloseNow() })
+		return conn
+	}
+	closed := func(conn *websocket.Conn) {
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		defer cancel()
+		_, _, err := conn.Read(ctx)
+		if websocket.CloseStatus(err) != websocket.StatusPolicyViolation {
+			t.Fatalf("ticket socket was not revoked: %v", err)
+		}
+	}
+	rotated := open()
+	request(t, s, "POST", "/v1/wake-tickets", authority(b), 200)
+	closed(rotated)
+	expired := open()
+	seconds.Store(121)
+	closed(expired)
+	ended := open()
+	request(t, s, "POST", "/v1/executions/"+b["execution_id"].(string)+"/end", map[string]any{"generation": 1}, 200)
+	closed(ended)
 }

@@ -425,7 +425,7 @@ func TestEventsCursorPrivacyReset(t *testing.T) {
 	if err = s.PruneEvents(context.Background(), 3); err != nil {
 		t.Fatal(err)
 	}
-	req.After = 1
+	req.After = 0
 	reset := call(t, s, "events", req)
 	if reset["reset"] != true || reset["snapshot"].(map[string]any)["unread"] != 5 {
 		t.Fatal(reset)
