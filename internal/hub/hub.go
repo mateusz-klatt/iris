@@ -48,6 +48,9 @@ func New(s *store.Store, token string, allowedHosts []string) *Hub {
 	} {
 		h.mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) { h.api(w, r, operation) })
 	}
+	h.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		writeError(w, &store.Error{Code: "not_found", Message: "unknown API route"})
+	})
 	h.mux.HandleFunc("GET /v1/watch", h.watch)
 	h.mux.HandleFunc("POST /v1/wake-tickets", h.wakeTicket)
 	return h
@@ -261,6 +264,7 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 	defer ticker.Stop()
 	initial := true
 	for {
+		changes := h.store.Changes()
 		if _, err = h.store.Call(ctx, "validate", req); err != nil {
 			_ = conn.Close(websocket.StatusPolicyViolation, "Execution lease lost")
 			return
@@ -308,6 +312,7 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 		select {
 		case <-ctx.Done():
 			return
+		case <-changes:
 		case <-ticker.C:
 		}
 	}

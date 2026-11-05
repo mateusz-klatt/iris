@@ -424,18 +424,20 @@ func TestEventsCursorPrivacyReset(t *testing.T) {
 }
 func TestBindingAliasesAndPolicy(t *testing.T) {
 	s, _, _ := testStore(t)
-	registration := Request{Client: "codex", Host: "host", SessionID: "one", Cwd: "/one", Worktree: "/same", RemoteURL: "git@alias:repo", ClientPID: 42, ClientPIDStartMS: 99, SingleSession: false}
+	registration := Request{Client: "codex", Host: "host", SessionID: "one", Cwd: "/one", Worktree: "/one", RemoteURL: "git@alias:repo", ClientPID: 42, ClientPIDStartMS: 99, SingleSession: false}
 	one := call(t, s, "sessions", registration)
 	bind := Request{Client: "codex", Host: "host", ClientPID: 42, ClientPIDStartMS: 99}
 	expectError(t, s, "bind", bind, "unbound")
 	registration.SessionID = "two"
 	registration.Cwd = "/two"
+	registration.Worktree = "/two"
 	two := call(t, s, "sessions", registration)
 	if one["repository_id"] == two["repository_id"] {
 		t.Fatal("ambiguous URL merged")
 	}
 	registration.SessionID = "three"
 	registration.Cwd = "/one"
+	registration.Worktree = "/one"
 	registration.SingleSession = true
 	three := call(t, s, "sessions", registration)
 	resolved := call(t, s, "bind", bind)
@@ -460,6 +462,7 @@ func TestBindingAliasesAndPolicy(t *testing.T) {
 	registration.SingleSession = false
 	registration.SessionID = "root-only"
 	registration.Cwd = "/root-only"
+	registration.Worktree = "/root-only"
 	registration.RootCommit = "root"
 	registration.RemoteURL = ""
 	local := call(t, s, "sessions", registration)
@@ -468,6 +471,7 @@ func TestBindingAliasesAndPolicy(t *testing.T) {
 	}
 	registration.SessionID = "contradiction"
 	registration.Cwd = "/contradiction"
+	registration.Worktree = "/contradiction"
 	registration.RemoteURL = "https://example.com/team/iris.git"
 	registration.RootCommit = "other"
 	different := call(t, s, "sessions", registration)

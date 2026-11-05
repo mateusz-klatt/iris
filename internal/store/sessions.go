@@ -113,13 +113,17 @@ func remoteAlias(raw string) string {
 }
 func (t *transaction) repository(r Request) (string, error) {
 	// Machine-relative remotes are deliberately never global aliases.
-	local := "local:" + r.Host + ":" + strings.ReplaceAll(r.Cwd, "\\", "/")
+	local := "local:" + r.Host + ":" + strings.ReplaceAll(r.Worktree, "\\", "/")
 	var repo, root string
 	err := t.row("SELECT r.id,r.root_commit FROM RepositoryAlias a JOIN Repository r ON r.id=a.repository_id WHERE a.alias=?", local).Scan(&repo, &root)
 	if err == nil {
-		return repo, nil
+		if root == "" || r.RootCommit == "" || root == r.RootCommit {
+			return repo, nil
+		}
+		// A reused path with a contradictory root must not inherit the old namespace.
+		repo = ""
 	}
-	if !errors.Is(err, sql.ErrNoRows) {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return "", err
 	}
 	remote := remoteAlias(r.RemoteURL)
@@ -186,7 +190,7 @@ func (t *transaction) session(r Request) (map[string]any, error) {
 			return nil, fail("lost", "recovery requires the prior session generation")
 		}
 		lease := int64(900000)
-		if e.Heartbeat || r.Source == "shim" || r.Source == "watch" {
+		if e.Heartbeat || r.Source == "shim" || r.Source == "watch" || r.Source == "mcp" {
 			lease = 60000
 			e.Heartbeat = true
 		}
@@ -260,7 +264,7 @@ func (t *transaction) session(r Request) (map[string]any, error) {
 		parent = parentID
 	}
 	lease := int64(900000)
-	heartbeat := r.Source == "shim" || r.Source == "watch"
+	heartbeat := r.Source == "shim" || r.Source == "watch" || r.Source == "mcp"
 	if heartbeat {
 		lease = 60000
 	}

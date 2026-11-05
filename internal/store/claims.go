@@ -19,6 +19,24 @@ type claim struct {
 func (c claim) public() map[string]any {
 	return map[string]any{"fence": c.Fence, "path": c.Path, "kind": c.Kind, "holder": c.Holder, "origin": c.Origin, "expires_at": timestamp(c.Expiry)}
 }
+func (t *transaction) conflict(c claim) (map[string]any, error) {
+	var deadline int64
+	var recovery sql.NullInt64
+	if err := t.row("SELECT deadline_tick_ms,recovery_deadline FROM Execution WHERE id=?", c.Execution).Scan(&deadline, &recovery); err != nil {
+		return nil, err
+	}
+	expiry := t.s.clock.Now().UnixMilli() + deadline - t.s.clock.Tick()
+	if recovery.Valid {
+		expiry = recovery.Int64
+	}
+	if c.Expiry.Valid && c.Expiry.Int64 < expiry {
+		expiry = c.Expiry.Int64
+	}
+	out := c.public()
+	out["expires_at"] = timestamp(sql.NullInt64{Int64: expiry, Valid: true})
+	return out, nil
+}
+
 func (t *transaction) claimRows(repo string) ([]claim, error) {
 	rows, err := t.rows(`SELECT c.fence,c.execution_id,c.repository_id,c.kind,c.path,c.origin,a.name,c.boot_epoch,c.expires_ms FROM Claim c JOIN Execution e ON e.id=c.execution_id JOIN Agent a ON a.id=e.agent_id WHERE c.repository_id=? AND c.revoked_ms IS NULL AND e.state='active' ORDER BY c.fence`, repo)
 	if err != nil {
@@ -213,7 +231,10 @@ func (t *transaction) touch(r Request) (map[string]any, error) {
 			if family {
 				continue
 			}
-			v := c.public()
+			v, err := t.conflict(c)
+			if err != nil {
+				return nil, err
+			}
 			v["path"] = p
 			conflicts = append(conflicts, v)
 		}
@@ -335,7 +356,11 @@ func (t *transaction) explicit(r Request) (map[string]any, error) {
 			return nil, err
 		}
 		if !family {
-			conflicts = append(conflicts, c.public())
+			v, err := t.conflict(c)
+			if err != nil {
+				return nil, err
+			}
+			conflicts = append(conflicts, v)
 		}
 	}
 	if len(conflicts) > 0 {

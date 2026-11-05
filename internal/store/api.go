@@ -94,7 +94,7 @@ func (t *transaction) events(r Request) (map[string]any, error) {
 	if err = t.row("SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name='Event'),0),COALESCE(MIN(seq),0) FROM Event").Scan(&high, &low); err != nil {
 		return nil, err
 	}
-	reset := (r.Stream != "" && r.Stream != t.s.stream) || (r.After > 0 && ((low > 0 && r.After < low-1) || (low == 0 && r.After < high))) || r.After > high
+	reset := (r.Stream != "" && r.Stream != t.s.stream) || ((low > 0 && r.After < low-1) || (low == 0 && r.After < high)) || r.After > high
 	out := map[string]any{"stream": t.s.stream, "events": []map[string]any{}, "high_water": high}
 	if reset {
 		claims, err := t.claims(e.Repo)

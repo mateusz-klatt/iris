@@ -52,9 +52,10 @@ type Store struct {
 	changed chan struct{}
 }
 type transaction struct {
-	conn *sql.Conn
-	ctx  context.Context
-	s    *Store
+	conn   *sql.Conn
+	ctx    context.Context
+	s      *Store
+	notify bool
 }
 
 func (t *transaction) exec(q string, a ...any) (sql.Result, error) {
@@ -70,6 +71,11 @@ func id(prefix string) string {
 		panic(err)
 	}
 	return prefix + hex.EncodeToString(b[:])
+}
+
+func newStreamID() string {
+	raw := id("")
+	return raw[:8] + "-" + raw[8:12] + "-4" + raw[13:16] + "-a" + raw[17:20] + "-" + raw[20:]
 }
 
 func Open(filename string, clock Clock) (*Store, error) {
@@ -104,7 +110,7 @@ func Open(filename string, clock Clock) (*Store, error) {
 		if _, err := t.exec(schema); err != nil {
 			return err
 		}
-		if _, err := t.exec("INSERT OR IGNORE INTO Meta VALUES(1,?,0)", id("")); err != nil {
+		if _, err := t.exec("INSERT OR IGNORE INTO Meta VALUES(1,?,0)", newStreamID()); err != nil {
 			return err
 		}
 		if _, err := t.exec("UPDATE Meta SET boot_epoch=boot_epoch+1 WHERE id=1"); err != nil {
@@ -148,14 +154,17 @@ func (s *Store) transact(ctx context.Context, f func(*transaction) error) error 
 		return err
 	}
 	defer c.ExecContext(context.Background(), "ROLLBACK") // also covers cancellation and panics
-	if err = f(&transaction{c, ctx, s}); err != nil {
+	tx := &transaction{conn: c, ctx: ctx, s: s}
+	if err = f(tx); err != nil {
 		return err
 	}
 	if _, err = c.ExecContext(ctx, "COMMIT"); err != nil {
 		return err
 	}
-	close(s.changed)
-	s.changed = make(chan struct{})
+	if tx.notify {
+		close(s.changed)
+		s.changed = make(chan struct{})
+	}
 	return nil
 }
 func (t *transaction) expire() error {
@@ -202,10 +211,16 @@ func (t *transaction) expire() error {
 }
 func (t *transaction) event(agent, ex, kind, object string) error {
 	_, err := t.exec("INSERT INTO Event(kind,agent_id,execution_id,object_id,created_ms) VALUES(?,NULLIF(?,''),NULLIF(?,''),?,?)", kind, agent, ex, object, t.s.clock.Now().UnixMilli())
+	if err == nil {
+		t.notify = true
+	}
 	return err
 }
 func (t *transaction) repoEvent(repo, kind, object string) error {
 	_, err := t.exec(`INSERT INTO Event(kind,agent_id,object_id,created_ms) SELECT ?,id,?,? FROM Agent WHERE repository_id=?`, kind, object, t.s.clock.Now().UnixMilli(), repo)
+	if err == nil {
+		t.notify = true
+	}
 	return err
 }
 func (t *transaction) cached(e execution, key, route string, request any) (map[string]any, bool, error) {
