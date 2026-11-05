@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Read|Grep|Glob|WebFetch|WebSearch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "grep -qiE 'mcp[_-]agent[_-]mail|dicklesworthstone|/iris\\.git' && { echo 'Blocked by the Iris clean-room policy. See docs/PROVENANCE.md.' >&2; exit 2; } || exit 0",
+            "timeout": 3
+          }
+        ]
+      }
+    ]
+  }
+}
