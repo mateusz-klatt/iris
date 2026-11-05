@@ -1,0 +1,7 @@
+{
+  "session_id": "b9f244d4-4326-45bf-8c3d-1d249f8f21b2",
+  "transcript_path": "/home/user/.claude/projects/-tmp-claude-1000--mnt-d-projects-iris-924a44a9-3f6d-455c-b21f-f96a8c99ee03-scratchpad-consult-claude/b9f244d4-4326-45bf-8c3d-1d249f8f21b2.jsonl",
+  "cwd": "/workspace/project",
+  "hook_event_name": "SessionStart",
+  "source": "startup"
+}

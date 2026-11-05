@@ -1,0 +1,20 @@
+{
+  "conversation_id": "<SESSION_OR_TOOL_ID>",
+  "generation_id": "<SESSION_OR_TOOL_ID>",
+  "model": "default",
+  "tool_name": "Read",
+  "tool_input": {
+    "file_path": "/workspace/project/fixtures/deny-target.txt"
+  },
+  "tool_output": "{\"file_path\":\"/workspace/project/fixtures/deny-target.txt\",\"content_length\":5}",
+  "duration": 29.268,
+  "tool_use_id": "<SESSION_OR_TOOL_ID>",
+  "session_id": "<SESSION_OR_TOOL_ID>",
+  "hook_event_name": "postToolUse",
+  "cursor_version": "2026.11.05-86047df",
+  "workspace_roots": [
+    "/workspace/project"
+  ],
+  "user_email": "<REDACTED_EMAIL>",
+  "transcript_path": "<REDACTED_TRANSCRIPT_PATH>"
+}

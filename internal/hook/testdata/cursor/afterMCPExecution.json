@@ -1,0 +1,19 @@
+{
+  "conversation_id": "<SESSION_OR_TOOL_ID>",
+  "generation_id": "<SESSION_OR_TOOL_ID>",
+  "model": "default",
+  "tool_name": "iris_probe",
+  "tool_input": "{}",
+  "result_json": "{\"content\":[{\"type\":\"text\",\"text\":\"{\\n  \\\"ok\\\": true,\\n  \\\"ancestors\\\": [\\n    {\\n      \\\"pid\\\": 767010,\\n      \\\"cmd\\\": \\\"python3 .cursor/hooks/mcp_probe.py\\\"\\n    },\\n    {\\n      \\\"pid\\\": 766876,\\n      \\\"cmd\\\": \\\"/home/user/.local/bin/cursor-agent --use-system-ca /home/user/.local/share/cursor-agent/versions/2026.11.05-86047df/index.js -p --force --trust --approve-mcps --sandbox disabled --model auto --output-format json --workspace /tmp/session",
+  "duration": 36.781,
+  "tool_use_id": "<SESSION_OR_TOOL_ID>",
+  "mcp_server_name": "iris-probe",
+  "session_id": "<SESSION_OR_TOOL_ID>",
+  "hook_event_name": "afterMCPExecution",
+  "cursor_version": "2026.11.05-86047df",
+  "workspace_roots": [
+    "/workspace/project"
+  ],
+  "user_email": "<REDACTED_EMAIL>",
+  "transcript_path": "<REDACTED_TRANSCRIPT_PATH>"
+}

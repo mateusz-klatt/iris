@@ -1,0 +1,16 @@
+{
+  "hookEventName": "subagent_start",
+  "sessionId": "01a1add0-deb3-7f23-969a-06a73e70b876",
+  "cwd": "/workspace/project",
+  "workspaceRoot": "/workspace/project",
+  "timestamp": "2026-11-05T22:25:15.982885542+00:00",
+  "transcriptPath": "/workspace/project/.exp/home/.grok/sessions//workspace/project_ENC/01a1add0-deb3-7f23-969a-06a73e70b876/updates.jsonl",
+  "permissionMode": "bypassPermissions",
+  "subagentId": "01a1add0-f889-76d3-9b16-1775afd996e6",
+  "subagentType": "general-purpose",
+  "description": "printf sub-ok reply",
+  "hook_event_name": "SubagentStart",
+  "session_id": "01a1add0-deb3-7f23-969a-06a73e70b876",
+  "transcript_path": "/workspace/project/.exp/home/.grok/sessions//workspace/project_ENC/01a1add0-deb3-7f23-969a-06a73e70b876/updates.jsonl",
+  "permission_mode": "bypassPermissions"
+}

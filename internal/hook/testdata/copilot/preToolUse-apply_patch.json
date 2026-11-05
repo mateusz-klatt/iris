@@ -1,0 +1,7 @@
+{
+  "sessionId": "05a1f795-918d-4cfb-aeb2-f17be274e1b8",
+  "timestamp": 1793917891566,
+  "cwd": "/workspace/project",
+  "toolName": "apply_patch",
+  "toolArgs": "*** Begin Patch\n*** Add File: allowed.txt\n+hello\n*** End Patch\n"
+}

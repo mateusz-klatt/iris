@@ -1,0 +1,15 @@
+{
+  "hookEventName": "session_end",
+  "sessionId": "01a1add0-f889-76d3-9b16-1775afd996e6",
+  "cwd": "/workspace/project",
+  "workspaceRoot": "/workspace/project",
+  "timestamp": "2026-11-05T22:25:22.132211124+00:00",
+  "transcriptPath": "/workspace/project/.exp/home/.grok/sessions//workspace/project_ENC/01a1add0-f889-76d3-9b16-1775afd996e6/updates.jsonl",
+  "permissionMode": "bypassPermissions",
+  "reason": "shutdown",
+  "subagentType": "general-purpose",
+  "hook_event_name": "SessionEnd",
+  "session_id": "01a1add0-f889-76d3-9b16-1775afd996e6",
+  "transcript_path": "/workspace/project/.exp/home/.grok/sessions//workspace/project_ENC/01a1add0-f889-76d3-9b16-1775afd996e6/updates.jsonl",
+  "permission_mode": "bypassPermissions"
+}

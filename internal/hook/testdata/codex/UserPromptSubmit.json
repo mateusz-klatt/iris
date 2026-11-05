@@ -1,0 +1,10 @@
+{
+  "session_id": "01a1adf0-8c32-7dd1-915f-250ba6059254",
+  "turn_id": "01a1adf0-8f1b-7231-88a8-12969bc5f98e",
+  "transcript_path": "/home/user/.codex/sessions/2026/11/05/rollout-2026-11-05T23-59-45-01a1adf0-8c32-7dd1-915f-250ba6059254.jsonl",
+  "cwd": "/workspace/project",
+  "hook_event_name": "UserPromptSubmit",
+  "model": "gpt-6-luna",
+  "permission_mode": "bypassPermissions",
+  "prompt": "Use apply_patch to add allowed.txt containing ok, then use apply_patch to add denied.txt containing ok. If a step is refused, do not retry and do not use another tool. Then run the shell command: pwd. Finally state the exact refusal text."
+}

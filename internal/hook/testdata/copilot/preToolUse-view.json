@@ -1,0 +1,9 @@
+{
+  "sessionId": "5371905e-5625-4681-bcbc-73b28e2669bb",
+  "timestamp": 1793918039257,
+  "cwd": "/workspace/project",
+  "toolName": "view",
+  "toolArgs": {
+    "path": "/workspace/project/fixtures/denied-target.txt"
+  }
+}

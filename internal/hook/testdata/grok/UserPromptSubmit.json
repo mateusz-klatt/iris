@@ -1,0 +1,13 @@
+{
+  "hookEventName": "user_prompt_submit",
+  "sessionId": "01a1add1-712e-7e22-a2a9-97ad1e9005b9",
+  "cwd": "/workspace/project",
+  "workspaceRoot": "/workspace/project",
+  "timestamp": "2026-11-05T22:25:48.194178251+00:00",
+  "promptId": "335c3f69-cdf1-4929-a84c-771df8da5107",
+  "permissionMode": "bypassPermissions",
+  "prompt": "Write the file note.txt with the exact contents hello. Do not run a shell. Do not read files. Then stop.",
+  "hook_event_name": "UserPromptSubmit",
+  "session_id": "01a1add1-712e-7e22-a2a9-97ad1e9005b9",
+  "permission_mode": "bypassPermissions"
+}

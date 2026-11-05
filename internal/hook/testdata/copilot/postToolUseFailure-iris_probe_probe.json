@@ -1,0 +1,8 @@
+{
+  "sessionId": "5371905e-5625-4681-bcbc-73b28e2669bb",
+  "timestamp": 1793918044581,
+  "cwd": "/workspace/project",
+  "toolName": "iris-probe-probe",
+  "toolArgs": {},
+  "error": "MCP server 'iris-probe': MCP server process exited before completing the MCP initialize handshake (exit code 1); last stderr: SyntaxError: invalid syntax. Perhaps you forgot a comma?\nServer stderr (last 4 lines):\n  File \"/workspace/project/fixtures/mcp_probe.py\", line 22\n    \"env_names\": sorted(os.environ) \"copilot_session_env\": {k: v for k, v in os.environ.items() if k.startswith(\"COPILOT\") and \"SESSION\" in k},}, out, indent=2)\n                 ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nSyntaxError: invalid syntax. Perhaps you forgot a comma?"
+}

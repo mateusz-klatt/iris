@@ -1,0 +1,14 @@
+{
+  "sessionId": "05a1f795-918d-4cfb-aeb2-f17be274e1b8",
+  "timestamp": 1793917887771,
+  "cwd": "/workspace/project",
+  "toolName": "bash",
+  "toolArgs": {
+    "command": "pwd && git status --short && ls -la fixtures",
+    "description": "Inspect worktree and fixture file"
+  },
+  "toolResult": {
+    "resultType": "success",
+    "textResultForLlm": "/workspace/project\nA  .github/hooks/iris-experiment.json\nA  .mcp.json\nA  REPORT.md\nA  fixtures/README.md\nA  fixtures/denied-target.txt\nA  fixtures/experiment-hook-config.json\nA  fixtures/experiment-mcp-config.json\nA  fixtures/hook_probe.py\nA  fixtures/mcp-list.json\nA  fixtures/mcp_probe.py\nA  fixtures/version.txt\n?? fixtures/log.jsonl\n?? fixtures/mcp-process.json\n?? fixtures/preToolUse.json\n?? fixtures/run1.stderr.txt\n?? fixtures/run1.stdout.txt\n?? fixtures/sessionStart.json\n?? fixtures/userPromptSubmitted.json\ntotal 68\ndrwxrwxr-x 2 user user   340 Nov  5 23:31 .\ndrwxrwxr-x 5 user user   160 Nov  5 23:31 ..\n-rw-rw-r-- 1 user user  1813 Nov  5 23:23 README.md\n-rw-rw-r-- 1 user user     9 Nov  5 23:31 denied-target.txt\n-rw-rw-r-- 1 user user  1168 Nov  5 23:23 experiment-hook-config.json\n-rw-rw-r-- 1 user user   174 Nov  5 23:23 experiment-mcp-config.json\n-rw-rw-r-- 1 user user  2331 Nov  5 23:25 hook_probe.py\n-rw-rw-r-- 1 user user 16165 Nov  5 23:31 log.jsonl\n-rw-rw-r-- 1 user user    23 Nov  5 23:22 mcp-list.json\n-rw-rw-r-- 1 user user  5206 Nov  5 23:31 mcp-process.json\n-rw-rw-r-- 1 user user  1831 Nov  5 23:23 mcp_probe.py\n-rw-rw-r-- 1 user user   273 Nov  5 23:31 preToolUse.json\n-rw-rw-r-- 1 user user     0 Nov  5 23:31 run1.stderr.txt\n-rw-rw-r-- 1 user user     0 Nov  5 23:31 run1.stdout.txt\n-rw-rw-r-- 1 user user   501 Nov  5 23:31 sessionStart.json\n-rw-rw-r-- 1 user user   475 Nov  5 23:31 userPromptSubmitted.json\n-rw-rw-r-- 1 user user    71 Nov  5 23:22 version.txt\n<shellId: 0 completed with exit code 0>"
+  }
+}

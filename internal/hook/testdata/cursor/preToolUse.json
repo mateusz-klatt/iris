@@ -1,0 +1,19 @@
+{
+  "conversation_id": "<SESSION_OR_TOOL_ID>",
+  "generation_id": "<SESSION_OR_TOOL_ID>",
+  "model": "default",
+  "tool_name": "Write",
+  "tool_input": {
+    "file_path": "/workspace/project/fixtures/deny-target.txt",
+    "content": "DENIED-TEST\n"
+  },
+  "tool_use_id": "<SESSION_OR_TOOL_ID>",
+  "session_id": "<SESSION_OR_TOOL_ID>",
+  "hook_event_name": "preToolUse",
+  "cursor_version": "2026.11.05-86047df",
+  "workspace_roots": [
+    "/workspace/project"
+  ],
+  "user_email": "<REDACTED_EMAIL>",
+  "transcript_path": "<REDACTED_TRANSCRIPT_PATH>"
+}

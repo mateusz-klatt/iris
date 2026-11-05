@@ -1,0 +1,11 @@
+{
+  "session_id": "01a1adf0-8c32-7dd1-915f-250ba6059254",
+  "turn_id": "01a1adf0-8f1b-7231-88a8-12969bc5f98e",
+  "transcript_path": "/home/user/.codex/sessions/2026/11/05/rollout-2026-11-05T23-59-45-01a1adf0-8c32-7dd1-915f-250ba6059254.jsonl",
+  "cwd": "/workspace/project",
+  "hook_event_name": "Stop",
+  "model": "gpt-6-luna",
+  "permission_mode": "bypassPermissions",
+  "stop_hook_active": false,
+  "last_assistant_message": "`allowed.txt` was added with `ok`. The `denied.txt` patch was refused, and I did not retry.\n\n`pwd` returned `/workspace/project`.\n\nExact refusal text: `Command blocked by PreToolUse hook: Iris experiment denies this edit.. Command: *** Begin Patch\n*** Add File: denied.txt\n+ok\n*** End Patch`"
+}
