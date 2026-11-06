@@ -24,6 +24,7 @@ func TestVersionBaselines(t *testing.T) {
 		{"grok", "development build", "", false},
 		{"kimi", "development build", "", false},
 		{"grok", "99999999999999999999999999.0.0", "", false},
+		{"unmeasured", "1.2.3", "", false},
 	}
 	for _, tc := range cases {
 		for _, status := range []string{StatusOK, StatusSilent, StatusNeedsHuman, StatusNotConfigured} {

@@ -10,8 +10,8 @@ type ParentWatch struct {
 	start int64
 }
 
-func WatchParent() (*ParentWatch, error) {
-	pid := os.Getppid()
+func WatchParent() (*ParentWatch, error) { return watch(os.Getppid()) }
+func watch(pid int) (*ParentWatch, error) {
 	p, ok := lookupOS(pid)
 	if pid <= 1 || !ok || p.StartMS <= 0 {
 		return nil, ErrNotFound

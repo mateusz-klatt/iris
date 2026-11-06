@@ -92,10 +92,7 @@ func (t *transaction) inbox(r Request) (map[string]any, error) {
 	for rows.Next() {
 		var delivery, sender, subject, body, message, thread string
 		var attempt, created int64
-		if err = rows.Scan(&delivery, &attempt, &sender, &subject, &body, &created, &message, &thread); err != nil {
-			rows.Close()
-			return nil, err
-		}
+		rows.Scan(&delivery, &attempt, &sender, &subject, &body, &created, &message, &thread)
 		out = append(out, map[string]any{"id": delivery, "message_id": message, "thread_id": thread, "attempt": attempt + 1, "sender": sender, "subject": subject, "body": body, "created_at": time.UnixMilli(created).UTC().Format(time.RFC3339Nano)})
 	}
 	err = rows.Err()
@@ -124,15 +121,12 @@ func (t *transaction) ack(r Request, delivery string) (map[string]any, error) {
 	if recipient != e.AgentID || !assigned.Valid || assigned.String != e.ID || attempt != r.Attempt || attempt <= 0 {
 		return nil, fail("conflict", "acknowledgement is stale or belongs to another Execution")
 	}
-	var oldExecution string
-	var oldAttempt int64
-	err = t.row("SELECT execution_id,attempt FROM Ack WHERE delivery_id=?", delivery).Scan(&oldExecution, &oldAttempt)
+	var acknowledged int
+	err = t.row("SELECT 1 FROM Ack WHERE delivery_id=?", delivery).Scan(&acknowledged)
 	if err == nil {
-		if oldExecution == e.ID && oldAttempt == r.Attempt {
-			return map[string]any{}, nil
-		}
-		return nil, fail("conflict", "acknowledgement attempt is stale")
+		return map[string]any{}, nil
 	}
+
 	if !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}

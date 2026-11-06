@@ -40,9 +40,7 @@ func New(h *hubclient.Client, client string) *Resolver {
 }
 func Key() string {
 	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		panic(err)
-	}
+	_, _ = rand.Read(b[:]) // crypto/rand.Read always fills b or crashes the program.
 	return hex.EncodeToString(b[:])
 }
 func IsCode(err error, code string) bool {

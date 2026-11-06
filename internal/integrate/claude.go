@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
-	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -16,6 +15,7 @@ const (
 	claudePluginID    = "iris@iris"
 	claudeMarketName  = "iris"
 	notificationPlain = "An Iris notification means new mail or a claim someone is waiting on."
+	claudeTemplateDir = "claudeplugin/marketplace"
 )
 
 func init() { register(claudeClient{}) }
@@ -60,16 +60,13 @@ func (c claudeClient) Install(l Layout, p Plugins) error {
 	iris := l.Iris()
 	monitor := shellQuote(iris) + " watch --client claude"
 	replacer := strings.NewReplacer("__IRIS__", jsonEscape(iris), "__MONITOR__", jsonEscape(monitor))
-	err = fs.WalkDir(claudeFS, "claudeplugin/marketplace", func(path string, d fs.DirEntry, err error) error {
+	err = fs.WalkDir(claudeFS, claudeTemplateDir, func(path string, d fs.DirEntry, err error) error {
 		if err != nil || d.IsDir() {
 			return err
 		}
-		rel := strings.TrimPrefix(path, "claudeplugin/marketplace/")
+		rel := strings.TrimPrefix(path, claudeTemplateDir+"/")
 		rel = filepath.FromSlash(rel)
-		data, err := claudeFS.ReadFile(path)
-		if err != nil {
-			return err
-		}
+		data, _ := claudeFS.ReadFile(path) // the walk just listed it
 		rendered := []byte(replacer.Replace(string(data)))
 		dest := filepath.Join(root, rel)
 		return l.update(Claude, dest, func(existing []byte) ([]byte, error) {
@@ -96,29 +93,14 @@ func (c claudeClient) Remove(l Layout, p Plugins) error {
 	if err := p.MarketplaceRemove(claudeMarketName); err != nil && uninstall == nil {
 		uninstall = err
 	}
-	m, err := l.loadManifest()
-	if err != nil {
-		return err
-	}
-	createdOnly := true
-	for _, rec := range m.Files {
-		if rec.Client == Claude && !rec.Created {
-			createdOnly = false
-		}
-	}
-	if err := l.restore(Claude); err != nil {
-		return err
-	}
-	if !createdOnly {
-		return uninstall
-	}
 	root, err := c.root(l)
 	if err != nil {
 		return err
 	}
-	if err := removeStateTree(l, root); err != nil {
-		return err
+	if err := l.unwire(Claude, stripClaude(root)); err != nil {
+		return errors.Join(uninstall, err)
 	}
+	pruneEmptyDirs(root)
 	return uninstall
 }
 
@@ -271,11 +253,8 @@ func mergeMonitors(existing, rendered []byte) ([]byte, error) {
 	}
 	var arr []any
 	if len(bytes.TrimSpace(existing)) != 0 {
-		if !json.Valid(existing) {
-			return nil, ErrBroken
-		}
-		if err := json.Unmarshal(existing, &arr); err != nil {
-			return nil, ErrBroken
+		if err := decodeJSON(existing, &arr); err != nil {
+			return nil, err
 		}
 	}
 	replaced := false
@@ -296,25 +275,7 @@ func mergeMonitors(existing, rendered []byte) ([]byte, error) {
 
 func jsonEscape(s string) string {
 	b, _ := json.Marshal(s)
-	if len(b) < 2 {
-		return ""
-	}
 	return string(b[1 : len(b)-1])
-}
-
-func removeStateTree(l Layout, dir string) error {
-	state, err := l.state()
-	if err != nil {
-		return err
-	}
-	rel, err := filepath.Rel(state, dir)
-	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
-		return errors.New("refusing to remove a directory outside the state directory")
-	}
-	if _, err := os.Stat(dir); errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	return os.RemoveAll(dir)
 }
 
 // ExecPlugins runs the Claude Code plugin CLI. It does not edit files itself.

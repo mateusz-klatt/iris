@@ -1,5 +1,7 @@
 package integrate
 
+import "path/filepath"
+
 func init() { register(cursorClient{}) }
 
 type cursorClient struct{}
@@ -8,15 +10,11 @@ func (cursorClient) Name() string  { return Cursor }
 func (cursorClient) Human() string { return "" }
 
 func (c cursorClient) Files(l Layout) ([]string, error) {
-	hooks, err := l.underHome(".cursor", "hooks.json")
+	dir, err := l.underHome(".cursor")
 	if err != nil {
 		return nil, err
 	}
-	mcp, err := l.underHome(".cursor", "mcp.json")
-	if err != nil {
-		return nil, err
-	}
-	return []string{hooks, mcp}, nil
+	return []string{filepath.Join(dir, "hooks.json"), filepath.Join(dir, "mcp.json")}, nil
 }
 
 func (c cursorClient) Install(l Layout, _ Plugins) error {
@@ -53,7 +51,7 @@ func (c cursorClient) Install(l Layout, _ Plugins) error {
 	})
 }
 
-func (c cursorClient) Remove(l Layout, _ Plugins) error { return l.restore(Cursor) }
+func (c cursorClient) Remove(l Layout, _ Plugins) error { return l.unwire(Cursor, stripClient(Cursor)) }
 
 func (c cursorClient) Canary(l Layout) (Invocation, error) {
 	files, err := c.Files(l)

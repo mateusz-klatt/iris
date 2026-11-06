@@ -3,6 +3,7 @@
 package integrate
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -111,9 +112,6 @@ func All() []Client {
 // ByName accepts the canonical name and the aliases the hook already accepts.
 func ByName(name string) (Client, bool) {
 	want := Canonical(name)
-	if want == "" {
-		return nil, false
-	}
 	for _, c := range All() {
 		if c.Name() == want {
 			return c, true
@@ -323,20 +321,12 @@ type manifestFile struct {
 	Backup  string `json:"backup,omitempty"`
 }
 
-func (l Layout) manifestPath() (string, error) {
-	dir, err := l.state()
-	if err != nil {
-		return "", err
-	}
-	return filepath.Join(dir, "integrate", "manifest.json"), nil
+func manifestPath(stateDir string) string {
+	return filepath.Join(stateDir, "integrate", "manifest.json")
 }
 
-func (l Layout) loadManifest() (manifest, error) {
-	path, err := l.manifestPath()
-	if err != nil {
-		return manifest{}, err
-	}
-	data, err := os.ReadFile(path)
+func loadManifest(stateDir string) (manifest, error) {
+	data, err := os.ReadFile(manifestPath(stateDir))
 	if errors.Is(err, os.ErrNotExist) {
 		return manifest{Files: map[string]manifestFile{}}, nil
 	}
@@ -353,20 +343,10 @@ func (l Layout) loadManifest() (manifest, error) {
 	return m, nil
 }
 
-func (l Layout) saveManifest(m manifest) error {
-	if m.Files == nil {
-		m.Files = map[string]manifestFile{}
-	}
-	path, err := l.manifestPath()
-	if err != nil {
-		return err
-	}
-	raw, err := json.MarshalIndent(m, "", "  ")
-	if err != nil {
-		return err
-	}
-	raw = append(raw, '\n')
-	return atomicWrite(path, raw)
+func saveManifest(stateDir string, m manifest) error {
+	// A manifest is strings and booleans, which always encode.
+	raw, _ := marshalJSON(m)
+	return atomicWrite(manifestPath(stateDir), raw)
 }
 
 // update validates, backs up the original once, then writes next.
@@ -397,7 +377,11 @@ func (l Layout) update(client, path string, render func(existing []byte) ([]byte
 }
 
 func (l Layout) remember(client, path string, existing []byte, absent bool) error {
-	m, err := l.loadManifest()
+	dir, err := l.state()
+	if err != nil {
+		return err
+	}
+	m, err := loadManifest(dir)
 	if err != nil {
 		return err
 	}
@@ -406,10 +390,6 @@ func (l Layout) remember(client, path string, existing []byte, absent bool) erro
 	}
 	rec := manifestFile{Client: client, Created: absent}
 	if !absent {
-		dir, err := l.state()
-		if err != nil {
-			return err
-		}
 		name := base64.RawURLEncoding.EncodeToString([]byte(path))
 		rel := filepath.Join("integrate", "backup", name)
 		if err := atomicWrite(filepath.Join(dir, rel), existing); err != nil {
@@ -418,39 +398,7 @@ func (l Layout) remember(client, path string, existing []byte, absent bool) erro
 		rec.Backup = rel
 	}
 	m.Files[path] = rec
-	return l.saveManifest(m)
-}
-
-func (l Layout) restore(client string) error {
-	m, err := l.loadManifest()
-	if err != nil {
-		return err
-	}
-	dir, err := l.state()
-	if err != nil {
-		return err
-	}
-	for path, rec := range m.Files {
-		if rec.Client != client {
-			continue
-		}
-		if rec.Created {
-			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return err
-			}
-		} else if rec.Backup != "" {
-			data, err := os.ReadFile(filepath.Join(dir, rec.Backup))
-			if err != nil {
-				return err
-			}
-			if err := atomicWrite(path, data); err != nil {
-				return err
-			}
-			_ = os.Remove(filepath.Join(dir, rec.Backup))
-		}
-		delete(m.Files, path)
-	}
-	return l.saveManifest(m)
+	return saveManifest(dir, m)
 }
 
 func refuseSpecial(path string) error {
@@ -479,35 +427,15 @@ func atomicWrite(path string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	tmpName := tmp.Name()
-	cleanup := true
-	defer func() {
-		if cleanup {
-			_ = os.Remove(tmpName)
-		}
-	}()
-	if err := tmp.Chmod(mode); err != nil {
-		tmp.Close()
-		return err
+	_, err = tmp.Write(data)
+	err = errors.Join(err, tmp.Chmod(mode), tmp.Close())
+	if err == nil {
+		err = os.Rename(tmp.Name(), path)
 	}
-	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
-		return err
+	if err != nil {
+		_ = os.Remove(tmp.Name())
 	}
-	if err := tmp.Close(); err != nil {
-		return err
-	}
-	if err := os.Rename(tmpName, path); err != nil {
-		if runtime.GOOS == "windows" && os.Remove(path) == nil {
-			if err = os.Rename(tmpName, path); err == nil {
-				cleanup = false
-				return nil
-			}
-		}
-		return err
-	}
-	cleanup = false
-	return nil
+	return err
 }
 
 func marshalJSON(v any) ([]byte, error) {
@@ -522,14 +450,25 @@ func readObject(existing []byte) (map[string]any, error) {
 	if len(bytesTrim(existing)) == 0 {
 		return map[string]any{}, nil
 	}
-	if !json.Valid(existing) {
-		return nil, ErrBroken
-	}
 	var doc map[string]any
-	if err := json.Unmarshal(existing, &doc); err != nil || doc == nil {
+	if err := decodeJSON(existing, &doc); err != nil || doc == nil {
 		return nil, ErrBroken
 	}
 	return doc, nil
+}
+
+// decodeJSON keeps numbers as written, because a value Iris does not own must
+// come back unchanged and float64 cannot hold every integer.
+func decodeJSON(data []byte, v any) error {
+	if !json.Valid(data) {
+		return ErrBroken
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	if err := dec.Decode(v); err != nil {
+		return ErrBroken
+	}
+	return nil
 }
 
 func bytesTrim(b []byte) []byte {

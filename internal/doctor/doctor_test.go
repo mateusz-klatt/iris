@@ -152,7 +152,8 @@ func TestRecentHookFailureIsSilent(t *testing.T) {
 		Getenv:   func(string) string { return "" },
 		LookPath: func(string) (string, error) { return "", errors.New("not found") },
 	}
-	res, err := Run(context.Background(), Options{Layout: layout, HubURL: srv.URL, TokenFile: token, HTTP: srv.Client()})
+	now := func() time.Time { return time.Date(2026, 11, 6, 13, 0, 0, 0, time.UTC) }
+	res, err := Run(context.Background(), Options{Layout: layout, HubURL: srv.URL, TokenFile: token, HTTP: srv.Client(), Now: now})
 	if err != nil {
 		t.Fatal(err)
 	}

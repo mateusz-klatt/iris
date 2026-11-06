@@ -14,6 +14,8 @@ import (
 // PlaceFake copies a small Go stub into dir under name. On Windows the name
 // gains a .exe suffix when it has none. The copy is built once per process.
 // Behaviour is IRIS_FAKE_STDOUT, IRIS_FAKE_EXIT and IRIS_FAKE_REQUIRE_CLOSED_STDIN.
+// The source is a test program under testdata, which ./... leaves out, so it is
+// named in full here. The build runs from the caller's package, inside this module.
 func PlaceFake(dir, name string) (string, error) {
 	exe, err := fakeBinary()
 	if err != nil {
@@ -22,10 +24,7 @@ func PlaceFake(dir, name string) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	if runtime.GOOS == "windows" && !strings.HasSuffix(strings.ToLower(name), ".exe") {
-		name += ".exe"
-	}
-	dest := filepath.Join(dir, name)
+	dest := filepath.Join(dir, exeName(runtime.GOOS, name))
 	if err := copyFile(exe, dest); err != nil {
 		return "", err
 	}
@@ -45,13 +44,14 @@ func fakeBinary() (string, error) {
 			fakeErr = err
 			return
 		}
-		out := filepath.Join(dir, "fakebin")
-		if runtime.GOOS == "windows" {
-			out += ".exe"
+		out := filepath.Join(dir, exeName(runtime.GOOS, "fakebin"))
+		var msg []byte
+		goTool, err := exec.LookPath("go")
+		if err == nil {
+			cmd := exec.Command(goTool, "build", "-o", out, "github.com/mateusz-klatt/iris/internal/integrate/testdata/fakebin")
+			cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+			msg, err = cmd.CombinedOutput()
 		}
-		cmd := exec.Command("go", "build", "-o", out, "github.com/mateusz-klatt/iris/internal/integrate/internal/fakebin")
-		cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
-		msg, err := cmd.CombinedOutput()
 		if err != nil {
 			fakeErr = fmt.Errorf("build fakebin: %w: %s", err, msg)
 			return
@@ -59,6 +59,13 @@ func fakeBinary() (string, error) {
 		fakeExe = out
 	})
 	return fakeExe, fakeErr
+}
+
+func exeName(goos, name string) string {
+	if goos == "windows" && !strings.HasSuffix(strings.ToLower(name), ".exe") {
+		return name + ".exe"
+	}
+	return name
 }
 
 func copyFile(src, dest string) error {

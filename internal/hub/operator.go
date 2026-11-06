@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coder/websocket"
 	"github.com/mateusz-klatt/iris/internal/store"
 )
 
@@ -22,9 +21,7 @@ type loginGrant struct{ expires time.Time }
 func (h *Hub) SetUI(handler http.Handler) { h.ui = handler }
 func secret() string {
 	var b [32]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		panic(err)
-	}
+	_, _ = rand.Read(b[:]) // crypto/rand.Read never returns an error
 	return base64.RawURLEncoding.EncodeToString(b[:])
 }
 func loopback(r *http.Request) bool {
@@ -121,11 +118,20 @@ func (h *Hub) uiLogin(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 func (h *Hub) uiWatch(w http.ResponseWriter, r *http.Request) {
-	conn, err := websocket.Accept(w, r, nil)
+	p := requestPrincipal(r)
+	if !h.reserveSocket(w, p) {
+		return
+	}
+	defer h.releaseSocket(p)
+	conn, err := h.acceptSocket(w, r, nil)
 	if err != nil {
 		return
 	}
 	defer conn.CloseNow()
+	if !h.trackSocket(r, conn, p) {
+		return
+	}
+	defer h.untrackSocket(conn, p)
 	ctx := conn.CloseRead(r.Context())
 	pings := time.NewTicker(h.pingInterval())
 	defer pings.Stop()
@@ -134,14 +140,14 @@ func (h *Hub) uiWatch(w http.ResponseWriter, r *http.Request) {
 	var previous int64 = -1
 	for {
 		changes := h.store.Changes()
-		result, err := h.store.Call(ctx, "ui_events", store.Request{})
+		result, err := h.call(ctx, "ui_events", store.Request{})
 		if err != nil {
 			return
 		}
 		cursor := result["cursor"].(int64)
 		if cursor != previous {
 			raw, _ := json.Marshal(result)
-			if conn.Write(ctx, websocket.MessageText, raw) != nil {
+			if h.writeSocket(ctx, conn, raw) != nil {
 				return
 			}
 			previous = cursor
@@ -181,7 +187,7 @@ func (h *Hub) operatorRoutes() {
 					return
 				}
 			}
-			out, err := h.store.Call(r.Context(), op, req)
+			out, err := h.call(r.Context(), op, req)
 			if err != nil {
 				writeError(w, err)
 				return

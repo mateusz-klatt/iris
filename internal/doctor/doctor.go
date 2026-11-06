@@ -44,14 +44,16 @@ type ClientReport struct {
 
 // Result is the human-readable outcome plus the stored report.
 type Result struct {
-	HubURL     string
-	HubSource  string
-	Report     Report
-	HubUp      bool
-	TokenOK    bool
-	HubDetail  string
-	Stored     bool
-	StoreError string
+	HubURL    string
+	HubSource string
+	Report    Report
+	HubUp     bool
+	TokenOK   bool
+	// TokenUnchecked means the hub never judged the token, as opposed to rejecting it.
+	TokenUnchecked bool
+	HubDetail      string
+	Stored         bool
+	StoreError     string
 }
 
 // Options configures one doctor run. Live is opt-in because it calls a model.
@@ -87,14 +89,8 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 		tokenFile = opt.TokenFile
 	}
 	token, tokenReadErr := readToken(tokenFile)
-	up, tokenOK, detail := probeHub(ctx, hubURL, token, opt.HTTP)
-	if tokenReadErr != nil && token == "" {
-		tokenOK = false
-		if detail == "" {
-			detail = tokenReadErr.Error()
-		}
-	}
-	res := Result{HubURL: hubURL, HubSource: source, HubUp: up, TokenOK: tokenOK, HubDetail: detail}
+	probe := probeHub(ctx, hubURL, token, tokenReadErr, opt.HTTP)
+	res := Result{HubURL: hubURL, HubSource: source, HubUp: probe.up, TokenOK: probe.tokenOK, TokenUnchecked: probe.unchecked, HubDetail: probe.detail}
 	res.Report.CheckedAt = opt.Now().UTC()
 	for _, c := range integrate.All() {
 		res.Report.Clients = append(res.Report.Clients, checkClient(ctx, opt, c))
@@ -105,7 +101,7 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 	for i := range res.Report.Clients {
 		applyVersion(&res.Report.Clients[i])
 	}
-	if up && tokenOK {
+	if probe.up && probe.tokenOK {
 		if err := putReport(ctx, hubURL, token, res.Report, opt.HTTP); err != nil {
 			res.StoreError = err.Error()
 		} else {
@@ -143,7 +139,7 @@ func (r Result) Format() string {
 		fmt.Fprintf(&b, " (%s)", r.HubDetail)
 	}
 	b.WriteByte('\n')
-	if !r.HubUp {
+	if !r.HubUp || r.TokenUnchecked {
 		b.WriteString("token: not checked\n")
 	} else if r.TokenOK {
 		b.WriteString("token: ok\n")
@@ -307,40 +303,56 @@ func canaryPayload(client, cwd string) []byte {
 	}
 }
 
-func probeHub(ctx context.Context, base, token string, hc *http.Client) (bool, bool, string) {
+// hubProbe is what one run learned about the hub and the token.
+type hubProbe struct {
+	up, tokenOK, unchecked bool
+	detail                 string
+}
+
+// hubRequest sends one call. An empty token sends no credential.
+func hubRequest(ctx context.Context, method, target, token string, body io.Reader, hc *http.Client) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, method, target, body)
+	if err != nil {
+		return nil, err
+	}
+	if token != "" {
+		req.Header.Set("Authorization", "Bearer "+token)
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	return hc.Do(req)
+}
+
+func probeHub(ctx context.Context, base, token string, tokenErr error, hc *http.Client) hubProbe {
 	if err := hubclient.ValidateURL(base); err != nil {
-		return false, false, err.Error()
+		return hubProbe{detail: err.Error()}
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(base, "/")+"/v1/status", nil)
+	root := strings.TrimRight(base, "/")
+	res, err := hubRequest(ctx, http.MethodGet, root+"/v1/status", "", nil, hc)
 	if err != nil {
-		return false, false, err.Error()
-	}
-	res, err := hc.Do(req)
-	if err != nil {
-		return false, false, "hub unreachable"
+		return hubProbe{detail: "hub unreachable"}
 	}
 	res.Body.Close()
 	if res.StatusCode >= 500 {
-		return false, false, "hub status " + res.Status
+		return hubProbe{detail: "hub status " + res.Status}
 	}
-	if token == "" {
-		return true, false, "token file is missing or empty"
+	if tokenErr != nil {
+		return hubProbe{up: true, detail: tokenErr.Error()}
 	}
-	req, err = http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimRight(base, "/")+"/v1/agents", nil)
+	res, err = hubRequest(ctx, http.MethodGet, root+"/v1/agents", token, nil, hc)
 	if err != nil {
-		return true, false, err.Error()
-	}
-	req.Header.Set("Authorization", "Bearer "+token)
-	res, err = hc.Do(req)
-	if err != nil {
-		return true, false, "token check failed"
+		return hubProbe{up: true, unchecked: true, detail: "token check failed"}
 	}
 	io.Copy(io.Discard, res.Body)
 	res.Body.Close()
-	if res.StatusCode == http.StatusUnauthorized {
-		return true, false, "token was rejected"
+	switch {
+	case res.StatusCode == http.StatusUnauthorized:
+		return hubProbe{up: true, detail: "token was rejected"}
+	case res.StatusCode >= 500:
+		return hubProbe{up: true, unchecked: true, detail: "token check failed: hub status " + res.Status}
 	}
-	return true, true, ""
+	return hubProbe{up: true, tokenOK: true}
 }
 
 func putReport(ctx context.Context, base, token string, report Report, hc *http.Client) error {
@@ -348,13 +360,7 @@ func putReport(ctx context.Context, base, token string, report Report, hc *http.
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPut, strings.TrimRight(base, "/")+"/v1/ui/doctor", bytes.NewReader(raw))
-	if err != nil {
-		return err
-	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", "Bearer "+token)
-	res, err := hc.Do(req)
+	res, err := hubRequest(ctx, http.MethodPut, strings.TrimRight(base, "/")+"/v1/ui/doctor", token, bytes.NewReader(raw), hc)
 	if err != nil {
 		return err
 	}

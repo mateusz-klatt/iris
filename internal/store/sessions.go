@@ -70,8 +70,12 @@ type execution struct {
 
 const executionSelect = `SELECT e.id,e.agent_id,e.repository_id,e.host_id,e.client,e.session_id,e.worktree,e.branch,e.state,a.name,e.generation,e.boot_epoch,e.deadline_tick_ms,e.client_pid,e.client_pid_start_ms,e.recovery_deadline,e.parent_id,e.single_session,e.heartbeat_mode FROM Execution e JOIN Agent a ON a.id=e.agent_id `
 
+func (e *execution) fields() []any {
+	return []any{&e.ID, &e.AgentID, &e.Repo, &e.Host, &e.Client, &e.Session, &e.Worktree, &e.Branch, &e.State, &e.Name, &e.Generation, &e.Epoch, &e.Deadline, &e.PID, &e.PIDStart, &e.Recovery, &e.Parent, &e.Single, &e.Heartbeat}
+}
+
 func scanExecution(row interface{ Scan(...any) error }) (e execution, err error) {
-	err = row.Scan(&e.ID, &e.AgentID, &e.Repo, &e.Host, &e.Client, &e.Session, &e.Worktree, &e.Branch, &e.State, &e.Name, &e.Generation, &e.Epoch, &e.Deadline, &e.PID, &e.PIDStart, &e.Recovery, &e.Parent, &e.Single, &e.Heartbeat)
+	err = row.Scan(e.fields()...)
 	return
 }
 func (t *transaction) live(ex string, generation int64) (execution, error) {
@@ -177,10 +181,7 @@ func (t *transaction) repository(r Request) (string, error) {
 		contradiction := false
 		for rows.Next() {
 			var candidate, commit string
-			if err = rows.Scan(&candidate, &commit); err != nil {
-				rows.Close()
-				return "", err
-			}
+			rows.Scan(&candidate, &commit)
 			count++
 			if commit != "" && r.RootCommit != "" && commit != r.RootCommit {
 				contradiction = true
@@ -380,10 +381,8 @@ func (t *transaction) bind(r Request) (map[string]any, error) {
 	defer rows.Close()
 	var matches []execution
 	for rows.Next() {
-		e, err := scanExecution(rows)
-		if err != nil {
-			return nil, err
-		}
+		var e execution
+		rows.Scan(e.fields()...)
 		matches = append(matches, e)
 	}
 	if err = rows.Err(); err != nil {
@@ -398,9 +397,6 @@ func (t *transaction) bind(r Request) (map[string]any, error) {
 	return bound(matches[0]), nil
 }
 func (t *transaction) heartbeat(r Request) (map[string]any, error) {
-	if r.Generation <= 0 {
-		return nil, fail("bad_request", "generation is required")
-	}
 	e, err := t.live(r.ExecutionID, r.Generation)
 	if err != nil {
 		return nil, err
@@ -445,9 +441,7 @@ func (t *transaction) agents(repo string) ([]map[string]any, error) {
 	out := []map[string]any{}
 	for rows.Next() {
 		var a, n, c, w, b, s string
-		if err = rows.Scan(&a, &n, &c, &w, &b, &s); err != nil {
-			return nil, err
-		}
+		rows.Scan(&a, &n, &c, &w, &b, &s)
 		out = append(out, map[string]any{"id": a, "name": n, "client": c, "worktree": w, "branch": b, "state": s})
 	}
 	return out, rows.Err()

@@ -91,11 +91,12 @@ func setup(args []string, env setupEnv) int {
 		selected := map[string]bool{}
 		for _, name := range strings.Split(*clientsFlag, ",") {
 			name = strings.TrimSpace(name)
-			if _, ok := integrate.ByName(name); !ok {
+			c, ok := integrate.ByName(name)
+			if !ok {
 				fmt.Fprintf(env.errw, "unknown client %q\n", name)
 				return 2
 			}
-			selected[name] = true
+			selected[c.Name()] = true
 		}
 		filtered := []string{}
 		for _, name := range found {
@@ -123,7 +124,7 @@ func setup(args []string, env setupEnv) int {
 	listen, local := loopbackListen(hubURL)
 	fmt.Fprintf(env.out, "Hub: %s\n", hubURL)
 	if local {
-		fmt.Fprintf(env.out, "Service: iris serve --listen %s --token-file %s\n", listen, tokenFile)
+		fmt.Fprintf(env.out, "Service: %s\n", serveCommand(listen, tokenFile))
 	} else {
 		fmt.Fprintln(env.out, "Service: remote hub, local service skipped")
 	}
@@ -137,6 +138,9 @@ func setup(args []string, env setupEnv) int {
 	}
 	configFile := resolved.ConfigFile
 	fmt.Fprintf(env.out, "Client configuration: %s\n", configFile)
+	if override := strings.TrimSpace(env.getenv("IRIS_HUB_URL")); override != "" && !sameHub(override, hubURL) {
+		fmt.Fprintf(env.out, "IRIS_HUB_URL is set to %s and overrides this hub for every command that sees it. Unset it to use %s.\n", override, hubURL)
+	}
 	if !local {
 		fmt.Fprintf(env.out, "Place the hub bearer token in %s (setup cannot fetch it).\n", tokenFile)
 	}
@@ -214,9 +218,21 @@ func setup(args []string, env setupEnv) int {
 		}
 	}
 	if serviceErr != nil {
-		fmt.Fprintf(env.out, "Service could not start: %v\nNext step: iris serve\n", serviceErr)
+		fmt.Fprintf(env.out, "Service could not start: %v\nNext step: %s\n", serviceErr, serveCommand(listen, tokenFile))
 	}
 	return code
+}
+
+func sameHub(a, b string) bool {
+	return strings.TrimRight(a, "/") == strings.TrimRight(b, "/")
+}
+
+// serveCommand is the command text shown to a person. It is never executed.
+func serveCommand(listen, tokenFile string) string {
+	if strings.ContainsAny(tokenFile, " \t") {
+		tokenFile = `"` + tokenFile + `"`
+	}
+	return "iris serve --listen " + listen + " --token-file " + tokenFile
 }
 
 func loopbackListen(raw string) (string, bool) {
