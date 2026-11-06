@@ -42,8 +42,11 @@ func (h *Hub) SetPublicURL(raw string) error {
 	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" {
 		return errors.New("public URL must be an https origin without credentials, query or fragment")
 	}
+	// Browsers send a lower-case Host without the default port, and login compares
+	// it exactly.
+	u.Host = strings.TrimSuffix(strings.ToLower(u.Host), ":443")
 	h.publicURL = u
-	h.hosts[strings.ToLower(u.Host)] = true
+	h.hosts[u.Host] = true
 	return nil
 }
 

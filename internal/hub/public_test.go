@@ -160,3 +160,29 @@ func TestLocalLoginExpiryAndForwarding(t *testing.T) {
 		t.Fatal("expired local code accepted", w.Code)
 	}
 }
+
+// Browsers send a lower-case Host without the default port, whatever the flag said.
+func TestPublicURLMatchesWhatBrowsersSend(t *testing.T) {
+	for raw, want := range map[string]string{
+		"https://iris.klatt.ie:443":  "iris.klatt.ie",
+		"https://IRIS.Klatt.IE":      "iris.klatt.ie",
+		"https://IRIS.klatt.ie:443/": "iris.klatt.ie",
+		"https://iris.klatt.ie:8443": "iris.klatt.ie:8443",
+		"https://[2001:DB8::1]:443":  "[2001:db8::1]",
+	} {
+		h := New(nil, "", nil)
+		if err := h.SetPublicURL(raw); err != nil {
+			t.Fatal(raw, err)
+		}
+		if h.publicURL.Host != want || !h.hosts[want] {
+			t.Errorf("%s: %q %v", raw, h.publicURL.Host, h.hosts)
+		}
+		r := httptest.NewRequest(http.MethodGet, "http://"+want+"/", nil)
+		r.RemoteAddr = "127.0.0.1:5000"
+		r.Host = want
+		r.Header.Set("X-Forwarded-Proto", "https")
+		if !h.loginAllowed(r) {
+			t.Errorf("%s: a browser request for %s was refused", raw, want)
+		}
+	}
+}
