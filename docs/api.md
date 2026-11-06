@@ -149,7 +149,13 @@ token with subprotocol `iris.v1`, or subprotocols `iris.wake` and the ticket. Ea
 {"stream":"<uuid>","cursor":124,"kind":"inbox_changed"}
 ```
 
-Frames never carry message text. Kinds so far: `inbox_changed`, `claim_released`, `reset`.
+Frames never carry message text. Kinds so far: `inbox_changed`, `claim_released`, `reset`, and
+`inbox_read`, which moves the cursor past mail already fetched and needs no attention.
+
+A monitor (`consumer_id=iris-watch`) with no saved cursor starts at the newest event, because a new
+session is a new Execution and must not hear the agent's history again. If undelivered mail is
+waiting it gets one `reset`. `pending` in the `/v1/events` response counts mail nobody has fetched;
+it does not count mail that was fetched and not yet acknowledged.
 
 `POST /v1/wake-tickets` takes `{"execution_id":"...","generation":1}`, and returns
 `{"url":"ws://...","protocols":["iris.wake","<ticket>"],"expires_at":"..."}`.

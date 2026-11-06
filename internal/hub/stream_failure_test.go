@@ -85,7 +85,7 @@ func TestMonitorCursorFailureReleasesMonitor(t *testing.T) {
 	defer conn.CloseNow()
 }
 func TestStreamIOFailuresReleaseResources(t *testing.T) {
-	for _, kind := range []string{"event-write", "reset-write", "ui-write", "ui-query", "watch-ping", "ui-ping"} {
+	for _, kind := range []string{"event-write", "waiting-write", "reset-write", "ui-write", "ui-query", "watch-ping", "ui-ping"} {
 		t.Run(kind, func(t *testing.T) {
 			h, s := setup(t)
 			a := register(t, s, 1)
@@ -111,6 +111,10 @@ func TestStreamIOFailuresReleaseResources(t *testing.T) {
 				endpoint = "ws" + strings.TrimPrefix(s.URL, "http") + "/v1/ui/watch"
 			}
 			if kind == "event-write" {
+				send(t, s, a, b, "pending")
+				endpoint = watchURL(s, b["execution_id"], 0)
+			}
+			if kind == "waiting-write" {
 				send(t, s, a, b, "pending")
 			}
 			if kind == "reset-write" {

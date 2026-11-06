@@ -344,6 +344,7 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	waiting := false
 	if req.ConsumerID == "iris-watch" {
 		h.mu.Lock()
 		busy := h.monitors[req.ExecutionID]
@@ -363,6 +364,7 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 		}
 		if cursor := saved["cursor"].(int64); req.After == 0 {
 			req.After = cursor
+			waiting = saved["pending"].(int) > 0
 		}
 	}
 	if ticketKey != "" && !h.tokenRate(w, p) {
@@ -416,6 +418,14 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 			frame, _ := json.Marshal(map[string]any{"stream": result["stream"], "cursor": cursor, "kind": kind})
 			return h.writeSocket(ctx, conn, frame)
 		}
+		if waiting {
+			// A new monitor skips history, so it fetches what is waiting. Frames never
+			// say how much, only that something changed.
+			if send(req.After, "reset") != nil {
+				return
+			}
+			waiting = false
+		}
 		if result["reset"] == true {
 			if send(high, "reset") != nil {
 				return
@@ -426,7 +436,12 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 			events := result["events"].([]map[string]any)
 			for _, event := range events {
 				cursor := event["cursor"].(int64)
-				if send(cursor, event["kind"].(string)) != nil {
+				kind := event["kind"].(string)
+				if event["settled"] == true {
+					// The cursor must still advance, but this mail has already been seen.
+					kind = "inbox_read"
+				}
+				if send(cursor, kind) != nil {
 					return
 				}
 				req.After = cursor
