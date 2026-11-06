@@ -91,6 +91,14 @@ Hard rules for `iris hook`, because failure semantics differ between clients:
    no tool call id, the hub refused the request, and the edit went through a live claim.
 7. A client that provides no tool call id gets one derived from a hash of the raw payload.
 
+A hook is a new process, so every call starts with DNS, TCP and TLS. Against the public hub a lost
+packet on any of them outlasted the deadline, and the edit went through without a claim: 3.7% of
+requests in one measurement took over 1.3 s, while the hub answered in milliseconds. A hook
+therefore sends a second request at 300 ms, on its own connection and resolver, and uses whichever
+answers first. Measured the same way, none took over 1.3 s. This is safe because session
+registration, `touch` and session end can be repeated. Reconcile is not repeated. A network that is
+down for the whole 1.5 s still fails open, and that is recorded as above.
+
 Target latency is p95 under 50 ms on Linux and macOS and under 150 ms on Windows, measured in
 CI with the real binary.
 
