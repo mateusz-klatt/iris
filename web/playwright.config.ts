@@ -4,7 +4,7 @@ import { join } from "node:path";
 
 const host = "127.0.0.1";
 const port = 4173;
-const baseURL = `http://${host}:${port}/mail/`;
+const baseURL = `http://${host}:${port}/`;
 
 export default defineConfig({
   testDir: "./e2e",
@@ -13,7 +13,7 @@ export default defineConfig({
   retries: process.env.CI ? 1 : 0,
   workers: 1,
   reporter: "line",
-  outputDir: join(tmpdir(), `mcp-agent-mail-webkit-${process.pid}`),
+  outputDir: join(tmpdir(), `iris-webkit-${process.pid}`),
   use: {
     baseURL,
     browserName: "webkit",

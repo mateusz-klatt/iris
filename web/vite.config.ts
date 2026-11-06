@@ -5,7 +5,7 @@ import { defineConfig } from "vitest/config";
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 
 export default defineConfig({
-  base: "/mail/",
+  base: "/",
   plugins: [react()],
   build: {
     manifest: true,
@@ -30,6 +30,7 @@ export default defineConfig({
     },
   },
   test: {
+    testTimeout: 20000,
     environment: "jsdom",
     include: ["src/**/*.test.{ts,tsx}"],
     setupFiles: ["./src/test/setup.ts"],

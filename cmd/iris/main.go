@@ -16,6 +16,7 @@ import (
 	"github.com/mateusz-klatt/iris/internal/config"
 	"github.com/mateusz-klatt/iris/internal/hub"
 	"github.com/mateusz-klatt/iris/internal/store"
+	"github.com/mateusz-klatt/iris/internal/webui"
 )
 
 // version is set at release time with -ldflags.
@@ -95,7 +96,9 @@ func run(args []string) error {
 			allowed = append(allowed, host)
 		}
 	}
-	server := &http.Server{Addr: cfg.Listen, Handler: hub.New(s, token, allowed), ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
+	handler := hub.New(s, token, allowed)
+	handler.SetUI(webui.Handler())
+	server := &http.Server{Addr: cfg.Listen, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	done := make(chan struct{})
