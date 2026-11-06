@@ -23,15 +23,15 @@ func TestGuardMissingIris(t *testing.T) {
 
 func TestGuardCrashIsAllow(t *testing.T) {
 	dir := t.TempDir()
-	path := dir + "/iris"
-	if err := os.WriteFile(path, []byte("#!/bin/sh\nexit 1\n"), 0o755); err != nil {
+	path, err := PlaceFake(dir, "iris")
+	if err != nil {
 		t.Fatal(err)
 	}
-	got := runGuard(t, Guard("linux", Copilot, path, "preToolUse"), dir)
+	got := runGuard(t, Guard("linux", Copilot, path, "preToolUse"), dir, "IRIS_FAKE_EXIT=3")
 	if strings.TrimSpace(got) != "{}" {
 		t.Fatalf("%q", got)
 	}
-	got = runGuard(t, Guard("linux", Antigravity, path, "PreToolUse"), dir)
+	got = runGuard(t, Guard("linux", Antigravity, path, "PreToolUse"), dir, "IRIS_FAKE_EXIT=3")
 	if strings.TrimSpace(got) != `{"decision":"allow"}` {
 		t.Fatalf("%q", got)
 	}
@@ -52,13 +52,26 @@ func TestWindowsGuardStrings(t *testing.T) {
 	}
 }
 
-func runGuard(t *testing.T, script, path string) string {
+func runGuard(t *testing.T, script, path string, extra ...string) string {
 	t.Helper()
 	cmd := exec.Command("/bin/sh", "-c", script)
-	cmd.Env = []string{"PATH=" + path}
+	cmd.Env = envWithPath(path, extra...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		t.Fatalf("guard exit: %v\n%s", err, out)
 	}
 	return string(out)
+}
+
+func envWithPath(path string, extra ...string) []string {
+	out := make([]string, 0, len(os.Environ())+1+len(extra))
+	for _, e := range os.Environ() {
+		key, _, ok := strings.Cut(e, "=")
+		if ok && (strings.EqualFold(key, "PATH") || strings.HasPrefix(key, "IRIS_FAKE_")) {
+			continue
+		}
+		out = append(out, e)
+	}
+	out = append(out, "PATH="+path)
+	return append(out, extra...)
 }

@@ -62,8 +62,8 @@ func TestSetupDeclineWritesNothing(t *testing.T) {
 
 func TestSetupIntegratesOnlyTheDetectedClient(t *testing.T) {
 	home := t.TempDir()
-	iris := filepath.Join(home, "iris")
-	if err := os.WriteFile(iris, []byte("#!/bin/sh\necho '{}'\n"), 0o755); err != nil {
+	iris, err := integrate.PlaceFake(home, "iris")
+	if err != nil {
 		t.Fatal(err)
 	}
 	layout := integrate.Layout{

@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -42,7 +43,9 @@ func TestCodexNeedsHumanAndIsStored(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	layout := doctorLayout(t, "#!/bin/sh\necho '{}'\n")
+	t.Setenv("IRIS_FAKE_STDOUT", "{}")
+	t.Setenv("IRIS_FAKE_EXIT", "0")
+	layout := doctorLayout(t)
 	codex, _ := integrate.ByName(integrate.Codex)
 	if err := codex.Install(layout, nil); err != nil {
 		t.Fatal(err)
@@ -110,7 +113,7 @@ func TestRejectedTokenIsNotStored(t *testing.T) {
 		t.Fatal(err)
 	}
 	res, err := Run(context.Background(), Options{
-		Layout:    doctorLayout(t, "#!/bin/sh\necho '{}'\n"),
+		Layout:    doctorLayout(t),
 		HubURL:    srv.URL,
 		TokenFile: token,
 		HTTP:      srv.Client(),
@@ -128,7 +131,9 @@ func TestBrokenCanaryIsSilent(t *testing.T) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer srv.Close()
-	layout := doctorLayout(t, "#!/bin/sh\nexit 1\n")
+	t.Setenv("IRIS_FAKE_STDOUT", "")
+	t.Setenv("IRIS_FAKE_EXIT", "1")
+	layout := doctorLayout(t)
 	codex, _ := integrate.ByName(integrate.Codex)
 	if err := codex.Install(layout, nil); err != nil {
 		t.Fatal(err)
@@ -154,19 +159,21 @@ func TestBrokenCanaryIsSilent(t *testing.T) {
 }
 
 func TestLiveIsOptIn(t *testing.T) {
-	layout := doctorLayout(t, "#!/bin/sh\necho '{}'\n")
+	t.Setenv("IRIS_FAKE_STDOUT", "{}")
+	t.Setenv("IRIS_FAKE_EXIT", "0")
+	layout := doctorLayout(t)
 	iris, err := layout.LookPath("iris")
 	if err != nil {
 		t.Fatal(err)
 	}
 	layout.LookPath = func(name string) (string, error) {
-		if name == "iris" || name == "copilot" {
+		if name == "iris" || name == "grok" {
 			return iris, nil
 		}
 		return "", errors.New("not found")
 	}
-	copilot, _ := integrate.ByName(integrate.Copilot)
-	if err := copilot.Install(layout, nil); err != nil {
+	grok, _ := integrate.ByName(integrate.Grok)
+	if err := grok.Install(layout, nil); err != nil {
 		t.Fatal(err)
 	}
 	calls := 0
@@ -217,15 +224,15 @@ func TestLiveArgsHaveNoTrustBypass(t *testing.T) {
 }
 
 func TestLiveClosesStdin(t *testing.T) {
-	dir := t.TempDir()
-	script := filepath.Join(dir, "codex")
-	body := "#!/bin/sh\nread line && exit 1\nexit 0\n"
-	if err := os.WriteFile(script, []byte(body), 0o755); err != nil {
+	t.Setenv("IRIS_FAKE_REQUIRE_CLOSED_STDIN", "1")
+	t.Setenv("IRIS_FAKE_EXIT", "0")
+	bin, err := integrate.PlaceFake(t.TempDir(), "codex")
+	if err != nil {
 		t.Fatal(err)
 	}
 	opt := Options{Layout: integrate.Layout{LookPath: func(name string) (string, error) {
 		if name == "codex" {
-			return script, nil
+			return bin, nil
 		}
 		return "", errors.New("not found")
 	}}}
@@ -236,11 +243,11 @@ func TestLiveClosesStdin(t *testing.T) {
 	}
 }
 
-func doctorLayout(t *testing.T, script string) integrate.Layout {
+func doctorLayout(t *testing.T) integrate.Layout {
 	t.Helper()
 	home := t.TempDir()
-	iris := filepath.Join(home, "iris")
-	if err := os.WriteFile(iris, []byte(script), 0o755); err != nil {
+	iris, err := integrate.PlaceFake(home, "iris")
+	if err != nil {
 		t.Fatal(err)
 	}
 	return integrate.Layout{
@@ -253,6 +260,6 @@ func doctorLayout(t *testing.T, script string) integrate.Layout {
 			}
 			return "", errors.New("not found")
 		},
-		GOOS: "linux",
+		GOOS: runtime.GOOS,
 	}
 }
