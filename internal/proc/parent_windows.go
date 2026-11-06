@@ -11,8 +11,8 @@ import (
 // Windows keeps the inherited parent PID after exit, so comparing PIDs is insufficient.
 type ParentWatch struct{ handle windows.Handle }
 
-func WatchParent() (*ParentWatch, error) {
-	pid := os.Getppid()
+func WatchParent() (*ParentWatch, error) { return watch(os.Getppid()) }
+func watch(pid int) (*ParentWatch, error) {
 	if pid <= 0 {
 		return nil, ErrNotFound
 	}
