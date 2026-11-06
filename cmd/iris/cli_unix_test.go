@@ -5,6 +5,7 @@ package main
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"syscall"
 	"testing"
 	"time"
@@ -19,24 +20,30 @@ func TestServeStopsOnSIGTERM(t *testing.T) {
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "cfg"))
 
 	errCh := make(chan error, 1)
-	go func() {
-		errCh <- run([]string{"serve", "--listen", "127.0.0.1:0", "--db", filepath.Join(dir, "live.db"), "--token-file", filepath.Join(dir, "live.token"), "--allowed-hosts", " iris.example:443, ,other.example:443", "--public-url", "https://iris.example"})
-	}()
-	select {
-	case err := <-errCh:
-		t.Fatal(err)
-	case <-time.After(300 * time.Millisecond):
-	}
-	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case err := <-errCh:
-		if err != nil {
+	_, stderr := capture(t, func() {
+		go func() {
+			errCh <- run([]string{"serve", "--listen", "127.0.0.1:0", "--db", filepath.Join(dir, "live.db"), "--token-file", filepath.Join(dir, "live.token"), "--allowed-hosts", " iris.example:443, ,other.example:443", "--public-url", "https://iris.example"})
+		}()
+		select {
+		case err := <-errCh:
+			t.Fatal(err)
+		case <-time.After(300 * time.Millisecond):
+		}
+		if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
 			t.Fatal(err)
 		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("serve did not stop")
+		select {
+		case err := <-errCh:
+			if err != nil {
+				t.Fatal(err)
+			}
+		case <-time.After(3 * time.Second):
+			t.Fatal("serve did not stop")
+		}
+	})
+	// Port 0 proves the line reports the bound socket, not the requested address.
+	if !strings.Contains(stderr, "Iris listening on 127.0.0.1:") || strings.Contains(stderr, "127.0.0.1:0\n") {
+		t.Fatalf("%q", stderr)
 	}
 }
 
