@@ -126,6 +126,53 @@ func TestRejectedTokenIsNotStored(t *testing.T) {
 	}
 }
 
+func TestRecentHookFailureIsSilent(t *testing.T) {
+	var put []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/ui/doctor" {
+			put, _ = io.ReadAll(r.Body)
+		}
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer srv.Close()
+	home := t.TempDir()
+	token := filepath.Join(home, "hub.token")
+	if err := os.WriteFile(token, []byte("secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	line := `{"time":"2026-11-06T12:00:00Z","client":"codex","event":"PreToolUse","stage":"touch","error":"hub client is not configured"}` + "\n"
+	if err := os.WriteFile(filepath.Join(home, "hook-failures.log"), []byte(line), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	layout := integrate.Layout{
+		Home:     home,
+		StateDir: filepath.Join(home, "state"),
+		Getenv:   func(string) string { return "" },
+		LookPath: func(string) (string, error) { return "", errors.New("not found") },
+	}
+	res, err := Run(context.Background(), Options{Layout: layout, HubURL: srv.URL, TokenFile: token, HTTP: srv.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, row := range res.Report.Clients {
+		if row.Client == integrate.Codex {
+			if row.Status != StatusSilent || !strings.Contains(row.Detail, "recent hook failure:") || !strings.Contains(row.Detail, "hub client is not configured") {
+				t.Fatalf("%+v", row)
+			}
+			continue
+		}
+		if row.Status != StatusNotConfigured {
+			t.Fatalf("%s is %s", row.Client, row.Status)
+		}
+	}
+	if res.ExitCode() == 0 {
+		t.Fatal("a recent hook failure should fail the run")
+	}
+	if !strings.Contains(string(put), `"status":"silent"`) {
+		t.Fatalf("stored report: %s", put)
+	}
+}
+
 func TestBrokenCanaryIsSilent(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)

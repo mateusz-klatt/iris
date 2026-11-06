@@ -15,6 +15,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mateusz-klatt/iris/internal/hook"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 	"github.com/mateusz-klatt/iris/internal/integrate"
 )
@@ -93,6 +94,9 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 	res.Report.CheckedAt = opt.Now().UTC()
 	for _, c := range integrate.All() {
 		res.Report.Clients = append(res.Report.Clients, checkClient(ctx, opt, c))
+	}
+	if err := applyFailures(&res, tokenFile); err != nil && res.HubDetail == "" {
+		res.HubDetail = "failure log: " + err.Error()
 	}
 	if up && tokenOK {
 		if err := putReport(ctx, hubURL, token, res.Report, opt.HTTP); err != nil {
@@ -206,6 +210,35 @@ func checkClient(ctx context.Context, opt Options, c integrate.Client) ClientRep
 	row.Status = StatusOK
 	row.Detail = ""
 	return row
+}
+
+// applyFailures marks a client silent when hook-failures.log, beside the token
+// file, has a recent entry for it. A hook that failed open did not protect the turn.
+func applyFailures(res *Result, tokenFile string) error {
+	if strings.TrimSpace(tokenFile) == "" {
+		return nil
+	}
+	entries, err := hook.ReadRecentFailures(tokenFile, 20)
+	if err != nil {
+		return err
+	}
+	by := map[string][]string{}
+	for _, entry := range entries {
+		name := integrate.Canonical(entry.Client)
+		if name == "" {
+			continue
+		}
+		by[name] = append(by[name], entry.Event+" "+entry.Stage+": "+entry.Error)
+	}
+	for i := range res.Report.Clients {
+		parts := by[res.Report.Clients[i].Client]
+		if len(parts) == 0 {
+			continue
+		}
+		res.Report.Clients[i].Status = StatusSilent
+		res.Report.Clients[i].Detail = "recent hook failure: " + strings.Join(parts, "; ")
+	}
+	return nil
 }
 
 func validHook(client string, stdout []byte, exit int) error {
