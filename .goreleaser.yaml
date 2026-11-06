@@ -1,0 +1,82 @@
+version: 2
+project_name: iris
+# D15 stage 0: local snapshots only. Publication must be enabled deliberately later.
+release:
+  disable: true
+before:
+  hooks:
+    - make web
+builds:
+  - id: iris
+    main: ./cmd/iris
+    binary: iris
+    env: [CGO_ENABLED=0]
+    goos: [linux, darwin, windows]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{ .Version }}
+archives:
+  - id: iris
+    ids: [iris]
+    name_template: 'iris_{{ .Version }}_{{ .Os }}_{{ .Arch }}'
+    formats: [tar.gz]
+    format_overrides:
+      - goos: windows
+        formats: [zip]
+    files: [LICENSE, docs/guard.md]
+checksum:
+  name_template: checksums.txt
+nfpms:
+  - id: iris
+    ids: [iris]
+    package_name: iris
+    file_name_template: '{{ .ConventionalFileName }}'
+    vendor: Mateusz Klatt
+    homepage: https://github.com/mateusz-klatt/iris
+    maintainer: Mateusz Klatt
+    description: Cooperative coordination for coding agents
+    license: Apache-2.0
+    formats: [deb, rpm]
+    bindir: /usr/bin
+dockers_v2:
+  - id: iris-server
+    # Stage 0 can build local snapshot images, never push a release image.
+    disable: '{{ not .IsSnapshot }}'
+    ids: [iris]
+    images: [ghcr.io/mateusz-klatt/iris]
+    tags: ['{{ .Version }}']
+    platforms: [linux/amd64, linux/arm64]
+    dockerfile: Dockerfile
+sboms:
+  - artifacts: archive
+    cmd: syft
+signs:
+  - artifacts: checksum
+    cmd: cosign
+    signature: '${artifact}.sigstore.json'
+    args: [sign-blob, '--bundle=${signature}', '${artifact}', '--yes']
+# Deprecated in GoReleaser v2.20. Keep the formula until cask notarization is ready.
+# A formula avoids cask quarantine; it does not replace Apple notarization.
+brews:
+  - name: iris
+    repository: {owner: mateusz-klatt, name: homebrew-tap}
+    homepage: https://github.com/mateusz-klatt/iris
+    description: Cooperative coordination for coding agents
+    license: Apache-2.0
+    skip_upload: true
+scoops:
+  - name: iris
+    repository: {owner: mateusz-klatt, name: scoop-bucket}
+    homepage: https://github.com/mateusz-klatt/iris
+    description: Cooperative coordination for coding agents
+    license: Apache-2.0
+    skip_upload: true
+winget:
+  - name: iris
+    publisher: Mateusz Klatt
+    package_identifier: MateuszKlatt.Iris
+    short_description: Cooperative coordination for coding agents
+    license: Apache-2.0
+    repository: {owner: mateusz-klatt, name: winget-pkgs}
+    skip_upload: true
