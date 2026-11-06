@@ -79,12 +79,18 @@ func userService(listen, tokenFile string) (service.Manager, error) {
 	return userServiceDB(listen, tokenFile, "")
 }
 
-func userServiceDB(listen, tokenFile, database string) (service.Manager, error) {
-	bin, err := exec.LookPath("iris")
-	if err != nil {
-		return nil, fmt.Errorf("iris is not on PATH: %w", err)
+// serviceBinary prefers iris on PATH, which survives an upgrade. A Windows logon can
+// start the autostart command before PATH is complete, so the running binary is the
+// fallback, not a failure.
+func serviceBinary(look func(string) (string, error), self func() (string, error)) (string, error) {
+	if bin, err := look("iris"); err == nil {
+		return absPath(bin)
 	}
-	bin, err = absPath(bin)
+	return self()
+}
+
+func userServiceDB(listen, tokenFile, database string) (service.Manager, error) {
+	bin, err := serviceBinary(exec.LookPath, os.Executable)
 	if err != nil {
 		return nil, err
 	}
