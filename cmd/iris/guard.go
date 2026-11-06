@@ -32,7 +32,7 @@ func runGuard(args []string) error {
 	case "remove":
 		return guard.Remove(ctx, dir)
 	case "check":
-		message, err := guard.Check(ctx, dir, &hubclient.Client{Config: hubclient.EnvConfig{}})
+		message, err := guard.Check(ctx, dir, &hubclient.Client{Config: hubclient.NewConfig()})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Iris: guard could not check claims; allowing commit: %v\n", err)
 			return nil

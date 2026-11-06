@@ -9,9 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mateusz-klatt/iris/internal/config"
 	"github.com/mateusz-klatt/iris/internal/doctor"
-	"github.com/mateusz-klatt/iris/internal/hubclient"
 	"github.com/mateusz-klatt/iris/internal/integrate"
 )
 
@@ -153,50 +151,38 @@ func TestSetupLoopbackInstallsService(t *testing.T) {
 	}
 }
 
-func TestSetupEnvironmentGuidance(t *testing.T) {
-	cfg, err := config.Default()
+func TestSetupPersistsRemoteConfiguration(t *testing.T) {
+	home := t.TempDir()
+	token := filepath.Join(home, "hub.token")
+	var out bytes.Buffer
+	code := setup([]string{"--yes", "--hub", "https://iris.klatt.ie", "--clients", "claude"}, setupEnv{
+		out: &out, errw: &out, getenv: func(string) string { return "" }, tokenFile: token,
+		layout:         integrate.Layout{Home: home, StateDir: filepath.Join(home, "state"), Getenv: func(string) string { return "" }},
+		detect:         func(func(string) (string, error)) []string { return []string{integrate.Codex, integrate.Claude} },
+		plugins:        setupPlugins{},
+		installService: func(string, string) error { t.Fatal("remote service installed"); return nil },
+		runDoctor: func(context.Context, doctor.Options) (doctor.Result, error) {
+			return doctor.Result{HubUp: true, TokenOK: true}, nil
+		},
+	})
+	if code != 0 {
+		t.Fatal(code, out.String())
+	}
+	raw, err := os.ReadFile(filepath.Join(home, "client.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, tc := range []struct {
-		name, url, token, goos string
-		want                   bool
-	}{
-		{"defaults", hubclient.DefaultHubURL, cfg.TokenFile, "windows", false},
-		{"windows URL", "http://127.0.0.1:8787", cfg.TokenFile, "windows", true},
-		{"windows token", hubclient.DefaultHubURL, filepath.Join(t.TempDir(), "O'Brien", "token"), "windows", true},
-		{"unix URL", "https://hub.example", cfg.TokenFile, "linux", true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			var out bytes.Buffer
-			code := setup([]string{"--yes", "--hub-url", tc.url}, setupEnv{
-				out: &out, errw: &out, getenv: func(string) string { return "" }, tokenFile: tc.token,
-				layout:         integrate.Layout{Home: t.TempDir(), GOOS: tc.goos, Getenv: func(string) string { return "" }},
-				detect:         func(func(string) (string, error)) []string { return nil },
-				installService: func(string, string) error { return nil },
-				runDoctor: func(context.Context, doctor.Options) (doctor.Result, error) {
-					return doctor.Result{HubUp: true, TokenOK: true}, nil
-				},
-			})
-			text := out.String()
-			if code != 0 || strings.Contains(text, "Hooks need") != tc.want {
-				t.Fatalf("code %d\n%s", code, text)
-			}
-			if tc.want {
-				if !strings.Contains(text, "permanently") || !strings.Contains(text, "restart your clients") {
-					t.Fatal(text)
-				}
-				if tc.goos == "windows" && !strings.Contains(text, "[Environment]::SetEnvironmentVariable(") {
-					t.Fatal(text)
-				}
-				if tc.goos == "linux" && !strings.Contains(text, "export IRIS_HUB_URL='https://hub.example'") {
-					t.Fatal(text)
-				}
-				if tc.name == "windows token" && !strings.Contains(text, "O''Brien") {
-					t.Fatal(text)
-				}
-			}
-		})
+	if !strings.Contains(string(raw), "https://iris.klatt.ie") || !strings.Contains(string(raw), "hub.token") {
+		t.Fatal(string(raw))
+	}
+	if _, err := os.Stat(token); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("setup created a token", err)
+	}
+	if _, err := os.Stat(filepath.Join(home, ".codex", "hooks.json")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("unselected codex integrated", err)
+	}
+	if !strings.Contains(out.String(), "setup cannot fetch it") {
+		t.Fatal(out.String())
 	}
 }
 

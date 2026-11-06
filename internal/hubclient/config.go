@@ -1,29 +1,33 @@
 // Package hubclient is the HTTP client for iris serve.
-// hub_url and the token file are read through Config so internal/config can
-// replace the environment fallback without changing callers.
 package hubclient
 
 import (
+	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 )
 
-// DefaultHubURL is the loopback hub from D1.
 const DefaultHubURL = "http://127.0.0.1:7878"
 
-// Config supplies the hub address and bearer token.
 type Config interface {
 	HubURL() string
 	Token() (string, error)
 }
 
-// EnvConfig reads IRIS_HUB_URL and IRIS_TOKEN_FILE.
-// An empty token file means the process has no credential yet.
+// FileConfig is stored in client.json beside the discovery token location.
+// Relative token paths are resolved relative to client.json.
+type FileConfig struct {
+	Hub       string `json:"hub_url"`
+	TokenFile string `json:"token_file"`
+}
+
 type EnvConfig struct {
-	Getenv   func(string) string
-	ReadFile func(string) ([]byte, error)
+	Getenv           func(string) string
+	ReadFile         func(string) ([]byte, error)
+	DefaultTokenFile string // optional platform/layout override
 }
 
 func (e EnvConfig) getenv(key string) string {
@@ -32,25 +36,15 @@ func (e EnvConfig) getenv(key string) string {
 	}
 	return os.Getenv(key)
 }
-
 func (e EnvConfig) readFile(path string) ([]byte, error) {
 	if e.ReadFile != nil {
 		return e.ReadFile(path)
 	}
 	return os.ReadFile(path)
 }
-
-func (e EnvConfig) HubURL() string {
-	if v := strings.TrimSpace(e.getenv("IRIS_HUB_URL")); v != "" {
-		return v
-	}
-	return DefaultHubURL
-}
-
-// TokenPath resolves the credential location without reading or creating it.
-func (e EnvConfig) TokenPath() (string, error) {
-	if path := strings.TrimSpace(e.getenv("IRIS_TOKEN_FILE")); path != "" {
-		return path, nil
+func (e EnvConfig) defaultTokenPath() (string, error) {
+	if e.DefaultTokenFile != "" {
+		return e.DefaultTokenFile, nil
 	}
 	dir, err := os.UserConfigDir()
 	if err != nil {
@@ -59,17 +53,111 @@ func (e EnvConfig) TokenPath() (string, error) {
 	return filepath.Join(dir, "iris", "hub.token"), nil
 }
 
-func (e EnvConfig) Token() (string, error) {
-	path, err := e.TokenPath()
-	if err != nil {
-		return "", err
+// Resolved captures configuration once per process; hooks read one small config file.
+type Resolved struct {
+	URL, TokenFile, Source, ConfigFile string
+	err                                error
+	readFile                           func(string) ([]byte, error)
+	explicitToken                      bool
+}
+
+func NewConfig() Resolved { return (EnvConfig{}).Load() }
+func (e EnvConfig) Load() Resolved {
+	r := Resolved{URL: DefaultHubURL, Source: "default", readFile: e.readFile}
+	r.TokenFile, r.err = e.defaultTokenPath()
+	if r.err != nil {
+		return r
 	}
-	b, err := e.readFile(path)
-	if errors.Is(err, os.ErrNotExist) && strings.TrimSpace(e.getenv("IRIS_TOKEN_FILE")) == "" {
+	envToken := strings.TrimSpace(e.getenv("IRIS_TOKEN_FILE"))
+	if envToken != "" {
+		r.TokenFile = envToken
+	}
+	r.ConfigFile = filepath.Join(filepath.Dir(r.TokenFile), "client.json")
+	raw, err := e.readFile(r.ConfigFile)
+	if err == nil {
+		var f FileConfig
+		if len(raw) > 64<<10 {
+			err = errors.New("client config exceeds 64 KiB")
+		} else {
+			err = json.Unmarshal(raw, &f)
+		}
+		if err != nil {
+			r.err = fmt.Errorf("read %s: %w", r.ConfigFile, err)
+			return r
+		}
+		if v := strings.TrimSpace(f.Hub); v != "" {
+			r.URL = v
+			r.Source = "file (" + r.ConfigFile + ")"
+		}
+		if v := strings.TrimSpace(f.TokenFile); v != "" {
+			if !filepath.IsAbs(v) {
+				v = filepath.Join(filepath.Dir(r.ConfigFile), v)
+			}
+			r.TokenFile = v
+			r.explicitToken = true
+		}
+	} else if !errors.Is(err, os.ErrNotExist) {
+		r.err = err
+		return r
+	}
+	if v := strings.TrimSpace(e.getenv("IRIS_HUB_URL")); v != "" {
+		r.URL = v
+		r.Source = "environment (IRIS_HUB_URL)"
+	}
+	if envToken != "" {
+		r.TokenFile = envToken
+		r.explicitToken = true
+	}
+	return r
+}
+func (r Resolved) HubURL() string {
+	if r.err != nil {
+		return ""
+	}
+	return r.URL
+}
+func (r Resolved) TokenPath() (string, error) { return r.TokenFile, r.err }
+func (r Resolved) Token() (string, error) {
+	if r.err != nil {
+		return "", r.err
+	}
+	raw, err := r.readFile(r.TokenFile)
+	if errors.Is(err, os.ErrNotExist) && !r.explicitToken {
 		return "", nil
 	}
 	if err != nil {
 		return "", err
 	}
-	return strings.TrimSpace(string(b)), nil
+	return strings.TrimSpace(string(raw)), nil
+}
+func (e EnvConfig) HubURL() string             { return e.Load().HubURL() }
+func (e EnvConfig) TokenPath() (string, error) { return e.Load().TokenPath() }
+func (e EnvConfig) Token() (string, error)     { return e.Load().Token() }
+
+// WriteConfig persists client settings without fetching or creating a credential.
+func WriteConfig(path string, f FileConfig) error {
+	if err := ValidateURL(f.Hub); err != nil {
+		return err
+	}
+	raw, err := json.MarshalIndent(f, "", "  ")
+	if err != nil {
+		return err
+	}
+	if err = os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	temp, err := os.CreateTemp(filepath.Dir(path), ".client-*")
+	if err != nil {
+		return err
+	}
+	name := temp.Name()
+	defer os.Remove(name)
+	if _, err = temp.Write(append(raw, '\n')); err != nil {
+		temp.Close()
+		return err
+	}
+	if err = temp.Close(); err != nil {
+		return err
+	}
+	return os.Rename(name, path)
 }
