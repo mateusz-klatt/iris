@@ -15,7 +15,7 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 		}
 		var err error
 		switch operation {
-		case "touch", "claim", "release", "messages", "ack", "end", "heartbeat":
+		case "touch", "claim", "release", "messages", "ack", "end", "heartbeat", "reconcile":
 			if r.Generation <= 0 {
 				return fail("bad_request", "generation is required")
 			}
@@ -23,6 +23,10 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 		switch operation {
 		case "ui_overview", "ui_threads", "ui_thread", "ui_messages", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_events":
 			out, err = t.operator(operation, r)
+		case "reconcile":
+			out, err = t.reconcile(r)
+		case "check":
+			out, err = t.check(r)
 		case "sessions":
 			out, err = t.session(r)
 		case "bind":

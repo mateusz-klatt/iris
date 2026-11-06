@@ -27,6 +27,7 @@ type Hub interface {
 
 // Runner executes one hook invocation.
 type Runner struct {
+	Status     func(context.Context, string) (map[string]string, error)
 	ClientName string
 	EventName  string
 	Stdin      io.Reader
@@ -104,6 +105,9 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 	if ev.ToolCallID == "" {
 		hash := sha256.Sum256(payload)
 		ev.ToolCallID = "payload:" + hex.EncodeToString(hash[:])
+	}
+	if shellEvent(ev) {
+		return r.finish(ev, r.reconcile(ctx, ev))
 	}
 	state.at("repository")
 	repo, err := r.repoFor(ev)
@@ -285,6 +289,7 @@ func (r Runner) sessionReq(ev Event, repo gitinfo.Repo) hubclient.SessionRequest
 		host, _ = os.Hostname()
 	}
 	return hubclient.SessionRequest{
+		CommonDir:        repo.CommonDir,
 		Client:           string(ev.Client),
 		SessionID:        ev.SessionID,
 		Host:             host,

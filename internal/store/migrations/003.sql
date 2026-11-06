@@ -1,0 +1,2 @@
+ALTER TABLE Repository ADD COLUMN name TEXT NOT NULL DEFAULT '';
+PRAGMA user_version=3;

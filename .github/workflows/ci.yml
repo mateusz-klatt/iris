@@ -46,3 +46,42 @@ jobs:
           CGO_ENABLED: "0"
           GOOS: ${{ matrix.target.goos }}
           GOARCH: ${{ matrix.target.goarch }}
+
+  hook-latency:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Measure 100 real pre-edit hooks (report only, no latency threshold)
+        run: go test ./cmd/iris -run '^TestHookLatency$' -count=1 -v
+        env:
+          CGO_ENABLED: "0"
+          IRIS_MEASURE_LATENCY: "1"
+  goreleaser-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: v2.20.0
+          install-only: true
+      - name: Validate stage 0 release configuration
+        shell: bash
+        run: |
+          # v2.20 returns 2 for valid configurations using deprecated brews (D15).
+          # Keep that visible, while invalid configurations (exit 1) fail CI.
+          set +e
+          goreleaser check
+          result=$?
+          set -e
+          if [ "$result" -eq 2 ]; then
+            echo "::warning::Valid configuration uses deprecated brews until notarization is available."
+          else
+            exit "$result"
+          fi

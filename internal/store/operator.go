@@ -3,8 +3,6 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
-	"path"
-	"strings"
 )
 
 // The operator has a mailbox per repository, but never a live session or lease.
@@ -115,7 +113,10 @@ func (t *transaction) overview() (map[string]any, error) {
 	}
 	for _, id := range ids {
 		aliases := []string{}
-		name := id
+		var name string
+		if err = t.row("SELECT name FROM Repository WHERE id=?", id).Scan(&name); err != nil {
+			return nil, err
+		}
 		rows, err = t.rows("SELECT alias FROM RepositoryAlias WHERE repository_id=? ORDER BY alias", id)
 		if err != nil {
 			return nil, err
@@ -127,9 +128,6 @@ func (t *transaction) overview() (map[string]any, error) {
 				return nil, err
 			}
 			aliases = append(aliases, a)
-			if strings.HasPrefix(a, "local:") {
-				name = path.Base(a)
-			}
 		}
 		err = rows.Err()
 		rows.Close()

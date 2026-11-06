@@ -13,6 +13,7 @@ import (
 
 // SessionRequest is the body of POST /v1/sessions.
 type SessionRequest struct {
+	CommonDir        string `json:"common_dir"`
 	Generation       int    `json:"generation"`
 	Client           string `json:"client"`
 	SessionID        string `json:"session_id"`
@@ -215,4 +216,39 @@ func ValidateURL(raw string) error {
 	default:
 		return fmt.Errorf("unsupported hub scheme %q", u.Scheme)
 	}
+}
+
+// CheckRequest identifies a worktree without creating an Execution or taking claims.
+type CheckRequest struct {
+	CommonDir  string   `json:"common_dir"`
+	Host       string   `json:"host"`
+	Worktree   string   `json:"worktree"`
+	RemoteURL  string   `json:"remote_url"`
+	RootCommit string   `json:"root_commit"`
+	Paths      []string `json:"paths"`
+}
+
+type CheckResponse struct {
+	Message   string  `json:"message"`
+	Conflicts []Claim `json:"conflicts"`
+}
+
+func (c *Client) CheckPaths(ctx context.Context, req CheckRequest) (CheckResponse, error) {
+	var out CheckResponse
+	err := c.post(ctx, "/v1/guard/check", req, &out)
+	return out, err
+}
+
+// ReconcileRequest carries an observed porcelain snapshot, never shell instructions.
+type ReconcileRequest struct {
+	ExecutionID string            `json:"execution_id"`
+	Generation  int               `json:"generation"`
+	Kind        string            `json:"kind"` // before records a baseline; after compares and records it.
+	Status      map[string]string `json:"status"`
+}
+
+func (c *Client) Reconcile(ctx context.Context, req ReconcileRequest) (CheckResponse, error) {
+	var out CheckResponse
+	err := c.post(ctx, "/v1/shell/reconcile", req, &out)
+	return out, err
 }

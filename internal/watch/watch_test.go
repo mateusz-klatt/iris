@@ -24,7 +24,7 @@ func TestCoalescing(t *testing.T) {
 		t.Fatal(output.String())
 	}
 	_ = c.Flush(start.Add(30 * time.Second))
-	want := "Iris: 1 new messages. Use the inbox tool.\nIris: 1 claims released. Use the claims tool.\nIris: 4 new messages. Use the inbox tool.\n"
+	want := "Iris: 1 new message. Use the inbox tool.\nIris: 1 claim released. Use the claims tool.\nIris: 4 new messages. Use the inbox tool.\n"
 	if output.String() != want {
 		t.Fatal(output.String())
 	}

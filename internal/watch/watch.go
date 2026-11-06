@@ -66,9 +66,17 @@ func (c *Coalescer) Flush(now time.Time) error {
 func (c *Coalescer) emit(now time.Time, kind string, p *pending) error {
 	var err error
 	if kind == "inbox_changed" {
-		_, err = fmt.Fprintf(c.Output, "Iris: %d new messages. Use the inbox tool.\n", p.count)
+		noun := "messages"
+		if p.count == 1 {
+			noun = "message"
+		}
+		_, err = fmt.Fprintf(c.Output, "Iris: %d new %s. Use the inbox tool.\n", p.count, noun)
 	} else {
-		_, err = fmt.Fprintf(c.Output, "Iris: %d claims released. Use the claims tool.\n", p.count)
+		noun := "claims"
+		if p.count == 1 {
+			noun = "claim"
+		}
+		_, err = fmt.Fprintf(c.Output, "Iris: %d %s released. Use the claims tool.\n", p.count, noun)
 	}
 	if err != nil {
 		return err

@@ -223,3 +223,22 @@ null and `clients` is empty. `expires_at` on a claim is null when it has no expi
 
 `GET /v1/ui/watch` upgrades to a WebSocket, with frames `{"cursor":124,"kind":"changed"}`. The UI
 refetches on a frame. Frames carry no content.
+
+## Cooperative Git and shell checks
+
+`POST /v1/guard/check` accepts `host`, `worktree`, `common_dir`, `remote_url`,
+`root_commit` and repository-relative `paths`. It creates no Execution and takes no
+claims. The response contains `message` and `conflicts`; a nonempty message means a
+live claim overlaps a path in another host/worktree. Repository case policy and
+prefix boundaries apply. Same-worktree claims are excluded. Git's staged rename
+source and destination are both checked by the CLI.
+
+`POST /v1/shell/reconcile` accepts `execution_id`, `generation`, `kind` (`before` or
+`after`), and `status`, a map of path to porcelain XY status. The hub stores a
+snapshot per Execution. `before` establishes the baseline; `after` compares and
+replaces it, returning the same response shape. The first post without a baseline
+only records it. Multiple live Executions in the same host/worktree suppress
+warnings and clear their baselines. Status strings are observations, never commands.
+
+Session registration also accepts `common_dir`, a host-scoped alias for linked
+worktrees without a globally unambiguous remote. It never joins paths across hosts.

@@ -14,49 +14,51 @@ import (
 
 // Request contains the version-one wire fields. Unknown client metadata is ignored.
 type Request struct {
-	ReplyTo          string           `json:"reply_to"`
-	Q                string           `json:"q"`
-	Agent            string           `json:"agent"`
-	Before           string           `json:"before"`
-	CheckedAt        string           `json:"checked_at"`
-	Clients          []map[string]any `json:"clients"`
-	Client           string           `json:"client"`
-	SessionID        string           `json:"session_id"`
-	Host             string           `json:"host"`
-	Cwd              string           `json:"cwd"`
-	Worktree         string           `json:"worktree"`
-	RemoteURL        string           `json:"remote_url"`
-	RootCommit       string           `json:"root_commit"`
-	Branch           string           `json:"branch"`
-	ParentSessionID  string           `json:"parent_session_id"`
-	ClientPID        int64            `json:"client_pid"`
-	ClientPIDStartMS int64            `json:"client_pid_start_ms"`
-	SingleSession    bool             `json:"single_session"`
-	Source           string           `json:"source"`
-	Execution        string           `json:"execution"`
-	ExecutionID      string           `json:"execution_id"`
-	Generation       int64            `json:"generation"`
-	Key              string           `json:"key"`
-	ToolCallID       string           `json:"tool_call_id"`
-	Paths            []string         `json:"paths"`
-	RenameFrom       string           `json:"rename_from"`
-	RenameTo         string           `json:"rename_to"`
-	Kind             string           `json:"kind"`
-	Path             string           `json:"path"`
-	RepoWide         bool             `json:"repo_wide"`
-	TTLS             int64            `json:"ttl_s"`
-	Fence            int64            `json:"fence"`
-	All              bool             `json:"all"`
-	Token            string           `json:"token"`
-	To               []string         `json:"to"`
-	Subject          string           `json:"subject"`
-	Body             string           `json:"body"`
-	Attempt          int64            `json:"attempt"`
-	RepositoryID     string           `json:"repository_id"`
-	After            int64            `json:"after"`
-	Limit            int              `json:"limit"`
-	ConsumerID       string           `json:"consumer_id"`
-	Stream           string           `json:"stream"`
+	CommonDir        string            `json:"common_dir"`
+	Status           map[string]string `json:"status"`
+	ReplyTo          string            `json:"reply_to"`
+	Q                string            `json:"q"`
+	Agent            string            `json:"agent"`
+	Before           string            `json:"before"`
+	CheckedAt        string            `json:"checked_at"`
+	Clients          []map[string]any  `json:"clients"`
+	Client           string            `json:"client"`
+	SessionID        string            `json:"session_id"`
+	Host             string            `json:"host"`
+	Cwd              string            `json:"cwd"`
+	Worktree         string            `json:"worktree"`
+	RemoteURL        string            `json:"remote_url"`
+	RootCommit       string            `json:"root_commit"`
+	Branch           string            `json:"branch"`
+	ParentSessionID  string            `json:"parent_session_id"`
+	ClientPID        int64             `json:"client_pid"`
+	ClientPIDStartMS int64             `json:"client_pid_start_ms"`
+	SingleSession    bool              `json:"single_session"`
+	Source           string            `json:"source"`
+	Execution        string            `json:"execution"`
+	ExecutionID      string            `json:"execution_id"`
+	Generation       int64             `json:"generation"`
+	Key              string            `json:"key"`
+	ToolCallID       string            `json:"tool_call_id"`
+	Paths            []string          `json:"paths"`
+	RenameFrom       string            `json:"rename_from"`
+	RenameTo         string            `json:"rename_to"`
+	Kind             string            `json:"kind"`
+	Path             string            `json:"path"`
+	RepoWide         bool              `json:"repo_wide"`
+	TTLS             int64             `json:"ttl_s"`
+	Fence            int64             `json:"fence"`
+	All              bool              `json:"all"`
+	Token            string            `json:"token"`
+	To               []string          `json:"to"`
+	Subject          string            `json:"subject"`
+	Body             string            `json:"body"`
+	Attempt          int64             `json:"attempt"`
+	RepositoryID     string            `json:"repository_id"`
+	After            int64             `json:"after"`
+	Limit            int               `json:"limit"`
+	ConsumerID       string            `json:"consumer_id"`
+	Stream           string            `json:"stream"`
 }
 type execution struct {
 	ID, AgentID, Repo, Host, Client, Session, Worktree, Branch, State, Name string
@@ -120,17 +122,26 @@ func remoteAlias(raw string) string {
 func (t *transaction) repository(r Request) (string, error) {
 	// Machine-relative remotes are deliberately never global aliases.
 	local := "local:" + r.Host + ":" + strings.ReplaceAll(r.Worktree, "\\", "/")
+	aliases := []string{local}
+	if r.CommonDir != "" {
+		aliases = append(aliases, "gitdir:"+r.Host+":"+strings.ReplaceAll(r.CommonDir, "\\", "/"))
+	}
 	var repo, root string
-	err := t.row("SELECT r.id,r.root_commit FROM RepositoryAlias a JOIN Repository r ON r.id=a.repository_id WHERE a.alias=?", local).Scan(&repo, &root)
-	if err == nil {
-		if root == "" || r.RootCommit == "" || root == r.RootCommit {
+	var err error
+	for _, alias := range aliases {
+		err = t.row("SELECT r.id,r.root_commit FROM RepositoryAlias a JOIN Repository r ON r.id=a.repository_id WHERE a.alias=?", alias).Scan(&repo, &root)
+		if err == nil && (root == "" || r.RootCommit == "" || root == r.RootCommit) {
+			for _, key := range aliases {
+				if _, err = t.exec("INSERT OR IGNORE INTO RepositoryAlias VALUES(?,?)", key, repo); err != nil {
+					return "", err
+				}
+			}
 			return repo, nil
 		}
-		// A reused path with a contradictory root must not inherit the old namespace.
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return "", err
+		}
 		repo = ""
-	}
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return "", err
 	}
 	remote := remoteAlias(r.RemoteURL)
 	if remote != "" {
@@ -163,12 +174,14 @@ func (t *transaction) repository(r Request) (string, error) {
 	}
 	if repo == "" {
 		repo = id("rp_")
-		if _, err = t.exec("INSERT INTO Repository(id,root_commit) VALUES(?,?)", repo, r.RootCommit); err != nil {
+		if _, err = t.exec("INSERT INTO Repository(id,root_commit,name) VALUES(?,?,?)", repo, r.RootCommit, repositoryName(r.RemoteURL, r.Worktree)); err != nil {
 			return "", err
 		}
 	}
-	if _, err = t.exec("INSERT OR IGNORE INTO RepositoryAlias VALUES(?,?)", local, repo); err != nil {
-		return "", err
+	for _, alias := range aliases {
+		if _, err = t.exec("INSERT OR IGNORE INTO RepositoryAlias VALUES(?,?)", alias, repo); err != nil {
+			return "", err
+		}
 	}
 	if remote != "" {
 		if _, err = t.exec("INSERT OR IGNORE INTO RepositoryAlias VALUES(?,?)", remote, repo); err != nil {

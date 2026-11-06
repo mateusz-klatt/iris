@@ -45,7 +45,9 @@ func New(s *store.Store, token string, allowedHosts []string) *Hub {
 		h.hosts[strings.ToLower(host)] = true
 	}
 	for route, operation := range map[string]string{
-		"POST /v1/sessions": "sessions", "POST /v1/bind": "bind",
+		"POST /v1/shell/reconcile": "reconcile",
+		"POST /v1/guard/check":     "check",
+		"POST /v1/sessions":        "sessions", "POST /v1/bind": "bind",
 		"POST /v1/executions/{id}/heartbeat": "heartbeat", "POST /v1/executions/{id}/end": "end",
 		"POST /v1/claims/touch": "touch", "POST /v1/claims": "claim", "POST /v1/claims/release": "release", "GET /v1/claims": "claims",
 		"POST /v1/messages": "messages", "GET /v1/inbox": "inbox", "POST /v1/deliveries/{id}/ack": "ack",
