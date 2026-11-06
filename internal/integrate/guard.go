@@ -33,15 +33,18 @@ func guardBash(iris, client, event, allow string) string {
 
 func guardPowerShell(iris, client, event, allow string) string {
 	// Get-Command sees a missing iris. $LASTEXITCODE catches a crash after it starts.
+	// exit 0 keeps a crash from becoming the hook's status; the allow text is the result.
 	run := "& " + psQuote(iris) + " hook --client " + client + " --event " + event
 	out := "Write-Output " + psQuote(allow)
-	return "if (Get-Command iris -ErrorAction SilentlyContinue) { " + run + "; if ($LASTEXITCODE -ne 0) { " + out + " } } else { " + out + " }"
+	return "if (Get-Command iris -ErrorAction SilentlyContinue) { " + run + "; if ($LASTEXITCODE -ne 0) { " + out + " } } else { " + out + " }; exit 0"
 }
 
 func guardCmd(iris, client, event, allow string) string {
 	run := iris
-	if strings.ContainsAny(iris, " \t") {
+	if strings.ContainsAny(iris, " \t\"") {
 		run = `"` + strings.ReplaceAll(iris, `"`, `""`) + `"`
 	}
-	return "where iris >NUL 2>&1 && " + run + " hook --client " + client + " --event " + event + " || echo " + allow
+	// cmd strips a surrounding quote and turns "" into one quote, so the allow JSON survives.
+	printed := `echo "` + strings.ReplaceAll(allow, `"`, `""`) + `"`
+	return "where iris >NUL 2>&1 && " + run + " hook --client " + client + " --event " + event + " || " + printed
 }
