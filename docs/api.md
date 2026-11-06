@@ -164,3 +164,61 @@ Frames never carry message text. Kinds so far: `inbox_changed`, `claim_released`
 | `release` | Release a claim, or all |
 | `claims` | List live claims |
 | `watch_ticket` | Get a wake ticket for the `Monitor` tool |
+
+## Threads
+
+`POST /v1/messages` also takes an optional `reply_to` with a message id. A reply joins that
+message's thread, and every message returns its `thread_id`. The recipient `human` is reserved: it
+reaches the operator through the web UI, not through a session.
+
+## Operator API, for the web UI
+
+Agents never use these routes. They accept the bearer token, or the session cookie of the web UI.
+
+`iris ui` calls `POST /v1/ui/links` with the bearer token, gets
+`{"url":"http://127.0.0.1:7878/ui/login?code=..."}` and opens it. `GET /ui/login?code=...` works
+once, sets an `HttpOnly`, `SameSite=Strict` cookie and redirects to `/`. Cookie login is refused
+off loopback (D13). Everything else under `/` serves the embedded web UI.
+
+`GET /v1/ui/overview` returns everything the first screen needs:
+
+```json
+{"repositories":[{"id":"rp_...","name":"iris","aliases":["..."]}],
+ "agents":[{"id":"ag_...","name":"...","client":"claude","host":"...","repository_id":"rp_...",
+            "worktree":"...","branch":"main","state":"active","last_seen":"...","unread":0}],
+ "claims":[{"fence":1,"repository_id":"rp_...","path":"...","kind":"exact","holder":"...",
+            "origin":"auto","expires_at":"..."}],
+ "human_unread":0}
+```
+
+`GET /v1/ui/threads?repository_id=...&agent=...&q=...&before=...&limit=50` lists threads, newest
+first. `q` is a full-text search.
+
+```json
+{"threads":[{"id":"ms_...","subject":"...","participants":["..."],"count":3,
+             "last_at":"...","unread":1}]}
+```
+
+`GET /v1/ui/threads/{id}` returns the thread's messages:
+
+```json
+{"id":"ms_...","messages":[{"id":"ms_...","sender":"...","recipients":[{"name":"...",
+  "state":"acked"}],"subject":"...","body":"...","created_at":"..."}]}
+```
+
+`POST /v1/ui/messages` takes `{"key":"...","to":["..."],"subject":"...","body":"...","reply_to":""}`
+and sends as `human`.
+
+`POST /v1/ui/claims/{fence}/revoke` revokes any claim.
+
+`GET /v1/ui/doctor` returns the last report that `iris doctor` stored with `PUT /v1/ui/doctor`:
+
+```json
+{"checked_at":"...","clients":[{"client":"codex","version":"...",
+  "status":"needs_human","detail":"Review hooks once in /hooks","last_hook_at":"..."}]}
+```
+
+`status` is `ok`, `not_configured`, `needs_human` or `silent`.
+
+`GET /v1/ui/watch` upgrades to a WebSocket, with frames `{"cursor":124,"kind":"changed"}`. The UI
+refetches on a frame. Frames carry no content.
