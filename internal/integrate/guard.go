@@ -44,7 +44,6 @@ func guardCmd(iris, client, event, allow string) string {
 	if strings.ContainsAny(iris, " \t\"") {
 		run = `"` + strings.ReplaceAll(iris, `"`, `""`) + `"`
 	}
-	// cmd strips a surrounding quote and turns "" into one quote, so the allow JSON survives.
-	printed := `echo "` + strings.ReplaceAll(allow, `"`, `""`) + `"`
-	return "where iris >NUL 2>&1 && " + run + " hook --client " + client + " --event " + event + " || " + printed
+	// cmd echo prints quote characters literally. Do not wrap or double them.
+	return "where iris >NUL 2>&1 && " + run + " hook --client " + client + " --event " + event + " || echo " + allow
 }

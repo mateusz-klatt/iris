@@ -1,10 +1,12 @@
 package integrate
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 	"testing"
@@ -19,9 +21,7 @@ func TestGuardOutcomes(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.client+"/missing", func(t *testing.T) {
 			out, code := runGuard(t, Guard(runtime.GOOS, tc.client, filepath.Join(t.TempDir(), "iris"), tc.event), guardPATH(t, ""))
-			if code != 0 || strings.TrimSpace(out) != tc.allow {
-				t.Fatalf("code %d output %q", code, out)
-			}
+			assertGuardJSON(t, out, code, tc.allow)
 		})
 		t.Run(tc.client+"/crash", func(t *testing.T) {
 			dir := t.TempDir()
@@ -30,9 +30,7 @@ func TestGuardOutcomes(t *testing.T) {
 				t.Fatal(err)
 			}
 			out, code := runGuard(t, Guard(runtime.GOOS, tc.client, path, tc.event), guardPATH(t, dir), "IRIS_FAKE_EXIT=3")
-			if code != 0 || strings.TrimSpace(out) != tc.allow {
-				t.Fatalf("code %d output %q", code, out)
-			}
+			assertGuardJSON(t, out, code, tc.allow)
 		})
 		t.Run(tc.client+"/deny", func(t *testing.T) {
 			dir := t.TempDir()
@@ -41,9 +39,7 @@ func TestGuardOutcomes(t *testing.T) {
 				t.Fatal(err)
 			}
 			out, code := runGuard(t, Guard(runtime.GOOS, tc.client, path, tc.event), guardPATH(t, dir), "IRIS_FAKE_EXIT=0", "IRIS_FAKE_STDOUT="+deny)
-			if code != 0 || strings.TrimSpace(out) != deny {
-				t.Fatalf("code %d output %q", code, out)
-			}
+			assertGuardJSON(t, out, code, deny)
 		})
 	}
 }
@@ -54,7 +50,7 @@ func TestWindowsGuardStrings(t *testing.T) {
 		t.Fatal(ps)
 	}
 	cmd := Guard("windows", Antigravity, `C:\iris\iris.exe`, "PreToolUse")
-	if !strings.Contains(cmd, "where") || !strings.Contains(cmd, `decision`) || !strings.Contains(cmd, `allow`) {
+	if !strings.Contains(cmd, "where") || !strings.HasSuffix(cmd, `|| echo {"decision":"allow"}`) {
 		t.Fatal(cmd)
 	}
 	cur := cursorCommand("windows", `C:\iris\iris.exe`, "sessionStart")
@@ -82,16 +78,18 @@ func guardPATH(t *testing.T, dir string) string {
 	return dir + ";" + base
 }
 
+func assertGuardJSON(t *testing.T, out string, code int, want string) {
+	t.Helper()
+	got := strings.TrimRight(out, "\r\n")
+	var have, need any
+	if err := json.Unmarshal([]byte(got), &have); err != nil || json.Unmarshal([]byte(want), &need) != nil || code != 0 || !reflect.DeepEqual(have, need) {
+		t.Fatalf("code %d output %q want %s", code, out, want)
+	}
+}
+
 func runGuard(t *testing.T, script, path string, extra ...string) (string, int) {
 	t.Helper()
-	var cmd *exec.Cmd
-	if runtime.GOOS == "windows" && strings.Contains(script, "Get-Command") {
-		cmd = exec.Command(powershellExe(), "-NoProfile", "-NonInteractive", "-Command", script)
-	} else if runtime.GOOS == "windows" {
-		cmd = exec.Command("cmd", "/d", "/c", script)
-	} else {
-		cmd = exec.Command("/bin/sh", "-c", script)
-	}
+	cmd := startGuard(script)
 	cmd.Env = envWithPath(path, extra...)
 	out, err := cmd.CombinedOutput()
 	if err == nil {
@@ -102,13 +100,6 @@ func runGuard(t *testing.T, script, path string, extra ...string) (string, int) 
 		t.Fatalf("guard start: %v\n%s", err, out)
 	}
 	return string(out), exit.ExitCode()
-}
-
-func powershellExe() string {
-	if p, err := exec.LookPath("pwsh"); err == nil {
-		return p
-	}
-	return "powershell"
 }
 
 func envWithPath(path string, extra ...string) []string {
