@@ -139,7 +139,7 @@ func TestBurstReconnectNoDuplicateLine(t *testing.T) {
 		send(fmt.Sprint(i))
 	}
 	close(resume)
-	want := "Iris: 1 new messages. Use the inbox tool.\nIris: 3 new messages. Use the inbox tool.\n"
+	want := "Iris: 1 new message. Use the inbox tool.\nIris: 3 new messages. Use the inbox tool.\n"
 	deadline := time.Now().Add(6 * time.Second)
 	for time.Now().Before(deadline) {
 		if output.String() == want {

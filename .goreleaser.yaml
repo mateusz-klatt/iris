@@ -65,6 +65,7 @@ brews:
     description: Cooperative coordination for coding agents
     license: Apache-2.0
     skip_upload: true
+    url_template: 'https://github.com/mateusz-klatt/iris/releases/download/{{ .Tag }}/{{ .ArtifactName }}'
 scoops:
   - name: iris
     repository: {owner: mateusz-klatt, name: scoop-bucket}
@@ -72,6 +73,7 @@ scoops:
     description: Cooperative coordination for coding agents
     license: Apache-2.0
     skip_upload: true
+    url_template: 'https://github.com/mateusz-klatt/iris/releases/download/{{ .Tag }}/{{ .ArtifactName }}'
 winget:
   - name: iris
     publisher: Mateusz Klatt
@@ -80,3 +82,4 @@ winget:
     license: Apache-2.0
     repository: {owner: mateusz-klatt, name: winget-pkgs}
     skip_upload: true
+    url_template: 'https://github.com/mateusz-klatt/iris/releases/download/{{ .Tag }}/{{ .ArtifactName }}'

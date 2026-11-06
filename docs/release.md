@@ -22,7 +22,8 @@ The before hook runs `make web`, requiring the Node version in `web/package.json
 and npm. Release builds embed the rebuilt console, use `CGO_ENABLED=0`, `-trimpath`,
 and set `main.version` through ldflags. Outputs cover Linux, macOS and Windows on
 amd64 and arm64: four tar.gz archives, two Windows zip archives, checksums, and
-Linux deb/rpm packages named `iris`. Package-manager manifests remain local.
+Linux deb/rpm packages named `iris`. Package-manager manifests remain local. Their explicit download URL templates refer to
+future GitHub assets; private snapshot assets are not public install channels.
 
 The server image uses `dockers_v2` for Linux amd64/arm64. Snapshots load local
 platform images without pushing; release publication remains a separate opt-in.
