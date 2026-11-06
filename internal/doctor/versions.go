@@ -35,14 +35,14 @@ func parsedVersion(text string) ([3]uint64, bool) {
 	}
 	return version, true
 }
-func legacyKimi(row ClientReport) bool {
+func oldKimi(row ClientReport) bool {
 	version, ok := parsedVersion(row.Version)
 	return row.Client == integrate.Kimi && ok && version[0] < 2
 }
 func applyVersion(row *ClientReport) {
-	if legacyKimi(*row) {
+	if oldKimi(*row) {
 		row.Status = StatusNeedsHuman
-		row.Detail = "legacy Kimi CLI; Iris needs Kimi Code 2 or later"
+		row.Detail = "Kimi Code older than version 2; Iris needs version 2 or later"
 		return
 	}
 	version, ok := parsedVersion(row.Version)

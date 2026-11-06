@@ -37,6 +37,14 @@ func realPath(t *testing.T, path string) string {
 	return resolved
 }
 
+// TestMain keeps the developer's git configuration out of these repositories. A global
+// commit.gpgsign otherwise makes every test commit depend on a signing tool.
+func TestMain(m *testing.M) {
+	os.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
+	os.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	os.Exit(m.Run())
+}
+
 func TestInstallRemove(t *testing.T) {
 	for _, custom := range []string{"", "relative hooks", "absolute"} {
 		t.Run(custom, func(t *testing.T) {

@@ -3,7 +3,10 @@ package integrate
 import (
 	"context"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"reflect"
+	"strings"
 	"testing"
 	"time"
 )
@@ -49,5 +52,40 @@ func TestWindowsClientInvocationStdin(t *testing.T) {
 				t.Fatalf("stdin receipt %q: %v", raw, err)
 			}
 		})
+	}
+}
+
+func TestWindowsCmdWithoutComspec(t *testing.T) {
+	t.Setenv("COMSPEC", "")
+	for _, kind := range []ShellKind{ShellCmd, ""} {
+		in := Invocation{Shell: "echo {}", Kind: kind}
+		out, code, err := in.Run(context.Background(), nil)
+		if err != nil || code != 0 || strings.TrimSpace(string(out)) != "{}" {
+			t.Fatalf("kind %q: %d %v %q", kind, code, err, out)
+		}
+	}
+}
+
+func TestWindowsShShell(t *testing.T) {
+	in := Invocation{Shell: "echo from-sh", Kind: ShellSh}
+	cmd, err := in.start(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(cmd.Args, []string{"sh", "-c", "echo from-sh"}) {
+		t.Fatal(cmd.Args)
+	}
+	if _, err := exec.LookPath("sh"); err != nil {
+		t.Skip("no sh on this machine")
+	}
+	out, code, err := in.Run(context.Background(), nil)
+	if err != nil || code != 0 || strings.TrimSpace(string(out)) != "from-sh" {
+		t.Fatalf("%d %v %q", code, err, out)
+	}
+}
+
+func TestWindowsRefusesAnUnknownShell(t *testing.T) {
+	if _, _, err := (Invocation{Shell: "echo", Kind: "fish"}).Run(context.Background(), nil); err == nil {
+		t.Fatal("no error")
 	}
 }
