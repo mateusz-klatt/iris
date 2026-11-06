@@ -166,6 +166,14 @@ func call(ctx context.Context, h *hubclient.Client, b binding.Bound, name string
 	if err == nil && (name == "send" || name == "claim") {
 		out["key"] = body["key"]
 	}
+	if err != nil && (name == "send" || name == "claim") {
+		var typed *hubclient.Error
+		if errors.As(err, &typed) {
+			typed.Details = map[string]any{"key": body["key"], "hub_details": typed.Details}
+		} else {
+			err = &hubclient.Error{Code: "unavailable", Message: err.Error(), Details: map[string]any{"key": body["key"], "instruction": "Retry with this same key and unchanged arguments."}}
+		}
+	}
 	return out, err
 }
 func fmtInt(i int) string { raw, _ := json.Marshal(i); return string(raw) }

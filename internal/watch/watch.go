@@ -227,6 +227,13 @@ func (r *Runner) connect(ctx context.Context, b binding.Bound, cursor *int64, st
 			if err = c.Add(time.Now(), f.Kind, 1); err != nil {
 				return err
 			}
+			// Persist only a cursor consumed here, never a socket writer's high-water mark.
+			ackCtx, ackCancel := context.WithTimeout(ctx, 5*time.Second)
+			err = h.Do(ackCtx, "GET", "/v1/events?execution_id="+url.QueryEscape(b.ExecutionID)+"&consumer_id=iris-watch&limit=1&after="+fmt.Sprint(*cursor), nil, nil)
+			ackCancel()
+			if err != nil {
+				return err
+			}
 		}
 	}
 }

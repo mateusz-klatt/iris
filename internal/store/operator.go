@@ -170,7 +170,7 @@ func (t *transaction) overview() (map[string]any, error) {
 	return map[string]any{"repositories": repos, "agents": agents, "claims": claims, "human_unread": unread}, err
 }
 func (t *transaction) threads(r Request) (map[string]any, error) {
-	q := `SELECT m.thread_id,MIN(m.subject),COUNT(*),MAX(m.created_ms),SUM((SELECT COUNT(*) FROM Delivery d JOIN Agent a ON a.id=d.recipient_agent_id WHERE d.message_id=m.id AND a.client='human' AND d.id NOT IN (SELECT delivery_id FROM Ack))) FROM Message m WHERE 1=1`
+	q := `SELECT m.thread_id,(SELECT subject FROM Message WHERE id=m.thread_id),COUNT(*),MAX(m.created_ms),SUM((SELECT COUNT(*) FROM Delivery d JOIN Agent a ON a.id=d.recipient_agent_id WHERE d.message_id=m.id AND a.client='human' AND d.id NOT IN (SELECT delivery_id FROM Ack))) FROM Message m WHERE 1=1`
 	args := []any{}
 	if r.RepositoryID != "" {
 		q += " AND m.repository_id=?"
@@ -247,7 +247,7 @@ func (t *transaction) thread(id string) (map[string]any, error) {
 			rows.Close()
 			return nil, err
 		}
-		messages = append(messages, map[string]any{"id": mid, "sender": sender, "subject": subject, "body": body, "created_at": timestamp(sql.NullInt64{Int64: at, Valid: true}), "reply_to": reply.String})
+		messages = append(messages, map[string]any{"id": mid, "thread_id": id, "sender": sender, "subject": subject, "body": body, "created_at": timestamp(sql.NullInt64{Int64: at, Valid: true}), "reply_to": reply.String})
 	}
 	err = rows.Err()
 	rows.Close()

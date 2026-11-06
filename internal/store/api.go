@@ -91,6 +91,12 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 			}
 			_, err = t.exec("UPDATE Execution SET last_seen_ms=? WHERE id=?", t.s.clock.Now().UnixMilli(), ex)
 		}
+		if err == nil {
+			switch operation {
+			case "sessions", "end", "touch", "claim", "release", "messages", "ack":
+				err = t.event("", "", "changed", "")
+			}
+		}
 		return err
 	})
 	return out, err

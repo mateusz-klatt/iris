@@ -4,7 +4,9 @@
 package hubclient
 
 import (
+	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
@@ -48,7 +50,18 @@ func (e EnvConfig) HubURL() string {
 func (e EnvConfig) Token() (string, error) {
 	path := strings.TrimSpace(e.getenv("IRIS_TOKEN_FILE"))
 	if path == "" {
-		return "", nil
+		dir, err := os.UserConfigDir()
+		if err != nil {
+			return "", err
+		}
+		raw, err := e.readFile(filepath.Join(dir, "iris", "hub.token"))
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil
+		}
+		if err != nil {
+			return "", err
+		}
+		return strings.TrimSpace(string(raw)), nil
 	}
 	b, err := e.readFile(path)
 	if err != nil {

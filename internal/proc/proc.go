@@ -125,14 +125,9 @@ func SingleSession(a Ancestor, client string) bool {
 			return false
 		}
 		args := strings.Split(string(raw), "\x00")
-		for _, arg := range args[1:] {
-			if arg == "app-server" {
-				return false
-			}
-			if arg == "exec" {
-				return true
-			}
-		}
+		// Only an unambiguous command position is positive evidence. A value of
+		// --config (or a prompt) containing "exec" must not classify app-server.
+		return len(args) > 1 && args[1] == "exec"
 	}
 	return false
 }

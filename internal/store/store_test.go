@@ -411,7 +411,7 @@ func TestEventsCursorPrivacyReset(t *testing.T) {
 	err := s.transact(context.Background(), func(tx *transaction) error {
 		return tx.row("SELECT seq FROM Cursor WHERE consumer_id=?", b.ExecutionID+":watch").Scan(&stored)
 	})
-	if err != nil || stored != 4 {
+	if err != nil || stored != number(rest[1]["cursor"]) {
 		t.Fatalf("cursor regressed: %d %v", stored, err)
 	}
 	other := call(t, s, "events", c)

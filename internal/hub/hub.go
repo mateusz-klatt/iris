@@ -285,7 +285,7 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 			writeError(w, err)
 			return
 		}
-		if cursor := saved["cursor"].(int64); cursor > req.After {
+		if cursor := saved["cursor"].(int64); req.After == 0 {
 			req.After = cursor
 		}
 	}
@@ -314,7 +314,11 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 			_ = conn.Close(websocket.StatusPolicyViolation, "Execution lease lost")
 			return
 		}
-		result, err := h.store.Call(ctx, "events", req)
+		pageReq := req
+		if pageReq.ConsumerID == "iris-watch" {
+			pageReq.ConsumerID = ""
+		}
+		result, err := h.store.Call(ctx, "events", pageReq)
 		if err != nil {
 			_ = conn.Close(websocket.StatusPolicyViolation, "Execution stream unavailable")
 			return
