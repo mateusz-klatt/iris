@@ -1,0 +1,76 @@
+{
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__IRIS__",
+            "args": ["hook", "--client", "claude", "--event", "SessionStart"],
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__IRIS__",
+            "args": ["hook", "--client", "claude", "--event", "UserPromptSubmit"],
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__IRIS__",
+            "args": ["hook", "--client", "claude", "--event", "PreToolUse"],
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__IRIS__",
+            "args": ["hook", "--client", "claude", "--event", "PostToolUse"],
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__IRIS__",
+            "args": ["hook", "--client", "claude", "--event", "Stop"],
+            "timeout": 3
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "__IRIS__",
+            "args": ["hook", "--client", "claude", "--event", "SessionEnd"],
+            "timeout": 1
+          }
+        ]
+      }
+    ]
+  }
+}

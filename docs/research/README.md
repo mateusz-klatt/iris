@@ -22,7 +22,9 @@ a later measurement overruled a claim. Captured payloads are in `internal/hook/t
 ## Review of the architecture
 
 The synthesis then went back to the clients as a plan review. Antigravity was left out of this
-round: its quota cost per run was too high for the value of a second opinion.
+round: its quota cost per run was too high for the value of a second opinion. Kimi's review did
+not finish, because of the account's limit of 3 requests per minute, so D3 to D6 were reviewed by
+Codex, Grok and Cursor only.
 
 Accepted changes include: refusing plain HTTP off loopback; recovery reservations in place of
 reviving leases at restart; stopping heartbeats on orphaning; all-or-nothing multi-path claims;

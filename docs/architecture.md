@@ -86,6 +86,10 @@ Hard rules for `iris hook`, because failure semantics differ between clients:
    because defaults reach 600 s.
 4. Non-mutating tools return without touching the network.
 5. Outside a git worktree the hook does nothing.
+6. Every fallback to allow caused by a failure is recorded in `hook-failures.log`, without payload
+   content, and `iris doctor` reports it. A silent fail-open once hid a real bypass: Copilot sends
+   no tool call id, the hub refused the request, and the edit went through a live claim.
+7. A client that provides no tool call id gets one derived from a hash of the raw payload.
 
 Target latency is p95 under 50 ms on Linux and macOS and under 150 ms on Windows, measured in
 CI with the real binary.
@@ -203,8 +207,9 @@ every arming and dies with the Execution. Notifications and digests carry the `k
 
 A stdio MCP server normally lives exactly as long as its client session, on every client.
 `iris mcp` therefore sends a heartbeat every 20 s for its positively bound Execution generation.
-It stops on stdin EOF, on a change of parent process and on loss of binding, so that an orphan
-cannot keep claims alive. An Execution with a recent heartbeat has a 60 s lease. With no shim or
+It stops on stdin EOF, when its parent process is gone and on loss of binding, so that an orphan
+cannot keep claims alive. The parent is checked by identity, because on Windows a process keeps
+its parent pid after the parent dies (found by CI). An Execution with a recent heartbeat has a 60 s lease. With no shim or
 watch process it has a 15-minute lease, renewed by hook activity, because no hook fires during a
 long model call. That is also how long a dead session of that kind can hold a claim. Claims need
 no renewal of their own: a claim is valid while its Execution is live and its own optional expiry
@@ -404,8 +409,9 @@ to run the doctor. A silent client must show its cause, not an empty table.
 
 ## 4. Known gaps
 
-- Nothing here is measured on Windows or macOS. Hook spawn cost under Defender, `cmd /c` quoting,
-  ACL handling, and whether fail-open holds there all need real runs before any claim of support.
+- The test suite passes on Windows and macOS in CI, but no real client has run there yet. Hook
+  spawn cost under Defender, `cmd /c` quoting, and whether fail-open holds on those systems all
+  need real runs before any claim of support.
 - Whether plugin monitors survive `--resume` and `/clear`, and at what rate monitors are stopped.
 - Whether `SessionStart` context on Grok and Kimi reaches the model at all.
 - The nearest-process rung has not been tried on a Codex TUI session or a Cursor IDE session.
