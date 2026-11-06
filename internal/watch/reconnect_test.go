@@ -57,6 +57,8 @@ func TestBurstReconnectNoDuplicateLine(t *testing.T) {
 	var sockets atomic.Int32
 	cut := make(chan struct{})
 	resume := make(chan struct{})
+	attached := make(chan struct{})
+	var attach sync.Once
 	server := httptest.NewUnstartedServer(nil)
 	real := hub.New(s, "token", []string{server.Listener.Addr().String()})
 	real.PingInterval = 20 * time.Millisecond
@@ -81,6 +83,9 @@ func TestBurstReconnectNoDuplicateLine(t *testing.T) {
 			return
 		}
 		defer upstream.CloseNow()
+		// The hub has placed this monitor at the newest event, so anything sent from
+		// here on arrives as a frame and not as mail already waiting.
+		attach.Do(func() { close(attached) })
 		downstream, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{"iris.v1"}})
 		if err != nil {
 			return
@@ -129,6 +134,11 @@ func TestBurstReconnectNoDuplicateLine(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+	}
+	select {
+	case <-attached:
+	case <-ctx.Done():
+		t.Fatal("monitor never attached")
 	}
 	send("first")
 	select {

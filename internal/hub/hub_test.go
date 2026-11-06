@@ -315,3 +315,45 @@ func TestConnectedWakeTicketRevocation(t *testing.T) {
 	request(t, s, "POST", "/v1/executions/"+b["execution_id"].(string)+"/end", map[string]any{"generation": 1}, 200)
 	closed(ended)
 }
+
+func monitor(t *testing.T, s *httptest.Server, ex any, after int64) *websocket.Conn {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, watchURL(s, ex, after)+"&consumer_id=iris-watch", &websocket.DialOptions{HTTPHeader: http.Header{"Authorization": []string{"Bearer test-secret"}}, Subprotocols: []string{"iris.v1"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { conn.CloseNow() })
+	return conn
+}
+
+func TestNewMonitorHearsOnlyWhatIsWaiting(t *testing.T) {
+	_, s := setup(t)
+	a, b := register(t, s, 1), register(t, s, 2)
+	send(t, s, a, b, "one")
+	send(t, s, a, b, "two")
+	conn := monitor(t, s, b["execution_id"], 0)
+	first := frame(t, conn)
+	if first["kind"] != "reset" {
+		t.Fatal(first)
+	}
+	send(t, s, a, b, "three")
+	next := frame(t, conn)
+	if next["kind"] != "inbox_changed" || next["cursor"].(float64) <= first["cursor"].(float64) {
+		t.Fatal(next)
+	}
+}
+
+func TestEventForFetchedMailDoesNotAskForAttention(t *testing.T) {
+	_, s := setup(t)
+	a, b := register(t, s, 1), register(t, s, 2)
+	conn := monitor(t, s, b["execution_id"], 0)
+	conn.CloseNow()
+	send(t, s, a, b, "one")
+	request(t, s, "GET", "/v1/inbox?execution_id="+b["execution_id"].(string), nil, 200)
+	again := dial(t, s, b["execution_id"], 0)
+	if got := frame(t, again); got["kind"] != "inbox_read" {
+		t.Fatal(got)
+	}
+}
