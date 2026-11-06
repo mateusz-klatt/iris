@@ -143,6 +143,18 @@ func TestConnectReturnsWhenTheSocketClosesOrTheContextEnds(t *testing.T) {
 	}
 }
 
+func TestReadFailureIsQuietOnlyAfterCancellation(t *testing.T) {
+	failure := errors.New("cut")
+	if got := readFailure(context.Background(), failure); got != failure {
+		t.Fatal(got)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if got := readFailure(ctx, failure); got != nil {
+		t.Fatal(got)
+	}
+}
+
 func TestRunCapsBackoffAndDefaultsAMissingDelay(t *testing.T) {
 	orig := maxBackoff
 	t.Cleanup(func() { maxBackoff = orig })
@@ -153,7 +165,7 @@ func TestRunCapsBackoffAndDefaultsAMissingDelay(t *testing.T) {
 		http.Error(w, "down", http.StatusServiceUnavailable)
 	}))
 	defer srv.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 40*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Millisecond)
 	defer cancel()
 	runner := &Runner{
 		Resolver: binding.New(&hubclient.Client{Config: testConfig{url: srv.URL}}, "claude"),

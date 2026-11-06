@@ -102,7 +102,7 @@ func TestServicePrintsStatusDetailAndAbsFailure(t *testing.T) {
 	origHost, origAbs := hostService, absPath
 	t.Cleanup(func() { hostService, absPath = origHost, origAbs })
 	binDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(binDir, "iris"), []byte("#!/bin/sh\n"), 0755); err != nil {
+	if _, err := integrate.PlaceFake(binDir, "iris"); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -306,7 +306,7 @@ func TestSetupUsesTheRealServiceBuilderWhenNoneIsInjected(t *testing.T) {
 	orig := hostService
 	t.Cleanup(func() { hostService = orig })
 	bin := t.TempDir()
-	if err := os.WriteFile(filepath.Join(bin, "iris"), []byte("#!/bin/sh\n"), 0755); err != nil {
+	if _, err := integrate.PlaceFake(bin, "iris"); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin)

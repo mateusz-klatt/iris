@@ -145,6 +145,15 @@ func (r *Runner) Run(ctx context.Context) error {
 	}
 	return nil
 }
+// readFailure hides the error a read reports because ctx ended. That is a normal
+// stop, and either side of the select in connect can see it first.
+func readFailure(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return nil
+	}
+	return err
+}
+
 func (r *Runner) connect(ctx context.Context, b binding.Bound, cursor *int64, stream *string, c *Coalescer) error {
 	h := r.Resolver.Hub
 	base := strings.TrimRight(h.Config.HubURL(), "/")
@@ -201,7 +210,7 @@ func (r *Runner) connect(ctx context.Context, b binding.Bound, cursor *int64, st
 		case <-ctx.Done():
 			return nil
 		case err := <-fail:
-			return err
+			return readFailure(ctx, err)
 		case now := <-tick.C:
 			if err = c.Flush(now); err != nil {
 				return err
