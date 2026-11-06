@@ -23,7 +23,7 @@ In WSL, keep the repository in the Linux filesystem, not under `/mnt/c`.
 ## macOS
 
 Iris keeps its configuration in `~/Library/Application Support/iris`, and it ignores `~/.config/iris`
-and `XDG_CONFIG_HOME`. A token copied to the Linux path leaves `iris doctor` reporting `token: not valid`.
+and `XDG_CONFIG_HOME`. A token copied to the Linux path leaves `iris doctor` reporting `token: not available`.
 
 ```bash
 git clone https://github.com/mateusz-klatt/iris.git && cd iris

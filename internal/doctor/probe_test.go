@@ -148,8 +148,29 @@ func TestUnreadableTokenKeepsItsReason(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if res.TokenOK || res.HubDetail == "" || strings.Contains(res.HubDetail, "missing or empty") {
+	if res.TokenOK || res.TokenDetail == "" || strings.Contains(res.TokenDetail, "missing or empty") {
 		t.Fatalf("%+v", res)
+	}
+}
+
+func TestMissingTokenIsReportedOnTheTokenLine(t *testing.T) {
+	layout := emptyLayout(t)
+	file := filepath.Join(layout.Home, "absent")
+	res, err := Run(context.Background(), Options{Layout: layout, HubURL: "https://hub.example", TokenFile: file, HTTP: &http.Client{Transport: hubStub{}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	text := res.Format()
+	for _, want := range []string{"\nhub: ok\n", "\ntoken: not available (token file is missing or empty)\n"} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("want %q in\n%s", want, text)
+		}
+	}
+	if strings.Contains(text, "not valid") {
+		t.Fatalf("the hub never saw a token:\n%s", text)
+	}
+	if res.ExitCode() != 1 {
+		t.Fatalf("exit %d", res.ExitCode())
 	}
 }
 
