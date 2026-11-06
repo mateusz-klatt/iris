@@ -294,3 +294,21 @@ persisted. Revocation refuses new requests and closes existing bearer streams an
 wake-ticket streams issued by that token. Already authenticated HTTP operations may
 finish. Previously issued UI login links and cookies remain valid until their own
 expiry; bearer revocation does not revoke those separate UI sessions.
+
+Request quotas are in-memory fixed one-minute windows, independently keyed by
+credential digest and by TCP peer IP. `serve --token-rate` defaults to 6000 requests
+per minute, `--address-rate` to 12000, and `--token-websockets` to 100 concurrent
+sockets per credential, sufficient for approximately 50 sessions sharing a host.
+Zero selects the default; negative limits are rejected. All requests, including
+unauthenticated status and failed authentication, consume address quota. Successful
+bearer authentication consumes token quota, including status and socket upgrades;
+wake upgrades consume their issuer's token quota. Cookie streams share a separate
+socket quota. HTTP quota exhaustion and socket-cap exhaustion return 429 with
+`error.code` `rate_limited` and integer `Retry-After` seconds. Closing or failing an
+upgrade releases its socket slot. Revocation does not reset a quota for the old secret.
+
+Forwarded client addresses are deliberately ignored: a trusted reverse proxy shares
+one address quota, so size `--address-rate` for its aggregate load. Quotas reset on
+hub restart, are local to one process, and do not impose per-Execution permissions.
+The address/token window table is capped at 10000 entries; saturation refuses new
+keys with 429 until a window expires, rather than allowing arbitrary memory growth.

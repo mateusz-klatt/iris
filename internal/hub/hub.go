@@ -29,7 +29,10 @@ type ticket struct {
 	used       bool
 }
 type Hub struct {
-	sockets map[string]map[*websocket.Conn]bool
+	Limits       Limits
+	rates        map[string]window
+	socketCounts map[string]int
+	sockets      map[string]map[*websocket.Conn]bool
 	// PingInterval is configurable before serving; zero uses 25 seconds.
 	PingInterval time.Duration
 	// MaxRequestBytes bounds every HTTP body; zero uses 64 KiB.
@@ -49,7 +52,7 @@ type Hub struct {
 }
 
 func New(s *store.Store, token string, allowedHosts []string) *Hub {
-	h := &Hub{sockets: map[string]map[*websocket.Conn]bool{}, monitors: map[string]bool{}, links: map[string]loginGrant{}, cookies: map[string]loginGrant{}, store: s, token: token, hosts: map[string]bool{}, mux: http.NewServeMux(), tickets: map[string]ticket{}, now: time.Now}
+	h := &Hub{rates: map[string]window{}, socketCounts: map[string]int{}, sockets: map[string]map[*websocket.Conn]bool{}, monitors: map[string]bool{}, links: map[string]loginGrant{}, cookies: map[string]loginGrant{}, store: s, token: token, hosts: map[string]bool{}, mux: http.NewServeMux(), tickets: map[string]ticket{}, now: time.Now}
 	for _, host := range allowedHosts {
 		h.hosts[strings.ToLower(host)] = true
 	}
@@ -82,6 +85,9 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if !h.hosts[strings.ToLower(r.Host)] {
 		h.reject(w, r, "Host is not allowed")
+		return
+	}
+	if !h.addressRate(w, r) {
 		return
 	}
 	wsOrigin := "ws://" + r.Host
@@ -125,6 +131,9 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	p := h.authenticate(r)
+	if !h.tokenRate(w, p) {
+		return
+	}
 	logPrincipal(r, p)
 	r = r.WithContext(context.WithValue(r.Context(), principalKey{}, p))
 	if strings.HasPrefix(r.URL.Path, "/v1/") && r.URL.Path != "/v1/status" && r.URL.Path != "/v1/watch" && !h.authorized(r) && !(strings.HasPrefix(r.URL.Path, "/v1/ui/") && r.URL.Path != "/v1/ui/links" && h.cookieAuthorized(r)) {
@@ -217,6 +226,8 @@ func writeError(w http.ResponseWriter, err error) {
 		status = http.StatusNotFound
 	case "conflict", "key_reused", "lost", "ambiguous", "unbound":
 		status = http.StatusConflict
+	case "rate_limited":
+		status = http.StatusTooManyRequests
 	case "too_large":
 		status = http.StatusRequestEntityTooLarge
 	}
@@ -346,6 +357,13 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 			req.After = cursor
 		}
 	}
+	if ticketKey != "" && !h.tokenRate(w, p) {
+		return
+	}
+	if !h.reserveSocket(w, p) {
+		return
+	}
+	defer h.releaseSocket(p)
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{protocol}})
 	if err != nil {
 		return

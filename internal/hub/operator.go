@@ -121,12 +121,16 @@ func (h *Hub) uiLogin(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
 func (h *Hub) uiWatch(w http.ResponseWriter, r *http.Request) {
+	p := requestPrincipal(r)
+	if !h.reserveSocket(w, p) {
+		return
+	}
+	defer h.releaseSocket(p)
 	conn, err := websocket.Accept(w, r, nil)
 	if err != nil {
 		return
 	}
 	defer conn.CloseNow()
-	p := requestPrincipal(r)
 	if !h.trackSocket(r, conn, p) {
 		return
 	}
