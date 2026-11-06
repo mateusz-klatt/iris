@@ -39,6 +39,9 @@ make build
 
 - [Requirements](docs/spec/requirements.md): what Iris must do, and why
 - [Architecture](docs/architecture.md): decisions, evidence and known gaps
+- [Joining a hub](docs/join-hub.md): connect Claude Code on Linux, WSL or Windows
+- [Deployment](docs/deploy.md): run a public hub
+- [Status](docs/status.md): what works and what does not
 - [Client research](docs/research/): measurements on each supported client
 - [Provenance](docs/PROVENANCE.md): how independence from earlier projects is kept
 
