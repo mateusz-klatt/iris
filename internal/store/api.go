@@ -66,15 +66,6 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 			var e execution
 			e, err = t.live(r.ExecutionID, r.Generation)
 			out = bound(e)
-		case "attention":
-			var e execution
-			e, err = t.live(r.ExecutionID, 0)
-			if err != nil {
-				return err
-			}
-			var unread int
-			err = t.row("SELECT COUNT(*) FROM Delivery WHERE recipient_agent_id=? AND id NOT IN (SELECT delivery_id FROM Ack)", e.AgentID).Scan(&unread)
-			out = map[string]any{"unread": unread}
 		case "status":
 			counts := map[string]int{}
 			for _, table := range []string{"Agent", "Execution", "Claim", "Message", "Delivery"} {

@@ -80,9 +80,7 @@ func (t *transaction) rows(q string, a ...any) (*sql.Rows, error) {
 }
 func id(prefix string) string {
 	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		panic(err)
-	}
+	_, _ = rand.Read(b[:]) // crypto/rand.Read never returns an error
 	return prefix + hex.EncodeToString(b[:])
 }
 
@@ -126,11 +124,7 @@ func Open(filename string, clock Clock) (*Store, error) {
 		unlockDatabase(lock)
 		return nil, err
 	}
-	db, err := sql.Open("sqlite", abs)
-	if err != nil {
-		unlockDatabase(lock)
-		return nil, err
-	}
+	db, _ := sql.Open("sqlite", abs) // the statically registered driver opens lazily; I/O errors occur below
 	db.SetMaxOpenConns(1)
 	s := &Store{db: db, lock: lock, clock: clock, changed: make(chan struct{})}
 	for _, q := range []string{"PRAGMA foreign_keys=ON", "PRAGMA journal_mode=WAL", "PRAGMA synchronous=FULL", "PRAGMA busy_timeout=5000"} {

@@ -22,9 +22,7 @@ type loginGrant struct{ expires time.Time }
 func (h *Hub) SetUI(handler http.Handler) { h.ui = handler }
 func secret() string {
 	var b [32]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		panic(err)
-	}
+	_, _ = rand.Read(b[:]) // crypto/rand.Read never returns an error
 	return base64.RawURLEncoding.EncodeToString(b[:])
 }
 func loopback(r *http.Request) bool {

@@ -13,7 +13,7 @@ are idempotent by fence and delivery attempt respectively. Errors look like this
 ```
 
 Codes: `unauthorized`, `bad_request`, `not_found`, `conflict`, `key_reused`, `unbound`,
-`ambiguous`, `lost`, `too_large`.
+`ambiguous`, `lost`, `too_large`, `rate_limited`.
 
 ## Sessions
 

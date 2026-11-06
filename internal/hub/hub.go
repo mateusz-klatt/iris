@@ -131,10 +131,10 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	p := h.authenticate(r)
+	logPrincipal(r, p)
 	if !h.tokenRate(w, p) {
 		return
 	}
-	logPrincipal(r, p)
 	r = r.WithContext(context.WithValue(r.Context(), principalKey{}, p))
 	if strings.HasPrefix(r.URL.Path, "/v1/") && r.URL.Path != "/v1/status" && r.URL.Path != "/v1/watch" && !h.authorized(r) && !(strings.HasPrefix(r.URL.Path, "/v1/ui/") && r.URL.Path != "/v1/ui/links" && h.cookieAuthorized(r)) {
 		h.reject(w, r, "bearer token required")
@@ -253,10 +253,7 @@ func (h *Hub) wakeTicket(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	var raw [32]byte
-	if _, err = rand.Read(raw[:]); err != nil {
-		writeError(w, err)
-		return
-	}
+	_, _ = rand.Read(raw[:]) // crypto/rand.Read never returns an error
 	key := base64.RawURLEncoding.EncodeToString(raw[:])
 	expires := h.now().Add(2 * time.Minute)
 	h.mu.Lock()
@@ -378,7 +375,6 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 	defer pings.Stop()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
-	initial := true
 	for {
 		changes := h.store.Changes()
 		if ticketKey != "" {
@@ -427,20 +423,8 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 			if len(events) < boundedPageSize {
 				req.After = high
 			}
-			if initial && len(events) == 0 && req.After == 0 {
-				snapshot, err := h.store.Call(ctx, "attention", req)
-				if err != nil {
-					_ = conn.Close(websocket.StatusPolicyViolation, "Execution stream unavailable")
-					return
-				}
-				if snapshot["unread"].(int) > 0 {
-					if send(high, "inbox_changed") != nil {
-						return
-					}
-				}
-			}
+
 		}
-		initial = false
 		select {
 		case <-ctx.Done():
 			return

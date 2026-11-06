@@ -79,3 +79,17 @@ func TestTokenLifecycle(t *testing.T) {
 		t.Fatal(list, err)
 	}
 }
+
+func TestCorruptTokenMetadataFailsClosed(t *testing.T) {
+	s, _, _ := testStore(t)
+	ctx := context.Background()
+	if _, err := s.AddToken(ctx, "host"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec("UPDATE HostToken SET created_ms='invalid'"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.ListTokens(ctx); err == nil {
+		t.Fatal("corrupt timestamp listed as valid")
+	}
+}

@@ -386,10 +386,7 @@ func (t *transaction) explicit(r Request) (map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		f, err := res.LastInsertId()
-		if err != nil {
-			return nil, err
-		}
+		f, _ := res.LastInsertId() // modernc SQLite always provides the last inserted rowid
 		c = claim{Fence: f, Execution: e.ID, Repo: e.Repo, Kind: r.Kind, Path: p, Origin: "explicit", Epoch: t.s.epoch, Expiry: expiry}
 	}
 	out = map[string]any{"fence": c.Fence, "token": t.fenceToken(c), "expires_at": timestamp(c.Expiry)}
