@@ -82,8 +82,9 @@ func systemdQuote(s string) string {
 	return s
 }
 
-// LaunchdPlist is the user LaunchAgent.
-func LaunchdPlist(argv []string) []byte {
+// LaunchdPlist is the user LaunchAgent. launchd sends both output streams to logPath, because
+// without a path it discards them and a hub that fails to start leaves only its exit code.
+func LaunchdPlist(argv []string, logPath string) []byte {
 	var args strings.Builder
 	for _, arg := range argv {
 		fmt.Fprintf(&args, "    <string>%s</string>\n", xmlEscape(arg))
@@ -102,9 +103,13 @@ func LaunchdPlist(argv []string) []byte {
   <true/>
   <key>KeepAlive</key>
   <true/>
+  <key>StandardOutPath</key>
+  <string>%s</string>
+  <key>StandardErrorPath</key>
+  <string>%s</string>
 </dict>
 </plist>
-`, Marker, args.String()))
+`, Marker, args.String(), xmlEscape(logPath), xmlEscape(logPath)))
 }
 
 func xmlEscape(s string) string {

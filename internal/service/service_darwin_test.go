@@ -144,7 +144,7 @@ func writePlist(t *testing.T, m launchdManager) {
 	if err := os.MkdirAll(filepath.Dir(m.plist), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(m.plist, LaunchdPlist(m.argv), 0o644); err != nil {
+	if err := os.WriteFile(m.plist, LaunchdPlist(m.argv, m.log), 0o644); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -241,5 +241,117 @@ func TestLaunchdStopReportsAFailedBootout(t *testing.T) {
 	m := launchManager(t.TempDir(), &launchRun{fail: "bootout"})
 	if err := m.Stop(context.Background()); err == nil {
 		t.Fatal("the job is still loaded")
+	}
+}
+
+func TestLaunchdPlistSendsOutputToTheLog(t *testing.T) {
+	m := launchManager(t.TempDir(), &launchRun{})
+	if err := m.Install(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	body, err := os.ReadFile(m.plist)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, key := range []string{"StandardOutPath", "StandardErrorPath"} {
+		want := "<key>" + key + "</key>\n  <string>" + m.log + "</string>"
+		if !strings.Contains(string(body), want) {
+			t.Fatalf("%s is missing from\n%s", key, body)
+		}
+	}
+}
+
+func TestLaunchdInstallCreatesAPrivateLog(t *testing.T) {
+	m := launchManager(t.TempDir(), &launchRun{})
+	if err := m.Install(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(m.log)
+	if err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("%v %v", info, err)
+	}
+	dir, err := os.Stat(filepath.Dir(m.log))
+	if err != nil || dir.Mode().Perm() != 0o700 {
+		t.Fatalf("%v %v", dir, err)
+	}
+}
+
+func oversizedLog(t *testing.T, m launchdManager) {
+	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(m.log), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(m.log, []byte("old"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Truncate(m.log, logLimit); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestLaunchdSetsAnOversizedLogAsideOnce(t *testing.T) {
+	ctx := context.Background()
+	m := launchManager(t.TempDir(), &launchRun{fail: "print"})
+	writePlist(t, m)
+	oversizedLog(t, m)
+	if err := m.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(m.log); err != nil || info.Size() != 0 {
+		t.Fatalf("%v %v", info, err)
+	}
+	kept, err := os.Stat(m.log + ".1")
+	if err != nil || kept.Size() != logLimit {
+		t.Fatalf("%v %v", kept, err)
+	}
+	if err := os.WriteFile(m.log, []byte("recent"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.Start(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if body, err := os.ReadFile(m.log); err != nil || string(body) != "recent" {
+		t.Fatalf("a log under the limit was rotated: %q %v", body, err)
+	}
+}
+
+func TestLaunchdLogFailuresStopBeforeLaunchd(t *testing.T) {
+	ctx := context.Background()
+	for name, block := range map[string]func(*testing.T, launchdManager){
+		"directory is a file": func(t *testing.T, m launchdManager) {
+			if err := os.MkdirAll(filepath.Dir(filepath.Dir(m.log)), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.WriteFile(filepath.Dir(m.log), nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"log is a directory": func(t *testing.T, m launchdManager) {
+			if err := os.MkdirAll(m.log, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"rotation target is a full directory": func(t *testing.T, m launchdManager) {
+			oversizedLog(t, m)
+			if err := os.MkdirAll(filepath.Join(m.log+".1", "keep"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		},
+	} {
+		run := &launchRun{fail: "print"}
+		m := launchManager(t.TempDir(), run)
+		block(t, m)
+		if err := m.Install(ctx); err == nil {
+			t.Fatalf("%s: install", name)
+		}
+		writePlist(t, m)
+		if err := m.Start(ctx); err == nil {
+			t.Fatalf("%s: start", name)
+		}
+		for _, call := range run.calls {
+			if strings.Contains(call, "bootstrap") || strings.Contains(call, "bootout") {
+				t.Fatalf("%s: %s", name, call)
+			}
+		}
 	}
 }

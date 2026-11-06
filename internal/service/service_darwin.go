@@ -10,8 +10,13 @@ import (
 	"strings"
 )
 
+// logLimit is the size at which Install and Start set the hub log aside. launchd keeps the file
+// open and has no rotation of its own, so nothing limits the log between those two commands.
+const logLimit = 10 << 20
+
 type launchdManager struct {
 	plist string
+	log   string
 	argv  []string
 	uid   int
 	run   Runner
@@ -20,6 +25,7 @@ type launchdManager struct {
 func newManager(home, _ string, argv []string, run Runner) Manager {
 	return launchdManager{
 		plist: filepath.Join(home, "Library", "LaunchAgents", "iris.plist"),
+		log:   filepath.Join(home, "Library", "Logs", "iris", "hub.log"),
 		argv:  argv,
 		uid:   os.Getuid(),
 		run:   run,
@@ -47,6 +53,24 @@ func running(detail string) bool {
 	return strings.Contains("\n"+detail+"\n", "\n\tstate = running\n")
 }
 
+// prepareLog runs before launchd opens the file. launchd does not create a missing directory,
+// and would create the file with the default mode. An older log survives as hub.log.1.
+func (m launchdManager) prepareLog() error {
+	if err := os.MkdirAll(filepath.Dir(m.log), 0o700); err != nil {
+		return err
+	}
+	if info, err := os.Stat(m.log); err == nil && info.Size() >= logLimit {
+		if err := os.Rename(m.log, m.log+".1"); err != nil {
+			return err
+		}
+	}
+	f, err := os.OpenFile(m.log, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return err
+	}
+	return f.Close()
+}
+
 func (m launchdManager) Install(ctx context.Context) error {
 	if data, err := os.ReadFile(m.plist); err == nil && !bytes.Contains(data, []byte(Marker)) {
 		return errors.New("iris.plist exists and is not managed by Iris")
@@ -56,7 +80,10 @@ func (m launchdManager) Install(ctx context.Context) error {
 	if err := os.MkdirAll(filepath.Dir(m.plist), 0o700); err != nil {
 		return err
 	}
-	if err := os.WriteFile(m.plist, LaunchdPlist(m.argv), 0o644); err != nil {
+	if err := m.prepareLog(); err != nil {
+		return err
+	}
+	if err := os.WriteFile(m.plist, LaunchdPlist(m.argv, m.log), 0o644); err != nil {
 		return err
 	}
 	// launchd refuses to bootstrap a label it already holds, and would keep the old arguments.
@@ -94,6 +121,9 @@ func (m launchdManager) Start(ctx context.Context) error {
 	}
 	if m.loaded(ctx) {
 		return nil
+	}
+	if err := m.prepareLog(); err != nil {
+		return err
 	}
 	_, err := m.run.Run(ctx, "launchctl", "bootstrap", m.domain(), m.plist)
 	return err

@@ -47,7 +47,8 @@ the operator console. `.goreleaser.yaml` validates and cannot publish.
 - `iris integrate` against a real client's own configuration: the real `claude plugin` install path,
   Codex's `/hooks` review, and whether Antigravity loads a user-level hook file. The Claude plugin
   passes `claude plugin validate`, and worked when loaded with `--plugin-dir`.
-- `iris doctor --live`, and running a service for real under launchd, `systemd --user` and Task Scheduler.
+- `iris doctor --live`, and running a service for real under `systemd --user` and Task Scheduler.
+  The launchd service has run for real on macOS under a scratch home directory. Loading at login has not been tested.
 - Package channels and signing (D15, stages 1 to 3).
 - 100% coverage. The gate is in CI and red on purpose: Go is at 68.9% and the console at about 92%.
 - A token per host, and rate limits on the public hub.
