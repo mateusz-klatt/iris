@@ -277,7 +277,13 @@ func (t *transaction) touch(r Request) (map[string]any, error) {
 	}
 	return out, nil
 }
+
+// claimLimit only stops growth. An upgrade can leave an Execution above the limit,
+// and it must still be able to touch paths it already holds.
 func (t *transaction) claimLimit(e execution, extra int) error {
+	if extra == 0 {
+		return nil
+	}
 	var count int
 	if err := t.row("SELECT COUNT(*) FROM Claim WHERE execution_id=? AND revoked_ms IS NULL", e.ID).Scan(&count); err != nil {
 		return err
