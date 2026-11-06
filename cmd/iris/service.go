@@ -2,6 +2,8 @@ package main
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"flag"
 	"fmt"
 	"os"
@@ -30,12 +32,26 @@ func runService(args []string) int {
 	if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 0 {
 		return 2
 	}
-	mgr, err := userServiceDB(*listen, *token, *db)
+	ctx := context.Background()
+	if args[0] == "install" {
+		if err := installUserService(ctx, *listen, *token, *db); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			return 1
+		}
+		fmt.Println("installed")
+		return 0
+	}
+	// Every other command acts on the service as installed, not on today's defaults.
+	saved, err := loadServiceSettings()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
-	ctx := context.Background()
+	mgr, err := userServiceDB(first(*listen, saved.Listen), first(*token, saved.TokenFile), first(*db, saved.Database))
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
 	switch args[0] {
 	case "start":
 		if err := mgr.Start(ctx); err != nil {
@@ -47,14 +63,12 @@ func runService(args []string) int {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-	case "install":
-		if err := mgr.Install(ctx); err != nil {
+	case "uninstall":
+		if err := mgr.Uninstall(ctx); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
-		fmt.Println("installed")
-	case "uninstall":
-		if err := mgr.Uninstall(ctx); err != nil {
+		if err := removeServiceSettings(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			return 1
 		}
@@ -71,6 +85,94 @@ func runService(args []string) int {
 		}
 	}
 	return 0
+}
+
+// serviceSettings are what `iris service install` was given. Lifecycle commands need
+// them because the manager finds a hub through its command line.
+type serviceSettings struct {
+	Listen    string `json:"listen,omitempty"`
+	TokenFile string `json:"token_file,omitempty"`
+	Database  string `json:"database,omitempty"`
+}
+
+func serviceSettingsPath() (string, error) {
+	cfg, err := config.Default()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(filepath.Dir(cfg.TokenFile), "service.json"), nil
+}
+
+func loadServiceSettings() (serviceSettings, error) {
+	var saved serviceSettings
+	path, err := serviceSettingsPath()
+	if err != nil {
+		return saved, err
+	}
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return saved, nil
+	}
+	if err != nil {
+		return saved, err
+	}
+	if err = json.Unmarshal(raw, &saved); err != nil {
+		return saved, fmt.Errorf("read %s: %w", path, err)
+	}
+	return saved, nil
+}
+
+func saveServiceSettings(saved serviceSettings) error {
+	path, err := serviceSettingsPath()
+	if err != nil {
+		return err
+	}
+	if err = os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		return err
+	}
+	raw, _ := json.Marshal(saved) // strings always encode
+	return os.WriteFile(path, raw, 0o600)
+}
+
+func removeServiceSettings() error {
+	path, err := serviceSettingsPath()
+	if err != nil {
+		return err
+	}
+	if err = os.Remove(path); errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
+// installUserService installs the service and records its settings, for the
+// commands that have to find this same hub later.
+func installUserService(ctx context.Context, listen, tokenFile, database string) error {
+	mgr, err := userServiceDB(listen, tokenFile, database)
+	if err != nil {
+		return err
+	}
+	if err = mgr.Install(ctx); err != nil {
+		return err
+	}
+	return saveServiceSettings(serviceSettings{Listen: listen, TokenFile: absolute(tokenFile), Database: absolute(database)})
+}
+
+// absolute keeps an empty setting empty, which means the default. userServiceDB has
+// already resolved these paths, so this cannot fail where that did not.
+func absolute(path string) string {
+	if path == "" {
+		return ""
+	}
+	path, _ = absPath(path)
+	return path
+}
+
+func first(a, b string) string {
+	if a != "" {
+		return a
+	}
+	return b
 }
 
 // userService builds the per-user manager. listen and tokenFile override the
@@ -110,6 +212,13 @@ func userServiceDB(listen, tokenFile, database string) (service.Manager, error) 
 	}
 	if database == "" {
 		database = cfg.Database
+	}
+	// The autostart command runs from another directory.
+	if tokenFile, err = absPath(tokenFile); err != nil {
+		return nil, err
+	}
+	if database, err = absPath(database); err != nil {
+		return nil, err
 	}
 	argv := []string{bin, "serve", "--listen", listen, "--token-file", tokenFile, "--db", database}
 	return hostService(home, os.Getenv("XDG_CONFIG_HOME"), argv), nil
