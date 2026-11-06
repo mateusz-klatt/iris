@@ -21,6 +21,8 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 			}
 		}
 		switch operation {
+		case "ui_overview", "ui_threads", "ui_thread", "ui_messages", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_events":
+			out, err = t.operator(operation, r)
 		case "sessions":
 			out, err = t.session(r)
 		case "bind":
@@ -40,6 +42,7 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 			v, err = t.claims(r.RepositoryID)
 			out = map[string]any{"claims": v}
 		case "messages":
+			r.Source = ""
 			out, err = t.send(r)
 		case "inbox":
 			out, err = t.inbox(r)
@@ -51,6 +54,10 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 			out = map[string]any{"agents": v}
 		case "events":
 			out, err = t.events(r)
+		case "monitor_cursor":
+			var cursor int64
+			err = t.row("SELECT COALESCE((SELECT seq FROM Cursor WHERE consumer_id=?),0)", r.ExecutionID+":iris-watch").Scan(&cursor)
+			out = map[string]any{"cursor": cursor}
 		case "validate":
 			var e execution
 			e, err = t.live(r.ExecutionID, r.Generation)
@@ -76,6 +83,19 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 			out = map[string]any{"version": "dev", "stream": s.stream, "boot_epoch": s.epoch, "counts": counts}
 		default:
 			return fail("not_found", "unknown operation")
+		}
+		if err == nil && (operation == "sessions" || operation == "heartbeat") {
+			ex := r.ExecutionID
+			if operation == "sessions" {
+				ex, _ = out["execution_id"].(string)
+			}
+			_, err = t.exec("UPDATE Execution SET last_seen_ms=? WHERE id=?", t.s.clock.Now().UnixMilli(), ex)
+		}
+		if err == nil {
+			switch operation {
+			case "sessions", "end", "touch", "claim", "release", "messages", "ack":
+				err = t.event("", "", "changed", "")
+			}
 		}
 		return err
 	})
