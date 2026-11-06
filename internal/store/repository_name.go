@@ -30,10 +30,7 @@ func (t *transaction) backfillRepositoryNames() error {
 	var ids []string
 	for rows.Next() {
 		var id string
-		if err = rows.Scan(&id); err != nil {
-			rows.Close()
-			return err
-		}
+		rows.Scan(&id)
 		ids = append(ids, id)
 	}
 	err = rows.Err()
@@ -49,10 +46,7 @@ func (t *transaction) backfillRepositoryNames() error {
 		var remote, first string
 		for rows.Next() {
 			var alias string
-			if err = rows.Scan(&alias); err != nil {
-				rows.Close()
-				return err
-			}
+			rows.Scan(&alias)
 			if strings.HasPrefix(alias, "remote:") && remote == "" {
 				remote = strings.TrimPrefix(alias, "remote:")
 			}

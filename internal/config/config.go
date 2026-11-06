@@ -12,6 +12,14 @@ import (
 	"strings"
 )
 
+// Failure points a test can replace. Production uses the real calls.
+var (
+	readEntropy   = rand.Read
+	syncTokenFile = func(f *os.File) error { return f.Sync() }
+	lstatToken    = os.Lstat
+	readTokenFile = os.ReadFile
+)
+
 type Config struct {
 	Listen, Database, TokenFile, TLSCert, TLSKey string
 	AllowedHosts                                 []string
@@ -50,7 +58,7 @@ func Token(filename string) (string, error) {
 			return "", err
 		}
 		var b [32]byte
-		if _, err = rand.Read(b[:]); err != nil {
+		if _, err = readEntropy(b[:]); err != nil {
 			f.Close()
 			os.Remove(filename)
 			return "", err
@@ -58,7 +66,7 @@ func Token(filename string) (string, error) {
 		token := base64.RawURLEncoding.EncodeToString(b[:])
 		_, err = f.WriteString(token + "\n")
 		if err == nil {
-			err = f.Sync()
+			err = syncTokenFile(f)
 		}
 		closeErr := f.Close()
 		if err == nil {
@@ -73,7 +81,7 @@ func Token(filename string) (string, error) {
 	if !errors.Is(err, os.ErrExist) {
 		return "", err
 	}
-	info, err := os.Lstat(filename)
+	info, err := lstatToken(filename)
 	if err != nil {
 		return "", err
 	}
@@ -83,7 +91,7 @@ func Token(filename string) (string, error) {
 	if err = secureToken(filename); err != nil {
 		return "", err
 	}
-	raw, err := os.ReadFile(filename)
+	raw, err := readTokenFile(filename)
 	if err != nil {
 		return "", err
 	}

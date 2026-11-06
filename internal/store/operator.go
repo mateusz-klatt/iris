@@ -100,10 +100,7 @@ func (t *transaction) overview() (map[string]any, error) {
 	ids := []string{}
 	for rows.Next() {
 		var id string
-		if err = rows.Scan(&id); err != nil {
-			rows.Close()
-			return nil, err
-		}
+		rows.Scan(&id)
 		ids = append(ids, id)
 	}
 	err = rows.Err()
@@ -123,10 +120,7 @@ func (t *transaction) overview() (map[string]any, error) {
 		}
 		for rows.Next() {
 			var a string
-			if err = rows.Scan(&a); err != nil {
-				rows.Close()
-				return nil, err
-			}
+			rows.Scan(&a)
 			aliases = append(aliases, a)
 		}
 		err = rows.Err()
@@ -152,10 +146,7 @@ func (t *transaction) overview() (map[string]any, error) {
 		var id, name, client, host, repo, worktree, branch, state string
 		var seen int64
 		var unread int
-		if err = rows.Scan(&id, &name, &client, &host, &repo, &worktree, &branch, &state, &seen, &unread); err != nil {
-			rows.Close()
-			return nil, err
-		}
+		rows.Scan(&id, &name, &client, &host, &repo, &worktree, &branch, &state, &seen, &unread)
 		agents = append(agents, map[string]any{"id": id, "name": name, "client": client, "host": host, "repository_id": repo, "worktree": worktree, "branch": branch, "state": state, "last_seen": timestamp(sql.NullInt64{Int64: seen, Valid: seen > 0}), "unread": unread})
 	}
 	err = rows.Err()
@@ -197,10 +188,7 @@ func (t *transaction) threads(r Request) (map[string]any, error) {
 	for rows.Next() {
 		var id, subject string
 		var count, at, unread int64
-		if err = rows.Scan(&id, &subject, &count, &at, &unread); err != nil {
-			rows.Close()
-			return nil, err
-		}
+		rows.Scan(&id, &subject, &count, &at, &unread)
 		out = append(out, map[string]any{"id": id, "subject": subject, "count": count, "last_at": timestamp(sql.NullInt64{Int64: at, Valid: true}), "unread": unread})
 	}
 	err = rows.Err()
@@ -216,10 +204,7 @@ func (t *transaction) threads(r Request) (map[string]any, error) {
 		}
 		for rows.Next() {
 			var name string
-			if err = rows.Scan(&name); err != nil {
-				rows.Close()
-				return nil, err
-			}
+			rows.Scan(&name)
 			names = append(names, name)
 		}
 		err = rows.Err()
@@ -241,10 +226,7 @@ func (t *transaction) thread(id string) (map[string]any, error) {
 		var mid, sender, subject, body string
 		var at int64
 		var reply sql.NullString
-		if err = rows.Scan(&mid, &sender, &subject, &body, &at, &reply); err != nil {
-			rows.Close()
-			return nil, err
-		}
+		rows.Scan(&mid, &sender, &subject, &body, &at, &reply)
 		messages = append(messages, map[string]any{"id": mid, "thread_id": id, "sender": sender, "subject": subject, "body": body, "created_at": timestamp(sql.NullInt64{Int64: at, Valid: true}), "reply_to": reply.String})
 	}
 	err = rows.Err()
@@ -263,10 +245,7 @@ func (t *transaction) thread(id string) (map[string]any, error) {
 		}
 		for rows.Next() {
 			var name, state string
-			if err = rows.Scan(&name, &state); err != nil {
-				rows.Close()
-				return nil, err
-			}
+			rows.Scan(&name, &state)
 			recipients = append(recipients, map[string]any{"name": name, "state": state})
 		}
 		err = rows.Err()

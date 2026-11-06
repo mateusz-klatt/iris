@@ -230,3 +230,78 @@ func TestFailureLogReadDuringWrites(t *testing.T) {
 		}
 	}
 }
+
+func TestFailureLogReadWaitsWhileWriteHoldsTheLock(t *testing.T) {
+	token := filepath.Join(t.TempDir(), "hub.token")
+	entry := Failure{Time: time.Now().UTC(), Client: "claude", Event: "pre_tool", Stage: "session", Error: "held"}
+	if err := appendFailure(token, entry); err != nil {
+		t.Fatal(err)
+	}
+	f, err := os.OpenFile(failurePath(token), os.O_RDWR, 0600)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer f.Close()
+	if err = lockFailureLog(f); err != nil {
+		t.Fatal(err)
+	}
+	read := make(chan error, 1)
+	go func() {
+		entries, err := ReadRecentFailures(token, 10)
+		if err != nil {
+			read <- err
+			return
+		}
+		if len(entries) != 1 || entries[0].Error != "held" {
+			read <- errors.New("missing entry")
+			return
+		}
+		read <- nil
+	}()
+	select {
+	case err := <-read:
+		t.Fatalf("read finished while the write lock was held: %v", err)
+	case <-time.After(80 * time.Millisecond):
+	}
+	unlockFailureLog(f)
+	select {
+	case err := <-read:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("read did not resume after the lock was released")
+	}
+}
+
+func TestMalformedClientConfigStillLogsTheFailure(t *testing.T) {
+	dir := t.TempDir()
+	token := filepath.Join(dir, "hub.token")
+	if err := os.WriteFile(filepath.Join(dir, "client.json"), []byte("{"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	out := (Runner{ClientName: "kimi", Stdin: strings.NewReader("{"), Getenv: func(k string) string {
+		if k == "IRIS_TOKEN_FILE" {
+			return token
+		}
+		return ""
+	}}).Run()
+	assertAllow(t, ClientKimi, out)
+	deadline := time.Now().Add(time.Second)
+	for {
+		entries, err := ReadRecentFailures(token, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) == 1 {
+			if entries[0].Stage == "" || entries[0].Client != "kimi" {
+				t.Fatal(entries[0])
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("malformed client.json left no failure trace")
+		}
+		time.Sleep(time.Millisecond)
+	}
+}

@@ -13,7 +13,7 @@ are idempotent by fence and delivery attempt respectively. Errors look like this
 ```
 
 Codes: `unauthorized`, `bad_request`, `not_found`, `conflict`, `key_reused`, `unbound`,
-`ambiguous`, `lost`, `too_large`.
+`ambiguous`, `lost`, `too_large`, `rate_limited`.
 
 ## Sessions
 
@@ -43,6 +43,11 @@ For recovery after a hub restart, reattach with the same `session_id` and the la
 generation cannot be reattached. `generation:0` starts or resumes a non-recovering session.
 Recovery keeps claim ownership and expiry but rotates fence numbers; use the `claims`
 in the reattachment response. Old fence numbers and tokens are invalid.
+
+A shim or `iris watch` reattaches by itself: a heartbeat with the current generation does the
+same work during the recovery window and returns the same response, so an idle session that
+fires no hook survives a hub restart. After the window the heartbeat returns `lost`, and the
+session needs a new generation.
 
 `POST /v1/bind` resolves a stdio MCP process to an Execution, following D6.
 
@@ -144,7 +149,13 @@ token with subprotocol `iris.v1`, or subprotocols `iris.wake` and the ticket. Ea
 {"stream":"<uuid>","cursor":124,"kind":"inbox_changed"}
 ```
 
-Frames never carry message text. Kinds so far: `inbox_changed`, `claim_released`, `reset`.
+Frames never carry message text. Kinds so far: `inbox_changed`, `claim_released`, `reset`, and
+`inbox_read`, which moves the cursor past mail already fetched and needs no attention.
+
+A monitor (`consumer_id=iris-watch`) with no saved cursor starts at the newest event, because a new
+session is a new Execution and must not hear the agent's history again. If undelivered mail is
+waiting it gets one `reset`. `pending` in the `/v1/events` response counts mail nobody has fetched;
+it does not count mail that was fetched and not yet acknowledged.
 
 `POST /v1/wake-tickets` takes `{"execution_id":"...","generation":1}`, and returns
 `{"url":"ws://...","protocols":["iris.wake","<ticket>"],"expires_at":"..."}`.
@@ -269,3 +280,51 @@ A missing pong within 10 seconds closes the socket. These are control frames, ne
 JSON events: `iris watch` responds while reading and browser WebSocket implementations
 handle them without dispatching `message` events. Public wake-ticket URLs use `wss`
 and the configured public authority.
+
+## Named host tokens
+
+The existing `hub.token` remains valid as `(legacy)`; no client change is needed on
+upgrade. `iris token add <host>`, `iris token list`, and `iris token revoke <host>`
+use the configured hub and an existing valid bearer token. All valid bearer tokens
+have the same authority, including token administration; names provide attribution,
+not isolation between hosts. A UI cookie cannot administer bearer tokens.
+
+`POST /v1/tokens` takes `{"host":"workstation"}` and returns `{"name":"workstation",
+"token":"..."}`. The random 256-bit token is returned only on creation; the database
+stores a SHA-256 digest. Names contain 1–64 ASCII letters, digits, dots, underscores
+or hyphens, starting with a letter or digit. An active duplicate returns `conflict`.
+`GET /v1/tokens` returns `tokens`, each with `name`, `created_ms`, `revoked_ms`,
+`last_used_ms`, and `requests`; no secret or digest is returned.
+`DELETE /v1/tokens/{name}` revokes immediately and is idempotent for an existing name.
+A revoked name can be added again with a fresh secret. The legacy file token is
+rotated through its file rather than this API.
+
+Every authenticated HTTP request logs its token name, method, path and peer, without
+credentials or request bodies. Named token usage counts and last-use timestamps are
+persisted. Revocation refuses new requests and closes existing bearer streams and
+wake-ticket streams issued by that token. Already authenticated HTTP operations may
+finish. Previously issued UI login links and cookies remain valid until their own
+expiry; bearer revocation does not revoke those separate UI sessions.
+
+Request quotas are in-memory fixed one-minute windows. A valid bearer token is
+limited only by its credential digest; anonymous traffic cannot consume that quota.
+All requests without a valid bearer token, including failed authentication, share
+one separate anonymous bucket. TCP peer addresses and forwarded headers never
+identify anonymous clients, so a loopback reverse proxy cannot cause an anonymous
+flood to lock out authenticated agents.
+
+`serve --token-rate` defaults to 6000 requests per minute per credential;
+`--address-rate` retains its flag name for compatibility but now sets the aggregate
+anonymous quota (default 12000 per minute). `--token-websockets` defaults to 100
+concurrent sockets per credential. Zero selects the default; negatives are rejected.
+These defaults support approximately 50 sessions sharing a host. Wake-ticket
+upgrades without a bearer token consume anonymous quota and their issuer's token
+quota; cookie streams without a bearer token consume anonymous quota and share a
+separate socket quota. HTTP quota and socket-cap exhaustion return 429 with
+`error.code` `rate_limited` and integer `Retry-After` seconds. Closing or failing an
+upgrade releases its socket slot. Revocation does not reset a quota for the old secret.
+
+Quotas reset on restart, are local to one hub process, and do not impose per-Execution
+permissions. The window table is capped at 10000 entries; saturation refuses new
+credential keys until an old window expires. Anonymous requests cannot grow this
+table beyond their single fixed entry.

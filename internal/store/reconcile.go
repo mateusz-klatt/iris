@@ -45,10 +45,7 @@ func (t *transaction) reconcile(r Request) (map[string]any, error) {
 			return nil, err
 		}
 	}
-	encoded, err := json.Marshal(r.Status)
-	if err != nil {
-		return nil, err
-	}
+	encoded, _ := json.Marshal(r.Status) // a map of strings is always JSON encodable
 	if _, err = t.exec("INSERT INTO ShellSnapshot VALUES(?,?) ON CONFLICT(execution_id) DO UPDATE SET status_json=excluded.status_json", e.ID, string(encoded)); err != nil {
 		return nil, err
 	}

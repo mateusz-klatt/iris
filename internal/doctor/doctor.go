@@ -81,10 +81,10 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 		hubURL = opt.HubURL
 		source = "command line"
 	}
-	tokenFile, configErr := resolved.TokenPath()
-	if configErr != nil {
-		return Result{}, configErr
+	if err := resolved.ConfigErr(); err != nil {
+		return Result{}, err
 	}
+	tokenFile := resolved.TokenFile
 	if opt.TokenFile != "" {
 		tokenFile = opt.TokenFile
 	}

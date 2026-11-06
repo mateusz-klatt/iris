@@ -1,0 +1,113 @@
+package hub
+
+import (
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/base64"
+	"log"
+	"net/http"
+	"strings"
+
+	"github.com/coder/websocket"
+)
+
+type principal struct{ name, digest string }
+type principalKey struct{}
+
+func tokenDigest(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return base64.RawURLEncoding.EncodeToString(sum[:])
+}
+func (h *Hub) authenticate(r *http.Request) principal {
+	header := r.Header.Get("Authorization")
+	if !strings.HasPrefix(header, "Bearer ") {
+		return principal{}
+	}
+	token := strings.TrimPrefix(header, "Bearer ")
+	got, want := sha256.Sum256([]byte(token)), sha256.Sum256([]byte(h.token))
+	if h.token != "" && subtle.ConstantTimeCompare(got[:], want[:]) == 1 {
+		return principal{"(legacy)", tokenDigest(token)}
+	}
+	name, err := h.store.AuthenticateToken(r.Context(), token)
+	if err != nil {
+		return principal{}
+	}
+	return principal{name, tokenDigest(token)}
+}
+func (h *Hub) tokenRoutes() {
+	h.mux.HandleFunc("GET /v1/tokens", func(w http.ResponseWriter, r *http.Request) {
+		tokens, err := h.store.ListTokens(r.Context())
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, map[string]any{"tokens": tokens})
+	})
+	h.mux.HandleFunc("POST /v1/tokens", func(w http.ResponseWriter, r *http.Request) {
+		req, err := decode(w, r)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		token, err := h.store.AddToken(r.Context(), req.Host)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, map[string]any{"name": req.Host, "token": token})
+	})
+	h.mux.HandleFunc("DELETE /v1/tokens/{name}", func(w http.ResponseWriter, r *http.Request) {
+		h.mu.Lock()
+		digest, err := h.store.RevokeToken(r.Context(), r.PathValue("name"))
+		if err == nil {
+			for conn := range h.sockets[digest] {
+				go conn.Close(websocket.StatusPolicyViolation, "bearer token revoked")
+			}
+			for key, t := range h.tickets {
+				if t.principal.digest == digest {
+					delete(h.tickets, key)
+				}
+			}
+		}
+		h.mu.Unlock()
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, map[string]any{"revoked": r.PathValue("name")})
+	})
+}
+
+// Registration and revocation share a lock; checking the original digest also
+// rejects a replaced token if its former name has already been reused.
+func (h *Hub) trackSocket(r *http.Request, conn *websocket.Conn, p principal) bool {
+	h.mu.Lock()
+	if p.name != "" && p.name != "(legacy)" && !h.store.TokenActive(r.Context(), p.digest) {
+		h.mu.Unlock()
+		_ = conn.Close(websocket.StatusPolicyViolation, "bearer token revoked")
+		return false
+	}
+	if h.sockets[p.digest] == nil {
+		h.sockets[p.digest] = map[*websocket.Conn]bool{}
+	}
+	h.sockets[p.digest][conn] = true
+	h.mu.Unlock()
+	return true
+}
+func (h *Hub) untrackSocket(conn *websocket.Conn, p principal) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	delete(h.sockets[p.digest], conn)
+	if len(h.sockets[p.digest]) == 0 {
+		delete(h.sockets, p.digest)
+	}
+}
+func requestPrincipal(r *http.Request) principal {
+	p, _ := r.Context().Value(principalKey{}).(principal)
+	return p
+}
+func logPrincipal(r *http.Request, p principal) {
+	if p.name != "" {
+		log.Printf("authenticated request: token=%q method=%q path=%q peer=%q", p.name, r.Method, r.URL.Path, r.RemoteAddr)
+	}
+}

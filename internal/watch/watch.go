@@ -16,6 +16,9 @@ import (
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 )
 
+// maxBackoff caps reconnect delay. Tests shrink it so the cap is observable.
+var maxBackoff = 30 * time.Second
+
 type Frame struct {
 	Stream string `json:"stream"`
 	Cursor int64  `json:"cursor"`
@@ -28,7 +31,10 @@ type pending struct {
 type Coalescer struct {
 	Window time.Duration
 	Output io.Writer
-	kinds  map[string]*pending
+	// Recount asks how much mail is still waiting when a held line comes due, so a
+	// line never announces mail fetched during the window. ok is false if unknown.
+	Recount func() (n int, ok bool)
+	kinds   map[string]*pending
 }
 
 func (c *Coalescer) Add(now time.Time, kind string, count int) error {
@@ -55,10 +61,20 @@ func (c *Coalescer) Add(now time.Time, kind string, count int) error {
 func (c *Coalescer) Flush(now time.Time) error {
 	for _, kind := range []string{"inbox_changed", "claim_released"} {
 		p := c.kinds[kind]
-		if p != nil && p.count > 0 && !now.Before(p.next) {
-			if err := c.emit(now, kind, p); err != nil {
-				return err
+		if p == nil || p.count <= 0 || now.Before(p.next) {
+			continue
+		}
+		if kind == "inbox_changed" && c.Recount != nil {
+			// Only ever down: waiting mail can include what an earlier line announced.
+			if n, ok := c.Recount(); ok {
+				p.count = min(p.count, n)
 			}
+		}
+		if p.count == 0 {
+			continue
+		}
+		if err := c.emit(now, kind, p); err != nil {
+			return err
 		}
 	}
 	return nil
@@ -104,7 +120,6 @@ func (r *Runner) Run(ctx context.Context) error {
 	if delay <= 0 {
 		delay = time.Second
 	}
-	base := delay
 	for ctx.Err() == nil {
 		call, cancel := context.WithTimeout(ctx, 5*time.Second)
 		b, err := r.Resolver.Resolve(call, "")
@@ -137,15 +152,36 @@ func (r *Runner) Run(ctx context.Context) error {
 		}
 		tick.Stop()
 		delay *= 2
-		if delay > 30*time.Second {
-			delay = 30 * time.Second
-		}
-		if err == nil {
-			delay = base
+		if delay > maxBackoff {
+			delay = maxBackoff
 		}
 	}
 	return nil
 }
+
+// waiting reads how much mail is unfetched. An older hub does not say.
+func (r *Runner) waiting(ctx context.Context, b binding.Bound, cursor int64) (int, bool) {
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+	var out struct {
+		Pending *int `json:"pending"`
+	}
+	path := "/v1/events?execution_id=" + url.QueryEscape(b.ExecutionID) + "&limit=1&after=" + fmt.Sprint(cursor)
+	if r.Resolver.Hub.Do(ctx, "GET", path, nil, &out) != nil || out.Pending == nil {
+		return 0, false
+	}
+	return *out.Pending, true
+}
+
+// readFailure hides the error a read reports because ctx ended. That is a normal
+// stop, and either side of the select in connect can see it first.
+func readFailure(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return nil
+	}
+	return err
+}
+
 func (r *Runner) connect(ctx context.Context, b binding.Bound, cursor *int64, stream *string, c *Coalescer) error {
 	h := r.Resolver.Hub
 	base := strings.TrimRight(h.Config.HubURL(), "/")
@@ -172,6 +208,7 @@ func (r *Runner) connect(ctx context.Context, b binding.Bound, cursor *int64, st
 		return err
 	}
 	defer conn.CloseNow()
+	c.Recount = func() (int, bool) { return r.waiting(ctx, b, *cursor) }
 	readCtx, stop := context.WithCancel(ctx)
 	defer stop()
 	frames := make(chan Frame)
@@ -202,7 +239,7 @@ func (r *Runner) connect(ctx context.Context, b binding.Bound, cursor *int64, st
 		case <-ctx.Done():
 			return nil
 		case err := <-fail:
-			return err
+			return readFailure(ctx, err)
 		case now := <-tick.C:
 			if err = c.Flush(now); err != nil {
 				return err
@@ -212,6 +249,7 @@ func (r *Runner) connect(ctx context.Context, b binding.Bound, cursor *int64, st
 				var snapshot struct {
 					Stream   string `json:"stream"`
 					High     int64  `json:"high_water"`
+					Pending  *int   `json:"pending"`
 					Snapshot struct {
 						Unread int `json:"unread"`
 					} `json:"snapshot"`
@@ -222,7 +260,11 @@ func (r *Runner) connect(ctx context.Context, b binding.Bound, cursor *int64, st
 				}
 				*cursor = snapshot.High
 				*stream = snapshot.Stream
-				if err = c.Add(time.Now(), "inbox_changed", snapshot.Snapshot.Unread); err != nil {
+				waiting := snapshot.Snapshot.Unread
+				if snapshot.Pending != nil { // an older hub does not send it
+					waiting = *snapshot.Pending
+				}
+				if err = c.Add(time.Now(), "inbox_changed", waiting); err != nil {
 					return err
 				}
 				continue

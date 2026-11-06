@@ -245,7 +245,8 @@ Changes from the reference schema:
    every claim in the system. At startup the boot epoch increases, and each active Execution
    without a `recovery_deadline` gets one, persisted, 120 s ahead. A recovering Execution's
    claims still block others, but it may do nothing until it reattaches with the same session
-   and generation, which clears the deadline and grants a lease in the new epoch. At the
+   and generation, which clears the deadline and grants a lease in the new epoch. A heartbeat
+   from `iris mcp` or `iris watch` carries that proof, so idle sessions reattach too. At the
    deadline it is lost. Repeated restarts cannot extend the window, because an existing deadline
    is never moved, and an expired generation is never revived.
 3. A claim has `origin` (`explicit` or `auto`) and an optional expiry instead of a mandatory

@@ -217,6 +217,47 @@ func TestLeasesFencesAndClientClock(t *testing.T) {
 	}
 	expectError(t, s, "release", bad, "lost")
 }
+func TestHeartbeatReattachesAfterRestart(t *testing.T) {
+	s, c, file := testStore(t)
+	a, _ := session(t, s, 1)
+	b, _ := session(t, s, 2)
+	call(t, s, "claim", claimRequest(a, "claim", "reserved", "exact"))
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s.lock = nil
+	reopened, err := Open(file, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer reopened.Close()
+	expectError(t, reopened, "validate", a, "lost")
+	stale := a
+	stale.Source, stale.Generation = "watch", a.Generation+1
+	expectError(t, reopened, "heartbeat", stale, "lost")
+	hb := a
+	hb.Source = "watch"
+	resumed := call(t, reopened, "heartbeat", hb)
+	if claims := resumed["claims"].([]map[string]any); len(claims) != 1 {
+		t.Fatalf("reattachment must return rotated claims: %v", resumed)
+	}
+	call(t, reopened, "validate", a)
+	expectError(t, reopened, "claim", claimRequest(b, "blocked", "reserved", "exact"), "lost")
+	// The same heartbeat cannot revive a session whose reservation has run out.
+	if number(call(t, reopened, "heartbeat", hb)["lease_ms"]) != 60000 {
+		t.Fatal("a reattached shim keeps the strong lease")
+	}
+	c.advance(121 * time.Second)
+	reopened.Close()
+	reopened.lock = nil
+	late, err := Open(file, c)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer late.Close()
+	c.advance(121 * time.Second)
+	expectError(t, late, "heartbeat", hb, "lost")
+}
 func TestRestartRecoveryDoesNotExtend(t *testing.T) {
 	s, c, file := testStore(t)
 	a, _ := session(t, s, 1)
@@ -604,5 +645,38 @@ func TestOutboxNotificationFollowsCommit(t *testing.T) {
 	}
 	if len(call(t, s, "events", a)["events"].([]map[string]any)) != 1 {
 		t.Fatal("notification preceded committed outbox")
+	}
+}
+
+func TestMonitorCursorStartsAtTheNewestEventOnce(t *testing.T) {
+	s, _, _ := testStore(t)
+	a, _ := session(t, s, 1)
+	b, br := session(t, s, 2)
+	name := br["agent"].(map[string]any)["name"].(string)
+	call(t, s, "messages", Request{ExecutionID: a.ExecutionID, Generation: a.Generation, Key: "m", To: []string{name}, Body: "x"})
+	first := call(t, s, "monitor_cursor", b)
+	if number(first["cursor"]) == 0 || first["pending"] != 1 {
+		t.Fatal(first)
+	}
+	second := call(t, s, "monitor_cursor", b)
+	if number(second["cursor"]) != number(first["cursor"]) || second["pending"] != 0 {
+		t.Fatal(second)
+	}
+}
+
+func TestEventsMarkMailAlreadyFetched(t *testing.T) {
+	s, _, _ := testStore(t)
+	a, _ := session(t, s, 1)
+	b, br := session(t, s, 2)
+	name := br["agent"].(map[string]any)["name"].(string)
+	call(t, s, "messages", Request{ExecutionID: a.ExecutionID, Generation: a.Generation, Key: "m", To: []string{name}, Body: "x"})
+	before := call(t, s, "events", b)
+	if before["pending"] != 1 || before["events"].([]map[string]any)[0]["settled"] != nil {
+		t.Fatal(before)
+	}
+	call(t, s, "inbox", b)
+	after := call(t, s, "events", b)
+	if after["pending"] != 0 || after["events"].([]map[string]any)[0]["settled"] != true {
+		t.Fatal(after)
 	}
 }

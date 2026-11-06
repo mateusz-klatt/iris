@@ -6,10 +6,12 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
 	"github.com/mateusz-klatt/iris/internal/doctor"
+	"github.com/mateusz-klatt/iris/internal/hubclient"
 	"github.com/mateusz-klatt/iris/internal/integrate"
 )
 
@@ -189,8 +191,9 @@ func TestSetupPersistsRemoteConfiguration(t *testing.T) {
 func TestSetupServiceFailureEndsWithNextStep(t *testing.T) {
 	for _, installErr := range []error{errors.New("access denied"), nil} {
 		var out bytes.Buffer
+		tokenFile := filepath.Join(t.TempDir(), "hub.token")
 		code := setup([]string{"--yes"}, setupEnv{
-			out: &out, errw: &out, getenv: func(string) string { return "" }, tokenFile: filepath.Join(t.TempDir(), "hub.token"),
+			out: &out, errw: &out, getenv: func(string) string { return "" }, tokenFile: tokenFile,
 			detect:         func(func(string) (string, error)) []string { return nil },
 			installService: func(string, string) error { return installErr },
 			runDoctor:      func(context.Context, doctor.Options) (doctor.Result, error) { return doctor.Result{}, nil },
@@ -200,8 +203,128 @@ func TestSetupServiceFailureEndsWithNextStep(t *testing.T) {
 		if installErr != nil {
 			reason = installErr.Error()
 		}
-		if code != 1 || !strings.HasSuffix(text, "Service could not start: "+reason+"\nNext step: iris serve\n") {
+		if code != 1 || !strings.HasSuffix(text, "Service could not start: "+reason+"\nNext step: iris serve --listen 127.0.0.1:7878 --token-file "+tokenFile+"\n") {
 			t.Fatalf("code %d\n%s", code, text)
 		}
+	}
+}
+
+// declinedSetup runs setup, answers no, and returns what it printed.
+func declinedSetup(t *testing.T, args []string, found []string, vars map[string]string) (string, int) {
+	t.Helper()
+	home := t.TempDir()
+	var out bytes.Buffer
+	code := setup(args, setupEnv{
+		in:     strings.NewReader("n\n"),
+		out:    &out,
+		errw:   &out,
+		getenv: func(key string) string { return vars[key] },
+		layout: integrate.Layout{
+			Home:     home,
+			StateDir: filepath.Join(home, "state"),
+			Getenv:   func(string) string { return "" },
+		},
+		detect:    func(func(string) (string, error)) []string { return found },
+		tokenFile: filepath.Join(home, "hub.token"),
+	})
+	return out.String(), code
+}
+
+func TestSetupClientsAcceptAliasesAndAnyCase(t *testing.T) {
+	cases := []struct{ flag, client, file string }{
+		{"CODEX", integrate.Codex, filepath.Join(".codex", "hooks.json")},
+		{" Cursor-Agent ", integrate.Cursor, filepath.Join(".cursor", "hooks.json")},
+		{"grok,kimi-code", integrate.Kimi, filepath.Join(".kimi-code", "config.toml")},
+	}
+	for _, tc := range cases {
+		t.Run(tc.flag, func(t *testing.T) {
+			text, code := declinedSetup(t, []string{"--clients", tc.flag}, []string{tc.client}, nil)
+			if code != 0 || !strings.Contains(text, tc.file) {
+				t.Fatalf("code %d\n%s", code, text)
+			}
+		})
+	}
+}
+
+func TestSetupClientsStillRefuseAnUnknownName(t *testing.T) {
+	text, code := declinedSetup(t, []string{"--clients", "emacs"}, nil, nil)
+	if code != 2 || !strings.Contains(text, `unknown client "emacs"`) {
+		t.Fatalf("code %d\n%s", code, text)
+	}
+}
+
+func TestSetupWarnsWhenTheEnvironmentOverridesTheChosenHub(t *testing.T) {
+	vars := map[string]string{"IRIS_HUB_URL": "https://other.example"}
+	text, _ := declinedSetup(t, []string{"--hub-url", hubclient.DefaultHubURL}, nil, vars)
+	if !strings.Contains(text, "IRIS_HUB_URL is set to https://other.example") {
+		t.Fatal(text)
+	}
+	if !strings.Contains(text, "Hub: "+hubclient.DefaultHubURL+"\n") {
+		t.Fatal(text)
+	}
+}
+
+func TestSetupDoesNotWarnWhenTheEnvironmentAgrees(t *testing.T) {
+	for name, vars := range map[string]map[string]string{
+		"unset":          nil,
+		"same":           {"IRIS_HUB_URL": "https://hub.example"},
+		"trailing slash": {"IRIS_HUB_URL": "https://hub.example/"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			text, _ := declinedSetup(t, []string{"--hub-url", "https://hub.example"}, nil, vars)
+			if strings.Contains(text, "IRIS_HUB_URL") {
+				t.Fatal(text)
+			}
+		})
+	}
+}
+
+func TestServeCommandQuotesATokenPathWithSpaces(t *testing.T) {
+	if got := serveCommand("127.0.0.1:7878", "/plain/hub.token"); got != "iris serve --listen 127.0.0.1:7878 --token-file /plain/hub.token" {
+		t.Fatal(got)
+	}
+	want := `iris serve --listen 127.0.0.1:7878 --token-file "C:\Users\A B\hub.token"`
+	if got := serveCommand("127.0.0.1:7878", `C:\Users\A B\hub.token`); got != want {
+		t.Fatal(got)
+	}
+}
+
+func TestSetupStopsOnABrokenClientConfiguration(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "client.json"), []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	code := setup([]string{"--yes"}, setupEnv{
+		out: &out, errw: &out, getenv: func(string) string { return "" },
+		tokenFile: filepath.Join(home, "hub.token"),
+		detect:    func(func(string) (string, error)) []string { return nil },
+	})
+	if code != 1 || !strings.Contains(out.String(), "client.json") {
+		t.Fatalf("code %d\n%s", code, out.String())
+	}
+}
+
+func TestSetupStopsWhenItCannotSaveTheConfiguration(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Getuid() == 0 {
+		t.Skip("directory modes are not enforced here")
+	}
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	var out bytes.Buffer
+	code := setup([]string{"--yes"}, setupEnv{
+		out: &out, errw: &out, getenv: func(string) string { return "" },
+		tokenFile: filepath.Join(dir, "hub.token"),
+		detect:    func(func(string) (string, error)) []string { return nil },
+		installService: func(string, string) error {
+			t.Fatal("installed a service after the configuration failed")
+			return nil
+		},
+	})
+	if code != 1 {
+		t.Fatalf("code %d\n%s", code, out.String())
 	}
 }

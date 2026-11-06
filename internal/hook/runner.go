@@ -144,7 +144,7 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 			return state.fail(err, allow)
 		}
 		return r.finish(ev, Encode(ev, Decision{Action: ActionAllow}))
-	case KindPreTool:
+	default: // needsNetwork leaves only an edit that is about to run.
 		state.at("paths")
 		if len(ev.Paths) == 0 {
 			return state.fail(hookFailure("edit tool has no usable paths"), allow)
@@ -178,8 +178,6 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 			return state.fail(hookFailure("hub returned an invalid touch action"), allow)
 		}
 		return r.finish(ev, Encode(ev, decisionFromTouch(touch)))
-	default:
-		return r.finish(ev, Encode(ev, Decision{Action: ActionAllow}))
 	}
 }
 

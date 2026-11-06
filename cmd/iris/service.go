@@ -12,6 +12,12 @@ import (
 	"github.com/mateusz-klatt/iris/internal/service"
 )
 
+// hostService is the process boundary for the user service manager.
+var hostService = service.Host
+
+// absPath is the process boundary for making the service binary absolute.
+var absPath = filepath.Abs
+
 func runService(args []string) int {
 	if len(args) == 0 || (args[0] != "install" && args[0] != "uninstall" && args[0] != "status" && args[0] != "start" && args[0] != "stop") {
 		fmt.Fprintln(os.Stderr, "usage: iris service install|uninstall|status|start|stop")
@@ -78,7 +84,7 @@ func userService(listen, tokenFile string) (service.Manager, error) {
 // fallback, not a failure.
 func serviceBinary(look func(string) (string, error), self func() (string, error)) (string, error) {
 	if bin, err := look("iris"); err == nil {
-		return filepath.Abs(bin)
+		return absPath(bin)
 	}
 	return self()
 }
@@ -106,5 +112,5 @@ func userServiceDB(listen, tokenFile, database string) (service.Manager, error) 
 		database = cfg.Database
 	}
 	argv := []string{bin, "serve", "--listen", listen, "--token-file", tokenFile, "--db", database}
-	return service.Host(home, os.Getenv("XDG_CONFIG_HOME"), argv), nil
+	return hostService(home, os.Getenv("XDG_CONFIG_HOME"), argv), nil
 }

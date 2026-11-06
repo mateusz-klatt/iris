@@ -2,6 +2,8 @@ package store
 
 import (
 	"context"
+	"database/sql"
+	"errors"
 	"fmt"
 )
 
@@ -59,22 +61,11 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 		case "events":
 			out, err = t.events(r)
 		case "monitor_cursor":
-			var cursor int64
-			err = t.row("SELECT COALESCE((SELECT seq FROM Cursor WHERE consumer_id=?),0)", r.ExecutionID+":iris-watch").Scan(&cursor)
-			out = map[string]any{"cursor": cursor}
+			out, err = t.monitorCursor(r)
 		case "validate":
 			var e execution
 			e, err = t.live(r.ExecutionID, r.Generation)
 			out = bound(e)
-		case "attention":
-			var e execution
-			e, err = t.live(r.ExecutionID, 0)
-			if err != nil {
-				return err
-			}
-			var unread int
-			err = t.row("SELECT COUNT(*) FROM Delivery WHERE recipient_agent_id=? AND id NOT IN (SELECT delivery_id FROM Ack)", e.AgentID).Scan(&unread)
-			out = map[string]any{"unread": unread}
 		case "status":
 			counts := map[string]int{}
 			for _, table := range []string{"Agent", "Execution", "Claim", "Message", "Delivery"} {
@@ -105,6 +96,45 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 	})
 	return out, err
 }
+
+// pendingDeliveries counts mail nobody has fetched yet. A fetched delivery stays
+// unread until it is acknowledged, but it no longer needs anyone's attention.
+func (t *transaction) pendingDeliveries(agent string) (int, error) {
+	var n int
+	err := t.row("SELECT COUNT(*) FROM Delivery WHERE recipient_agent_id=? AND attempt=0 AND id NOT IN (SELECT delivery_id FROM Ack)", agent).Scan(&n)
+	return n, err
+}
+
+// monitorCursor says where a monitor resumes. A new session is a new Execution
+// with no cursor, and it must not hear the agent's whole history again, so it
+// starts at the newest event and is told only about mail still waiting.
+func (t *transaction) monitorCursor(r Request) (map[string]any, error) {
+	e, err := t.live(r.ExecutionID, 0)
+	if err != nil {
+		return nil, err
+	}
+	consumer := r.ExecutionID + ":iris-watch"
+	var cursor int64
+	err = t.row("SELECT seq FROM Cursor WHERE consumer_id=?", consumer).Scan(&cursor)
+	if err == nil {
+		return map[string]any{"cursor": cursor, "pending": 0}, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	if err = t.row("SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name='Event'),0)").Scan(&cursor); err != nil {
+		return nil, err
+	}
+	if _, err = t.exec("INSERT INTO Cursor VALUES(?,?,?)", consumer, e.ID, cursor); err != nil {
+		return nil, err
+	}
+	pending, err := t.pendingDeliveries(e.AgentID)
+	if err != nil {
+		return nil, err
+	}
+	return map[string]any{"cursor": cursor, "pending": pending}, nil
+}
+
 func (t *transaction) events(r Request) (map[string]any, error) {
 	e, err := t.live(r.ExecutionID, 0)
 	if err != nil {
@@ -118,8 +148,12 @@ func (t *transaction) events(r Request) (map[string]any, error) {
 	if err = t.row("SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name='Event'),0),COALESCE(MIN(seq),0) FROM Event").Scan(&high, &low); err != nil {
 		return nil, err
 	}
+	pending, err := t.pendingDeliveries(e.AgentID)
+	if err != nil {
+		return nil, err
+	}
 	reset := (r.Stream != "" && r.Stream != t.s.stream) || ((low > 0 && r.After < low-1) || (low == 0 && r.After < high)) || r.After > high
-	out := map[string]any{"stream": t.s.stream, "events": []map[string]any{}, "high_water": high}
+	out := map[string]any{"stream": t.s.stream, "events": []map[string]any{}, "high_water": high, "pending": pending}
 	if reset {
 		claims, err := t.claims(e.Repo)
 		if err != nil {
@@ -132,7 +166,8 @@ func (t *transaction) events(r Request) (map[string]any, error) {
 		out["reset"] = true
 		out["snapshot"] = map[string]any{"claims": claims, "unread": unread}
 	} else {
-		rows, err := t.rows("SELECT seq,kind FROM Event WHERE seq>? AND agent_id=? AND (execution_id IS NULL OR execution_id=?) ORDER BY seq LIMIT ?", r.After, e.AgentID, e.ID, boundedLimit(r.Limit, 100, 1000))
+		// A delivery that is no longer waiting was already seen, so its event needs no attention.
+		rows, err := t.rows(`SELECT seq,kind,kind='inbox_changed' AND object_id NOT IN (SELECT id FROM Delivery WHERE attempt=0 AND id NOT IN (SELECT delivery_id FROM Ack)) FROM Event WHERE seq>? AND agent_id=? AND (execution_id IS NULL OR execution_id=?) ORDER BY seq LIMIT ?`, r.After, e.AgentID, e.ID, boundedLimit(r.Limit, 100, 1000))
 		if err != nil {
 			return nil, err
 		}
@@ -140,11 +175,13 @@ func (t *transaction) events(r Request) (map[string]any, error) {
 		for rows.Next() {
 			var seq int64
 			var kind string
-			if err = rows.Scan(&seq, &kind); err != nil {
-				rows.Close()
-				return nil, err
+			var settled bool
+			rows.Scan(&seq, &kind, &settled)
+			event := map[string]any{"cursor": seq, "kind": kind}
+			if settled {
+				event["settled"] = true
 			}
-			events = append(events, map[string]any{"cursor": seq, "kind": kind})
+			events = append(events, event)
 		}
 		err = rows.Err()
 		rows.Close()

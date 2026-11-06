@@ -116,7 +116,20 @@ func (r Resolved) HubURL() string {
 	}
 	return r.URL
 }
-func (r Resolved) TokenPath() (string, error) { return r.TokenFile, r.err }
+func (r Resolved) TokenPath() (string, error) {
+	// A malformed client.json must not hide the credential path. Failure logs
+	// are written beside it, and a failing hook still has to leave a trace.
+	// HubURL and Token keep the parse error, so the hub itself stays fail-closed.
+	if r.TokenFile != "" {
+		return r.TokenFile, nil
+	}
+	return "", r.err
+}
+
+// ConfigErr reports what TokenPath deliberately tolerates: a setting that could
+// not be read. Commands that act on the configuration must check it.
+func (r Resolved) ConfigErr() error { return r.err }
+
 func (r Resolved) Token() (string, error) {
 	if r.err != nil {
 		return "", r.err
@@ -134,16 +147,20 @@ func (e EnvConfig) HubURL() string             { return e.Load().HubURL() }
 func (e EnvConfig) TokenPath() (string, error) { return e.Load().TokenPath() }
 func (e EnvConfig) Token() (string, error)     { return e.Load().Token() }
 
+// Hooks a test uses to force a write or close failure on the temp file.
+var (
+	prepareConfigWrite = func(*os.File) {}
+	prepareConfigClose = func(*os.File) {}
+)
+
 // WriteConfig persists client settings without fetching or creating a credential.
 func WriteConfig(path string, f FileConfig) error {
 	if err := ValidateURL(f.Hub); err != nil {
 		return err
 	}
-	raw, err := json.MarshalIndent(f, "", "  ")
-	if err != nil {
-		return err
-	}
-	if err = os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	// FileConfig is only strings, so the encoding cannot fail.
+	raw, _ := json.MarshalIndent(f, "", "  ")
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
 	temp, err := os.CreateTemp(filepath.Dir(path), ".client-*")
@@ -152,10 +169,12 @@ func WriteConfig(path string, f FileConfig) error {
 	}
 	name := temp.Name()
 	defer os.Remove(name)
+	prepareConfigWrite(temp)
 	if _, err = temp.Write(append(raw, '\n')); err != nil {
 		temp.Close()
 		return err
 	}
+	prepareConfigClose(temp)
 	if err = temp.Close(); err != nil {
 		return err
 	}

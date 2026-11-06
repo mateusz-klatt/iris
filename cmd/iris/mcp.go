@@ -7,7 +7,6 @@ import (
 	"github.com/mateusz-klatt/iris/internal/binding"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 	"github.com/mateusz-klatt/iris/internal/mcpserver"
-	"github.com/mateusz-klatt/iris/internal/proc"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 	"time"
 )
@@ -23,7 +22,7 @@ func runMCP(args []string) error {
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	parent, err := proc.WatchParent()
+	parent, err := watchParent()
 	if err != nil {
 		return err
 	}
