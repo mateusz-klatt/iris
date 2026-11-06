@@ -7,8 +7,11 @@ permissions:
   contents: read
 jobs:
   sonar:
+    # The gate reads the profile each OS job uploaded, so it waits for them, and
+    # still runs when one failed so the scan is not lost.
+    needs: test
     # Pull requests from forks get no secrets, so the scanner could not authenticate.
-    if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -22,10 +25,15 @@ jobs:
           node-version: 26
           cache: npm
           cache-dependency-path: web/package-lock.json
-      - name: Go coverage
-        run: go test -coverprofile=coverage.out ./...
-        env:
-          CGO_ENABLED: "0"
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: coverage-*
+          path: profiles
+          merge-multiple: true
+      - name: Merge Go coverage from every OS
+        run: |
+          go test ./.github/covermerge
+          go run ./.github/covermerge profiles/*.out > coverage.out
       - run: npm ci --ignore-scripts --prefix web
       - name: Web coverage
         id: web_coverage
@@ -73,9 +81,17 @@ jobs:
         with:
           go-version-file: go.mod
       - run: go vet ./...
-      - run: go test ./...
+      - run: go test -coverprofile=coverage-${{ matrix.os }}.out ./...
+        # PowerShell would split the flag at the dot in its value.
+        shell: bash
         env:
           CGO_ENABLED: "0"
+      - uses: actions/upload-artifact@v4
+        if: ${{ !cancelled() }}
+        with:
+          name: coverage-${{ matrix.os }}
+          path: coverage-${{ matrix.os }}.out
+          retention-days: 1
       - run: go test -race ./...
         if: runner.os != 'Windows'
         env:
