@@ -3,6 +3,7 @@
 package integrate
 
 import (
+	"bytes"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -421,38 +422,6 @@ func (l Layout) remember(client, path string, existing []byte, absent bool) erro
 	return l.saveManifest(m)
 }
 
-func (l Layout) restore(client string) error {
-	m, err := l.loadManifest()
-	if err != nil {
-		return err
-	}
-	dir, err := l.state()
-	if err != nil {
-		return err
-	}
-	for path, rec := range m.Files {
-		if rec.Client != client {
-			continue
-		}
-		if rec.Created {
-			if err := os.Remove(path); err != nil && !errors.Is(err, os.ErrNotExist) {
-				return err
-			}
-		} else if rec.Backup != "" {
-			data, err := os.ReadFile(filepath.Join(dir, rec.Backup))
-			if err != nil {
-				return err
-			}
-			if err := atomicWrite(path, data); err != nil {
-				return err
-			}
-			_ = os.Remove(filepath.Join(dir, rec.Backup))
-		}
-		delete(m.Files, path)
-	}
-	return l.saveManifest(m)
-}
-
 func refuseSpecial(path string) error {
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
@@ -522,14 +491,25 @@ func readObject(existing []byte) (map[string]any, error) {
 	if len(bytesTrim(existing)) == 0 {
 		return map[string]any{}, nil
 	}
-	if !json.Valid(existing) {
-		return nil, ErrBroken
-	}
 	var doc map[string]any
-	if err := json.Unmarshal(existing, &doc); err != nil || doc == nil {
+	if err := decodeJSON(existing, &doc); err != nil || doc == nil {
 		return nil, ErrBroken
 	}
 	return doc, nil
+}
+
+// decodeJSON keeps numbers as written, because a value Iris does not own must
+// come back unchanged and float64 cannot hold every integer.
+func decodeJSON(data []byte, v any) error {
+	if !json.Valid(data) {
+		return ErrBroken
+	}
+	dec := json.NewDecoder(bytes.NewReader(data))
+	dec.UseNumber()
+	if err := dec.Decode(v); err != nil {
+		return ErrBroken
+	}
+	return nil
 }
 
 func bytesTrim(b []byte) []byte {

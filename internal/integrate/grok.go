@@ -61,7 +61,7 @@ func (c grokClient) Install(l Layout, _ Plugins) error {
 	})
 }
 
-func (c grokClient) Remove(l Layout, _ Plugins) error { return l.restore(Grok) }
+func (c grokClient) Remove(l Layout, _ Plugins) error { return l.unwire(Grok, stripClient(Grok)) }
 
 func (c grokClient) Canary(l Layout) (Invocation, error) {
 	files, err := c.Files(l)
