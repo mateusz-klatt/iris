@@ -1,0 +1,13 @@
+{
+  "name": "iris",
+  "owner": {
+    "name": "Iris"
+  },
+  "plugins": [
+    {
+      "name": "iris",
+      "source": "./plugins/iris",
+      "description": "Coordinate coding agents. An Iris notification means new mail or a claim someone is waiting on."
+    }
+  ]
+}

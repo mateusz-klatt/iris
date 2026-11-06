@@ -1,0 +1,7 @@
+[
+  {
+    "name": "iris",
+    "command": "__MONITOR__",
+    "description": "Iris attention. An Iris notification means new mail or a claim someone is waiting on. Use the Iris tools to read it and reply."
+  }
+]
