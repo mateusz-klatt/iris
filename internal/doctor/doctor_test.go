@@ -285,7 +285,9 @@ func TestLiveClosesStdin(t *testing.T) {
 		}
 		return "", errors.New("not found")
 	}}}
-	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	// Generous: the first run of a fresh binary on Windows waits for the virus scanner, and
+	// a killed process there looks exactly like the failure this test is looking for.
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	if err := runLive(ctx, opt, integrate.Codex); err != nil {
 		t.Fatal(err)
