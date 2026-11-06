@@ -357,6 +357,14 @@ The Run value starts at logon; it does not supervise or restart a crashed hub.
 Writes are idempotent, backed up and validated before saving, which matters because Kimi drops
 its entire hooks section over one bad key (measured).
 
+`iris integrate --remove` edits each file as it is now and takes out only what Iris wrote, so a
+change made after install survives. A file Iris created goes if nothing else is in it. The backup
+is used only to return the original bytes when nothing but Iris differs, and never if it holds Iris
+entries of its own, because that would reinstall an older integration. Removal cannot keep the
+formatting of a JSON file changed after install: keys come back sorted and indented by Iris's
+writer, as they do on install. A file that no longer parses is refused and stays in the manifest
+for a retry. A plugin skill somebody edited no longer matches its template, so it stays.
+
 Clients that cannot be fully automated are reported truthfully. Codex needs its hooks reviewed
 once in `/hooks`; project hooks need trust on Cursor, Copilot and Grok. Kimi has no project
 hooks at all. Monitors require the Claude plugin, so `iris integrate claude` installs one,

@@ -6,7 +6,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "grep -qiE 'mcp[_-]agent[_-]mail|dicklesworthstone|projects/iris\\.git' && { echo 'Blocked by the Iris clean-room policy. See docs/PROVENANCE.md.' >&2; exit 2; } || exit 0",
+            "command": "sed 's#mateusz-klatt/iris\\.git##g' | grep -qiE 'mcp[_-]agent[_-]mail|dicklesworthstone|(^|[^a-z0-9_.-])iris\\.git' && { echo 'Blocked by the Iris clean-room policy. See docs/PROVENANCE.md.' >&2; exit 2; } || exit 0",
             "timeout": 3
           }
         ]

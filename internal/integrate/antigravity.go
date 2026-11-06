@@ -69,7 +69,9 @@ func agyMatched(l Layout, iris, event string) map[string]any {
 	}
 }
 
-func (c antigravityClient) Remove(l Layout, _ Plugins) error { return l.restore(Antigravity) }
+func (c antigravityClient) Remove(l Layout, _ Plugins) error {
+	return l.unwire(Antigravity, stripClient(Antigravity))
+}
 
 func (c antigravityClient) Canary(l Layout) (Invocation, error) {
 	files, err := c.Files(l)

@@ -63,7 +63,7 @@ func (c kimiClient) Install(l Layout, _ Plugins) error {
 	})
 }
 
-func (c kimiClient) Remove(l Layout, _ Plugins) error { return l.restore(Kimi) }
+func (c kimiClient) Remove(l Layout, _ Plugins) error { return l.unwire(Kimi, stripClient(Kimi)) }
 
 func (c kimiClient) Canary(l Layout) (Invocation, error) {
 	files, err := c.Files(l)
