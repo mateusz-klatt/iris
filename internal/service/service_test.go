@@ -15,13 +15,7 @@ func TestUnitText(t *testing.T) {
 	if !strings.Contains(plist, Marker) || !strings.Contains(plist, "<string>/opt/iris</string>") || !strings.Contains(plist, "<string>serve</string>") {
 		t.Fatal(plist)
 	}
-	create := TaskCreateArgs(argv)
-	if create[0] != "/Create" || create[len(create)-1] != "/opt/iris serve --listen 127.0.0.1:7878 --token-file /home/a/token" {
-		t.Fatal(create)
-	}
-	if TaskDeleteArgs()[0] != "/Delete" || TaskQueryArgs()[0] != "/Query" {
-		t.Fatal("task args")
-	}
+
 }
 
 func TestSystemdQuotesSpaces(t *testing.T) {

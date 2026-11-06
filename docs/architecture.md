@@ -341,10 +341,19 @@ iris setup
 
 `iris setup` detects clients and shows one screen: the hub URL, with a non-local hub entered here,
 and the exact files it will write. It asks once, then installs the user service (launchd,
-`systemd --user` or Task Scheduler), integrates the clients and runs `iris doctor`. It ends with
+`systemd --user` or HKCU Run), integrates the clients and runs `iris doctor`. It ends with
 the steps only a human can do, such as Codex's `/hooks` review, and reports `Iris inactive on
 <client>` for each one left undone, so that a green finish is never false. `iris integrate
 <client>` and `iris integrate --remove` do the parts separately.
+On Windows the `Iris` value under
+`HKCU\Software\Microsoft\Windows\CurrentVersion\Run` runs the stable binary with
+`service start`. The first real non-elevated Windows 11 setup measured access denied for
+Task Scheduler's ONLOGON registration: it requires elevation. Installation starts the hub
+immediately. `service start` detaches `iris serve` without a console, logging beside the
+database; `service stop` checks the pid file's process creation time before termination.
+Start is a no-op if the hub responds, and the database OS lock still guards against two hubs.
+The Run value starts at logon; it does not supervise or restart a crashed hub.
+
 Writes are idempotent, backed up and validated before saving, which matters because Kimi drops
 its entire hooks section over one bad key (measured).
 

@@ -76,3 +76,12 @@ func (m systemdManager) Status(ctx context.Context) (Status, error) {
 	}
 	return Status{Installed: installed, Active: active && installed, Detail: detail}, nil
 }
+
+func (m systemdManager) Start(ctx context.Context) error {
+	_, err := m.run.Run(ctx, "systemctl", "--user", "start", "iris.service")
+	return err
+}
+func (m systemdManager) Stop(ctx context.Context) error {
+	_, err := m.run.Run(ctx, "systemctl", "--user", "stop", "iris.service")
+	return err
+}

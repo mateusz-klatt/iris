@@ -69,3 +69,15 @@ func (m launchdManager) Status(ctx context.Context) (Status, error) {
 	out, runErr := m.run.Run(ctx, "launchctl", "print", m.domain()+"/iris")
 	return Status{Installed: installed, Active: installed && runErr == nil, Detail: out}, nil
 }
+
+func (m launchdManager) Start(ctx context.Context) error {
+	if st, _ := m.Status(ctx); st.Active {
+		return nil
+	}
+	_, err := m.run.Run(ctx, "launchctl", "bootstrap", m.domain(), m.plist)
+	return err
+}
+func (m launchdManager) Stop(ctx context.Context) error {
+	_, err := m.run.Run(ctx, "launchctl", "bootout", m.domain()+"/iris")
+	return err
+}
