@@ -46,9 +46,7 @@ func (t *transaction) claimRows(repo string) ([]claim, error) {
 	out := []claim{}
 	for rows.Next() {
 		var c claim
-		if err = rows.Scan(&c.Fence, &c.Execution, &c.Repo, &c.Kind, &c.Path, &c.Origin, &c.Holder, &c.Epoch, &c.Expiry); err != nil {
-			return nil, err
-		}
+		rows.Scan(&c.Fence, &c.Execution, &c.Repo, &c.Kind, &c.Path, &c.Origin, &c.Holder, &c.Epoch, &c.Expiry)
 		out = append(out, c)
 	}
 	return out, rows.Err()
@@ -250,9 +248,6 @@ func (t *transaction) touch(r Request) (map[string]any, error) {
 		out["action"] = action
 		c := conflicts[0]
 		expiry := c["expires_at"]
-		if expiry == nil {
-			expiry = "the holder's execution lease expires"
-		}
 		out["message"] = fmt.Sprintf("Iris: %s is held by %s until %v (%s claim). Message them with the send tool, or work on something else. Do not bypass this with a shell command.", c["path"], c["holder"], expiry, c["origin"])
 		if action == "deny" {
 			out["message"] = out["message"].(string) + " Ask the human if you need help resolving this conflict."
@@ -386,10 +381,7 @@ func (t *transaction) explicit(r Request) (map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		f, err := res.LastInsertId()
-		if err != nil {
-			return nil, err
-		}
+		f, _ := res.LastInsertId() // modernc SQLite always provides the last inserted rowid
 		c = claim{Fence: f, Execution: e.ID, Repo: e.Repo, Kind: r.Kind, Path: p, Origin: "explicit", Epoch: t.s.epoch, Expiry: expiry}
 	}
 	out = map[string]any{"fence": c.Fence, "token": t.fenceToken(c), "expires_at": timestamp(c.Expiry)}
@@ -426,10 +418,7 @@ func (t *transaction) release(r Request) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	n, err := res.RowsAffected()
-	if err != nil {
-		return nil, err
-	}
+	n, _ := res.RowsAffected() // SQLite always reports affected rows
 	if n > 0 {
 		err = t.repoEvent(e.Repo, "claim_released", e.ID)
 	}

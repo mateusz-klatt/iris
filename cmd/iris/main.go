@@ -44,6 +44,9 @@ func main() {
 	}
 }
 func run(args []string) error {
+	if len(args) > 0 && args[0] == "token" {
+		return runToken(args[1:])
+	}
 	if len(args) > 0 && args[0] == "guard" {
 		return runGuard(args[1:])
 	}
@@ -74,9 +77,13 @@ func run(args []string) error {
 	flags.StringVar(&cfg.TLSCert, "tls-cert", "", "TLS certificate file")
 	flags.StringVar(&cfg.TLSKey, "tls-key", "", "TLS private key file")
 	publicURL := flags.String("public-url", "", "public https origin behind a trusted loopback TLS proxy")
+	limits := hub.RateLimitFlags(flags)
 	var hosts string
 	flags.StringVar(&hosts, "allowed-hosts", "", "additional allowed Host authorities, including ports")
 	if err = flags.Parse(args[1:]); err != nil {
+		return err
+	}
+	if err = limits.Validate(); err != nil {
 		return err
 	}
 	if flags.NArg() != 0 {
@@ -107,6 +114,7 @@ func run(args []string) error {
 		}
 	}
 	handler := hub.New(s, token, allowed)
+	handler.Limits = *limits
 	if *publicURL != "" {
 		if err = handler.SetPublicURL(*publicURL); err != nil {
 			return err

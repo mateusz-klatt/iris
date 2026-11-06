@@ -5,8 +5,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -24,12 +22,23 @@ import (
 )
 
 type ticket struct {
+	principal  principal
 	execution  string
 	generation int64
 	expires    time.Time
 	used       bool
 }
 type Hub struct {
+	// These seams are the database and WebSocket I/O boundaries; production uses
+	// the real store and transport, and tests can report their actual failure modes.
+	call         func(context.Context, string, store.Request) (map[string]any, error)
+	acceptSocket func(http.ResponseWriter, *http.Request, *websocket.AcceptOptions) (*websocket.Conn, error)
+	writeSocket  func(context.Context, *websocket.Conn, []byte) error
+	pingSocket   func(context.Context, *websocket.Conn) error
+	Limits       Limits
+	rates        map[string]window
+	socketCounts map[string]int
+	sockets      map[string]map[*websocket.Conn]bool
 	// PingInterval is configurable before serving; zero uses 25 seconds.
 	PingInterval time.Duration
 	// MaxRequestBytes bounds every HTTP body; zero uses 64 KiB.
@@ -49,7 +58,11 @@ type Hub struct {
 }
 
 func New(s *store.Store, token string, allowedHosts []string) *Hub {
-	h := &Hub{monitors: map[string]bool{}, links: map[string]loginGrant{}, cookies: map[string]loginGrant{}, store: s, token: token, hosts: map[string]bool{}, mux: http.NewServeMux(), tickets: map[string]ticket{}, now: time.Now}
+	h := &Hub{call: s.Call, acceptSocket: websocket.Accept,
+		writeSocket: func(ctx context.Context, c *websocket.Conn, raw []byte) error {
+			return c.Write(ctx, websocket.MessageText, raw)
+		},
+		pingSocket: func(ctx context.Context, c *websocket.Conn) error { return c.Ping(ctx) }, rates: map[string]window{}, socketCounts: map[string]int{}, sockets: map[string]map[*websocket.Conn]bool{}, monitors: map[string]bool{}, links: map[string]loginGrant{}, cookies: map[string]loginGrant{}, store: s, token: token, hosts: map[string]bool{}, mux: http.NewServeMux(), tickets: map[string]ticket{}, now: time.Now}
 	for _, host := range allowedHosts {
 		h.hosts[strings.ToLower(host)] = true
 	}
@@ -72,6 +85,7 @@ func New(s *store.Store, token string, allowedHosts []string) *Hub {
 		writeError(w, &store.Error{Code: "not_found", Message: "unknown API route"})
 	})
 	h.operatorRoutes()
+	h.tokenRoutes()
 	h.mux.HandleFunc("GET /v1/watch", h.watch)
 	h.mux.HandleFunc("POST /v1/wake-tickets", h.wakeTicket)
 	return h
@@ -83,6 +97,16 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.reject(w, r, "Host is not allowed")
 		return
 	}
+	p := h.authenticate(r)
+	logPrincipal(r, p)
+	if p.name == "" {
+		if !h.anonymousRate(w) {
+			return
+		}
+	} else if !h.tokenRate(w, p) {
+		return
+	}
+	r = r.WithContext(context.WithValue(r.Context(), principalKey{}, p))
 	wsOrigin := "ws://" + r.Host
 	if r.TLS != nil {
 		wsOrigin = "wss://" + r.Host
@@ -130,10 +154,7 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.mux.ServeHTTP(w, r)
 }
 func (h *Hub) authorized(r *http.Request) bool {
-	header := r.Header.Get("Authorization")
-	value := strings.TrimPrefix(header, "Bearer ")
-	got, want := sha256.Sum256([]byte(value)), sha256.Sum256([]byte(h.token))
-	return subtle.ConstantTimeCompare(got[:], want[:]) == 1 && h.token != "" && strings.HasPrefix(header, "Bearer ")
+	return requestPrincipal(r).name != ""
 }
 func decode(w http.ResponseWriter, r *http.Request) (store.Request, error) {
 	var req store.Request
@@ -192,7 +213,7 @@ func (h *Hub) api(w http.ResponseWriter, r *http.Request, operation string) {
 	if operation == "ack" {
 		req.Key = r.PathValue("id")
 	}
-	out, err := h.store.Call(r.Context(), operation, req)
+	out, err := h.call(r.Context(), operation, req)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -216,6 +237,8 @@ func writeError(w http.ResponseWriter, err error) {
 		status = http.StatusNotFound
 	case "conflict", "key_reused", "lost", "ambiguous", "unbound":
 		status = http.StatusConflict
+	case "rate_limited":
+		status = http.StatusTooManyRequests
 	case "too_large":
 		status = http.StatusRequestEntityTooLarge
 	}
@@ -236,15 +259,12 @@ func (h *Hub) wakeTicket(w http.ResponseWriter, r *http.Request) {
 		writeError(w, &store.Error{Code: "bad_request", Message: "generation required"})
 		return
 	}
-	if _, err = h.store.Call(r.Context(), "validate", req); err != nil {
+	if _, err = h.call(r.Context(), "validate", req); err != nil {
 		writeError(w, err)
 		return
 	}
 	var raw [32]byte
-	if _, err = rand.Read(raw[:]); err != nil {
-		writeError(w, err)
-		return
-	}
+	_, _ = rand.Read(raw[:]) // crypto/rand.Read never returns an error
 	key := base64.RawURLEncoding.EncodeToString(raw[:])
 	expires := h.now().Add(2 * time.Minute)
 	h.mu.Lock()
@@ -253,7 +273,7 @@ func (h *Hub) wakeTicket(w http.ResponseWriter, r *http.Request) {
 			delete(h.tickets, k)
 		}
 	}
-	h.tickets[key] = ticket{execution: req.ExecutionID, generation: req.Generation, expires: expires}
+	h.tickets[key] = ticket{principal: requestPrincipal(r), execution: req.ExecutionID, generation: req.Generation, expires: expires}
 	h.mu.Unlock()
 	scheme := "ws"
 	if r.TLS != nil {
@@ -290,6 +310,7 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 	}
 	protocol := "iris.v1"
 	ticketKey := ""
+	p := requestPrincipal(r)
 	if h.authorized(r) {
 		if !offered(protocols, "iris.v1") {
 			writeError(w, &store.Error{Code: "bad_request", Message: "iris.v1 subprotocol required"})
@@ -300,12 +321,14 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 		valid := false
 		h.mu.Lock()
 		if offered(protocols, "iris.wake") {
-			for _, p := range protocols {
-				if t, ok := h.tickets[p]; ok && !t.used && t.execution == req.ExecutionID && t.expires.After(h.now()) {
+			for _, offeredTicket := range protocols {
+				if t, ok := h.tickets[offeredTicket]; ok && !t.used && t.execution == req.ExecutionID && t.expires.After(h.now()) {
+					p = t.principal
+					logPrincipal(r, p)
 					req.Generation = t.generation
 					t.used = true
-					h.tickets[p] = t
-					ticketKey = p
+					h.tickets[offeredTicket] = t
+					ticketKey = offeredTicket
 					valid = true
 					break
 				}
@@ -317,7 +340,7 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if _, err = h.store.Call(r.Context(), "validate", req); err != nil {
+	if _, err = h.call(r.Context(), "validate", req); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -333,7 +356,7 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer func() { h.mu.Lock(); delete(h.monitors, req.ExecutionID); h.mu.Unlock() }()
-		saved, err := h.store.Call(r.Context(), "monitor_cursor", req)
+		saved, err := h.call(r.Context(), "monitor_cursor", req)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -342,17 +365,27 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 			req.After = cursor
 		}
 	}
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{protocol}})
+	if ticketKey != "" && !h.tokenRate(w, p) {
+		return
+	}
+	if !h.reserveSocket(w, p) {
+		return
+	}
+	defer h.releaseSocket(p)
+	conn, err := h.acceptSocket(w, r, &websocket.AcceptOptions{Subprotocols: []string{protocol}})
 	if err != nil {
 		return
 	}
 	defer conn.CloseNow()
+	if !h.trackSocket(r, conn, p) {
+		return
+	}
+	defer h.untrackSocket(conn, p)
 	ctx := conn.CloseRead(r.Context())
 	pings := time.NewTicker(h.pingInterval())
 	defer pings.Stop()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
-	initial := true
 	for {
 		changes := h.store.Changes()
 		if ticketKey != "" {
@@ -365,7 +398,7 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		if _, err = h.store.Call(ctx, "validate", req); err != nil {
+		if _, err = h.call(ctx, "validate", req); err != nil {
 			_ = conn.Close(websocket.StatusPolicyViolation, "Execution lease lost")
 			return
 		}
@@ -373,7 +406,7 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 		if pageReq.ConsumerID == "iris-watch" {
 			pageReq.ConsumerID = ""
 		}
-		result, err := h.store.Call(ctx, "events", pageReq)
+		result, err := h.call(ctx, "events", pageReq)
 		if err != nil {
 			_ = conn.Close(websocket.StatusPolicyViolation, "Execution stream unavailable")
 			return
@@ -381,7 +414,7 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 		high := result["high_water"].(int64)
 		send := func(cursor int64, kind string) error {
 			frame, _ := json.Marshal(map[string]any{"stream": result["stream"], "cursor": cursor, "kind": kind})
-			return conn.Write(ctx, websocket.MessageText, frame)
+			return h.writeSocket(ctx, conn, frame)
 		}
 		if result["reset"] == true {
 			if send(high, "reset") != nil {
@@ -401,20 +434,8 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 			if len(events) < boundedPageSize {
 				req.After = high
 			}
-			if initial && len(events) == 0 && req.After == 0 {
-				snapshot, err := h.store.Call(ctx, "attention", req)
-				if err != nil {
-					_ = conn.Close(websocket.StatusPolicyViolation, "Execution stream unavailable")
-					return
-				}
-				if snapshot["unread"].(int) > 0 {
-					if send(high, "inbox_changed") != nil {
-						return
-					}
-				}
-			}
+
 		}
-		initial = false
 		select {
 		case <-ctx.Done():
 			return
@@ -440,7 +461,7 @@ func (h *Hub) pingInterval() time.Duration {
 func (h *Hub) ping(ctx context.Context, conn *websocket.Conn) bool {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	if conn.Ping(ctx) != nil {
+	if h.pingSocket(ctx, conn) != nil {
 		_ = conn.CloseNow()
 		return false
 	}

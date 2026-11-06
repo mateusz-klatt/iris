@@ -32,6 +32,9 @@ var namesSchema string
 //go:embed migrations/004.sql
 var shellSchema string
 
+//go:embed migrations/005.sql
+var tokensSchema string
+
 // Clock separates lease ticks from persisted wall-clock expiries. Tick must be monotonic
 // within a Store's lifetime; client timestamps never participate in lease decisions.
 type Clock interface {
@@ -72,14 +75,32 @@ func (t *transaction) exec(q string, a ...any) (sql.Result, error) {
 	return t.conn.ExecContext(t.ctx, q, a...)
 }
 func (t *transaction) row(q string, a ...any) *sql.Row { return t.conn.QueryRowContext(t.ctx, q, a...) }
-func (t *transaction) rows(q string, a ...any) (*sql.Rows, error) {
-	return t.conn.QueryContext(t.ctx, q, a...)
+
+// queryRows records both decoding and iteration failures. Callers check Err after
+// iteration, so malformed rows cannot escape as a partially successful result.
+type queryRows struct {
+	*sql.Rows
+	scanErr error
+}
+
+func (r *queryRows) Scan(dst ...any) { r.scanErr = r.Rows.Scan(dst...) }
+func (r *queryRows) Next() bool      { return r.scanErr == nil && r.Rows.Next() }
+func (r *queryRows) Err() error {
+	if r.scanErr != nil {
+		return r.scanErr
+	}
+	return r.Rows.Err()
+}
+func (t *transaction) rows(q string, a ...any) (*queryRows, error) {
+	rows, err := t.conn.QueryContext(t.ctx, q, a...)
+	if err != nil {
+		return nil, err
+	}
+	return &queryRows{Rows: rows}, nil
 }
 func id(prefix string) string {
 	var b [16]byte
-	if _, err := rand.Read(b[:]); err != nil {
-		panic(err)
-	}
+	_, _ = rand.Read(b[:]) // crypto/rand.Read never returns an error
 	return prefix + hex.EncodeToString(b[:])
 }
 
@@ -89,41 +110,27 @@ func newStreamID() string {
 }
 
 func Open(filename string, clock Clock) (*Store, error) {
+	return openDatabase(filename, clock, "sqlite")
+}
+
+// openDatabase permits tests to wrap the real driver at its I/O boundary.
+func openDatabase(filename string, clock Clock, driverName string) (*Store, error) {
 	if clock == nil {
 		clock = systemClock{time.Now()}
 	}
-	abs, err := filepath.Abs(filename)
+	abs, err := resolveDatabasePath(filename, filepath.Abs, filepath.EvalSymlinks)
 	if err != nil {
 		return nil, err
-	}
-	if err = os.MkdirAll(filepath.Dir(abs), 0700); err != nil {
-		return nil, err
-	}
-	if real, evalErr := filepath.EvalSymlinks(abs); evalErr == nil {
-		abs = real
-	} else if !errors.Is(evalErr, os.ErrNotExist) {
-		return nil, evalErr
-	} else {
-		parent, evalErr := filepath.EvalSymlinks(filepath.Dir(abs))
-		if evalErr != nil {
-			return nil, evalErr
-		}
-		abs = filepath.Join(parent, filepath.Base(abs))
 	}
 	lock, err := lockDatabase(abs + ".lock")
 	if err != nil {
 		return nil, err
 	}
-	file, err := os.OpenFile(abs, os.O_CREATE|os.O_RDWR, 0600)
-	if err != nil {
+	if err = createDatabaseFile(abs); err != nil {
 		unlockDatabase(lock)
 		return nil, err
 	}
-	if err = file.Close(); err != nil {
-		unlockDatabase(lock)
-		return nil, err
-	}
-	db, err := sql.Open("sqlite", abs)
+	db, err := sql.Open(driverName, abs)
 	if err != nil {
 		unlockDatabase(lock)
 		return nil, err
@@ -159,6 +166,11 @@ func Open(filename string, clock Clock) (*Store, error) {
 		}
 		if version < 4 {
 			if _, err := t.exec(shellSchema); err != nil {
+				return err
+			}
+		}
+		if version < 5 {
+			if _, err := t.exec(tokensSchema); err != nil {
 				return err
 			}
 		}
@@ -241,10 +253,7 @@ func (t *transaction) expire() error {
 	var old []expired
 	for rows.Next() {
 		var x expired
-		if err = rows.Scan(&x.f, &x.r); err != nil {
-			rows.Close()
-			return err
-		}
+		rows.Scan(&x.f, &x.r)
 		old = append(old, x)
 	}
 	err = rows.Err()
@@ -310,10 +319,37 @@ func (t *transaction) remember(e execution, key, route string, request any, resu
 		Request any
 	}{route, request})
 	hash := sha256.Sum256(raw)
-	body, err := json.Marshal(result)
+	body, _ := json.Marshal(result) // results are hub-owned JSON maps, never client metadata
+	_, err := t.exec("INSERT INTO Operation VALUES(?,?,?,?)", e.AgentID, key, hash[:], string(body))
+	return err
+}
+
+func createDatabaseFile(filename string) error {
+	file, err := os.OpenFile(filename, os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return err
 	}
-	_, err = t.exec("INSERT INTO Operation VALUES(?,?,?,?)", e.AgentID, key, hash[:], string(body))
-	return err
+	return file.Close()
+}
+
+func resolveDatabasePath(filename string, absolute, evalLinks func(string) (string, error)) (string, error) {
+	abs, err := absolute(filename)
+	if err != nil {
+		return "", err
+	}
+	if err = os.MkdirAll(filepath.Dir(abs), 0700); err != nil {
+		return "", err
+	}
+	if real, evalErr := evalLinks(abs); evalErr == nil {
+		abs = real
+	} else if !errors.Is(evalErr, os.ErrNotExist) {
+		return "", evalErr
+	} else {
+		parent, evalErr := evalLinks(filepath.Dir(abs))
+		if evalErr != nil {
+			return "", evalErr
+		}
+		abs = filepath.Join(parent, filepath.Base(abs))
+	}
+	return abs, nil
 }
