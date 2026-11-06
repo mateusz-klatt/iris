@@ -6,6 +6,14 @@ import (
 	"testing"
 )
 
+func TestUserServiceDoesNotNeedIrisOnPath(t *testing.T) {
+	t.Setenv("PATH", t.TempDir())
+	mgr, err := userService("127.0.0.1:1", filepath.Join(t.TempDir(), "hub.token"))
+	if err != nil || mgr == nil {
+		t.Fatalf("%v %v", mgr, err)
+	}
+}
+
 func TestServiceBinary(t *testing.T) {
 	missing := func(string) (string, error) { return "", errors.New("not on PATH") }
 	self := func() (string, error) { return "/running/iris", nil }
