@@ -7,7 +7,13 @@ import (
 )
 
 func (t *transaction) send(r Request) (map[string]any, error) {
-	e, err := t.live(r.ExecutionID, r.Generation)
+	var e execution
+	var err error
+	if r.Source == "operator" {
+		e, err = t.humanSender(r)
+	} else {
+		e, err = t.live(r.ExecutionID, r.Generation)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -26,7 +32,13 @@ func (t *transaction) send(r Request) (map[string]any, error) {
 	seen := map[string]bool{}
 	for _, name := range r.To {
 		var a recipient
-		if err = t.row("SELECT id,name FROM Agent WHERE repository_id=? AND (name=? OR id=?)", e.Repo, name, name).Scan(&a.id, &a.name); err != nil {
+		if name == "human" {
+			a.id, err = t.human(e.Repo)
+			a.name = "human"
+		} else {
+			err = t.row("SELECT id,name FROM Agent WHERE repository_id=? AND (name=? OR id=?) AND client<>'human'", e.Repo, name, name).Scan(&a.id, &a.name)
+		}
+		if err != nil {
 			return nil, fail("not_found", "recipient is not in this repository")
 		}
 		if !seen[a.id] {
@@ -35,7 +47,13 @@ func (t *transaction) send(r Request) (map[string]any, error) {
 		}
 	}
 	message := id("ms_")
-	if _, err = t.exec("INSERT INTO Message VALUES(?,?,?,?,?)", message, e.ID, r.Subject, r.Body, t.s.clock.Now().UnixMilli()); err != nil {
+	thread := message
+	if r.ReplyTo != "" {
+		if err = t.row("SELECT thread_id FROM Message WHERE id=? AND repository_id=?", r.ReplyTo, e.Repo).Scan(&thread); err != nil {
+			return nil, fail("not_found", "reply is not in this repository")
+		}
+	}
+	if _, err = t.exec("INSERT INTO Message(id,sender_execution_id,subject,body,created_ms,repository_id,thread_id,reply_to) VALUES(?,?,?,?,?,?,?,NULLIF(?,''))", message, e.ID, r.Subject, r.Body, t.s.clock.Now().UnixMilli(), e.Repo, thread, r.ReplyTo); err != nil {
 		return nil, err
 	}
 	deliveries := []map[string]any{}
@@ -49,7 +67,7 @@ func (t *transaction) send(r Request) (map[string]any, error) {
 		}
 		deliveries = append(deliveries, map[string]any{"id": delivery, "recipient": a.name})
 	}
-	out = map[string]any{"message_id": message, "deliveries": deliveries}
+	out = map[string]any{"message_id": message, "thread_id": thread, "deliveries": deliveries}
 	return out, t.remember(e, r.Key, "message", r, out)
 }
 func boundedLimit(n, def, max int) int {
@@ -66,19 +84,19 @@ func (t *transaction) inbox(r Request) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows, err := t.rows(`SELECT d.id,d.attempt,a.name,m.subject,m.body,m.created_ms FROM Delivery d JOIN Message m ON m.id=d.message_id JOIN Execution sender ON sender.id=m.sender_execution_id JOIN Agent a ON a.id=sender.agent_id WHERE d.recipient_agent_id=? AND d.id NOT IN (SELECT delivery_id FROM Ack) AND (d.execution_id IS NULL OR d.execution_id=?) ORDER BY m.created_ms,d.id LIMIT ?`, e.AgentID, e.ID, boundedLimit(r.Limit, 20, 100))
+	rows, err := t.rows(`SELECT d.id,d.attempt,CASE WHEN a.client='human' THEN 'human' ELSE a.name END,m.subject,m.body,m.created_ms,m.id,m.thread_id FROM Delivery d JOIN Message m ON m.id=d.message_id JOIN Execution sender ON sender.id=m.sender_execution_id JOIN Agent a ON a.id=sender.agent_id WHERE d.recipient_agent_id=? AND d.id NOT IN (SELECT delivery_id FROM Ack) AND (d.execution_id IS NULL OR d.execution_id=?) ORDER BY m.created_ms,d.id LIMIT ?`, e.AgentID, e.ID, boundedLimit(r.Limit, 20, 100))
 	if err != nil {
 		return nil, err
 	}
 	out := []map[string]any{}
 	for rows.Next() {
-		var delivery, sender, subject, body string
+		var delivery, sender, subject, body, message, thread string
 		var attempt, created int64
-		if err = rows.Scan(&delivery, &attempt, &sender, &subject, &body, &created); err != nil {
+		if err = rows.Scan(&delivery, &attempt, &sender, &subject, &body, &created, &message, &thread); err != nil {
 			rows.Close()
 			return nil, err
 		}
-		out = append(out, map[string]any{"id": delivery, "attempt": attempt + 1, "sender": sender, "subject": subject, "body": body, "created_at": time.UnixMilli(created).UTC().Format(time.RFC3339Nano)})
+		out = append(out, map[string]any{"id": delivery, "message_id": message, "thread_id": thread, "attempt": attempt + 1, "sender": sender, "subject": subject, "body": body, "created_at": time.UnixMilli(created).UTC().Format(time.RFC3339Nano)})
 	}
 	err = rows.Err()
 	rows.Close()

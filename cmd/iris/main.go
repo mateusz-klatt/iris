@@ -31,6 +31,15 @@ func main() {
 	}
 }
 func run(args []string) error {
+	if len(args) > 0 && args[0] == "watch" {
+		return runWatch(args[1:])
+	}
+	if len(args) > 0 && args[0] == "ui" {
+		return runUI(args[1:])
+	}
+	if len(args) > 0 && args[0] == "mcp" {
+		return runMCP(args[1:])
+	}
 	if len(args) == 1 && args[0] == "version" {
 		fmt.Println(version)
 		return nil

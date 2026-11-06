@@ -2,6 +2,8 @@ package hook
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -25,6 +27,7 @@ func TestFailOpenEveryClient(t *testing.T) {
 			out := Runner{
 				ClientName: string(c),
 				EventName:  "PreToolUse",
+				Getenv:     failureEnv(t),
 				Stdin:      strings.NewReader(editPayload(c, t.TempDir())),
 				Find: func(string) (gitinfo.Repo, error) {
 					panic("boom")
@@ -125,7 +128,8 @@ func TestEndToEndFakeHub(t *testing.T) {
 			}
 			wantCall := "t1"
 			if c == ClientCopilot {
-				wantCall = ""
+				hash := sha256.Sum256([]byte(editPayload(c, root)))
+				wantCall = "payload:" + hex.EncodeToString(hash[:])
 			}
 			if c == ClientAntigravity {
 				wantCall = "1"
@@ -287,6 +291,7 @@ func editRunner(t *testing.T, c Client, url string, deadline time.Duration) Runn
 		EventName:  "PreToolUse",
 		Stdin:      strings.NewReader(editPayload(c, root)),
 		Hub:        &hubclient.Client{Config: hubURL(url)},
+		Getenv:     failureEnv(t),
 		Deadline:   deadline,
 	}
 }
