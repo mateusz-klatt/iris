@@ -13,7 +13,7 @@ import (
 // client runs the same text, do not insert.
 func startGuard(script string) *exec.Cmd {
 	if strings.Contains(script, "Get-Command") {
-		exe := powershellExe()
+		exe := powershellExe(exec.LookPath)
 		cmd := exec.Command(exe)
 		cmd.SysProcAttr = &syscall.SysProcAttr{CmdLine: quoteExe(exe) + " -NoProfile -NonInteractive -Command " + script}
 		return cmd
@@ -21,13 +21,6 @@ func startGuard(script string) *exec.Cmd {
 	cmd := exec.Command("cmd")
 	cmd.SysProcAttr = &syscall.SysProcAttr{CmdLine: "cmd.exe /d /c " + script}
 	return cmd
-}
-
-func powershellExe() string {
-	if p, err := exec.LookPath("pwsh"); err == nil {
-		return p
-	}
-	return "powershell"
 }
 
 func quoteExe(s string) string {

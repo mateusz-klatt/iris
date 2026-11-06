@@ -62,13 +62,31 @@ type Layout struct {
 	GOOS     string
 }
 
-// Invocation is the hook command read back from a client file.
-// Comspec means Windows Codex: COMSPEC runs Shell through cmd.exe /C,
-// and the text is not quoted again.
+// ShellKind identifies the shell used by the client for its command text.
+type ShellKind string
+
+const (
+	ShellSh         ShellKind = "sh"
+	ShellCmd        ShellKind = "cmd"
+	ShellPowerShell ShellKind = "powershell"
+)
+
+// Invocation is the hook command read back from a client file. Argv executes
+// directly; Shell is interpreted by Kind without re-quoting the command text.
 type Invocation struct {
-	Argv    []string
-	Shell   string
-	Comspec bool
+	Argv  []string
+	Shell string
+	Kind  ShellKind
+}
+
+func clientShell(goos, client string) ShellKind {
+	if goos != "windows" {
+		return ShellSh
+	}
+	if client == Copilot || client == Cursor {
+		return ShellPowerShell
+	}
+	return ShellCmd
 }
 
 var registry []Client

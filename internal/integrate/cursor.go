@@ -68,7 +68,7 @@ func (c cursorClient) Canary(l Layout) (Invocation, error) {
 	if !ok {
 		return Invocation{}, ErrNotConfigured
 	}
-	return Invocation{Shell: shell}, nil
+	return Invocation{Shell: shell, Kind: clientShell(l.goos(), Cursor)}, nil
 }
 
 func cursorCommand(goos, iris, event string) string {

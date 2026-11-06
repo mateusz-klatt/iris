@@ -76,12 +76,12 @@ func (c codexClient) Canary(l Layout) (Invocation, error) {
 	}
 	if l.goos() == "windows" {
 		if shell, ok := findNamedString(doc, "commandWindows", "--event SessionStart"); ok {
-			return Invocation{Shell: shell, Comspec: true}, nil
+			return Invocation{Shell: shell, Kind: ShellCmd}, nil
 		}
 	}
 	shell, ok := findShell(doc, "SessionStart")
 	if !ok {
 		return Invocation{}, ErrNotConfigured
 	}
-	return Invocation{Shell: shell}, nil
+	return Invocation{Shell: shell, Kind: clientShell(l.goos(), Codex)}, nil
 }

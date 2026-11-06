@@ -83,7 +83,7 @@ func (c copilotClient) Canary(l Layout) (Invocation, error) {
 	if shell == "" {
 		return Invocation{}, ErrNotConfigured
 	}
-	return Invocation{Shell: shell}, nil
+	return Invocation{Shell: shell, Kind: clientShell(l.goos(), Copilot)}, nil
 }
 
 func requireVersion1(doc map[string]any) error {

@@ -12,6 +12,17 @@ import (
 )
 
 func main() {
+	if want, ok := os.LookupEnv("IRIS_FAKE_STDIN"); ok {
+		raw, err := io.ReadAll(os.Stdin)
+		if err != nil || string(raw) != want {
+			os.Exit(4)
+		}
+		if receipt := os.Getenv("IRIS_FAKE_STDIN_RECEIPT"); receipt != "" {
+			if err := os.WriteFile(receipt, raw, 0600); err != nil {
+				os.Exit(5)
+			}
+		}
+	}
 	if os.Getenv("IRIS_FAKE_REQUIRE_CLOSED_STDIN") == "1" && !stdinClosed() {
 		os.Exit(1)
 	}
