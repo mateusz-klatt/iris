@@ -2,6 +2,8 @@ package hook
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"fmt"
 	"net"
@@ -125,7 +127,8 @@ func TestEndToEndFakeHub(t *testing.T) {
 			}
 			wantCall := "t1"
 			if c == ClientCopilot {
-				wantCall = ""
+				hash := sha256.Sum256([]byte(editPayload(c, root)))
+				wantCall = "payload:" + hex.EncodeToString(hash[:])
 			}
 			if c == ClientAntigravity {
 				wantCall = "1"

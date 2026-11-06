@@ -2,6 +2,8 @@ package hook
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"os"
 	"strings"
@@ -78,6 +80,12 @@ func (r Runner) execute(ctx context.Context) Output {
 	}
 	if runner, cross := r.crossLoad(ev.SessionID, client); cross {
 		return FallbackAllow(runner)
+	}
+	// Some clients supply only a timestamp, not a tool call ID. Hash the raw
+	// bytes so a retry stays idempotent while distinct timestamped calls differ.
+	if ev.ToolCallID == "" {
+		hash := sha256.Sum256(payload)
+		ev.ToolCallID = "payload:" + hex.EncodeToString(hash[:])
 	}
 	repo, ok := r.repoFor(ev)
 	if !ok {
