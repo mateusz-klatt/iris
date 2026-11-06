@@ -28,6 +28,9 @@ jobs:
           CGO_ENABLED: "0"
       - run: npm ci --prefix web
       - name: Web coverage
+        id: web_coverage
+        # The 100% gate is enforced after the scan, so Sonar always gets the data.
+        continue-on-error: true
         run: npm run coverage --prefix web
       - name: SonarCloud Scan
         uses: SonarSource/sonarqube-scan-action@e805d875275f728fac1885b413934be6d7c63f65 # v8.4.1
@@ -38,6 +41,10 @@ jobs:
         timeout-minutes: 5
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      - name: Coverage must be 100%
+        run: |
+          test "${{ steps.web_coverage.outcome }}" = success
+          make cov-check
   web:
     runs-on: ubuntu-latest
     steps:
