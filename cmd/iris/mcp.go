@@ -29,7 +29,7 @@ func runMCP(args []string) error {
 	}
 	maintained := make(chan struct{})
 	defer func() { cancel(); <-maintained; parent.Close() }()
-	resolver := binding.New(&hubclient.Client{Config: hubclient.EnvConfig{}}, *client)
+	resolver := binding.New(&hubclient.Client{Config: hubclient.NewConfig()}, *client)
 	go func() { defer close(maintained); resolver.Maintain(ctx, "shim", 20*time.Second, parent.Alive, cancel) }()
 	return mcpserver.New(resolver).Run(ctx, &mcp.StdioTransport{})
 }

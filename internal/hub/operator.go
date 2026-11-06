@@ -4,9 +4,12 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"net"
 	"net/http"
+	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/coder/websocket"
@@ -35,8 +38,27 @@ func loopback(r *http.Request) bool {
 	}
 	return net.ParseIP(remote).IsLoopback() && net.ParseIP(host).IsLoopback()
 }
+
+// SetPublicURL opts into a trusted loopback TLS reverse proxy. Configure before serving.
+func (h *Hub) SetPublicURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || u.Scheme != "https" || u.Hostname() == "" || u.User != nil || (u.Path != "" && u.Path != "/") || u.RawQuery != "" || u.Fragment != "" || u.Opaque != "" {
+		return errors.New("public URL must be an https origin without credentials, query or fragment")
+	}
+	h.publicURL = u
+	h.hosts[strings.ToLower(u.Host)] = true
+	return nil
+}
+
+func (h *Hub) loginAllowed(r *http.Request) bool {
+	if h.publicURL == nil {
+		return loopback(r)
+	}
+	remote, _, err := net.SplitHostPort(r.RemoteAddr)
+	return err == nil && net.ParseIP(remote).IsLoopback() && r.Host == h.publicURL.Host && r.Header.Get("X-Forwarded-Proto") == "https"
+}
 func (h *Hub) cookieAuthorized(r *http.Request) bool {
-	if !loopback(r) {
+	if !h.loginAllowed(r) {
 		return false
 	}
 	c, err := r.Cookie("iris_session")
@@ -49,8 +71,8 @@ func (h *Hub) cookieAuthorized(r *http.Request) bool {
 	return ok && g.expires.After(h.now())
 }
 func (h *Hub) uiLink(w http.ResponseWriter, r *http.Request) {
-	if !loopback(r) {
-		writeError(w, &store.Error{Code: "unauthorized", Message: "UI login is loopback only"})
+	if !h.loginAllowed(r) {
+		h.reject(w, r, "UI login origin is not trusted")
 		return
 	}
 	code := secret()
@@ -66,11 +88,15 @@ func (h *Hub) uiLink(w http.ResponseWriter, r *http.Request) {
 	if r.TLS != nil {
 		scheme = "https"
 	}
-	writeJSON(w, map[string]any{"url": scheme + "://" + r.Host + "/ui/login?code=" + code})
+	base := scheme + "://" + r.Host
+	if h.publicURL != nil {
+		base = "https://" + h.publicURL.Host
+	}
+	writeJSON(w, map[string]any{"url": base + "/ui/login?code=" + code})
 }
 func (h *Hub) uiLogin(w http.ResponseWriter, r *http.Request) {
-	if !loopback(r) {
-		writeError(w, &store.Error{Code: "unauthorized", Message: "UI cookie is loopback only"})
+	if !h.loginAllowed(r) {
+		h.reject(w, r, "UI cookie origin is not trusted")
 		return
 	}
 	code := r.URL.Query().Get("code")
@@ -79,7 +105,7 @@ func (h *Hub) uiLogin(w http.ResponseWriter, r *http.Request) {
 	delete(h.links, code)
 	if !ok || !grant.expires.After(h.now()) {
 		h.mu.Unlock()
-		writeError(w, &store.Error{Code: "unauthorized", Message: "login link expired or used"})
+		h.reject(w, r, "login link expired or used")
 		return
 	}
 	key := secret()
@@ -90,7 +116,7 @@ func (h *Hub) uiLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	h.cookies[key] = loginGrant{h.now().Add(12 * time.Hour)}
 	h.mu.Unlock()
-	http.SetCookie(w, &http.Cookie{Name: "iris_session", Value: key, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: r.TLS != nil, MaxAge: 43200})
+	http.SetCookie(w, &http.Cookie{Name: "iris_session", Value: key, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, Secure: r.TLS != nil || h.publicURL != nil, MaxAge: 43200})
 	w.Header().Set("Referrer-Policy", "no-referrer")
 	http.Redirect(w, r, "/", http.StatusSeeOther)
 }
@@ -101,6 +127,8 @@ func (h *Hub) uiWatch(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.CloseNow()
 	ctx := conn.CloseRead(r.Context())
+	pings := time.NewTicker(h.pingInterval())
+	defer pings.Stop()
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	var previous int64 = -1
@@ -123,6 +151,10 @@ func (h *Hub) uiWatch(w http.ResponseWriter, r *http.Request) {
 			return
 		case <-changes:
 		case <-ticker.C:
+		case <-pings.C:
+			if !h.ping(ctx, conn) {
+				return
+			}
 		}
 	}
 }

@@ -44,6 +44,8 @@ type ClientReport struct {
 
 // Result is the human-readable outcome plus the stored report.
 type Result struct {
+	HubURL     string
+	HubSource  string
 	Report     Report
 	HubUp      bool
 	TokenOK    bool
@@ -71,16 +73,18 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 	if opt.HTTP == nil {
 		opt.HTTP = http.DefaultClient
 	}
-	hubURL := opt.HubURL
-	if hubURL == "" {
-		hubURL = opt.Layout.GetenvOr("IRIS_HUB_URL")
+	resolved := (hubclient.EnvConfig{Getenv: opt.Layout.GetenvOr, DefaultTokenFile: defaultTokenFile(opt.Layout)}).Load()
+	hubURL, source := resolved.HubURL(), resolved.Source
+	if opt.HubURL != "" {
+		hubURL = opt.HubURL
+		source = "command line"
 	}
-	if strings.TrimSpace(hubURL) == "" {
-		hubURL = hubclient.DefaultHubURL
+	tokenFile, configErr := resolved.TokenPath()
+	if configErr != nil {
+		return Result{}, configErr
 	}
-	tokenFile := opt.TokenFile
-	if tokenFile == "" {
-		tokenFile = defaultTokenFile(opt.Layout)
+	if opt.TokenFile != "" {
+		tokenFile = opt.TokenFile
 	}
 	token, tokenReadErr := readToken(tokenFile)
 	up, tokenOK, detail := probeHub(ctx, hubURL, token, opt.HTTP)
@@ -90,7 +94,7 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 			detail = tokenReadErr.Error()
 		}
 	}
-	res := Result{HubUp: up, TokenOK: tokenOK, HubDetail: detail}
+	res := Result{HubURL: hubURL, HubSource: source, HubUp: up, TokenOK: tokenOK, HubDetail: detail}
 	res.Report.CheckedAt = opt.Now().UTC()
 	for _, c := range integrate.All() {
 		res.Report.Clients = append(res.Report.Clients, checkClient(ctx, opt, c))
@@ -127,6 +131,9 @@ func (r Result) ExitCode() int {
 // Format is the text a person reads.
 func (r Result) Format() string {
 	var b strings.Builder
+	if r.HubURL != "" {
+		fmt.Fprintf(&b, "hub URL: %s (source: %s)\n", r.HubURL, r.HubSource)
+	}
 	state := "unreachable"
 	if r.HubUp {
 		state = "ok"

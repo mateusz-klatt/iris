@@ -11,7 +11,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/mateusz-klatt/iris/internal/config"
 	"github.com/mateusz-klatt/iris/internal/doctor"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 	"github.com/mateusz-klatt/iris/internal/integrate"
@@ -61,7 +60,10 @@ func setup(args []string, env setupEnv) int {
 	fs := flag.NewFlagSet("setup", flag.ContinueOnError)
 	fs.SetOutput(env.errw)
 	yes := fs.Bool("yes", false, "do not ask")
-	hubFlag := fs.String("hub-url", "", "hub base URL")
+	var hubFlag string
+	fs.StringVar(&hubFlag, "hub-url", "", "hub base URL (alias for --hub)")
+	fs.StringVar(&hubFlag, "hub", "", "hub base URL")
+	clientsFlag := fs.String("clients", "", "comma-separated clients to integrate (default: all detected)")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
@@ -69,12 +71,15 @@ func setup(args []string, env setupEnv) int {
 		fmt.Fprintln(env.errw, "usage: iris setup [--yes] [--hub-url url]")
 		return 2
 	}
-	hubURL := strings.TrimSpace(*hubFlag)
-	if hubURL == "" {
-		hubURL = strings.TrimSpace(env.getenv("IRIS_HUB_URL"))
+	resolved := (hubclient.EnvConfig{Getenv: env.getenv, DefaultTokenFile: env.tokenFile}).Load()
+	tokenFile, err := resolved.TokenPath()
+	if err != nil {
+		fmt.Fprintln(env.errw, err)
+		return 1
 	}
+	hubURL := strings.TrimSpace(hubFlag)
 	if hubURL == "" {
-		hubURL = hubclient.DefaultHubURL
+		hubURL = resolved.HubURL()
 	}
 	if err := hubclient.ValidateURL(hubURL); err != nil {
 		fmt.Fprintln(env.errw, err)
@@ -82,6 +87,24 @@ func setup(args []string, env setupEnv) int {
 	}
 	layout := env.layout
 	found := env.detect(layout.LookPath)
+	if strings.TrimSpace(*clientsFlag) != "" {
+		selected := map[string]bool{}
+		for _, name := range strings.Split(*clientsFlag, ",") {
+			name = strings.TrimSpace(name)
+			if _, ok := integrate.ByName(name); !ok {
+				fmt.Fprintf(env.errw, "unknown client %q\n", name)
+				return 2
+			}
+			selected[name] = true
+		}
+		filtered := []string{}
+		for _, name := range found {
+			if selected[name] {
+				filtered = append(filtered, name)
+			}
+		}
+		found = filtered
+	}
 	foundSet := map[string]bool{}
 	var files []string
 	for _, name := range found {
@@ -96,18 +119,6 @@ func setup(args []string, env setupEnv) int {
 			return 1
 		}
 		files = append(files, list...)
-	}
-	cfg, err := config.Default()
-	if err != nil {
-		fmt.Fprintln(env.errw, err)
-		return 1
-	}
-	tokenFile := env.tokenFile
-	if tokenFile == "" {
-		tokenFile = strings.TrimSpace(env.getenv("IRIS_TOKEN_FILE"))
-	}
-	if tokenFile == "" {
-		tokenFile = cfg.TokenFile
 	}
 	listen, local := loopbackListen(hubURL)
 	fmt.Fprintf(env.out, "Hub: %s\n", hubURL)
@@ -124,17 +135,10 @@ func setup(args []string, env setupEnv) int {
 			fmt.Fprintf(env.out, "  %s\n", f)
 		}
 	}
-	if hubURL != hubclient.DefaultHubURL || tokenFile != cfg.TokenFile {
-		fmt.Fprintf(env.out, "Hooks need IRIS_HUB_URL=%s and IRIS_TOKEN_FILE=%s\n", hubURL, tokenFile)
-		if layout.OS() == "windows" {
-			fmt.Fprintln(env.out, "Set these permanently in PowerShell, then restart your clients:")
-			fmt.Fprintf(env.out, "[Environment]::SetEnvironmentVariable('IRIS_HUB_URL', '%s', 'User')\n", strings.ReplaceAll(hubURL, "'", "''"))
-			fmt.Fprintf(env.out, "[Environment]::SetEnvironmentVariable('IRIS_TOKEN_FILE', '%s', 'User')\n", strings.ReplaceAll(tokenFile, "'", "''"))
-		} else {
-			quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
-			fmt.Fprintln(env.out, "Add these to your shell profile permanently, then restart your clients:")
-			fmt.Fprintf(env.out, "export IRIS_HUB_URL=%s\nexport IRIS_TOKEN_FILE=%s\n", quote(hubURL), quote(tokenFile))
-		}
+	configFile := resolved.ConfigFile
+	fmt.Fprintf(env.out, "Client configuration: %s\n", configFile)
+	if !local {
+		fmt.Fprintf(env.out, "Place the hub bearer token in %s (setup cannot fetch it).\n", tokenFile)
 	}
 	if !*yes {
 		fmt.Fprint(env.out, "Proceed? [y/N] ")
@@ -146,6 +150,10 @@ func setup(args []string, env setupEnv) int {
 			}
 			return 0
 		}
+	}
+	if err := hubclient.WriteConfig(configFile, hubclient.FileConfig{Hub: hubURL, TokenFile: tokenFile}); err != nil {
+		fmt.Fprintln(env.errw, err)
+		return 1
 	}
 	code := 0
 	var serviceErr error

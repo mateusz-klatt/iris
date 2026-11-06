@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -34,7 +36,10 @@ func TestEnvConfig(t *testing.T) {
 		default:
 			return ""
 		}
-	}, ReadFile: func(string) ([]byte, error) {
+	}, ReadFile: func(path string) ([]byte, error) {
+		if filepath.Base(path) == "client.json" {
+			return nil, os.ErrNotExist
+		}
 		return []byte(" secret \n"), nil
 	}}
 	if cfg.HubURL() != "http://127.0.0.1:9" {

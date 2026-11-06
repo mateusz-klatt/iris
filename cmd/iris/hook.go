@@ -32,7 +32,7 @@ func runHookIO(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv 
 		EventName:  *event,
 		Stdin:      stdin,
 		Getenv:     getenv,
-		Hub:        &hubclient.Client{Config: hubclient.EnvConfig{Getenv: getenv}},
+		Hub:        &hubclient.Client{Config: (hubclient.EnvConfig{Getenv: getenv}).Load()},
 		Deadline:   deadline,
 	}.Run()
 	_, _ = stdout.Write(out.Stdout)
