@@ -63,9 +63,12 @@ type Layout struct {
 }
 
 // Invocation is the hook command read back from a client file.
+// Comspec means Windows Codex: COMSPEC runs Shell through cmd.exe /C,
+// and the text is not quoted again.
 type Invocation struct {
-	Argv  []string
-	Shell string
+	Argv    []string
+	Shell   string
+	Comspec bool
 }
 
 var registry []Client
@@ -264,6 +267,18 @@ func (l Layout) Iris() string {
 
 func hookShell(iris, client, event string) string {
 	return shellQuote(iris) + " hook --client " + client + " --event " + event
+}
+
+// hookCmd is the Windows command line. cmd.exe does not treat single quotes as quotes.
+func hookCmd(iris, client, event string) string {
+	return cmdQuote(iris) + " hook --client " + client + " --event " + event
+}
+
+func cmdQuote(s string) string {
+	if strings.ContainsAny(s, " \t\"") {
+		return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
+	}
+	return s
 }
 
 func shellQuote(s string) string {

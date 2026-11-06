@@ -185,6 +185,35 @@ func findArgv(v any, event string) (Invocation, bool) {
 	return Invocation{}, false
 }
 
+func findNamedString(v any, key, needle string) (string, bool) {
+	var found string
+	var walk func(any)
+	walk = func(v any) {
+		if found != "" {
+			return
+		}
+		switch t := v.(type) {
+		case map[string]any:
+			if s, ok := t[key].(string); ok && strings.Contains(s, needle) {
+				found = s
+				return
+			}
+			for childKey, child := range t {
+				if childKey == key {
+					continue
+				}
+				walk(child)
+			}
+		case []any:
+			for _, child := range t {
+				walk(child)
+			}
+		}
+	}
+	walk(v)
+	return found, found != ""
+}
+
 func findShell(v any, event string) (string, bool) {
 	needle := "--event " + event
 	var found string

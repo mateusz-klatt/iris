@@ -39,6 +39,9 @@ func (c codexClient) Install(l Layout, _ Plugins) error {
 					"command": hookShell(iris, Codex, event),
 					"timeout": eventTimeout(Codex, event),
 				}
+				if l.goos() == "windows" {
+					hook["commandWindows"] = hookCmd(iris, Codex, event)
+				}
 				if err := putNestedHook(doc, event, hook, func(v any) bool {
 					return treeContains(v, "--client codex --event "+event)
 				}); err != nil {
@@ -70,6 +73,11 @@ func (c codexClient) Canary(l Layout) (Invocation, error) {
 	doc, err := readJSON(files[0])
 	if err != nil {
 		return Invocation{}, err
+	}
+	if l.goos() == "windows" {
+		if shell, ok := findNamedString(doc, "commandWindows", "--event SessionStart"); ok {
+			return Invocation{Shell: shell, Comspec: true}, nil
+		}
 	}
 	shell, ok := findShell(doc, "SessionStart")
 	if !ok {

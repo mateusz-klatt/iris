@@ -282,6 +282,32 @@ func TestTimeoutsAndKimiKeys(t *testing.T) {
 	}
 }
 
+func TestCodexCommandWindows(t *testing.T) {
+	l := testLayout(t)
+	l.GOOS = "windows"
+	l.LookPath = func(name string) (string, error) {
+		if name == "iris" {
+			return `C:\Program Files\iris\iris.exe`, nil
+		}
+		return "", errors.New("not found")
+	}
+	codex, _ := ByName(Codex)
+	if err := codex.Install(l, &fakePlugins{}); err != nil {
+		t.Fatal(err)
+	}
+	in, err := codex.Canary(l)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !in.Comspec {
+		t.Fatal("windows canary is not a cmd.exe /C command")
+	}
+	want := `"C:\Program Files\iris\iris.exe" hook --client codex --event SessionStart`
+	if in.Shell != want {
+		t.Fatalf("%s", in.Shell)
+	}
+}
+
 func TestExecPluginsArgs(t *testing.T) {
 	var got []string
 	p := ExecPlugins{Run: func(name string, args ...string) error {
