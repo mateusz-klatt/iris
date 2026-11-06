@@ -218,6 +218,30 @@ func (t *transaction) repository(r Request) (string, error) {
 	}
 	return repo, err
 }
+
+// resume renews a session and, after a hub restart, moves it into the current epoch.
+func (t *transaction) resume(e *execution, strong bool) (int64, error) {
+	lease := int64(900000)
+	if e.Heartbeat || strong {
+		lease = 60000
+		e.Heartbeat = true
+	}
+	if _, err := t.exec("UPDATE Execution SET recovery_deadline=NULL,boot_epoch=?,deadline_tick_ms=?,heartbeat_mode=? WHERE id=?", t.s.epoch, t.s.clock.Tick()+lease, e.Heartbeat, e.ID); err != nil {
+		return 0, err
+	}
+	e.Epoch = t.s.epoch
+	e.Recovery = sql.NullInt64{}
+	e.Deadline = t.s.clock.Tick() + lease
+	// Rotate the numeric fence as well as the epoch: release accepts a fence
+	// without a complete token, so retaining the number would admit zombies.
+	if _, err := t.exec(`INSERT INTO Claim(execution_id,repository_id,kind,path,origin,boot_epoch,expires_ms)
+            SELECT execution_id,repository_id,kind,path,origin,?,expires_ms FROM Claim
+            WHERE execution_id=? AND revoked_ms IS NULL AND boot_epoch<>?`, t.s.epoch, e.ID, t.s.epoch); err != nil {
+		return 0, err
+	}
+	_, err := t.exec("UPDATE Claim SET revoked_ms=? WHERE execution_id=? AND revoked_ms IS NULL AND boot_epoch<>?", t.s.clock.Now().UnixMilli(), e.ID, t.s.epoch)
+	return lease, err
+}
 func (t *transaction) session(r Request) (map[string]any, error) {
 	if r.Client == "" || r.SessionID == "" || r.Host == "" || r.Cwd == "" {
 		return nil, fail("bad_request", "client, session_id, host and cwd are required")
@@ -233,26 +257,8 @@ func (t *transaction) session(r Request) (map[string]any, error) {
 		if e.Recovery.Valid && r.Generation != e.Generation {
 			return nil, fail("lost", "recovery requires the prior session generation")
 		}
-		lease := int64(900000)
-		if e.Heartbeat || r.Source == "shim" || r.Source == "watch" || r.Source == "mcp" {
-			lease = 60000
-			e.Heartbeat = true
-		}
-		_, err = t.exec("UPDATE Execution SET recovery_deadline=NULL,boot_epoch=?,deadline_tick_ms=?,heartbeat_mode=? WHERE id=?", t.s.epoch, t.s.clock.Tick()+lease, e.Heartbeat, e.ID)
+		lease, err := t.resume(&e, r.Source == "shim" || r.Source == "watch" || r.Source == "mcp")
 		if err != nil {
-			return nil, err
-		}
-		e.Epoch = t.s.epoch
-		e.Recovery = sql.NullInt64{}
-		e.Deadline = t.s.clock.Tick() + lease
-		// Rotate the numeric fence as well as the epoch: release accepts a fence
-		// without a complete token, so retaining the number would admit zombies.
-		if _, err = t.exec(`INSERT INTO Claim(execution_id,repository_id,kind,path,origin,boot_epoch,expires_ms)
-            SELECT execution_id,repository_id,kind,path,origin,?,expires_ms FROM Claim
-            WHERE execution_id=? AND revoked_ms IS NULL AND boot_epoch<>?`, t.s.epoch, e.ID, t.s.epoch); err != nil {
-			return nil, err
-		}
-		if _, err = t.exec("UPDATE Claim SET revoked_ms=? WHERE execution_id=? AND revoked_ms IS NULL AND boot_epoch<>?", t.s.clock.Now().UnixMilli(), e.ID, t.s.epoch); err != nil {
 			return nil, err
 		}
 		return t.sessionResponse(e, lease)
@@ -397,17 +403,29 @@ func (t *transaction) bind(r Request) (map[string]any, error) {
 	return bound(matches[0]), nil
 }
 func (t *transaction) heartbeat(r Request) (map[string]any, error) {
-	e, err := t.live(r.ExecutionID, r.Generation)
-	if err != nil {
-		return nil, err
-	}
 	if r.Source != "hook" && r.Source != "shim" && r.Source != "watch" {
 		return nil, fail("bad_request", "unknown heartbeat source")
 	}
+	strong := r.Source != "hook"
+	// A shim knows its Execution and generation but not always a session id, and an idle
+	// session fires no hook. Its heartbeat is therefore what reattaches it after a restart.
+	e, err := scanExecution(t.row(executionSelect+"WHERE e.id=?", r.ExecutionID))
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	if err == nil && e.State == "active" && e.Recovery.Valid && e.Generation == r.Generation {
+		lease, err := t.resume(&e, strong)
+		if err != nil {
+			return nil, err
+		}
+		return t.sessionResponse(e, lease)
+	}
+	if e, err = t.live(r.ExecutionID, r.Generation); err != nil {
+		return nil, err
+	}
 	lease := int64(900000)
-	strong := e.Heartbeat || r.Source != "hook"
-	if strong {
-		lease = 60000
+	if e.Heartbeat || strong {
+		strong, lease = true, 60000
 	}
 	_, err = t.exec("UPDATE Execution SET deadline_tick_ms=?,heartbeat_mode=? WHERE id=?", t.s.clock.Tick()+lease, strong, e.ID)
 	return map[string]any{"lease_ms": lease}, err

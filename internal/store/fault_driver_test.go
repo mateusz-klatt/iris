@@ -107,7 +107,7 @@ func installFaultDriver(t *testing.T, s *Store, file string) *storageFault {
 }
 
 func TestStorageFailuresRollBackAndRetry(t *testing.T) {
-	for _, op := range []string{"sessions", "session-resume", "session-new-slot", "touch-cached", "touch-conflict", "claim-conflict", "check-known", "policy", "bind", "heartbeat", "end", "touch", "claim", "claim-reuse", "claim-cached", "release", "claims", "messages", "message-cached", "inbox", "ack", "agents", "events", "events-reset", "status", "validate", "monitor_cursor", "check", "reconcile", "ui_overview", "ui_threads", "ui_thread", "ui_messages", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_events", "expire"} {
+	for _, op := range []string{"sessions", "session-resume", "heartbeat-recovery", "session-new-slot", "touch-cached", "touch-conflict", "claim-conflict", "check-known", "policy", "bind", "heartbeat", "end", "touch", "claim", "claim-reuse", "claim-cached", "release", "claims", "messages", "message-cached", "inbox", "ack", "agents", "events", "events-reset", "status", "validate", "monitor_cursor", "check", "reconcile", "ui_overview", "ui_threads", "ui_thread", "ui_messages", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_events", "expire"} {
 		t.Run(op, func(t *testing.T) {
 			s, clock, file := testStore(t)
 			a, ar := session(t, s, 1)
@@ -163,6 +163,12 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 				r = Request{Client: "codex", Host: "host", SessionID: "1"}
 			case "heartbeat":
 				r.Source = "shim"
+			case "heartbeat-recovery":
+				route = "heartbeat"
+				r.Source = "watch"
+				if _, err := s.db.Exec("UPDATE Execution SET recovery_deadline=? WHERE id=?", clock.Now().UnixMilli()+60000, a.ExecutionID); err != nil {
+					t.Fatal(err)
+				}
 			case "touch":
 				r = touchRequest(a, "new-touch", "held", "new")
 			case "claim":
