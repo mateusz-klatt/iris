@@ -26,6 +26,9 @@ type ticket struct {
 	used       bool
 }
 type Hub struct {
+	ui      http.Handler
+	links   map[string]loginGrant
+	cookies map[string]loginGrant
 	store   *store.Store
 	token   string
 	hosts   map[string]bool
@@ -36,7 +39,7 @@ type Hub struct {
 }
 
 func New(s *store.Store, token string, allowedHosts []string) *Hub {
-	h := &Hub{store: s, token: token, hosts: map[string]bool{}, mux: http.NewServeMux(), tickets: map[string]ticket{}, now: time.Now}
+	h := &Hub{links: map[string]loginGrant{}, cookies: map[string]loginGrant{}, store: s, token: token, hosts: map[string]bool{}, mux: http.NewServeMux(), tickets: map[string]ticket{}, now: time.Now}
 	for _, host := range allowedHosts {
 		h.hosts[strings.ToLower(host)] = true
 	}
@@ -50,8 +53,13 @@ func New(s *store.Store, token string, allowedHosts []string) *Hub {
 		h.mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) { h.api(w, r, operation) })
 	}
 	h.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if h.ui != nil && !strings.HasPrefix(r.URL.Path, "/v1/") {
+			h.ui.ServeHTTP(w, r)
+			return
+		}
 		writeError(w, &store.Error{Code: "not_found", Message: "unknown API route"})
 	})
+	h.operatorRoutes()
 	h.mux.HandleFunc("GET /v1/watch", h.watch)
 	h.mux.HandleFunc("POST /v1/wake-tickets", h.wakeTicket)
 	return h
@@ -74,7 +82,7 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if r.URL.Path != "/v1/status" && r.URL.Path != "/v1/watch" && !h.authorized(r) {
+	if strings.HasPrefix(r.URL.Path, "/v1/") && r.URL.Path != "/v1/status" && r.URL.Path != "/v1/watch" && !h.authorized(r) && !(strings.HasPrefix(r.URL.Path, "/v1/ui/") && r.URL.Path != "/v1/ui/links" && h.cookieAuthorized(r)) {
 		writeError(w, &store.Error{Code: "unauthorized", Message: "bearer token required", Details: map[string]any{}})
 		return
 	}

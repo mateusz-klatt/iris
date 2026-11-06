@@ -14,43 +14,49 @@ import (
 
 // Request contains the version-one wire fields. Unknown client metadata is ignored.
 type Request struct {
-	Client           string   `json:"client"`
-	SessionID        string   `json:"session_id"`
-	Host             string   `json:"host"`
-	Cwd              string   `json:"cwd"`
-	Worktree         string   `json:"worktree"`
-	RemoteURL        string   `json:"remote_url"`
-	RootCommit       string   `json:"root_commit"`
-	Branch           string   `json:"branch"`
-	ParentSessionID  string   `json:"parent_session_id"`
-	ClientPID        int64    `json:"client_pid"`
-	ClientPIDStartMS int64    `json:"client_pid_start_ms"`
-	SingleSession    bool     `json:"single_session"`
-	Source           string   `json:"source"`
-	Execution        string   `json:"execution"`
-	ExecutionID      string   `json:"execution_id"`
-	Generation       int64    `json:"generation"`
-	Key              string   `json:"key"`
-	ToolCallID       string   `json:"tool_call_id"`
-	Paths            []string `json:"paths"`
-	RenameFrom       string   `json:"rename_from"`
-	RenameTo         string   `json:"rename_to"`
-	Kind             string   `json:"kind"`
-	Path             string   `json:"path"`
-	RepoWide         bool     `json:"repo_wide"`
-	TTLS             int64    `json:"ttl_s"`
-	Fence            int64    `json:"fence"`
-	All              bool     `json:"all"`
-	Token            string   `json:"token"`
-	To               []string `json:"to"`
-	Subject          string   `json:"subject"`
-	Body             string   `json:"body"`
-	Attempt          int64    `json:"attempt"`
-	RepositoryID     string   `json:"repository_id"`
-	After            int64    `json:"after"`
-	Limit            int      `json:"limit"`
-	ConsumerID       string   `json:"consumer_id"`
-	Stream           string   `json:"stream"`
+	ReplyTo          string           `json:"reply_to"`
+	Q                string           `json:"q"`
+	Agent            string           `json:"agent"`
+	Before           string           `json:"before"`
+	CheckedAt        string           `json:"checked_at"`
+	Clients          []map[string]any `json:"clients"`
+	Client           string           `json:"client"`
+	SessionID        string           `json:"session_id"`
+	Host             string           `json:"host"`
+	Cwd              string           `json:"cwd"`
+	Worktree         string           `json:"worktree"`
+	RemoteURL        string           `json:"remote_url"`
+	RootCommit       string           `json:"root_commit"`
+	Branch           string           `json:"branch"`
+	ParentSessionID  string           `json:"parent_session_id"`
+	ClientPID        int64            `json:"client_pid"`
+	ClientPIDStartMS int64            `json:"client_pid_start_ms"`
+	SingleSession    bool             `json:"single_session"`
+	Source           string           `json:"source"`
+	Execution        string           `json:"execution"`
+	ExecutionID      string           `json:"execution_id"`
+	Generation       int64            `json:"generation"`
+	Key              string           `json:"key"`
+	ToolCallID       string           `json:"tool_call_id"`
+	Paths            []string         `json:"paths"`
+	RenameFrom       string           `json:"rename_from"`
+	RenameTo         string           `json:"rename_to"`
+	Kind             string           `json:"kind"`
+	Path             string           `json:"path"`
+	RepoWide         bool             `json:"repo_wide"`
+	TTLS             int64            `json:"ttl_s"`
+	Fence            int64            `json:"fence"`
+	All              bool             `json:"all"`
+	Token            string           `json:"token"`
+	To               []string         `json:"to"`
+	Subject          string           `json:"subject"`
+	Body             string           `json:"body"`
+	Attempt          int64            `json:"attempt"`
+	RepositoryID     string           `json:"repository_id"`
+	After            int64            `json:"after"`
+	Limit            int              `json:"limit"`
+	ConsumerID       string           `json:"consumer_id"`
+	Stream           string           `json:"stream"`
 }
 type execution struct {
 	ID, AgentID, Repo, Host, Client, Session, Worktree, Branch, State, Name string
@@ -80,7 +86,7 @@ func (t *transaction) live(ex string, generation int64) (execution, error) {
 	return e, nil
 }
 func bound(e execution) map[string]any {
-	return map[string]any{"execution_id": e.ID, "generation": e.Generation, "agent": map[string]any{"id": e.AgentID, "name": e.Name}}
+	return map[string]any{"execution_id": e.ID, "generation": e.Generation, "repository_id": e.Repo, "agent": map[string]any{"id": e.AgentID, "name": e.Name}}
 }
 
 var safePart = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
