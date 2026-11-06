@@ -7,6 +7,7 @@ import (
 	"io"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -409,6 +410,9 @@ func grokLayout(t *testing.T, withClient bool) integrate.Layout {
 		if err != nil {
 			t.Fatal(err)
 		}
+		// Defender scans a new executable on its first start, which can outlast the
+		// version check on a CI runner. The exit status does not matter here.
+		_ = exec.Command(client).Run()
 	}
 	layout.LookPath = func(name string) (string, error) {
 		switch {
