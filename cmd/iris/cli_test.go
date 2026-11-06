@@ -10,10 +10,12 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/mateusz-klatt/iris/internal/integrate"
 	"github.com/mateusz-klatt/iris/internal/proc"
 	"github.com/mateusz-klatt/iris/internal/service"
 )
@@ -120,7 +122,18 @@ func TestDispatchHookIntegrateDoctorAndServiceUsage(t *testing.T) {
 	}
 }
 
+// fakeClaude stands in for the Claude CLI, which integrate runs for its plugin.
+func fakeClaude(t *testing.T) {
+	t.Helper()
+	dir := t.TempDir()
+	if _, err := integrate.PlaceFake(dir, "claude"); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
 func TestIntegrateOneClientThenRemoveIt(t *testing.T) {
+	fakeClaude(t)
 	out, errText := capture(t, func() {
 		if code := dispatch([]string{"integrate", "claude"}); code != 0 {
 			t.Fatalf("install %d", code)
@@ -307,7 +320,12 @@ func TestGuardHelpCheckAndInstall(t *testing.T) {
 	if err := runGuard([]string{"remove"}); err != nil {
 		t.Fatal(err)
 	}
+}
 
+func TestGuardReportsADeletedWorkingDirectory(t *testing.T) {
+	if runtime.GOOS != "linux" {
+		t.Skip("only Linux reports a deleted working directory: Windows refuses to delete it and macOS still names it")
+	}
 	gone := t.TempDir()
 	t.Chdir(gone)
 	if err := os.RemoveAll(gone); err != nil {

@@ -68,6 +68,7 @@ func TestDoctorReportsAMissingConfigDirectory(t *testing.T) {
 }
 
 func TestIntegrateAllAndAWriteFailure(t *testing.T) {
+	fakeClaude(t)
 	out, errText := capture(t, func() {
 		if code := dispatch([]string{"integrate", "--bogus"}); code != 2 {
 			t.Fatalf("flag %d", code)

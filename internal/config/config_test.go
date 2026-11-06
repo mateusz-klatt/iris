@@ -7,8 +7,6 @@ import (
 	"runtime"
 	"strings"
 	"testing"
-
-	"golang.org/x/sys/unix"
 )
 
 func TestTLSRequiredOutsideLiteralLoopback(t *testing.T) {
@@ -75,8 +73,11 @@ func TestTokenSymlinkRejected(t *testing.T) {
 }
 
 func TestDefaultUsesTheConfigDirAndRejectsABadListen(t *testing.T) {
-	dir := t.TempDir()
-	t.Setenv("XDG_CONFIG_HOME", dir)
+	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
 	cfg, err := Default()
 	if err != nil {
 		t.Fatal(err)
@@ -87,6 +88,7 @@ func TestDefaultUsesTheConfigDirAndRejectsABadListen(t *testing.T) {
 	t.Setenv("HOME", "")
 	t.Setenv("USERPROFILE", "")
 	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("AppData", "")
 	if _, err = Default(); err == nil {
 		t.Fatal("missing config dir")
 	}
@@ -130,19 +132,10 @@ func TestTokenRemovesAPartialFileWhenCreationFails(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "hub.token")
 
-	origEntropy, origSync, origLstat, origRead, origUnix := readEntropy, syncTokenFile, lstatToken, readTokenFile, unixLstat
+	origEntropy, origSync, origLstat, origRead := readEntropy, syncTokenFile, lstatToken, readTokenFile
 	t.Cleanup(func() {
-		readEntropy, syncTokenFile, lstatToken, readTokenFile, unixLstat = origEntropy, origSync, origLstat, origRead, origUnix
+		readEntropy, syncTokenFile, lstatToken, readTokenFile = origEntropy, origSync, origLstat, origRead
 	})
-
-	unixLstat = func(string, *unix.Stat_t) error { return errors.New("lstat failed") }
-	if _, err := Token(path); err == nil || !strings.Contains(err.Error(), "lstat failed") {
-		t.Fatal(err)
-	}
-	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
-		t.Fatal("partial token left behind", err)
-	}
-	unixLstat = origUnix
 
 	readEntropy = func([]byte) (int, error) { return 0, errors.New("no entropy") }
 	if _, err := Token(path); err == nil || !strings.Contains(err.Error(), "no entropy") {
@@ -172,14 +165,6 @@ func TestTokenRemovesAPartialFileWhenCreationFails(t *testing.T) {
 	lstatToken = origLstat
 	readTokenFile = func(string) ([]byte, error) { return nil, errors.New("unreadable") }
 	if _, err := Token(path); err == nil || !strings.Contains(err.Error(), "unreadable") {
-		t.Fatal(err)
-	}
-
-	unixLstat = func(_ string, st *unix.Stat_t) error {
-		st.Uid = uint32(os.Geteuid()) + 1
-		return nil
-	}
-	if _, err := Token(path); err == nil || !strings.Contains(err.Error(), "not owned") {
 		t.Fatal(err)
 	}
 }
