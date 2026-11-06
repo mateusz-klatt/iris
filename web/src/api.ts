@@ -31,7 +31,7 @@ export interface Claim {
   kind: string;
   holder: string;
   origin: string;
-  expires_at: string;
+  expires_at: string | null;
 }
 
 export interface Overview {
@@ -84,7 +84,7 @@ export interface DoctorClient {
 }
 
 export interface DoctorReport {
-  checked_at: string;
+  checked_at: string | null;
   clients: DoctorClient[];
 }
 

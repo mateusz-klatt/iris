@@ -163,6 +163,31 @@ describe("Iris operator console", () => {
     expect(await screen.findByText("3 unread")).toBeVisible();
   });
 
+  it("renders the hub's real empty report and claims with no expiry", async () => {
+    server.use(
+      http.get("*/v1/ui/doctor", () => HttpResponse.json({ checked_at: null, clients: [] })),
+      http.get("*/v1/ui/overview", () =>
+        HttpResponse.json({
+          ...emptyOverview,
+          claims: [
+            {
+              fence: 1,
+              repository_id: "rp_1",
+              path: "docs/",
+              kind: "prefix",
+              holder: "codex-host-api",
+              origin: "explicit",
+              expires_at: null,
+            },
+          ],
+        }),
+      ),
+    );
+    render(<App connect={() => () => {}} />);
+    expect(await screen.findByText("docs/")).toBeVisible();
+    expect(screen.getByText(/No doctor report is stored yet. Run iris doctor/)).toBeVisible();
+  });
+
   it("keeps the doctor hint when the report is missing", async () => {
     server.use(http.get("*/v1/ui/doctor", () => new HttpResponse(null, { status: 404 })));
     render(<App connect={() => () => {}} />);

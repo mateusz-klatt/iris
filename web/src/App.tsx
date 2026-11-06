@@ -365,7 +365,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                 </button>
               </div>
               <p>{t("operator.doctorHint", { command: "iris doctor" })}</p>
-              {doctor !== null && doctor.checked_at.length > 0 ? (
+              {doctor !== null && doctor.checked_at !== null ? (
                 <p>{t("operator.checkedAt", { date: formatWhen(doctor.checked_at) })}</p>
               ) : null}
               {doctor === null || doctor.clients.length === 0 ? (
@@ -474,7 +474,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                           <td>
                             {claim.holder} · {claim.kind}
                           </td>
-                          <td>{formatWhen(claim.expires_at)}</td>
+                          <td>{claim.expires_at === null ? t("operator.none") : formatWhen(claim.expires_at)}</td>
                           <td>
                             <button
                               type="button"

@@ -8,3 +8,4 @@ node_modules/
 /iris.exe
 /web/dist/
 coverage.out
+.playwright-mcp/
