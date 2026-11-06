@@ -53,7 +53,7 @@ func (c cursorClient) Install(l Layout, _ Plugins) error {
 	})
 }
 
-func (c cursorClient) Remove(l Layout, _ Plugins) error { return l.restore(Cursor) }
+func (c cursorClient) Remove(l Layout, _ Plugins) error { return l.unwire(Cursor, stripClient(Cursor)) }
 
 func (c cursorClient) Canary(l Layout) (Invocation, error) {
 	files, err := c.Files(l)

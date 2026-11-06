@@ -1,6 +1,9 @@
 package integrate
 
-import "path/filepath"
+import (
+	"encoding/json"
+	"path/filepath"
+)
 
 func init() { register(copilotClient{}) }
 
@@ -57,7 +60,9 @@ func (c copilotClient) Install(l Layout, _ Plugins) error {
 	})
 }
 
-func (c copilotClient) Remove(l Layout, _ Plugins) error { return l.restore(Copilot) }
+func (c copilotClient) Remove(l Layout, _ Plugins) error {
+	return l.unwire(Copilot, stripClient(Copilot))
+}
 
 func (c copilotClient) Canary(l Layout) (Invocation, error) {
 	files, err := c.Files(l)
@@ -92,16 +97,7 @@ func requireVersion1(doc map[string]any) error {
 		doc["version"] = 1
 		return nil
 	}
-	switch n := v.(type) {
-	case float64:
-		if n != 1 {
-			return ErrBroken
-		}
-	case int:
-		if n != 1 {
-			return ErrBroken
-		}
-	default:
+	if n, ok := v.(json.Number); !ok || n.String() != "1" {
 		return ErrBroken
 	}
 	return nil

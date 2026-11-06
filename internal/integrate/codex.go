@@ -63,7 +63,7 @@ func (c codexClient) Install(l Layout, _ Plugins) error {
 	})
 }
 
-func (c codexClient) Remove(l Layout, _ Plugins) error { return l.restore(Codex) }
+func (c codexClient) Remove(l Layout, _ Plugins) error { return l.unwire(Codex, stripClient(Codex)) }
 
 func (c codexClient) Canary(l Layout) (Invocation, error) {
 	files, err := c.Files(l)
