@@ -163,7 +163,7 @@ func (t *transaction) repository(r Request) (string, error) {
 	}
 	if repo == "" {
 		repo = id("rp_")
-		if _, err = t.exec("INSERT INTO Repository(id,root_commit) VALUES(?,?)", repo, r.RootCommit); err != nil {
+		if _, err = t.exec("INSERT INTO Repository(id,root_commit,name) VALUES(?,?,?)", repo, r.RootCommit, repositoryName(r.RemoteURL, r.Worktree)); err != nil {
 			return "", err
 		}
 	}
