@@ -30,6 +30,9 @@ make fixtures # replays captured client payloads through the hook adapters
 
 ## Rules for code
 
+- Coverage is 100% for Go and for the web console, as in snapper. A branch that cannot be reached
+  is deleted or redesigned, not excluded, and no test exists only to touch a line: each one asserts
+  behaviour.
 - Release builds use `CGO_ENABLED=0`. No dependency may need a C compiler.
 - No shell scripts as application logic. Logic lives in Go.
 - `iris hook` never breaks a session. See D3: it catches everything, keeps to its deadline and
