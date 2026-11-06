@@ -16,6 +16,9 @@ import (
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 )
 
+// maxBackoff caps reconnect delay. Tests shrink it so the cap is observable.
+var maxBackoff = 30 * time.Second
+
 type Frame struct {
 	Stream string `json:"stream"`
 	Cursor int64  `json:"cursor"`
@@ -104,7 +107,6 @@ func (r *Runner) Run(ctx context.Context) error {
 	if delay <= 0 {
 		delay = time.Second
 	}
-	base := delay
 	for ctx.Err() == nil {
 		call, cancel := context.WithTimeout(ctx, 5*time.Second)
 		b, err := r.Resolver.Resolve(call, "")
@@ -137,11 +139,8 @@ func (r *Runner) Run(ctx context.Context) error {
 		}
 		tick.Stop()
 		delay *= 2
-		if delay > 30*time.Second {
-			delay = 30 * time.Second
-		}
-		if err == nil {
-			delay = base
+		if delay > maxBackoff {
+			delay = maxBackoff
 		}
 	}
 	return nil
