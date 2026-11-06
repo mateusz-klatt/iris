@@ -22,10 +22,7 @@ func PlaceFake(dir, name string) (string, error) {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return "", err
 	}
-	if runtime.GOOS == "windows" && !strings.HasSuffix(strings.ToLower(name), ".exe") {
-		name += ".exe"
-	}
-	dest := filepath.Join(dir, name)
+	dest := filepath.Join(dir, exeName(runtime.GOOS, name))
 	if err := copyFile(exe, dest); err != nil {
 		return "", err
 	}
@@ -45,10 +42,7 @@ func fakeBinary() (string, error) {
 			fakeErr = err
 			return
 		}
-		out := filepath.Join(dir, "fakebin")
-		if runtime.GOOS == "windows" {
-			out += ".exe"
-		}
+		out := filepath.Join(dir, exeName(runtime.GOOS, "fakebin"))
 		cmd := exec.Command("go", "build", "-o", out, "github.com/mateusz-klatt/iris/internal/integrate/internal/fakebin")
 		cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
 		msg, err := cmd.CombinedOutput()
@@ -59,6 +53,13 @@ func fakeBinary() (string, error) {
 		fakeExe = out
 	})
 	return fakeExe, fakeErr
+}
+
+func exeName(goos, name string) string {
+	if goos == "windows" && !strings.HasSuffix(strings.ToLower(name), ".exe") {
+		return name + ".exe"
+	}
+	return name
 }
 
 func copyFile(src, dest string) error {

@@ -66,10 +66,7 @@ func (c claudeClient) Install(l Layout, p Plugins) error {
 		}
 		rel := strings.TrimPrefix(path, claudeTemplateDir+"/")
 		rel = filepath.FromSlash(rel)
-		data, err := claudeFS.ReadFile(path)
-		if err != nil {
-			return err
-		}
+		data, _ := claudeFS.ReadFile(path) // the walk just listed it
 		rendered := []byte(replacer.Replace(string(data)))
 		dest := filepath.Join(root, rel)
 		return l.update(Claude, dest, func(existing []byte) ([]byte, error) {
@@ -256,11 +253,8 @@ func mergeMonitors(existing, rendered []byte) ([]byte, error) {
 	}
 	var arr []any
 	if len(bytes.TrimSpace(existing)) != 0 {
-		if !json.Valid(existing) {
-			return nil, ErrBroken
-		}
-		if err := json.Unmarshal(existing, &arr); err != nil {
-			return nil, ErrBroken
+		if err := decodeJSON(existing, &arr); err != nil {
+			return nil, err
 		}
 	}
 	replaced := false
@@ -281,9 +275,6 @@ func mergeMonitors(existing, rendered []byte) ([]byte, error) {
 
 func jsonEscape(s string) string {
 	b, _ := json.Marshal(s)
-	if len(b) < 2 {
-		return ""
-	}
 	return string(b[1 : len(b)-1])
 }
 

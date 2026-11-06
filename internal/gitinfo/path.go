@@ -42,11 +42,6 @@ func Relative(root, path string) (string, error) {
 	if len(rest) == 0 {
 		return "", ErrEscape
 	}
-	for _, seg := range rest {
-		if seg == ".." {
-			return "", ErrEscape
-		}
-	}
 	return strings.Join(rest, "/"), nil
 }
 

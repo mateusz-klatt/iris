@@ -21,11 +21,11 @@ type stripFunc func(path string, data []byte) ([]byte, bool, error)
 // A file that cannot be edited safely stays as it is and stays in the manifest,
 // so a retry can finish it. The other files are still done.
 func (l Layout) unwire(client string, strip stripFunc) error {
-	m, err := l.loadManifest()
+	dir, err := l.state()
 	if err != nil {
 		return err
 	}
-	dir, err := l.state()
+	m, err := loadManifest(dir)
 	if err != nil {
 		return err
 	}
@@ -44,7 +44,7 @@ func (l Layout) unwire(client string, strip stripFunc) error {
 		}
 		delete(m.Files, path)
 	}
-	return errors.Join(append(failed, l.saveManifest(m))...)
+	return errors.Join(append(failed, saveManifest(dir, m))...)
 }
 
 func unwireFile(stateDir, path string, rec manifestFile, strip stripFunc) error {
