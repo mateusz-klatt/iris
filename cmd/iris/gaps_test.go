@@ -340,9 +340,19 @@ func TestSetupUsesTheRealServiceBuilderWhenNoneIsInjected(t *testing.T) {
 		t.Fatalf("unit %d %s", code, out.String())
 	}
 
+	// Setup started by its full path has no iris on PATH, and records the running binary.
 	t.Setenv("PATH", t.TempDir())
+	var recorded string
+	hostService = func(_, _ string, argv []string) service.Manager {
+		recorded = argv[0]
+		return scriptedService{}
+	}
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
 	out.Reset()
-	if code := setup([]string{"--yes", "--hub-url", "http://127.0.0.1:7878"}, env); code != 1 || !strings.Contains(out.String(), "not on PATH") {
-		t.Fatalf("path %d %s", code, out.String())
+	if code := setup([]string{"--yes", "--hub-url", "http://127.0.0.1:7878"}, env); code != 0 || recorded != self {
+		t.Fatalf("path %d %q %s", code, recorded, out.String())
 	}
 }

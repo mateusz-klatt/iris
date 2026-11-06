@@ -218,12 +218,7 @@ func TestServiceReportsEachLifecycleOutcome(t *testing.T) {
 	}
 }
 
-func TestServiceRejectsAMissingBinaryAndAMissingHome(t *testing.T) {
-	t.Setenv("PATH", t.TempDir())
-	if _, err := userServiceDB("", "", ""); err == nil || !strings.Contains(err.Error(), "not on PATH") {
-		t.Fatal(err)
-	}
-
+func TestServiceRejectsAMissingHome(t *testing.T) {
 	binDir := t.TempDir()
 	if _, err := integrate.PlaceFake(binDir, "iris"); err != nil {
 		t.Fatal(err)
