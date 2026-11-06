@@ -289,9 +289,9 @@ silently weakened to an allow.
 ### D11. Repository identity and paths
 
 The hub assigns a repository id. Aliases point to it: normalised remote URL, root commit, and
-host plus path. A remote URL joins an existing repository automatically only when it means the
-same thing everywhere: an absolute URL on a fully qualified host, with no contradiction in the
-root commit. That covers the normal case across machines. Spellings that depend on one machine,
+host plus path. A remote joins an existing repository automatically only when it means the same
+thing everywhere: a fully qualified host with no contradiction in the root commit, whatever the
+spelling. `git@host:owner/repo.git`, `ssh://` and `https://` are one remote. That covers the normal case across machines. Spellings that depend on one machine,
 such as SSH aliases, `insteadOf` rewrites and relative remotes, stay scoped to that host and
 path. A match on root commit alone, which is what forks look like, and any contradiction are
 only suggestions for a human. Without a remote the identity is local to the path.
