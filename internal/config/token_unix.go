@@ -8,6 +8,9 @@ import (
 	"os"
 )
 
+// unixLstat is the ownership check. Tests report a foreign uid without chown.
+var unixLstat = unix.Lstat
+
 func secureToken(path string) error {
 	info, err := os.Lstat(path)
 	if err != nil {
@@ -17,7 +20,7 @@ func secureToken(path string) error {
 		return errors.New("token must be a regular file")
 	}
 	var st unix.Stat_t
-	if err = unix.Lstat(path, &st); err != nil {
+	if err = unixLstat(path, &st); err != nil {
 		return err
 	}
 	if st.Uid != uint32(os.Geteuid()) {

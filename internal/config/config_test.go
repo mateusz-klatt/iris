@@ -1,10 +1,14 @@
 package config
 
 import (
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 func TestTLSRequiredOutsideLiteralLoopback(t *testing.T) {
@@ -67,5 +71,115 @@ func TestTokenSymlinkRejected(t *testing.T) {
 	}
 	if _, err := Token(link); err == nil {
 		t.Fatal("symlink accepted")
+	}
+}
+
+func TestDefaultUsesTheConfigDirAndRejectsABadListen(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("XDG_CONFIG_HOME", dir)
+	cfg, err := Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.Listen != "127.0.0.1:7878" || cfg.Database != filepath.Join(dir, "iris", "hub.db") || cfg.TokenFile != filepath.Join(dir, "iris", "hub.token") {
+		t.Fatalf("%+v", cfg)
+	}
+	t.Setenv("HOME", "")
+	t.Setenv("USERPROFILE", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	if _, err = Default(); err == nil {
+		t.Fatal("missing config dir")
+	}
+	if err = (Config{Listen: "not-an-address"}).Validate(); err == nil {
+		t.Fatal("bad listen")
+	}
+}
+
+func TestTokenRejectsADirectoryAndABlockedParent(t *testing.T) {
+	dir := t.TempDir()
+	if _, err := Token(dir); err == nil {
+		t.Fatal("directory accepted")
+	}
+	parent := filepath.Join(dir, "not-a-dir")
+	if err := os.WriteFile(parent, []byte("x"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Token(filepath.Join(parent, "hub.token")); err == nil {
+		t.Fatal("created a token under a file")
+	}
+	if err := secureToken(filepath.Join(dir, "missing")); err == nil {
+		t.Fatal("missing token")
+	}
+	if err := secureToken(dir); err == nil || !strings.Contains(err.Error(), "regular") {
+		t.Fatal(err)
+	}
+	locked := filepath.Join(dir, "locked")
+	if err := os.Mkdir(locked, 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chmod(locked, 0555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(locked, 0700) })
+	if _, err := Token(filepath.Join(locked, "hub.token")); err == nil {
+		t.Fatal("created a token in a read-only directory")
+	}
+}
+
+func TestTokenRemovesAPartialFileWhenCreationFails(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "hub.token")
+
+	origEntropy, origSync, origLstat, origRead, origUnix := readEntropy, syncTokenFile, lstatToken, readTokenFile, unixLstat
+	t.Cleanup(func() {
+		readEntropy, syncTokenFile, lstatToken, readTokenFile, unixLstat = origEntropy, origSync, origLstat, origRead, origUnix
+	})
+
+	unixLstat = func(string, *unix.Stat_t) error { return errors.New("lstat failed") }
+	if _, err := Token(path); err == nil || !strings.Contains(err.Error(), "lstat failed") {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("partial token left behind", err)
+	}
+	unixLstat = origUnix
+
+	readEntropy = func([]byte) (int, error) { return 0, errors.New("no entropy") }
+	if _, err := Token(path); err == nil || !strings.Contains(err.Error(), "no entropy") {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("partial token left behind", err)
+	}
+	readEntropy = origEntropy
+
+	syncTokenFile = func(*os.File) error { return errors.New("sync failed") }
+	if _, err := Token(path); err == nil || !strings.Contains(err.Error(), "sync failed") {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("partial token left behind", err)
+	}
+	syncTokenFile = origSync
+
+	if _, err := Token(path); err != nil {
+		t.Fatal(err)
+	}
+	lstatToken = func(string) (os.FileInfo, error) { return nil, errors.New("gone") }
+	if _, err := Token(path); err == nil || !strings.Contains(err.Error(), "gone") {
+		t.Fatal(err)
+	}
+	lstatToken = origLstat
+	readTokenFile = func(string) ([]byte, error) { return nil, errors.New("unreadable") }
+	if _, err := Token(path); err == nil || !strings.Contains(err.Error(), "unreadable") {
+		t.Fatal(err)
+	}
+
+	unixLstat = func(_ string, st *unix.Stat_t) error {
+		st.Uid = uint32(os.Geteuid()) + 1
+		return nil
+	}
+	if _, err := Token(path); err == nil || !strings.Contains(err.Error(), "not owned") {
+		t.Fatal(err)
 	}
 }
