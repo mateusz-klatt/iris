@@ -37,9 +37,17 @@ func TestSecureTokenLeavesOnlyTheCurrentUser(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// SDDL writes well-known accounts as aliases, so a CI administrator appears as LA.
+	// Build the expected entry the same way instead of comparing raw SIDs.
+	expected, err := windows.SecurityDescriptorFromString("D:P(A;;FA;;;" + user.User.Sid.String() + ")")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := expected.String()
+	want = want[strings.Index(want, "("):]
 	got := dacl(t, path)
-	if !strings.HasPrefix(got, "D:P") || strings.Count(got, "(") != 1 || !strings.Contains(got, ";"+user.User.Sid.String()+")") {
-		t.Fatalf("not owner-only and protected: %s", got)
+	if !strings.HasPrefix(got, "D:P") || got[strings.Index(got, "("):] != want {
+		t.Fatalf("not owner-only and protected: %s, want %s", got, want)
 	}
 	if raw, err := os.ReadFile(path); err != nil || string(raw) != "secret" {
 		t.Fatalf("the owner lost access: %q %v", raw, err)
