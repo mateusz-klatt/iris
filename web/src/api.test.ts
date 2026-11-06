@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { getDoctor, revokeClaim, watchUi, type WatchFrame } from "./api";
+import { getDoctor, listThreads, revokeClaim, watchSocketUrl, watchUi, type WatchFrame } from "./api";
 import { server } from "./test/server";
 import { http, HttpResponse } from "msw";
 
@@ -55,6 +55,29 @@ describe("operator watch", () => {
     const count = statuses.length;
     vi.advanceTimersByTime(5000);
     expect(statuses).toHaveLength(count);
+  });
+
+  it("opens a secure socket from an https page and omits an empty thread query", async () => {
+    expect(watchSocketUrl("https://console.example/iris")).toBe(
+      "wss://console.example/v1/ui/watch",
+    );
+    expect(watchSocketUrl("http://localhost:3000/iris")).toBe(
+      "ws://localhost:3000/v1/ui/watch",
+    );
+
+    let search = "unset";
+    server.use(
+      http.get("*/v1/ui/threads", ({ request }) => {
+        const url = new URL(request.url);
+        if (url.pathname !== "/v1/ui/threads" || url.search !== "") {
+          return undefined;
+        }
+        search = url.search;
+        return HttpResponse.json({ threads: [] });
+      }),
+    );
+    await expect(listThreads({})).resolves.toEqual({ threads: [] });
+    expect(search).toBe("");
   });
 
   it("revokes by fence and treats a missing doctor report as absent", async () => {

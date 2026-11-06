@@ -182,6 +182,13 @@ export function revokeClaim(fence: number, signal?: AbortSignal): Promise<void> 
   return postJson(`/v1/ui/claims/${fence}/revoke`, {}, signal);
 }
 
+/** Socket URL for the live feed. An https page must use wss, anything else ws. */
+export function watchSocketUrl(pageHref: string): string {
+  const url = new URL("/v1/ui/watch", pageHref);
+  url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+  return url.toString();
+}
+
 export function watchUi(
   onFrame: (frame: WatchFrame) => void,
   onStatus?: (status: WatchStatus) => void,
@@ -192,9 +199,7 @@ export function watchUi(
 
   const open = (reconnect: boolean) => {
     onStatus?.(reconnect ? "reconnecting" : "connecting");
-    const url = new URL("/v1/ui/watch", window.location.href);
-    url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-    socket = new WebSocket(url.toString());
+    socket = new WebSocket(watchSocketUrl(window.location.href));
     socket.onopen = () => {
       onStatus?.("live");
     };
