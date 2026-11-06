@@ -27,6 +27,7 @@ func TestFailOpenEveryClient(t *testing.T) {
 			out := Runner{
 				ClientName: string(c),
 				EventName:  "PreToolUse",
+				Getenv:     failureEnv(t),
 				Stdin:      strings.NewReader(editPayload(c, t.TempDir())),
 				Find: func(string) (gitinfo.Repo, error) {
 					panic("boom")
@@ -290,6 +291,7 @@ func editRunner(t *testing.T, c Client, url string, deadline time.Duration) Runn
 		EventName:  "PreToolUse",
 		Stdin:      strings.NewReader(editPayload(c, root)),
 		Hub:        &hubclient.Client{Config: hubURL(url)},
+		Getenv:     failureEnv(t),
 		Deadline:   deadline,
 	}
 }

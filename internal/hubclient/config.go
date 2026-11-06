@@ -47,23 +47,27 @@ func (e EnvConfig) HubURL() string {
 	return DefaultHubURL
 }
 
+// TokenPath resolves the credential location without reading or creating it.
+func (e EnvConfig) TokenPath() (string, error) {
+	if path := strings.TrimSpace(e.getenv("IRIS_TOKEN_FILE")); path != "" {
+		return path, nil
+	}
+	dir, err := os.UserConfigDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, "iris", "hub.token"), nil
+}
+
 func (e EnvConfig) Token() (string, error) {
-	path := strings.TrimSpace(e.getenv("IRIS_TOKEN_FILE"))
-	if path == "" {
-		dir, err := os.UserConfigDir()
-		if err != nil {
-			return "", err
-		}
-		raw, err := e.readFile(filepath.Join(dir, "iris", "hub.token"))
-		if errors.Is(err, os.ErrNotExist) {
-			return "", nil
-		}
-		if err != nil {
-			return "", err
-		}
-		return strings.TrimSpace(string(raw)), nil
+	path, err := e.TokenPath()
+	if err != nil {
+		return "", err
 	}
 	b, err := e.readFile(path)
+	if errors.Is(err, os.ErrNotExist) && strings.TrimSpace(e.getenv("IRIS_TOKEN_FILE")) == "" {
+		return "", nil
+	}
 	if err != nil {
 		return "", err
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"errors"
 	"io"
 	"os"
 	"strings"
@@ -41,6 +42,14 @@ type Runner struct {
 // for the named client. A deadline ends the call even if a dependency is stuck.
 func (r Runner) Run() Output {
 	allow := FallbackAllow(Canonical(r.ClientName))
+	state := &runState{stage: "read"}
+	var failure error
+	var failureStage string
+	defer func() {
+		if failure != nil {
+			r.recordFailure(failureStage, failure)
+		}
+	}()
 	deadline := r.Deadline
 	if deadline <= 0 {
 		deadline = DefaultDeadline
@@ -51,32 +60,41 @@ func (r Runner) Run() Output {
 	go func() {
 		defer func() {
 			if recover() != nil {
+				state.fail(hookFailure("panic during hook execution"), allow)
 				ch <- allow
 			}
 		}()
-		ch <- r.execute(ctx)
+		ch <- r.execute(ctx, state)
 	}()
 	select {
 	case out := <-ch:
+		failureStage, failure = state.snapshot()
 		return out
 	case <-ctx.Done():
+		failureStage, _ = state.snapshot()
+		failure = ctx.Err()
 		return allow
 	}
 }
 
-func (r Runner) execute(ctx context.Context) Output {
+func (r Runner) execute(ctx context.Context, state *runState) Output {
 	client := Canonical(r.ClientName)
 	allow := FallbackAllow(client)
 	payload, err := readPayload(r.Stdin)
-	if err != nil || client == "" {
-		return allow
+	if err != nil {
+		return state.fail(err, allow)
 	}
+	if client == "" {
+		state.at("client")
+		return state.fail(hookFailure("unknown hook client"), allow)
+	}
+	state.at("decode")
 	ev, err := Decode(client, r.EventName, payload)
 	if err != nil {
 		if runner, cross := r.crossLoad(peekSessionID(payload), client); cross {
 			return FallbackAllow(runner)
 		}
-		return allow
+		return state.fail(err, allow)
 	}
 	if runner, cross := r.crossLoad(ev.SessionID, client); cross {
 		return FallbackAllow(runner)
@@ -87,42 +105,58 @@ func (r Runner) execute(ctx context.Context) Output {
 		hash := sha256.Sum256(payload)
 		ev.ToolCallID = "payload:" + hex.EncodeToString(hash[:])
 	}
-	repo, ok := r.repoFor(ev)
-	if !ok {
+	state.at("repository")
+	repo, err := r.repoFor(ev)
+	if err != nil && !errors.Is(err, gitinfo.ErrNotRepo) {
+		return state.fail(err, allow)
+	}
+	if err != nil {
 		return r.finish(ev, Encode(ev, Decision{Action: ActionAllow}))
 	}
 	if !needsNetwork(ev) {
 		return r.finish(ev, Encode(ev, Decision{Action: ActionAllow}))
 	}
 	if r.Hub == nil {
-		return allow
+		state.at("hub")
+		return state.fail(hookFailure("hub client is not configured"), allow)
 	}
 	switch ev.Kind {
 	case KindSessionStart, KindSubagentStart:
+		state.at("session")
 		sess, err := r.Hub.RegisterSession(ctx, r.sessionReq(ev, repo))
 		if err != nil {
-			return allow
+			return state.fail(err, allow)
 		}
 		return r.finish(ev, Encode(ev, Decision{Action: ActionAllow, Context: SessionText(sess)}))
 	case KindSessionEnd:
+		state.at("session")
 		sess, err := r.Hub.RegisterSession(ctx, r.sessionReq(ev, repo))
 		if err != nil {
-			return allow
+			return state.fail(err, allow)
 		}
 		// Session end is a best-effort speed-up. A missed call still expires the lease.
-		_ = r.Hub.EndExecution(ctx, sess.ExecutionID, sess.Generation)
+		state.at("end")
+		if err := r.Hub.EndExecution(ctx, sess.ExecutionID, sess.Generation); err != nil {
+			return state.fail(err, allow)
+		}
 		return r.finish(ev, Encode(ev, Decision{Action: ActionAllow}))
 	case KindPreTool:
+		state.at("paths")
+		if len(ev.Paths) == 0 {
+			return state.fail(hookFailure("edit tool has no usable paths"), allow)
+		}
 		paths, from, to := r.claimPaths(repo, ev)
 		if len(paths) == 0 {
 			return r.finish(ev, Encode(ev, Decision{Action: ActionAllow}))
 		}
 		// Touch needs an execution id. The hook only has the client session id,
 		// so it reattaches through POST /v1/sessions, which is defined as idempotent.
+		state.at("session")
 		sess, err := r.Hub.RegisterSession(ctx, r.sessionReq(ev, repo))
 		if err != nil {
-			return allow
+			return state.fail(err, allow)
 		}
+		state.at("touch")
 		touch, err := r.Hub.Touch(ctx, hubclient.TouchRequest{
 			ExecutionID: sess.ExecutionID,
 			Generation:  sess.Generation,
@@ -132,7 +166,12 @@ func (r Runner) execute(ctx context.Context) Output {
 			RenameTo:    to,
 		})
 		if err != nil {
-			return allow
+			return state.fail(err, allow)
+		}
+		switch strings.ToLower(touch.Action) {
+		case "allow", "deny", "ask", "warn":
+		default:
+			return state.fail(hookFailure("hub returned an invalid touch action"), allow)
 		}
 		return r.finish(ev, Encode(ev, decisionFromTouch(touch)))
 	default:
@@ -206,7 +245,7 @@ func (r Runner) crossLoad(sessionID string, requested Client) (Client, bool) {
 	return found[0], true
 }
 
-func (r Runner) repoFor(ev Event) (gitinfo.Repo, bool) {
+func (r Runner) repoFor(ev Event) (gitinfo.Repo, error) {
 	find := r.Find
 	if find == nil {
 		find = gitinfo.Find
@@ -217,6 +256,7 @@ func (r Runner) repoFor(ev Event) (gitinfo.Repo, bool) {
 	}
 	dirs = append(dirs, ev.Workspaces...)
 	seen := map[string]bool{}
+	var failure error
 	for _, dir := range dirs {
 		if dir == "" || seen[dir] {
 			continue
@@ -224,10 +264,16 @@ func (r Runner) repoFor(ev Event) (gitinfo.Repo, bool) {
 		seen[dir] = true
 		repo, err := find(dir)
 		if err == nil {
-			return repo, true
+			return repo, nil
+		}
+		if !errors.Is(err, gitinfo.ErrNotRepo) {
+			failure = err
 		}
 	}
-	return gitinfo.Repo{}, false
+	if failure != nil {
+		return gitinfo.Repo{}, failure
+	}
+	return gitinfo.Repo{}, gitinfo.ErrNotRepo
 }
 
 func (r Runner) sessionReq(ev Event, repo gitinfo.Repo) hubclient.SessionRequest {
