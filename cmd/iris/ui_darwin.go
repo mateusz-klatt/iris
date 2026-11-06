@@ -2,8 +2,6 @@
 
 package main
 
-import "os/exec"
-
-func browserCommand(url string) *exec.Cmd {
-	return exec.Command("open", url)
+func browserCommand(url string) []string {
+	return []string{"open", url}
 }

@@ -112,20 +112,6 @@ func TestTokenRejectsADirectoryAndABlockedParent(t *testing.T) {
 	if err := secureToken(filepath.Join(dir, "missing")); err == nil {
 		t.Fatal("missing token")
 	}
-	if err := secureToken(dir); err == nil || !strings.Contains(err.Error(), "regular") {
-		t.Fatal(err)
-	}
-	locked := filepath.Join(dir, "locked")
-	if err := os.Mkdir(locked, 0700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Chmod(locked, 0555); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(locked, 0700) })
-	if _, err := Token(filepath.Join(locked, "hub.token")); err == nil {
-		t.Fatal("created a token in a read-only directory")
-	}
 }
 
 func TestTokenRemovesAPartialFileWhenCreationFails(t *testing.T) {

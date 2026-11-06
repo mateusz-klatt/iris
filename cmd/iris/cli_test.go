@@ -176,7 +176,7 @@ func TestServiceReportsEachLifecycleOutcome(t *testing.T) {
 	orig := hostService
 	t.Cleanup(func() { hostService = orig })
 	binDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(binDir, "iris"), []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+	if _, err := integrate.PlaceFake(binDir, "iris"); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", binDir+string(os.PathListSeparator)+os.Getenv("PATH"))
@@ -231,6 +231,7 @@ func TestServiceRejectsAMissingBinaryAndAMissingHome(t *testing.T) {
 	t.Setenv("PATH", binDir)
 	t.Setenv("HOME", "")
 	t.Setenv("USERPROFILE", "")
+	t.Setenv("AppData", "")
 	t.Setenv("XDG_CONFIG_HOME", "")
 	if _, err := userServiceDB("", "", ""); err == nil {
 		t.Fatal("missing config dir")
@@ -268,11 +269,13 @@ func TestServeRejectsBadFlagsAndStopsWhenSignalled(t *testing.T) {
 
 	t.Setenv("HOME", "")
 	t.Setenv("USERPROFILE", "")
+	t.Setenv("AppData", "")
 	t.Setenv("XDG_CONFIG_HOME", "")
 	if err := run([]string{"serve"}); err == nil {
 		t.Fatal("missing config")
 	}
 	t.Setenv("HOME", dir)
+	t.Setenv("AppData", dir)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "cfg"))
 
 	cert, key := filepath.Join(dir, "cert.pem"), filepath.Join(dir, "key.pem")

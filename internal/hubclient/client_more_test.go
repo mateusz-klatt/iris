@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -128,6 +129,7 @@ func TestLoadAndWriteConfigFailures(t *testing.T) {
 	}
 	t.Setenv("HOME", "")
 	t.Setenv("USERPROFILE", "")
+	t.Setenv("AppData", "")
 	t.Setenv("XDG_CONFIG_HOME", "")
 	if _, err := (EnvConfig{}).TokenPath(); err == nil {
 		t.Fatal("missing config dir")
@@ -186,13 +188,15 @@ func TestDoReadsABrokenBodyAndTouchReportsHubErrors(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	locked := t.TempDir()
-	if err := os.Chmod(locked, 0555); err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.Chmod(locked, 0700) })
-	if err := WriteConfig(filepath.Join(locked, "client.json"), FileConfig{Hub: "https://iris.example"}); err == nil {
-		t.Fatal("created a config in a read-only directory")
+	if runtime.GOOS != "windows" { // Windows ignores directory modes.
+		locked := t.TempDir()
+		if err := os.Chmod(locked, 0555); err != nil {
+			t.Fatal(err)
+		}
+		t.Cleanup(func() { _ = os.Chmod(locked, 0700) })
+		if err := WriteConfig(filepath.Join(locked, "client.json"), FileConfig{Hub: "https://iris.example"}); err == nil {
+			t.Fatal("created a config in a read-only directory")
+		}
 	}
 
 	origWrite, origClose := prepareConfigWrite, prepareConfigClose

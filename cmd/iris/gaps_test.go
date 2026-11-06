@@ -56,6 +56,7 @@ func TestServeRejectsATokenThatIsNotAFile(t *testing.T) {
 func TestDoctorReportsAMissingConfigDirectory(t *testing.T) {
 	t.Setenv("HOME", "")
 	t.Setenv("USERPROFILE", "")
+	t.Setenv("AppData", "")
 	t.Setenv("XDG_CONFIG_HOME", "")
 	_, errText := capture(t, func() {
 		if code := runDoctor(nil); code != 1 {
@@ -228,6 +229,7 @@ func TestSetupRejectsBadInputAndSurvivesEachFailure(t *testing.T) {
 
 	t.Setenv("HOME", "")
 	t.Setenv("USERPROFILE", "")
+	t.Setenv("AppData", "")
 	t.Setenv("XDG_CONFIG_HOME", "")
 	out.Reset()
 	if code := setup(nil, setupEnv{out: &out, errw: &out, getenv: func(string) string { return "" }}); code != 1 || out.Len() == 0 {
@@ -248,6 +250,7 @@ func TestSetupRejectsBadInputAndSurvivesEachFailure(t *testing.T) {
 	env.detect = func(func(string) (string, error)) []string { return []string{integrate.Claude} }
 	t.Setenv("HOME", "")
 	t.Setenv("USERPROFILE", "")
+	t.Setenv("AppData", "")
 	if code := setup([]string{"--yes", "--hub-url", "http://127.0.0.1:7878"}, env); code != 1 || !strings.Contains(out.String(), "claude:") {
 		t.Fatalf("files %d %s", code, out.String())
 	}

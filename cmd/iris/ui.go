@@ -5,8 +5,23 @@ import (
 	"errors"
 	"fmt"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
+	"os/exec"
 	"time"
 )
+
+// openBrowser is best effort. The link is already printed for a machine without one.
+func openBrowser(argv []string) bool {
+	path, err := exec.LookPath(argv[0])
+	if err != nil {
+		return false
+	}
+	command := exec.Command(path, argv[1:]...)
+	if err = command.Start(); err != nil {
+		return false
+	}
+	go command.Wait()
+	return true
+}
 
 func runUI(args []string) error {
 	if len(args) != 0 {
@@ -22,9 +37,6 @@ func runUI(args []string) error {
 		return err
 	}
 	fmt.Println(link.URL)
-	command := browserCommand(link.URL)
-	if command.Start() == nil {
-		go command.Wait()
-	}
+	openBrowser(browserCommand(link.URL))
 	return nil
 }

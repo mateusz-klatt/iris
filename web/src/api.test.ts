@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { getDoctor, listThreads, revokeClaim, watchSocketUrl, watchUi, type WatchFrame } from "./api";
+import { getDoctor, listThreads, revokeClaim, watchUi, type WatchFrame } from "./api";
 import { server } from "./test/server";
 import { http, HttpResponse } from "msw";
 
@@ -58,12 +58,17 @@ describe("operator watch", () => {
   });
 
   it("opens a secure socket from an https page and omits an empty thread query", async () => {
-    expect(watchSocketUrl("https://console.example/iris")).toBe(
-      "wss://console.example/v1/ui/watch",
-    );
-    expect(watchSocketUrl("http://localhost:3000/iris")).toBe(
-      "ws://localhost:3000/v1/ui/watch",
-    );
+    vi.stubGlobal("WebSocket", FakeSocket);
+    for (const [page, socket] of [
+      ["https://console.example/iris", "wss://console.example/v1/ui/watch"],
+      ["http://localhost:3000/iris", "ws://localhost:3000/v1/ui/watch"],
+    ]) {
+      vi.stubGlobal("location", new URL(page as string));
+      const stop = watchUi(() => undefined);
+      expect(FakeSocket.latest?.url).toBe(socket);
+      stop();
+    }
+    vi.unstubAllGlobals();
 
     let search = "unset";
     server.use(
