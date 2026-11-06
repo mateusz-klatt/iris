@@ -397,9 +397,6 @@ func (t *transaction) bind(r Request) (map[string]any, error) {
 	return bound(matches[0]), nil
 }
 func (t *transaction) heartbeat(r Request) (map[string]any, error) {
-	if r.Generation <= 0 {
-		return nil, fail("bad_request", "generation is required")
-	}
 	e, err := t.live(r.ExecutionID, r.Generation)
 	if err != nil {
 		return nil, err

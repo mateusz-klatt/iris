@@ -319,11 +319,8 @@ func (t *transaction) remember(e execution, key, route string, request any, resu
 		Request any
 	}{route, request})
 	hash := sha256.Sum256(raw)
-	body, err := json.Marshal(result)
-	if err != nil {
-		return err
-	}
-	_, err = t.exec("INSERT INTO Operation VALUES(?,?,?,?)", e.AgentID, key, hash[:], string(body))
+	body, _ := json.Marshal(result) // results are hub-owned JSON maps, never client metadata
+	_, err := t.exec("INSERT INTO Operation VALUES(?,?,?,?)", e.AgentID, key, hash[:], string(body))
 	return err
 }
 

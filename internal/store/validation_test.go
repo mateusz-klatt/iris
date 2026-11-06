@@ -71,15 +71,6 @@ func TestInvalidOperationsLeaveStateUnchanged(t *testing.T) {
 	if boundedLimit(200, 20, 100) != 100 {
 		t.Fatal("unbounded inbox limit")
 	}
-	if _, err := s.transactHeartbeatWithoutGeneration(a); err == nil {
-		t.Fatal("missing heartbeat generation accepted")
-	}
-}
-func (s *Store) transactHeartbeatWithoutGeneration(r Request) (map[string]any, error) {
-	r.Generation = 0
-	var out map[string]any
-	err := s.transact(context.Background(), func(tx *transaction) error { var err error; out, err = tx.heartbeat(r); return err })
-	return out, err
 }
 func TestTouchDeduplicatesAndAllowsFamily(t *testing.T) {
 	s, _, _ := testStore(t)

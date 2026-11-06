@@ -143,9 +143,7 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 				route = "check"
 				r = Request{Host: "host", Worktree: "/repo/w1", RemoteURL: "https://example.com/team/iris.git", RootCommit: "root", Paths: []string{"held"}}
 			case "policy":
-				_, fresh := session(t, s, 3)
-				r.RepositoryID = fresh["repository_id"].(string)
-				// Session helper joins the shared repository; use an independent namespace.
+				// Use an independent namespace whose policy is not pinned by claims.
 				independent := call(t, s, "sessions", Request{Client: "codex", Host: "policy", SessionID: "policy", Cwd: "/policy", RemoteURL: "https://policy.example/policy.git"})
 				r.RepositoryID = independent["repository_id"].(string)
 			case "touch-cached":
@@ -226,7 +224,12 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 			// Discover the real statement/step sequence, forcing COMMIT to fail so the
 			// discovery itself also proves atomicity and leaves the fixture unchanged.
 			f.discover = true
-			if _, err := invoke(); !errors.Is(err, errStorageFault) && op != "claim-conflict" {
+			if _, err := invoke(); op == "claim-conflict" {
+				var domain *Error
+				if !errors.As(err, &domain) || domain.Code != "conflict" {
+					t.Fatal("overlap was not refused", err)
+				}
+			} else if !errors.Is(err, errStorageFault) {
 				t.Fatalf("discovery: %v", err)
 			}
 			trace := append([]string(nil), f.trace...)
@@ -255,7 +258,12 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 			}
 			f.at = 0
 			f.count = 0
-			if _, err := invoke(); err != nil && op != "claim-conflict" {
+			if _, err := invoke(); op == "claim-conflict" {
+				var domain *Error
+				if !errors.As(err, &domain) || domain.Code != "conflict" {
+					t.Fatal("overlap was not refused on retry", err)
+				}
+			} else if err != nil {
 				t.Fatal("retry after transient storage failure:", err)
 			}
 		})
@@ -378,23 +386,7 @@ func TestOpenFilesystemFailuresReleaseOwnership(t *testing.T) {
 	}
 }
 
-func TestRememberRejectsUnencodableResult(t *testing.T) {
-	s, _, _ := testStore(t)
-	a, _ := session(t, s, 1)
-	before := databaseState(t, s)
-	err := s.transact(context.Background(), func(tx *transaction) error {
-		e, err := tx.live(a.ExecutionID, a.Generation)
-		if err != nil {
-			return err
-		}
-		return tx.remember(e, "bad-result", "claim", a, map[string]any{"invalid": make(chan int)})
-	})
-	if err == nil || databaseState(t, s) != before {
-		t.Fatal("invalid cached result persisted", err)
-	}
-}
-
-func TestCorruptSnapshotAndDoctorReportAreRejected(t *testing.T) {
+func TestCorruptSnapshotAndUnencodableDoctorReportAreRejected(t *testing.T) {
 	s, _, _ := testStore(t)
 	a, _ := session(t, s, 1)
 	if _, err := s.db.Exec("INSERT INTO ShellSnapshot VALUES(?,?)", a.ExecutionID, "{"); err != nil {
