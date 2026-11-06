@@ -2,13 +2,16 @@
 package hub
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
 	"io"
+	"log"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -29,18 +32,20 @@ type ticket struct {
 type Hub struct {
 	// PingInterval is configurable before serving; zero uses 25 seconds.
 	PingInterval time.Duration
-	publicURL    *url.URL
-	monitors     map[string]bool
-	ui           http.Handler
-	links        map[string]loginGrant
-	cookies      map[string]loginGrant
-	store        *store.Store
-	token        string
-	hosts        map[string]bool
-	mux          *http.ServeMux
-	mu           sync.Mutex
-	tickets      map[string]ticket
-	now          func() time.Time
+	// MaxRequestBytes bounds every HTTP body; zero uses 64 KiB.
+	MaxRequestBytes int64
+	publicURL       *url.URL
+	monitors        map[string]bool
+	ui              http.Handler
+	links           map[string]loginGrant
+	cookies         map[string]loginGrant
+	store           *store.Store
+	token           string
+	hosts           map[string]bool
+	mux             *http.ServeMux
+	mu              sync.Mutex
+	tickets         map[string]ticket
+	now             func() time.Time
 }
 
 func New(s *store.Store, token string, allowedHosts []string) *Hub {
@@ -75,8 +80,37 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Cache-Control", "no-store")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
 	if !h.hosts[strings.ToLower(r.Host)] {
-		writeError(w, &store.Error{Code: "unauthorized", Message: "Host is not allowed", Details: map[string]any{}})
+		h.reject(w, r, "Host is not allowed")
 		return
+	}
+	wsOrigin := "ws://" + r.Host
+	if r.TLS != nil {
+		wsOrigin = "wss://" + r.Host
+	}
+	if h.publicURL != nil {
+		wsOrigin = "wss://" + h.publicURL.Host
+	}
+	w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:; font-src 'self'; connect-src 'self' "+wsOrigin+"; base-uri 'none'; form-action 'none'; frame-ancestors 'none'")
+	limit := h.MaxRequestBytes
+	if limit <= 0 {
+		limit = 64 << 10
+	}
+	if r.ContentLength > limit {
+		writeError(w, &store.Error{Code: "too_large", Message: "request body exceeds limit"})
+		return
+	}
+	if r.Body != nil {
+		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
+		if err != nil {
+			var large *http.MaxBytesError
+			code := "bad_request"
+			if errors.As(err, &large) {
+				code = "too_large"
+			}
+			writeError(w, &store.Error{Code: code, Message: "invalid or oversized request body"})
+			return
+		}
+		r.Body = io.NopCloser(bytes.NewReader(body))
 	}
 	if origin := r.Header.Get("Origin"); origin != "" {
 		u, err := url.Parse(origin)
@@ -85,19 +119,21 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			scheme = "https"
 		}
 		if err != nil || u.Scheme != scheme || !strings.EqualFold(u.Host, r.Host) || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
-			writeError(w, &store.Error{Code: "unauthorized", Message: "Origin is not allowed", Details: map[string]any{}})
+			h.reject(w, r, "Origin is not allowed")
 			return
 		}
 	}
 	if strings.HasPrefix(r.URL.Path, "/v1/") && r.URL.Path != "/v1/status" && r.URL.Path != "/v1/watch" && !h.authorized(r) && !(strings.HasPrefix(r.URL.Path, "/v1/ui/") && r.URL.Path != "/v1/ui/links" && h.cookieAuthorized(r)) {
-		writeError(w, &store.Error{Code: "unauthorized", Message: "bearer token required", Details: map[string]any{}})
+		h.reject(w, r, "bearer token required")
 		return
 	}
 	h.mux.ServeHTTP(w, r)
 }
 func (h *Hub) authorized(r *http.Request) bool {
-	value := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
-	return h.token != "" && r.Header.Get("Authorization") != "" && subtle.ConstantTimeCompare([]byte(value), []byte(h.token)) == 1 && strings.HasPrefix(r.Header.Get("Authorization"), "Bearer ")
+	header := r.Header.Get("Authorization")
+	value := strings.TrimPrefix(header, "Bearer ")
+	got, want := sha256.Sum256([]byte(value)), sha256.Sum256([]byte(h.token))
+	return subtle.ConstantTimeCompare(got[:], want[:]) == 1 && h.token != "" && strings.HasPrefix(header, "Bearer ")
 }
 func decode(w http.ResponseWriter, r *http.Request) (store.Request, error) {
 	var req store.Request
@@ -122,7 +158,7 @@ func decode(w http.ResponseWriter, r *http.Request) (store.Request, error) {
 		}
 		return req, nil
 	}
-	dec := json.NewDecoder(http.MaxBytesReader(w, r.Body, 64<<10))
+	dec := json.NewDecoder(r.Body)
 	if err := dec.Decode(&req); err != nil {
 		var large *http.MaxBytesError
 		code := "bad_request"
@@ -138,6 +174,13 @@ func decode(w http.ResponseWriter, r *http.Request) (store.Request, error) {
 	return req, nil
 }
 func (h *Hub) api(w http.ResponseWriter, r *http.Request, operation string) {
+	if operation == "status" && !h.authorized(r) {
+		if r.Header.Get("Authorization") != "" {
+			log.Printf("authentication failed: peer=%q reason=invalid status token", r.RemoteAddr)
+		}
+		writeJSON(w, map[string]string{"status": "ok"})
+		return
+	}
 	req, err := decode(w, r)
 	if err != nil {
 		writeError(w, err)
@@ -270,7 +313,7 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 		}
 		h.mu.Unlock()
 		if !valid {
-			writeError(w, &store.Error{Code: "unauthorized", Message: "valid single-use wake ticket required"})
+			h.reject(w, r, "valid single-use wake ticket required")
 			return
 		}
 	}
@@ -402,4 +445,9 @@ func (h *Hub) ping(ctx context.Context, conn *websocket.Conn) bool {
 		return false
 	}
 	return true
+}
+
+func (h *Hub) reject(w http.ResponseWriter, r *http.Request, reason string) {
+	log.Printf("authentication failed: peer=%q reason=%q", r.RemoteAddr, reason)
+	writeError(w, &store.Error{Code: "unauthorized", Message: reason})
 }

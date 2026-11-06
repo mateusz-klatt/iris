@@ -119,8 +119,8 @@ ack succeeds, and a stale one returns `conflict`. Ack means accepted, not acted 
 
 `GET /v1/agents?repository_id=...` lists agents and their current state.
 
-`GET /v1/status` returns version, stream id, boot epoch and counts. It needs no token, and it reveals
-nothing beyond those.
+`GET /v1/status` returns only `{"status":"ok"}` without a valid bearer token. With a valid
+bearer token it returns version, stream id, boot epoch and counts.
 
 ## Events
 
@@ -178,7 +178,11 @@ Agents never use these routes. They accept the bearer token, or the session cook
 `iris ui` calls `POST /v1/ui/links` with the bearer token, gets
 `{"url":"http://127.0.0.1:7878/ui/login?code=..."}` and opens it. `GET /ui/login?code=...` works
 once, sets an `HttpOnly`, `SameSite=Strict` cookie and redirects to `/`. Cookie login is refused
-off loopback (D13). Everything else under `/` serves the embedded web UI.
+off loopback unless `serve --public-url https://host` explicitly enables a trusted loopback
+reverse proxy. In that mode login and cookie authentication require the exact public Host and
+`X-Forwarded-Proto: https`, and the cookie is also `Secure`. The proxy must strip incoming
+forwarding headers before setting its own. Links expire after one minute and work once;
+creating a link always requires the bearer token. Everything else under `/` serves the embedded web UI.
 
 `GET /v1/ui/overview` returns everything the first screen needs:
 
@@ -242,3 +246,26 @@ warnings and clear their baselines. Status strings are observations, never comma
 
 Session registration also accepts `common_dir`, a host-scoped alias for linked
 worktrees without a globally unambiguous remote. It never joins paths across hosts.
+
+## Public service limits
+
+Every route accepts at most 64 KiB of request body, including chunked bodies and routes
+that do not consume JSON. Oversized requests return 413 (`too_large`). An Execution
+may hold at most 500 live claims; a grant exceeding that limit fails atomically with
+`too_large`, while touching existing claims is allowed. The HTTP server has a 10-second
+read timeout, a 5-second header timeout and a 60-second idle timeout; upgraded sockets
+are independent of these deadlines.
+
+`GET /v1/status` without a valid bearer token returns only `{"status":"ok"}`. With a
+valid bearer token it returns the full status document described above. A UI cookie
+does not grant access to detailed status. Authentication failures are logged without
+credentials. All `/v1/` and `/ui/login` responses carry `Cache-Control: no-store`.
+The console has a restrictive Content-Security-Policy: scripts, styles and fonts are
+same-origin, images are same-origin or data, connections are same-origin HTTP and the
+hub WebSocket origin, and framing, forms and base URLs are disabled.
+
+Both `/v1/watch` and `/v1/ui/watch` send WebSocket protocol pings every 25 seconds.
+A missing pong within 10 seconds closes the socket. These are control frames, never
+JSON events: `iris watch` responds while reading and browser WebSocket implementations
+handle them without dispatching `message` events. Public wake-ticket URLs use `wss`
+and the configured public authority.

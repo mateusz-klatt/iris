@@ -72,7 +72,7 @@ func (h *Hub) cookieAuthorized(r *http.Request) bool {
 }
 func (h *Hub) uiLink(w http.ResponseWriter, r *http.Request) {
 	if !h.loginAllowed(r) {
-		writeError(w, &store.Error{Code: "unauthorized", Message: "UI login origin is not trusted"})
+		h.reject(w, r, "UI login origin is not trusted")
 		return
 	}
 	code := secret()
@@ -96,7 +96,7 @@ func (h *Hub) uiLink(w http.ResponseWriter, r *http.Request) {
 }
 func (h *Hub) uiLogin(w http.ResponseWriter, r *http.Request) {
 	if !h.loginAllowed(r) {
-		writeError(w, &store.Error{Code: "unauthorized", Message: "UI cookie origin is not trusted"})
+		h.reject(w, r, "UI cookie origin is not trusted")
 		return
 	}
 	code := r.URL.Query().Get("code")
@@ -105,7 +105,7 @@ func (h *Hub) uiLogin(w http.ResponseWriter, r *http.Request) {
 	delete(h.links, code)
 	if !ok || !grant.expires.After(h.now()) {
 		h.mu.Unlock()
-		writeError(w, &store.Error{Code: "unauthorized", Message: "login link expired or used"})
+		h.reject(w, r, "login link expired or used")
 		return
 	}
 	key := secret()

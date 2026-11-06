@@ -287,8 +287,8 @@ func (t *transaction) claimLimit(e execution, extra int) error {
 	if err := t.row("SELECT COUNT(*) FROM Claim WHERE execution_id=? AND revoked_ms IS NULL", e.ID).Scan(&count); err != nil {
 		return err
 	}
-	if count+extra > 1024 {
-		return fail("too_large", "maximum 1024 live claims per Execution")
+	if count+extra > 500 {
+		return fail("too_large", "maximum 500 live claims per Execution")
 	}
 	return nil
 }
