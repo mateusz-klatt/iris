@@ -25,6 +25,18 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == "hook" {
 		os.Exit(runHook(os.Args[2:]))
 	}
+	if len(os.Args) > 1 && os.Args[1] == "integrate" {
+		os.Exit(runIntegrate(os.Args[2:]))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "setup" {
+		os.Exit(runSetup(os.Args[2:]))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "doctor" {
+		os.Exit(runDoctor(os.Args[2:]))
+	}
+	if len(os.Args) > 1 && os.Args[1] == "service" {
+		os.Exit(runService(os.Args[2:]))
+	}
 	if err := run(os.Args[1:]); err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
@@ -36,7 +48,7 @@ func run(args []string) error {
 		return nil
 	}
 	if len(args) == 0 || args[0] != "serve" {
-		return errors.New("usage: iris serve [--listen address] [--db path] [--token-file path] [--tls-cert path --tls-key path] [--allowed-hosts host:port,...] | version")
+		return errors.New("usage: iris serve [--listen address] [--db path] [--token-file path] [--tls-cert path --tls-key path] [--allowed-hosts host:port,...] | hook | integrate | setup | doctor | service | version")
 	}
 	cfg, err := config.Default()
 	if err != nil {
