@@ -99,7 +99,7 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 	for _, c := range integrate.All() {
 		res.Report.Clients = append(res.Report.Clients, checkClient(ctx, opt, c))
 	}
-	if err := applyFailures(&res, tokenFile); err != nil && res.HubDetail == "" {
+	if err := applyFailures(&res, tokenFile, opt.Now()); err != nil && res.HubDetail == "" {
 		res.HubDetail = "failure log: " + err.Error()
 	}
 	for i := range res.Report.Clients {
@@ -229,9 +229,14 @@ func checkClient(ctx context.Context, opt Options, c integrate.Client) ClientRep
 	return row
 }
 
+// failureWindow is how long a failed hook counts against a client. An old failure
+// says nothing about whether the client is protected now.
+const failureWindow = 24 * time.Hour
+
 // applyFailures marks a client silent when hook-failures.log, beside the token
 // file, has a recent entry for it. A hook that failed open did not protect the turn.
-func applyFailures(res *Result, tokenFile string) error {
+// An entry proves that a hook ran, so it counts even when doctor found no configuration.
+func applyFailures(res *Result, tokenFile string, now time.Time) error {
 	if strings.TrimSpace(tokenFile) == "" {
 		return nil
 	}
@@ -242,7 +247,7 @@ func applyFailures(res *Result, tokenFile string) error {
 	by := map[string][]string{}
 	for _, entry := range entries {
 		name := integrate.Canonical(entry.Client)
-		if name == "" {
+		if name == "" || now.Sub(entry.Time) > failureWindow {
 			continue
 		}
 		by[name] = append(by[name], entry.Event+" "+entry.Stage+": "+entry.Error)

@@ -3,6 +3,7 @@ package doctor
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -331,5 +332,34 @@ func TestDoctorReportsConfigurationSource(t *testing.T) {
 	}
 	if res.HubURL != srv.URL || res.HubSource != "file ("+path+")" || !strings.Contains(res.Format(), "source: file (") {
 		t.Fatal(res.Format())
+	}
+}
+
+func TestFailuresCountOnlyWhenRecent(t *testing.T) {
+	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
+	token := filepath.Join(t.TempDir(), "hub.token")
+	log := filepath.Join(filepath.Dir(token), "hook-failures.log")
+	line := func(client string, at time.Time) string {
+		return fmt.Sprintf(`{"time":%q,"client":%q,"event":"pre_tool","stage":"session","error":"connection refused"}`+"\n",
+			at.Format(time.RFC3339), client)
+	}
+	body := line(integrate.Claude, now.Add(-time.Hour)) +
+		line(integrate.Codex, now.Add(-48*time.Hour))
+	if err := os.WriteFile(log, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res := Result{}
+	res.Report.Clients = []ClientReport{
+		{Client: integrate.Claude, Status: StatusOK},
+		{Client: integrate.Codex, Status: StatusOK},
+	}
+	if err := applyFailures(&res, token, now); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{StatusSilent, StatusOK}
+	for i, row := range res.Report.Clients {
+		if row.Status != want[i] {
+			t.Fatalf("%s: got %s, want %s", row.Client, row.Status, want[i])
+		}
 	}
 }
