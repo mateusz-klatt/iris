@@ -1,13 +1,14 @@
 {
-  "name": "mcp-agent-mail-ui",
+  "name": "iris-ui",
   "private": true,
+  "license": "Apache-2.0",
   "version": "0.1.0",
   "type": "module",
   "engines": {
     "node": "^22.22.2 || ^24.15.0 || >=26.0.0"
   },
   "scripts": {
-    "build": "tsc --noEmit && vite build && vite build --config vite.legacy.config.ts",
+    "build": "tsc --noEmit && vite build",
     "coverage": "vitest run --coverage",
     "dev": "vite --host 0.0.0.0",
     "lint": "eslint . --max-warnings=0",
@@ -17,27 +18,13 @@
     "typecheck": "tsc --noEmit --pretty false"
   },
   "dependencies": {
-    "@alpinejs/collapse": "3.17.4",
-    "@popperjs/core": "2.11.8",
-    "alpinejs": "3.17.4",
-    "dayjs": "1.11.23",
-    "diff2html": "3.4.56",
-    "dompurify": "3.4.16",
-    "fuse.js": "7.5.0",
     "i18next": "26.4.2",
-    "lucide": "0.474.0",
-    "marked": "11.2.0",
-    "mermaid": "11.17.2",
-    "nprogress": "0.2.0",
-    "prismjs": "1.30.0",
     "react": "19.3.0",
     "react-dom": "19.3.0",
     "react-i18next": "17.0.15",
     "react-markdown": "10.1.0",
     "remark-breaks": "4.0.0",
-    "remark-gfm": "4.0.1",
-    "tippy.js": "6.3.7",
-    "vis-network": "9.1.13"
+    "remark-gfm": "4.0.1"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",
@@ -47,8 +34,6 @@
     "@testing-library/react": "16.3.3",
     "@testing-library/user-event": "14.6.7",
     "@types/node": "26.6.4",
-    "@types/nprogress": "0.2.3",
-    "@types/prismjs": "1.26.6",
     "@types/react": "19.3.0",
     "@types/react-dom": "19.3.0",
     "@vitejs/plugin-react": "6.1.1",

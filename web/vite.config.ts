@@ -5,7 +5,7 @@ import { defineConfig } from "vitest/config";
 const repositoryRoot = fileURLToPath(new URL("../", import.meta.url));
 
 export default defineConfig({
-  base: "/mail/",
+  base: "/",
   plugins: [react()],
   build: {
     manifest: true,

@@ -16,7 +16,7 @@
  * unknown agent must never take the notification path down with it.
  */
 
-export const soundPreferenceKey = "agentMailSound";
+export const soundPreferenceKey = "irisSound";
 
 interface ToneNote {
   hz: number;

@@ -114,7 +114,7 @@ const resources = {
   en: {
     translation: {
       appName: "Iris",
-      appSubtitle: "Agent Mail",
+      appSubtitle: "Iris",
       skipToContent: "Skip to content",
       mailboxSecureDelivery: "Durable delivery",
       navigation: "Primary navigation",

@@ -2,7 +2,7 @@ import type { TranslationResource } from "../i18n";
 
 const translation = {
   appName: "Iris",
-  appSubtitle: "Agent Mail",
+  appSubtitle: "Iris",
   skipToContent: "본문으로 건너뛰기",
   mailboxSecureDelivery: "영구 전달",
   navigation: "기본 탐색",

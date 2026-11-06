@@ -2,7 +2,7 @@ import type { TranslationResource } from "../i18n";
 
 const translation = {
   appName: "Iris",
-  appSubtitle: "Agent Mail",
+  appSubtitle: "Iris",
   skipToContent: "အကြောင်းအရာသို့ ကျော်သွားရန်",
   mailboxSecureDelivery: "တည်တံ့သော ပေးပို့မှု",
   navigation: "အဓိက လမ်းညွှန်",

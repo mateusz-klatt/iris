@@ -1,6 +1,6 @@
 export const FLAG_FONT_FAMILY = "Twemoji Country Flags";
 export const FLAG_FONT_URL =
-  "/mail/assets/TwemojiCountryFlags.woff2?v=9f04f144";
+  "/assets/TwemojiCountryFlags.woff2?v=9f04f144";
 
 const emojiFontStack =
   '"Twemoji Mozilla","Apple Color Emoji","Segoe UI Emoji","Segoe UI Symbol",' +

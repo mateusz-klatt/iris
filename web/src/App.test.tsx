@@ -723,7 +723,7 @@ describe("Iris landing shell", () => {
 
     // Enabling plays the default tone: it doubles as the gesture the browser
     // wants and as proof to the reader that audio works here.
-    expect(stored.get("agentMailSound")).toBe("on");
+    expect(stored.get("irisSound")).toBe("on");
     expect(contexts).toHaveLength(1);
     const armed = await screen.findByRole("button", {
       name: "Notification sound on. Click to mute.",
@@ -734,7 +734,7 @@ describe("Iris landing shell", () => {
 
     // Muting must stay silent — no second context.
     expect(contexts).toHaveLength(1);
-    expect(stored.get("agentMailSound")).toBe("off");
+    expect(stored.get("irisSound")).toBe("off");
     expect(
       await screen.findByRole("button", {
         name: "Notification sound off. Click to unmute.",

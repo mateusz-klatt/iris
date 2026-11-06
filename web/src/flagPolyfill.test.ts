@@ -54,7 +54,7 @@ describe("initFlagPolyfill", () => {
     expect(document.documentElement).toHaveAttribute("data-flag-polyfill", "true");
     expect(FLAG_FONT_FAMILY).toBe("Twemoji Country Flags");
     expect(FLAG_FONT_URL).toBe(
-      "/mail/assets/TwemojiCountryFlags.woff2?v=9f04f144",
+      "/assets/TwemojiCountryFlags.woff2?v=9f04f144",
     );
   });
 
@@ -138,7 +138,7 @@ describe("initFlagPolyfill", () => {
   it("keeps the static font CSP-safe and gated to polyfilled flag surfaces", () => {
     expect(appStyles).toContain('@font-face {\n  font-family: "Twemoji Country Flags";');
     expect(appStyles).toContain(
-      'src: url("/mail/assets/TwemojiCountryFlags.woff2?v=9f04f144") format("woff2");',
+      'src: url("/assets/TwemojiCountryFlags.woff2?v=9f04f144") format("woff2");',
     );
     expect(appStyles).toContain("U+1F1E6-1F1FF");
     expect(appStyles).toContain(
