@@ -25,8 +25,13 @@ func runWatch(args []string) error {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	parent := os.Getppid()
+	parent, err := proc.WatchParent()
+	if err != nil {
+		return err
+	}
+	maintained := make(chan struct{})
+	defer func() { cancel(); <-maintained; parent.Close() }()
 	resolver := binding.New(&hubclient.Client{Config: hubclient.EnvConfig{}}, *client)
-	go resolver.Maintain(ctx, "watch", 20*time.Second, func() bool { return proc.ParentUnchanged(parent) }, cancel)
+	go func() { defer close(maintained); resolver.Maintain(ctx, "watch", 20*time.Second, parent.Alive, cancel) }()
 	return (&watch.Runner{Resolver: resolver, Output: os.Stdout}).Run(ctx)
 }

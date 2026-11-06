@@ -103,9 +103,6 @@ func baseName(name string) string {
 	return name
 }
 
-// ParentUnchanged detects reparenting, including orphan adoption after a wrapper exits.
-func ParentUnchanged(original int) bool { return os.Getppid() == original && original > 1 }
-
 // SingleSession recognizes only measured single-session launchers. In particular,
 // the Codex app-server and Cursor IDE are deliberately excluded.
 func SingleSession(a Ancestor, client string) bool {

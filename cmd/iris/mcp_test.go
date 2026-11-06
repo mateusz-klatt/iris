@@ -94,3 +94,29 @@ func TestMCPStdio(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestMCPStdinEOF(t *testing.T) {
+	cmd := exec.Command(os.Args[0], "-test.run=^TestMCPStdio$")
+	cmd.Env = append(os.Environ(), "IRIS_TEST_MCP_CHILD=1")
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cmd.Process.Kill() }()
+	if err = stdin.Close(); err != nil {
+		t.Fatal(err)
+	}
+	done := make(chan error, 1)
+	go func() { done <- cmd.Wait() }()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(3 * time.Second):
+		t.Fatal("MCP did not stop on stdin EOF while its parent remained alive")
+	}
+}

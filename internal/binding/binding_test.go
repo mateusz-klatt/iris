@@ -101,13 +101,17 @@ func TestRealOrphanExits(t *testing.T) {
 		os.Exit(4)
 	}
 	if mode == "child" {
-		original := os.Getppid()
+		parent, err := proc.WatchParent()
+		if err != nil {
+			os.Exit(5)
+		}
+		defer parent.Close()
 		marker := os.Getenv("IRIS_ORPHAN_PATH")
 		_ = os.WriteFile(marker+".ready", nil, 0600)
 		r := &Resolver{}
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 		defer cancel()
-		r.Maintain(ctx, "shim", time.Millisecond, func() bool { return proc.ParentUnchanged(original) }, func() { _ = os.WriteFile(marker+".stopped", nil, 0600) })
+		r.Maintain(ctx, "shim", time.Millisecond, parent.Alive, func() { _ = os.WriteFile(marker+".stopped", nil, 0600) })
 		os.Exit(0)
 	}
 	marker := filepath.Join(t.TempDir(), "orphan")
