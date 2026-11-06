@@ -397,12 +397,21 @@ reserve for any channel that needs a bare name.
 | 0 | CI on three OSes, GoReleaser snapshots | Now, in a private repository |
 | 1 | Releases, checksums, cosign keyless, SBOM, Homebrew tap, Scoop bucket, GHCR | Public release assets, after IP review |
 | 2 | winget, signed apt and dnf through Cloudsmith OSS, GitHub attestations | Public release URLs; a public repository for attestations |
-| 3 | Apple notarization, Windows signing | $99 a year; SignPath Foundation once public, or about $300 a year |
+| 3 | Apple notarization, Windows signing | $99 a year; SignPath Foundation, or Certum Open Source from €49 |
 
 Private release assets cannot serve package managers. The source repository need not be public
 for stage 1 if the assets are public somewhere, but GitHub attestations on this plan need a public
 attesting repository that truthfully built the artifact. Azure Artifact Signing is closed to
-individuals in the EU.
+individuals in the EU, and Iris has no company behind it.
+
+Windows signing tries SignPath Foundation first, after the first public release, because it is
+free. The certificate then names SignPath Foundation as publisher, and approval is a review that
+Iris may not pass while it has no users. The fallback is Certum Open Source Code Signing in the
+cloud, issued to the maintainer as "Open Source Developer" and limited to non-commercial
+distribution. CI would then hold a long-lived TOTP seed, so it stays in a GitHub environment with
+manual approval. Neither removes SmartScreen warnings at once, because reputation builds over
+time. A private key can no longer be delivered as a file, so a `.p12` in Azure Key Vault is not an
+option.
 
 Until macOS binaries are notarized, Homebrew ships a prebuilt formula through GoReleaser's `brews`
 key, which v2.20 supports but deprecates, so it must be replaced before upgrading to v3. A cask is
