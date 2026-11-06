@@ -166,11 +166,7 @@ func setup(args []string, env setupEnv) int {
 		if env.installService != nil {
 			err = env.installService(listen, tokenFile)
 		} else {
-			var mgr interface{ Install(context.Context) error }
-			mgr, err = userService(listen, tokenFile)
-			if err == nil {
-				err = mgr.Install(context.Background())
-			}
+			err = installUserService(context.Background(), listen, tokenFile, "")
 		}
 		if err != nil {
 			serviceErr = err
