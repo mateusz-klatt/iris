@@ -108,3 +108,20 @@ Remaining operational limits: no per-user authorization, per-IP rate limit, glob
 session/socket quota, token revocation API or automatic database retention. Failed-auth
 logs may be flooded; use edge limits and bounded log retention. Backups, credential
 rotation, origin firewall policy and Cloudflare account security remain operator tasks.
+
+## Replacing an existing vhost
+
+Do not replace a working vhost with `deploy/apache-iris.conf`. That file is a reference for a new
+host. An existing vhost carries certbot's TLS options and its own ACME webroot, and swapping those
+can break certificate renewal without any immediate symptom. Change only the proxy lines, keeping a
+copy of the file for rollback:
+
+```apache
+ProxyPass "/v1/ui/watch" "http://127.0.0.1:7878/v1/ui/watch" upgrade=websocket timeout=3600 retry=0
+ProxyPass "/v1/watch" "http://127.0.0.1:7878/v1/watch" upgrade=websocket timeout=3600 retry=0
+ProxyPass "/" "http://127.0.0.1:7878/" timeout=60 retry=0
+ProxyPassReverse "/" "http://127.0.0.1:7878/"
+```
+
+The WebSocket lines must come first, because Apache uses the first match. Check that the vhost also
+removes client-supplied `X-Forwarded-*` and `Forwarded` headers and then sets `X-Forwarded-Proto https`.
