@@ -16,8 +16,12 @@ import (
 )
 
 func hookPath(ctx context.Context, dir string) (string, error) {
+	repo, err := gitinfo.Find(dir)
+	if err != nil {
+		return "", err
+	}
 	cmd := exec.CommandContext(ctx, "git", "rev-parse", "--path-format=absolute", "--git-path", "hooks")
-	cmd.Dir = dir
+	cmd.Dir = repo.Worktree
 	out, err := cmd.Output()
 	if err != nil {
 		return "", fmt.Errorf("find Git hooks directory: %w", err)

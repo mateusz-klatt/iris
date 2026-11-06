@@ -2,6 +2,12 @@ package hook
 
 import (
 	"context"
+	"github.com/mateusz-klatt/iris/internal/hub"
+	"github.com/mateusz-klatt/iris/internal/store"
+	"net/http/httptest"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -54,4 +60,57 @@ func TestShellDeadlineAndNonShellCost(t *testing.T) {
 	}
 	r.Stdin = strings.NewReader(`{"session_id":"shell","cwd":"/repo","tool_name":"Edit","tool_input":{"file_path":"/repo/a"}}`)
 	assertAllow(t, ClientClaude, r.Run())
+}
+
+func TestShellStatusAgainstRealHub(t *testing.T) {
+	root := t.TempDir()
+	cmd := exec.Command("git", "init", root)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git: %v: %s", err, out)
+	}
+	database, err := store.Open(filepath.Join(t.TempDir(), "hub.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer database.Close()
+	server := httptest.NewUnstartedServer(nil)
+	server.Config.Handler = hub.New(database, "secret", []string{server.Listener.Addr().String()})
+	server.Start()
+	defer server.Close()
+	client := &hubclient.Client{Config: hubURL(server.URL)}
+	// Functional integration does not impose a machine-speed assertion. The separate
+	// deadline test proves the Runner's 300 ms fail-open boundary under stalled I/O.
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	holder, err := client.RegisterSession(ctx, hubclient.SessionRequest{Client: "codex", SessionID: "holder", Host: "testhost", CWD: "/other", Worktree: "/other", RemoteURL: "https://example.com/team/shell.git"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = client.Touch(ctx, hubclient.TouchRequest{ExecutionID: holder.ExecutionID, Generation: holder.Generation, ToolCallID: "held", Paths: []string{"shared"}}); err != nil {
+		t.Fatal(err)
+	}
+	shell, err := client.RegisterSession(ctx, hubclient.SessionRequest{Client: "claude", SessionID: "shell", Host: "testhost", CWD: root, Worktree: root, RemoteURL: "https://example.com/team/shell.git"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	request := hubclient.ReconcileRequest{ExecutionID: shell.ExecutionID, Generation: shell.Generation, Kind: "before"}
+	request.Status, err = gitinfo.Status(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = client.Reconcile(ctx, request); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(filepath.Join(root, "shared"), []byte("shell edit"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	request.Kind = "after"
+	request.Status, err = gitinfo.Status(ctx, root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := client.Reconcile(ctx, request)
+	if err != nil || !strings.Contains(out.Message, "Shell edit detected") {
+		t.Fatalf("missing shell conflict: %#v %v", out, err)
+	}
 }
