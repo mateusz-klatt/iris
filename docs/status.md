@@ -27,6 +27,12 @@ From `docs/spec/requirements.md`:
 
 On the development machine, with a slower disk, Linux measured p50 27.6 ms and p95 42.6 ms.
 
+On a Windows 11 machine on 2026-11-06, with ESET active and Defender off, four runs of 100 pre-edit
+hooks against the live hub over TLS measured p50 172 to 182 ms and p95 222 to 366 ms. Six of the 400
+hooks reached the 1.5 s deadline and failed open, and the cause is not known yet. The same machine
+with a local hub measured p50 about 30 ms and p95 37 to 45 ms. The targets above are for a local hub,
+so they do not cover this round trip. This is not a Defender measurement.
+
 Linux, macOS and Windows all pass the test suite in CI, including the D4 guards run for real through
 `cmd` and PowerShell. Six targets cross-build.
 

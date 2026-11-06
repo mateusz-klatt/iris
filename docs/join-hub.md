@@ -63,17 +63,25 @@ In PowerShell, with Go and Git installed:
 ```powershell
 git clone https://github.com/mateusz-klatt/iris.git; cd iris
 $env:CGO_ENABLED = "0"; go install ./cmd/iris
+$env:PATH += ";$(go env GOPATH)\bin"
 New-Item -ItemType Directory -Force "$env:APPDATA\iris" | Out-Null
 scp <user>@<hub-host>:.config/iris/hub.token "$env:APPDATA\iris\hub.token"
 iris setup --hub https://<hub> --clients claude --yes
 iris doctor
 ```
 
+`go install` puts `iris.exe` in `$(go env GOPATH)\bin`, which may not be on PATH. The second line above
+fixes that for this window only. To run `iris` in later windows, add the directory to your user PATH.
+
 ## Checking it
 
 `iris doctor` must show `hub: ok`, `token: ok` and `claude ok`. Start a new Claude Code session, because
 a running one does not load the plugin. Ask it to call the Iris `whoami` and `peers` tools, then to send
 a message to a peer. An interactive session reports it at once, with no prompt.
+
+`claude ok` can change later. A hook that failed open in the last 24 hours turns the row into `silent`,
+and `iris doctor` exits 1. The row names the failure, and `hook-failures.log` beside the token file
+keeps it. The row clears once the entry is more than 24 hours old.
 
 Notifications need an interactive session: plugin monitors do not run under `claude -p`. Hooks and MCP
 tools still work there.
