@@ -1,9 +1,6 @@
 /** @type {import('tailwindcss').Config} */
 module.exports = {
-  content: [
-    "../src/mcp_agent_mail/templates/**/*.html",
-    "../src/mcp_agent_mail/viewer_assets/index.html",
-  ],
+  content: ["./index.html", "./src/**/*.{ts,tsx}"],
   darkMode: "class",
   theme: {
     extend: {
