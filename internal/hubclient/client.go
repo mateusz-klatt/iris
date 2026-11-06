@@ -216,3 +216,23 @@ func ValidateURL(raw string) error {
 		return fmt.Errorf("unsupported hub scheme %q", u.Scheme)
 	}
 }
+
+// CheckRequest identifies a worktree without creating an Execution or taking claims.
+type CheckRequest struct {
+	Host       string   `json:"host"`
+	Worktree   string   `json:"worktree"`
+	RemoteURL  string   `json:"remote_url"`
+	RootCommit string   `json:"root_commit"`
+	Paths      []string `json:"paths"`
+}
+
+type CheckResponse struct {
+	Message   string  `json:"message"`
+	Conflicts []Claim `json:"conflicts"`
+}
+
+func (c *Client) CheckPaths(ctx context.Context, req CheckRequest) (CheckResponse, error) {
+	var out CheckResponse
+	err := c.post(ctx, "/v1/guard/check", req, &out)
+	return out, err
+}
