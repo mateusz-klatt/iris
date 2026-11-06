@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 )
 
@@ -100,4 +101,30 @@ func baseName(name string) string {
 	name = strings.ToLower(path.Base(name))
 	name = strings.TrimSuffix(name, ".exe")
 	return name
+}
+
+// SingleSession recognizes only measured single-session launchers. In particular,
+// the Codex app-server and Cursor IDE are deliberately excluded.
+func SingleSession(a Ancestor, client string) bool {
+	switch client {
+	case "cursor":
+		return baseName(a.Name) == "cursor-agent"
+	case "antigravity":
+		return baseName(a.Name) == "antigravity" || baseName(a.Name) == "agy"
+	case "kimi":
+		return baseName(a.Name) == "kimi" || baseName(a.Name) == "kimi-code"
+	case "codex":
+		if baseName(a.Name) != "codex" {
+			return false
+		}
+		raw, err := os.ReadFile("/proc/" + strconv.Itoa(a.PID) + "/cmdline")
+		if err != nil {
+			return false
+		}
+		args := strings.Split(string(raw), "\x00")
+		// Only an unambiguous command position is positive evidence. A value of
+		// --config (or a prompt) containing "exec" must not classify app-server.
+		return len(args) > 1 && args[1] == "exec"
+	}
+	return false
 }

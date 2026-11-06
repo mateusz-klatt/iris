@@ -13,6 +13,7 @@ import (
 
 // SessionRequest is the body of POST /v1/sessions.
 type SessionRequest struct {
+	Generation       int    `json:"generation"`
 	Client           string `json:"client"`
 	SessionID        string `json:"session_id"`
 	Host             string `json:"host"`
@@ -123,6 +124,20 @@ func (c *Client) EndExecution(ctx context.Context, id string, generation int) er
 }
 
 func (c *Client) post(ctx context.Context, path string, body, dest any) error {
+	return c.Do(ctx, http.MethodPost, path, body, dest)
+}
+
+// Error preserves the hub's typed failure for binding and liveness decisions.
+type Error struct {
+	Code    string `json:"code"`
+	Message string `json:"message"`
+	Details any    `json:"details"`
+}
+
+func (e *Error) Error() string { return e.Code + ": " + e.Message }
+
+// Do issues an authenticated JSON request. Callers keep retry keys stable across retries.
+func (c *Client) Do(ctx context.Context, method, path string, body, dest any) error {
 	if c == nil || c.Config == nil {
 		return fmt.Errorf("hub client is not configured")
 	}
@@ -138,7 +153,7 @@ func (c *Client) post(ctx context.Context, path string, body, dest any) error {
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, base+path, bytes.NewReader(raw))
+	req, err := http.NewRequestWithContext(ctx, method, base+path, bytes.NewReader(raw))
 	if err != nil {
 		return err
 	}
@@ -160,6 +175,12 @@ func (c *Client) post(ctx context.Context, path string, body, dest any) error {
 		return err
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		var envelope struct {
+			Error *Error `json:"error"`
+		}
+		if json.Unmarshal(slurp, &envelope) == nil && envelope.Error != nil {
+			return envelope.Error
+		}
 		return fmt.Errorf("hub %s: %s", path, res.Status)
 	}
 	if dest == nil || len(bytes.TrimSpace(slurp)) == 0 {

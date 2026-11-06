@@ -26,17 +26,21 @@ type ticket struct {
 	used       bool
 }
 type Hub struct {
-	store   *store.Store
-	token   string
-	hosts   map[string]bool
-	mux     *http.ServeMux
-	mu      sync.Mutex
-	tickets map[string]ticket
-	now     func() time.Time
+	monitors map[string]bool
+	ui       http.Handler
+	links    map[string]loginGrant
+	cookies  map[string]loginGrant
+	store    *store.Store
+	token    string
+	hosts    map[string]bool
+	mux      *http.ServeMux
+	mu       sync.Mutex
+	tickets  map[string]ticket
+	now      func() time.Time
 }
 
 func New(s *store.Store, token string, allowedHosts []string) *Hub {
-	h := &Hub{store: s, token: token, hosts: map[string]bool{}, mux: http.NewServeMux(), tickets: map[string]ticket{}, now: time.Now}
+	h := &Hub{monitors: map[string]bool{}, links: map[string]loginGrant{}, cookies: map[string]loginGrant{}, store: s, token: token, hosts: map[string]bool{}, mux: http.NewServeMux(), tickets: map[string]ticket{}, now: time.Now}
 	for _, host := range allowedHosts {
 		h.hosts[strings.ToLower(host)] = true
 	}
@@ -50,8 +54,13 @@ func New(s *store.Store, token string, allowedHosts []string) *Hub {
 		h.mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) { h.api(w, r, operation) })
 	}
 	h.mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if h.ui != nil && !strings.HasPrefix(r.URL.Path, "/v1/") {
+			h.ui.ServeHTTP(w, r)
+			return
+		}
 		writeError(w, &store.Error{Code: "not_found", Message: "unknown API route"})
 	})
+	h.operatorRoutes()
 	h.mux.HandleFunc("GET /v1/watch", h.watch)
 	h.mux.HandleFunc("POST /v1/wake-tickets", h.wakeTicket)
 	return h
@@ -74,7 +83,7 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if r.URL.Path != "/v1/status" && r.URL.Path != "/v1/watch" && !h.authorized(r) {
+	if strings.HasPrefix(r.URL.Path, "/v1/") && r.URL.Path != "/v1/status" && r.URL.Path != "/v1/watch" && !h.authorized(r) && !(strings.HasPrefix(r.URL.Path, "/v1/ui/") && r.URL.Path != "/v1/ui/links" && h.cookieAuthorized(r)) {
 		writeError(w, &store.Error{Code: "unauthorized", Message: "bearer token required", Details: map[string]any{}})
 		return
 	}
@@ -259,6 +268,27 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	if req.ConsumerID == "iris-watch" {
+		h.mu.Lock()
+		busy := h.monitors[req.ExecutionID]
+		if !busy {
+			h.monitors[req.ExecutionID] = true
+		}
+		h.mu.Unlock()
+		if busy {
+			writeError(w, &store.Error{Code: "conflict", Message: "Execution already has a monitor"})
+			return
+		}
+		defer func() { h.mu.Lock(); delete(h.monitors, req.ExecutionID); h.mu.Unlock() }()
+		saved, err := h.store.Call(r.Context(), "monitor_cursor", req)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		if cursor := saved["cursor"].(int64); req.After == 0 {
+			req.After = cursor
+		}
+	}
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{protocol}})
 	if err != nil {
 		return
@@ -284,7 +314,11 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 			_ = conn.Close(websocket.StatusPolicyViolation, "Execution lease lost")
 			return
 		}
-		result, err := h.store.Call(ctx, "events", req)
+		pageReq := req
+		if pageReq.ConsumerID == "iris-watch" {
+			pageReq.ConsumerID = ""
+		}
+		result, err := h.store.Call(ctx, "events", pageReq)
 		if err != nil {
 			_ = conn.Close(websocket.StatusPolicyViolation, "Execution stream unavailable")
 			return
@@ -312,7 +346,7 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 			if len(events) < boundedPageSize {
 				req.After = high
 			}
-			if initial && len(events) == 0 {
+			if initial && len(events) == 0 && req.After == 0 {
 				snapshot, err := h.store.Call(ctx, "attention", req)
 				if err != nil {
 					_ = conn.Close(websocket.StatusPolicyViolation, "Execution stream unavailable")
