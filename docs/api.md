@@ -269,3 +269,28 @@ A missing pong within 10 seconds closes the socket. These are control frames, ne
 JSON events: `iris watch` responds while reading and browser WebSocket implementations
 handle them without dispatching `message` events. Public wake-ticket URLs use `wss`
 and the configured public authority.
+
+## Named host tokens
+
+The existing `hub.token` remains valid as `(legacy)`; no client change is needed on
+upgrade. `iris token add <host>`, `iris token list`, and `iris token revoke <host>`
+use the configured hub and an existing valid bearer token. All valid bearer tokens
+have the same authority, including token administration; names provide attribution,
+not isolation between hosts. A UI cookie cannot administer bearer tokens.
+
+`POST /v1/tokens` takes `{"host":"workstation"}` and returns `{"name":"workstation",
+"token":"..."}`. The random 256-bit token is returned only on creation; the database
+stores a SHA-256 digest. Names contain 1–64 ASCII letters, digits, dots, underscores
+or hyphens, starting with a letter or digit. An active duplicate returns `conflict`.
+`GET /v1/tokens` returns `tokens`, each with `name`, `created_ms`, `revoked_ms`,
+`last_used_ms`, and `requests`; no secret or digest is returned.
+`DELETE /v1/tokens/{name}` revokes immediately and is idempotent for an existing name.
+A revoked name can be added again with a fresh secret. The legacy file token is
+rotated through its file rather than this API.
+
+Every authenticated HTTP request logs its token name, method, path and peer, without
+credentials or request bodies. Named token usage counts and last-use timestamps are
+persisted. Revocation refuses new requests and closes existing bearer streams and
+wake-ticket streams issued by that token. Already authenticated HTTP operations may
+finish. Previously issued UI login links and cookies remain valid until their own
+expiry; bearer revocation does not revoke those separate UI sessions.

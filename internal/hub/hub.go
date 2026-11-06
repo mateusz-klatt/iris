@@ -5,8 +5,6 @@ import (
 	"bytes"
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
-	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -24,12 +22,14 @@ import (
 )
 
 type ticket struct {
+	principal  principal
 	execution  string
 	generation int64
 	expires    time.Time
 	used       bool
 }
 type Hub struct {
+	sockets map[string]map[*websocket.Conn]bool
 	// PingInterval is configurable before serving; zero uses 25 seconds.
 	PingInterval time.Duration
 	// MaxRequestBytes bounds every HTTP body; zero uses 64 KiB.
@@ -49,7 +49,7 @@ type Hub struct {
 }
 
 func New(s *store.Store, token string, allowedHosts []string) *Hub {
-	h := &Hub{monitors: map[string]bool{}, links: map[string]loginGrant{}, cookies: map[string]loginGrant{}, store: s, token: token, hosts: map[string]bool{}, mux: http.NewServeMux(), tickets: map[string]ticket{}, now: time.Now}
+	h := &Hub{sockets: map[string]map[*websocket.Conn]bool{}, monitors: map[string]bool{}, links: map[string]loginGrant{}, cookies: map[string]loginGrant{}, store: s, token: token, hosts: map[string]bool{}, mux: http.NewServeMux(), tickets: map[string]ticket{}, now: time.Now}
 	for _, host := range allowedHosts {
 		h.hosts[strings.ToLower(host)] = true
 	}
@@ -72,6 +72,7 @@ func New(s *store.Store, token string, allowedHosts []string) *Hub {
 		writeError(w, &store.Error{Code: "not_found", Message: "unknown API route"})
 	})
 	h.operatorRoutes()
+	h.tokenRoutes()
 	h.mux.HandleFunc("GET /v1/watch", h.watch)
 	h.mux.HandleFunc("POST /v1/wake-tickets", h.wakeTicket)
 	return h
@@ -123,6 +124,9 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	p := h.authenticate(r)
+	logPrincipal(r, p)
+	r = r.WithContext(context.WithValue(r.Context(), principalKey{}, p))
 	if strings.HasPrefix(r.URL.Path, "/v1/") && r.URL.Path != "/v1/status" && r.URL.Path != "/v1/watch" && !h.authorized(r) && !(strings.HasPrefix(r.URL.Path, "/v1/ui/") && r.URL.Path != "/v1/ui/links" && h.cookieAuthorized(r)) {
 		h.reject(w, r, "bearer token required")
 		return
@@ -130,10 +134,7 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	h.mux.ServeHTTP(w, r)
 }
 func (h *Hub) authorized(r *http.Request) bool {
-	header := r.Header.Get("Authorization")
-	value := strings.TrimPrefix(header, "Bearer ")
-	got, want := sha256.Sum256([]byte(value)), sha256.Sum256([]byte(h.token))
-	return subtle.ConstantTimeCompare(got[:], want[:]) == 1 && h.token != "" && strings.HasPrefix(header, "Bearer ")
+	return requestPrincipal(r).name != ""
 }
 func decode(w http.ResponseWriter, r *http.Request) (store.Request, error) {
 	var req store.Request
@@ -253,7 +254,7 @@ func (h *Hub) wakeTicket(w http.ResponseWriter, r *http.Request) {
 			delete(h.tickets, k)
 		}
 	}
-	h.tickets[key] = ticket{execution: req.ExecutionID, generation: req.Generation, expires: expires}
+	h.tickets[key] = ticket{principal: requestPrincipal(r), execution: req.ExecutionID, generation: req.Generation, expires: expires}
 	h.mu.Unlock()
 	scheme := "ws"
 	if r.TLS != nil {
@@ -290,6 +291,7 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 	}
 	protocol := "iris.v1"
 	ticketKey := ""
+	p := requestPrincipal(r)
 	if h.authorized(r) {
 		if !offered(protocols, "iris.v1") {
 			writeError(w, &store.Error{Code: "bad_request", Message: "iris.v1 subprotocol required"})
@@ -300,12 +302,14 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 		valid := false
 		h.mu.Lock()
 		if offered(protocols, "iris.wake") {
-			for _, p := range protocols {
-				if t, ok := h.tickets[p]; ok && !t.used && t.execution == req.ExecutionID && t.expires.After(h.now()) {
+			for _, offeredTicket := range protocols {
+				if t, ok := h.tickets[offeredTicket]; ok && !t.used && t.execution == req.ExecutionID && t.expires.After(h.now()) {
+					p = t.principal
+					logPrincipal(r, p)
 					req.Generation = t.generation
 					t.used = true
-					h.tickets[p] = t
-					ticketKey = p
+					h.tickets[offeredTicket] = t
+					ticketKey = offeredTicket
 					valid = true
 					break
 				}
@@ -347,6 +351,10 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.CloseNow()
+	if !h.trackSocket(r, conn, p) {
+		return
+	}
+	defer h.untrackSocket(conn, p)
 	ctx := conn.CloseRead(r.Context())
 	pings := time.NewTicker(h.pingInterval())
 	defer pings.Stop()

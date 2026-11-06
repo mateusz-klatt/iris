@@ -44,6 +44,9 @@ func main() {
 	}
 }
 func run(args []string) error {
+	if len(args) > 0 && args[0] == "token" {
+		return runToken(args[1:])
+	}
 	if len(args) > 0 && args[0] == "guard" {
 		return runGuard(args[1:])
 	}

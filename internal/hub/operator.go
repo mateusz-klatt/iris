@@ -126,6 +126,11 @@ func (h *Hub) uiWatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer conn.CloseNow()
+	p := requestPrincipal(r)
+	if !h.trackSocket(r, conn, p) {
+		return
+	}
+	defer h.untrackSocket(conn, p)
 	ctx := conn.CloseRead(r.Context())
 	pings := time.NewTicker(h.pingInterval())
 	defer pings.Stop()
