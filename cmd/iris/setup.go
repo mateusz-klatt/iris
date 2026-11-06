@@ -97,13 +97,16 @@ func setup(args []string, env setupEnv) int {
 		}
 		files = append(files, list...)
 	}
+	cfg, err := config.Default()
+	if err != nil {
+		fmt.Fprintln(env.errw, err)
+		return 1
+	}
 	tokenFile := env.tokenFile
 	if tokenFile == "" {
-		cfg, err := config.Default()
-		if err != nil {
-			fmt.Fprintln(env.errw, err)
-			return 1
-		}
+		tokenFile = strings.TrimSpace(env.getenv("IRIS_TOKEN_FILE"))
+	}
+	if tokenFile == "" {
 		tokenFile = cfg.TokenFile
 	}
 	listen, local := loopbackListen(hubURL)
@@ -121,7 +124,18 @@ func setup(args []string, env setupEnv) int {
 			fmt.Fprintf(env.out, "  %s\n", f)
 		}
 	}
-	fmt.Fprintf(env.out, "Hooks need IRIS_HUB_URL=%s and IRIS_TOKEN_FILE=%s\n", hubURL, tokenFile)
+	if hubURL != hubclient.DefaultHubURL || tokenFile != cfg.TokenFile {
+		fmt.Fprintf(env.out, "Hooks need IRIS_HUB_URL=%s and IRIS_TOKEN_FILE=%s\n", hubURL, tokenFile)
+		if layout.OS() == "windows" {
+			fmt.Fprintln(env.out, "Set these permanently in PowerShell, then restart your clients:")
+			fmt.Fprintf(env.out, "[Environment]::SetEnvironmentVariable('IRIS_HUB_URL', '%s', 'User')\n", strings.ReplaceAll(hubURL, "'", "''"))
+			fmt.Fprintf(env.out, "[Environment]::SetEnvironmentVariable('IRIS_TOKEN_FILE', '%s', 'User')\n", strings.ReplaceAll(tokenFile, "'", "''"))
+		} else {
+			quote := func(s string) string { return "'" + strings.ReplaceAll(s, "'", "'\"'\"'") + "'" }
+			fmt.Fprintln(env.out, "Add these to your shell profile permanently, then restart your clients:")
+			fmt.Fprintf(env.out, "export IRIS_HUB_URL=%s\nexport IRIS_TOKEN_FILE=%s\n", quote(hubURL), quote(tokenFile))
+		}
+	}
 	if !*yes {
 		fmt.Fprint(env.out, "Proceed? [y/N] ")
 		line, _ := bufio.NewReader(env.in).ReadString('\n')
@@ -134,6 +148,7 @@ func setup(args []string, env setupEnv) int {
 		}
 	}
 	code := 0
+	var serviceErr error
 	if local {
 		var err error
 		if env.installService != nil {
@@ -146,6 +161,7 @@ func setup(args []string, env setupEnv) int {
 			}
 		}
 		if err != nil {
+			serviceErr = err
 			fmt.Fprintf(env.errw, "service: %v\n", err)
 			code = 1
 		}
@@ -173,6 +189,9 @@ func setup(args []string, env setupEnv) int {
 		fmt.Fprintln(env.errw, err)
 		code = 1
 	} else {
+		if local && !res.HubUp && serviceErr == nil {
+			serviceErr = fmt.Errorf("hub is unreachable after service installation")
+		}
 		fmt.Fprint(env.out, res.Format())
 		if res.ExitCode() != 0 {
 			code = 1
@@ -187,6 +206,9 @@ func setup(args []string, env setupEnv) int {
 		if step := c.Human(); step != "" {
 			fmt.Fprintf(env.out, "%s: %s\n", name, step)
 		}
+	}
+	if serviceErr != nil {
+		fmt.Fprintf(env.out, "Service could not start: %v\nNext step: iris serve\n", serviceErr)
 	}
 	return code
 }
