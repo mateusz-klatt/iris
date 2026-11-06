@@ -3,7 +3,6 @@ package hub
 import (
 	"flag"
 	"fmt"
-	"net"
 	"net/http"
 	"strconv"
 	"time"
@@ -17,7 +16,7 @@ type Limits struct{ TokenPerMinute, AddressPerMinute, WebSockets int }
 func RateLimitFlags(flags *flag.FlagSet) *Limits {
 	limits := &Limits{}
 	flags.IntVar(&limits.TokenPerMinute, "token-rate", 6000, "requests per minute per bearer token")
-	flags.IntVar(&limits.AddressPerMinute, "address-rate", 12000, "requests per minute per client IP (forwarded headers ignored)")
+	flags.IntVar(&limits.AddressPerMinute, "address-rate", 12000, "requests per minute for all requests without a valid bearer token (forwarded headers ignored)")
 	flags.IntVar(&limits.WebSockets, "token-websockets", 100, "concurrent WebSockets per bearer token")
 	return limits
 }
@@ -41,8 +40,8 @@ func (h *Hub) allowRate(w http.ResponseWriter, key string, limit int) bool {
 	if !now.Before(bucket.start.Add(time.Minute)) {
 		bucket = window{start: now}
 	}
-	// Bound unauthenticated address cardinality. Never evict an active window,
-	// because an attacker could then reset its own quota by cycling addresses.
+	// Bound credential cardinality. Anonymous traffic uses one fixed key and
+	// cannot create entries or consume any authenticated credential quota.
 	if bucket.count == 0 && len(h.rates) >= 10000 {
 		for k, b := range h.rates {
 			if !now.Before(b.start.Add(time.Minute)) {
@@ -67,16 +66,12 @@ func rateLimited(w http.ResponseWriter, retry int) {
 	w.Header().Set("Retry-After", strconv.Itoa(retry))
 	writeError(w, &store.Error{Code: "rate_limited", Message: "request quota exceeded; retry later"})
 }
-func (h *Hub) addressRate(w http.ResponseWriter, r *http.Request) bool {
-	address, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		address = r.RemoteAddr
-	}
+func (h *Hub) anonymousRate(w http.ResponseWriter) bool {
 	limit := h.Limits.AddressPerMinute
 	if limit == 0 {
 		limit = 12000
 	}
-	return h.allowRate(w, "address:"+address, limit)
+	return h.allowRate(w, "anonymous", limit)
 }
 func (h *Hub) tokenRate(w http.ResponseWriter, p principal) bool {
 	if p.name == "" {

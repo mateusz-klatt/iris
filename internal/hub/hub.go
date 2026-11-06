@@ -87,9 +87,16 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		h.reject(w, r, "Host is not allowed")
 		return
 	}
-	if !h.addressRate(w, r) {
+	p := h.authenticate(r)
+	logPrincipal(r, p)
+	if p.name == "" {
+		if !h.anonymousRate(w) {
+			return
+		}
+	} else if !h.tokenRate(w, p) {
 		return
 	}
+	r = r.WithContext(context.WithValue(r.Context(), principalKey{}, p))
 	wsOrigin := "ws://" + r.Host
 	if r.TLS != nil {
 		wsOrigin = "wss://" + r.Host
@@ -130,12 +137,6 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	p := h.authenticate(r)
-	logPrincipal(r, p)
-	if !h.tokenRate(w, p) {
-		return
-	}
-	r = r.WithContext(context.WithValue(r.Context(), principalKey{}, p))
 	if strings.HasPrefix(r.URL.Path, "/v1/") && r.URL.Path != "/v1/status" && r.URL.Path != "/v1/watch" && !h.authorized(r) && !(strings.HasPrefix(r.URL.Path, "/v1/ui/") && r.URL.Path != "/v1/ui/links" && h.cookieAuthorized(r)) {
 		h.reject(w, r, "bearer token required")
 		return

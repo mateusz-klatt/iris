@@ -5,6 +5,7 @@ import (
 	"flag"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
@@ -20,7 +21,7 @@ func TestRequestQuotas(t *testing.T) {
 	if out["error"].(map[string]any)["code"] != "rate_limited" {
 		t.Fatal(out)
 	}
-	// The address bucket ignores source ports and spoofed proxy headers.
+	// Anonymous requests share a bucket regardless of source port or proxy headers.
 	for i := 0; i < 2; i++ {
 		r := httptest.NewRequest("GET", "http://localhost/v1/status", nil)
 		r.RemoteAddr = "192.0.2.1:" + []string{"1000", "2000"}[i]
@@ -120,4 +121,33 @@ func TestWebSocketQuotaAndFailedUpgradeRelease(t *testing.T) {
 		t.Fatal(response.StatusCode)
 	}
 	dial(t, s, session["execution_id"], 0)
+}
+
+func TestAnonymousFloodCannotLockOutValidTokens(t *testing.T) {
+	h, s := setup(t)
+	h.Limits = Limits{TokenPerMinute: 2, AddressPerMinute: 2}
+	named := request(t, s, "POST", "/v1/tokens", map[string]string{"host": "proxy-host"}, 200)["token"].(string)
+	for i, token := range []string{"", "wrong", "another-wrong", "", "test-secret", named, "wrong"} {
+		r := httptest.NewRequest("GET", s.URL+"/v1/status", nil)
+		r.RemoteAddr = "127.0.0.1:1234"
+		r.Header.Set("X-Forwarded-For", "spoofed")
+		if token != "" {
+			r.Header.Set("Authorization", "Bearer "+token)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		want := 200
+		if i == 2 || i == 3 || i == 6 {
+			want = 429
+		}
+		if w.Code != want {
+			t.Fatalf("request %d: got %d want %d: %s", i, w.Code, want, w.Body.String())
+		}
+		if want == 429 && (w.Header().Get("Retry-After") == "" || !strings.Contains(w.Body.String(), "rate_limited")) {
+			t.Fatal("missing quota response", w.Header(), w.Body.String())
+		}
+		if (i == 4 || i == 5) && !strings.Contains(w.Body.String(), "counts") {
+			t.Fatal("valid token lost authentication", w.Body.String())
+		}
+	}
 }

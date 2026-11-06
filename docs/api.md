@@ -295,20 +295,25 @@ wake-ticket streams issued by that token. Already authenticated HTTP operations 
 finish. Previously issued UI login links and cookies remain valid until their own
 expiry; bearer revocation does not revoke those separate UI sessions.
 
-Request quotas are in-memory fixed one-minute windows, independently keyed by
-credential digest and by TCP peer IP. `serve --token-rate` defaults to 6000 requests
-per minute, `--address-rate` to 12000, and `--token-websockets` to 100 concurrent
-sockets per credential, sufficient for approximately 50 sessions sharing a host.
-Zero selects the default; negative limits are rejected. All requests, including
-unauthenticated status and failed authentication, consume address quota. Successful
-bearer authentication consumes token quota, including status and socket upgrades;
-wake upgrades consume their issuer's token quota. Cookie streams share a separate
-socket quota. HTTP quota exhaustion and socket-cap exhaustion return 429 with
+Request quotas are in-memory fixed one-minute windows. A valid bearer token is
+limited only by its credential digest; anonymous traffic cannot consume that quota.
+All requests without a valid bearer token, including failed authentication, share
+one separate anonymous bucket. TCP peer addresses and forwarded headers never
+identify anonymous clients, so a loopback reverse proxy cannot cause an anonymous
+flood to lock out authenticated agents.
+
+`serve --token-rate` defaults to 6000 requests per minute per credential;
+`--address-rate` retains its flag name for compatibility but now sets the aggregate
+anonymous quota (default 12000 per minute). `--token-websockets` defaults to 100
+concurrent sockets per credential. Zero selects the default; negatives are rejected.
+These defaults support approximately 50 sessions sharing a host. Wake-ticket
+upgrades without a bearer token consume anonymous quota and their issuer's token
+quota; cookie streams without a bearer token consume anonymous quota and share a
+separate socket quota. HTTP quota and socket-cap exhaustion return 429 with
 `error.code` `rate_limited` and integer `Retry-After` seconds. Closing or failing an
 upgrade releases its socket slot. Revocation does not reset a quota for the old secret.
 
-Forwarded client addresses are deliberately ignored: a trusted reverse proxy shares
-one address quota, so size `--address-rate` for its aggregate load. Quotas reset on
-hub restart, are local to one process, and do not impose per-Execution permissions.
-The address/token window table is capped at 10000 entries; saturation refuses new
-keys with 429 until a window expires, rather than allowing arbitrary memory growth.
+Quotas reset on restart, are local to one hub process, and do not impose per-Execution
+permissions. The window table is capped at 10000 entries; saturation refuses new
+credential keys until an old window expires. Anonymous requests cannot grow this
+table beyond their single fixed entry.
