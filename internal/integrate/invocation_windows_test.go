@@ -9,7 +9,7 @@ import (
 )
 
 func TestWindowsClientInvocationStdin(t *testing.T) {
-	for _, client := range []string{Copilot, Cursor, Codex, Antigravity} {
+	for _, client := range []string{Copilot, Cursor, Codex, Antigravity, Kimi} {
 		t.Run(client, func(t *testing.T) {
 			dir := filepath.Join(t.TempDir(), "path with spaces")
 			bin, err := PlaceFake(dir, "iris")
