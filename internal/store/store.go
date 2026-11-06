@@ -118,7 +118,7 @@ func openDatabase(filename string, clock Clock, driverName string) (*Store, erro
 	if clock == nil {
 		clock = systemClock{time.Now()}
 	}
-	abs, err := resolveDatabasePath(filename, filepath.EvalSymlinks)
+	abs, err := resolveDatabasePath(filename, filepath.Abs, filepath.EvalSymlinks)
 	if err != nil {
 		return nil, err
 	}
@@ -332,8 +332,8 @@ func createDatabaseFile(filename string) error {
 	return file.Close()
 }
 
-func resolveDatabasePath(filename string, evalLinks func(string) (string, error)) (string, error) {
-	abs, err := filepath.Abs(filename)
+func resolveDatabasePath(filename string, absolute, evalLinks func(string) (string, error)) (string, error) {
+	abs, err := absolute(filename)
 	if err != nil {
 		return "", err
 	}

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -134,7 +135,7 @@ func TestClaimExpiryAndRepositoryDisplayCollisions(t *testing.T) {
 
 func TestDatabaseParentDisappearingFailsSafely(t *testing.T) {
 	calls := 0
-	_, err := resolveDatabasePath(t.TempDir()+"/new.db", func(string) (string, error) {
+	_, err := resolveDatabasePath(t.TempDir()+"/new.db", filepath.Abs, func(string) (string, error) {
 		calls++
 		if calls == 1 {
 			return "", os.ErrNotExist
@@ -143,5 +144,12 @@ func TestDatabaseParentDisappearingFailsSafely(t *testing.T) {
 	})
 	if !errors.Is(err, os.ErrPermission) || calls != 2 {
 		t.Fatal(calls, err)
+	}
+}
+
+func TestRelativeDatabasePathResolutionFailure(t *testing.T) {
+	_, err := resolveDatabasePath("relative.db", func(string) (string, error) { return "", os.ErrPermission }, filepath.EvalSymlinks)
+	if !errors.Is(err, os.ErrPermission) {
+		t.Fatal("working-directory failure was not reported", err)
 	}
 }

@@ -367,23 +367,7 @@ func TestOpenFilesystemFailuresReleaseOwnership(t *testing.T) {
 		s.Close()
 		t.Fatal("unknown driver accepted")
 	}
-	// A removed working directory makes relative path resolution fail.
-	original, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	removed := t.TempDir()
-	if err = os.Chdir(removed); err != nil {
-		t.Fatal(err)
-	}
-	defer os.Chdir(original)
-	if err = os.Remove(removed); err != nil {
-		t.Fatal(err)
-	}
-	if s, err := Open("relative.db", nil); err == nil {
-		s.Close()
-		t.Fatal("removed current directory accepted")
-	}
+
 }
 
 func TestCorruptSnapshotAndUnencodableDoctorReportAreRejected(t *testing.T) {
