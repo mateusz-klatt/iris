@@ -51,9 +51,12 @@ type Result struct {
 	TokenOK   bool
 	// TokenUnchecked means the hub never judged the token, as opposed to rejecting it.
 	TokenUnchecked bool
-	HubDetail      string
-	Stored         bool
-	StoreError     string
+	// TokenUnavailable means no token could be read, so the hub never saw one.
+	TokenUnavailable bool
+	TokenDetail      string
+	HubDetail        string
+	Stored           bool
+	StoreError       string
 }
 
 // Options configures one doctor run. Live is opt-in because it calls a model.
@@ -90,7 +93,7 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 	}
 	token, tokenReadErr := readToken(tokenFile)
 	probe := probeHub(ctx, hubURL, token, tokenReadErr, opt.HTTP)
-	res := Result{HubURL: hubURL, HubSource: source, HubUp: probe.up, TokenOK: probe.tokenOK, TokenUnchecked: probe.unchecked, HubDetail: probe.detail}
+	res := Result{HubURL: hubURL, HubSource: source, HubUp: probe.up, TokenOK: probe.tokenOK, TokenUnchecked: probe.unchecked, TokenUnavailable: probe.unavailable, TokenDetail: probe.tokenDetail, HubDetail: probe.detail}
 	res.Report.CheckedAt = opt.Now().UTC()
 	for _, c := range integrate.All() {
 		res.Report.Clients = append(res.Report.Clients, checkClient(ctx, opt, c))
@@ -139,13 +142,20 @@ func (r Result) Format() string {
 		fmt.Fprintf(&b, " (%s)", r.HubDetail)
 	}
 	b.WriteByte('\n')
-	if !r.HubUp || r.TokenUnchecked {
-		b.WriteString("token: not checked\n")
-	} else if r.TokenOK {
-		b.WriteString("token: ok\n")
-	} else {
-		b.WriteString("token: not valid\n")
+	state = "not valid"
+	switch {
+	case !r.HubUp || r.TokenUnchecked:
+		state = "not checked"
+	case r.TokenOK:
+		state = "ok"
+	case r.TokenUnavailable:
+		state = "not available"
 	}
+	fmt.Fprintf(&b, "token: %s", state)
+	if r.TokenDetail != "" {
+		fmt.Fprintf(&b, " (%s)", r.TokenDetail)
+	}
+	b.WriteByte('\n')
 	for _, c := range r.Report.Clients {
 		fmt.Fprintf(&b, "%s\t%s\t%s", c.Client, c.Status, c.Version)
 		if c.Detail != "" {
@@ -306,8 +316,8 @@ func canaryPayload(client, cwd string) []byte {
 
 // hubProbe is what one run learned about the hub and the token.
 type hubProbe struct {
-	up, tokenOK, unchecked bool
-	detail                 string
+	up, tokenOK, unchecked, unavailable bool
+	detail, tokenDetail                 string
 }
 
 // hubRequest sends one call. An empty token sends no credential.
@@ -339,19 +349,19 @@ func probeHub(ctx context.Context, base, token string, tokenErr error, hc *http.
 		return hubProbe{detail: "hub status " + res.Status}
 	}
 	if tokenErr != nil {
-		return hubProbe{up: true, detail: tokenErr.Error()}
+		return hubProbe{up: true, unavailable: true, tokenDetail: tokenErr.Error()}
 	}
 	res, err = hubRequest(ctx, http.MethodGet, root+"/v1/agents", token, nil, hc)
 	if err != nil {
-		return hubProbe{up: true, unchecked: true, detail: "token check failed"}
+		return hubProbe{up: true, unchecked: true, tokenDetail: "token check failed"}
 	}
 	io.Copy(io.Discard, res.Body)
 	res.Body.Close()
 	switch {
 	case res.StatusCode == http.StatusUnauthorized:
-		return hubProbe{up: true, detail: "token was rejected"}
+		return hubProbe{up: true, tokenDetail: "token was rejected"}
 	case res.StatusCode >= 500:
-		return hubProbe{up: true, unchecked: true, detail: "token check failed: hub status " + res.Status}
+		return hubProbe{up: true, unchecked: true, tokenDetail: "token check failed: hub status " + res.Status}
 	}
 	return hubProbe{up: true, tokenOK: true}
 }
