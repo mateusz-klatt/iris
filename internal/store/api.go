@@ -54,6 +54,10 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 			out = map[string]any{"agents": v}
 		case "events":
 			out, err = t.events(r)
+		case "monitor_cursor":
+			var cursor int64
+			err = t.row("SELECT COALESCE((SELECT seq FROM Cursor WHERE consumer_id=?),0)", r.ExecutionID+":iris-watch").Scan(&cursor)
+			out = map[string]any{"cursor": cursor}
 		case "validate":
 			var e execution
 			e, err = t.live(r.ExecutionID, r.Generation)

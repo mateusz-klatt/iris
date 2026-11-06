@@ -26,20 +26,21 @@ type ticket struct {
 	used       bool
 }
 type Hub struct {
-	ui      http.Handler
-	links   map[string]loginGrant
-	cookies map[string]loginGrant
-	store   *store.Store
-	token   string
-	hosts   map[string]bool
-	mux     *http.ServeMux
-	mu      sync.Mutex
-	tickets map[string]ticket
-	now     func() time.Time
+	monitors map[string]bool
+	ui       http.Handler
+	links    map[string]loginGrant
+	cookies  map[string]loginGrant
+	store    *store.Store
+	token    string
+	hosts    map[string]bool
+	mux      *http.ServeMux
+	mu       sync.Mutex
+	tickets  map[string]ticket
+	now      func() time.Time
 }
 
 func New(s *store.Store, token string, allowedHosts []string) *Hub {
-	h := &Hub{links: map[string]loginGrant{}, cookies: map[string]loginGrant{}, store: s, token: token, hosts: map[string]bool{}, mux: http.NewServeMux(), tickets: map[string]ticket{}, now: time.Now}
+	h := &Hub{monitors: map[string]bool{}, links: map[string]loginGrant{}, cookies: map[string]loginGrant{}, store: s, token: token, hosts: map[string]bool{}, mux: http.NewServeMux(), tickets: map[string]ticket{}, now: time.Now}
 	for _, host := range allowedHosts {
 		h.hosts[strings.ToLower(host)] = true
 	}
@@ -267,6 +268,27 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
+	if req.ConsumerID == "iris-watch" {
+		h.mu.Lock()
+		busy := h.monitors[req.ExecutionID]
+		if !busy {
+			h.monitors[req.ExecutionID] = true
+		}
+		h.mu.Unlock()
+		if busy {
+			writeError(w, &store.Error{Code: "conflict", Message: "Execution already has a monitor"})
+			return
+		}
+		defer func() { h.mu.Lock(); delete(h.monitors, req.ExecutionID); h.mu.Unlock() }()
+		saved, err := h.store.Call(r.Context(), "monitor_cursor", req)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		if cursor := saved["cursor"].(int64); cursor > req.After {
+			req.After = cursor
+		}
+	}
 	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{protocol}})
 	if err != nil {
 		return
@@ -320,7 +342,7 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 			if len(events) < boundedPageSize {
 				req.After = high
 			}
-			if initial && len(events) == 0 {
+			if initial && len(events) == 0 && req.After == 0 {
 				snapshot, err := h.store.Call(ctx, "attention", req)
 				if err != nil {
 					_ = conn.Close(websocket.StatusPolicyViolation, "Execution stream unavailable")
