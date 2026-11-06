@@ -14,6 +14,9 @@ func main() {
 		fmt.Println(version)
 		return
 	}
+	if len(os.Args) > 1 && os.Args[1] == "hook" {
+		os.Exit(runHook(os.Args[2:]))
+	}
 	fmt.Fprintln(os.Stderr, "usage: iris <command>")
 	os.Exit(2)
 }
