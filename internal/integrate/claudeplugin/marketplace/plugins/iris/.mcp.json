@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "iris": {
+      "command": "__IRIS__",
+      "args": ["mcp", "--client", "claude"]
+    }
+  }
+}
