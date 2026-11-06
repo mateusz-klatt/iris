@@ -44,6 +44,11 @@ generation cannot be reattached. `generation:0` starts or resumes a non-recoveri
 Recovery keeps claim ownership and expiry but rotates fence numbers; use the `claims`
 in the reattachment response. Old fence numbers and tokens are invalid.
 
+A shim or `iris watch` reattaches by itself: a heartbeat with the current generation does the
+same work during the recovery window and returns the same response, so an idle session that
+fires no hook survives a hub restart. After the window the heartbeat returns `lost`, and the
+session needs a new generation.
+
 `POST /v1/bind` resolves a stdio MCP process to an Execution, following D6.
 
 ```json
