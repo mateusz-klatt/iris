@@ -15,6 +15,13 @@ import (
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 )
 
+// rename and hostname are replaced in tests. Neither can be made to fail through
+// the file system once the temporary hook exists, and the rollback must be proven.
+var (
+	rename   = os.Rename
+	hostname = os.Hostname
+)
+
 func hookPath(ctx context.Context, dir string) (string, error) {
 	repo, err := gitinfo.Find(dir)
 	if err != nil {
@@ -67,28 +74,17 @@ func Install(ctx context.Context, dir string) error {
 	tmp := f.Name()
 	defer os.Remove(tmp)
 	_, err = f.Write(wrapper(old != nil))
-	closeErr := f.Close()
+	err = errors.Join(err, f.Close(), os.Chmod(tmp, 0755))
+	if err == nil && old != nil {
+		err = rename(p, backup)
+	}
 	if err != nil {
 		return err
 	}
-	if closeErr != nil {
-		return closeErr
+	if err = rename(tmp, p); err != nil && old != nil {
+		_ = rename(backup, p)
 	}
-	if err = os.Chmod(tmp, 0755); err != nil {
-		return err
-	}
-	if old != nil {
-		if err = os.Rename(p, backup); err != nil {
-			return err
-		}
-	}
-	if err = os.Rename(tmp, p); err != nil {
-		if old != nil {
-			_ = os.Rename(backup, p)
-		}
-		return err
-	}
-	return nil
+	return err
 }
 
 // Remove restores the original hook, refusing to discard later user edits.
@@ -117,7 +113,7 @@ func Remove(ctx context.Context, dir string) error {
 		return err
 	}
 	if chain {
-		return os.Rename(p+".iris-original", p)
+		return rename(p+".iris-original", p)
 	}
 	return nil
 }
@@ -144,7 +140,7 @@ func Check(ctx context.Context, dir string, hub *hubclient.Client) (string, erro
 	if len(paths) == 0 {
 		return "", nil
 	}
-	host, err := os.Hostname()
+	host, err := hostname()
 	if err != nil {
 		return "", err
 	}

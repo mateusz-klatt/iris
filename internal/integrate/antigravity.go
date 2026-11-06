@@ -1,6 +1,9 @@
 package integrate
 
-import "strings"
+import (
+	"path/filepath"
+	"strings"
+)
 
 func init() { register(antigravityClient{}) }
 
@@ -13,15 +16,11 @@ func (antigravityClient) Human() string { return "" }
 // is project-scoped, which Iris does not write by default. Global hooks and
 // MCP are the user paths in the precedence and config lists.
 func (c antigravityClient) Files(l Layout) ([]string, error) {
-	hooks, err := l.underHome(".gemini", "config", "hooks.json")
+	dir, err := l.underHome(".gemini", "config")
 	if err != nil {
 		return nil, err
 	}
-	mcp, err := l.underHome(".gemini", "config", "mcp_config.json")
-	if err != nil {
-		return nil, err
-	}
-	return []string{hooks, mcp}, nil
+	return []string{filepath.Join(dir, "hooks.json"), filepath.Join(dir, "mcp_config.json")}, nil
 }
 
 func (c antigravityClient) Install(l Layout, _ Plugins) error {

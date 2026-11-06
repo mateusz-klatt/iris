@@ -43,15 +43,8 @@ func (c kimiClient) Install(l Layout, _ Plugins) error {
 			tomlString(event), tomlString(command), eventTimeout(Kimi, event))
 	}
 	block := wrapBlock(strings.TrimRight(body.String(), "\n"))
-	if err := validateHookKeys(block); err != nil {
-		return err
-	}
 	if err := l.update(Kimi, files[0], func(existing []byte) ([]byte, error) {
-		next, err := upsertBlock(string(existing), block)
-		if err != nil {
-			return nil, err
-		}
-		return []byte(next), nil
+		return upsertHooks(existing, block)
 	}); err != nil {
 		return err
 	}
@@ -61,6 +54,16 @@ func (c kimiClient) Install(l Layout, _ Plugins) error {
 			return nil
 		})
 	})
+}
+
+// upsertHooks refuses a block with an unknown key before it reaches the file,
+// because Kimi drops its whole hooks section over one.
+func upsertHooks(existing []byte, block string) ([]byte, error) {
+	if err := validateHookKeys(block); err != nil {
+		return nil, err
+	}
+	next, err := upsertBlock(string(existing), block)
+	return []byte(next), err
 }
 
 func (c kimiClient) Remove(l Layout, _ Plugins) error { return l.unwire(Kimi, stripClient(Kimi)) }
