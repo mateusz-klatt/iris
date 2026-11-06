@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -400,5 +401,24 @@ func TestWatchAndMCPRejectBadArgumentsAndAMissingParent(t *testing.T) {
 	}
 	if err := runMCP([]string{"--client", "claude"}); err == nil || !strings.Contains(err.Error(), "no parent") {
 		t.Fatal(err)
+	}
+}
+
+func TestServeAnnouncesNothingWhenThePortIsTaken(t *testing.T) {
+	taken, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer taken.Close()
+	dir := t.TempDir()
+	var serveErr error
+	_, stderr := capture(t, func() {
+		serveErr = run([]string{"serve", "--listen", taken.Addr().String(), "--db", filepath.Join(dir, "hub.db"), "--token-file", filepath.Join(dir, "hub.token")})
+	})
+	if serveErr == nil {
+		t.Fatal("serve bound a port in use")
+	}
+	if strings.Contains(stderr, "listening") {
+		t.Fatalf("a hub that never bound said %q", stderr)
 	}
 }

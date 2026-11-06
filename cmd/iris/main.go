@@ -6,6 +6,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"os/signal"
@@ -127,7 +128,12 @@ func run(args []string) error {
 		handler.SetPublicURL(*publicURL)
 	}
 	handler.SetUI(webui.Handler())
-	server := &http.Server{Addr: cfg.Listen, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
+	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
+	// Bind before announcing: a port already in use must not read as a hub that started.
+	listener, err := net.Listen("tcp", cfg.Listen)
+	if err != nil {
+		return err
+	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	done := make(chan struct{})
@@ -141,11 +147,11 @@ func run(args []string) error {
 		case <-done:
 		}
 	}()
-	fmt.Fprintf(os.Stderr, "Iris listening on %s\n", cfg.Listen)
+	fmt.Fprintf(os.Stderr, "Iris listening on %s\n", listener.Addr())
 	if cfg.TLSCert != "" {
-		err = server.ListenAndServeTLS(cfg.TLSCert, cfg.TLSKey)
+		err = server.ServeTLS(listener, cfg.TLSCert, cfg.TLSKey)
 	} else {
-		err = server.ListenAndServe()
+		err = server.Serve(listener)
 	}
 	if errors.Is(err, http.ErrServerClosed) {
 		return nil
