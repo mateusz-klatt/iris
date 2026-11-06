@@ -125,6 +125,11 @@ func (r Resolved) TokenPath() (string, error) {
 	}
 	return "", r.err
 }
+
+// ConfigErr reports what TokenPath deliberately tolerates: a setting that could
+// not be read. Commands that act on the configuration must check it.
+func (r Resolved) ConfigErr() error { return r.err }
+
 func (r Resolved) Token() (string, error) {
 	if r.err != nil {
 		return "", r.err

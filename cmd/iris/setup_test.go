@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -285,5 +286,45 @@ func TestServeCommandQuotesATokenPathWithSpaces(t *testing.T) {
 	want := `iris serve --listen 127.0.0.1:7878 --token-file "C:\Users\A B\hub.token"`
 	if got := serveCommand("127.0.0.1:7878", `C:\Users\A B\hub.token`); got != want {
 		t.Fatal(got)
+	}
+}
+
+func TestSetupStopsOnABrokenClientConfiguration(t *testing.T) {
+	home := t.TempDir()
+	if err := os.WriteFile(filepath.Join(home, "client.json"), []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	code := setup([]string{"--yes"}, setupEnv{
+		out: &out, errw: &out, getenv: func(string) string { return "" },
+		tokenFile: filepath.Join(home, "hub.token"),
+		detect:    func(func(string) (string, error)) []string { return nil },
+	})
+	if code != 1 || !strings.Contains(out.String(), "client.json") {
+		t.Fatalf("code %d\n%s", code, out.String())
+	}
+}
+
+func TestSetupStopsWhenItCannotSaveTheConfiguration(t *testing.T) {
+	if runtime.GOOS == "windows" || os.Getuid() == 0 {
+		t.Skip("directory modes are not enforced here")
+	}
+	dir := t.TempDir()
+	if err := os.Chmod(dir, 0o500); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(dir, 0o700) })
+	var out bytes.Buffer
+	code := setup([]string{"--yes"}, setupEnv{
+		out: &out, errw: &out, getenv: func(string) string { return "" },
+		tokenFile: filepath.Join(dir, "hub.token"),
+		detect:    func(func(string) (string, error)) []string { return nil },
+		installService: func(string, string) error {
+			t.Fatal("installed a service after the configuration failed")
+			return nil
+		},
+	})
+	if code != 1 {
+		t.Fatalf("code %d\n%s", code, out.String())
 	}
 }

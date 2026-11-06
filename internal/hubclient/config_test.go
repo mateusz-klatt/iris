@@ -53,3 +53,18 @@ func TestConfigPrecedence(t *testing.T) {
 		t.Fatal("malformed config silently ignored")
 	}
 }
+
+func TestConfigErrReportsWhatTokenPathTolerates(t *testing.T) {
+	dir := t.TempDir()
+	token := filepath.Join(dir, "hub.token")
+	if err := os.WriteFile(filepath.Join(dir, "client.json"), []byte("not json"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r := (EnvConfig{Getenv: func(string) string { return "" }, DefaultTokenFile: token}).Load()
+	if got, err := r.TokenPath(); err != nil || got != token {
+		t.Fatal(got, err)
+	}
+	if r.ConfigErr() == nil {
+		t.Fatal("a malformed client.json was not reported")
+	}
+}

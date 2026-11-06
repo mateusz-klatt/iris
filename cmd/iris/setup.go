@@ -72,11 +72,11 @@ func setup(args []string, env setupEnv) int {
 		return 2
 	}
 	resolved := (hubclient.EnvConfig{Getenv: env.getenv, DefaultTokenFile: env.tokenFile}).Load()
-	tokenFile, err := resolved.TokenPath()
-	if err != nil {
+	if err := resolved.ConfigErr(); err != nil {
 		fmt.Fprintln(env.errw, err)
 		return 1
 	}
+	tokenFile := resolved.TokenFile
 	hubURL := strings.TrimSpace(hubFlag)
 	if hubURL == "" {
 		hubURL = resolved.HubURL()

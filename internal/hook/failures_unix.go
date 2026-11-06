@@ -4,11 +4,12 @@ package hook
 
 import (
 	"golang.org/x/sys/unix"
-	"os"
 )
 
-func lockFailureLog(f *os.File) error { return unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB) }
-func lockFailureLogShared(f *os.File) error {
+func lockFailureLog(f interface{ Fd() uintptr }) error {
+	return unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB)
+}
+func lockFailureLogShared(f interface{ Fd() uintptr }) error {
 	return unix.Flock(int(f.Fd()), unix.LOCK_SH)
 }
-func unlockFailureLog(f *os.File) { _ = unix.Flock(int(f.Fd()), unix.LOCK_UN) }
+func unlockFailureLog(f interface{ Fd() uintptr }) { _ = unix.Flock(int(f.Fd()), unix.LOCK_UN) }

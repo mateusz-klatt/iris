@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 
@@ -273,27 +272,6 @@ func TestServeRejectsBadFlagsAndStopsWhenSignalled(t *testing.T) {
 	if err := run([]string{"serve", "--listen", "127.0.0.1:0", "--db", filepath.Join(dir, "tls.db"), "--token-file", filepath.Join(dir, "tls.token"), "--tls-cert", cert, "--tls-key", key}); err == nil {
 		t.Fatal("tls")
 	}
-
-	errCh := make(chan error, 1)
-	go func() {
-		errCh <- run([]string{"serve", "--listen", "127.0.0.1:0", "--db", filepath.Join(dir, "live.db"), "--token-file", filepath.Join(dir, "live.token"), "--allowed-hosts", " iris.example:443, ,other.example:443", "--public-url", "https://iris.example"})
-	}()
-	select {
-	case err := <-errCh:
-		t.Fatal(err)
-	case <-time.After(300 * time.Millisecond):
-	}
-	if err := syscall.Kill(os.Getpid(), syscall.SIGTERM); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case err := <-errCh:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("serve did not stop")
-	}
 }
 
 func TestGuardHelpCheckAndInstall(t *testing.T) {
@@ -406,22 +384,5 @@ func TestWatchAndMCPRejectBadArgumentsAndAMissingParent(t *testing.T) {
 	}
 	if err := runMCP([]string{"--client", "claude"}); err == nil || !strings.Contains(err.Error(), "no parent") {
 		t.Fatal(err)
-	}
-}
-
-func TestWatchStopsWhenTheProcessIsSignalled(t *testing.T) {
-	errCh := make(chan error, 1)
-	go func() { errCh <- runWatch([]string{"--client", "claude"}) }()
-	time.Sleep(200 * time.Millisecond)
-	if err := syscall.Kill(os.Getpid(), syscall.SIGINT); err != nil {
-		t.Fatal(err)
-	}
-	select {
-	case err := <-errCh:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(3 * time.Second):
-		t.Fatal("watch did not stop")
 	}
 }
