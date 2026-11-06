@@ -75,8 +75,28 @@ func (t *transaction) exec(q string, a ...any) (sql.Result, error) {
 	return t.conn.ExecContext(t.ctx, q, a...)
 }
 func (t *transaction) row(q string, a ...any) *sql.Row { return t.conn.QueryRowContext(t.ctx, q, a...) }
-func (t *transaction) rows(q string, a ...any) (*sql.Rows, error) {
-	return t.conn.QueryContext(t.ctx, q, a...)
+
+// queryRows records both decoding and iteration failures. Callers check Err after
+// iteration, so malformed rows cannot escape as a partially successful result.
+type queryRows struct {
+	*sql.Rows
+	scanErr error
+}
+
+func (r *queryRows) Scan(dst ...any) { r.scanErr = r.Rows.Scan(dst...) }
+func (r *queryRows) Next() bool      { return r.scanErr == nil && r.Rows.Next() }
+func (r *queryRows) Err() error {
+	if r.scanErr != nil {
+		return r.scanErr
+	}
+	return r.Rows.Err()
+}
+func (t *transaction) rows(q string, a ...any) (*queryRows, error) {
+	rows, err := t.conn.QueryContext(t.ctx, q, a...)
+	if err != nil {
+		return nil, err
+	}
+	return &queryRows{Rows: rows}, nil
 }
 func id(prefix string) string {
 	var b [16]byte
@@ -90,41 +110,31 @@ func newStreamID() string {
 }
 
 func Open(filename string, clock Clock) (*Store, error) {
+	return openDatabase(filename, clock, "sqlite")
+}
+
+// openDatabase permits tests to wrap the real driver at its I/O boundary.
+func openDatabase(filename string, clock Clock, driverName string) (*Store, error) {
 	if clock == nil {
 		clock = systemClock{time.Now()}
 	}
-	abs, err := filepath.Abs(filename)
+	abs, err := resolveDatabasePath(filename, filepath.EvalSymlinks)
 	if err != nil {
 		return nil, err
-	}
-	if err = os.MkdirAll(filepath.Dir(abs), 0700); err != nil {
-		return nil, err
-	}
-	if real, evalErr := filepath.EvalSymlinks(abs); evalErr == nil {
-		abs = real
-	} else if !errors.Is(evalErr, os.ErrNotExist) {
-		return nil, evalErr
-	} else {
-		parent, evalErr := filepath.EvalSymlinks(filepath.Dir(abs))
-		if evalErr != nil {
-			return nil, evalErr
-		}
-		abs = filepath.Join(parent, filepath.Base(abs))
 	}
 	lock, err := lockDatabase(abs + ".lock")
 	if err != nil {
 		return nil, err
 	}
-	file, err := os.OpenFile(abs, os.O_CREATE|os.O_RDWR, 0600)
+	if err = createDatabaseFile(abs); err != nil {
+		unlockDatabase(lock)
+		return nil, err
+	}
+	db, err := sql.Open(driverName, abs)
 	if err != nil {
 		unlockDatabase(lock)
 		return nil, err
 	}
-	if err = file.Close(); err != nil {
-		unlockDatabase(lock)
-		return nil, err
-	}
-	db, _ := sql.Open("sqlite", abs) // the statically registered driver opens lazily; I/O errors occur below
 	db.SetMaxOpenConns(1)
 	s := &Store{db: db, lock: lock, clock: clock, changed: make(chan struct{})}
 	for _, q := range []string{"PRAGMA foreign_keys=ON", "PRAGMA journal_mode=WAL", "PRAGMA synchronous=FULL", "PRAGMA busy_timeout=5000"} {
@@ -243,10 +253,7 @@ func (t *transaction) expire() error {
 	var old []expired
 	for rows.Next() {
 		var x expired
-		if err = rows.Scan(&x.f, &x.r); err != nil {
-			rows.Close()
-			return err
-		}
+		rows.Scan(&x.f, &x.r)
 		old = append(old, x)
 	}
 	err = rows.Err()
@@ -318,4 +325,34 @@ func (t *transaction) remember(e execution, key, route string, request any, resu
 	}
 	_, err = t.exec("INSERT INTO Operation VALUES(?,?,?,?)", e.AgentID, key, hash[:], string(body))
 	return err
+}
+
+func createDatabaseFile(filename string) error {
+	file, err := os.OpenFile(filename, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return err
+	}
+	return file.Close()
+}
+
+func resolveDatabasePath(filename string, evalLinks func(string) (string, error)) (string, error) {
+	abs, err := filepath.Abs(filename)
+	if err != nil {
+		return "", err
+	}
+	if err = os.MkdirAll(filepath.Dir(abs), 0700); err != nil {
+		return "", err
+	}
+	if real, evalErr := evalLinks(abs); evalErr == nil {
+		abs = real
+	} else if !errors.Is(evalErr, os.ErrNotExist) {
+		return "", evalErr
+	} else {
+		parent, evalErr := evalLinks(filepath.Dir(abs))
+		if evalErr != nil {
+			return "", evalErr
+		}
+		abs = filepath.Join(parent, filepath.Base(abs))
+	}
+	return abs, nil
 }

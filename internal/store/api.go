@@ -131,10 +131,7 @@ func (t *transaction) events(r Request) (map[string]any, error) {
 		for rows.Next() {
 			var seq int64
 			var kind string
-			if err = rows.Scan(&seq, &kind); err != nil {
-				rows.Close()
-				return nil, err
-			}
+			rows.Scan(&seq, &kind)
 			events = append(events, map[string]any{"cursor": seq, "kind": kind})
 		}
 		err = rows.Err()

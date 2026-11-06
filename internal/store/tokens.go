@@ -51,9 +51,7 @@ func (s *Store) ListTokens(ctx context.Context) ([]map[string]any, error) {
 			var name string
 			var created, count int64
 			var revoked, used sql.NullInt64
-			if err = rows.Scan(&name, &created, &revoked, &used, &count); err != nil {
-				return err
-			}
+			rows.Scan(&name, &created, &revoked, &used, &count)
 			out = append(out, map[string]any{"name": name, "created_ms": created, "revoked_ms": nullableMillis(revoked), "last_used_ms": nullableMillis(used), "requests": count})
 		}
 		return rows.Err()
