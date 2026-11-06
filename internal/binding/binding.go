@@ -119,6 +119,7 @@ func (r *Resolver) Resolve(ctx context.Context, handle string) (Bound, error) {
 func (r *Resolver) register(ctx context.Context, session string, a proc.Ancestor, single bool, rung int) (Bound, error) {
 	req := hubclient.SessionRequest{Client: r.Client, SessionID: session, Host: r.Host, CWD: r.CWD, Source: "mcp", ClientPID: a.PID, ClientPIDStartMS: a.StartMS, SingleSession: single}
 	if repo, err := gitinfo.Find(r.CWD); err == nil {
+		req.CommonDir = repo.CommonDir
 		req.Worktree = repo.Worktree
 		req.RemoteURL = repo.RemoteURL
 		req.RootCommit = repo.RootCommit

@@ -13,6 +13,7 @@ import (
 
 // SessionRequest is the body of POST /v1/sessions.
 type SessionRequest struct {
+	CommonDir        string `json:"common_dir"`
 	Generation       int    `json:"generation"`
 	Client           string `json:"client"`
 	SessionID        string `json:"session_id"`
@@ -219,6 +220,7 @@ func ValidateURL(raw string) error {
 
 // CheckRequest identifies a worktree without creating an Execution or taking claims.
 type CheckRequest struct {
+	CommonDir  string   `json:"common_dir"`
 	Host       string   `json:"host"`
 	Worktree   string   `json:"worktree"`
 	RemoteURL  string   `json:"remote_url"`

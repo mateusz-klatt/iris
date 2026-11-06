@@ -289,6 +289,7 @@ func (r Runner) sessionReq(ev Event, repo gitinfo.Repo) hubclient.SessionRequest
 		host, _ = os.Hostname()
 	}
 	return hubclient.SessionRequest{
+		CommonDir:        repo.CommonDir,
 		Client:           string(ev.Client),
 		SessionID:        ev.SessionID,
 		Host:             host,

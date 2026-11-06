@@ -14,6 +14,7 @@ import (
 
 // Request contains the version-one wire fields. Unknown client metadata is ignored.
 type Request struct {
+	CommonDir        string            `json:"common_dir"`
 	Status           map[string]string `json:"status"`
 	ReplyTo          string            `json:"reply_to"`
 	Q                string            `json:"q"`
@@ -121,17 +122,26 @@ func remoteAlias(raw string) string {
 func (t *transaction) repository(r Request) (string, error) {
 	// Machine-relative remotes are deliberately never global aliases.
 	local := "local:" + r.Host + ":" + strings.ReplaceAll(r.Worktree, "\\", "/")
+	aliases := []string{local}
+	if r.CommonDir != "" {
+		aliases = append(aliases, "gitdir:"+r.Host+":"+strings.ReplaceAll(r.CommonDir, "\\", "/"))
+	}
 	var repo, root string
-	err := t.row("SELECT r.id,r.root_commit FROM RepositoryAlias a JOIN Repository r ON r.id=a.repository_id WHERE a.alias=?", local).Scan(&repo, &root)
-	if err == nil {
-		if root == "" || r.RootCommit == "" || root == r.RootCommit {
+	var err error
+	for _, alias := range aliases {
+		err = t.row("SELECT r.id,r.root_commit FROM RepositoryAlias a JOIN Repository r ON r.id=a.repository_id WHERE a.alias=?", alias).Scan(&repo, &root)
+		if err == nil && (root == "" || r.RootCommit == "" || root == r.RootCommit) {
+			for _, key := range aliases {
+				if _, err = t.exec("INSERT OR IGNORE INTO RepositoryAlias VALUES(?,?)", key, repo); err != nil {
+					return "", err
+				}
+			}
 			return repo, nil
 		}
-		// A reused path with a contradictory root must not inherit the old namespace.
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return "", err
+		}
 		repo = ""
-	}
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return "", err
 	}
 	remote := remoteAlias(r.RemoteURL)
 	if remote != "" {
@@ -168,8 +178,10 @@ func (t *transaction) repository(r Request) (string, error) {
 			return "", err
 		}
 	}
-	if _, err = t.exec("INSERT OR IGNORE INTO RepositoryAlias VALUES(?,?)", local, repo); err != nil {
-		return "", err
+	for _, alias := range aliases {
+		if _, err = t.exec("INSERT OR IGNORE INTO RepositoryAlias VALUES(?,?)", alias, repo); err != nil {
+			return "", err
+		}
 	}
 	if remote != "" {
 		if _, err = t.exec("INSERT OR IGNORE INTO RepositoryAlias VALUES(?,?)", remote, repo); err != nil {

@@ -144,7 +144,7 @@ func Check(ctx context.Context, dir string, hub *hubclient.Client) (string, erro
 	if err != nil {
 		return "", err
 	}
-	result, err := hub.CheckPaths(ctx, hubclient.CheckRequest{Host: host, Worktree: repo.Worktree, RemoteURL: repo.RemoteURL, RootCommit: repo.RootCommit, Paths: paths})
+	result, err := hub.CheckPaths(ctx, hubclient.CheckRequest{CommonDir: repo.CommonDir, Host: host, Worktree: repo.Worktree, RemoteURL: repo.RemoteURL, RootCommit: repo.RootCommit, Paths: paths})
 	if err != nil {
 		return "", err
 	}
