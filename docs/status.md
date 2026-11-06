@@ -2,6 +2,11 @@
 
 Last updated 2026-11-06. Nothing is released.
 
+The hub runs at https://iris.klatt.ie behind Apache and Cloudflare, in place of the previous service.
+A fresh Claude Code session with the plugin registered there, used the MCP tools and edited a file
+through the hook. A `watch` stream stayed up through 125 s of idle time and delivered a notification
+32 ms after a message was sent. All clients share one token, and there are no rate quotas yet.
+
 ## First milestone
 
 From `docs/spec/requirements.md`:
@@ -44,6 +49,8 @@ the operator console. `.goreleaser.yaml` validates and cannot publish.
   passes `claude plugin validate`, and worked when loaded with `--plugin-dir`.
 - `iris doctor --live`, and running a service for real under launchd, `systemd --user` and Task Scheduler.
 - Package channels and signing (D15, stages 1 to 3).
+- 100% coverage. The gate is in CI and red on purpose: Go is at 68.9% and the console at about 92%.
+- A token per host, and rate limits on the public hub.
 - Translations of the new console strings, and layout polish.
 - Legal review of the clean-room record.
 
