@@ -34,8 +34,13 @@ func (c kimiClient) Install(l Layout, _ Plugins) error {
 	events := []string{"SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SessionEnd"}
 	var body strings.Builder
 	for _, event := range events {
+		command := hookShell(iris, Kimi, event)
+		if l.goos() == "windows" {
+			// Kimi's Windows spawning is undocumented: cmd is an unverified assumption.
+			command = hookCmd(iris, Kimi, event)
+		}
 		fmt.Fprintf(&body, "[[hooks]]\nevent = %s\ncommand = %s\ntimeout = %d\n\n",
-			tomlString(event), tomlString(hookShell(iris, Kimi, event)), eventTimeout(Kimi, event))
+			tomlString(event), tomlString(command), eventTimeout(Kimi, event))
 	}
 	block := wrapBlock(strings.TrimRight(body.String(), "\n"))
 	if err := validateHookKeys(block); err != nil {
@@ -73,7 +78,7 @@ func (c kimiClient) Canary(l Layout) (Invocation, error) {
 	if shell == "" {
 		return Invocation{}, ErrNotConfigured
 	}
-	return Invocation{Shell: shell}, nil
+	return Invocation{Shell: shell, Kind: clientShell(l.goos(), Kimi)}, nil
 }
 
 func tomlCommand(file, event string) string {

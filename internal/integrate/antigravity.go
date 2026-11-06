@@ -96,5 +96,5 @@ func (c antigravityClient) Canary(l Layout) (Invocation, error) {
 	if !strings.Contains(shell, "--event PreToolUse") {
 		return Invocation{}, ErrNotConfigured
 	}
-	return Invocation{Shell: shell}, nil
+	return Invocation{Shell: shell, Kind: clientShell(l.goos(), Antigravity)}, nil
 }

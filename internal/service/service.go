@@ -25,6 +25,8 @@ type Manager interface {
 	Install(ctx context.Context) error
 	Uninstall(ctx context.Context) error
 	Status(ctx context.Context) (Status, error)
+	Start(ctx context.Context) error
+	Stop(ctx context.Context) error
 }
 
 // Runner executes a host command and returns its combined output.
@@ -109,14 +111,3 @@ func xmlEscape(s string) string {
 	r := strings.NewReplacer("&", "&amp;", "<", "&lt;", ">", "&gt;", `"`, "&quot;")
 	return r.Replace(s)
 }
-
-// TaskCreateArgs is the Task Scheduler registration. The task runs at logon.
-func TaskCreateArgs(argv []string) []string {
-	return []string{"/Create", "/F", "/SC", "ONLOGON", "/TN", "Iris", "/TR", strings.Join(argv, " ")}
-}
-
-// TaskDeleteArgs removes the Iris task.
-func TaskDeleteArgs() []string { return []string{"/Delete", "/F", "/TN", "Iris"} }
-
-// TaskQueryArgs reads the Iris task.
-func TaskQueryArgs() []string { return []string{"/Query", "/TN", "Iris"} }

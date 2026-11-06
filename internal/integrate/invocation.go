@@ -8,7 +8,7 @@ import (
 )
 
 // Run executes the configured hook command with stdin. A shell command is
-// run by /bin/sh or cmd. The exit code is returned even when the process
+// run by its client's configured shell. The exit code is returned even when the process
 // exits non-zero. A missing binary is an error.
 func (in Invocation) Run(ctx context.Context, stdin []byte) ([]byte, int, error) {
 	cmd, err := in.start(ctx)
@@ -28,4 +28,12 @@ func (in Invocation) Run(ctx context.Context, stdin []byte) ([]byte, int, error)
 		return out.Bytes(), exit.ExitCode(), nil
 	}
 	return out.Bytes(), -1, err
+}
+
+// powershellExe prefers PowerShell 7 and falls back to Windows PowerShell.
+func powershellExe(look func(string) (string, error)) string {
+	if p, err := look("pwsh"); err == nil {
+		return p
+	}
+	return "powershell"
 }

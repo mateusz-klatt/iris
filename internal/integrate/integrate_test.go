@@ -299,7 +299,7 @@ func TestCodexCommandWindows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !in.Comspec {
+	if in.Kind != ShellCmd {
 		t.Fatal("windows canary is not a cmd.exe /C command")
 	}
 	want := `"C:\Program Files\iris\iris.exe" hook --client codex --event SessionStart`

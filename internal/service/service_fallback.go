@@ -25,3 +25,10 @@ func (unsupported) Uninstall(context.Context) error {
 func (unsupported) Status(context.Context) (Status, error) {
 	return Status{}, errors.New("iris service is not supported on this OS")
 }
+
+func (unsupported) Start(context.Context) error {
+	return errors.New("iris service is not supported on this OS")
+}
+func (unsupported) Stop(context.Context) error {
+	return errors.New("iris service is not supported on this OS")
+}

@@ -9,7 +9,9 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mateusz-klatt/iris/internal/config"
 	"github.com/mateusz-klatt/iris/internal/doctor"
+	"github.com/mateusz-klatt/iris/internal/hubclient"
 	"github.com/mateusz-klatt/iris/internal/integrate"
 )
 
@@ -148,5 +150,72 @@ func TestSetupLoopbackInstallsService(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "Files: none") {
 		t.Fatal(out.String())
+	}
+}
+
+func TestSetupEnvironmentGuidance(t *testing.T) {
+	cfg, err := config.Default()
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name, url, token, goos string
+		want                   bool
+	}{
+		{"defaults", hubclient.DefaultHubURL, cfg.TokenFile, "windows", false},
+		{"windows URL", "http://127.0.0.1:8787", cfg.TokenFile, "windows", true},
+		{"windows token", hubclient.DefaultHubURL, filepath.Join(t.TempDir(), "O'Brien", "token"), "windows", true},
+		{"unix URL", "https://hub.example", cfg.TokenFile, "linux", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var out bytes.Buffer
+			code := setup([]string{"--yes", "--hub-url", tc.url}, setupEnv{
+				out: &out, errw: &out, getenv: func(string) string { return "" }, tokenFile: tc.token,
+				layout:         integrate.Layout{Home: t.TempDir(), GOOS: tc.goos, Getenv: func(string) string { return "" }},
+				detect:         func(func(string) (string, error)) []string { return nil },
+				installService: func(string, string) error { return nil },
+				runDoctor: func(context.Context, doctor.Options) (doctor.Result, error) {
+					return doctor.Result{HubUp: true, TokenOK: true}, nil
+				},
+			})
+			text := out.String()
+			if code != 0 || strings.Contains(text, "Hooks need") != tc.want {
+				t.Fatalf("code %d\n%s", code, text)
+			}
+			if tc.want {
+				if !strings.Contains(text, "permanently") || !strings.Contains(text, "restart your clients") {
+					t.Fatal(text)
+				}
+				if tc.goos == "windows" && !strings.Contains(text, "[Environment]::SetEnvironmentVariable(") {
+					t.Fatal(text)
+				}
+				if tc.goos == "linux" && !strings.Contains(text, "export IRIS_HUB_URL='https://hub.example'") {
+					t.Fatal(text)
+				}
+				if tc.name == "windows token" && !strings.Contains(text, "O''Brien") {
+					t.Fatal(text)
+				}
+			}
+		})
+	}
+}
+
+func TestSetupServiceFailureEndsWithNextStep(t *testing.T) {
+	for _, installErr := range []error{errors.New("access denied"), nil} {
+		var out bytes.Buffer
+		code := setup([]string{"--yes"}, setupEnv{
+			out: &out, errw: &out, getenv: func(string) string { return "" }, tokenFile: filepath.Join(t.TempDir(), "hub.token"),
+			detect:         func(func(string) (string, error)) []string { return nil },
+			installService: func(string, string) error { return installErr },
+			runDoctor:      func(context.Context, doctor.Options) (doctor.Result, error) { return doctor.Result{}, nil },
+		})
+		text := out.String()
+		reason := "hub is unreachable after service installation"
+		if installErr != nil {
+			reason = installErr.Error()
+		}
+		if code != 1 || !strings.HasSuffix(text, "Service could not start: "+reason+"\nNext step: iris serve\n") {
+			t.Fatalf("code %d\n%s", code, text)
+		}
 	}
 }

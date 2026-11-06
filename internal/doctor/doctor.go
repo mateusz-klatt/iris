@@ -98,6 +98,9 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 	if err := applyFailures(&res, tokenFile); err != nil && res.HubDetail == "" {
 		res.HubDetail = "failure log: " + err.Error()
 	}
+	for i := range res.Report.Clients {
+		applyVersion(&res.Report.Clients[i])
+	}
 	if up && tokenOK {
 		if err := putReport(ctx, hubURL, token, res.Report, opt.HTTP); err != nil {
 			res.StoreError = err.Error()
@@ -133,7 +136,9 @@ func (r Result) Format() string {
 		fmt.Fprintf(&b, " (%s)", r.HubDetail)
 	}
 	b.WriteByte('\n')
-	if r.TokenOK {
+	if !r.HubUp {
+		b.WriteString("token: not checked\n")
+	} else if r.TokenOK {
 		b.WriteString("token: ok\n")
 	} else {
 		b.WriteString("token: not valid\n")
@@ -159,6 +164,11 @@ func checkClient(ctx context.Context, opt Options, c integrate.Client) ClientRep
 		if ver, err := commandVersion(ctx, bin); err == nil {
 			row.Version = ver
 		}
+	}
+	// A legacy Kimi binary never reads the Kimi Code integration directory.
+	if legacyKimi(row) {
+		applyVersion(&row)
+		return row
 	}
 	in, err := c.Canary(opt.Layout)
 	if err != nil {
