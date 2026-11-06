@@ -38,12 +38,8 @@ func runIntegrate(args []string) int {
 	plugins := integrate.ExecPlugins{}
 	code := 0
 	for _, name := range names {
-		c, ok := integrate.ByName(name)
-		if !ok {
-			fmt.Fprintf(os.Stderr, "unknown client %s\n", name)
-			code = 1
-			continue
-		}
+		// names are Canonical or integrate.Names, both of which ByName resolves.
+		c, _ := integrate.ByName(name)
 		var err error
 		if *remove {
 			err = c.Remove(layout, plugins)

@@ -179,10 +179,8 @@ func setup(args []string, env setupEnv) int {
 		if !foundSet[name] {
 			continue
 		}
-		c, ok := integrate.ByName(name)
-		if !ok {
-			continue
-		}
+		// integrate.Names is the only set that reaches this loop, and ByName resolves every one of them.
+		c, _ := integrate.ByName(name)
 		if err := c.Install(layout, env.plugins); err != nil {
 			fmt.Fprintf(env.errw, "%s: %v\n", name, err)
 			code = 1

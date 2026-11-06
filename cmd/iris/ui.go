@@ -5,8 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
-	"os/exec"
-	"runtime"
 	"time"
 )
 
@@ -24,15 +22,7 @@ func runUI(args []string) error {
 		return err
 	}
 	fmt.Println(link.URL)
-	var command *exec.Cmd
-	switch runtime.GOOS {
-	case "windows":
-		command = exec.Command("rundll32", "url.dll,FileProtocolHandler", link.URL)
-	case "darwin":
-		command = exec.Command("open", link.URL)
-	default:
-		command = exec.Command("xdg-open", link.URL)
-	}
+	command := browserCommand(link.URL)
 	if command.Start() == nil {
 		go command.Wait()
 	}
