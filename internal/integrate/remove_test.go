@@ -270,7 +270,7 @@ func TestRemoveDoesNotRecreateAFileDeletedByHand(t *testing.T) {
 	if _, err := os.Stat(files[0]); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("recreated: %v", err)
 	}
-	m, err := l.loadManifest()
+	m, err := loadManifest(l.StateDir)
 	if err != nil {
 		t.Fatal(err)
 	}
