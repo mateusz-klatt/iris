@@ -44,7 +44,12 @@ func TestConfigPrecedence(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "client.json"), []byte("broken"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := e.Load().TokenPath(); err == nil {
+	loaded := e.Load()
+	path, err := loaded.TokenPath()
+	if err != nil || path != token {
+		t.Fatalf("failure log lost its token path: %q %v", path, err)
+	}
+	if _, err = loaded.Token(); err == nil || loaded.HubURL() != "" {
 		t.Fatal("malformed config silently ignored")
 	}
 }
