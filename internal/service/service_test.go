@@ -11,7 +11,10 @@ func TestUnitText(t *testing.T) {
 	if !strings.Contains(unit, Marker) || !strings.Contains(unit, "ExecStart=/opt/iris serve --listen 127.0.0.1:7878 --token-file /home/a/token") {
 		t.Fatal(unit)
 	}
-	plist := string(LaunchdPlist(argv))
+	plist := string(LaunchdPlist(argv, "/logs/a&b.log"))
+	if !strings.Contains(plist, "<string>/logs/a&amp;b.log</string>") {
+		t.Fatal(plist)
+	}
 	if !strings.Contains(plist, Marker) || !strings.Contains(plist, "<string>/opt/iris</string>") || !strings.Contains(plist, "<string>serve</string>") {
 		t.Fatal(plist)
 	}
