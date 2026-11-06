@@ -236,3 +236,17 @@ func (c *Client) CheckPaths(ctx context.Context, req CheckRequest) (CheckRespons
 	err := c.post(ctx, "/v1/guard/check", req, &out)
 	return out, err
 }
+
+// ReconcileRequest carries an observed porcelain snapshot, never shell instructions.
+type ReconcileRequest struct {
+	ExecutionID string            `json:"execution_id"`
+	Generation  int               `json:"generation"`
+	Kind        string            `json:"kind"` // before records a baseline; after compares and records it.
+	Status      map[string]string `json:"status"`
+}
+
+func (c *Client) Reconcile(ctx context.Context, req ReconcileRequest) (CheckResponse, error) {
+	var out CheckResponse
+	err := c.post(ctx, "/v1/shell/reconcile", req, &out)
+	return out, err
+}
