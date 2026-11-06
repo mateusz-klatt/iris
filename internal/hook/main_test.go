@@ -18,6 +18,12 @@ func TestMain(m *testing.M) {
 			panic(err)
 		}
 	}
+	// An exported credential must not point hook failures at the real home.
+	for _, key := range []string{"IRIS_HUB_URL", "IRIS_TOKEN_FILE"} {
+		if err = os.Unsetenv(key); err != nil {
+			panic(err)
+		}
+	}
 	code := m.Run()
 	_ = os.RemoveAll(dir)
 	os.Exit(code)
