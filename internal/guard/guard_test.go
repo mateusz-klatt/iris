@@ -26,13 +26,24 @@ func git(t *testing.T, dir string, args ...string) string {
 	return string(out)
 }
 
+// realPath resolves what git resolves: /var is a link to /private/var on macOS, and the
+// temporary directory on Windows runners uses a short name.
+func realPath(t *testing.T, path string) string {
+	t.Helper()
+	resolved, err := filepath.EvalSymlinks(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resolved
+}
+
 func TestInstallRemove(t *testing.T) {
 	for _, custom := range []string{"", "relative hooks", "absolute"} {
 		t.Run(custom, func(t *testing.T) {
-			dir := t.TempDir()
+			dir := realPath(t, t.TempDir())
 			git(t, dir, "init")
 			git(t, dir, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "init")
-			linked := filepath.Join(t.TempDir(), "linked")
+			linked := filepath.Join(realPath(t, t.TempDir()), "linked")
 			git(t, dir, "worktree", "add", "-b", "linked", linked)
 			if custom != "" {
 				p := custom
