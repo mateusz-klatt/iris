@@ -83,7 +83,7 @@ func tomlCommand(file, event string) string {
 		return ""
 	}
 	body := file[start:end]
-	if !strings.Contains(body, `event = "`+event+`"`) && !strings.Contains(body, `event = "`+event+`"`) {
+	if !strings.Contains(body, `event = "`+event+`"`) {
 		return ""
 	}
 	for _, line := range strings.Split(body, "\n") {
