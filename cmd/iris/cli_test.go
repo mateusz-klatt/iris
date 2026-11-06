@@ -225,7 +225,7 @@ func TestServiceRejectsAMissingBinaryAndAMissingHome(t *testing.T) {
 	}
 
 	binDir := t.TempDir()
-	if err := os.WriteFile(filepath.Join(binDir, "iris"), []byte("#!/bin/sh\n"), 0755); err != nil {
+	if _, err := integrate.PlaceFake(binDir, "iris"); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", binDir)

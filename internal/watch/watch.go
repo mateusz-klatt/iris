@@ -145,6 +145,7 @@ func (r *Runner) Run(ctx context.Context) error {
 	}
 	return nil
 }
+
 // readFailure hides the error a read reports because ctx ended. That is a normal
 // stop, and either side of the select in connect can see it first.
 func readFailure(ctx context.Context, err error) error {
