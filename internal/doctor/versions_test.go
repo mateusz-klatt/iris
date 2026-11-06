@@ -32,7 +32,7 @@ func TestVersionBaselines(t *testing.T) {
 				row := ClientReport{Client: tc.client, Version: tc.version, Status: status, Detail: "existing detail"}
 				applyVersion(&row)
 				if tc.legacy {
-					if row.Status != StatusNeedsHuman || row.Detail != "legacy Kimi CLI; Iris needs Kimi Code 2 or later" {
+					if row.Status != StatusNeedsHuman || row.Detail != "Kimi Code older than version 2; Iris needs version 2 or later" {
 						t.Fatalf("%+v", row)
 					}
 					return

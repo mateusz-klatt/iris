@@ -484,7 +484,7 @@ func TestCanaryRunsWithoutATemporaryDirectory(t *testing.T) {
 	}
 }
 
-func TestLegacyKimiIsNamedBeforeItsConfiguration(t *testing.T) {
+func TestOldKimiIsNamedBeforeItsConfiguration(t *testing.T) {
 	bin, err := integrate.PlaceFake(t.TempDir(), "kimi")
 	if err != nil {
 		t.Fatal(err)
@@ -503,7 +503,7 @@ func TestLegacyKimiIsNamedBeforeItsConfiguration(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, row := range res.Report.Clients {
-		if row.Client == integrate.Kimi && (row.Status != StatusNeedsHuman || !strings.Contains(row.Detail, "legacy Kimi CLI")) {
+		if row.Client == integrate.Kimi && (row.Status != StatusNeedsHuman || !strings.Contains(row.Detail, "older than version 2")) {
 			t.Fatalf("%+v", row)
 		}
 	}

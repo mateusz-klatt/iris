@@ -168,8 +168,9 @@ func checkClient(ctx context.Context, opt Options, c integrate.Client) ClientRep
 			row.Version = ver
 		}
 	}
-	// A legacy Kimi binary never reads the Kimi Code integration directory.
-	if legacyKimi(row) {
+	// Iris is measured on Kimi Code 2. An older kimi, whether an early Kimi Code or the
+	// separate kimi-cli, says so here instead of reporting missing configuration.
+	if oldKimi(row) {
 		applyVersion(&row)
 		return row
 	}
