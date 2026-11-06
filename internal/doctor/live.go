@@ -2,6 +2,7 @@ package doctor
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"os/exec"
 	"time"
@@ -35,12 +36,9 @@ func LiveArgs(client, bin string) (string, []string, error) {
 }
 
 func runLive(ctx context.Context, opt Options, client string) error {
-	bin, err := opt.Layout.Binary(client)
-	if err != nil {
-		return err
-	}
-	name, args, err := LiveArgs(client, bin)
-	if err != nil {
+	bin, binErr := opt.Layout.Binary(client)
+	name, args, argsErr := LiveArgs(client, bin)
+	if err := errors.Join(binErr, argsErr); err != nil {
 		return err
 	}
 	if opt.LiveRun != nil {

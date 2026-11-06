@@ -31,8 +31,9 @@ type Snapshot struct {
 }
 
 // Nearest returns the ancestor of the current process that Iris records.
-func Nearest() (Ancestor, error) {
-	s, ok := NearestFrom(os.Getpid(), lookupOS)
+func Nearest() (Ancestor, error) { return nearest(os.Getpid(), lookupOS) }
+func nearest(self int, get func(int) (Snapshot, bool)) (Ancestor, error) {
+	s, ok := NearestFrom(self, get)
 	if !ok {
 		return Ancestor{}, ErrNotFound
 	}
@@ -106,6 +107,12 @@ func baseName(name string) string {
 // SingleSession recognizes only measured single-session launchers. In particular,
 // the Codex app-server and Cursor IDE are deliberately excluded.
 func SingleSession(a Ancestor, client string) bool {
+	return singleSession(a, client, os.ReadFile)
+}
+
+// singleSession reads the command line from /proc, so a Codex process is never
+// recognized on Windows or macOS and its session binds by another rung.
+func singleSession(a Ancestor, client string, read func(string) ([]byte, error)) bool {
 	switch client {
 	case "cursor":
 		return baseName(a.Name) == "cursor-agent"
@@ -117,7 +124,7 @@ func SingleSession(a Ancestor, client string) bool {
 		if baseName(a.Name) != "codex" {
 			return false
 		}
-		raw, err := os.ReadFile("/proc/" + strconv.Itoa(a.PID) + "/cmdline")
+		raw, err := read("/proc/" + strconv.Itoa(a.PID) + "/cmdline")
 		if err != nil {
 			return false
 		}

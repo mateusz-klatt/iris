@@ -20,10 +20,8 @@ func lookupOS(pid int) (Snapshot, bool) {
 
 	var info windows.PROCESS_BASIC_INFORMATION
 	var n uint32
-	err = windows.NtQueryInformationProcess(h, int32(windows.ProcessBasicInformation), unsafe.Pointer(&info), uint32(unsafe.Sizeof(info)), &n)
-	if err != nil {
-		return Snapshot{}, false
-	}
+	// Without a parent the walk stops here, which is the safe outcome of a failed query.
+	_ = windows.NtQueryInformationProcess(h, int32(windows.ProcessBasicInformation), unsafe.Pointer(&info), uint32(unsafe.Sizeof(info)), &n)
 	var created, exit, kernel, user windows.Filetime
 	_ = windows.GetProcessTimes(h, &created, &exit, &kernel, &user)
 	return Snapshot{

@@ -20,25 +20,26 @@ import (
 
 const runKey = `Software\Microsoft\Windows\CurrentVersion\Run`
 
-type registryValue struct{ name string }
+type registryValue struct{ key, name string }
 
-func (v registryValue) Read() (string, error) {
-	k, err := registry.OpenKey(registry.CURRENT_USER, runKey, registry.QUERY_VALUE)
+// present turns a missing key or value into success.
+func present(err error) error {
 	if errors.Is(err, registry.ErrNotExist) {
-		return "", nil
+		return nil
 	}
+	return err
+}
+func (v registryValue) Read() (string, error) {
+	k, err := registry.OpenKey(registry.CURRENT_USER, v.key, registry.QUERY_VALUE)
 	if err != nil {
-		return "", err
+		return "", present(err)
 	}
 	defer k.Close()
 	s, _, err := k.GetStringValue(v.name)
-	if errors.Is(err, registry.ErrNotExist) {
-		return "", nil
-	}
-	return s, err
+	return s, present(err)
 }
 func (v registryValue) Write(s string) error {
-	k, _, err := registry.CreateKey(registry.CURRENT_USER, runKey, registry.SET_VALUE)
+	k, _, err := registry.CreateKey(registry.CURRENT_USER, v.key, registry.SET_VALUE)
 	if err != nil {
 		return err
 	}
@@ -46,19 +47,12 @@ func (v registryValue) Write(s string) error {
 	return k.SetStringValue(v.name, s)
 }
 func (v registryValue) Remove() error {
-	k, err := registry.OpenKey(registry.CURRENT_USER, runKey, registry.SET_VALUE)
-	if errors.Is(err, registry.ErrNotExist) {
-		return nil
-	}
+	k, err := registry.OpenKey(registry.CURRENT_USER, v.key, registry.SET_VALUE)
 	if err != nil {
-		return err
+		return present(err)
 	}
 	defer k.Close()
-	err = k.DeleteValue(v.name)
-	if errors.Is(err, registry.ErrNotExist) {
-		return nil
-	}
-	return err
+	return present(k.DeleteValue(v.name))
 }
 
 // Host uses HKCU Run, which requires no administrator rights. argv is iris serve.
@@ -78,12 +72,28 @@ func Host(_, _ string, argv []string) Manager {
 			listen = argv[i+1]
 		}
 	}
-	return autostartManager{value: registryValue{"Iris"}, command: strings.Join(parts, " "), process: detachedHub{argv: argv, dir: filepath.Dir(db), url: "http://" + listen + "/v1/status"}}
+	return autostartManager{
+		value:   registryValue{runKey, "Iris"},
+		command: strings.Join(parts, " "),
+		process: detachedHub{argv: argv, dir: filepath.Dir(db), stem: hubStem(db), url: "http://" + listen + "/v1/status"},
+		legacy:  scheduledTask{ExecRunner{}},
+	}
+}
+
+// hubStem names the process files of one database, so two hubs sharing a directory
+// keep separate identities. The default database keeps the names it has always had,
+// which lets an upgrade stop a hub that an earlier release started.
+func hubStem(db string) string {
+	base := filepath.Base(db)
+	if base == "hub.db" {
+		return "hub"
+	}
+	return base + ".hub"
 }
 
 type detachedHub struct {
-	argv     []string
-	dir, url string
+	argv           []string
+	dir, stem, url string
 }
 type processIdentity struct {
 	PID     uint32
@@ -94,6 +104,29 @@ func creationTime(h windows.Handle) (uint64, error) {
 	var c, e, k, u windows.Filetime
 	err := windows.GetProcessTimes(h, &c, &e, &k, &u)
 	return uint64(c.HighDateTime)<<32 | uint64(c.LowDateTime), err
+}
+func (p detachedHub) path(suffix string) string { return filepath.Join(p.dir, p.stem+suffix) }
+func processCreated(process *os.Process) (uint64, error) {
+	var created uint64
+	var timesErr error
+	err := process.WithHandle(func(handle uintptr) {
+		created, timesErr = creationTime(windows.Handle(handle))
+	})
+	return created, errors.Join(err, timesErr)
+}
+
+// record writes the identity Stop relies on. A hub that cannot be identified could
+// never be stopped safely, so it does not keep running.
+func (p detachedHub) record(process *os.Process, created func(*os.Process) (uint64, error)) error {
+	at, err := created(process)
+	if err == nil {
+		raw, _ := json.Marshal(processIdentity{uint32(process.Pid), at})
+		err = os.WriteFile(p.path(".pid"), raw, 0600)
+	}
+	if err != nil {
+		_ = process.Kill()
+	}
+	return err
 }
 func (p detachedHub) Responds(ctx context.Context) bool {
 	ctx, cancel := context.WithTimeout(ctx, 300*time.Millisecond)
@@ -113,7 +146,7 @@ func (p detachedHub) locked(f func() error) error {
 	if err := os.MkdirAll(p.dir, 0700); err != nil {
 		return err
 	}
-	file, err := os.OpenFile(filepath.Join(p.dir, "hub-process.lock"), os.O_CREATE|os.O_RDWR, 0600)
+	file, err := os.OpenFile(p.path("-process.lock"), os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return err
 	}
@@ -137,7 +170,7 @@ func (p detachedHub) Start(ctx context.Context) error {
 			windows.CloseHandle(h)
 			return nil
 		}
-		log, err := os.OpenFile(filepath.Join(p.dir, "hub.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+		log, err := os.OpenFile(p.path(".log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 		if err != nil {
 			return err
 		}
@@ -150,33 +183,14 @@ func (p detachedHub) Start(ctx context.Context) error {
 		}
 		// Keep the process handle open until its creation time has been recorded.
 		defer cmd.Process.Release()
-		var created uint64
-		var identityErr error
-		err = cmd.Process.WithHandle(func(handle uintptr) {
-			created, identityErr = creationTime(windows.Handle(handle))
-		})
-		if err == nil {
-			err = identityErr
-		}
-		if err != nil {
-			_ = cmd.Process.Kill()
-			return err
-		}
-		raw, err := json.Marshal(processIdentity{uint32(cmd.Process.Pid), created})
-		if err == nil {
-			err = os.WriteFile(filepath.Join(p.dir, "hub.pid"), raw, 0600)
-		}
-		if err != nil {
-			_ = cmd.Process.Kill()
-		}
-		return err
+		return p.record(cmd.Process, processCreated)
 	})
 }
 
 // openRecorded verifies creation time using the SAME handle later used to stop
 // the process, so PID reuse between checking and termination cannot kill a peer.
 func (p detachedHub) openRecorded() (windows.Handle, error) {
-	raw, err := os.ReadFile(filepath.Join(p.dir, "hub.pid"))
+	raw, err := os.ReadFile(p.path(".pid"))
 	if errors.Is(err, os.ErrNotExist) {
 		return 0, nil
 	}
@@ -197,21 +211,24 @@ func (p detachedHub) openRecorded() (windows.Handle, error) {
 	if err != nil {
 		return 0, err
 	}
-	created, err := creationTime(h)
-	if err != nil {
-		windows.CloseHandle(h)
-		return 0, err
-	}
-	state, err := windows.WaitForSingleObject(h, 0)
-	if err != nil {
-		windows.CloseHandle(h)
-		return 0, err
-	}
-	if created != id.Created || state == windows.WAIT_OBJECT_0 {
+	// Either call failing leaves a value that does not match, so the process is not ours.
+	created, _ := creationTime(h)
+	state, _ := windows.WaitForSingleObject(h, 0)
+	if created != id.Created || state != uint32(windows.WAIT_TIMEOUT) {
 		windows.CloseHandle(h)
 		return 0, nil
 	}
 	return h, nil
+}
+
+// terminate judges by the wait, not the call: terminating a process that has
+// already exited fails, and that hub has stopped all the same.
+func terminate(h windows.Handle, waitMS uint32) error {
+	_ = windows.TerminateProcess(h, 0)
+	if state, _ := windows.WaitForSingleObject(h, waitMS); state != windows.WAIT_OBJECT_0 {
+		return errors.New("hub did not stop")
+	}
+	return nil
 }
 func (p detachedHub) Stop(_ context.Context) error {
 	return p.locked(func() error {
@@ -219,21 +236,23 @@ func (p detachedHub) Stop(_ context.Context) error {
 		if err != nil {
 			return err
 		}
-		if h != 0 {
-			defer windows.CloseHandle(h)
-			if err := windows.TerminateProcess(h, 0); err != nil {
-				return err
-			}
-			if state, err := windows.WaitForSingleObject(h, 5000); err != nil {
-				return err
-			} else if state != windows.WAIT_OBJECT_0 {
-				return errors.New("hub did not stop")
-			}
+		if h == 0 {
+			return p.forget(nil)
 		}
-		err = os.Remove(filepath.Join(p.dir, "hub.pid"))
-		if errors.Is(err, os.ErrNotExist) {
-			return nil
-		}
-		return err
+		defer windows.CloseHandle(h)
+		return p.forget(terminate(h, 5000))
 	})
+}
+
+// forget drops the identity once the hub is gone. A hub that did not stop keeps it,
+// so a later stop can still find the process.
+func (p detachedHub) forget(stopErr error) error {
+	if stopErr != nil {
+		return stopErr
+	}
+	err := os.Remove(p.path(".pid"))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
 }

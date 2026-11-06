@@ -38,13 +38,11 @@ func statusValue(status []byte, key string) string {
 
 func argv0(pid int) string {
 	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cmdline")
-	if err != nil || len(b) == 0 {
+	if err != nil {
 		return ""
 	}
-	if i := strings.IndexByte(string(b), 0); i >= 0 {
-		b = b[:i]
-	}
-	return string(b)
+	first, _, _ := strings.Cut(string(b), "\x00")
+	return first
 }
 
 func startMS(pid int) (int64, error) {
@@ -52,7 +50,11 @@ func startMS(pid int) (int64, error) {
 	if err != nil {
 		return 0, err
 	}
-	_, ticks, err := parseStat(string(b))
+	return startFrom(string(b), clock)
+}
+
+func startFrom(stat string, clock func() (int64, int64, error)) (int64, error) {
+	_, ticks, err := parseStat(stat)
 	if err != nil {
 		return 0, err
 	}
@@ -90,30 +92,30 @@ var (
 
 func clock() (boot, tick int64, err error) {
 	clockOnce.Do(func() {
-		b, readErr := os.ReadFile("/proc/stat")
-		if readErr != nil {
-			clockErr = readErr
-			return
-		}
-		for _, line := range strings.Split(string(b), "\n") {
-			if strings.HasPrefix(line, "btime ") {
-				clockBoot, clockErr = strconv.ParseInt(strings.TrimSpace(line[len("btime "):]), 10, 64)
-				break
-			}
-		}
-		if clockBoot == 0 && clockErr == nil {
-			clockErr = os.ErrNotExist
-		}
-		clockTick = clkTck()
+		clockBoot, clockErr = bootTime(os.ReadFile)
+		clockTick = clkTck(os.ReadFile)
 	})
 	return clockBoot, clockTick, clockErr
 }
 
+func bootTime(read func(string) ([]byte, error)) (int64, error) {
+	b, err := read("/proc/stat")
+	if err != nil {
+		return 0, err
+	}
+	for _, line := range strings.Split(string(b), "\n") {
+		if strings.HasPrefix(line, "btime ") {
+			return strconv.ParseInt(strings.TrimSpace(line[len("btime "):]), 10, 64)
+		}
+	}
+	return 0, os.ErrNotExist
+}
+
 // clkTck reads AT_CLKTCK from the auxiliary vector. Linux exposes /proc
 // starttime in these ticks. 100 is the userspace ABI default.
-func clkTck() int64 {
+func clkTck(read func(string) ([]byte, error)) int64 {
 	const atClkTck = 17
-	b, err := os.ReadFile("/proc/self/auxv")
+	b, err := read("/proc/self/auxv")
 	if err != nil {
 		return 100
 	}
