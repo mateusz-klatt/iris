@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path"
+	"strconv"
 	"strings"
 )
 
@@ -100,4 +101,38 @@ func baseName(name string) string {
 	name = strings.ToLower(path.Base(name))
 	name = strings.TrimSuffix(name, ".exe")
 	return name
+}
+
+// ParentUnchanged detects reparenting, including orphan adoption after a wrapper exits.
+func ParentUnchanged(original int) bool { return os.Getppid() == original && original > 1 }
+
+// SingleSession recognizes only measured single-session launchers. In particular,
+// the Codex app-server and Cursor IDE are deliberately excluded.
+func SingleSession(a Ancestor, client string) bool {
+	switch client {
+	case "cursor":
+		return baseName(a.Name) == "cursor-agent"
+	case "antigravity":
+		return baseName(a.Name) == "antigravity" || baseName(a.Name) == "agy"
+	case "kimi":
+		return baseName(a.Name) == "kimi" || baseName(a.Name) == "kimi-code"
+	case "codex":
+		if baseName(a.Name) != "codex" {
+			return false
+		}
+		raw, err := os.ReadFile("/proc/" + strconv.Itoa(a.PID) + "/cmdline")
+		if err != nil {
+			return false
+		}
+		args := strings.Split(string(raw), "\x00")
+		for _, arg := range args[1:] {
+			if arg == "app-server" {
+				return false
+			}
+			if arg == "exec" {
+				return true
+			}
+		}
+	}
+	return false
 }
