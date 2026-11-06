@@ -2,7 +2,7 @@
 # only for themselves. Nothing in Iris links C code.
 GO ?= go
 
-.PHONY: test race fixtures build
+.PHONY: test race fixtures build web
 
 test:
 	$(GO) vet ./...
@@ -16,3 +16,12 @@ fixtures:
 
 build:
 	CGO_ENABLED=0 $(GO) build -trimpath -o iris ./cmd/iris
+
+# Rebuild the embedded console. The placeholder in internal/webui/dist is what
+# `go build` uses when Node has not run; this target replaces that tree.
+web:
+	npm ci --prefix web
+	npm run build --prefix web
+	rm -rf internal/webui/dist
+	mkdir -p internal/webui/dist
+	cp -a web/dist/. internal/webui/dist/
