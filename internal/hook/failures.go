@@ -137,6 +137,24 @@ func boundedLabel(label string) string {
 	return label
 }
 
+// logFile is what the failure log needs from a file. Once a file is open its calls
+// cannot be made to fail from outside, and the log must still fail safely when they do.
+type logFile interface {
+	io.Reader
+	io.Writer
+	io.Seeker
+	io.ReaderAt
+	io.WriterAt
+	io.Closer
+	Stat() (os.FileInfo, error)
+	Truncate(int64) error
+	Fd() uintptr
+}
+
+var openFailureLog = func(path string, flag int, perm os.FileMode) (logFile, error) {
+	return os.OpenFile(path, flag, perm)
+}
+
 func failurePath(tokenFile string) string {
 	return filepath.Join(filepath.Dir(tokenFile), "hook-failures.log")
 }
@@ -150,7 +168,7 @@ func appendFailure(tokenFile string, entry Failure) error {
 	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return err
 	}
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0600)
+	f, err := openFailureLog(path, os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
 		return err
 	}
@@ -218,7 +236,7 @@ func ReadRecentFailures(tokenFile string, limit int) ([]Failure, error) {
 	if !info.Mode().IsRegular() {
 		return nil, errors.New("failure log is not regular")
 	}
-	f, err := os.Open(path)
+	f, err := openFailureLog(path, os.O_RDONLY, 0)
 	if err != nil {
 		return nil, err
 	}

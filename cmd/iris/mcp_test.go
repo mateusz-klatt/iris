@@ -17,6 +17,10 @@ import (
 
 func TestMCPStdio(t *testing.T) {
 	if os.Getenv("IRIS_TEST_MCP_CHILD") == "1" {
+		// TestMain clears inherited credentials. The parent passed the fixture
+		// hub through names TestMain does not touch.
+		_ = os.Setenv("IRIS_HUB_URL", os.Getenv("IRIS_CHILD_HUB_URL"))
+		_ = os.Setenv("IRIS_TOKEN_FILE", os.Getenv("IRIS_CHILD_TOKEN_FILE"))
 		if err := runMCP([]string{"--client", "claude"}); err != nil {
 			os.Exit(2)
 		}
@@ -37,7 +41,7 @@ func TestMCPStdio(t *testing.T) {
 	}
 	exe, _ := os.Executable()
 	cmd := exec.Command(exe, "-test.run=^TestMCPStdio$")
-	cmd.Env = append(os.Environ(), "IRIS_TEST_MCP_CHILD=1", "IRIS_EXECUTION=", "CLAUDE_CODE_SESSION_ID=mcp-only-test", "COPILOT_AGENT_SESSION_ID=wrong-inherited", "IRIS_HUB_URL="+httpServer.URL, "IRIS_TOKEN_FILE="+token)
+	cmd.Env = append(os.Environ(), "IRIS_TEST_MCP_CHILD=1", "IRIS_EXECUTION=", "CLAUDE_CODE_SESSION_ID=mcp-only-test", "COPILOT_AGENT_SESSION_ID=wrong-inherited", "IRIS_CHILD_HUB_URL="+httpServer.URL, "IRIS_CHILD_TOKEN_FILE="+token)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	client := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil)

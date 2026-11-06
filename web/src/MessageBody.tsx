@@ -44,7 +44,7 @@ export function MessageBody({ body }: { body: string }) {
         if (src === undefined) {
           return <span className="markdown-image-alt">{alt}</span>;
         }
-        return <img src={src} alt={alt ?? ""} title={title} />;
+        return <img src={src} alt={alt} title={title} />;
       },
       pre({ children }) {
         return (

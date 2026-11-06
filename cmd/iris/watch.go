@@ -6,7 +6,6 @@ import (
 	"flag"
 	"github.com/mateusz-klatt/iris/internal/binding"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
-	"github.com/mateusz-klatt/iris/internal/proc"
 	"github.com/mateusz-klatt/iris/internal/watch"
 	"os"
 	"os/signal"
@@ -25,7 +24,7 @@ func runWatch(args []string) error {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	parent, err := proc.WatchParent()
+	parent, err := watchParent()
 	if err != nil {
 		return err
 	}

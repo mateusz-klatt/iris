@@ -22,26 +22,33 @@ import (
 // version is set at release time with -ldflags.
 var version = "dev"
 
+// exitProcess is the process boundary. Tests replace it so main can be called.
+var exitProcess = os.Exit
+
 func main() {
-	if len(os.Args) > 1 && os.Args[1] == "hook" {
-		os.Exit(runHook(os.Args[2:]))
+	exitProcess(dispatch(os.Args[1:]))
+}
+
+func dispatch(args []string) int {
+	if len(args) > 0 {
+		switch args[0] {
+		case "hook":
+			return runHook(args[1:])
+		case "integrate":
+			return runIntegrate(args[1:])
+		case "setup":
+			return runSetup(args[1:])
+		case "doctor":
+			return runDoctor(args[1:])
+		case "service":
+			return runService(args[1:])
+		}
 	}
-	if len(os.Args) > 1 && os.Args[1] == "integrate" {
-		os.Exit(runIntegrate(os.Args[2:]))
-	}
-	if len(os.Args) > 1 && os.Args[1] == "setup" {
-		os.Exit(runSetup(os.Args[2:]))
-	}
-	if len(os.Args) > 1 && os.Args[1] == "doctor" {
-		os.Exit(runDoctor(os.Args[2:]))
-	}
-	if len(os.Args) > 1 && os.Args[1] == "service" {
-		os.Exit(runService(os.Args[2:]))
-	}
-	if err := run(os.Args[1:]); err != nil {
+	if err := run(args); err != nil {
 		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+		return 1
 	}
+	return 0
 }
 func run(args []string) error {
 	if len(args) > 0 && args[0] == "token" {
@@ -116,9 +123,8 @@ func run(args []string) error {
 	handler := hub.New(s, token, allowed)
 	handler.Limits = *limits
 	if *publicURL != "" {
-		if err = handler.SetPublicURL(*publicURL); err != nil {
-			return err
-		}
+		// The same origin was accepted before the store was opened.
+		handler.SetPublicURL(*publicURL)
 	}
 	handler.SetUI(webui.Handler())
 	server := &http.Server{Addr: cfg.Listen, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}

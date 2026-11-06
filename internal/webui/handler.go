@@ -17,10 +17,20 @@ var dist embed.FS
 // so a refresh away from / still loads the app. Mount API routes elsewhere:
 // this handler does not know them.
 func Handler() http.Handler {
-	root, err := fs.Sub(dist, "dist")
+	return handlerFrom(dist)
+}
+
+// handlerFrom serves console files from bundle/dist. Tests pass a MapFS so an
+// embedded asset can be fetched and a bundle without index.html can 404.
+func handlerFrom(bundle fs.FS) http.Handler {
+	root, err := fs.Sub(bundle, "dist")
 	if err != nil {
 		panic(err)
 	}
+	return handler(root)
+}
+
+func handler(root fs.FS) http.Handler {
 	files := http.FileServer(http.FS(root))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method != http.MethodGet && r.Method != http.MethodHead {

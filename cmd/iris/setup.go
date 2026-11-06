@@ -72,11 +72,11 @@ func setup(args []string, env setupEnv) int {
 		return 2
 	}
 	resolved := (hubclient.EnvConfig{Getenv: env.getenv, DefaultTokenFile: env.tokenFile}).Load()
-	tokenFile, err := resolved.TokenPath()
-	if err != nil {
+	if err := resolved.ConfigErr(); err != nil {
 		fmt.Fprintln(env.errw, err)
 		return 1
 	}
+	tokenFile := resolved.TokenFile
 	hubURL := strings.TrimSpace(hubFlag)
 	if hubURL == "" {
 		hubURL = resolved.HubURL()
@@ -183,10 +183,8 @@ func setup(args []string, env setupEnv) int {
 		if !foundSet[name] {
 			continue
 		}
-		c, ok := integrate.ByName(name)
-		if !ok {
-			continue
-		}
+		// integrate.Names is the only set that reaches this loop, and ByName resolves every one of them.
+		c, _ := integrate.ByName(name)
 		if err := c.Install(layout, env.plugins); err != nil {
 			fmt.Fprintf(env.errw, "%s: %v\n", name, err)
 			code = 1

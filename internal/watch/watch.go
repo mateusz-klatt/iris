@@ -16,6 +16,9 @@ import (
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 )
 
+// maxBackoff caps reconnect delay. Tests shrink it so the cap is observable.
+var maxBackoff = 30 * time.Second
+
 type Frame struct {
 	Stream string `json:"stream"`
 	Cursor int64  `json:"cursor"`
@@ -104,7 +107,6 @@ func (r *Runner) Run(ctx context.Context) error {
 	if delay <= 0 {
 		delay = time.Second
 	}
-	base := delay
 	for ctx.Err() == nil {
 		call, cancel := context.WithTimeout(ctx, 5*time.Second)
 		b, err := r.Resolver.Resolve(call, "")
@@ -137,15 +139,22 @@ func (r *Runner) Run(ctx context.Context) error {
 		}
 		tick.Stop()
 		delay *= 2
-		if delay > 30*time.Second {
-			delay = 30 * time.Second
-		}
-		if err == nil {
-			delay = base
+		if delay > maxBackoff {
+			delay = maxBackoff
 		}
 	}
 	return nil
 }
+
+// readFailure hides the error a read reports because ctx ended. That is a normal
+// stop, and either side of the select in connect can see it first.
+func readFailure(ctx context.Context, err error) error {
+	if ctx.Err() != nil {
+		return nil
+	}
+	return err
+}
+
 func (r *Runner) connect(ctx context.Context, b binding.Bound, cursor *int64, stream *string, c *Coalescer) error {
 	h := r.Resolver.Hub
 	base := strings.TrimRight(h.Config.HubURL(), "/")
@@ -202,7 +211,7 @@ func (r *Runner) connect(ctx context.Context, b binding.Bound, cursor *int64, st
 		case <-ctx.Done():
 			return nil
 		case err := <-fail:
-			return err
+			return readFailure(ctx, err)
 		case now := <-tick.C:
 			if err = c.Flush(now); err != nil {
 				return err
