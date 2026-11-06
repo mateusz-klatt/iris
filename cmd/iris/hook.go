@@ -34,7 +34,7 @@ func runHookIO(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv 
 		Getenv:     getenv,
 		// Load client.json inside Run. A stalled or panicking read must stay
 		// inside the deadline and the panic recovery, or the hook breaks D3.
-		Hub:      &hubclient.Client{Config: hubclient.EnvConfig{Getenv: getenv}},
+		Hub:      &hubclient.Client{Config: hubclient.EnvConfig{Getenv: getenv}, HTTP: hubclient.HedgedClient()},
 		Deadline: deadline,
 	}.Run()
 	_, _ = stdout.Write(out.Stdout)
