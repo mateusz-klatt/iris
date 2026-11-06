@@ -32,6 +32,10 @@ func TestConfigPrecedence(t *testing.T) {
 		t.Fatal("configuration reread", reads)
 	}
 	env["IRIS_HUB_URL"] = "https://env.example"
+	r = e.Load()
+	if r.HubURL() != "https://env.example" || r.TokenFile != filepath.Join(dir, "other.token") {
+		t.Fatal("URL override changed file token", r)
+	}
 	env["IRIS_TOKEN_FILE"] = token
 	r = e.Load()
 	if r.HubURL() != "https://env.example" || r.Source != "environment (IRIS_HUB_URL)" || r.TokenFile != token {

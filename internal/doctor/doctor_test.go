@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mateusz-klatt/iris/internal/hubclient"
 	"github.com/mateusz-klatt/iris/internal/integrate"
 )
 
@@ -308,5 +309,27 @@ func doctorLayout(t *testing.T) integrate.Layout {
 			return "", errors.New("not found")
 		},
 		GOOS: runtime.GOOS,
+	}
+}
+
+func TestDoctorReportsConfigurationSource(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(200) }))
+	defer srv.Close()
+	home := t.TempDir()
+	layout := integrate.Layout{Home: home, GOOS: "linux", Getenv: func(string) string { return "" }, LookPath: func(string) (string, error) { return "", os.ErrNotExist }}
+	token := defaultTokenFile(layout)
+	path := filepath.Join(filepath.Dir(token), "client.json")
+	if err := hubclient.WriteConfig(path, hubclient.FileConfig{Hub: srv.URL, TokenFile: token}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(token, []byte("secret"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Run(context.Background(), Options{Layout: layout, HTTP: srv.Client()})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.HubURL != srv.URL || res.HubSource != "file ("+path+")" || !strings.Contains(res.Format(), "source: file (") {
+		t.Fatal(res.Format())
 	}
 }

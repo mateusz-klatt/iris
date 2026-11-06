@@ -1,6 +1,8 @@
 package hub
 
 import (
+	"bytes"
+	"log"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -41,5 +43,27 @@ func TestStatusAndBodyLimits(t *testing.T) {
 				t.Fatal(path, chunked, w.Code, w.Body.String())
 			}
 		}
+	}
+}
+
+func TestAuthenticationLogRedactsCredentials(t *testing.T) {
+	h, s := setup(t)
+	var output bytes.Buffer
+	before := log.Writer()
+	log.SetOutput(&output)
+	defer log.SetOutput(before)
+	r := httptest.NewRequest("GET", s.URL+"/v1/agents", nil)
+	r.Header.Set("Authorization", "Bearer do-not-log-this-token")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != 401 || !strings.Contains(output.String(), "authentication failed") || strings.Contains(output.String(), "do-not-log-this-token") {
+		t.Fatal(w.Code, output.String())
+	}
+	r = httptest.NewRequest("GET", s.URL+"/", nil)
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	csp := w.Header().Get("Content-Security-Policy")
+	if !strings.Contains(csp, "script-src 'self'") || !strings.Contains(csp, "frame-ancestors 'none'") || strings.Contains(csp, "unsafe-inline") {
+		t.Fatal(csp)
 	}
 }

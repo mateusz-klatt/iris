@@ -1,8 +1,10 @@
 package store
 
 import (
+	"context"
 	"fmt"
 	"testing"
+	"time"
 )
 
 func TestClaimLimit(t *testing.T) {
@@ -19,5 +21,17 @@ func TestClaimLimit(t *testing.T) {
 	rows := call(t, s, "claims", Request{RepositoryID: out["repository_id"].(string)})
 	if len(rows["claims"].([]map[string]any)) != 500 {
 		t.Fatal(rows)
+	}
+}
+
+func TestCanceledTransactionsLeaveConnectionClean(t *testing.T) {
+	s, _, _ := testStore(t)
+	for i := 0; i < 200; i++ {
+		ctx, cancel := context.WithCancel(context.Background())
+		timer := time.AfterFunc(time.Duration(i%10)*time.Microsecond, cancel)
+		_ = s.transact(ctx, func(*transaction) error { return nil })
+		timer.Stop()
+		cancel()
+		call(t, s, "status", Request{})
 	}
 }

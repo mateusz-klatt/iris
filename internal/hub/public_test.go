@@ -1,9 +1,11 @@
 package hub
 
 import (
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strings"
 	"testing"
 	"time"
 )
@@ -99,5 +101,62 @@ func TestPublicURLValidation(t *testing.T) {
 		if err := New(nil, "", nil).SetPublicURL(raw); err == nil {
 			t.Fatal(raw)
 		}
+	}
+}
+
+func TestPublicLinksOriginsAndTickets(t *testing.T) {
+	h, s := setup(t)
+	if err := h.SetPublicURL("https://iris.klatt.ie"); err != nil {
+		t.Fatal(err)
+	}
+	a := register(t, s, 1)
+	call := func(method, path, origin string, body string) *httptest.ResponseRecorder {
+		r := httptest.NewRequest(method, "http://iris.klatt.ie"+path, strings.NewReader(body))
+		r.RemoteAddr = "127.0.0.1:4321"
+		r.Header.Set("Authorization", "Bearer test-secret")
+		r.Header.Set("X-Forwarded-Proto", "https")
+		r.Header.Set("Origin", origin)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		return w
+	}
+	for _, origin := range []string{"https://iris.klatt.ie", "http://iris.klatt.ie", "https://evil.example"} {
+		w := call("POST", "/v1/ui/links", origin, "{}")
+		if origin == "https://iris.klatt.ie" {
+			if w.Code != 200 || !strings.Contains(w.Body.String(), "https://iris.klatt.ie/ui/login?code=") {
+				t.Fatal(w.Code, w.Body.String())
+			}
+		} else if w.Code != 401 {
+			t.Fatal(origin, w.Code)
+		}
+	}
+	raw, _ := json.Marshal(authority(a))
+	w := call("POST", "/v1/wake-tickets", "https://iris.klatt.ie", string(raw))
+	if w.Code != 200 || !strings.Contains(w.Body.String(), "wss://iris.klatt.ie/v1/watch?") {
+		t.Fatal(w.Code, w.Body.String())
+	}
+}
+
+func TestLocalLoginExpiryAndForwarding(t *testing.T) {
+	h, s := setup(t)
+	now := time.Now()
+	h.now = func() time.Time { return now }
+	link := request(t, s, "POST", "/v1/ui/links", map[string]any{}, 200)["url"].(string)
+	r := httptest.NewRequest("GET", link, nil)
+	r.RemoteAddr = "127.0.0.1:4321"
+	r.Header.Set("X-Forwarded-Proto", "https")
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != 303 || w.Result().Cookies()[0].Secure {
+		t.Fatal("forwarded header changed local cookie", w.Code, w.Header())
+	}
+	link = request(t, s, "POST", "/v1/ui/links", map[string]any{}, 200)["url"].(string)
+	now = now.Add(2 * time.Minute)
+	r = httptest.NewRequest("GET", link, nil)
+	r.RemoteAddr = "127.0.0.1:4321"
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != 401 {
+		t.Fatal("expired local code accepted", w.Code)
 	}
 }

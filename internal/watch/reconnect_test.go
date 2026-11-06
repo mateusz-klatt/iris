@@ -59,6 +59,7 @@ func TestBurstReconnectNoDuplicateLine(t *testing.T) {
 	resume := make(chan struct{})
 	server := httptest.NewUnstartedServer(nil)
 	real := hub.New(s, "token", []string{server.Listener.Addr().String()})
+	real.PingInterval = 20 * time.Millisecond
 	server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/watch" {
 			real.ServeHTTP(w, r)

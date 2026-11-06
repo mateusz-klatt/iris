@@ -132,7 +132,7 @@ func TestOperatorThreadsAndSecurity(t *testing.T) {
 func TestOneMonitorPerExecution(t *testing.T) {
 	_, s := setup(t)
 	a, b := register(t, s, 1), register(t, s, 2)
-	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	endpoint := watchURL(s, b["execution_id"], 0) + "&consumer_id=iris-watch"
 	options := &websocket.DialOptions{HTTPHeader: http.Header{"Authorization": {"Bearer test-secret"}}, Subprotocols: []string{"iris.v1"}}

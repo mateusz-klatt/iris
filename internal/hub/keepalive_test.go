@@ -38,7 +38,7 @@ func TestWatchKeepalive(t *testing.T) {
 				endpoint = watchURL(s, b["execution_id"], 0)
 			}
 			var pings atomic.Int64
-			ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
 			conn, _, err := websocket.Dial(ctx, endpoint, &websocket.DialOptions{HTTPHeader: http.Header{"Authorization": {"Bearer test-secret"}}, Subprotocols: []string{"iris.v1"}, OnPingReceived: func(context.Context, []byte) bool { pings.Add(1); return true }})
 			if err != nil {
@@ -72,9 +72,27 @@ func TestWatchKeepalive(t *testing.T) {
 				}
 			}
 			// Remain idle for much longer than the HTTP timeout and several ping cycles.
-			time.Sleep(180 * time.Millisecond)
-			if pings.Load() < 2 {
-				t.Fatalf("only %d pings", pings.Load())
+			idle := time.NewTimer(180 * time.Millisecond)
+			defer idle.Stop()
+			select {
+			case <-idle.C:
+			case err := <-failures:
+				t.Fatal(err)
+			case <-ctx.Done():
+				t.Fatal(ctx.Err())
+			}
+			// Race instrumentation can make store polling slower than the ping interval.
+			// Wait for observed protocol traffic rather than assuming scheduler timing.
+			observed := time.NewTicker(10 * time.Millisecond)
+			defer observed.Stop()
+			for pings.Load() < 3 {
+				select {
+				case <-observed.C:
+				case err := <-failures:
+					t.Fatal(err)
+				case <-ctx.Done():
+					t.Fatalf("only %d pings: %v", pings.Load(), ctx.Err())
+				}
 			}
 			select {
 			case f := <-frames:

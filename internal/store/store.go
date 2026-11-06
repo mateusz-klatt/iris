@@ -202,10 +202,12 @@ func (s *Store) transact(ctx context.Context, f func(*transaction) error) error 
 		return err
 	}
 	defer c.Close()
+	// Cancellation can be reported after SQLite has executed BEGIN. Install cleanup
+	// before starting it, so that error cannot leak an open transaction into the pool.
+	defer c.ExecContext(context.Background(), "ROLLBACK") // also covers cancellation and panics
 	if _, err = c.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
 		return err
 	}
-	defer c.ExecContext(context.Background(), "ROLLBACK") // also covers cancellation and panics
 	tx := &transaction{conn: c, ctx: ctx, s: s}
 	if err = f(tx); err != nil {
 		return err
