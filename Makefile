@@ -20,7 +20,7 @@ build:
 # Rebuild the embedded console. The placeholder in internal/webui/dist is what
 # `go build` uses when Node has not run; this target replaces that tree.
 web:
-	npm ci --prefix web
+	npm ci --ignore-scripts --prefix web
 	npm run build --prefix web
 	rm -rf internal/webui/dist
 	mkdir -p internal/webui/dist
