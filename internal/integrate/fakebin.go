@@ -45,9 +45,13 @@ func fakeBinary() (string, error) {
 			return
 		}
 		out := filepath.Join(dir, exeName(runtime.GOOS, "fakebin"))
-		cmd := exec.Command("go", "build", "-o", out, "github.com/mateusz-klatt/iris/internal/integrate/testdata/fakebin")
-		cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
-		msg, err := cmd.CombinedOutput()
+		var msg []byte
+		goTool, err := exec.LookPath("go")
+		if err == nil {
+			cmd := exec.Command(goTool, "build", "-o", out, "github.com/mateusz-klatt/iris/internal/integrate/testdata/fakebin")
+			cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
+			msg, err = cmd.CombinedOutput()
+		}
 		if err != nil {
 			fakeErr = fmt.Errorf("build fakebin: %w: %s", err, msg)
 			return
