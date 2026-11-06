@@ -223,6 +223,14 @@ func ReadRecentFailures(tokenFile string, limit int) ([]Failure, error) {
 		return nil, err
 	}
 	defer f.Close()
+	if err = lockFailureLogShared(f); err != nil {
+		return nil, err
+	}
+	defer unlockFailureLog(f)
+	// Size again under the lock: a writer may have grown or cut the file meanwhile.
+	if info, err = f.Stat(); err != nil {
+		return nil, err
+	}
 	offset := max(int64(0), info.Size()-failureLogLimit)
 	if _, err = f.Seek(offset, io.SeekStart); err != nil {
 		return nil, err

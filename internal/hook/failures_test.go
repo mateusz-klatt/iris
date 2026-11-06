@@ -205,3 +205,28 @@ func TestSlowFailureLoggerDoesNotHoldHook(t *testing.T) {
 	}
 	t.Fatal("failure was not recorded after logging resumed")
 }
+
+// A reader that arrives during a write waits. Windows file locks are mandatory, so
+// without a shared lock the read fails. A writer that finds the file busy skips its
+// entry, because logging must never delay a hook, so only reads must succeed here.
+func TestFailureLogReadDuringWrites(t *testing.T) {
+	token := filepath.Join(t.TempDir(), "hub.token")
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for i := 0; i < 200; i++ {
+			entry := Failure{Time: time.Now().UTC(), Client: "claude", Event: "pre_tool", Stage: "session", Error: "x"}
+			_ = appendFailure(token, entry)
+		}
+	}()
+	for {
+		if _, err := ReadRecentFailures(token, 10); err != nil {
+			t.Fatal(err)
+		}
+		select {
+		case <-done:
+			return
+		default:
+		}
+	}
+}
