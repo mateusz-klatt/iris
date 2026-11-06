@@ -29,6 +29,12 @@ type ticket struct {
 	used       bool
 }
 type Hub struct {
+	// These seams are the database and WebSocket I/O boundaries; production uses
+	// the real store and transport, and tests can report their actual failure modes.
+	call         func(context.Context, string, store.Request) (map[string]any, error)
+	acceptSocket func(http.ResponseWriter, *http.Request, *websocket.AcceptOptions) (*websocket.Conn, error)
+	writeSocket  func(context.Context, *websocket.Conn, []byte) error
+	pingSocket   func(context.Context, *websocket.Conn) error
 	Limits       Limits
 	rates        map[string]window
 	socketCounts map[string]int
@@ -52,7 +58,11 @@ type Hub struct {
 }
 
 func New(s *store.Store, token string, allowedHosts []string) *Hub {
-	h := &Hub{rates: map[string]window{}, socketCounts: map[string]int{}, sockets: map[string]map[*websocket.Conn]bool{}, monitors: map[string]bool{}, links: map[string]loginGrant{}, cookies: map[string]loginGrant{}, store: s, token: token, hosts: map[string]bool{}, mux: http.NewServeMux(), tickets: map[string]ticket{}, now: time.Now}
+	h := &Hub{call: s.Call, acceptSocket: websocket.Accept,
+		writeSocket: func(ctx context.Context, c *websocket.Conn, raw []byte) error {
+			return c.Write(ctx, websocket.MessageText, raw)
+		},
+		pingSocket: func(ctx context.Context, c *websocket.Conn) error { return c.Ping(ctx) }, rates: map[string]window{}, socketCounts: map[string]int{}, sockets: map[string]map[*websocket.Conn]bool{}, monitors: map[string]bool{}, links: map[string]loginGrant{}, cookies: map[string]loginGrant{}, store: s, token: token, hosts: map[string]bool{}, mux: http.NewServeMux(), tickets: map[string]ticket{}, now: time.Now}
 	for _, host := range allowedHosts {
 		h.hosts[strings.ToLower(host)] = true
 	}
@@ -203,7 +213,7 @@ func (h *Hub) api(w http.ResponseWriter, r *http.Request, operation string) {
 	if operation == "ack" {
 		req.Key = r.PathValue("id")
 	}
-	out, err := h.store.Call(r.Context(), operation, req)
+	out, err := h.call(r.Context(), operation, req)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -249,7 +259,7 @@ func (h *Hub) wakeTicket(w http.ResponseWriter, r *http.Request) {
 		writeError(w, &store.Error{Code: "bad_request", Message: "generation required"})
 		return
 	}
-	if _, err = h.store.Call(r.Context(), "validate", req); err != nil {
+	if _, err = h.call(r.Context(), "validate", req); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -330,7 +340,7 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if _, err = h.store.Call(r.Context(), "validate", req); err != nil {
+	if _, err = h.call(r.Context(), "validate", req); err != nil {
 		writeError(w, err)
 		return
 	}
@@ -346,7 +356,7 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		defer func() { h.mu.Lock(); delete(h.monitors, req.ExecutionID); h.mu.Unlock() }()
-		saved, err := h.store.Call(r.Context(), "monitor_cursor", req)
+		saved, err := h.call(r.Context(), "monitor_cursor", req)
 		if err != nil {
 			writeError(w, err)
 			return
@@ -362,7 +372,7 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer h.releaseSocket(p)
-	conn, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{protocol}})
+	conn, err := h.acceptSocket(w, r, &websocket.AcceptOptions{Subprotocols: []string{protocol}})
 	if err != nil {
 		return
 	}
@@ -388,7 +398,7 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		}
-		if _, err = h.store.Call(ctx, "validate", req); err != nil {
+		if _, err = h.call(ctx, "validate", req); err != nil {
 			_ = conn.Close(websocket.StatusPolicyViolation, "Execution lease lost")
 			return
 		}
@@ -396,7 +406,7 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 		if pageReq.ConsumerID == "iris-watch" {
 			pageReq.ConsumerID = ""
 		}
-		result, err := h.store.Call(ctx, "events", pageReq)
+		result, err := h.call(ctx, "events", pageReq)
 		if err != nil {
 			_ = conn.Close(websocket.StatusPolicyViolation, "Execution stream unavailable")
 			return
@@ -404,7 +414,7 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 		high := result["high_water"].(int64)
 		send := func(cursor int64, kind string) error {
 			frame, _ := json.Marshal(map[string]any{"stream": result["stream"], "cursor": cursor, "kind": kind})
-			return conn.Write(ctx, websocket.MessageText, frame)
+			return h.writeSocket(ctx, conn, frame)
 		}
 		if result["reset"] == true {
 			if send(high, "reset") != nil {
@@ -451,7 +461,7 @@ func (h *Hub) pingInterval() time.Duration {
 func (h *Hub) ping(ctx context.Context, conn *websocket.Conn) bool {
 	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 	defer cancel()
-	if conn.Ping(ctx) != nil {
+	if h.pingSocket(ctx, conn) != nil {
 		_ = conn.CloseNow()
 		return false
 	}

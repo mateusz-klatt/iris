@@ -74,9 +74,6 @@ func (h *Hub) anonymousRate(w http.ResponseWriter) bool {
 	return h.allowRate(w, "anonymous", limit)
 }
 func (h *Hub) tokenRate(w http.ResponseWriter, p principal) bool {
-	if p.name == "" {
-		return true
-	}
 	limit := h.Limits.TokenPerMinute
 	if limit == 0 {
 		limit = 6000

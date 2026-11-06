@@ -12,7 +12,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/coder/websocket"
 	"github.com/mateusz-klatt/iris/internal/store"
 )
 
@@ -124,7 +123,7 @@ func (h *Hub) uiWatch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer h.releaseSocket(p)
-	conn, err := websocket.Accept(w, r, nil)
+	conn, err := h.acceptSocket(w, r, nil)
 	if err != nil {
 		return
 	}
@@ -141,14 +140,14 @@ func (h *Hub) uiWatch(w http.ResponseWriter, r *http.Request) {
 	var previous int64 = -1
 	for {
 		changes := h.store.Changes()
-		result, err := h.store.Call(ctx, "ui_events", store.Request{})
+		result, err := h.call(ctx, "ui_events", store.Request{})
 		if err != nil {
 			return
 		}
 		cursor := result["cursor"].(int64)
 		if cursor != previous {
 			raw, _ := json.Marshal(result)
-			if conn.Write(ctx, websocket.MessageText, raw) != nil {
+			if h.writeSocket(ctx, conn, raw) != nil {
 				return
 			}
 			previous = cursor
@@ -188,7 +187,7 @@ func (h *Hub) operatorRoutes() {
 					return
 				}
 			}
-			out, err := h.store.Call(r.Context(), op, req)
+			out, err := h.call(r.Context(), op, req)
 			if err != nil {
 				writeError(w, err)
 				return
