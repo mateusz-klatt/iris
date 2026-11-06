@@ -1,7 +1,8 @@
 ALTER TABLE Message ADD COLUMN repository_id TEXT REFERENCES Repository(id);
 ALTER TABLE Message ADD COLUMN thread_id TEXT;
 ALTER TABLE Message ADD COLUMN reply_to TEXT;
-UPDATE Message SET repository_id=(SELECT repository_id FROM Execution WHERE id=sender_execution_id),thread_id=id;
+UPDATE Message SET repository_id=(SELECT repository_id FROM Execution WHERE id=sender_execution_id),thread_id=id
+WHERE repository_id IS NULL;
 ALTER TABLE Execution ADD COLUMN last_seen_ms INTEGER NOT NULL DEFAULT 0;
 CREATE INDEX message_thread ON Message(thread_id,created_ms);
 CREATE VIRTUAL TABLE MessageSearch USING fts5(subject,body,content='Message',content_rowid='rowid');
