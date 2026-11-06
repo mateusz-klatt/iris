@@ -9,7 +9,7 @@ func TestRepositoryNameStable(t *testing.T) {
 			r := Request{Client: "codex", Host: "host", SessionID: "first", Cwd: "/work/shop-a", Worktree: "/work/shop-a", RemoteURL: remote}
 			first := call(t, s, "sessions", r)
 			// A local-only repository joins by the same alias; global remotes join across worktrees.
-			if remote != "" && remote[0] == 'h' {
+			if remote != "" {
 				r.Worktree = "/work/shop-z"
 			}
 			r.SessionID = "second"

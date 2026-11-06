@@ -103,22 +103,37 @@ func namePart(s string) string {
 	}
 	return s
 }
+
+// scpRemote is git's scp-like form, as in git@host:owner/repo.git. It is not a URL.
+var scpRemote = regexp.MustCompile(`^(?:[^@/]+@)?([^:/]+):([^/].*)$`)
+
+// remoteAlias names a repository by host and path, so that one repository cloned over
+// https on one machine and over ssh on another has one alias. It returns nothing for a
+// host that may mean something different on another machine.
 func remoteAlias(raw string) string {
-	u, err := url.Parse(raw)
-	if err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http" && u.Scheme != "ssh" && u.Scheme != "git") {
+	raw = strings.TrimSpace(raw)
+	var host, repoPath string
+	if u, err := url.Parse(raw); err == nil && u.Host != "" {
+		if u.Scheme != "https" && u.Scheme != "http" && u.Scheme != "ssh" && u.Scheme != "git" {
+			return ""
+		}
+		host, repoPath = u.Hostname(), u.Path
+	} else if m := scpRemote.FindStringSubmatch(raw); m != nil {
+		host, repoPath = m[1], m[2]
+	} else {
 		return ""
 	}
-	host := strings.ToLower(u.Hostname())
+	host = strings.ToLower(host)
 	if !strings.Contains(host, ".") || net.ParseIP(host) != nil || strings.HasSuffix(host, ".local") || strings.HasSuffix(host, ".") {
 		return ""
 	}
-	u.User = nil
-	u.RawQuery = ""
-	u.Fragment = ""
-	u.Host = strings.ToLower(u.Host)
-	u.Path = strings.TrimSuffix(strings.TrimSuffix(u.Path, "/"), ".git")
-	return "remote:" + u.String()
+	repoPath = strings.Trim(strings.TrimSuffix(strings.TrimRight(repoPath, "/"), ".git"), "/")
+	if repoPath == "" {
+		return ""
+	}
+	return "remote:" + host + "/" + repoPath
 }
+
 func (t *transaction) repository(r Request) (string, error) {
 	// Machine-relative remotes are deliberately never global aliases.
 	local := "local:" + r.Host + ":" + strings.ReplaceAll(r.Worktree, "\\", "/")
@@ -131,7 +146,16 @@ func (t *transaction) repository(r Request) (string, error) {
 	for _, alias := range aliases {
 		err = t.row("SELECT r.id,r.root_commit FROM RepositoryAlias a JOIN Repository r ON r.id=a.repository_id WHERE a.alias=?", alias).Scan(&repo, &root)
 		if err == nil && (root == "" || r.RootCommit == "" || root == r.RootCommit) {
-			for _, key := range aliases {
+			// A known worktree can gain its global identity later, for example after a
+			// remote is added, so that other machines can still join this repository.
+			known := aliases
+			if remote := remoteAlias(r.RemoteURL); remote != "" {
+				known = append(known, remote)
+			}
+			if r.RootCommit != "" {
+				known = append(known, "root:"+r.RootCommit)
+			}
+			for _, key := range known {
 				if _, err = t.exec("INSERT OR IGNORE INTO RepositoryAlias VALUES(?,?)", key, repo); err != nil {
 					return "", err
 				}
