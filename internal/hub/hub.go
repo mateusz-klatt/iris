@@ -2,6 +2,7 @@
 package hub
 
 import (
+	"context"
 	"crypto/rand"
 	"crypto/subtle"
 	"encoding/base64"
@@ -26,18 +27,20 @@ type ticket struct {
 	used       bool
 }
 type Hub struct {
-	publicURL *url.URL
-	monitors  map[string]bool
-	ui        http.Handler
-	links     map[string]loginGrant
-	cookies   map[string]loginGrant
-	store     *store.Store
-	token     string
-	hosts     map[string]bool
-	mux       *http.ServeMux
-	mu        sync.Mutex
-	tickets   map[string]ticket
-	now       func() time.Time
+	// PingInterval is configurable before serving; zero uses 25 seconds.
+	PingInterval time.Duration
+	publicURL    *url.URL
+	monitors     map[string]bool
+	ui           http.Handler
+	links        map[string]loginGrant
+	cookies      map[string]loginGrant
+	store        *store.Store
+	token        string
+	hosts        map[string]bool
+	mux          *http.ServeMux
+	mu           sync.Mutex
+	tickets      map[string]ticket
+	now          func() time.Time
 }
 
 func New(s *store.Store, token string, allowedHosts []string) *Hub {
@@ -302,6 +305,8 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.CloseNow()
 	ctx := conn.CloseRead(r.Context())
+	pings := time.NewTicker(h.pingInterval())
+	defer pings.Stop()
 	ticker := time.NewTicker(100 * time.Millisecond)
 	defer ticker.Stop()
 	initial := true
@@ -372,8 +377,29 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 			return
 		case <-changes:
 		case <-ticker.C:
+		case <-pings.C:
+			if !h.ping(ctx, conn) {
+				return
+			}
 		}
 	}
 }
 
 const boundedPageSize = 100
+
+func (h *Hub) pingInterval() time.Duration {
+	if h.PingInterval > 0 {
+		return h.PingInterval
+	}
+	return 25 * time.Second
+}
+
+func (h *Hub) ping(ctx context.Context, conn *websocket.Conn) bool {
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	if conn.Ping(ctx) != nil {
+		_ = conn.CloseNow()
+		return false
+	}
+	return true
+}

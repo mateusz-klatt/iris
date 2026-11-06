@@ -127,6 +127,8 @@ func (h *Hub) uiWatch(w http.ResponseWriter, r *http.Request) {
 	}
 	defer conn.CloseNow()
 	ctx := conn.CloseRead(r.Context())
+	pings := time.NewTicker(h.pingInterval())
+	defer pings.Stop()
 	ticker := time.NewTicker(time.Second)
 	defer ticker.Stop()
 	var previous int64 = -1
@@ -149,6 +151,10 @@ func (h *Hub) uiWatch(w http.ResponseWriter, r *http.Request) {
 			return
 		case <-changes:
 		case <-ticker.C:
+		case <-pings.C:
+			if !h.ping(ctx, conn) {
+				return
+			}
 		}
 	}
 }
