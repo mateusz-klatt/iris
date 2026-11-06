@@ -26,17 +26,18 @@ type ticket struct {
 	used       bool
 }
 type Hub struct {
-	monitors map[string]bool
-	ui       http.Handler
-	links    map[string]loginGrant
-	cookies  map[string]loginGrant
-	store    *store.Store
-	token    string
-	hosts    map[string]bool
-	mux      *http.ServeMux
-	mu       sync.Mutex
-	tickets  map[string]ticket
-	now      func() time.Time
+	publicURL *url.URL
+	monitors  map[string]bool
+	ui        http.Handler
+	links     map[string]loginGrant
+	cookies   map[string]loginGrant
+	store     *store.Store
+	token     string
+	hosts     map[string]bool
+	mux       *http.ServeMux
+	mu        sync.Mutex
+	tickets   map[string]ticket
+	now       func() time.Time
 }
 
 func New(s *store.Store, token string, allowedHosts []string) *Hub {
@@ -77,7 +78,7 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if origin := r.Header.Get("Origin"); origin != "" {
 		u, err := url.Parse(origin)
 		scheme := "http"
-		if r.TLS != nil {
+		if r.TLS != nil || (h.publicURL != nil && r.Host == h.publicURL.Host) {
 			scheme = "https"
 		}
 		if err != nil || u.Scheme != scheme || !strings.EqualFold(u.Host, r.Host) || u.User != nil || u.Path != "" || u.RawQuery != "" || u.Fragment != "" {
@@ -212,7 +213,11 @@ func (h *Hub) wakeTicket(w http.ResponseWriter, r *http.Request) {
 	if r.TLS != nil {
 		scheme = "wss"
 	}
-	u := url.URL{Scheme: scheme, Host: r.Host, Path: "/v1/watch"}
+	host := r.Host
+	if h.publicURL != nil {
+		scheme, host = "wss", h.publicURL.Host
+	}
+	u := url.URL{Scheme: scheme, Host: host, Path: "/v1/watch"}
 	q := u.Query()
 	q.Set("execution_id", req.ExecutionID)
 	u.RawQuery = q.Encode()

@@ -73,6 +73,7 @@ func run(args []string) error {
 	flags.StringVar(&cfg.TokenFile, "token-file", cfg.TokenFile, "owner-only bearer token file")
 	flags.StringVar(&cfg.TLSCert, "tls-cert", "", "TLS certificate file")
 	flags.StringVar(&cfg.TLSKey, "tls-key", "", "TLS private key file")
+	publicURL := flags.String("public-url", "", "public https origin behind a trusted loopback TLS proxy")
 	var hosts string
 	flags.StringVar(&hosts, "allowed-hosts", "", "additional allowed Host authorities, including ports")
 	if err = flags.Parse(args[1:]); err != nil {
@@ -83,6 +84,12 @@ func run(args []string) error {
 	}
 	if err = cfg.Validate(); err != nil {
 		return err
+	}
+	// Validate the public origin before creating any state.
+	if *publicURL != "" {
+		if err = hub.New(nil, "", nil).SetPublicURL(*publicURL); err != nil {
+			return err
+		}
 	}
 	s, err := store.Open(cfg.Database, nil)
 	if err != nil {
@@ -100,6 +107,11 @@ func run(args []string) error {
 		}
 	}
 	handler := hub.New(s, token, allowed)
+	if *publicURL != "" {
+		if err = handler.SetPublicURL(*publicURL); err != nil {
+			return err
+		}
+	}
 	handler.SetUI(webui.Handler())
 	server := &http.Server{Addr: cfg.Listen, Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
