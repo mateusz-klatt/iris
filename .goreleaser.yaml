@@ -6,7 +6,8 @@ release:
   draft: true
 before:
   hooks:
-    - make web
+    # WEB_DIST is set only by the release workflow, to a console built without credentials.
+    - make web WEB_DIST={{ envOrDefault "WEB_DIST" "" }}
 builds:
   - id: iris
     main: ./cmd/iris

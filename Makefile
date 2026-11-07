@@ -19,12 +19,21 @@ build:
 
 # Rebuild the embedded console. The placeholder in internal/webui/dist is what
 # `go build` uses when Node has not run; this target replaces that tree.
+# WEB_DIST names a console built elsewhere. The release job builds it in a job of its
+# own, so no code from web/node_modules runs where its credentials are.
 web:
+ifeq ($(WEB_DIST),)
 	npm ci --ignore-scripts --prefix web
 	npm run build --prefix web
 	rm -rf internal/webui/dist
 	mkdir -p internal/webui/dist
 	cp -a web/dist/. internal/webui/dist/
+else
+	test -f "$(WEB_DIST)/index.html"
+	rm -rf internal/webui/dist
+	mkdir -p internal/webui/dist
+	cp -a "$(WEB_DIST)/." internal/webui/dist/
+endif
 
 cov:
 	CGO_ENABLED=0 $(GO) test -coverprofile=coverage.out ./...
