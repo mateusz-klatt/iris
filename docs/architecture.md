@@ -429,11 +429,20 @@ removed with the table:
 
 `iris doctor` runs offline by default: hub reachable, token valid, client version, configuration
 present, trust state, unknown tools seen, last hook received, and a synthetic canary through the
-configured hook command. `iris doctor --live` runs the real client on its cheapest model. It is
+configured hook command. `iris doctor --live` runs the real client, on its cheapest model where
+that model edits through the client's file editing tool. Codex uses `gpt-6.1-terra`, which used
+`apply_patch` in 8 of 8 runs. `gpt-6-luna` wrote the scratch file through Code Mode's `js` tool
+in every measured run, and no pre-edit hook sees that, so the check would fail for a reason
+unrelated to Iris. It is
 billable, so it is opt-in: it names each client, binary and model first and asks, unless `--yes`
 is given. A client that still needs a person, such as Codex before its hooks are reviewed in
 `/hooks`, is skipped with that reason: no trust is bypassed, and a run whose hook cannot fire
-spends money to prove nothing. Output is per client binary, not per vendor, because the Cursor IDE and
+spends money to prove nothing. A client reported silent still runs: the cause may be an old
+failure in the log, and a live run is how to show that it works now. Every client runs on a
+named model, never its default, which can be expensive. Cursor gets `--trust`, which trusts only
+the scratch repository doctor created. Without it, a headless `cursor-agent` prints "Workspace
+Trust Required" and exits 0 having run nothing. That is trust in a temporary directory Iris made,
+not a bypass of trust in the user's own workspaces. Output is per client binary, not per vendor, because the Cursor IDE and
 `cursor-agent` differ.
 
 Each live run happens in a scratch repository under the temporary directory, with no commit and
@@ -452,7 +461,14 @@ other clients' hooks (D5). If the scratch hub sees nothing from that hook, eithe
 stopped before running it, which Cursor does with exit 0 in an untrusted workspace, or a client
 that hides its environment from its hook reached the configured hub instead. Doctor then prints
 the client's output and the marker origin, so the hub's owner can find that repository and
-remove it with `iris admin forget`. The run is limited per
+remove it with `iris admin forget`. Naming a client with `--client` runs it even when doctor reports
+that it needs a person, because Codex's hook review cannot be read yet: the plan line says the
+hook depends on that step, and a missing session says so again. Codex runs with
+`sandbox_mode="workspace-write"`, `approval_policy="never"` and the Iris tools approved for that
+run only, never with full access. Codex records each directory it runs in as trusted, in
+`config.toml`. Doctor removes that scratch table afterwards, but only if removing it gives back
+the file's bytes from before the run. A file that changed in any other way meanwhile is left
+alone, and the report says so. The run is limited per
 client, three minutes by default.
 
 ### D15. Distribution

@@ -96,7 +96,8 @@ Against the production hub, over TLS:
   after a reboot of the WSL VM.
 - **`iris doctor --live` on clients other than Claude Code.** It ran for real for Claude Code
   2.1.319 on WSL and on macOS against its scratch hub. Grok's allow flags were measured on macOS.
-  The other clients' invocations are not measured yet.
+  Codex's invocation follows claude-laptop-iris's measurements of its flags on macOS. The whole
+  run has not yet been measured end to end. The other clients' invocations are not measured yet.
 - **Translations** of the newer console strings, and layout polish.
 - **Legal review** of the clean-room record.
 

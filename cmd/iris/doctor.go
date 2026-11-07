@@ -70,6 +70,9 @@ func liveStage(ctx context.Context, plans []doctor.LivePlan, skipped []string, y
 	_, _ = fmt.Fprintln(stderr, "iris doctor --live runs these clients in a scratch repository, and each call may incur a charge:")
 	for _, p := range plans {
 		_, _ = fmt.Fprintf(stderr, "  %s (%s), model %s\n", p.Client, p.Binary, p.Model)
+		if p.Requires != "" {
+			_, _ = fmt.Fprintf(stderr, "    %s: its hook runs only if you have done this: %s\n", p.Client, p.Requires)
+		}
 	}
 	if !yes {
 		_, _ = fmt.Fprint(stderr, "Proceed? [y/N] ")
@@ -82,7 +85,7 @@ func liveStage(ctx context.Context, plans []doctor.LivePlan, skipped []string, y
 	code := 0
 	for _, p := range plans {
 		_, _ = fmt.Fprintf(stderr, "running %s...\n", p.Client)
-		r := live(ctx, doctor.LiveOptions{Timeout: timeout}, p)
+		r := live(ctx, doctor.LiveOptions{Layout: integrate.Layout{}, Timeout: timeout}, p)
 		_, _ = fmt.Fprint(stdout, doctor.FormatLive([]doctor.LiveResult{r}))
 		if !r.OK() {
 			code = 1
