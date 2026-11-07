@@ -156,7 +156,17 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		if ev.Kind == KindSessionStart && guard.NeedsHint(repo) {
 			notes = append(notes, guard.Hint)
 		}
+		// The session context states the unread count, so those counts count as said.
+		r.attentionNote(ev, sess.Attention, true)
 		return r.finish(ev, Encode(ev, Decision{Action: ActionAllow, Context: SessionText(sess, notes...)}))
+	case KindPrompt, KindPreInvocation:
+		// One registration per user turn: idempotent, hedged, and within the deadline.
+		state.at("session")
+		sess, err := r.register(ctx, ev, repo)
+		if err != nil {
+			return state.fail(err, r.failOpen(ev, err, allow))
+		}
+		return r.finish(ev, Encode(ev, Decision{Action: ActionAllow, Context: r.attentionNote(ev, sess.Attention, false)}))
 	case KindSessionEnd:
 		state.at("session")
 		sess, err := r.register(ctx, ev, repo)
@@ -210,7 +220,14 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		default:
 			return state.fail(hookFailure("hub returned an invalid touch action"), allow)
 		}
-		return r.finish(ev, Encode(ev, decisionFromTouch(touch)))
+		d := decisionFromTouch(touch)
+		if d.Action == ActionAllow && carriesToolContext(ev.Client) {
+			// The touch already brought the counts, so this costs no request.
+			if note := r.attentionNote(ev, touch.Attention, false); note != "" {
+				d.Context = strings.TrimSpace(d.Context + "\n" + note)
+			}
+		}
+		return r.finish(ev, Encode(ev, d))
 	}
 }
 
@@ -260,6 +277,8 @@ func needsNetwork(ev Event) bool {
 	switch ev.Kind {
 	case KindSessionStart, KindSubagentStart, KindSessionEnd:
 		return true
+	case KindPrompt, KindPreInvocation:
+		return promptEvent(ev) && carriesPromptContext(ev.Client)
 	case KindPreTool:
 		return ev.ToolClass == ClassEdit
 	default:

@@ -298,6 +298,9 @@ func (t *transaction) touch(r Request) (map[string]any, error) {
 		}
 		out["granted"] = normalized
 	}
+	if out["attention"], err = t.attention(e); err != nil {
+		return nil, err
+	}
 	if err = t.remember(e, key, "touch", r, out); err != nil {
 		return nil, err
 	}
