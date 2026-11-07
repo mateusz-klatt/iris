@@ -11,6 +11,8 @@ func classifyTool(name string, mcp bool) (ToolClass, bool) {
 	// Codex's Code Mode runs JavaScript through its built-in node_repl server, and that code can
 	// write any file (measured: fs.appendFile on 0.167.0, with no apply_patch). Iris cannot read
 	// what the code will write, so it is reconciled like a shell: detected, not prevented.
+	// The name is matched for every client. Only Codex's built-in server is known to carry it,
+	// and on any other client a tool of that name is just as able to write files.
 	if low == "mcp__node_repl__js" {
 		return ClassShell, false
 	}
