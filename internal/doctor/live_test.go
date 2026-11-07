@@ -164,8 +164,12 @@ func TestLiveRunSaysWhichPartFailed(t *testing.T) {
 			if tc.detail == "the hook used the configured hub" && (!strings.Contains(res.Detail, res.Marker) || !strings.Contains(res.Detail, "iris admin forget")) {
 				t.Fatalf("no way to find stray records: %q", res.Detail)
 			}
-			if tc.mode == "nohook" && !strings.Contains(res.Detail, "; client output: ") {
-				t.Fatalf("a client that exits 0 without its hook must show its output: %q", res.Detail)
+			// Whatever fact failed, a client that exited 0 shows what it did.
+			if tc.mode != "fail" && !strings.Contains(res.Detail, "client output: ") {
+				t.Fatalf("a client that exits 0 must show its output when a fact fails: %q", res.Detail)
+			}
+			if tc.mode == "nomcp" && !strings.HasPrefix(res.Detail, "client output: ") {
+				t.Fatalf("MCP failed alone, so the output is the whole explanation: %q", res.Detail)
 			}
 			if tc.mode == "fail" && !strings.Contains(res.Detail, "the model is not available") {
 				t.Fatalf("client output lost: %q", res.Detail)

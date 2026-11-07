@@ -218,13 +218,14 @@ func RunLive(ctx context.Context, opt LiveOptions, plan LivePlan) (res LiveResul
 		notes = append(notes, "the hook did not fire; it runs only after this step: "+plan.Requires)
 	}
 	if !res.HookFired {
-		// A client can also stop before its hooks and still exit 0, as Cursor
-		// does in an untrusted workspace, so its output is shown either way.
-		note := "the scratch hub saw no session from this client's hook. Either the client stopped before running it, or the hook used the configured hub, under the repository with origin " + res.Marker + ", which the hub's owner can remove with `iris admin forget`"
-		if runErr == nil && !timedOut {
-			note += "; client output: " + clip(out)
-		}
-		notes = append(notes, note)
+		notes = append(notes, "the scratch hub saw no session from this client's hook. Either the client stopped before running it, or the hook used the configured hub, under the repository with origin "+res.Marker+", which the hub's owner can remove with `iris admin forget`")
+	}
+	// Any fact that failed is explained only by what the client did, such as
+	// Cursor stopping with exit 0 in an untrusted workspace, or a model writing
+	// the file with a tool no pre-edit hook sees. A failed run already shows it.
+	failed := !res.HookFired || !res.ClaimReached || !res.ToolsAnswered || !res.FileEdited
+	if failed && runErr == nil && !timedOut {
+		notes = append(notes, "client output: "+clip(out))
 	}
 	res.Detail = strings.Join(notes, "; ")
 	return res
