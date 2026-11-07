@@ -404,3 +404,89 @@ func TestClaudeRemoveKeepsTheTreeOnlyAroundWhatIsStillThere(t *testing.T) {
 		t.Fatalf("empty directory left: %v", err)
 	}
 }
+
+// Remove takes out the directories install created, and only those: ~/.grok/hooks did not exist
+// and was left behind empty (measured), while ~/.copilot/hooks existed, empty, and must stay.
+func TestRemoveTakesOutOnlyTheDirectoriesInstallCreated(t *testing.T) {
+	l := testLayout(t)
+	grok, _ := ByName(Grok)
+	copilot, _ := ByName(Copilot)
+	gfiles, _ := grok.Files(l)
+	cfiles, _ := copilot.Files(l)
+	ghome := filepath.Dir(filepath.Dir(gfiles[0])) // ~/.grok exists, ~/.grok/hooks does not
+	chooks := filepath.Dir(cfiles[0])              // ~/.copilot/hooks exists, empty
+	for _, d := range []string{ghome, chooks} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, c := range []Client{grok, copilot} {
+		if err := c.Install(l, nil); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.Remove(l, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := os.Stat(filepath.Dir(gfiles[0])); !os.IsNotExist(err) {
+		t.Fatalf("the hooks directory install created is still there: %v", err)
+	}
+	for _, d := range []string{ghome, chooks} {
+		if _, err := os.Stat(d); err != nil {
+			t.Fatalf("%s existed before install and must stay: %v", d, err)
+		}
+	}
+}
+
+func TestACreatedDirectoryWithSomethingInItStays(t *testing.T) {
+	l := testLayout(t)
+	grok, _ := ByName(Grok)
+	files, _ := grok.Files(l)
+	if err := grok.Install(l, nil); err != nil {
+		t.Fatal(err)
+	}
+	mine := filepath.Join(filepath.Dir(files[0]), "mine.json")
+	if err := os.WriteFile(mine, []byte("{}"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// The user also deleted Iris's file; remove still tidies what it can.
+	if err := os.Remove(files[0]); err != nil {
+		t.Fatal(err)
+	}
+	if err := grok.Remove(l, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(mine); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// A created directory the user replaced with a link keeps the link: os.Remove would delete it.
+func TestACreatedDirectoryReplacedByALinkStays(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating a symlink needs a privilege on Windows")
+	}
+	l := testLayout(t)
+	grok, _ := ByName(Grok)
+	files, _ := grok.Files(l)
+	if err := grok.Install(l, nil); err != nil {
+		t.Fatal(err)
+	}
+	hooks := filepath.Dir(files[0])
+	elsewhere := t.TempDir()
+	if err := os.Rename(files[0], filepath.Join(elsewhere, filepath.Base(files[0]))); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(hooks); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(elsewhere, hooks); err != nil {
+		t.Fatal(err)
+	}
+	if err := grok.Remove(l, nil); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Lstat(hooks); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the user's link is gone: %v", err)
+	}
+}
