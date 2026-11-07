@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync"
 	"testing"
@@ -38,6 +39,10 @@ func TestFileMemoryRemembersEachSessionApart(t *testing.T) {
 	m.Forget("claude", "s")
 	if m.Recall("claude", "s") != 0 || m.Recall("codex", "s") != 7 {
 		t.Fatal("forget removed the wrong session")
+	}
+	// Windows has no mode bits: the files take the ACL of the user's configuration directory.
+	if runtime.GOOS == "windows" {
+		return
 	}
 	for _, info := range mustList(t, m.dir) {
 		if info.Mode().Perm() != 0o600 {
@@ -105,7 +110,8 @@ func TestFileMemoryFailsQuietly(t *testing.T) {
 		}
 	}
 
-	if os.Getuid() != 0 {
+	// A mode of 0500 refuses a write only on POSIX, and never for root.
+	if runtime.GOOS != "windows" && os.Getuid() != 0 {
 		readOnly := newFileMemory(t)
 		if err := os.MkdirAll(readOnly.dir, 0o500); err != nil {
 			t.Fatal(err)
