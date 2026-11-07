@@ -114,3 +114,22 @@ func TestShellStatusAgainstRealHub(t *testing.T) {
 		t.Fatalf("missing shell conflict: %#v %v", out, err)
 	}
 }
+
+// Codex's Code Mode js tool can write any file, and Iris cannot tell what from the code, so a
+// real capture of it must take the shell path: reconciled before and after, not passed as an
+// MCP call that touches nothing.
+func TestCodexJavaScriptToolIsReconciledLikeAShell(t *testing.T) {
+	for _, name := range []string{"PreToolUse-node_repl_js.json", "PostToolUse-node_repl_js.json"} {
+		raw, err := os.ReadFile(filepath.Join("testdata", "codex", name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		ev, err := codexAdapter{}.Decode(strings.TrimSuffix(strings.SplitN(name, "-", 2)[0], ".json"), raw)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if ev.ToolClass != ClassShell || !shellEvent(ev) || !strings.Contains(ev.Command, "fs.appendFile") {
+			t.Fatalf("%s: class %q shell %v command %q", name, ev.ToolClass, shellEvent(ev), ev.Command)
+		}
+	}
+}
