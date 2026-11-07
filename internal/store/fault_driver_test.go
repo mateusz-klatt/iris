@@ -126,6 +126,13 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 			snap.Kind = "before"
 			snap.Status = map[string]string{"file": " M"}
 			call(t, s, "reconcile", snap)
+			// b waits for a's "held", which a release frees, and for "dir", which a third
+			// session still blocks, so a release both wakes a waiter and keeps one waiting.
+			call(t, s, "touch", touchRequest(b, "wait-held", "held"))
+			c, _ := session(t, s, 3)
+			call(t, s, "touch", touchRequest(a, "dir-a", "dir/x"))
+			call(t, s, "touch", touchRequest(c, "dir-c", "dir/y"))
+			expectError(t, s, "claim", claimRequest(b, "wait-dir", "dir", "prefix"), "conflict")
 			if op == "touch-conflict" {
 				if err := s.SetRepositoryPolicy(context.Background(), repo, "sensitive", "warn"); err != nil {
 					t.Fatal(err)
@@ -239,12 +246,8 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 			// Discover the real statement/step sequence, forcing COMMIT to fail so the
 			// discovery itself also proves atomicity and leaves the fixture unchanged.
 			f.discover = true
-			if _, err := invoke(); op == "claim-conflict" {
-				var domain *Error
-				if !errors.As(err, &domain) || domain.Code != "conflict" {
-					t.Fatal("overlap was not refused", err)
-				}
-			} else if !errors.Is(err, errStorageFault) {
+			// A refused claim commits the waiter it leaves, so it too reports the failed COMMIT.
+			if _, err := invoke(); !errors.Is(err, errStorageFault) {
 				t.Fatalf("discovery: %v", err)
 			}
 			trace := append([]string(nil), f.trace...)

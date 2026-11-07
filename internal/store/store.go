@@ -38,6 +38,9 @@ var tokensSchema string
 //go:embed migrations/006.sql
 var pathKeySchema string
 
+//go:embed migrations/007.sql
+var waiterSchema string
+
 // Clock separates lease ticks from persisted wall-clock expiries. Tick must be monotonic
 // within a Store's lifetime; client timestamps never participate in lease decisions.
 type Clock interface {
@@ -72,6 +75,9 @@ type transaction struct {
 	ctx    context.Context
 	s      *Store
 	notify bool
+	// refused is a refusal whose side effects must still commit, such as the
+	// waiter a conflicting claim leaves. Call returns it after the commit.
+	refused *Error
 }
 
 func (t *transaction) exec(q string, a ...any) (sql.Result, error) {
@@ -182,6 +188,11 @@ func openDatabase(filename string, clock Clock, driverName string) (*Store, erro
 				return err
 			}
 		}
+		if version < 7 {
+			if _, err := t.exec(waiterSchema); err != nil {
+				return err
+			}
+		}
 		if err := t.fillMissingKeys(); err != nil {
 			return err
 		}
@@ -276,7 +287,7 @@ func (t *transaction) expire() error {
 		if _, err = t.exec("UPDATE Claim SET revoked_ms=? WHERE fence=?", now, x.f); err != nil {
 			return err
 		}
-		if err = t.repoEvent(x.r, "claim_released", fmt.Sprint(x.f)); err != nil {
+		if err = t.released(x.r, fmt.Sprint(x.f)); err != nil {
 			return err
 		}
 	}

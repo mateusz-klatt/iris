@@ -19,7 +19,12 @@ func pathKey(p, policy string) string {
 
 // rekeyRepository follows a change of case policy.
 func (t *transaction) rekeyRepository(repo string) error {
-	return t.rekey("c.repository_id=?", repo)
+	if err := t.rekey("c.repository_id=?", repo); err != nil {
+		return err
+	}
+	// A waiter's key follows the old case policy. Dropping it costs one wake, at most.
+	_, err := t.exec("DELETE FROM Waiter WHERE repository_id=?", repo)
+	return err
 }
 
 // fillMissingKeys runs at every start, not only at the migration: a binary from before the

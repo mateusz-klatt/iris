@@ -58,6 +58,7 @@ func (t *transaction) forget(r Request) (map[string]any, error) {
 		{"Delivery", deliveries.wrap("id IN (%s)")},
 		{"Message", messages.wrap("id IN (%s)")},
 		{"Claim", join2(executions.wrap("execution_id IN (%s)"), set{"?<>'' AND repository_id=?", []any{repo, repo}})},
+		{"Waiter", join2(executions.wrap("execution_id IN (%s)"), set{"?<>'' AND repository_id=?", []any{repo, repo}})},
 		{"Cursor", executions.wrap("execution_id IN (%s)")},
 		{"ShellSnapshot", executions.wrap("execution_id IN (%s)")},
 		{"Operation", agents.wrap("principal_agent_id IN (%s)")},

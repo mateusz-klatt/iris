@@ -207,6 +207,19 @@ attention: new mail, and a claim someone is waiting for. The session context tel
 what an Iris notification means, because without it the model correctly declines to act on an
 unexplained background line (measured).
 
+A release wakes only a session that was waiting for it. When the hub refuses an Execution's
+touch or claim because another Execution holds the path, it records that Execution as a
+**waiter** on the path and kind it asked for. The waiter lasts until the blocking claim's expiry
+or one hour, whichever comes first, and it is cleared when the Execution takes the path.
+After any release (by the holder, by an operator's revoke, or by expiry), each live waiter whose
+path no longer overlaps a claim of an unrelated Execution gets one `claim_available` event,
+addressed to it alone, and is cleared. Overlap follows ADR 003's path identity, prefix claims
+included. A waiter still blocked by another holder keeps waiting. `claim_released` still goes to
+every agent in the repository, for the console and the claims tool, but `iris watch` ignores
+it: before this rule, every release woke every session at the cost of a turn (measured on two
+hosts). A refused explicit claim still returns its conflict, but only after the waiter it leaves
+is committed.
+
 Commit precedes notification: the event table is the outbox. Delivery is at-least-once with a
 per-consumer cursor. A cursor that has expired gets a reset plus a snapshot, never a silent gap.
 A wake-up never acknowledges a message.

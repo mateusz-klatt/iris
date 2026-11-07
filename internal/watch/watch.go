@@ -39,7 +39,9 @@ type Coalescer struct {
 }
 
 func (c *Coalescer) Add(now time.Time, kind string, count int) error {
-	if kind != "inbox_changed" && kind != "claim_released" {
+	// claim_released goes to every agent in the repository, for the console. Only
+	// claim_available, addressed to a session that was refused the path, is a wake.
+	if kind != "inbox_changed" && kind != "claim_available" {
 		return nil
 	}
 	if count <= 0 {
@@ -60,7 +62,7 @@ func (c *Coalescer) Add(now time.Time, kind string, count int) error {
 	return nil
 }
 func (c *Coalescer) Flush(now time.Time) error {
-	for _, kind := range []string{"inbox_changed", "claim_released"} {
+	for _, kind := range []string{"inbox_changed", "claim_available"} {
 		p := c.kinds[kind]
 		if p == nil || p.count <= 0 || now.Before(p.next) {
 			continue
@@ -92,12 +94,10 @@ func (c *Coalescer) emit(now time.Time, kind string, p *pending) error {
 			noun = "message"
 		}
 		_, err = fmt.Fprintf(c.Output, "Iris: %d new %s. Use the inbox tool.\n", p.count, noun)
+	} else if p.count == 1 {
+		_, err = fmt.Fprint(c.Output, "Iris: a path you were refused is free now. Use the claims tool.\n")
 	} else {
-		noun := "claims"
-		if p.count == 1 {
-			noun = "claim"
-		}
-		_, err = fmt.Fprintf(c.Output, "Iris: %d %s released. Use the claims tool.\n", p.count, noun)
+		_, err = fmt.Fprintf(c.Output, "Iris: %d paths you were refused are free now. Use the claims tool.\n", p.count)
 	}
 	if err != nil {
 		return outputError{err}

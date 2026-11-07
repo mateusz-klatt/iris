@@ -53,7 +53,7 @@ func (t *transaction) operator(op string, r Request) (map[string]any, error) {
 		if _, err := t.exec("UPDATE Claim SET revoked_ms=? WHERE fence=? AND revoked_ms IS NULL", t.s.clock.Now().UnixMilli(), r.Fence); err != nil {
 			return nil, err
 		}
-		return map[string]any{}, t.repoEvent(repo, "claim_released", r.Key)
+		return map[string]any{}, t.released(repo, r.Key)
 	case "ui_doctor_get":
 		out := map[string]any{"checked_at": nil, "clients": []any{}}
 		var raw string
