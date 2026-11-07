@@ -1,6 +1,7 @@
 package integrate
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 )
@@ -16,12 +17,21 @@ func (antigravityClient) Human() string { return "" }
 // is project-scoped, which Iris does not write by default. Global hooks and
 // MCP are the user paths in the precedence and config lists.
 func (c antigravityClient) Files(l Layout) ([]string, error) {
-	dir, err := l.underHome(".gemini", "config")
+	gemini, err := l.underHome(".gemini")
 	if err != nil {
 		return nil, err
 	}
-	return []string{filepath.Join(dir, "hooks.json"), filepath.Join(dir, "mcp_config.json")}, nil
+	dir := filepath.Join(gemini, "config")
+	settings := filepath.Join(gemini, "antigravity-cli", "settings.json")
+	return []string{filepath.Join(dir, "hooks.json"), filepath.Join(dir, "mcp_config.json"), settings}, nil
 }
+
+// AgyAllowRule lets a headless agy call the Iris tools. Without it agy 1.5.3 denies every Iris
+// call in print mode ("a tool required the "mcp" permission that headless mode cannot prompt for,
+// so it was auto-denied") and stops. agy reads the rule only from the user's
+// antigravity-cli/settings.json, not from a workspace file (measured). The rule covers the Iris
+// server alone, and Iris tools act only on the hub, never on local files or a shell.
+const AgyAllowRule = "mcp(iris/*)"
 
 func (c antigravityClient) Install(l Layout, _ Plugins) error {
 	files, err := c.Files(l)
@@ -44,12 +54,66 @@ func (c antigravityClient) Install(l Layout, _ Plugins) error {
 	}); err != nil {
 		return err
 	}
-	return l.update(Antigravity, files[1], func(existing []byte) ([]byte, error) {
+	if err := l.update(Antigravity, files[1], func(existing []byte) ([]byte, error) {
 		return writeObject(existing, func(doc map[string]any) error {
 			mcpServers(doc, iris, Antigravity)
 			return nil
 		})
+	}); err != nil {
+		return err
+	}
+	return l.update(Antigravity, files[2], func(existing []byte) ([]byte, error) {
+		return writeObject(existing, func(doc map[string]any) error {
+			return AddAllowRule(doc, AgyAllowRule)
+		})
 	})
+}
+
+// AddAllowRule puts rule into agy's permissions.allow once, keeping every other setting.
+func AddAllowRule(doc map[string]any, rule string) error {
+	perms, ok := doc["permissions"].(map[string]any)
+	if !ok {
+		if doc["permissions"] != nil {
+			return fmt.Errorf("%w: permissions is not an object", ErrBroken)
+		}
+		perms = map[string]any{}
+		doc["permissions"] = perms
+	}
+	allow, ok := perms["allow"].([]any)
+	if !ok && perms["allow"] != nil {
+		return fmt.Errorf("%w: permissions.allow is not a list", ErrBroken)
+	}
+	for _, r := range allow {
+		if r == rule {
+			return nil
+		}
+	}
+	perms["allow"] = append(allow, rule)
+	return nil
+}
+
+// RemoveAllowRule takes rule out of agy's permissions.allow, and the containers it leaves empty.
+func RemoveAllowRule(doc map[string]any, rule string) bool {
+	perms, _ := doc["permissions"].(map[string]any)
+	allow, _ := perms["allow"].([]any)
+	kept := make([]any, 0, len(allow))
+	for _, r := range allow {
+		if r != rule {
+			kept = append(kept, r)
+		}
+	}
+	if len(kept) == len(allow) {
+		return false
+	}
+	if len(kept) > 0 {
+		perms["allow"] = kept
+	} else {
+		delete(perms, "allow")
+	}
+	if len(perms) == 0 {
+		delete(doc, "permissions")
+	}
+	return true
 }
 
 func agyCommand(l Layout, iris, event string, matched bool) map[string]any {

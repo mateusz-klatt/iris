@@ -134,6 +134,8 @@ func stripClient(client string) stripFunc {
 		switch {
 		case strings.HasSuffix(path, ".toml"):
 			return stripBlock(data)
+		case client == Antigravity && filepath.Base(path) == "settings.json":
+			return stripObject(data, func(doc map[string]any) bool { return RemoveAllowRule(doc, AgyAllowRule) })
 		case strings.Contains(filepath.Base(path), "mcp"):
 			return stripObject(data, removeMCPServer)
 		default:
