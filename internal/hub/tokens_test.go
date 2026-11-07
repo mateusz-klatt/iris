@@ -88,3 +88,36 @@ func TestNamedTokenRevokesStreams(t *testing.T) {
 	call("/v1/agents", 401)
 	request(t, s, "GET", "/v1/status", nil, 200) // legacy remains accepted
 }
+
+func TestOnlyTheOwnerManagesTokens(t *testing.T) {
+	_, s := setup(t)
+	host := request(t, s, "POST", "/v1/tokens", map[string]string{"host": "laptop"}, 200)["token"].(string)
+	as := func(method, path, body string) int {
+		t.Helper()
+		r, _ := http.NewRequest(method, s.URL+path, strings.NewReader(body))
+		r.Header.Set("Authorization", "Bearer "+host)
+		resp, err := s.Client().Do(r)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer resp.Body.Close()
+		return resp.StatusCode
+	}
+	for _, route := range []struct{ method, path, body string }{
+		{"GET", "/v1/tokens", ""},
+		{"POST", "/v1/tokens", `{"host":"minted"}`},
+		{"DELETE", "/v1/tokens/laptop", ""},
+	} {
+		if got := as(route.method, route.path, route.body); got != http.StatusForbidden {
+			t.Errorf("%s %s: %d", route.method, route.path, got)
+		}
+	}
+	// Refused means nothing changed: no token was minted and none was revoked.
+	tokens := request(t, s, "GET", "/v1/tokens", nil, 200)["tokens"].([]any)
+	if len(tokens) != 1 || tokens[0].(map[string]any)["revoked_ms"] != nil {
+		t.Fatal(tokens)
+	}
+	if got := as("GET", "/v1/agents?repository_id=x", ""); got == http.StatusForbidden {
+		t.Fatal("a host token lost its ordinary authority")
+	}
+}

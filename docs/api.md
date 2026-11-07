@@ -286,11 +286,13 @@ and the configured public authority.
 
 ## Named host tokens
 
-The existing `hub.token` remains valid as `(legacy)`; no client change is needed on
-upgrade. `iris token add <host>`, `iris token list`, and `iris token revoke <host>`
-use the configured hub and an existing valid bearer token. All valid bearer tokens
-have the same authority, including token administration; names provide attribution,
-not isolation between hosts. A UI cookie cannot administer bearer tokens.
+The hub's own `hub.token` is the owner token. It remains valid, and logs name it
+`(legacy)`; no client change is needed on upgrade. `iris token add <host>`,
+`iris token list`, and `iris token revoke <host>` need the owner token: a host token
+gets `forbidden` (403) on every `/v1/tokens` route, because a host that could manage
+tokens could mint itself more or lock other hosts out. Otherwise host tokens have the
+owner's authority, and names give attribution, not isolation between hosts. A UI
+cookie cannot administer bearer tokens.
 
 `POST /v1/tokens` takes `{"host":"workstation"}` and returns `{"name":"workstation",
 "token":"..."}`. The random 256-bit token is returned only on creation; the database
