@@ -201,11 +201,22 @@ func (t *transaction) threads(r Request) (map[string]any, error) {
 	}
 	q += " GROUP BY m.thread_id"
 	if r.Before != "" {
-		q += " HAVING MAX(m.created_ms)<COALESCE((SELECT MAX(created_ms) FROM Message WHERE thread_id=?),CAST(? AS INTEGER))"
+		// A thread cursor continues after that thread in the list's own order: by its last
+		// message visible in this view, then by thread id, so threads that share the
+		// cursor's millisecond are neither skipped nor repeated (gap review A15). A cursor
+		// that names no thread is a millisecond timestamp, as before.
+		cursor, cursorArgs := visibleIn("mc", r.RepositoryID)
+		at := "COALESCE((SELECT MAX(mc.created_ms) FROM Message mc WHERE mc.thread_id=? AND " + cursor + "),CAST(? AS INTEGER))"
+		q += " HAVING MAX(m.created_ms)<" + at + " OR (MAX(m.created_ms)=" + at + " AND m.thread_id<? AND EXISTS(SELECT 1 FROM Message WHERE thread_id=?))"
+		for range 2 {
+			args = append(append(append(args, r.Before), cursorArgs...), r.Before)
+		}
 		args = append(args, r.Before, r.Before)
 	}
+	// One more than the page is read, to tell whether another page follows.
+	limit := boundedLimit(r.Limit, 50, 100)
 	q += " ORDER BY MAX(m.created_ms) DESC,m.thread_id DESC LIMIT ?"
-	args = append(args, boundedLimit(r.Limit, 50, 100))
+	args = append(args, limit+1)
 	rows, err := t.rows(q, args...)
 	if err != nil {
 		return nil, fail("bad_request", "invalid thread search")
@@ -222,6 +233,12 @@ func (t *transaction) threads(r Request) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	page := map[string]any{}
+	if len(out) > limit {
+		out = out[:limit]
+		page["next"] = out[limit-1]["id"]
+	}
+	page["threads"] = out
 	for _, th := range out {
 		names := []string{}
 		// Participants of the messages visible here only, not of the whole thread.
@@ -241,7 +258,7 @@ func (t *transaction) threads(r Request) (map[string]any, error) {
 		}
 		th["participants"] = names
 	}
-	return map[string]any{"threads": out}, nil
+	return page, nil
 }
 func (t *transaction) thread(id, repo string) (map[string]any, error) {
 	visible, args := visibleIn("m", repo)

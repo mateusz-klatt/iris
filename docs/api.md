@@ -250,12 +250,18 @@ creating a link always requires the bearer token. Everything else under `/` serv
 ```
 
 `GET /v1/ui/threads?repository_id=...&agent=...&q=...&before=...&limit=50` lists threads, newest
-first. `q` is a full-text search.
+first, ordered by the last message visible in the view and then by thread id. `q` is a full-text
+search. `limit` is 50 by default and 100 at most.
 
 ```json
 {"threads":[{"id":"ms_...","subject":"...","participants":["..."],"count":3,
-             "last_at":"...","unread":1}]}
+             "last_at":"...","unread":1}],"next":"ms_..."}
 ```
+
+`next` is present when more threads follow. Pass it as `before` with the same filters for the next
+page. It continues after that thread in the same order, so threads whose last messages share a
+millisecond are neither skipped nor repeated. A `before` that names no thread is read as a
+millisecond timestamp and returns the threads whose last message is older.
 
 `GET /v1/ui/threads/{id}` returns the thread's messages:
 
