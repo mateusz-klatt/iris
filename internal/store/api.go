@@ -104,11 +104,12 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 	return out, err
 }
 
-// pendingDeliveries counts mail nobody has fetched yet. A fetched delivery stays
-// unread until it is acknowledged, but it no longer needs anyone's attention.
+// pendingDeliveries counts mail that needs its recipient's attention: not fetched yet, or
+// fetched by an Execution that is gone. A fetched delivery stays unread until it is
+// acknowledged, but while its fetcher lives it needs no one's attention.
 func (t *transaction) pendingDeliveries(agent string) (int, error) {
 	var n int
-	err := t.row("SELECT COUNT(*) FROM Delivery WHERE recipient_agent_id=? AND attempt=0 AND id NOT IN (SELECT delivery_id FROM Ack)", agent).Scan(&n)
+	err := t.row("SELECT COUNT(*) FROM Delivery WHERE recipient_agent_id=? AND attention=1 AND id NOT IN (SELECT delivery_id FROM Ack)", agent).Scan(&n)
 	return n, err
 }
 
@@ -176,7 +177,7 @@ func (t *transaction) events(r Request) (map[string]any, error) {
 		out["snapshot"] = map[string]any{"claims": claims, "unread": unread}
 	} else {
 		// A delivery that is no longer waiting was already seen, so its event needs no attention.
-		rows, err := t.rows(`SELECT seq,kind,kind='inbox_changed' AND object_id NOT IN (SELECT id FROM Delivery WHERE attempt=0 AND id NOT IN (SELECT delivery_id FROM Ack)) FROM Event WHERE seq>? AND agent_id=? AND (execution_id IS NULL OR execution_id=?) ORDER BY seq LIMIT ?`, r.After, e.AgentID, e.ID, boundedLimit(r.Limit, 100, 1000))
+		rows, err := t.rows(`SELECT seq,kind,kind='inbox_changed' AND object_id NOT IN (SELECT id FROM Delivery WHERE attention=1 AND id NOT IN (SELECT delivery_id FROM Ack)) FROM Event WHERE seq>? AND agent_id=? AND (execution_id IS NULL OR execution_id=?) ORDER BY seq LIMIT ?`, r.After, e.AgentID, e.ID, boundedLimit(r.Limit, 100, 1000))
 		if err != nil {
 			return nil, err
 		}

@@ -41,6 +41,9 @@ var pathKeySchema string
 //go:embed migrations/007.sql
 var waiterSchema string
 
+//go:embed migrations/008.sql
+var attentionSchema string
+
 // Clock separates lease ticks from persisted wall-clock expiries. Tick must be monotonic
 // within a Store's lifetime; client timestamps never participate in lease decisions.
 type Clock interface {
@@ -193,6 +196,11 @@ func openDatabase(filename string, clock Clock, driverName string) (*Store, erro
 				return err
 			}
 		}
+		if version < 8 {
+			if _, err := t.exec(attentionSchema); err != nil {
+				return err
+			}
+		}
 		if err := t.fillMissingKeys(); err != nil {
 			return err
 		}
@@ -208,10 +216,10 @@ func openDatabase(filename string, clock Clock, driverName string) (*Store, erro
 		if _, err := t.exec("UPDATE Execution SET recovery_deadline=? WHERE state='active' AND recovery_deadline IS NULL", clock.Now().Add(120*time.Second).UnixMilli()); err != nil {
 			return err
 		}
-		// Attempts survive reassignment, so a pre-crash acknowledgement cannot match a new fetch.
-		if _, err := t.exec("UPDATE Delivery SET execution_id=NULL WHERE id NOT IN (SELECT delivery_id FROM Ack)"); err != nil {
-			return err
-		}
+		// A recovering Execution keeps the deliveries it fetched, so a restart wakes no one for
+		// mail already read. One that does not recover loses them in expire, which requeues them.
+		// An acknowledgement from before the crash still cannot settle a later fetch: a fetch
+		// raises the attempt, and an acknowledgement must name the current one.
 		return t.expire()
 	})
 	if err != nil {
@@ -291,8 +299,38 @@ func (t *transaction) expire() error {
 			return err
 		}
 	}
-	_, err = t.exec(`UPDATE Delivery SET execution_id=NULL WHERE execution_id IN (SELECT id FROM Execution WHERE state<>'active') AND id NOT IN (SELECT delivery_id FROM Ack)`)
-	return err
+	return t.requeue()
+}
+
+// requeue frees the unacknowledged deliveries of Executions that are no longer active, and
+// wakes their recipient: the mail was fetched, but whoever fetched it is gone, so nobody may
+// have read it. Each is announced once, because a freed delivery no longer matches.
+func (t *transaction) requeue() error {
+	rows, err := t.rows(`SELECT id,recipient_agent_id FROM Delivery WHERE execution_id IN (SELECT id FROM Execution WHERE state<>'active') AND id NOT IN (SELECT delivery_id FROM Ack)`)
+	if err != nil {
+		return err
+	}
+	type freed struct{ id, agent string }
+	var all []freed
+	for rows.Next() {
+		var f freed
+		rows.Scan(&f.id, &f.agent)
+		all = append(all, f)
+	}
+	err = rows.Err()
+	_ = rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, f := range all {
+		if _, err = t.exec("UPDATE Delivery SET execution_id=NULL,attention=1 WHERE id=?", f.id); err != nil {
+			return err
+		}
+		if err = t.event(f.agent, "", "inbox_changed", f.id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 func (t *transaction) event(agent, ex, kind, object string) error {
 	_, err := t.exec("INSERT INTO Event(kind,agent_id,execution_id,object_id,created_ms) VALUES(?,NULLIF(?,''),NULLIF(?,''),?,?)", kind, agent, ex, object, t.s.clock.Now().UnixMilli())

@@ -296,6 +296,20 @@ Changes from the reference schema:
    was refused and nothing went through unclaimed.
 3. A claim has `origin` (`explicit` or `auto`) and an optional expiry instead of a mandatory
    renewed deadline.
+4. A Delivery keeps four separate facts. `attempt` guards acknowledgements: each fetch raises it,
+   and an acknowledgement must name the current one. `execution_id` is the Execution processing
+   it. `attention` says the recipient still needs a wake. An `Ack` row means it is settled. A new
+   delivery needs attention, and a fetch clears it. When the Execution that fetched it is no
+   longer active, the delivery is freed, needs attention again, and one `inbox_changed` event
+   wakes the recipient: the mail was fetched, but nobody may have read it (gap review A10).
+
+   Deliveries are recovered like claims. A hub restart no longer frees them: a recovering
+   Execution keeps what it fetched, can acknowledge it after reattaching, and wakes no one for
+   mail it already read. One that is lost at its deadline frees its deliveries then, and they
+   are requeued as above. An acknowledgement made before a crash still cannot settle a fetch
+   made after it, because that fetch raised the attempt. Not covered: an `inbox` response lost
+   while its session stays alive. The session can fetch the same deliveries again, but nothing
+   wakes it. That needs a receipt step, which belongs with gap A12's acceptance semantics.
 
 ### D10. Claim semantics
 
@@ -591,6 +605,8 @@ last checkpoint.
 - Whether `SessionStart` context on Grok and Kimi reaches the model at all.
 - The nearest-process rung has not been tried on a Codex TUI session or a Cursor IDE session.
 - The clean-room record has had no legal review.
+- A lost `inbox` response to a session that stays alive leaves its mail fetched and unwoken (D9,
+  change 4). It is fixed with gap review A12's receipt semantics, not separately.
 
 ## 5. Invariants the tests must prove
 
@@ -604,6 +620,9 @@ On `modernc.org/sqlite`, with real concurrency:
 - Retries cannot double-send or resurrect a claim. A key reused with a different request gets 409.
 - A failed transaction exposes nothing.
 - Deliveries survive a crash and deduplicate by id. A stale ack fails, and a repeated ack is harmless.
+  An ack from before a restart cannot settle a fetch after it.
+- A restart wakes no one for mail a live session already fetched. Mail whose fetching Execution is
+  lost is requeued once, wakes its recipient once, and goes to the agent's next session.
 - Cursors never regress. A reconnect neither loses committed events nor exposes another recipient
   or any content. An expired cursor returns a reset with a snapshot.
 - Clock skew on clients cannot extend a lease.
