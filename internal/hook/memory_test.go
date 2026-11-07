@@ -214,7 +214,7 @@ func writePayload(root, session, file string) string {
 }
 
 func runWith(h Hub, m Memory, event, payload string) Output {
-	return Runner{ClientName: "claude", EventName: event, Stdin: strings.NewReader(payload), Hub: h, Getenv: func(string) string { return "" }, Memory: m}.Run()
+	return Runner{ClientName: "claude", EventName: event, Stdin: strings.NewReader(payload), Hub: h, Getenv: func(string) string { return "" }, Memory: m, Deadline: roomy}.Run()
 }
 
 func TestARememberedGenerationReattachesARecoveringSession(t *testing.T) {

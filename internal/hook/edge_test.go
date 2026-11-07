@@ -69,8 +69,12 @@ func waitForFailure(t *testing.T, token string) Failure {
 	return Failure{}
 }
 
+// roomy is the deadline and log wait for tests that assert a decision or a recorded failure,
+// not the budget. Under full CPU load the repository stage alone passed the 1.5 s default.
+const roomy = time.Minute
+
 func run(hub Hub, event, payload string, env func(string) string) Output {
-	return Runner{ClientName: "claude", EventName: event, Stdin: strings.NewReader(payload), Hub: hub, Getenv: env}.Run()
+	return Runner{ClientName: "claude", EventName: event, Stdin: strings.NewReader(payload), Hub: hub, Getenv: env, Deadline: roomy, logWait: roomy}.Run()
 }
 
 func TestSessionStartWithoutTheHubFailsOpenAndIsRecorded(t *testing.T) {
