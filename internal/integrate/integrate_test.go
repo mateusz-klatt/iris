@@ -391,3 +391,18 @@ func TestCodexMCPServerKeepsTheHubOverrideAndNeedsNoApproval(t *testing.T) {
 		t.Fatalf("remove changed the user's file\n got: %q\nwant: %q", got, mine)
 	}
 }
+
+// Antigravity denies the tool when a hook times out, so its timeout must leave Iris's own 1.5 s
+// deadline room to give up first.
+func TestAntigravityHooksOutlastIrisDeadline(t *testing.T) {
+	l := testLayout(t)
+	agy, _ := ByName(Antigravity)
+	if err := agy.Install(l, nil); err != nil {
+		t.Fatal(err)
+	}
+	files, _ := agy.Files(l)
+	text := string(mustRead(t, files[0]))
+	if strings.Count(text, `"timeout": 10`) == 0 || strings.Contains(text, `"timeout": 3`) || strings.Contains(text, `"timeout": 1,`) {
+		t.Fatalf("antigravity timeouts\n%s", text)
+	}
+}

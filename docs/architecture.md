@@ -75,7 +75,7 @@ Hard rules for `iris hook`, because failure semantics differ between clients:
 | Claude Code | allowed | allowed | JSON |
 | Codex | allowed (measured) | allowed (measured) | JSON |
 | Copilot | **denied** (measured) | allowed | JSON |
-| Antigravity | **denied** (measured) | unknown | JSON |
+| Antigravity | **denied** (measured) | **denied** (measured) | JSON |
 | Cursor | allowed unless `failClosed` | unknown | JSON |
 | Grok | allowed unless `failClosed` | allowed | JSON with exit 2 |
 | Kimi | allowed | allowed | exit 2 with stderr |
@@ -83,7 +83,11 @@ Hard rules for `iris hook`, because failure semantics differ between clients:
 1. Everything is caught. A failure of any kind produces that client's valid allow output.
 2. The exit code is non-zero only for a deliberate deny on a client whose contract requires it.
 3. A 1.5 s internal deadline ends the hook; the client-side timeout is set to 3 s explicitly,
-   because defaults reach 600 s.
+   because defaults reach 600 s. Antigravity's is 10 s, because there a timeout kills the hook
+   and fails the tool call, MCP tools included (measured on 1.5.3), and no guard can turn that
+   into an allow. With 10 s the internal deadline fails open long before. What remains is a
+   hook that stalls before its own deadline can act, or a hung process: on Antigravity that
+   still denies every tool for as long as it lasts.
 4. Non-mutating tools return without touching the network.
 5. Outside a git worktree the hook does nothing.
 6. Every fallback to allow caused by a failure is recorded in `hook-failures.log`, without payload

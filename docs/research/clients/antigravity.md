@@ -255,3 +255,28 @@ If designing for agy alone: skip hooks for read-only tool visibility and use MCP
 | MCP server-initiated notifications reaching model | Implement MCP server sending `notifications/message`; observe model |
 | `conversationId` stability through compaction | Resume compacted session with `--continue`, compare IDs before/after |
 | Hook timing on Windows with Defender | Measure PreToolUse hook round-trip with AV enabled |
+
+## H. Measured on macOS, 1.5.3 (2026-11-07)
+
+Real headless runs (`agy -p … --dangerously-skip-permissions --disable-slash-commands`) against a
+local hub on an Intel Mac, with the Iris integration installed by `iris integrate antigravity`.
+Another session held an explicit claim on one file.
+
+- **Deny and claims.** A claimed file was refused with "tool call denied by pre-tool hook: Iris: …".
+  A free file was claimed automatically.
+- **MCP and context.** `whoami` bound by the process ancestor (D6, the nearest-process rung).
+  `claims` and `inbox` worked. The SessionStart context reached the model, which reported its Iris
+  handle.
+- **Failure semantics.** A hook that exits 1 and a missing binary both became the guard's allow.
+  A hook **timeout denies**: Antigravity kills the hook ("JSON hook … failed: command failed:
+  signal: killed") and fails the tool call, for every tool including MCP tools. With the timeout
+  at 10 s, a hook that took 5 s was waited for, and one that slept 15 s was killed after about
+  11 s. Iris therefore sets 10 s for Antigravity, well above its own 1.5 s deadline. A hook that
+  stalls before that deadline can act, or a hung process, still denies every tool, and no guard
+  can change that.
+- **PATH.** The earlier guard checked `command -v iris` and ran the recorded path. With the
+  client's PATH lacking that directory, every hook was skipped without a trace (#87 fixed it).
+- **ack.** With a five-step prompt the model called `ack` with an empty `delivery_id` in every
+  run. With a short prompt, the transport carried the right id and the ack succeeded. Iris now
+  refuses an empty id with a message that names the field (#90).
+- **Not measured:** session end (Antigravity has Stop only), Windows, and hook latency.
