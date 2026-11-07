@@ -29,8 +29,9 @@ func run(dirs []string, out io.Writer) int {
 	}
 	var problems []string
 	for _, dir := range dirs {
-		files, err := filepath.Glob(filepath.Join(dir, "*.y*ml"))
-		if err != nil || len(files) == 0 {
+		// The pattern is fixed, so Glob cannot report ErrBadPattern.
+		files, _ := filepath.Glob(filepath.Join(dir, "*.y*ml"))
+		if len(files) == 0 {
 			fmt.Fprintf(out, "%s: no workflows found\n", dir)
 			return 2
 		}
