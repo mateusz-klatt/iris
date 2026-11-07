@@ -121,3 +121,40 @@ func TestOnlyTheOwnerManagesTokens(t *testing.T) {
 		t.Fatal("a host token lost its ordinary authority")
 	}
 }
+
+func TestForgetIsForTheOwnerOnly(t *testing.T) {
+	_, s := setup(t)
+	gone := register(t, s, 9)
+	request(t, s, "POST", "/v1/executions/"+gone["execution_id"].(string)+"/end", map[string]any{"generation": gone["generation"]}, 200)
+	host := request(t, s, "POST", "/v1/tokens", map[string]string{"host": "laptop"}, 200)["token"].(string)
+	body := `{"repository_id":"` + gone["repository_id"].(string) + `","dry_run":true}`
+	r, _ := http.NewRequest("POST", s.URL+"/v1/admin/forget", strings.NewReader(body))
+	r.Header.Set("Authorization", "Bearer "+host)
+	resp, err := s.Client().Do(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatal(resp.StatusCode)
+	}
+	anonymous, _ := http.NewRequest("POST", s.URL+"/v1/admin/forget", strings.NewReader(body))
+	resp, err = s.Client().Do(anonymous)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Fatal("anonymous", resp.StatusCode)
+	}
+	dry := request(t, s, "POST", "/v1/admin/forget", map[string]any{"repository_id": gone["repository_id"], "dry_run": true}, 200)
+	if dry["dry_run"] != true || dry["counts"].(map[string]any)["Repository"] != float64(1) {
+		t.Fatal(dry)
+	}
+	done := request(t, s, "POST", "/v1/admin/forget", map[string]any{"repository_id": gone["repository_id"]}, 200)
+	if done["dry_run"] != false {
+		t.Fatal(done)
+	}
+	request(t, s, "POST", "/v1/admin/forget", map[string]any{"repository_id": gone["repository_id"]}, 404)
+	request(t, s, "POST", "/v1/admin/forget", "not an object", 400)
+}

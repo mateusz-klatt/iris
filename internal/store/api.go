@@ -60,6 +60,8 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 			out = map[string]any{"agents": v}
 		case "events":
 			out, err = t.events(r)
+		case "forget":
+			out, err = t.forget(r)
 		case "monitor_cursor":
 			out, err = t.monitorCursor(r)
 		case "validate":

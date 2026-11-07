@@ -52,6 +52,22 @@ func (h *Hub) authenticate(r *http.Request) principal {
 	return principal{name, tokenDigest(token)}
 }
 func (h *Hub) tokenRoutes() {
+	h.mux.HandleFunc("POST /v1/admin/forget", func(w http.ResponseWriter, r *http.Request) {
+		if !h.ownerOnly(w, r) {
+			return
+		}
+		req, err := decode(w, r)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		out, err := h.call(r.Context(), "forget", req)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, out)
+	})
 	h.mux.HandleFunc("GET /v1/tokens", func(w http.ResponseWriter, r *http.Request) {
 		if !h.ownerOnly(w, r) {
 			return

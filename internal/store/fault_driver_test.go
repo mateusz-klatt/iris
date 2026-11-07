@@ -107,7 +107,7 @@ func installFaultDriver(t *testing.T, s *Store, file string) *storageFault {
 }
 
 func TestStorageFailuresRollBackAndRetry(t *testing.T) {
-	for _, op := range []string{"sessions", "session-resume", "heartbeat-recovery", "session-new-slot", "touch-cached", "touch-conflict", "claim-conflict", "check-known", "policy", "bind", "heartbeat", "end", "touch", "claim", "claim-reuse", "claim-cached", "release", "claims", "messages", "message-cached", "inbox", "ack", "agents", "events", "events-reset", "status", "validate", "monitor_cursor", "check", "reconcile", "ui_overview", "ui_threads", "ui_thread", "ui_messages", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_events", "expire"} {
+	for _, op := range []string{"sessions", "session-resume", "heartbeat-recovery", "session-new-slot", "touch-cached", "touch-conflict", "claim-conflict", "check-known", "policy", "bind", "heartbeat", "end", "touch", "claim", "claim-reuse", "claim-cached", "release", "claims", "messages", "message-cached", "inbox", "ack", "agents", "events", "events-reset", "status", "validate", "monitor_cursor", "check", "reconcile", "ui_overview", "ui_threads", "ui_thread", "ui_messages", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_events", "expire", "forget", "forget-repository"} {
 		t.Run(op, func(t *testing.T) {
 			s, clock, file := testStore(t)
 			a, ar := session(t, s, 1)
@@ -219,6 +219,15 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 			case "expire":
 				route = "status"
 				clock.advance(1000000000000)
+			case "forget":
+				// b holds no claims, so once its session ends it can go, mail and all.
+				call(t, s, "end", b)
+				r = Request{Agent: name}
+			case "forget-repository":
+				route = "forget"
+				other := call(t, s, "sessions", Request{Client: "codex", Host: "gone", SessionID: "gone", Cwd: "/gone", RemoteURL: "https://gone.example/gone.git"})
+				call(t, s, "end", Request{ExecutionID: other["execution_id"].(string), Generation: other["generation"].(int64)})
+				r = Request{RepositoryID: other["repository_id"].(string)}
 			}
 			invoke := func() (map[string]any, error) {
 				if op == "policy" {

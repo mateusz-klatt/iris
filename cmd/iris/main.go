@@ -52,6 +52,9 @@ func dispatch(args []string) int {
 	return 0
 }
 func run(args []string) error {
+	if len(args) > 0 && args[0] == "admin" {
+		return runAdmin(args[1:])
+	}
 	if len(args) > 0 && args[0] == "token" {
 		return runToken(args[1:])
 	}
@@ -72,7 +75,7 @@ func run(args []string) error {
 		return nil
 	}
 	if len(args) == 0 || args[0] != "serve" {
-		return errors.New("usage: iris serve [--listen address] [--db path] [--token-file path] [--tls-cert path --tls-key path] [--allowed-hosts host:port,...] | setup | doctor | service | ui | token | guard | hook | mcp | watch | integrate | version")
+		return errors.New("usage: iris serve [--listen address] [--db path] [--token-file path] [--tls-cert path --tls-key path] [--allowed-hosts host:port,...] | setup | doctor | service | ui | token | admin | guard | hook | mcp | watch | integrate | version")
 	}
 	cfg, err := config.Default()
 	if err != nil {

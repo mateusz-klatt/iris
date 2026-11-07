@@ -304,6 +304,24 @@ or hyphens, starting with a letter or digit. An active duplicate returns `confli
 A revoked name can be added again with a fresh secret. The legacy file token is
 rotated through its file rather than this API.
 
+## Removing records
+
+`POST /v1/admin/forget` removes one repository or one agent, with its executions,
+claims, deliveries, messages, acknowledgements, cursors, shell snapshots and events.
+It takes `{"repository_id":"..."}` or `{"agent":"..."}`, exactly one, and
+`"dry_run":true` to report without removing. Only the owner token may call it; a host
+token gets `forbidden` and no token gets `unauthorized`. `iris admin forget
+--repository <id> | --agent <name> [--dry-run]` prints the response.
+
+It refuses with `conflict` while any of those executions is active or holds an
+unrevoked claim, and says how many of each in `details`. The response names the
+`scope`, gives `counts` per table, and `detached_children`, the subagent executions of
+other agents that lose their parent link. Mail goes with whichever end is removed, so
+another agent can lose messages from its inbox. Events for other agents that refer to a
+removed delivery stay, and read as `inbox_read`, so no watcher is woken for them. A
+`changed` event refreshes the web console. Nothing is archived: a removed record is
+gone, and the hub keeps no tombstone.
+
 Every authenticated HTTP request logs its token name, method, path and peer, without
 credentials or request bodies. Named token usage counts and last-use timestamps are
 persisted. Revocation refuses new requests and closes existing bearer streams and
