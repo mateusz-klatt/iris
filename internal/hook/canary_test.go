@@ -2,6 +2,7 @@ package hook
 
 import (
 	"bytes"
+	"encoding/json"
 	"strings"
 	"testing"
 )
@@ -11,7 +12,8 @@ import (
 func TestTheCanaryReceiptIsOnlyForDoctorsCanary(t *testing.T) {
 	nonce := "0123456789abcdef0123456789abcdef"
 	payload := func(session string) string {
-		return `{"session_id":"` + session + `","cwd":"` + t.TempDir() + `","hook_event_name":"SessionStart"}`
+		cwd, _ := json.Marshal(t.TempDir()) // a Windows path has backslashes, which JSON escapes
+		return `{"session_id":"` + session + `","cwd":` + string(cwd) + `,"hook_event_name":"SessionStart"}`
 	}
 	env := func(value string) func(string) string {
 		return func(name string) string {
