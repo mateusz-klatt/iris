@@ -62,6 +62,10 @@ func TestFailOpenEveryClient(t *testing.T) {
 }
 
 func TestEndToEndFakeHub(t *testing.T) {
+	// The subtests assert the decision each client receives, not the hook's budget, so the
+	// deadline only bounds a hang. Under full CPU load on Windows the repository stage alone
+	// passed one second, and the hook rightly failed open.
+	deadline := time.Minute
 	var mu sync.Mutex
 	var sessions []map[string]any
 	var touches []map[string]any
@@ -111,7 +115,7 @@ func TestEndToEndFakeHub(t *testing.T) {
 				Hub:      &hubclient.Client{Config: hubURL(srv.URL)},
 				Ancestor: func() (proc.Ancestor, error) { return proc.Ancestor{PID: 42, StartMS: 99}, nil },
 				Host:     func() string { return "testhost" },
-				Deadline: time.Second,
+				Deadline: deadline,
 			}.Run()
 			if !denied(c, out) {
 				t.Fatalf("deny output stdout %q stderr %q exit %d", out.Stdout, out.Stderr, out.Exit)
@@ -153,7 +157,7 @@ func TestEndToEndFakeHub(t *testing.T) {
 			EventName:  "SessionStart",
 			Stdin:      strings.NewReader(fmt.Sprintf(`{"session_id":"s1","cwd":%q,"hook_event_name":"SessionStart"}`, root)),
 			Hub:        &hubclient.Client{Config: hubURL(srv.URL)},
-			Deadline:   time.Second,
+			Deadline:   deadline,
 		}.Run()
 		if out.Exit != 0 || !strings.Contains(string(out.Stdout), "Iris handle: ex_1") || !strings.Contains(string(out.Stdout), "untrusted data") {
 			t.Fatalf("%s", out.Stdout)
@@ -174,7 +178,7 @@ func TestEndToEndFakeHub(t *testing.T) {
 			EventName:  "PreToolUse",
 			Stdin:      strings.NewReader(editPayload(ClientCodex, root)),
 			Hub:        &hubclient.Client{Config: hubURL(askSrv.URL)},
-			Deadline:   time.Second,
+			Deadline:   deadline,
 		}.Run()
 		if out.Exit != 0 || !strings.Contains(string(out.Stdout), "permissionDecision\":\"deny") || !strings.Contains(string(out.Stdout), "Ask the human") {
 			t.Fatalf("%s", out.Stdout)
