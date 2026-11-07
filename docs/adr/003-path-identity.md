@@ -67,13 +67,17 @@ host. Otherwise the repository opts out.
 
 ## What this still cannot catch
 
-- A file reached by another name: symlinks, hard links, or a shell command whose paths no hook sees.
-- Rules that differ between filesystems. The key is one rule, so it can over-match. NTFS and casefold
-  ext4 were not measured.
-- Windows short names such as `PROGRA~1`, and trailing dots and spaces.
+- A file reached by another name: symlinks, junctions, hard links, or a shell command whose paths no
+  hook sees. Measured on NTFS for a file symlink and a directory junction.
+- Rules that differ between filesystems. The key is one rule, so it can over-match. On NTFS it does:
+  see the table below. Casefold ext4 was not measured.
+- Windows short names such as `PROGRA~1`, for a file, a directory or the worktree root. Matching them
+  needs the filesystem, and a hook resolves paths lexically. Git refuses to stage a short name, so
+  only the hook is affected.
 - A claim made in a repository that opted out.
-- An absolute path whose worktree root is itself spelled differently. `gitinfo.Relative` compares the
-  root exactly and rejects such a path as outside the worktree, before any key is computed.
+- An absolute path whose worktree root is spelled in another case on a case-insensitive POSIX volume,
+  such as macOS. `gitinfo.Relative` compares a POSIX root exactly. A drive-letter root now compares
+  without case, and drops the trailing dots and spaces that Win32 removes.
 
 Hooks and the guard remain cooperative, and a hook that misses its deadline still fails open.
 
@@ -100,4 +104,34 @@ start, because an empty key on a prefix claim would otherwise read as repository
 On one APFS volume with the real binary, hooks, Git and guard: every row of the table was refused by
 the hook and by a commit, with a same-spelling control and an empty hook failure log. A database
 written by the older binary migrated in place, and its claim refused another spelling. A rollback to
-that binary and forward again kept every claim. NTFS and casefold ext4 were not measured.
+that binary and forward again kept every claim. Casefold ext4 was not measured.
+
+On NTFS, Windows 11, with 8.3 names enabled, `core.ignorecase` true, the real hook and guard, two
+worktrees and a local hub. Session A edited the first name, and session B then edited the second in
+its own worktree. A same-spelling control was refused and no hook failed open.
+
+| Pair | NTFS | Hook | Guard | Reading |
+|---|---|---|---|---|
+| `b.go`, `B.GO` | one file | refused | refused | caught |
+| `straße`, `STRASSE` | two files | refused | | false conflict |
+| `İx`, `i̇x` (`i` and U+0307) | two files | refused | | false conflict |
+| `İx`, `Ix` | two files | allowed | | correct |
+| `ıx`, `Ix` | two files | allowed | | correct |
+| `café` in NFC and NFD | two files | refused | refused | false conflict |
+| `ﬁle`, `FILE` | two files | refused | | false conflict |
+| `σ`, `ς` | two files | refused | | false conflict |
+| `K` (Kelvin sign), `k` | two files | refused | | false conflict |
+| `t.go`, `t.go.` | one file | refused after the fix | Git cannot stage it | caught |
+| `s.go`, `s.go ` | one file | refused after the fix | | caught |
+| `d/x.go`, `d./x.go` | one file | refused after the fix | | caught |
+| backslashes, forward slashes | one file | refused | | caught |
+| root in upper case | one file | refused after the fix | | caught |
+| drive letter in lower case | one file | refused | | caught |
+| `longfilename.go`, `LONGFI~1.GO` | one file | allowed | Git cannot stage it | missed |
+| directory and root as 8.3 | one file | allowed | | missed |
+| a file symlink | one file | allowed | | missed |
+| a directory junction | one file | allowed | | missed |
+
+So NTFS folds less than the key. Every Unicode row that APFS treats as one file is two files here,
+and a refusal between them is a false conflict. Decision 3 accepts that cost. Trailing dots, trailing
+spaces and the case of the root were missed collisions before this measurement, and are refused now.
