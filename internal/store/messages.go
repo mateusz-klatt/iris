@@ -27,19 +27,14 @@ func (t *transaction) send(r Request) (map[string]any, error) {
 	if len(r.To) == 0 || len(r.To) > 100 {
 		return nil, fail("bad_request", "provide 1 to 100 recipients")
 	}
-	type recipient struct{ id, name string }
+	// Addresses are resolved after the retry check, so a retry returns the deliveries
+	// it made the first time even if a repository's contact has changed since (ADR 004).
 	recipients := []recipient{}
 	seen := map[string]bool{}
 	for _, name := range r.To {
-		var a recipient
-		if name == "human" {
-			a.id, err = t.human(e.Repo)
-			a.name = "human"
-		} else {
-			err = t.row("SELECT id,name FROM Agent WHERE repository_id=? AND (name=? OR id=?) AND client<>'human'", e.Repo, name, name).Scan(&a.id, &a.name)
-		}
+		a, err := t.resolve(e, name)
 		if err != nil {
-			return nil, fail("not_found", "recipient is not in this repository")
+			return nil, err
 		}
 		if !seen[a.id] {
 			recipients = append(recipients, a)
@@ -49,8 +44,18 @@ func (t *transaction) send(r Request) (map[string]any, error) {
 	message := id("ms_")
 	thread := message
 	if r.ReplyTo != "" {
-		if err = t.row("SELECT thread_id FROM Message WHERE id=? AND repository_id=?", r.ReplyTo, e.Repo).Scan(&thread); err != nil {
-			return nil, fail("not_found", "reply is not in this repository")
+		// A reply follows its thread across repositories, but only someone who wrote or
+		// received the message may reply to it. The operator oversees a repository, so it
+		// may reply to any message visible there.
+		eligible := `(m.sender_execution_id IN (SELECT id FROM Execution WHERE agent_id=?) OR EXISTS (SELECT 1 FROM Delivery d WHERE d.message_id=m.id AND d.recipient_agent_id=?))`
+		args := []any{r.ReplyTo, e.AgentID, e.AgentID}
+		if r.Source == "operator" {
+			var more []any
+			eligible, more = visibleIn("m", e.Repo)
+			args = append([]any{r.ReplyTo}, more...)
+		}
+		if err = t.row(`SELECT m.thread_id FROM Message m WHERE m.id=? AND `+eligible, args...).Scan(&thread); err != nil {
+			return nil, fail("not_found", "you can reply only to a message you sent or received")
 		}
 	}
 	if _, err = t.exec("INSERT INTO Message(id,sender_execution_id,subject,body,created_ms,repository_id,thread_id,reply_to) VALUES(?,?,?,?,?,?,?,NULLIF(?,''))", message, e.ID, r.Subject, r.Body, t.s.clock.Now().UnixMilli(), e.Repo, thread, r.ReplyTo); err != nil {
@@ -65,7 +70,16 @@ func (t *transaction) send(r Request) (map[string]any, error) {
 		if err = t.event(a.id, "", "inbox_changed", delivery); err != nil {
 			return nil, err
 		}
-		deliveries = append(deliveries, map[string]any{"id": delivery, "recipient": a.name})
+		d := map[string]any{"id": delivery, "recipient": a.name, "repository_id": a.repo}
+		if a.name != "human" {
+			// The sender learns that nobody can take the mail now: it waits for the next session.
+			live, err := t.reachable(a.id)
+			if err != nil {
+				return nil, err
+			}
+			d["queued"] = !live
+		}
+		deliveries = append(deliveries, d)
 	}
 	out = map[string]any{"message_id": message, "thread_id": thread, "deliveries": deliveries}
 	return out, t.remember(e, r.Key, "message", r, out)
@@ -84,16 +98,18 @@ func (t *transaction) inbox(r Request) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	rows, err := t.rows(`SELECT d.id,d.attempt,CASE WHEN a.client='human' THEN 'human' ELSE a.name END,m.subject,m.body,m.created_ms,m.id,m.thread_id FROM Delivery d JOIN Message m ON m.id=d.message_id JOIN Execution sender ON sender.id=m.sender_execution_id JOIN Agent a ON a.id=sender.agent_id WHERE d.recipient_agent_id=? AND d.id NOT IN (SELECT delivery_id FROM Ack) AND (d.execution_id IS NULL OR d.execution_id=?) ORDER BY m.created_ms,d.id LIMIT ?`, e.AgentID, e.ID, boundedLimit(r.Limit, 20, 100))
+	// The sender's repository comes from its Execution, never from the message (ADR 004).
+	rows, err := t.rows(`SELECT d.id,d.attempt,CASE WHEN a.client='human' THEN 'human' ELSE a.name END,m.subject,m.body,m.created_ms,m.id,m.thread_id,m.repository_id,COALESCE(r.name,'') FROM Delivery d JOIN Message m ON m.id=d.message_id JOIN Execution sender ON sender.id=m.sender_execution_id JOIN Agent a ON a.id=sender.agent_id LEFT JOIN Repository r ON r.id=m.repository_id WHERE d.recipient_agent_id=? AND d.id NOT IN (SELECT delivery_id FROM Ack) AND (d.execution_id IS NULL OR d.execution_id=?) ORDER BY m.created_ms,d.id LIMIT ?`, e.AgentID, e.ID, boundedLimit(r.Limit, 20, 100))
 	if err != nil {
 		return nil, err
 	}
 	out := []map[string]any{}
 	for rows.Next() {
-		var delivery, sender, subject, body, message, thread string
+		var delivery, sender, subject, body, message, thread, fromRepo, fromName string
 		var attempt, created int64
-		rows.Scan(&delivery, &attempt, &sender, &subject, &body, &created, &message, &thread)
-		out = append(out, map[string]any{"id": delivery, "message_id": message, "thread_id": thread, "attempt": attempt + 1, "sender": sender, "subject": subject, "body": body, "created_at": time.UnixMilli(created).UTC().Format(time.RFC3339Nano)})
+		rows.Scan(&delivery, &attempt, &sender, &subject, &body, &created, &message, &thread, &fromRepo, &fromName)
+		out = append(out, map[string]any{"id": delivery, "message_id": message, "thread_id": thread, "attempt": attempt + 1, "sender": sender, "subject": subject, "body": body, "created_at": time.UnixMilli(created).UTC().Format(time.RFC3339Nano),
+			"from_repository": fromName, "from_repository_id": fromRepo, "cross_repository": fromRepo != e.Repo})
 	}
 	err = rows.Err()
 	_ = rows.Close()

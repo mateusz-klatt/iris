@@ -95,6 +95,12 @@ func (t *transaction) forget(r Request) (map[string]any, error) {
 	if _, err := t.exec("UPDATE Execution SET parent_id=NULL WHERE "+children.q, children.args...); err != nil {
 		return nil, err
 	}
+	// A repository whose contact is forgotten falls back to its human inbox. The
+	// foreign key would do this too; it is explicit so it does not rest on the pragma.
+	contacts := agents.wrap("UPDATE Repository SET contact_agent_id=NULL WHERE contact_agent_id IN (%s)")
+	if _, err := t.exec(contacts.q, contacts.args...); err != nil {
+		return nil, err
+	}
 	for _, x := range targets {
 		if _, err := t.exec("DELETE FROM "+x.table+" WHERE "+x.where.q, x.where.args...); err != nil {
 			return nil, err
