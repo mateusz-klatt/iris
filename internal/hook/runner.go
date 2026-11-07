@@ -40,6 +40,9 @@ type Runner struct {
 	// Memory keeps each session's generation between hook processes. Nil means a file
 	// beside the token.
 	Memory Memory
+	// ShellDeadline bounds a shell reconcile. Zero means ReconcileDeadline. Tests that are
+	// not about the budget give it room, because a real git status is slow under load.
+	ShellDeadline time.Duration
 	// after starts the deadline. Tests replace it so a deadline fires at a known
 	// stage rather than whenever a slow machine gets there.
 	after func(time.Duration) <-chan time.Time

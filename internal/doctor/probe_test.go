@@ -498,13 +498,19 @@ func TestSlowVersionIsATimeoutNotAMissingBinary(t *testing.T) {
 func TestBrokenClientBinaryIsNotCalledMissing(t *testing.T) {
 	t.Setenv("IRIS_FAKE_STDOUT", "{}")
 	t.Setenv("IRIS_FAKE_EXIT", "0")
-	layout := grokLayout(t, true)
-	client, err := layout.LookPath("grok")
-	if err != nil {
+	// A file that was never started: Windows keeps an executable's image mapped for a moment
+	// after it exits, so overwriting the warmed fake could fail.
+	layout := grokLayout(t, false)
+	broken := filepath.Join(t.TempDir(), "grok.exe")
+	if err := os.WriteFile(broken, []byte("not a program"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(client, []byte("not a program"), 0o755); err != nil {
-		t.Fatal(err)
+	look := layout.LookPath
+	layout.LookPath = func(name string) (string, error) {
+		if name == "grok" {
+			return broken, nil
+		}
+		return look(name)
 	}
 	row := grokRow(t, Options{Layout: layout})
 	if row.Status != StatusNeedsHuman || !strings.HasPrefix(row.Detail, "version check failed: ") {
