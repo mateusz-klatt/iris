@@ -280,3 +280,19 @@ func TestToolErrorHidesNothingButWrapsPlainErrors(t *testing.T) {
 		t.Fatal(res)
 	}
 }
+
+// An empty delivery id built the route /v1/deliveries//ack, and the hub answered "unknown API
+// route", which tells a model nothing (measured with Antigravity). It is refused here instead.
+func TestAckWithoutADeliveryIDIsRefused(t *testing.T) {
+	for _, args := range []map[string]any{{"delivery_id": "", "attempt": 1}, {"delivery_id": "  ", "attempt": 1}} {
+		f := &fakeHub{}
+		out, failed := use(t, connect(t, f), "ack", args)
+		e, _ := out["error"].(map[string]any)
+		if !failed || e["code"] != "bad_request" || !strings.Contains(e["message"].(string), "delivery_id") {
+			t.Fatal(out)
+		}
+		if len(f.calls) != 0 {
+			t.Fatal(f.calls)
+		}
+	}
+}
