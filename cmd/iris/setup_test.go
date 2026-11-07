@@ -188,6 +188,42 @@ func TestSetupPersistsRemoteConfiguration(t *testing.T) {
 	}
 }
 
+func TestSetupDoesNotAskForATokenThatIsThere(t *testing.T) {
+	home := t.TempDir()
+	token := filepath.Join(home, "hub.token")
+	if err := os.WriteFile(token, []byte("secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	code := setup([]string{"--yes", "--hub", "https://iris.klatt.ie", "--clients", "claude"}, setupEnv{
+		out: &out, errw: &out, getenv: func(string) string { return "" }, tokenFile: token,
+		layout:  integrate.Layout{Home: home, StateDir: filepath.Join(home, "state"), Getenv: func(string) string { return "" }},
+		detect:  func(func(string) (string, error)) []string { return []string{integrate.Claude} },
+		plugins: setupPlugins{},
+		runDoctor: func(context.Context, doctor.Options) (doctor.Result, error) {
+			return doctor.Result{HubUp: true, TokenOK: true}, nil
+		},
+	})
+	if code != 0 || strings.Contains(out.String(), "setup cannot fetch it") {
+		t.Fatal(code, out.String())
+	}
+}
+
+func TestTokenMissing(t *testing.T) {
+	dir := t.TempDir()
+	blank := filepath.Join(dir, "blank")
+	full := filepath.Join(dir, "full")
+	if err := os.WriteFile(blank, []byte(" \n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(full, []byte("secret"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !tokenMissing(filepath.Join(dir, "absent")) || !tokenMissing(blank) || tokenMissing(full) {
+		t.Fatal("wrong verdict")
+	}
+}
+
 func TestSetupServiceFailureEndsWithNextStep(t *testing.T) {
 	for _, installErr := range []error{errors.New("access denied"), nil} {
 		var out bytes.Buffer

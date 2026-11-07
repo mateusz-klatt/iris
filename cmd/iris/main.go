@@ -67,12 +67,12 @@ func run(args []string) error {
 	if len(args) > 0 && args[0] == "mcp" {
 		return runMCP(args[1:])
 	}
-	if len(args) == 1 && args[0] == "version" {
+	if len(args) == 1 && (args[0] == "version" || args[0] == "--version") {
 		fmt.Println(version)
 		return nil
 	}
 	if len(args) == 0 || args[0] != "serve" {
-		return errors.New("usage: iris serve [--listen address] [--db path] [--token-file path] [--tls-cert path --tls-key path] [--allowed-hosts host:port,...] | hook | integrate | setup | doctor | service | version")
+		return errors.New("usage: iris serve [--listen address] [--db path] [--token-file path] [--tls-cert path --tls-key path] [--allowed-hosts host:port,...] | setup | doctor | service | ui | token | guard | hook | mcp | watch | integrate | version")
 	}
 	cfg, err := config.Default()
 	if err != nil {

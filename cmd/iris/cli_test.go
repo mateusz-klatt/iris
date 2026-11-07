@@ -73,6 +73,19 @@ func TestMainReportsTheVersionAndRejectsAnUnknownCommand(t *testing.T) {
 	if !strings.Contains(errText, "usage: iris serve") {
 		t.Fatal(errText)
 	}
+	for _, command := range []string{"setup", "doctor", "service", "ui", "token", "guard", "hook", "mcp", "watch", "integrate", "version"} {
+		if !strings.Contains(errText, "| "+command) {
+			t.Fatalf("usage does not name %s: %s", command, errText)
+		}
+	}
+	out, _ = capture(t, func() {
+		if code := dispatch([]string{"--version"}); code != 0 {
+			t.Fatalf("code %d", code)
+		}
+	})
+	if strings.TrimSpace(out) != version {
+		t.Fatalf("--version printed %q", out)
+	}
 	if code := dispatch([]string{"nope"}); code != 1 {
 		t.Fatal(code)
 	}
