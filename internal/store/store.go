@@ -285,11 +285,18 @@ func (s *Store) transact(ctx context.Context, f func(*transaction) error) error 
 }
 func (t *transaction) expire() error {
 	now, tick := t.s.clock.Now().UnixMilli(), t.s.clock.Tick()
-	_, err := t.exec(`UPDATE Execution SET state='lost' WHERE state='active' AND
+	res, err := t.exec(`UPDATE Execution SET state='lost' WHERE state='active' AND
  ((recovery_deadline IS NOT NULL AND recovery_deadline<=?) OR
  (recovery_deadline IS NULL AND (boot_epoch<>? OR deadline_tick_ms<=?)))`, now, t.s.epoch, tick)
 	if err != nil {
 		return err
+	}
+	// A lost session changes what the console shows even when it held no claims, so it moves
+	// the event cursor the console refreshes on. Its claims, if any, are announced below.
+	if n, _ := res.RowsAffected(); n > 0 {
+		if err = t.event("", "", "changed", ""); err != nil {
+			return err
+		}
 	}
 	rows, err := t.rows(`SELECT c.fence,c.repository_id FROM Claim c JOIN Execution e ON e.id=c.execution_id
  WHERE c.revoked_ms IS NULL AND (e.state<>'active' OR (c.expires_ms IS NOT NULL AND c.expires_ms<=?))`, now)
