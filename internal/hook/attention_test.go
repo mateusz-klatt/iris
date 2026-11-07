@@ -3,6 +3,7 @@ package hook
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -72,9 +73,11 @@ func TestThePromptHookSaysEachNewEventOnce(t *testing.T) {
 	if got := prompt(); strings.Contains(got, "Iris:") {
 		t.Fatalf("repeated what the monitor said: %s", got)
 	}
+	// The monitor may have died within its freshness window, so once it is not seen, the
+	// events it may not have printed are said (be60dbb0's review of #123).
 	*now = hubclient.Attention{Unread: 3, Available: 2}
-	if got := prompt(); strings.Contains(got, "Iris:") {
-		t.Fatalf("what the monitor said came back once it stopped: %s", got)
+	if got := prompt(); !strings.Contains(got, "3 unread messages") || !strings.Contains(got, "1 path you were refused is free") {
+		t.Fatalf("events seen only while monitored were hidden for good: %s", got)
 	}
 	if calls != 7 {
 		t.Fatalf("%d registrations for 7 prompts", calls)
@@ -135,6 +138,16 @@ func TestMemoryKeepsCountsBesideTheGeneration(t *testing.T) {
 	m.Remember("codex", "s", 5)
 	m.SetCounts("codex", "s", Counts{3, 1}, Counts{2, 1})
 	m.Remember("codex", "s", 6)
+	// The counts live in their own file, so neither write can roll the other back.
+	if _, err := os.Stat(m.counts("codex", "s")); err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		m.Forget("codex", "s")
+		if _, err := os.Stat(m.counts("codex", "s")); !os.IsNotExist(err) {
+			t.Fatalf("forget left the counts: %v", err)
+		}
+	}()
 	latest, told := m.Counts("codex", "s")
 	if m.Recall("codex", "s") != 6 || latest != (Counts{3, 1}) || told != (Counts{2, 1}) {
 		t.Fatal(m.Recall("codex", "s"), latest, told)

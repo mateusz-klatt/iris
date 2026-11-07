@@ -38,8 +38,15 @@ func (r Runner) attentionNote(ev Event, now hubclient.Attention, said bool) stri
 	}
 	latest := Counts{now.Unread, now.Available}
 	_, told := am.Counts(string(ev.Client), ev.SessionID)
-	if said || now.Monitored {
+	if said {
 		am.SetCounts(string(ev.Client), ev.SessionID, latest, latest)
+		return ""
+	}
+	if now.Monitored {
+		// The monitor says it. What the session was told stays as it was: a monitor can have
+		// died within the freshness window, and marking its events told would hide them for
+		// good. At worst, a note repeats one line the monitor already printed.
+		am.SetCounts(string(ev.Client), ev.SessionID, latest, told)
 		return ""
 	}
 	// Handled mail and taken paths lower the counts, so a later event is new again.

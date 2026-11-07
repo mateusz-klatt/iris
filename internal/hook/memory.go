@@ -41,18 +41,18 @@ func (m fileMemory) name(client, session string) string {
 	return filepath.Join(m.dir, hex.EncodeToString(sum[:16]))
 }
 
-// read returns the entry's first line, the generation, and the line after it.
-func (m fileMemory) read(client, session string) (first, rest string) {
-	raw, err := os.ReadFile(m.name(client, session))
+// read returns a file's first line.
+func (m fileMemory) read(path string) string {
+	raw, err := os.ReadFile(path)
 	if err != nil {
-		return "", ""
+		return ""
 	}
-	first, rest, _ = strings.Cut(string(raw), "\n")
-	return strings.TrimSpace(first), strings.TrimSpace(rest)
+	first, _, _ := strings.Cut(string(raw), "\n")
+	return strings.TrimSpace(first)
 }
 
 func (m fileMemory) Recall(client, session string) int {
-	first, _ := m.read(client, session)
+	first := m.read(m.name(client, session))
 	generation, err := strconv.Atoi(first)
 	if err != nil || generation < 0 {
 		return 0
@@ -61,10 +61,9 @@ func (m fileMemory) Recall(client, session string) int {
 }
 
 // Remember is best effort. A failed write only means the next restart costs this session
-// its proof, which is what every session had before. The attention line is kept.
+// its proof, which is what every session had before.
 func (m fileMemory) Remember(client, session string, generation int) {
-	_, rest := m.read(client, session)
-	m.write(client, session, strconv.Itoa(generation)+"\n"+rest)
+	m.write(m.name(client, session), strconv.Itoa(generation))
 }
 
 // Counts are a session's attention numbers: unread deliveries and freed paths.
@@ -77,8 +76,14 @@ type attentionMemory interface {
 	SetCounts(client, session string, latest, told Counts)
 }
 
+// counts is the attention file beside a session's generation. It is separate, so a counts
+// write can never race a reattach's generation write and roll the proof back (D9).
+func (m fileMemory) counts(client, session string) string {
+	return m.name(client, session) + ".attention"
+}
+
 func (m fileMemory) Counts(client, session string) (latest, told Counts) {
-	_, rest := m.read(client, session)
+	rest := m.read(m.counts(client, session))
 	var n [4]int
 	for i, field := range strings.Fields(rest) {
 		if i < len(n) {
@@ -90,11 +95,10 @@ func (m fileMemory) Counts(client, session string) (latest, told Counts) {
 
 // SetCounts is best effort, as Remember is: losing it can only repeat or skip one note.
 func (m fileMemory) SetCounts(client, session string, latest, told Counts) {
-	first, _ := m.read(client, session)
-	m.write(client, session, first+"\n"+strconv.Itoa(latest.Unread)+" "+strconv.Itoa(latest.Available)+" "+strconv.Itoa(told.Unread)+" "+strconv.Itoa(told.Available))
+	m.write(m.counts(client, session), strconv.Itoa(latest.Unread)+" "+strconv.Itoa(latest.Available)+" "+strconv.Itoa(told.Unread)+" "+strconv.Itoa(told.Available))
 }
 
-func (m fileMemory) write(client, session, body string) {
+func (m fileMemory) write(path, body string) {
 	if err := os.MkdirAll(m.dir, 0o700); err != nil || m.restrict(m.dir) != nil {
 		return
 	}
@@ -111,7 +115,7 @@ func (m fileMemory) write(client, session, body string) {
 		err = m.restrict(f.Name())
 	}
 	if err == nil {
-		err = os.Rename(f.Name(), m.name(client, session))
+		err = os.Rename(f.Name(), path)
 	}
 	if err != nil {
 		_ = os.Remove(f.Name())
@@ -120,6 +124,7 @@ func (m fileMemory) write(client, session, body string) {
 
 func (m fileMemory) Forget(client, session string) {
 	_ = os.Remove(m.name(client, session))
+	_ = os.Remove(m.counts(client, session))
 }
 
 // prune removes entries untouched for memoryAge, and leftover temporary files.
