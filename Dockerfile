@@ -2,10 +2,10 @@
 
 # Distroless has no shell, so /data is made here and its owner set on the copy below.
 # This stage runs on the build host, so an arm64 image needs no emulation.
-FROM --platform=$BUILDPLATFORM busybox:1.37 AS data
+FROM --platform=$BUILDPLATFORM busybox:1.37@sha256:a7dbc319b1438115a207e11930dc4bb3e643dcb3ec0bdd694bb36cd8fad289ec AS data
 RUN mkdir /data
 
-FROM gcr.io/distroless/static-debian12:nonroot
+FROM gcr.io/distroless/static-debian12:nonroot@sha256:afa5c872c891853ca7fcf1f12c3edb23f7eeef36189728842dd51042ff57f7ab
 ARG TARGETPLATFORM
 COPY ${TARGETPLATFORM}/iris /usr/local/bin/iris
 COPY --from=data --chown=65532:65532 /data /data
