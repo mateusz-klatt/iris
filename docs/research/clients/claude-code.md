@@ -59,6 +59,11 @@ presence alone therefore does not prove that Claude is the immediate client.
 Hooks fire for MCP tools, as `mcp__<server>__<tool>` [MEASURED]. Configuration is `.mcp.json`
 at project scope, `claude mcp add` for user scope, or a plugin's `.mcp.json` [DOCS].
 
+Tool annotations do not change permissions [MEASURED 2026-11-07, Claude Code 2.1.319, WSL]. In
+`claude -p` without an allow rule, `claims`, which carries `readOnlyHint: true`, was refused like
+`send`. With `--allowedTools mcp__<server>__claims` the same call reached the hub. So a
+headless run still needs the Iris tools allowed by name, as `iris doctor --live` does.
+
 ### A4 Packaging
 
 A plugin has `.claude-plugin/plugin.json` and can bundle `hooks/hooks.json`, `.mcp.json`,
