@@ -126,6 +126,10 @@ func TestHTTPContract(t *testing.T) {
 	}
 	request(t, s, "GET", "/v1/claims?repository_id="+a["repository_id"].(string), nil, 200)
 	request(t, s, "GET", "/v1/agents?repository_id="+a["repository_id"].(string), nil, 200)
+	// When this host's hooks last reached the hub, per client, for doctor (C4).
+	if seen := request(t, s, "GET", "/v1/hooks/seen?host=host", nil, 200)["clients"].(map[string]any); seen["codex"] == nil {
+		t.Fatal(seen)
+	}
 	r = authority(a)
 	r["fence"] = claim["fence"]
 	r["token"] = claim["token"]

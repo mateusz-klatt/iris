@@ -164,6 +164,12 @@ seconds, then turns `pending` if that session is lost.
 
 `GET /v1/agents?repository_id=...` lists agents and their current state.
 
+`GET /v1/hooks/seen?host=...` says, for each client on that host, when its hooks last reached the
+hub: `{"clients":{"codex":"2026-11-07T21:00:00Z"}}`. A hook counts when it registers a session,
+claims a path automatically or reconciles a shell command. A heartbeat from the MCP shim or the
+monitor does not, so this is the last hook, not the last sign of life. A client whose hooks never
+reached the hub is absent. `iris doctor` puts it in each row's `last_hook_at`.
+
 `GET /v1/status` returns only `{"status":"ok"}` without a valid bearer token. With a valid
 bearer token it returns version, stream id, boot epoch and counts.
 
@@ -293,7 +299,8 @@ and sends as `human`.
 `status` is `ok`, `not_configured`, `needs_human`, `silent` or `slow`. `slow` means the hooks run,
 but shell reconciliation passed its budget more than ten times in 24 hours, so those commands'
 changes went unclaimed. A doctor sends it as `silent`, with `slow: ` in the detail, to a hub that
-refuses it. Before the first report, `checked_at` is
+refuses it. `last_hook_at` is when that client's hooks on the doctor's host last reached the hub,
+and empty when they never did or the hub cannot say. Before the first report, `checked_at` is
 null and `clients` is empty. `expires_at` on a claim is null when it has no expiry.
 
 `GET /v1/ui/watch` upgrades to a WebSocket, with frames `{"cursor":124,"kind":"changed"}`. The UI
