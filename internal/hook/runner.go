@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/mateusz-klatt/iris/internal/gitinfo"
+	"github.com/mateusz-klatt/iris/internal/guard"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 	"github.com/mateusz-klatt/iris/internal/proc"
 )
@@ -150,7 +151,12 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		if err != nil {
 			return state.fail(err, r.failOpen(ev, err, allow))
 		}
-		return r.finish(ev, Encode(ev, Decision{Action: ActionAllow, Context: SessionText(sess)}))
+		var notes []string
+		// Once per session, not per subagent: the hint is about the repository.
+		if ev.Kind == KindSessionStart && guard.NeedsHint(repo) {
+			notes = append(notes, guard.Hint)
+		}
+		return r.finish(ev, Encode(ev, Decision{Action: ActionAllow, Context: SessionText(sess, notes...)}))
 	case KindSessionEnd:
 		state.at("session")
 		sess, err := r.register(ctx, ev, repo)

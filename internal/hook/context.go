@@ -14,7 +14,8 @@ const contextTail = "An Iris notification means new mail or a claim someone is w
 
 // SessionText tells the model its handle, who else is here, and how to treat mail.
 // The text stays under 2 KB. The tail is kept when peers or claims are truncated.
-func SessionText(s hubclient.SessionResponse) string {
+// Notes follow the counts and are kept before peers and claims.
+func SessionText(s hubclient.SessionResponse, notes ...string) string {
 	handle := s.Handle
 	if handle == "" {
 		handle = s.ExecutionID
@@ -29,6 +30,9 @@ func SessionText(s hubclient.SessionResponse) string {
 	}
 	head.WriteString(".\n")
 	fmt.Fprintf(&head, "Unread messages: %d.\n", s.Unread)
+	for _, note := range notes {
+		head.WriteString(note)
+	}
 
 	budget := contextLimit - head.Len() - len(contextTail)
 	var mid strings.Builder

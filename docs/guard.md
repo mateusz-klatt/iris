@@ -10,6 +10,18 @@ not checked` and allows the commit, so an uninstalled iris cannot block commits.
 by an earlier version, which found iris only on PATH and failed with 127 without it, is upgraded
 by the next `iris guard install`; hooks Iris did not write are kept as the chained original.
 
+Without the guard, an edit made through a shell past someone else's claim is only warned about
+and can reach a commit. So a session that starts in a repository without the guard is told so
+once, in the SessionStart context, and asked to suggest `iris guard install` to the user. The
+model is never told to install it, because `.git/hooks` belongs to the user. Subagents are not
+told again. To hide the note for one repository, run `git config iris.guardHint false`. The check
+runs inside the hook's deadline, so it starts no git process. It reads the repository's own
+`config` for `core.hooksPath` and that setting, and then the one hook file. A `core.hooksPath`
+set only in the global or system Git config is not seen, so the note can appear even though a
+guard is installed; the setting above hides it. `iris doctor` reports the guard of the repository
+it runs in, using the hooks path that Git itself resolves: installed, not installed, or another
+pre-commit hook without Iris. A missing guard does not fail doctor.
+
 `iris guard check` reads staged paths, including both ends of renames and deletions.
 It refuses paths claimed by an Execution in another worktree. Claims in the same
 host/worktree do not block it. An unreachable hub produces a warning and allows the
