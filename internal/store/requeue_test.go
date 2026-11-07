@@ -52,7 +52,7 @@ func register2(t *testing.T, s *Store, generation int64) Request {
 // restart freed every delivery, which would have made all read-but-unacked mail look new.
 func TestARestartWakesNoOneForMailAlreadyFetched(t *testing.T) {
 	s, c, file := testStore(t)
-	_, b, _, high := attentionSetup(t, s)
+	_, _, _, high := attentionSetup(t, s)
 	_ = s.Close()
 	s.lock = nil
 	n, err := Open(file, c)
@@ -60,7 +60,7 @@ func TestARestartWakesNoOneForMailAlreadyFetched(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = n.Close() }()
-	b = reattach(t, n)
+	b := reattach(t, n)
 	if out := call(t, n, "events", b); out["pending"] != 0 {
 		t.Fatalf("pending after restart: %v", out["pending"])
 	}
