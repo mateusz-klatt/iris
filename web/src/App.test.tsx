@@ -266,6 +266,41 @@ describe("Iris operator console", () => {
     expect(await screen.findByText("No threads in this view.")).toBeVisible();
   }, 20000);
 
+  it("reads a thread from a repository's view, names another repository, and replies from that view", async () => {
+    const user = userEvent.setup({ delay: null });
+    const threadURLs: string[] = [];
+    const bodies: unknown[] = [];
+    server.use(
+      http.get("*/v1/ui/overview", () =>
+        HttpResponse.json({
+          ...sessionOverview,
+          repositories: [...sessionOverview.repositories, { id: "rp_snapper", name: "snapper", aliases: [] }],
+        }),
+      ),
+      http.get("*/v1/ui/threads/:id", ({ request }) => {
+        threadURLs.push(request.url);
+        return HttpResponse.json({
+          ...threadDetail,
+          messages: [{ ...threadDetail.messages[0], repository_id: "rp_snapper" }],
+        });
+      }),
+      http.post("*/v1/ui/messages", async ({ request }) => {
+        bodies.push(await request.json());
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    await showSession();
+    await user.selectOptions(await screen.findByRole("combobox", { name: "Repository" }), "rp_iris");
+    await user.click(await screen.findByRole("button", { name: /Rollout check/ }));
+    const detail = await screen.findByRole("article", { name: "Rollout check" });
+    expect(within(detail).getByText("snapper")).toBeVisible();
+    expect(threadURLs.at(-1)).toContain("repository_id=rp_iris");
+    await user.type(within(detail).getByRole("textbox", { name: "Message" }), "Seen.");
+    await user.click(screen.getByRole("button", { name: "Reply" }));
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    expect(bodies[0]).toMatchObject({ repository_id: "rp_iris", reply_to: "ms_root" });
+  }, 40000);
+
   it("replies and sends as human", async () => {
     const user = userEvent.setup({ delay: null });
     const bodies: unknown[] = [];

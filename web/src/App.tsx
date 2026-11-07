@@ -224,7 +224,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
       return;
     }
     let ignore = false;
-    void getThread(selectedId)
+    void getThread(selectedId, repositoryId)
       .then((detail) => {
         if (ignore) {
           return;
@@ -254,7 +254,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
     return () => {
       ignore = true;
     };
-  }, [phase, selectedId, t, threadRevision]);
+  }, [phase, repositoryId, selectedId, t, threadRevision]);
 
   const chooseLocale = (next: SupportedLocale) => {
     try {
@@ -293,6 +293,8 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
         subject: draft.subject,
         body: draft.body,
         reply_to: draft.replyTo,
+        // The message belongs to the repository the operator is reading (ADR 004).
+        ...(repositoryId === "" ? {} : { repository_id: repositoryId }),
       });
       clear();
       setNotice(t("operator.sent"));
@@ -591,6 +593,9 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                     <article key={message.id} className="thread-message">
                       <header>
                         <strong>{message.sender}</strong>
+                        {overview !== null && message.repository_id !== undefined && message.repository_id !== repositoryId ? (
+                          <span className="message-repository">{repositoryName(overview, message.repository_id)}</span>
+                        ) : null}
                         <small>
                           {t("message.to")}: {message.recipients.map((recipient) => `${recipient.name} (${recipient.state})`).join(", ")}
                         </small>

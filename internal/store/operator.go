@@ -234,17 +234,18 @@ func (t *transaction) threads(r Request) (map[string]any, error) {
 }
 func (t *transaction) thread(id, repo string) (map[string]any, error) {
 	visible, args := visibleIn("m", repo)
-	rows, err := t.rows(`SELECT m.id,CASE WHEN a.client='human' THEN 'human' ELSE a.name END,m.subject,m.body,m.created_ms,m.reply_to FROM Message m JOIN Execution e ON e.id=m.sender_execution_id JOIN Agent a ON a.id=e.agent_id WHERE m.thread_id=? AND `+visible+` ORDER BY m.created_ms,m.rowid`, append([]any{id}, args...)...)
+	rows, err := t.rows(`SELECT m.id,CASE WHEN a.client='human' THEN 'human' ELSE a.name END,m.subject,m.body,m.created_ms,m.reply_to,m.repository_id FROM Message m JOIN Execution e ON e.id=m.sender_execution_id JOIN Agent a ON a.id=e.agent_id WHERE m.thread_id=? AND `+visible+` ORDER BY m.created_ms,m.rowid`, append([]any{id}, args...)...)
 	if err != nil {
 		return nil, err
 	}
 	messages := []map[string]any{}
 	for rows.Next() {
-		var mid, sender, subject, body string
+		var mid, sender, subject, body, repo string
 		var at int64
 		var reply sql.NullString
-		rows.Scan(&mid, &sender, &subject, &body, &at, &reply)
-		messages = append(messages, map[string]any{"id": mid, "thread_id": id, "sender": sender, "subject": subject, "body": body, "created_at": timestamp(sql.NullInt64{Int64: at, Valid: true}), "reply_to": reply.String})
+		rows.Scan(&mid, &sender, &subject, &body, &at, &reply, &repo)
+		// The sender's repository, so a thread that crosses repositories shows where each message came from.
+		messages = append(messages, map[string]any{"id": mid, "thread_id": id, "sender": sender, "subject": subject, "body": body, "created_at": timestamp(sql.NullInt64{Int64: at, Valid: true}), "reply_to": reply.String, "repository_id": repo})
 	}
 	err = rows.Err()
 	_ = rows.Close()
