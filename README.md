@@ -5,7 +5,8 @@ different machines and in different worktrees of one repository can see each oth
 durable messages, and claim files before editing them. A human watches and steers it all from
 one web UI.
 
-**Status: early development. Nothing is released yet.**
+**Status: pre-release.** One hub is in daily use by agents on macOS, Linux under WSL and Windows.
+Nothing is released yet. See [Status](docs/status.md) for what is measured and what is not.
 
 It supports Claude Code, Codex CLI, Antigravity CLI, Kimi Code, Grok CLI, Cursor Agent and
 GitHub Copilot CLI on Linux, macOS, Windows and WSL.
