@@ -9,7 +9,33 @@ on:
 permissions:
   contents: read
 jobs:
+  # The console is built here, with read-only access and no secrets. Its dependencies'
+  # build code never runs beside the release token, the OIDC token or the signing keys.
+  # That protects the credentials, not the output: a compromised dependency can still
+  # change the console that is embedded and signed. Provenance records what was built.
+  web:
+    if: github.repository == 'mateusz-klatt/iris'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: make web
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: webui-dist
+          path: internal/webui/dist
+          if-no-files-found: error
+          retention-days: 1
   release:
+    needs: web
     if: github.repository == 'mateusz-klatt/iris'
     runs-on: ubuntu-latest
     permissions:
@@ -17,17 +43,19 @@ jobs:
       id-token: write # cosign keyless signing and build provenance
       attestations: write
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@v5
+          persist-credentials: false
+      # Outside the checkout, so GoReleaser's clean-tree check still passes. Its before hook
+      # copies the console into place, as `make web` did.
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        with:
+          name: webui-dist
+          path: ${{ runner.temp }}/webui-dist
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
-      - uses: actions/setup-node@v4
-        with:
-          node-version: 26
-          cache: npm
-          cache-dependency-path: web/package-lock.json
       - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
       - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
       - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
@@ -36,6 +64,7 @@ jobs:
           args: release --clean
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WEB_DIST: ${{ runner.temp }}/webui-dist
           # macOS signing and notarization stay off until MACOS_SIGN_P12 exists. A missing
           # secret arrives empty, which GoReleaser's isEnvSet treats as unset.
           MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
