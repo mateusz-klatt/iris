@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -33,14 +33,24 @@ import "./app.css";
 
 const maximumBodyLength = 16 * 1024;
 
+// A draft carries the retry key of its send. The key is made with the draft and kept until the
+// send succeeds, so retrying after an ambiguous failure cannot send twice (gap review A9). An
+// edit is a different send, so it gets a new key: the hub refuses a key reused for other content.
 interface Draft {
   to: string;
   subject: string;
   body: string;
   replyTo: string;
+  key: string;
 }
 
-const emptyDraft: Draft = { to: "", subject: "", body: "", replyTo: "" };
+function newDraft(fields: Partial<Draft> = {}): Draft {
+  return { to: "", subject: "", body: "", replyTo: "", ...fields, key: humanKey() };
+}
+
+function edited(draft: Draft, change: Partial<Draft>): Draft {
+  return { ...draft, ...change, key: humanKey() };
+}
 
 function isAbort(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
@@ -106,8 +116,12 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
   const [threadsError, setThreadsError] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [thread, setThread] = useState<ThreadDetail | null>(null);
-  const [compose, setCompose] = useState<Draft>(emptyDraft);
-  const [reply, setReply] = useState<Draft>(emptyDraft);
+  const [compose, setCompose] = useState<Draft>(newDraft);
+  const [reply, setReply] = useState<Draft>(newDraft);
+  // One send at a time: a second submit while one is pending would be a second send. The ref
+  // stops one that comes before React re-renders; the state disables the buttons.
+  const inFlight = useRef(false);
+  const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState("");
   const [formError, setFormError] = useState("");
   const [revoking, setRevoking] = useState<number | null>(null);
@@ -218,12 +232,13 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
         setThread(detail);
         const last = detail.messages.at(-1);
         if (last !== undefined) {
-          setReply({
-            to: last.sender,
-            subject: last.subject.startsWith("Re:") ? last.subject : `Re: ${last.subject}`,
-            body: "",
-            replyTo: last.id,
-          });
+          setReply(
+            newDraft({
+              to: last.sender,
+              subject: last.subject.startsWith("Re:") ? last.subject : `Re: ${last.subject}`,
+              replyTo: last.id,
+            }),
+          );
         }
       })
       .catch((error: unknown) => {
@@ -264,11 +279,16 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
   };
 
   const submit = async (draft: Draft, clear: () => void) => {
+    if (inFlight.current) {
+      return;
+    }
+    inFlight.current = true;
+    setSending(true);
     setFormError("");
     setNotice("");
     try {
       await sendMessage({
-        key: humanKey(),
+        key: draft.key,
         to: recipientsOf(draft.to),
         subject: draft.subject,
         body: draft.body,
@@ -284,6 +304,9 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
         return;
       }
       setFormError(t("operator.loadError"));
+    } finally {
+      inFlight.current = false;
+      setSending(false);
     }
   };
 
@@ -580,27 +603,27 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                     className="search-form"
                     onSubmit={(event) => {
                       event.preventDefault();
-                      void submit(reply, () => setReply((current) => ({ ...current, body: "" })));
+                      void submit(reply, () => setReply((current) => edited(current, { body: "" })));
                     }}
                   >
                     <h3>{t("operator.reply")}</h3>
                     <label>
                       {t("operator.recipients")}
-                      <input value={reply.to} onChange={(event) => setReply({ ...reply, to: event.target.value })} />
+                      <input value={reply.to} onChange={(event) => setReply(edited(reply, { to: event.target.value }))} />
                     </label>
                     <label>
                       {t("operator.subject")}
-                      <input value={reply.subject} onChange={(event) => setReply({ ...reply, subject: event.target.value })} />
+                      <input value={reply.subject} onChange={(event) => setReply(edited(reply, { subject: event.target.value }))} />
                     </label>
                     <label>
                       {t("operator.body")}
-                      <textarea value={reply.body} onChange={(event) => setReply({ ...reply, body: event.target.value })} />
+                      <textarea value={reply.body} onChange={(event) => setReply(edited(reply, { body: event.target.value }))} />
                     </label>
                     <p>{t("markdown.characterCount", { count: reply.body.length, maximum: maximumBodyLength })}</p>
                     <button
                       type="submit"
                       className="primary-button"
-                      disabled={reply.to.length === 0 || reply.subject.length === 0 || reply.body.length === 0 || reply.body.length > maximumBodyLength}
+                      disabled={sending || reply.to.length === 0 || reply.subject.length === 0 || reply.body.length === 0 || reply.body.length > maximumBodyLength}
                     >
                       {t("operator.reply")}
                     </button>
@@ -617,26 +640,26 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                 className="search-form"
                 onSubmit={(event) => {
                   event.preventDefault();
-                  void submit(compose, () => setCompose(emptyDraft));
+                  void submit(compose, () => setCompose(newDraft()));
                 }}
               >
                 <label>
                   {t("operator.recipients")}
-                  <input value={compose.to} onChange={(event) => setCompose({ ...compose, to: event.target.value })} />
+                  <input value={compose.to} onChange={(event) => setCompose(edited(compose, { to: event.target.value }))} />
                 </label>
                 <label>
                   {t("operator.subject")}
-                  <input value={compose.subject} onChange={(event) => setCompose({ ...compose, subject: event.target.value })} />
+                  <input value={compose.subject} onChange={(event) => setCompose(edited(compose, { subject: event.target.value }))} />
                 </label>
                 <label>
                   {t("operator.body")}
-                  <textarea value={compose.body} onChange={(event) => setCompose({ ...compose, body: event.target.value })} />
+                  <textarea value={compose.body} onChange={(event) => setCompose(edited(compose, { body: event.target.value }))} />
                 </label>
                 <p>{t("markdown.characterCount", { count: compose.body.length, maximum: maximumBodyLength })}</p>
                 <button
                   type="submit"
                   className="primary-button"
-                  disabled={compose.to.length === 0 || compose.subject.length === 0 || compose.body.length === 0 || compose.body.length > maximumBodyLength}
+                  disabled={sending || compose.to.length === 0 || compose.subject.length === 0 || compose.body.length === 0 || compose.body.length > maximumBodyLength}
                 >
                   {t("operator.send")}
                 </button>
