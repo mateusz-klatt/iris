@@ -56,25 +56,24 @@ func (h scriptHub) Reconcile(_ context.Context, r hubclient.ReconcileRequest) (h
 	return hubclient.CheckResponse{Message: h.message}, h.reconcileErr
 }
 
+// waitForFailure reads the entry a run has just written. With logAfter set to never, Run
+// returns only after the write, so there is nothing to wait for.
 func waitForFailure(t *testing.T, token string) Failure {
 	t.Helper()
-	deadline := time.Now().Add(2 * time.Second)
-	for time.Now().Before(deadline) {
-		if entries, err := ReadRecentFailures(token, 10); err == nil && len(entries) > 0 {
-			return entries[len(entries)-1]
-		}
-		time.Sleep(time.Millisecond)
+	entries, err := ReadRecentFailures(token, 10)
+	if err != nil || len(entries) == 0 {
+		t.Fatalf("no failure was recorded: %v", err)
 	}
-	t.Fatal("no failure was recorded")
-	return Failure{}
+	return entries[len(entries)-1]
 }
 
-// roomy is the deadline and log wait for tests that assert a decision or a recorded failure,
-// not the budget. Under full CPU load the repository stage alone passed the 1.5 s default.
-const roomy = time.Minute
+// never is a deadline that does not fire. A test that is not about a deadline uses it, so a
+// slow machine cannot turn its decision into a fail-open. The test binary's own timeout
+// bounds a real hang. A test about a deadline fires it explicitly instead.
+func never(time.Duration) <-chan time.Time { return nil }
 
 func run(hub Hub, event, payload string, env func(string) string) Output {
-	return Runner{ClientName: "claude", EventName: event, Stdin: strings.NewReader(payload), Hub: hub, Getenv: env, Deadline: roomy, logWait: roomy}.Run()
+	return Runner{ClientName: "claude", EventName: event, Stdin: strings.NewReader(payload), Hub: hub, Getenv: env, after: never, logAfter: never}.Run()
 }
 
 func TestSessionStartWithoutTheHubFailsOpenAndIsRecorded(t *testing.T) {
@@ -161,6 +160,7 @@ func TestCrossLoadAppliesWhenThePayloadCannotBeDecoded(t *testing.T) {
 			}
 			return ""
 		},
+		after: never,
 	}.Run()
 	// Grok's allow, not Antigravity's, because Grok is the real runner.
 	if string(out.Stdout) != "{}\n" {
@@ -169,7 +169,7 @@ func TestCrossLoadAppliesWhenThePayloadCannotBeDecoded(t *testing.T) {
 }
 
 func TestRunWithoutStdinFailsOpen(t *testing.T) {
-	out := Runner{ClientName: "cursor", Getenv: failureEnv(t)}.Run()
+	out := Runner{ClientName: "cursor", Getenv: failureEnv(t), after: never, logAfter: never}.Run()
 	assertAllow(t, ClientCursor, out)
 }
 
@@ -210,7 +210,9 @@ func TestClaimPathsKeepsARenameOnlyWhenBothEndsAreInside(t *testing.T) {
 }
 
 func shellRunner(hub Hub, root string) (Runner, Event) {
-	return Runner{Hub: hub, Status: func(context.Context, string) (map[string]string, error) { return map[string]string{}, nil }},
+	// A context deadline cannot be one that never fires, so these tests give the shell budget
+	// an hour, past the test binary's own timeout. The budget has its own test.
+	return Runner{Hub: hub, Status: func(context.Context, string) (map[string]string, error) { return map[string]string{}, nil }, ShellDeadline: time.Hour},
 		Event{Client: ClientClaude, Kind: KindPreTool, SessionID: "s", CWD: root, ToolClass: ClassShell}
 }
 
@@ -258,10 +260,7 @@ func TestReconcileReportsItsPhase(t *testing.T) {
 	for kind, want := range map[Kind]string{KindPreTool: "before", KindPostTool: "after"} {
 		phase := ""
 		r, ev := shellRunner(scriptHub{phase: &phase, message: "changed"}, root)
-		r.Status = nil // the real git status
-		// This test is about the phase. Under full CPU load a real git status took longer
-		// than the 300 ms budget, and the hook rightly failed open.
-		r.ShellDeadline = time.Minute
+		r.Status = nil // the real git status, within shellRunner's hour
 		ev.Kind = kind
 		out := r.reconcile(context.Background(), ev)
 		if phase != want || !strings.Contains(string(out.Stdout), "changed") {

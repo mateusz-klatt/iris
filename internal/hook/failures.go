@@ -126,15 +126,13 @@ func (r Runner) recordFailure(stage string, err error) {
 		entry := Failure{Time: time.Now().UTC(), Client: client, Event: boundedLabel(r.EventName), Stage: stage, Error: failureText(err)}
 		_ = appendFailure(token, entry)
 	}()
-	wait := r.logWait
-	if wait <= 0 {
-		wait = failureLogBudget
+	after := r.logAfter
+	if after == nil {
+		after = time.After
 	}
-	timer := time.NewTimer(wait)
-	defer timer.Stop()
 	select {
 	case <-done:
-	case <-timer.C:
+	case <-after(failureLogBudget):
 	}
 }
 func boundedLabel(label string) string {

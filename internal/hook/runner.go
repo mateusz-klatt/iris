@@ -46,9 +46,9 @@ type Runner struct {
 	// after starts the deadline. Tests replace it so a deadline fires at a known
 	// stage rather than whenever a slow machine gets there.
 	after func(time.Duration) <-chan time.Time
-	// logWait is how long a failure entry may delay the answer. Zero means failureLogBudget.
-	// Tests that read the log give it room, because a loaded machine writes slowly.
-	logWait time.Duration
+	// logAfter starts the failure log budget, as after starts the deadline. Tests that read the
+	// log pass one that never fires, so Run returns only once the entry is written.
+	logAfter func(time.Duration) <-chan time.Time
 	// logged runs once the failure write has finished, even after Run has returned.
 	logged func()
 }

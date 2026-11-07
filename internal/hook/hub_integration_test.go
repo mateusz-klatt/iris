@@ -11,7 +11,6 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
-	"time"
 
 	"github.com/mateusz-klatt/iris/internal/hub"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
@@ -91,8 +90,8 @@ func TestCapturedEditsAgainstRealHub(t *testing.T) {
 						return ""
 					}
 					client := &hubclient.Client{Config: hubclient.EnvConfig{Getenv: getenv}}
-					ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-					defer cancel()
+					// Setup against the real hub is not timed. The test binary's own timeout bounds a hang.
+					ctx := context.Background()
 					otherClient := "codex"
 					if tc.client == ClientCodex {
 						otherClient = "claude"
@@ -107,7 +106,7 @@ func TestCapturedEditsAgainstRealHub(t *testing.T) {
 						}
 					}
 
-					out := (Runner{ClientName: string(tc.client), EventName: tc.event, Stdin: bytes.NewReader(raw), Getenv: getenv, Hub: client, Host: func() string { return "testhost" }, Ancestor: func() (proc.Ancestor, error) { return proc.Ancestor{}, nil }, Deadline: 5 * time.Second}).Run()
+					out := (Runner{ClientName: string(tc.client), EventName: tc.event, Stdin: bytes.NewReader(raw), Getenv: getenv, Hub: client, Host: func() string { return "testhost" }, Ancestor: func() (proc.Ancestor, error) { return proc.Ancestor{}, nil }, after: never, logAfter: never}).Run()
 					var listed struct {
 						Claims []struct{ Path, Kind, Origin, Holder string }
 					}

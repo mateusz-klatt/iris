@@ -91,22 +91,13 @@ func TestFailureLogStagesAndPrivacy(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			getenv := failureEnv(t)
 			token := getenv("IRIS_TOKEN_FILE")
-			r := Runner{ClientName: "claude", EventName: "PreToolUse", Stdin: strings.NewReader(editPayload(ClientClaude, "/repo")), Getenv: getenv, Hub: failureHub{}, Find: func(string) (gitinfo.Repo, error) { return gitinfo.Repo{Worktree: "/repo"}, nil }, Deadline: time.Second}
+			r := Runner{ClientName: "claude", EventName: "PreToolUse", Stdin: strings.NewReader(editPayload(ClientClaude, "/repo")), Getenv: getenv, Hub: failureHub{}, Find: func(string) (gitinfo.Repo, error) { return gitinfo.Repo{Worktree: "/repo"}, nil }, after: never, logAfter: never}
 			tc.change(&r)
 			out := r.Run()
 			assertAllow(t, ClientClaude, out)
-			deadline := time.Now().Add(time.Second)
-			var entries []Failure
-			for time.Now().Before(deadline) {
-				var err error
-				entries, err = ReadRecentFailures(token, 10)
-				if err != nil {
-					t.Fatal(err)
-				}
-				if len(entries) > 0 {
-					break
-				}
-				time.Sleep(time.Millisecond)
+			entries, err := ReadRecentFailures(token, 10)
+			if err != nil {
+				t.Fatal(err)
 			}
 			if len(entries) != 1 {
 				t.Fatalf("entries: %+v", entries)
@@ -161,23 +152,21 @@ func TestUnwritableFailureLogStillAllows(t *testing.T) {
 	if err := os.Mkdir(failurePath(token), 0700); err != nil {
 		t.Fatal(err)
 	}
-	start := time.Now()
+	// That logging cannot delay the answer is TestSlowFailureLoggerDoesNotHoldHook's job, by
+	// order. Here the failed write is awaited, so the test checks only that the hook allows.
 	out := (Runner{ClientName: "kimi", Stdin: strings.NewReader("{"), Getenv: func(k string) string {
 		if k == "IRIS_TOKEN_FILE" {
 			return token
 		}
 		return ""
-	}}).Run()
+	}, after: never, logAfter: never}).Run()
 	assertAllow(t, ClientKimi, out)
-	if time.Since(start) > 100*time.Millisecond {
-		t.Fatal("logging delayed hook")
-	}
 }
 
 func TestNormalAllowsDoNotLogFailures(t *testing.T) {
 	getenv := failureEnv(t)
 	for _, payload := range []string{`{"session_id":"s","cwd":"/outside","tool_name":"Read"}`, `{"session_id":"s","cwd":"/outside","tool_name":"Write","tool_input":{"path":"file"}}`} {
-		out := (Runner{ClientName: "claude", EventName: "PreToolUse", Stdin: strings.NewReader(payload), Getenv: getenv, Find: func(string) (gitinfo.Repo, error) { return gitinfo.Repo{}, gitinfo.ErrNotRepo }}).Run()
+		out := (Runner{ClientName: "claude", EventName: "PreToolUse", Stdin: strings.NewReader(payload), Getenv: getenv, Find: func(string) (gitinfo.Repo, error) { return gitinfo.Repo{}, gitinfo.ErrNotRepo }, after: never}).Run()
 		assertAllow(t, ClientClaude, out)
 	}
 	entries, err := ReadRecentFailures(getenv("IRIS_TOKEN_FILE"), 10)
@@ -189,36 +178,28 @@ func TestNormalAllowsDoNotLogFailures(t *testing.T) {
 func TestSlowFailureLoggerDoesNotHoldHook(t *testing.T) {
 	token := filepath.Join(t.TempDir(), "hub.token")
 	unblock := make(chan struct{})
-	done := make(chan Output, 1)
-	go func() {
-		done <- (Runner{ClientName: "copilot", EventName: "preToolUse", Stdin: strings.NewReader("{"), Getenv: func(key string) string {
-			<-unblock
-			if key == "IRIS_TOKEN_FILE" {
-				return token
-			}
-			return ""
-		}}).Run()
-	}()
-	select {
-	case out := <-done:
-		assertAllow(t, ClientCopilot, out)
-	case <-time.After(100 * time.Millisecond):
-		close(unblock)
-		t.Fatal("slow log configuration blocked the hook")
+	written := make(chan struct{})
+	// The budget expires as soon as it starts, so Run must answer while the writer is still
+	// blocked in its configuration. Order, not speed, is what is checked.
+	expired := func(time.Duration) <-chan time.Time {
+		c := make(chan time.Time)
+		close(c)
+		return c
 	}
+	out := (Runner{ClientName: "copilot", EventName: "preToolUse", Stdin: strings.NewReader("{"), Getenv: func(key string) string {
+		<-unblock
+		if key == "IRIS_TOKEN_FILE" {
+			return token
+		}
+		return ""
+	}, logAfter: expired, logged: func() { close(written) }}).Run()
+	assertAllow(t, ClientCopilot, out)
 	close(unblock)
-	deadline := time.Now().Add(time.Second)
-	for time.Now().Before(deadline) {
-		entries, err := ReadRecentFailures(token, 1)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(entries) == 1 {
-			return
-		}
-		time.Sleep(time.Millisecond)
+	<-written
+	entries, err := ReadRecentFailures(token, 1)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("failure was not recorded after logging resumed: %v %v", entries, err)
 	}
-	t.Fatal("failure was not recorded after logging resumed")
 }
 
 // A reader that arrives during a write waits. Windows file locks are mandatory, so
@@ -279,13 +260,8 @@ func TestFailureLogReadWaitsWhileWriteHoldsTheLock(t *testing.T) {
 	case <-time.After(80 * time.Millisecond):
 	}
 	unlockFailureLog(f)
-	select {
-	case err := <-read:
-		if err != nil {
-			t.Fatal(err)
-		}
-	case <-time.After(time.Second):
-		t.Fatal("read did not resume after the lock was released")
+	if err := <-read; err != nil {
+		t.Fatalf("read did not resume after the lock was released: %v", err)
 	}
 }
 
@@ -300,23 +276,16 @@ func TestMalformedClientConfigStillLogsTheFailure(t *testing.T) {
 			return token
 		}
 		return ""
-	}, Deadline: roomy, logWait: roomy}).Run()
+	}, after: never, logAfter: never}).Run()
 	assertAllow(t, ClientKimi, out)
-	deadline := time.Now().Add(time.Second)
-	for {
-		entries, err := ReadRecentFailures(token, 10)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(entries) == 1 {
-			if entries[0].Stage == "" || entries[0].Client != "kimi" {
-				t.Fatal(entries[0])
-			}
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatal("malformed client.json left no failure trace")
-		}
-		time.Sleep(time.Millisecond)
+	entries, err := ReadRecentFailures(token, 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(entries) != 1 {
+		t.Fatal("malformed client.json left no failure trace")
+	}
+	if entries[0].Stage == "" || entries[0].Client != "kimi" {
+		t.Fatal(entries[0])
 	}
 }
