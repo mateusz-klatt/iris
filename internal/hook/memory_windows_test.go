@@ -16,13 +16,15 @@ func TestFileMemoryIsOwnerOnlyOnWindows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	expected, err := windows.SecurityDescriptorFromString("D:P(A;;FA;;;" + user.User.Sid.String() + ")")
-	if err != nil {
-		t.Fatal(err)
-	}
-	want := expected.String()
-	want = want[strings.Index(want, "("):]
-	for _, path := range []string{m.dir, m.name("claude", "s")} {
+	sid := user.User.Sid.String()
+	// The directory's entry is inherited by what is created inside; the file's is not.
+	for path, sddl := range map[string]string{m.dir: "D:P(A;OICI;FA;;;" + sid + ")", m.name("claude", "s"): "D:P(A;;FA;;;" + sid + ")"} {
+		expected, err := windows.SecurityDescriptorFromString(sddl)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := expected.String()
+		want = want[strings.Index(want, "("):]
 		sd, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
 		if err != nil {
 			t.Fatal(err)
