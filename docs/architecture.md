@@ -392,7 +392,9 @@ writer, as they do on install. A file that no longer parses is refused and stays
 for a retry. A plugin skill somebody edited no longer matches its template, so it stays.
 
 Clients that cannot be fully automated are reported truthfully. Codex needs its hooks reviewed
-once in `/hooks`; project hooks need trust on Cursor, Copilot and Grok.
+once in `/hooks`; project hooks need trust on Cursor, Copilot and Grok. Kimi has no project
+hooks at all. Monitors require the Claude plugin, so `iris integrate claude` installs one,
+generated from files embedded in the binary.
 
 Codex's `[mcp_servers.iris]` table carries two more keys, both measured on Codex 0.167.0 and both
 removed with the table:
@@ -404,9 +406,7 @@ removed with the table:
   and applies to no other server. Without it Codex asks before every Iris call, and with
   `approval_policy = "never"` it refuses them all. Iris tools act only on the hub, never on local
   files or a shell. The `writes` mode would ask only for tools not marked read-only, but Iris's
-  tools carry no annotations, so `writes` refused even `whoami`. Kimi has no project
-hooks at all. Monitors require the Claude plugin, so `iris integrate claude` installs one,
-generated from files embedded in the binary.
+  tools carry no annotations, so `writes` refused even `whoami`.
 
 `iris doctor` runs offline by default: hub reachable, token valid, client version, configuration
 present, trust state, unknown tools seen, last hook received, and a synthetic canary through the
