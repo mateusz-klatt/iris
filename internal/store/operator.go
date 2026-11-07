@@ -28,6 +28,14 @@ func (t *transaction) humanSender(r Request) (execution, error) {
 	if repo == "" {
 		return execution{}, fail("bad_request", "repository or recipient required")
 	}
+	// The operator may write from any repository on the hub, but only from one that exists.
+	var known int
+	if err := t.row("SELECT COUNT(*) FROM Repository WHERE id=?", repo).Scan(&known); err != nil {
+		return execution{}, err
+	}
+	if known == 0 {
+		return execution{}, fail("not_found", "unknown repository")
+	}
 	agent, err := t.human(repo)
 	if err != nil {
 		return execution{}, err

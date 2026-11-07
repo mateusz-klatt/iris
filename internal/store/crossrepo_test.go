@@ -223,3 +223,9 @@ func TestUnreadInAThreadCountsThisViewsHumanOnly(t *testing.T) {
 		t.Fatal(all)
 	}
 }
+
+// The console's view names the repository a message is written from; an unknown one is refused.
+func TestTheOperatorCannotWriteFromAnUnknownRepository(t *testing.T) {
+	s, _, irisOut, _, _ := crossRepo(t)
+	refusedWith(t, s, "ui_messages", Request{RepositoryID: "rp_unknown", Key: "x", Body: "x", To: []string{agentName(irisOut)}}, "not_found")
+}
