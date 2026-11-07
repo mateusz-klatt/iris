@@ -437,6 +437,19 @@ The first screen with no sessions shows a live wait for the first session, next 
 status from the last doctor run (hook received, not configured, needs a human step), with a button
 to run the doctor. A silent client must show its cause, not an empty table.
 
+### D17. Removing records
+
+Records outlive the sessions that made them, and measurement runs leave repositories and
+agents nobody wants. `iris admin forget` removes one repository, or one agent whose sessions
+have ended, with everything that refers to it, in one transaction. It is the only deletion
+besides event pruning, so it is narrow: owner token only, a dry run first, and a refusal while
+anything it would remove is in use.
+
+R4 still holds. A delivery is never lost by accident; this removes it because the owner asked,
+and reports how many. The event log stays consistent: events of the removed agent go, and other
+agents' events about removed deliveries read as settled, so a watcher is neither woken nor reset.
+The search index is updated in the same transaction.
+
 ## 3. Client capability matrix
 
 | Capability | Claude | Codex | Copilot | Cursor | Antigravity | Grok | Kimi |

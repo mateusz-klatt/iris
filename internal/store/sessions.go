@@ -19,6 +19,7 @@ type Request struct {
 	ReplyTo          string            `json:"reply_to"`
 	Q                string            `json:"q"`
 	Agent            string            `json:"agent"`
+	DryRun           bool              `json:"dry_run"`
 	Before           string            `json:"before"`
 	CheckedAt        string            `json:"checked_at"`
 	Clients          []map[string]any  `json:"clients"`
