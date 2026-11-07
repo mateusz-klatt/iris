@@ -97,6 +97,9 @@ Against the production hub, over TLS:
 - **Not measured:** Defender, the SmartScreen window, Apple silicon, Gatekeeper's dialog and "Open
   Anyway", and a Mac or PC whose policy forbids unsigned code.
 - **Production hook latency on Windows since #39.**
+- **An internal/integrate test that fails under load.** One run of four failed on Windows with every
+  CPU busy. It has not reproduced since, and its name was not captured. Pending a -v loop under load
+  when the PC is free.
 - **Services:** loading the LaunchAgent at login, the `systemd --user` unit starting at boot from
   linger alone, without a login session (it needs the Codex desktop app closed first), and the
   service exit codes on Windows.
