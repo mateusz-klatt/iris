@@ -202,9 +202,9 @@ func NoRedirects(hc *http.Client) *http.Client {
 	if hc == nil {
 		hc = http.DefaultClient
 	}
-	copy := *hc
-	copy.CheckRedirect = func(*http.Request, []*http.Request) error { return ErrRedirect }
-	return &copy
+	refusing := *hc
+	refusing.CheckRedirect = func(*http.Request, []*http.Request) error { return ErrRedirect }
+	return &refusing
 }
 
 // ValidateURL accepts https, and http only for the literal hosts 127.0.0.1 and ::1.
