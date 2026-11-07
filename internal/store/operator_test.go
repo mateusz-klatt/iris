@@ -131,3 +131,24 @@ func TestTokenStorageFailures(t *testing.T) {
 		t.Fatal("missing token table revoked")
 	}
 }
+
+func TestRevokedTokenNameNamesOnlyRevokedTokens(t *testing.T) {
+	s, _, _ := testStore(t)
+	ctx := context.Background()
+	secret, err := s.AddToken(ctx, "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, revoked := s.RevokedTokenName(ctx, secret); revoked {
+		t.Fatal("an active token reads as revoked")
+	}
+	if _, err = s.RevokeToken(ctx, "laptop"); err != nil {
+		t.Fatal(err)
+	}
+	if name, revoked := s.RevokedTokenName(ctx, secret); !revoked || name != "laptop" {
+		t.Fatal(name, revoked)
+	}
+	if _, revoked := s.RevokedTokenName(ctx, "never-issued"); revoked {
+		t.Fatal("an unknown token reads as revoked")
+	}
+}

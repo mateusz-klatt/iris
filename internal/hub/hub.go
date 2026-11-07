@@ -153,10 +153,23 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if strings.HasPrefix(r.URL.Path, "/v1/") && r.URL.Path != "/v1/status" && r.URL.Path != "/v1/watch" && !h.authorized(r) && !(strings.HasPrefix(r.URL.Path, "/v1/ui/") && r.URL.Path != "/v1/ui/links" && h.cookieAuthorized(r)) {
-		h.reject(w, r, "bearer token required")
+		h.reject(w, r, h.refusal(r))
 		return
 	}
 	h.mux.ServeHTTP(w, r)
+}
+
+// refusal says why a request has no principal. A revoked or unknown token is told apart
+// from a missing one, so the log shows a host still sending a token it should not.
+func (h *Hub) refusal(r *http.Request) string {
+	header := r.Header.Get("Authorization")
+	if !strings.HasPrefix(header, "Bearer ") {
+		return "bearer token required"
+	}
+	if name, revoked := h.store.RevokedTokenName(r.Context(), strings.TrimPrefix(header, "Bearer ")); revoked {
+		return "revoked token " + strconv.Quote(name)
+	}
+	return "unknown bearer token"
 }
 func (h *Hub) authorized(r *http.Request) bool {
 	return requestPrincipal(r).name != ""
