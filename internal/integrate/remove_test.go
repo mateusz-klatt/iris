@@ -5,7 +5,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"runtime"
 	"strings"
 	"testing"
 )
@@ -338,9 +337,6 @@ func TestRemoveRefusesAMarkerWithoutItsPartner(t *testing.T) {
 }
 
 func TestRemoveRefusesASymlink(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("symlinks need a privilege on Windows")
-	}
 	l := testLayout(t)
 	c, _ := ByName(Grok)
 	if err := c.Install(l, nil); err != nil {
@@ -463,9 +459,6 @@ func TestACreatedDirectoryWithSomethingInItStays(t *testing.T) {
 
 // A created directory the user replaced with a link keeps the link: os.Remove would delete it.
 func TestACreatedDirectoryReplacedByALinkStays(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("creating a symlink needs a privilege on Windows")
-	}
 	l := testLayout(t)
 	grok, _ := ByName(Grok)
 	files, _ := grok.Files(l)
