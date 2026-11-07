@@ -228,7 +228,9 @@ func (t *transaction) touch(r Request) (map[string]any, error) {
 	}
 	conflicts := []map[string]any{}
 	reuse := map[string]claim{}
-	for _, p := range normalized {
+	// Ignored paths take no automatic claim, but another session's explicit claim on one
+	// still applies (D10), so every requested path is checked for conflicts.
+	for _, p := range append(append([]string{}, normalized...), ignored...) {
 		for _, c := range cs {
 			if !overlaps(pathKey(p, policy), "exact", c.Key, c.Kind) {
 				continue
