@@ -1,7 +1,15 @@
 # GoReleaser provides pure-Go binaries in platform-named directories.
-FROM gcr.io/distroless/static-debian12
+
+# Distroless has no shell, so /data is made here and its owner set on the copy below.
+# This stage runs on the build host, so an arm64 image needs no emulation.
+FROM --platform=$BUILDPLATFORM busybox:1.37 AS data
+RUN mkdir /data
+
+FROM gcr.io/distroless/static-debian12:nonroot
 ARG TARGETPLATFORM
 COPY ${TARGETPLATFORM}/iris /usr/local/bin/iris
+COPY --from=data --chown=65532:65532 /data /data
+USER 65532:65532
 VOLUME ["/data"]
 EXPOSE 7878
 ENTRYPOINT ["/usr/local/bin/iris"]

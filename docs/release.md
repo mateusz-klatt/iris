@@ -27,7 +27,8 @@ future GitHub assets; private snapshot assets are not public install channels.
 
 The server image uses `dockers_v2` for Linux amd64/arm64. Snapshots load local
 platform images without pushing; release publication remains a separate opt-in.
-It stores the database and token under `/data`. For externally reachable serving,
+It runs as uid/gid 65532 and stores the database and token under `/data`, which must be
+writable by that user. A fresh named volume is; a bind mount needs its owner set. For externally reachable serving,
 pass `--listen`, `--tls-cert` and `--tls-key` explicitly, as required by D1.
 Snapshot signing and SBOM generation are skipped by the command above. Later
 releases can generate archive SBOMs with syft and sign checksums with keyless

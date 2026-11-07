@@ -134,6 +134,46 @@ jobs:
         env:
           CGO_ENABLED: "0"
           IRIS_MEASURE_LATENCY: "1"
+  release-image:
+    # The image has no shell, so only a real run shows the hub can write to /data.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: docker/setup-buildx-action@v3
+      - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
+        with:
+          version: v2.20.0
+          args: release --snapshot --clean --skip=sign,sbom
+      - name: Run the image as non-root on a fresh named volume
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker images
+          image=$(docker images --format '{{.Repository}}:{{.Tag}}' ghcr.io/mateusz-klatt/iris | head -1)
+          test -n "$image"
+          test "$(docker image inspect --format '{{.Config.User}}' "$image")" = "65532:65532"
+          docker volume create iris-image-check
+          docker run -d --name iris-image-check -v iris-image-check:/data "$image"
+          inspect() { docker run --rm -v iris-image-check:/data busybox:1.37 "$@"; }
+          for _ in $(seq 1 30); do
+            if inspect test -s /data/hub.token && inspect test -s /data/iris.db; then
+              break
+            fi
+            sleep 1
+          done
+          docker logs iris-image-check
+          test "$(docker inspect --format '{{.State.Running}}' iris-image-check)" = true
+          inspect ls -ln /data
+          inspect stat -c '%u:%g' /data /data/hub.token /data/iris.db | sort -u | tee owners
+          test "$(cat owners)" = "65532:65532"
   goreleaser-check:
     runs-on: ubuntu-latest
     steps:
