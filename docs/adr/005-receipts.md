@@ -20,9 +20,19 @@ responsibility for it. That is what settles a delivery: it stops redelivery and 
 as now. Nothing about recovery, attempts or stale acks changes.
 
 **2. A separate "handled" state.** The ack request takes an optional `"handled": true`. A handled
-ack also accepts, so one call can do both. A plain ack can be followed later by a handled one, under the
-same attempt rules as any ack: a stale attempt gets `conflict`. A handled ack after a handled ack succeeds and changes
-nothing. A handled state is never taken back. The `Ack` row gains a nullable `handled_ms`.
+ack also accepts, so one call can do both. That call follows today's rules: the delivery is assigned to
+the calling Execution, and the attempt matches, or `conflict`.
+
+Marking an already-accepted delivery handled has looser rules, because it is usually said later,
+from another Execution of the same agent: after a compaction, a resume, or a lost session that
+A10 replaced. That Execution never fetched the delivery and, once it is acked, never will. So any
+live Execution of the recipient agent may mark it handled, with no attempt. The mailbox, which is
+the Agent, is the identity that matters. Another agent's Execution gets `not_found`. The mark is
+monotone and idempotent: a repeat succeeds and changes nothing, a handled state is never taken
+back, and so a stale caller can undo nothing. A handled mark on a delivery not yet accepted, from
+an Execution it is not assigned to, gets `conflict`, as an ack would. The `Ack` row gains a
+nullable `handled_ms`. Tests cover a mark from a second Execution of the same agent, a refusal
+for another agent, and the repeat.
 
 "Handled" is a claim by the recipient model, not a verified fact. Iris records that the recipient
 said so, and when. It cannot check that the work was done, or done well. The MCP tool description
@@ -38,8 +48,13 @@ each recipient of one message:
 
 `state` is `pending` (not fetched, or freed again), `inflight` (fetched by a live Execution, not
 acked), `acked`, or `handled`. These are the names `DeliveryState` already uses, plus `handled`.
-`at` is the time of the last change the hub recorded for that state. No subject, no body and no
-recipient Execution is returned.
+`at` is `Ack.acked_ms` for `acked` and `handled_ms` for `handled`. It is null for `pending` and
+`inflight`: `Delivery` stores no fetch or free time, and this decision adds none. No subject, no
+body and no recipient Execution is returned.
+
+After a hub restart, a recovering Execution's deliveries stay `inflight` for up to the 120 s
+recovery window. They become `pending` if it is lost (A10). A sender polling during a deploy can
+see that, and it is not a fault.
 
 Only the agent that sent the message may read its status, from any of its Executions, and the
 operator, through the console's thread view, which shows `handled` as well. Anyone else gets
