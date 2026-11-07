@@ -4,6 +4,7 @@ package watch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -79,6 +80,10 @@ func (c *Coalescer) Flush(now time.Time) error {
 	}
 	return nil
 }
+
+// outputError is a failure to print. Reconnecting cannot fix it, so Run stops on it.
+type outputError struct{ error }
+
 func (c *Coalescer) emit(now time.Time, kind string, p *pending) error {
 	var err error
 	if kind == "inbox_changed" {
@@ -95,7 +100,7 @@ func (c *Coalescer) emit(now time.Time, kind string, p *pending) error {
 		_, err = fmt.Fprintf(c.Output, "Iris: %d %s released. Use the claims tool.\n", p.count, noun)
 	}
 	if err != nil {
-		return err
+		return outputError{err}
 	}
 	p.count = 0
 	window := c.Window
@@ -114,6 +119,9 @@ type Runner struct {
 	Now func() time.Time
 	// after waits out a backoff. Tests replace it to see each delay without waiting.
 	after func(time.Duration) <-chan time.Time
+	// streamed is set once a stream has opened, so a drop after a working connection
+	// starts the backoff again instead of continuing it.
+	streamed bool
 }
 
 func (r *Runner) wait(d time.Duration) <-chan time.Time {
@@ -135,16 +143,24 @@ func (r *Runner) Run(ctx context.Context) error {
 	var cursor int64
 	stream := ""
 	warned := false
-	delay := r.Backoff
-	if delay <= 0 {
-		delay = time.Second
+	base := r.Backoff
+	if base <= 0 {
+		base = time.Second
 	}
+	delay := base
 	for ctx.Err() == nil {
 		call, cancel := context.WithTimeout(ctx, 5*time.Second)
 		b, err := r.Resolver.Resolve(call, "")
 		cancel()
+		r.streamed = false
 		if err == nil {
 			err = r.connect(ctx, b, &cursor, &stream, coalesce)
+		}
+		if errors.As(err, new(outputError)) {
+			return err
+		}
+		if r.streamed {
+			delay = base
 		}
 		if binding.IsCode(err, "lost") {
 			return nil
@@ -235,6 +251,7 @@ func (r *Runner) connect(ctx context.Context, b binding.Bound, cursor *int64, st
 	if err != nil {
 		return err
 	}
+	r.streamed = true
 	defer conn.CloseNow()
 	c.Recount = func() (int, bool) { return r.waiting(ctx, b, *cursor) }
 	readCtx, stop := context.WithCancel(ctx)
