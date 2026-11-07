@@ -8,8 +8,13 @@ import (
 )
 
 // Status reads NUL-delimited porcelain, preserving spaces, newlines and both rename ends.
+//
+// --no-optional-locks keeps git from taking index.lock to refresh the index. The hook runs this
+// under a 300 ms budget and kills git when it runs out. A git killed while holding the lock left
+// a stale .git/index.lock, and the user's next commit then failed with "Another git process seems
+// to be running" (measured on macOS: 6 of 40 killed runs left one; 0 of 40 with the flag).
 func Status(ctx context.Context, root string) (map[string]string, error) {
-	cmd := exec.CommandContext(ctx, "git", "status", "--porcelain", "-z", "--untracked-files=all")
+	cmd := exec.CommandContext(ctx, "git", "--no-optional-locks", "status", "--porcelain", "-z", "--untracked-files=all")
 	cmd.Dir = root
 	var out limitedStatus
 	cmd.Stdout = &out
