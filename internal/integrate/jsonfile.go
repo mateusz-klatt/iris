@@ -49,17 +49,44 @@ func putNestedHook(doc map[string]any, event string, hook map[string]any, match 
 	if !ok {
 		return ErrBroken
 	}
+	// Only Iris's own handler is replaced. A person's handler in the same group, and the group's
+	// own keys such as its matcher, stay: replacing the whole group deleted them (gap review A6).
 	replaced := false
-	for i, item := range arr {
-		if match(item) {
-			arr[i] = group
-			replaced = true
+	var out []any
+	for _, item := range arr {
+		if !match(item) {
+			out = append(out, item)
+			continue
+		}
+		g, isGroup := item.(map[string]any)
+		handlers, hasHandlers := g["hooks"].([]any)
+		if !isGroup || !hasHandlers {
+			// A handler written directly in the event list, as some clients allow.
+			if !replaced {
+				out = append(out, group)
+				replaced = true
+			}
+			continue
+		}
+		var kept []any
+		for _, h := range handlers {
+			switch {
+			case !match(h):
+				kept = append(kept, h)
+			case !replaced:
+				kept = append(kept, hook)
+				replaced = true
+			}
+		}
+		if len(kept) > 0 {
+			g["hooks"] = kept
+			out = append(out, g)
 		}
 	}
 	if !replaced {
-		arr = append(arr, group)
+		out = append(out, group)
 	}
-	hooks[event] = arr
+	hooks[event] = out
 	return nil
 }
 

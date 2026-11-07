@@ -483,3 +483,46 @@ func TestACreatedDirectoryReplacedByALinkStays(t *testing.T) {
 		t.Fatalf("the user's link is gone: %v", err)
 	}
 }
+
+// Reintegrating replaces only Iris's handler. A person's handler in the same group and the
+// group's own keys stay; before, the whole group was replaced and they were lost (gap A6).
+func TestReintegrateKeepsSiblingHandlersAndGroupKeys(t *testing.T) {
+	l := testLayout(t)
+	c, _ := ByName(Codex)
+	if err := c.Install(l, nil); err != nil {
+		t.Fatal(err)
+	}
+	files, _ := c.Files(l)
+	var doc map[string]any
+	if err := json.Unmarshal(mustRead(t, files[0]), &doc); err != nil {
+		t.Fatal(err)
+	}
+	hooks := doc["hooks"].(map[string]any)
+	group := hooks["Stop"].([]any)[0].(map[string]any)
+	group["matcher"] = "mine"
+	group["hooks"] = append(group["hooks"].([]any), map[string]any{"type": "command", "command": "beside"})
+	// A handler written directly in the list, and a second group that also runs Iris.
+	hooks["Stop"] = append(hooks["Stop"].([]any),
+		map[string]any{"type": "command", "command": "iris hook --client codex --event Stop"},
+		map[string]any{"hooks": []any{map[string]any{"type": "command", "command": "iris hook --client codex --event Stop"}}})
+	// An event whose only Iris entry is written directly in the list.
+	hooks["SessionEnd"] = []any{map[string]any{"type": "command", "command": "iris hook --client codex --event SessionEnd"}}
+	body, _ := marshalJSON(doc)
+	if err := os.WriteFile(files[0], body, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 {
+		if err := c.Install(l, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	text := string(mustRead(t, files[0]))
+	if !strings.Contains(text, `"beside"`) || !strings.Contains(text, `"matcher": "mine"`) {
+		t.Fatalf("lost the person's handler or the group's matcher\n%s", text)
+	}
+	for _, event := range []string{"Stop", "SessionEnd"} {
+		if n := strings.Count(text, "--client codex --event "+event); n != 1 {
+			t.Fatalf("%d Iris %s handlers, want 1\n%s", n, event, text)
+		}
+	}
+}
