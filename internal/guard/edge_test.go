@@ -254,3 +254,20 @@ func TestCheckReportsAMissingHostname(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestInstalledHookRunsOnlyForItsOwner(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows has no such mode")
+	}
+	dir, hook := repoHook(t)
+	if err := Install(bg, dir); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(hook)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o700 {
+		t.Fatalf("mode %o", got)
+	}
+}
