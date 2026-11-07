@@ -10,7 +10,7 @@ SSH, or by hand.
 
 ```bash
 git clone https://github.com/mateusz-klatt/iris.git && cd iris
-mkdir -p ~/.local/bin ~/.config/iris
+mkdir -p ~/.local/bin && mkdir -p -m 700 ~/.config/iris
 CGO_ENABLED=0 go build -o ~/.local/bin/iris ./cmd/iris
 scp <user>@<hub-host>:.config/iris/hub.token ~/.config/iris/hub.token
 chmod 600 ~/.config/iris/hub.token
@@ -36,7 +36,7 @@ mkdir -p ~/.local/bin
 tar -xzf iris_<version>_darwin_arm64.tar.gz -C ~/.local/bin iris
 export PATH="$HOME/.local/bin:$PATH"
 CONFIG="$HOME/Library/Application Support/iris"
-mkdir -p "$CONFIG"
+mkdir -p -m 700 "$CONFIG"
 scp <user>@<hub-host>:.config/iris/hub.token "$CONFIG/hub.token"
 chmod 600 "$CONFIG/hub.token"
 iris setup --hub https://<hub> --clients claude --yes
@@ -70,7 +70,7 @@ Homebrew 7 requires for a formula outside its own taps.
 ```bash
 git clone https://github.com/mateusz-klatt/iris.git && cd iris
 CONFIG="$HOME/Library/Application Support/iris"
-mkdir -p ~/.local/bin "$CONFIG"
+mkdir -p ~/.local/bin && mkdir -p -m 700 "$CONFIG"
 CGO_ENABLED=0 go build -o ~/.local/bin/iris ./cmd/iris
 scp <user>@<hub-host>:.config/iris/hub.token "$CONFIG/hub.token"
 chmod 600 "$CONFIG/hub.token"
