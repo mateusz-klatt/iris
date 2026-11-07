@@ -199,7 +199,7 @@ func (t *transaction) repository(r Request) (string, error) {
 	}
 	if repo == "" {
 		repo = id("rp_")
-		if _, err = t.exec("INSERT INTO Repository(id,root_commit,name) VALUES(?,?,?)", repo, r.RootCommit, repositoryName(r.RemoteURL, r.Worktree)); err != nil {
+		if _, err = t.exec("INSERT INTO Repository(id,case_policy,root_commit,name) VALUES(?,'folded',?,?)", repo, r.RootCommit, repositoryName(r.RemoteURL, r.Worktree)); err != nil {
 			return "", err
 		}
 	}
@@ -234,8 +234,8 @@ func (t *transaction) resume(e *execution, strong bool) (int64, error) {
 	e.Deadline = t.s.clock.Tick() + lease
 	// Rotate the numeric fence as well as the epoch: release accepts a fence
 	// without a complete token, so retaining the number would admit zombies.
-	if _, err := t.exec(`INSERT INTO Claim(execution_id,repository_id,kind,path,origin,boot_epoch,expires_ms)
-            SELECT execution_id,repository_id,kind,path,origin,?,expires_ms FROM Claim
+	if _, err := t.exec(`INSERT INTO Claim(execution_id,repository_id,kind,path,path_key,origin,boot_epoch,expires_ms)
+            SELECT execution_id,repository_id,kind,path,path_key,origin,?,expires_ms FROM Claim
             WHERE execution_id=? AND revoked_ms IS NULL AND boot_epoch<>?`, t.s.epoch, e.ID, t.s.epoch); err != nil {
 		return 0, err
 	}

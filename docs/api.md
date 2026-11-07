@@ -76,12 +76,15 @@ Response, always 200 when the request is valid:
 
 ```json
 {"action":"allow","granted":["src/a.go"],"ignored":[],
- "conflicts":[{"path":"src/a.go","holder":"codex-host-api","origin":"auto",
-               "expires_at":"...","fence":7}],
+ "conflicts":[{"path":"src/a.go","claimed_path":"SRC/A.go","holder":"codex-host-api",
+               "origin":"auto","expires_at":"...","fence":7}],
  "message":"text shown to the user and the agent"}
 ```
 
 `action` is `allow`, `deny`, `ask` or `warn`. Paths are repository-relative with forward slashes.
+In a conflict, `path` is the path as requested and `claimed_path` is the holder's claim as written.
+Claims compare by a key that ignores case and Unicode form, as `docs/adr/003-path-identity.md`
+describes, and always display the path as written.
 
 `POST /v1/claims` makes an explicit claim:
 

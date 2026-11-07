@@ -1,6 +1,6 @@
 # 003: Path identity for claims
 
-Status: proposed. It needs the owner's decision and has not been implemented.
+Status: accepted. The decisions below were made by `claude-holzera-iris` under the owner's delegation.
 
 ## Problem
 
@@ -22,17 +22,25 @@ tests sets it, and it folds with `strings.ToLower`, which misses most of what AP
 | `σ`, `ς` | yes | yes | yes |
 | `K` (Kelvin sign), `k` | yes | yes | yes |
 
-## Proposal
+## Decision
 
 **Claim key.** Keep `path` as written, for display. Add `path_key`, computed by the hub as
 `NFD(fold(NFD(path)))`, and make `overlaps` compare keys, including prefix claims. This is the
 canonical caseless match from the Unicode standard. It needs `golang.org/x/text`, which is pure Go
 and so keeps `CGO_ENABLED=0`, but is a new direct dependency. A prototype matched every row above.
 
-**Every repository, by default.** Replace `folded` with this key and make it the default.
-`sensitive` stays as an opt-out for a repository that really has paths differing only by case.
-`SetRepositoryPolicy` refuses to change a repository that has claims. A migration that backfills
-`path_key` removes the reason for that refusal.
+**Every repository, by default.** `folded` now means this key, and every repository uses it,
+including those that existed before the migration. `sensitive` stays as an opt-out for a repository
+that really has paths differing only by case. `SetRepositoryPolicy` no longer refuses a repository
+with claims: it recomputes their keys. If two live claims come to share a key, both stay, and only a
+new claim conflicts.
+
+The opt-out has no command yet. Only `Store.SetRepositoryPolicy` can set it, so today it takes a
+code change or a direct call.
+
+**Refusals show both spellings.** A hook or guard refusal reads `SRC/A.GO is held by x as src/a.go`,
+and a conflict carries `path` as requested and `claimed_path` as held. A prefix claim shows its own
+path in the same way.
 
 **Detecting a case-insensitive volume.** Enforcement needs no detection, which is the main reason to
 fold by default. Detection is only for a warning: `iris doctor` reports a repository left `sensitive`
@@ -64,16 +72,32 @@ host. Otherwise the repository opts out.
   ext4 were not measured.
 - Windows short names such as `PROGRA~1`, and trailing dots and spaces.
 - A claim made in a repository that opted out.
+- An absolute path whose worktree root is itself spelled differently. `gitinfo.Relative` compares the
+  root exactly and rejects such a path as outside the worktree, before any key is computed.
 
 Hooks and the guard remain cooperative, and a hook that misses its deadline still fails open.
 
 ## Rollout
 
-The change is in the hub, so clients need no upgrade. It needs a schema migration, so it takes effect
-at a hub deploy with a restart. The console and deny messages should keep showing `path`.
+The change is in the hub, so clients need no upgrade. Schema version 6 applies at a hub deploy with a
+restart, inside the transaction that opens the database, so a failure leaves version 5 unchanged.
 
-## Decisions for the owner
+The migration can be rolled back by running the older binary, which opens version 6. That binary
+writes claims with no key, compares exact strings, and folds with `ToLower`, because every repository
+is now `folded`. The next start of this version fills in the missing keys. It does this at every
+start, because an empty key on a prefix claim would otherwise read as repository-wide.
 
-1. Fold by default, or opt in per repository. This proposal recommends the default.
-2. Accept `golang.org/x/text` as a direct dependency.
-3. Accept false conflicts between case-only paths on case-sensitive hosts.
+## Decisions
+
+1. Fold by default, in every repository.
+2. Accept `golang.org/x/text` as a direct dependency. All six release targets build with
+   `CGO_ENABLED=0`.
+3. Accept false conflicts between case-only paths. A missed collision costs more than a false
+   refusal, and `sensitive` remains the opt-out.
+
+## Measured
+
+On one APFS volume with the real binary, hooks, Git and guard: every row of the table was refused by
+the hook and by a commit, with a same-spelling control and an empty hook failure log. A database
+written by the older binary migrated in place, and its claim refused another spelling. A rollback to
+that binary and forward again kept every claim. NTFS and casefold ext4 were not measured.

@@ -222,7 +222,7 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 			}
 			invoke := func() (map[string]any, error) {
 				if op == "policy" {
-					return nil, s.SetRepositoryPolicy(context.Background(), r.RepositoryID, "folded", "deny")
+					return nil, s.SetRepositoryPolicy(context.Background(), r.RepositoryID, "sensitive", "deny")
 				}
 				return s.Call(context.Background(), route, r)
 			}
