@@ -1,8 +1,11 @@
-# Stage 0 snapshots
+# Snapshots and releases
 
-The repository is public, but stage 0 still publishes nothing: no release, no
-package-manager update and no image. `.goreleaser.yaml` disables GitHub releases and sets Homebrew, Scoop and winget
-`skip_upload: true`. Docker builds are enabled only for snapshots, which never push. Do not enable publishing until D15's later stages are approved.
+The repository is public, and nothing is published yet: no release, no package-manager update
+and no image. A pushed version tag runs `.github/workflows/release.yml`, which makes a **draft**
+GitHub release (`release: draft: true`) that stays private until the owner publishes it. The tag
+itself is public as soon as it is pushed. Homebrew,
+Scoop and winget are `skip_upload: true`. Docker builds are enabled only for snapshots, which never
+push. Do not enable publishing until D15's later stages are approved.
 The GoReleaser dependency is not part of the application module.
 
 Use GoReleaser **v2.20.0** (the official binary, Docker image, or `go run github.com/goreleaser/goreleaser/v2@v2.20.0`) from the repository root:
