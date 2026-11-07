@@ -195,14 +195,19 @@ into a chat, a ticket or an Iris message.
 
 ### Revoking a host token
 
-`iris token revoke <host>` takes effect at once. Measured with the session still running:
+`iris token revoke <host>` takes effect at once. Measured with a Claude Code session still running:
 
 - `iris doctor` on the host reported `token: not valid (token was rejected)` and exited 1.
-- Hooks failed open, as D3 requires. Seven edits went through unclaimed and were recorded in
-  `hook-failures.log`. The session reported no failed step, so revocation is silent to the agent.
-- `whoami` still answered from what `iris mcp` had cached, so it did not show the revocation.
-- The open `iris watch` stream could not reconnect afterwards, and it printed nothing.
-- The hub logs a revoked token as `authentication failed: ... reason="bearer token required"`, the same
-  reason as a missing token.
+- Hooks failed open, as D3 requires: the edits were allowed but not claimed, and recorded in
+  `hook-failures.log`. Each one also told the model: "Iris: the hub rejected this host's token, so
+  this session's edits are allowed but not claimed, and other agents cannot see them." The model
+  quoted it and asked for `iris doctor`.
+- `whoami` failed with `unauthorized`, because it proves its binding to the hub instead of answering
+  from cache.
+- `iris watch` printed one line, "Iris: the hub rejected this host's token, so notifications have
+  stopped.", and printed nothing more while it retried.
+- The hub logged `reason="revoked token \"<host>\""`. An unknown token logs `unknown bearer token`,
+  and a missing one `bearer token required`.
 
-So revoke a host's token only after its sessions have ended, or after its file holds a replacement.
+Edits still go through unclaimed until the host has a working token. So revoke a host's token only
+after its sessions have ended, or after its file holds a replacement.

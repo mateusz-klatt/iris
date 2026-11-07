@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -119,14 +120,20 @@ func TestEveryToolIsListed(t *testing.T) {
 	}
 }
 
-func TestWhoamiStaysLocal(t *testing.T) {
-	f := &fakeHub{}
+// whoami's binding is cached, so it proves it to the hub. A dead token must not look healthy.
+func TestWhoamiProvesItsBindingToTheHub(t *testing.T) {
+	f := &fakeHub{reply: "{}"}
 	out, failed := use(t, connect(t, f), "whoami", nil)
 	if failed || out["execution_id"] != "ex" || out["repository_id"] != "rp" {
 		t.Fatal(out, failed)
 	}
-	if len(f.calls) != 0 {
-		t.Fatal(f.calls)
+	if call := f.last(t); call.method != "POST" || call.path != "/v1/executions/ex/heartbeat" || call.body["source"] != "shim" || call.body["generation"] != float64(3) {
+		t.Fatal(call)
+	}
+	rejected := &fakeHub{status: 401, reply: `{"error":{"code":"unauthorized","message":"revoked token"}}`}
+	out, failed = use(t, connect(t, rejected), "whoami", nil)
+	if !failed || !strings.Contains(fmt.Sprint(out), "unauthorized") {
+		t.Fatalf("a rejected token still answered whoami: %v", out)
 	}
 }
 

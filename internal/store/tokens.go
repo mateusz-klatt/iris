@@ -99,6 +99,16 @@ func (s *Store) RevokeToken(ctx context.Context, name string) (string, error) {
 }
 
 // TokenActive checks a digest for streams already authenticated by the hub.
+// RevokedTokenName names a token that was valid once and has been revoked, so the hub can log
+// it apart from an unknown one. Any failure reads as not revoked.
+func (s *Store) RevokedTokenName(ctx context.Context, token string) (string, bool) {
+	digest := sha256.Sum256([]byte(token))
+	var name string
+	err := s.transact(ctx, func(t *transaction) error {
+		return t.row("SELECT name FROM HostToken WHERE digest=? AND revoked_ms IS NOT NULL", digest[:]).Scan(&name)
+	})
+	return name, err == nil
+}
 func (s *Store) TokenActive(ctx context.Context, encoded string) bool {
 	digest, err := base64.RawURLEncoding.DecodeString(encoded)
 	if err != nil {

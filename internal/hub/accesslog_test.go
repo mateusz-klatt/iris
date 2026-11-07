@@ -70,3 +70,36 @@ func TestAccessLogNamesEveryRequest(t *testing.T) {
 		t.Fatalf("%s", text)
 	}
 }
+
+func TestRefusalsTellMissingUnknownAndRevokedApart(t *testing.T) {
+	h, s := setup(t)
+	laptop, err := h.store.AddToken(context.Background(), "laptop")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = h.store.RevokeToken(context.Background(), "laptop"); err != nil {
+		t.Fatal(err)
+	}
+	output := captureLog(t)
+	for header, want := range map[string]string{
+		"":                           `reason="bearer token required"`,
+		"Bearer never-issued":        `reason="unknown bearer token"`,
+		"Bearer " + laptop:           `reason="revoked token \"laptop\""`,
+		"Basic dXNlcjpwYXNzd29yZA==": `reason="bearer token required"`,
+	} {
+		before := output.Len()
+		r := httptest.NewRequest("GET", s.URL+"/v1/agents", nil)
+		if header != "" {
+			r.Header.Set("Authorization", header)
+		}
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		got := output.String()[before:]
+		if w.Code != 401 || !strings.Contains(got, want) {
+			t.Fatalf("%q: %d %s", header, w.Code, got)
+		}
+		if strings.Contains(got, laptop) {
+			t.Fatal("a secret reached the log")
+		}
+	}
+}

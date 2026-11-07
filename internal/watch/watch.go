@@ -134,6 +134,7 @@ func (r *Runner) Run(ctx context.Context) error {
 	coalesce := &Coalescer{Output: r.Output, Window: r.Window}
 	var cursor int64
 	stream := ""
+	warned := false
 	delay := r.Backoff
 	if delay <= 0 {
 		delay = time.Second
@@ -148,6 +149,14 @@ func (r *Runner) Run(ctx context.Context) error {
 		if binding.IsCode(err, "lost") {
 			return nil
 		}
+		// Say it once: each retry would cost the model another turn.
+		rejected := binding.IsCode(err, "unauthorized")
+		if rejected && !warned {
+			if _, werr := fmt.Fprintln(r.Output, "Iris: the hub rejected this host's token, so notifications have stopped. Tell the user to run `iris doctor`."); werr != nil {
+				return werr
+			}
+		}
+		warned = rejected
 		// Keep flushing pending attention even during a network outage.
 		wait := r.wait(delay)
 		tick := time.NewTicker(100 * time.Millisecond)
@@ -218,8 +227,11 @@ func (r *Runner) connect(ctx context.Context, b binding.Bound, cursor *int64, st
 	q := url.Values{"execution_id": {b.ExecutionID}, "after": {fmt.Sprint(*cursor)}, "stream": {*stream}, "consumer_id": {"iris-watch"}}
 	u.RawQuery = q.Encode()
 	dial, cancel := context.WithTimeout(ctx, 5*time.Second)
-	conn, _, err := websocket.Dial(dial, u.String(), &websocket.DialOptions{HTTPClient: h.HTTP, HTTPHeader: http.Header{"Authorization": {"Bearer " + token}}, Subprotocols: []string{"iris.v1"}})
+	conn, resp, err := websocket.Dial(dial, u.String(), &websocket.DialOptions{HTTPClient: h.HTTP, HTTPHeader: http.Header{"Authorization": {"Bearer " + token}}, Subprotocols: []string{"iris.v1"}})
 	cancel()
+	if err != nil && resp != nil && resp.StatusCode == http.StatusUnauthorized {
+		return &hubclient.Error{Code: "unauthorized", Message: "the hub rejected the watch stream's token"}
+	}
 	if err != nil {
 		return err
 	}
