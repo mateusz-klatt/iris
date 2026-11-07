@@ -214,7 +214,7 @@ func writePayload(root, session, file string) string {
 }
 
 func runWith(h Hub, m Memory, event, payload string) Output {
-	return Runner{ClientName: "claude", EventName: event, Stdin: strings.NewReader(payload), Hub: h, Getenv: func(string) string { return "" }, Memory: m, Deadline: roomy}.Run()
+	return Runner{ClientName: "claude", EventName: event, Stdin: strings.NewReader(payload), Hub: h, Getenv: func(string) string { return "" }, Memory: m, after: never}.Run()
 }
 
 func TestARememberedGenerationReattachesARecoveringSession(t *testing.T) {
@@ -357,7 +357,7 @@ func TestTheRecoveryWindowNeverAllowsAnUnclaimedEdit(t *testing.T) {
 	}
 	hook := func(event, payload string) string {
 		client := &hubclient.Client{Config: hubclient.EnvConfig{Getenv: env}}
-		out := Runner{ClientName: "claude", EventName: event, Stdin: strings.NewReader(payload), Hub: client, Getenv: env, Deadline: 10 * time.Second}.Run()
+		out := Runner{ClientName: "claude", EventName: event, Stdin: strings.NewReader(payload), Hub: client, Getenv: env, after: never, logAfter: never}.Run()
 		return string(out.Stdout)
 	}
 	allowed := func(out string) bool { return !strings.Contains(out, `"permissionDecision"`) }

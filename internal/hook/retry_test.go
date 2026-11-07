@@ -42,7 +42,7 @@ func TestMissingToolCallIDIsStableAcrossRetries(t *testing.T) {
 	}
 	h := &retryHub{}
 	for _, raw := range [][]byte{first, first, next} {
-		out := (Runner{ClientName: "copilot", EventName: "preToolUse", Stdin: bytes.NewReader(raw), Hub: h}).Run()
+		out := (Runner{ClientName: "copilot", EventName: "preToolUse", Stdin: bytes.NewReader(raw), Hub: h, after: never}).Run()
 		assertAllow(t, ClientCopilot, out)
 	}
 	if len(h.calls) != 3 {

@@ -32,32 +32,28 @@ func TestFailOpenEveryClient(t *testing.T) {
 				Find: func(string) (gitinfo.Repo, error) {
 					panic("boom")
 				},
-				Deadline: 200 * time.Millisecond,
-				logWait:  roomy,
+				after:    never,
+				logAfter: never,
 			}.Run()
 			assertAllow(t, c, out)
 		})
 		t.Run(string(c)+"/timeout", func(t *testing.T) {
-			srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
-				time.Sleep(2 * time.Second)
+			// The hub never answers, and the deadline fires once the hook is waiting on it, so
+			// the hook must give up rather than wait. Order, not speed, is what is checked.
+			entered := make(chan struct{})
+			var once sync.Once
+			srv := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, req *http.Request) {
+				once.Do(func() { close(entered) })
+				<-req.Context().Done()
 			}))
 			t.Cleanup(func() { srv.CloseClientConnections() })
-			r := editRunner(t, c, srv.URL, 40*time.Millisecond)
-			// The answer must not wait for the failure log, so the write can outlive Run.
-			// Wait for it before the temporary directory is removed.
-			logged := make(chan struct{})
-			r.logged = func() { close(logged) }
-			t.Cleanup(func() {
-				select {
-				case <-logged:
-				case <-time.After(roomy):
-				}
-			})
-			start := time.Now()
-			out := r.Run()
-			if time.Since(start) > 500*time.Millisecond {
-				t.Fatalf("deadline missed after %s", time.Since(start))
+			r := editRunner(t, c, srv.URL)
+			r.after = func(time.Duration) <-chan time.Time {
+				fired := make(chan time.Time)
+				go func() { <-entered; close(fired) }()
+				return fired
 			}
+			out := r.Run()
 			assertAllow(t, c, out)
 		})
 		t.Run(string(c)+"/unreachable", func(t *testing.T) {
@@ -67,19 +63,13 @@ func TestFailOpenEveryClient(t *testing.T) {
 			}
 			addr := ln.Addr().String()
 			_ = ln.Close()
-			r := editRunner(t, c, "http://"+addr, roomy)
-			r.logWait = roomy
-			out := r.Run()
+			out := editRunner(t, c, "http://"+addr).Run()
 			assertAllow(t, c, out)
 		})
 	}
 }
 
 func TestEndToEndFakeHub(t *testing.T) {
-	// The subtests assert the decision each client receives, not the hook's budget, so the
-	// deadline only bounds a hang. Under full CPU load on Windows the repository stage alone
-	// passed one second, and the hook rightly failed open.
-	deadline := time.Minute
 	var mu sync.Mutex
 	var sessions []map[string]any
 	var touches []map[string]any
@@ -129,7 +119,7 @@ func TestEndToEndFakeHub(t *testing.T) {
 				Hub:      &hubclient.Client{Config: hubURL(srv.URL)},
 				Ancestor: func() (proc.Ancestor, error) { return proc.Ancestor{PID: 42, StartMS: 99}, nil },
 				Host:     func() string { return "testhost" },
-				Deadline: deadline,
+				after:    never,
 			}.Run()
 			if !denied(c, out) {
 				t.Fatalf("deny output stdout %q stderr %q exit %d", out.Stdout, out.Stderr, out.Exit)
@@ -171,7 +161,7 @@ func TestEndToEndFakeHub(t *testing.T) {
 			EventName:  "SessionStart",
 			Stdin:      strings.NewReader(fmt.Sprintf(`{"session_id":"s1","cwd":%q,"hook_event_name":"SessionStart"}`, root)),
 			Hub:        &hubclient.Client{Config: hubURL(srv.URL)},
-			Deadline:   deadline,
+			after:      never,
 		}.Run()
 		if out.Exit != 0 || !strings.Contains(string(out.Stdout), "Iris handle: ex_1") || !strings.Contains(string(out.Stdout), "untrusted data") {
 			t.Fatalf("%s", out.Stdout)
@@ -192,7 +182,7 @@ func TestEndToEndFakeHub(t *testing.T) {
 			EventName:  "PreToolUse",
 			Stdin:      strings.NewReader(editPayload(ClientCodex, root)),
 			Hub:        &hubclient.Client{Config: hubURL(askSrv.URL)},
-			Deadline:   deadline,
+			after:      never,
 		}.Run()
 		if out.Exit != 0 || !strings.Contains(string(out.Stdout), "permissionDecision\":\"deny") || !strings.Contains(string(out.Stdout), "Ask the human") {
 			t.Fatalf("%s", out.Stdout)
@@ -220,7 +210,7 @@ func TestNoNetworkForHarmlessTools(t *testing.T) {
 				EventName:  tc.event,
 				Stdin:      strings.NewReader(tc.body),
 				Hub:        hub,
-				Deadline:   time.Second,
+				after:      never,
 			}.Run()
 			if calls != 0 || out.Exit != 0 {
 				t.Fatalf("calls %d exit %d", calls, out.Exit)
@@ -247,8 +237,8 @@ func TestCrossLoad(t *testing.T) {
 			}
 			return ""
 		},
-		Hub:      &countingHub{fn: func() { calls++ }},
-		Deadline: time.Second,
+		Hub:   &countingHub{fn: func() { calls++ }},
+		after: never,
 	}.Run()
 	if calls != 0 {
 		t.Fatal("cross-load called the hub")
@@ -268,8 +258,8 @@ func TestCrossLoad(t *testing.T) {
 			}
 			return ""
 		},
-		Hub:      denyHub{calls: &calls},
-		Deadline: time.Second,
+		Hub:   denyHub{calls: &calls},
+		after: never,
 	}.Run()
 	if calls == 0 {
 		t.Fatal("matching copilot session should call the hub; inherited claude id is ignored")
@@ -288,7 +278,7 @@ func TestUnknownToolReported(t *testing.T) {
 		ClientName: "copilot",
 		EventName:  "preToolUse",
 		Stdin:      strings.NewReader(string(payload)),
-		Deadline:   time.Second,
+		after:      never,
 	}.Run()
 	if string(out.Stderr) != "iris: unknown tool iris-probe-probe\n" || out.Exit != 0 {
 		t.Fatalf("stdout %q stderr %q", out.Stdout, out.Stderr)
@@ -301,7 +291,7 @@ func TestDefaultDeadline(t *testing.T) {
 	}
 }
 
-func editRunner(t *testing.T, c Client, url string, deadline time.Duration) Runner {
+func editRunner(t *testing.T, c Client, url string) Runner {
 	t.Helper()
 	root := gitRepo(t)
 	return Runner{
@@ -310,7 +300,8 @@ func editRunner(t *testing.T, c Client, url string, deadline time.Duration) Runn
 		Stdin:      strings.NewReader(editPayload(c, root)),
 		Hub:        &hubclient.Client{Config: hubURL(url)},
 		Getenv:     failureEnv(t),
-		Deadline:   deadline,
+		after:      never,
+		logAfter:   never,
 	}
 }
 
