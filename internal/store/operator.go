@@ -53,6 +53,8 @@ func (t *transaction) operator(op string, r Request) (map[string]any, error) {
 		return t.overview()
 	case "ui_threads":
 		return t.threads(r)
+	case "ui_read":
+		return t.readThread(r)
 	case "ui_thread":
 		return t.thread(r.Key, r.RepositoryID)
 	case "ui_revoke":
@@ -283,4 +285,60 @@ func (t *transaction) thread(id, repo string) (map[string]any, error) {
 		m["recipients"] = recipients
 	}
 	return map[string]any{"id": id, "messages": messages}, nil
+}
+
+// readThread acknowledges the operator's unread mail in a thread, which is how the human
+// inbox's unread count goes down (gap review A13): opening a thread, or replying in it,
+// reads it. With a repository, only that repository's human deliveries are read; from the
+// whole-hub view, every repository's. There is no way back to unread.
+func (t *transaction) readThread(r Request) (map[string]any, error) {
+	var n int
+	if err := t.row("SELECT COUNT(*) FROM Message WHERE thread_id=?", r.Key).Scan(&n); err != nil {
+		return nil, err
+	}
+	if n == 0 {
+		return nil, fail("not_found", "unknown thread")
+	}
+	rows, err := t.rows(`SELECT d.id,d.attempt,a.repository_id FROM Delivery d JOIN Message m ON m.id=d.message_id JOIN Agent a ON a.id=d.recipient_agent_id
+ WHERE m.thread_id=? AND a.client='human' AND (?='' OR a.repository_id=?) AND d.id NOT IN (SELECT delivery_id FROM Ack) ORDER BY d.id`, r.Key, r.RepositoryID, r.RepositoryID)
+	if err != nil {
+		return nil, err
+	}
+	type unread struct {
+		id, repo string
+		attempt  int64
+	}
+	var all []unread
+	for rows.Next() {
+		var u unread
+		rows.Scan(&u.id, &u.attempt, &u.repo)
+		all = append(all, u)
+	}
+	err = rows.Err()
+	_ = rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	now := t.s.clock.Now().UnixMilli()
+	for _, u := range all {
+		operator, err := t.humanSender(Request{RepositoryID: u.repo})
+		if err != nil {
+			return nil, err
+		}
+		// An acknowledgement names an attempt above zero, and the operator never fetched
+		// this mail through an inbox, so reading it counts as its first attempt.
+		attempt := max(u.attempt, 1)
+		if _, err = t.exec("UPDATE Delivery SET execution_id=?,attempt=?,attention=0 WHERE id=?", operator.ID, attempt, u.id); err != nil {
+			return nil, err
+		}
+		if _, err = t.exec("INSERT INTO Ack VALUES(?,?,?,?)", u.id, operator.ID, attempt, now); err != nil {
+			return nil, err
+		}
+	}
+	if len(all) > 0 {
+		if err = t.event("", "", "changed", ""); err != nil {
+			return nil, err
+		}
+	}
+	return map[string]any{"read": len(all)}, nil
 }

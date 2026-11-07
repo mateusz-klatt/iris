@@ -237,6 +237,11 @@ first. `q` is a full-text search.
   "state":"acked"}],"subject":"...","body":"...","created_at":"..."}]}
 ```
 
+`POST /v1/ui/threads/{id}/read` takes `{"repository_id":"..."}` and acknowledges the human
+deliveries in that thread: that repository's, or every repository's when `repository_id` is
+empty. It returns `{"read": n}`. The console calls it when the operator opens a thread, so the
+human inbox's unread count goes down. There is no way to mark mail unread again.
+
 `POST /v1/ui/messages` takes `{"key":"...","to":["..."],"subject":"...","body":"...","reply_to":""}`
 and sends as `human`.
 

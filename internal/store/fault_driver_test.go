@@ -107,7 +107,7 @@ func installFaultDriver(t *testing.T, s *Store, file string) *storageFault {
 }
 
 func TestStorageFailuresRollBackAndRetry(t *testing.T) {
-	for _, op := range []string{"sessions", "session-resume", "heartbeat-recovery", "session-new-slot", "session-learns-root", "touch-cached", "touch-conflict", "claim-conflict", "check-known", "policy", "bind", "heartbeat", "end", "touch", "claim", "claim-reuse", "claim-cached", "release", "claims", "messages", "message-repo", "contact", "message-cached", "inbox", "ack", "agents", "agents-all", "events", "events-reset", "status", "validate", "monitor_cursor", "check", "reconcile", "ui_overview", "ui_threads", "ui_thread", "ui_messages", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_events", "expire", "forget", "forget-repository"} {
+	for _, op := range []string{"sessions", "session-resume", "heartbeat-recovery", "session-new-slot", "session-learns-root", "touch-cached", "touch-conflict", "claim-conflict", "check-known", "policy", "bind", "heartbeat", "end", "touch", "claim", "claim-reuse", "claim-cached", "release", "claims", "messages", "message-repo", "contact", "message-cached", "inbox", "ack", "agents", "agents-all", "events", "events-reset", "status", "validate", "monitor_cursor", "check", "reconcile", "ui_overview", "ui_threads", "ui_thread", "ui_read", "ui_messages", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_events", "expire", "forget", "forget-repository"} {
 		t.Run(op, func(t *testing.T) {
 			s, clock, file := testStore(t)
 			a, ar := session(t, s, 1)
@@ -234,6 +234,11 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 				r.Status = map[string]string{"file": "MM", "dir/x": " M", "dir/y": " M"}
 			case "ui_threads":
 				r = Request{RepositoryID: repo, Agent: name, Q: "persisted", Before: "9999999999999"}
+			case "ui_read":
+				// The operator reads a thread with human mail in it.
+				human := mail
+				human.Key, human.To = "to-human", []string{"human"}
+				r = Request{Key: call(t, s, "messages", human)["thread_id"].(string)}
 			case "ui_thread":
 				r.Key = sent["thread_id"].(string)
 			case "ui_messages":

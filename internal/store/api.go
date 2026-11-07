@@ -24,7 +24,7 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 			}
 		}
 		switch operation {
-		case "ui_overview", "ui_threads", "ui_thread", "ui_messages", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_events":
+		case "ui_overview", "ui_threads", "ui_thread", "ui_read", "ui_messages", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_events":
 			out, err = t.operator(operation, r)
 		case "reconcile":
 			out, err = t.reconcile(r)

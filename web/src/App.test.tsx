@@ -334,6 +334,27 @@ describe("Iris operator console", () => {
     expect(bodies[1]?.key).not.toBe(bodies[0]?.key);
   }, 40000);
 
+  it("reads the operator's mail in a thread when it is opened, and survives a failed read", async () => {
+    const user = userEvent.setup({ delay: null });
+    const reads: { url: string; body: unknown }[] = [];
+    server.use(
+      http.post("*/v1/ui/threads/:id/read", async ({ request }) => {
+        reads.push({ url: request.url, body: await request.json() });
+        return reads.length === 1 ? new HttpResponse(null, { status: 204 }) : new HttpResponse(null, { status: 500 });
+      }),
+    );
+    await showSession();
+    await user.click(await screen.findByRole("button", { name: /Rollout check/ }));
+    await screen.findByRole("article", { name: "Rollout check" });
+    await waitFor(() => expect(reads).toHaveLength(1));
+    expect(reads[0]?.url).toContain("/v1/ui/threads/ms_root/read");
+    expect(reads[0]?.body).toEqual({ repository_id: "" });
+    await user.click(screen.getByRole("button", { name: "Back to threads" }));
+    await user.click(await screen.findByRole("button", { name: /Rollout check/ }));
+    await waitFor(() => expect(reads).toHaveLength(2));
+    expect(await screen.findByRole("article", { name: "Rollout check" })).toBeVisible();
+  }, 40000);
+
   it("replies and sends as human", async () => {
     const user = userEvent.setup({ delay: null });
     const bodies: unknown[] = [];
