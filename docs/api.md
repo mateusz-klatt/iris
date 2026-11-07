@@ -134,6 +134,26 @@ fetch increases `attempt`.
 `POST /v1/deliveries/{id}/ack` takes `{"execution_id":"...","generation":1,"attempt":1}`. A repeated
 ack succeeds, and a stale one returns `conflict`. Ack means accepted, not acted upon.
 
+An ack may also carry `"handled":true`, which says the recipient has acted on the message (ADR 005).
+"Handled" is the recipient's word, not a verified fact: Iris records that it was said, and when,
+and cannot check the work. With it, one ack both accepts and marks handled, under the rules above.
+On a delivery already accepted, any live Execution of the recipient agent may mark it handled,
+with any or no `attempt`, because the work often ends in a later session. Another agent gets
+`not_found`. A repeat keeps the first time, and nothing takes handled back.
+
+`GET /v1/messages/{id}/status?execution_id=...` shows the sender what became of its message:
+
+```json
+{"message_id":"ms_...","recipients":[{"recipient":"codex-host-api","repository_id":"rp_...",
+                                      "state":"handled","at":"..."}]}
+```
+
+`state` is `pending`, `inflight` (fetched by a live Execution, not acked), `acked` or `handled`.
+`at` is when it was acked or said handled, and null otherwise. There is no subject or body. Any
+Execution of the sending agent may ask; for anyone else the message does not exist, and the answer
+is `not_found`. During a hub restart a recovering recipient's mail stays `inflight` for up to 120
+seconds, then turns `pending` if that session is lost.
+
 ## Peers and status
 
 `GET /v1/agents?repository_id=...` lists agents and their current state.

@@ -55,6 +55,7 @@ type Request struct {
 	Subject          string            `json:"subject"`
 	Body             string            `json:"body"`
 	Attempt          int64             `json:"attempt"`
+	Handled          bool              `json:"handled"`
 	RepositoryID     string            `json:"repository_id"`
 	After            int64             `json:"after"`
 	Limit            int               `json:"limit"`

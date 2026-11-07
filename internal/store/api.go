@@ -55,6 +55,8 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 			out, err = t.inbox(r)
 		case "ack":
 			out, err = t.ack(r, r.Key)
+		case "receipts":
+			out, err = t.receipts(r, r.Key)
 		case "agents":
 			var v []map[string]any
 			if r.All {

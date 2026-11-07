@@ -138,6 +138,15 @@ func TestHTTPContract(t *testing.T) {
 	r["attempt"] = delivery["attempt"]
 	request(t, s, "POST", "/v1/deliveries/"+id+"/ack", r, 200)
 	request(t, s, "POST", "/v1/deliveries/"+id+"/ack", r, 200)
+	// The recipient says it handled the message, and the sender, only, can see that (ADR 005).
+	r["handled"] = true
+	request(t, s, "POST", "/v1/deliveries/"+id+"/ack", r, 200)
+	status := "/v1/messages/" + sent["message_id"].(string) + "/status?execution_id="
+	receipt := request(t, s, "GET", status+ex, nil, 200)["recipients"].([]any)[0].(map[string]any)
+	if receipt["state"] != "handled" || receipt["body"] != nil {
+		t.Fatal(receipt)
+	}
+	request(t, s, "GET", status+b["execution_id"].(string), nil, 404)
 	request(t, s, "GET", "/v1/events?execution_id="+b["execution_id"].(string), nil, 200)
 	request(t, s, "POST", "/v1/executions/"+ex+"/end", map[string]any{"generation": 1}, 200)
 	request(t, s, "POST", "/v1/executions/"+ex+"/heartbeat", map[string]any{"generation": 1, "source": "shim"}, 409)
