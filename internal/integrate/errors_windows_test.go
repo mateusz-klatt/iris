@@ -17,7 +17,7 @@ import (
 // folder whose ACL denies the access, and a name Windows cannot hold.
 //
 // A file held open without sharing was tried first. It was refused locally but read without error
-// on the windows-latest runner, so it cannot carry a test.
+// on the windows-latest runner, so it cannot carry a test. See denyRead for the ACL case.
 
 // setDACL replaces path's DACL with sddl, and gives Everyone full access again before the
 // temporary directory is removed.
@@ -41,8 +41,17 @@ func setDACL(t *testing.T, path, sddl string) {
 	t.Cleanup(func() { _ = set("D:P(A;OICI;FA;;;WD)") })
 }
 
-// denyRead lets Everyone do anything to a file but read its contents (0x1, FILE_READ_DATA).
-func denyRead(t *testing.T, file string) { setDACL(t, file, "D:P(D;;0x1;;;WD)(A;;FA;;;WD)") }
+// denyRead lets Everyone do anything to a file but read its contents (0x1, FILE_READ_DATA). An
+// account that reads it anyway skips the test: measured on the windows-latest runner, where both
+// this ACL and a file held open without sharing were read without error, while a folder that
+// takes no new files was refused there too.
+func denyRead(t *testing.T, file string) {
+	t.Helper()
+	setDACL(t, file, "D:P(D;;0x1;;;WD)(A;;FA;;;WD)")
+	if _, err := os.ReadFile(file); err == nil {
+		t.Skip("this account reads a file its ACL denies")
+	}
+}
 
 // denyNewFiles refuses adding files or folders to dir (0x6, FILE_ADD_FILE and
 // FILE_ADD_SUBDIRECTORY). WD is Everyone.
@@ -92,20 +101,27 @@ func TestUnwireCannotReadOrReplaceADeniedFile(t *testing.T) {
 	files, _ := c.Files(l)
 	editByHand(t, files[0])
 
+	// Each case checks the file itself, so a case that wrongly succeeds cannot hide behind the one
+	// before it.
+	unchanged := func(t *testing.T) {
+		t.Helper()
+		if !strings.Contains(string(mustRead(t, files[0])), "--client codex") {
+			t.Fatal("a failed removal changed the file")
+		}
+	}
 	t.Run("unreadable", func(t *testing.T) {
 		denyRead(t, files[0])
 		if err := c.Remove(l, nil); !errors.Is(err, os.ErrPermission) {
 			t.Fatal(err)
 		}
 	})
+	unchanged(t)
 	// The file can be read, but the replacement cannot be created beside it.
 	t.Run("folder takes no new files", func(t *testing.T) {
 		denyNewFiles(t, filepath.Dir(files[0]))
 		if err := c.Remove(l, nil); !errors.Is(err, os.ErrPermission) {
 			t.Fatal(err)
 		}
+		unchanged(t)
 	})
-	if !strings.Contains(string(mustRead(t, files[0])), "--client codex") {
-		t.Fatal("a failed removal changed the file")
-	}
 }
