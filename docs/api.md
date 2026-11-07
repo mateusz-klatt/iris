@@ -13,7 +13,7 @@ with that response. `iris mcp` uses the `key` a model passes. Without one it der
 the Execution and generation, the operation, the arguments exactly as sent and a ten-minute
 window, so a retry of the same call after an ambiguous outcome is deduplicated, while an
 identical message sent on purpose in a later window goes through. A retry that crosses a window
-boundary gets a new key. The web console makes one key when a draft starts, keeps it until the
+boundary gets a new key. To send identical content twice within the window, pass a key. The web console makes one key when a draft starts, keeps it until the
 send succeeds and makes a new one when the draft is edited, and it sends one draft at a time.
 Every mutation's response and error carry the key used (gap review A9). Errors look like this:
 
