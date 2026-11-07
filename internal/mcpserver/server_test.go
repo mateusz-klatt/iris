@@ -190,6 +190,7 @@ func TestToolsReachTheirRoutes(t *testing.T) {
 		value  any
 	}{
 		{"peers", nil, "GET", "/v1/agents?execution_id=ex&repository_id=rp", "", nil},
+		{"peers", map[string]any{"all": true}, "GET", "/v1/agents?all=1&execution_id=ex&repository_id=rp", "", nil},
 		{"claims", nil, "GET", "/v1/claims?execution_id=ex&repository_id=rp", "", nil},
 		{"inbox", nil, "GET", "/v1/inbox?execution_id=ex", "", nil},
 		{"inbox", map[string]any{"limit": 5}, "GET", "/v1/inbox?execution_id=ex&limit=5", "", nil},

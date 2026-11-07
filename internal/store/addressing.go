@@ -113,3 +113,22 @@ func (t *transaction) contact(r Request) (map[string]any, error) {
 	}
 	return map[string]any{"repository_id": repo, "contact": r.Agent}, t.event("", "", "changed", "")
 }
+
+// everyAgent lists the non-human agents of every repository on the hub, for a sender
+// that needs a name to write to (ADR 004). It shows no more of an agent than peers
+// does within a repository, plus the repository it belongs to.
+func (t *transaction) everyAgent() ([]map[string]any, error) {
+	rows, err := t.rows(`SELECT a.id,a.name,a.client,a.repository_id,COALESCE(r.name,''),COALESCE(e.state,'offline') FROM Agent a JOIN Repository r ON r.id=a.repository_id LEFT JOIN Execution e ON e.id=(SELECT id FROM Execution WHERE agent_id=a.id ORDER BY rowid DESC LIMIT 1) WHERE a.client<>'human' ORDER BY r.name,a.name`)
+	if err != nil {
+		return nil, err
+	}
+	out := []map[string]any{}
+	for rows.Next() {
+		var id, name, client, repo, repoName, state string
+		rows.Scan(&id, &name, &client, &repo, &repoName, &state)
+		out = append(out, map[string]any{"id": id, "name": name, "client": client, "repository_id": repo, "repository": repoName, "state": state})
+	}
+	err = rows.Err()
+	_ = rows.Close()
+	return out, err
+}

@@ -41,6 +41,15 @@ func (t *transaction) send(r Request) (map[string]any, error) {
 			seen[a.id] = true
 		}
 	}
+	cross := 0
+	for _, a := range recipients {
+		if a.repo != e.Repo {
+			cross++
+		}
+	}
+	if cross > 0 && !t.s.allowCross(principalOf(t.ctx), cross, t.s.clock.Now()) {
+		return nil, crossRefused()
+	}
 	message := id("ms_")
 	thread := message
 	if r.ReplyTo != "" {

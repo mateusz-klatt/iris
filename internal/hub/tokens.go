@@ -67,6 +67,24 @@ func (h *Hub) tokenRoutes() {
 		}
 		writeJSON(w, out)
 	})
+	// A repository's contact receives its repo: mail (ADR 004). Only the owner sets it:
+	// a host could otherwise redirect another repository's reports to itself.
+	h.mux.HandleFunc("POST /v1/admin/contact", func(w http.ResponseWriter, r *http.Request) {
+		if !h.ownerOnly(w, r) {
+			return
+		}
+		req, err := decode(w, r)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		out, err := h.call(r.Context(), "contact", req)
+		if err != nil {
+			writeError(w, err)
+			return
+		}
+		writeJSON(w, out)
+	})
 	h.mux.HandleFunc("GET /v1/tokens", func(w http.ResponseWriter, r *http.Request) {
 		if !h.ownerOnly(w, r) {
 			return

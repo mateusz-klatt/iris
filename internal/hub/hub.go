@@ -184,6 +184,7 @@ func decode(w http.ResponseWriter, r *http.Request) (store.Request, error) {
 		req.RepositoryID = q.Get("repository_id")
 		req.Stream = q.Get("stream")
 		req.ConsumerID = q.Get("consumer_id")
+		req.All = q.Get("all") == "1"
 		var err error
 		if q.Has("after") {
 			req.After, err = strconv.ParseInt(q.Get("after"), 10, 64)
@@ -233,7 +234,12 @@ func (h *Hub) api(w http.ResponseWriter, r *http.Request, operation string) {
 	if operation == "ack" {
 		req.Key = r.PathValue("id")
 	}
-	out, err := h.call(r.Context(), operation, req)
+	ctx := r.Context()
+	if operation == "messages" {
+		// Sends to other repositories are counted per credential (ADR 004).
+		ctx = store.WithPrincipal(ctx, requestPrincipal(r).digest)
+	}
+	out, err := h.call(ctx, operation, req)
 	if err != nil {
 		writeError(w, err)
 		return
