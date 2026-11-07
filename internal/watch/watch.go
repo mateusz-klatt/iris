@@ -358,7 +358,9 @@ func (r *Runner) connect(ctx context.Context, b binding.Bound, cursor *int64, st
 // checkpoint saves cursor at the hub once nothing counted up to it is still held.
 // A line waiting for its window has not been printed, so saving the cursor then would
 // let a monitor that dies, or is replaced, skip that attention for good. Saving it
-// only after the print means a restart replays the held frames instead.
+// only after the print means a restart replays the held frames instead. Under steady
+// traffic the saved cursor therefore lags, and a restart replays frames the coalescer
+// then folds into one line: a repeated wake is the intended price of never losing one.
 // The hub keeps the larger of the saved and the sent cursor, and only a cursor this
 // monitor consumed is ever sent, never a socket writer's high-water mark.
 func (r *Runner) checkpoint(ctx context.Context, b binding.Bound, cursor int64, stream string, c *Coalescer) error {
