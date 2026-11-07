@@ -176,8 +176,10 @@ func (t *transaction) threads(r Request) (map[string]any, error) {
 	// may belong to another repository's view, or have been removed by forget.
 	title, titleArgs := visibleIn("m2", r.RepositoryID)
 	visible, visibleArgs := visibleIn("m", r.RepositoryID)
-	q := `SELECT m.thread_id,(SELECT m2.subject FROM Message m2 WHERE m2.thread_id=m.thread_id AND ` + title + ` ORDER BY m2.created_ms,m2.rowid LIMIT 1),COUNT(*),MAX(m.created_ms),SUM((SELECT COUNT(*) FROM Delivery d JOIN Agent a ON a.id=d.recipient_agent_id WHERE d.message_id=m.id AND a.client='human' AND d.id NOT IN (SELECT delivery_id FROM Ack))) FROM Message m WHERE ` + visible
-	args := append(append([]any{}, titleArgs...), visibleArgs...)
+	q := `SELECT m.thread_id,(SELECT m2.subject FROM Message m2 WHERE m2.thread_id=m.thread_id AND ` + title + ` ORDER BY m2.created_ms,m2.rowid LIMIT 1),COUNT(*),MAX(m.created_ms),SUM((SELECT COUNT(*) FROM Delivery d JOIN Agent a ON a.id=d.recipient_agent_id WHERE d.message_id=m.id AND a.client='human' AND (?='' OR a.repository_id=?) AND d.id NOT IN (SELECT delivery_id FROM Ack))) FROM Message m WHERE ` + visible
+	// Unread counts this view's human inbox only: in a thread that crosses repositories,
+	// another repository's unread mail is not this view's to clear.
+	args := append(append(append([]any{}, titleArgs...), r.RepositoryID, r.RepositoryID), visibleArgs...)
 	if r.Q != "" {
 		q += " AND m.thread_id IN (SELECT thread_id FROM Message WHERE rowid IN (SELECT rowid FROM MessageSearch WHERE MessageSearch MATCH ?))"
 		args = append(args, r.Q)

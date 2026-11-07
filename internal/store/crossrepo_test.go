@@ -204,3 +204,22 @@ func TestAForgottenContactFallsBackToTheHuman(t *testing.T) {
 		t.Fatal(d)
 	}
 }
+
+// A thread's unread count in a repository's view counts that repository's human
+// inbox only, never another repository's in the same thread.
+func TestUnreadInAThreadCountsThisViewsHumanOnly(t *testing.T) {
+	s, _, irisOut, snap, snapOut := crossRepo(t)
+	irisRepo, snapRepo := irisOut["repository_id"].(string), snapOut["repository_id"].(string)
+	call(t, s, "messages", sendTo(snap, "both", "x", "human", "human:"+irisRepo))
+	unread := func(repo string) int64 {
+		threads := call(t, s, "ui_threads", Request{RepositoryID: repo})["threads"].([]map[string]any)
+		return threads[0]["unread"].(int64)
+	}
+	if unread(snapRepo) != 1 || unread(irisRepo) != 1 {
+		t.Fatalf("snapper %d, iris %d, want 1 each", unread(snapRepo), unread(irisRepo))
+	}
+	all := call(t, s, "ui_threads", Request{})["threads"].([]map[string]any)
+	if all[0]["unread"].(int64) != 2 {
+		t.Fatal(all)
+	}
+}
