@@ -35,8 +35,8 @@ that really has paths differing only by case. `SetRepositoryPolicy` no longer re
 with claims: it recomputes their keys. If two live claims come to share a key, both stay, and only a
 new claim conflicts.
 
-The opt-out has no command yet. Only `Store.SetRepositoryPolicy` can set it, so today it takes a
-code change or a direct call.
+The opt-out is reachable only through `Store.SetRepositoryPolicy`. There is no command, route or
+console control for it, by decision: nobody needs it yet.
 
 **Refusals show both spellings.** A hook or guard refusal reads `SRC/A.GO is held by x as src/a.go`,
 and a conflict carries `path` as requested and `claimed_path` as held. A prefix claim shows its own

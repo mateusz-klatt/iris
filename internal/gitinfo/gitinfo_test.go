@@ -80,7 +80,7 @@ func TestFindNormalRepo(t *testing.T) {
 [remote "upstream"]
 	url = https://example.com/other.git
 [remote "origin"]
-	url = "https://example.com/iris.git"
+	url = "https://example.com/project.git"
 `)
 	sub := filepath.Join(root, "src")
 	if err := os.MkdirAll(sub, 0o755); err != nil {
@@ -93,7 +93,7 @@ func TestFindNormalRepo(t *testing.T) {
 	if repo.Worktree != root || repo.GitDir != git || repo.CommonDir != git {
 		t.Fatalf("dirs = %+v", repo)
 	}
-	if repo.Branch != "main" || repo.RemoteURL != "https://example.com/iris.git" || repo.RootCommit != rootSHA {
+	if repo.Branch != "main" || repo.RemoteURL != "https://example.com/project.git" || repo.RootCommit != rootSHA {
 		t.Fatalf("identity = %+v", repo)
 	}
 }
@@ -102,7 +102,7 @@ func TestFindLinkedWorktree(t *testing.T) {
 	main := t.TempDir()
 	common := filepath.Join(main, ".git")
 	wtGit := filepath.Join(common, "worktrees", "feature")
-	writeFile(t, filepath.Join(common, "config"), "[remote \"origin\"]\n\turl = git@github.com:example/iris.git\n")
+	writeFile(t, filepath.Join(common, "config"), "[remote \"origin\"]\n\turl = git@github.com:example/project.git\n")
 	writeFile(t, filepath.Join(common, "HEAD"), "ref: refs/heads/main\n")
 	writeFile(t, filepath.Join(wtGit, "HEAD"), "ref: refs/heads/feature\n")
 	writeFile(t, filepath.Join(wtGit, "commondir"), "../..\n")
@@ -127,7 +127,7 @@ func TestFindLinkedWorktree(t *testing.T) {
 	if repo.GitDir != wtGit || repo.CommonDir != common {
 		t.Fatalf("git %s common %s", repo.GitDir, repo.CommonDir)
 	}
-	if repo.Branch != "feature" || repo.RemoteURL != "git@github.com:example/iris.git" {
+	if repo.Branch != "feature" || repo.RemoteURL != "git@github.com:example/project.git" {
 		t.Fatalf("identity %+v", repo)
 	}
 	if repo.RootCommit != "" {

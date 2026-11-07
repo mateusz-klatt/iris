@@ -56,7 +56,7 @@ func expectError(t *testing.T, s *Store, op string, r Request, code string) {
 }
 func session(t *testing.T, s *Store, n int) (Request, map[string]any) {
 	t.Helper()
-	r := Request{Client: "codex", Host: "host", Cwd: fmt.Sprintf("/repo/w%d", n), Worktree: fmt.Sprintf("/repo/w%d", n), RemoteURL: "https://example.com/team/iris.git", RootCommit: "root", SessionID: fmt.Sprint(n), Source: "hook"}
+	r := Request{Client: "codex", Host: "host", Cwd: fmt.Sprintf("/repo/w%d", n), Worktree: fmt.Sprintf("/repo/w%d", n), RemoteURL: "https://example.com/team/project.git", RootCommit: "root", SessionID: fmt.Sprint(n), Source: "hook"}
 	out := call(t, s, "sessions", r)
 	return Request{ExecutionID: out["execution_id"].(string), Generation: out["generation"].(int64)}, out
 }
@@ -211,7 +211,7 @@ func TestLeasesFencesAndClientClock(t *testing.T) {
 	c.tick += 60000
 	expectError(t, s, "heartbeat", hb, "lost")
 	expectError(t, s, "claim", q, "lost")
-	replacement := call(t, s, "sessions", Request{Client: "codex", Host: "host", Cwd: "/repo/w1", Worktree: "/repo/w1", SessionID: "1", RemoteURL: "https://example.com/team/iris.git", RootCommit: "root"})
+	replacement := call(t, s, "sessions", Request{Client: "codex", Host: "host", Cwd: "/repo/w1", Worktree: "/repo/w1", SessionID: "1", RemoteURL: "https://example.com/team/project.git", RootCommit: "root"})
 	if replacement["execution_id"] == ao["execution_id"] || number(replacement["generation"]) != 2 {
 		t.Fatal(replacement)
 	}
@@ -527,7 +527,7 @@ func TestBindingAliasesAndPolicy(t *testing.T) {
 	registration.SessionID = "contradiction"
 	registration.Cwd = "/contradiction"
 	registration.Worktree = "/contradiction"
-	registration.RemoteURL = "https://example.com/team/iris.git"
+	registration.RemoteURL = "https://example.com/team/project.git"
 	registration.RootCommit = "other"
 	different := call(t, s, "sessions", registration)
 	if different["repository_id"] == ao["repository_id"] {
