@@ -1,8 +1,9 @@
 version: 2
 project_name: iris
-# D15 stage 0: local snapshots only. Publication must be enabled deliberately later.
+# D15 stage 1 is prepared. Snapshots never release. A pushed version tag runs
+# .github/workflows/release.yml, which makes a draft for the owner to publish.
 release:
-  disable: true
+  draft: true
 before:
   hooks:
     - make web

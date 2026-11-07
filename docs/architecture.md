@@ -399,6 +399,13 @@ reserve for any channel that needs a bare name.
 | 2 | winget, signed apt and dnf through Cloudsmith OSS, GitHub attestations | Public release URLs; a public repository for attestations |
 | 3 | Apple notarization, Windows signing | $99 a year; SignPath Foundation, or Certum Open Source from €49 |
 
+Stage 1 is prepared but inert. `.github/workflows/release.yml` runs only when the owner pushes a
+version tag in this repository, and builds a draft release with cosign keyless signatures of the
+checksums, an SBOM per archive and GitHub build provenance. Nothing is public until the owner
+publishes the draft, no image is pushed, and Homebrew, Scoop and winget stay skipped. CI checks the
+configuration and the SBOMs on every pull request; keyless signing needs a release's OIDC identity,
+so its first real run is the first tag.
+
 Private release assets cannot serve package managers. The source repository need not be public
 for stage 1 if the assets are public somewhere, but GitHub attestations on this plan need a public
 attesting repository that truthfully built the artifact. Azure Artifact Signing is closed to
