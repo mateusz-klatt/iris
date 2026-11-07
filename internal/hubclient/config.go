@@ -160,7 +160,7 @@ func WriteConfig(path string, f FileConfig) error {
 	}
 	// FileConfig is only strings, so the encoding cannot fail.
 	raw, _ := json.MarshalIndent(f, "", "  ")
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+	if err := privateDir(filepath.Dir(path)); err != nil {
 		return err
 	}
 	temp, err := os.CreateTemp(filepath.Dir(path), ".client-*")

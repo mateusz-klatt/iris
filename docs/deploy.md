@@ -160,9 +160,16 @@ into a chat, a ticket or an Iris message.
    ```bash
    CONFIG="$HOME/Library/Application Support/iris"   # Linux: ~/.config/iris
    install -m 600 <host>.token "$CONFIG/hub.token.new"
-   mv "$CONFIG/hub.token.new" "$CONFIG/hub.token"
    rm <host>.token
+   IRIS_TOKEN_FILE="$CONFIG/hub.token.new" iris doctor              # token: ok
+   IRIS_TOKEN_FILE="$CONFIG/hub.token.new" iris token list > /dev/null # must be refused: forbidden
+   mv "$CONFIG/hub.token.new" "$CONFIG/hub.token"
    ```
+
+   Check the new token before it replaces the old one. If `iris doctor` shows `token: ok` and `token
+   list` is refused as `forbidden`, the file holds a working host token and not the owner's. Measured
+   on the first real switch, of `laptop` on 2026-11-07. Until the `mv`, the old file still works, so a
+   failed check costs nothing.
 
    Iris reads the file on every request, so nothing needs a restart. Measured: from the next request,
    the running session's hooks, its `iris mcp` and its heartbeats all used the host token. The session
