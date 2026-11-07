@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mateusz-klatt/iris/internal/gitinfo"
+	"github.com/mateusz-klatt/iris/internal/guard"
 	"github.com/mateusz-klatt/iris/internal/hook"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 	"github.com/mateusz-klatt/iris/internal/integrate"
@@ -57,6 +59,8 @@ type Result struct {
 	HubDetail        string
 	Stored           bool
 	StoreError       string
+	// Guard is the pre-commit guard line for the repository doctor ran in.
+	Guard string
 }
 
 // Options configures one offline doctor run. RunLive is separate because it calls a model.
@@ -68,6 +72,8 @@ type Options struct {
 	Now       func() time.Time
 	// VersionTimeout limits one client --version call. Zero means the default.
 	VersionTimeout time.Duration
+	// Dir is where the guard is looked for. Empty means the working directory.
+	Dir string
 }
 
 // versionTimeout is long enough for a normal client and short enough to keep doctor usable.
@@ -111,6 +117,7 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 	for i := range res.Report.Clients {
 		applyVersion(&res.Report.Clients[i])
 	}
+	res.Guard = guardLine(ctx, opt.Dir)
 	if probe.up && probe.tokenOK {
 		if err := putReport(ctx, hubURL, token, res.Report, opt.HTTP); err != nil {
 			res.StoreError = err.Error()
@@ -119,6 +126,24 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 		}
 	}
 	return res, nil
+}
+
+// guardLine reports the pre-commit guard of the repository containing dir.
+// A missing guard does not fail doctor: it is cooperative and per repository.
+func guardLine(ctx context.Context, dir string) string {
+	if dir == "" {
+		dir = "."
+	}
+	state, path, err := guard.Status(ctx, dir)
+	switch {
+	case errors.Is(err, gitinfo.ErrNotRepo):
+		return "not in a git repository"
+	case err != nil:
+		return "unknown (" + err.Error() + ")"
+	case state == guard.StateInstalled:
+		return state + " (" + path + ")"
+	}
+	return state + " (" + path + "); run `iris guard install`"
 }
 
 // ExitCode is 1 when the hub or token is unusable, or any client is silent.
@@ -169,6 +194,9 @@ func (r Result) Format() string {
 			fmt.Fprintf(&b, "\t%s", c.Detail)
 		}
 		b.WriteByte('\n')
+	}
+	if r.Guard != "" {
+		fmt.Fprintf(&b, "pre-commit guard: %s\n", r.Guard)
 	}
 	if r.Stored {
 		b.WriteString("stored: yes\n")
