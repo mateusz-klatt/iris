@@ -380,6 +380,9 @@ func (t *transaction) sessionResponse(e execution, lease int64) (map[string]any,
 		return nil, err
 	}
 	out["unread"] = unread
+	if out["attention"], err = t.attention(e); err != nil {
+		return nil, err
+	}
 	return out, nil
 }
 func (t *transaction) bind(r Request) (map[string]any, error) {
@@ -452,7 +455,13 @@ func (t *transaction) heartbeat(r Request) (map[string]any, error) {
 	if e.Heartbeat || strong {
 		strong, lease = true, 60000
 	}
-	_, err = t.exec("UPDATE Execution SET deadline_tick_ms=?,heartbeat_mode=? WHERE id=?", t.s.clock.Tick()+lease, strong, e.ID)
+	if _, err = t.exec("UPDATE Execution SET deadline_tick_ms=?,heartbeat_mode=? WHERE id=?", t.s.clock.Tick()+lease, strong, e.ID); err != nil {
+		return nil, err
+	}
+	if r.Source == "watch" {
+		// The session's monitor is alive, so its hooks need not repeat what it says (A4).
+		err = t.watchSeen(e.ID)
+	}
 	return map[string]any{"lease_ms": lease}, err
 }
 func (t *transaction) end(r Request) (map[string]any, error) {

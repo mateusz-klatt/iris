@@ -280,7 +280,7 @@ func oldDatabase(t *testing.T) (file string, held []string) {
 	}
 	defer func() { _ = raw.Close() }()
 	// A version 5 database has neither path_key nor the later Delivery.attention.
-	for _, q := range []string{"ALTER TABLE Claim DROP COLUMN path_key", "ALTER TABLE Delivery DROP COLUMN attention", "ALTER TABLE Repository DROP COLUMN contact_agent_id", "UPDATE Repository SET case_policy='sensitive'", "PRAGMA user_version=5"} {
+	for _, q := range []string{"ALTER TABLE Claim DROP COLUMN path_key", "ALTER TABLE Delivery DROP COLUMN attention", "ALTER TABLE Repository DROP COLUMN contact_agent_id", "ALTER TABLE Execution DROP COLUMN watch_seen_ms", "UPDATE Repository SET case_policy='sensitive'", "PRAGMA user_version=5"} {
 		if _, err = raw.Exec(q); err != nil {
 			t.Fatal(err)
 		}
@@ -295,7 +295,7 @@ func TestMigrationBackfillsEveryClaimAndFoldsEveryRepository(t *testing.T) {
 		t.Fatal(err)
 	}
 	var version int
-	if err = s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 9 {
+	if err = s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 10 {
 		t.Fatal(version, err)
 	}
 	for _, p := range held {

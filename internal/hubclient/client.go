@@ -33,15 +33,25 @@ type SessionRequest struct {
 
 // SessionResponse is the registration result.
 type SessionResponse struct {
-	ExecutionID  string  `json:"execution_id"`
-	Generation   int     `json:"generation"`
-	Handle       string  `json:"handle"`
-	RepositoryID string  `json:"repository_id"`
-	Agent        Agent   `json:"agent"`
-	LeaseMS      int64   `json:"lease_ms"`
-	Peers        []Peer  `json:"peers"`
-	Claims       []Claim `json:"claims"`
-	Unread       int     `json:"unread"`
+	ExecutionID  string    `json:"execution_id"`
+	Generation   int       `json:"generation"`
+	Handle       string    `json:"handle"`
+	RepositoryID string    `json:"repository_id"`
+	Agent        Agent     `json:"agent"`
+	LeaseMS      int64     `json:"lease_ms"`
+	Peers        []Peer    `json:"peers"`
+	Claims       []Claim   `json:"claims"`
+	Unread       int       `json:"unread"`
+	Attention    Attention `json:"attention"`
+}
+
+// Attention is what the session has not been told yet: unacknowledged deliveries and paths
+// it was refused that are now free. Monitored means its iris watch beat recently, so the
+// monitor, not a hook, tells it.
+type Attention struct {
+	Unread    int  `json:"unread"`
+	Available int  `json:"available"`
+	Monitored bool `json:"monitored"`
 }
 
 // Agent is the mailbox named in a session response.
@@ -81,8 +91,9 @@ type TouchRequest struct {
 
 // TouchResponse is the pre-edit result. Action is allow, deny, ask, or warn.
 type TouchResponse struct {
-	Action  string `json:"action"`
-	Message string `json:"message"`
+	Action    string    `json:"action"`
+	Message   string    `json:"message"`
+	Attention Attention `json:"attention"`
 }
 
 // Client calls the hub. A non-nil HTTP client is used as-is; otherwise
