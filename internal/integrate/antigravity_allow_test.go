@@ -76,3 +76,27 @@ func TestAllowRulesKeepOtherRulesAndRefuseWrongTypes(t *testing.T) {
 		}
 	}
 }
+
+// A user who already allows the Iris server keeps that rule after remove: install changed
+// nothing in that file, so it is not in the manifest and remove does not touch it.
+func TestAUserAllowRuleForIrisSurvivesRemove(t *testing.T) {
+	l := testLayout(t)
+	agy, _ := ByName(Antigravity)
+	files, _ := agy.Files(l)
+	if err := os.MkdirAll(filepath.Dir(files[2]), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mine := "{\n  \"permissions\": {\n    \"allow\": [\n      \"" + AgyAllowRule + "\"\n    ]\n  }\n}\n"
+	if err := os.WriteFile(files[2], []byte(mine), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := agy.Install(l, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := agy.Remove(l, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(mustRead(t, files[2])); got != mine {
+		t.Fatalf("the user's own rule was removed\n got %q\nwant %q", got, mine)
+	}
+}
