@@ -39,7 +39,9 @@ func (b *lines) Write(p []byte) (int, error) {
 }
 func (b *lines) String() string { b.mu.Lock(); defer b.mu.Unlock(); return b.text }
 func TestBurstReconnectNoDuplicateLine(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	// This only bounds a hang. No assertion below depends on it, so it is generous: a fully
+	// loaded Windows runner once needed more than 12 s just to attach the monitor.
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	s, err := store.Open(filepath.Join(t.TempDir(), "hub.db"), nil)
 	if err != nil {
