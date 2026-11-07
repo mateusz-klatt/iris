@@ -27,6 +27,15 @@ func (c antigravityClient) Files(l Layout) ([]string, error) {
 	return []string{filepath.Join(dir, "hooks.json"), filepath.Join(dir, "mcp_config.json"), settings}, nil
 }
 
+// AgySettings is agy's user settings file, the only one it reads allow rules from.
+func AgySettings(l Layout) (string, error) {
+	files, err := antigravityClient{}.Files(l)
+	if err != nil {
+		return "", err
+	}
+	return files[2], nil
+}
+
 // AgyAllowRule lets a headless agy call the Iris tools. Without it agy 1.5.3 denies every Iris
 // call in print mode ("a tool required the "mcp" permission that headless mode cannot prompt for,
 // so it was auto-denied") and stops. agy reads the rule only from the user's
