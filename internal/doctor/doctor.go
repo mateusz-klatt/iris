@@ -262,7 +262,7 @@ func checkClient(ctx context.Context, opt Options, c integrate.Client) ClientRep
 	}
 	if len(drift) > 0 {
 		row.Status = StatusNeedsHuman
-		row.Detail = "configuration differs from what iris integrate installs (" + strings.Join(homeRelative(opt.Layout, drift), ", ") + "): run iris integrate --client " + c.Name()
+		row.Detail = "configuration differs from what iris integrate installs (" + strings.Join(homeRelative(opt.Layout, drift), ", ") + "): run iris integrate " + c.Name()
 		return row
 	}
 	step, note := c.Human(), ""

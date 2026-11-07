@@ -58,7 +58,7 @@ func TestAPartialIntegrationNeedsAHuman(t *testing.T) {
 		t.Fatal(err)
 	}
 	row := doctorRow(t, layout, integrate.Cursor)
-	want := "configuration differs from what iris integrate installs (" + filepath.Join("~", ".cursor", "hooks.json") + "): run iris integrate --client cursor"
+	want := "configuration differs from what iris integrate installs (" + filepath.Join("~", ".cursor", "hooks.json") + "): run iris integrate cursor"
 	if row.Status != StatusNeedsHuman || row.Detail != want {
 		t.Fatalf("%+v", row)
 	}

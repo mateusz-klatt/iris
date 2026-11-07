@@ -162,7 +162,7 @@ MCP entry, with the current `iris` path. Doctor renders that configuration witho
 and compares it with the files, so your own hooks beside Iris's and a client's own reformatting do
 not count. When something differs, such as a hook removed by hand, a hook timeout from an older
 Iris, or an `iris` binary that has moved, the row is `needs_human` and names the files: run
-`iris integrate --client <client>` again. This checks configuration only. It cannot show that the
+`iris integrate <client>` again. This checks configuration only. It cannot show that the
 client loads it; `iris doctor --live` does that.
 
 `claude ok` can change later. A hook that failed open in the last 24 hours turns the row into `silent`,
