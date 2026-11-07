@@ -243,7 +243,7 @@ func (r *Runner) connect(ctx context.Context, b binding.Bound, cursor *int64, st
 	q := url.Values{"execution_id": {b.ExecutionID}, "after": {fmt.Sprint(*cursor)}, "stream": {*stream}, "consumer_id": {"iris-watch"}}
 	u.RawQuery = q.Encode()
 	dial, cancel := context.WithTimeout(ctx, 5*time.Second)
-	conn, resp, err := websocket.Dial(dial, u.String(), &websocket.DialOptions{HTTPClient: h.HTTP, HTTPHeader: http.Header{"Authorization": {"Bearer " + token}}, Subprotocols: []string{"iris.v1"}})
+	conn, resp, err := websocket.Dial(dial, u.String(), &websocket.DialOptions{HTTPClient: hubclient.NoRedirects(h.HTTP), HTTPHeader: http.Header{"Authorization": {"Bearer " + token}}, Subprotocols: []string{"iris.v1"}})
 	cancel()
 	if err != nil && resp != nil && resp.StatusCode == http.StatusUnauthorized {
 		return &hubclient.Error{Code: "unauthorized", Message: "the hub rejected the watch stream's token"}

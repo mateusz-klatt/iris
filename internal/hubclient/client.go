@@ -163,11 +163,7 @@ func (c *Client) Do(ctx context.Context, method, path string, body, dest any) er
 	if token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
-	hc := c.HTTP
-	if hc == nil {
-		hc = http.DefaultClient
-	}
-	res, err := hc.Do(req)
+	res, err := NoRedirects(c.HTTP).Do(req)
 	if err != nil {
 		return err
 	}
@@ -192,6 +188,23 @@ func (c *Client) Do(ctx context.Context, method, path string, body, dest any) er
 		return fmt.Errorf("hub %s: %w", path, err)
 	}
 	return nil
+}
+
+// ErrRedirect is a hub answer that tried to send the request elsewhere.
+var ErrRedirect = errors.New("the hub answered with a redirect, which Iris does not follow: set the hub URL to the final address")
+
+// NoRedirects returns a copy of hc, or of the default client, that refuses every
+// redirect. Every hub request carries the bearer token, and Go keeps that header
+// across a redirect to the same host, including one from https to http, so only
+// the first URL is ever validated (ValidateURL). The hub never redirects an API
+// call, so refusing all of them costs nothing.
+func NoRedirects(hc *http.Client) *http.Client {
+	if hc == nil {
+		hc = http.DefaultClient
+	}
+	copy := *hc
+	copy.CheckRedirect = func(*http.Request, []*http.Request) error { return ErrRedirect }
+	return &copy
 }
 
 // ValidateURL accepts https, and http only for the literal hosts 127.0.0.1 and ::1.

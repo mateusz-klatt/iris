@@ -373,7 +373,8 @@ func hubRequest(ctx context.Context, method, target, token string, body io.Reade
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	return hc.Do(req)
+	// The token must not follow a redirect to another scheme, host or port.
+	return hubclient.NoRedirects(hc).Do(req)
 }
 
 func probeHub(ctx context.Context, base, token string, tokenErr error, hc *http.Client) hubProbe {
