@@ -279,8 +279,15 @@ func (t *transaction) session(r Request) (map[string]any, error) {
 		return nil, err
 	}
 	var agent, agentName string
+	// A session that ran here before gets its own mailbox back, unless another active
+	// session holds it now. Without this, the first free slot was taken, so the
+	// order in which sessions resumed decided whose mail each one saw.
+	prior, priorName, err := t.priorAgent(r, repo)
+	if err != nil {
+		return nil, err
+	}
 	slot := 1
-	for {
+	for prior == "" {
 		var busy int
 		err = t.row("SELECT id,name FROM Agent WHERE repository_id=? AND host=? AND client=? AND worktree=? AND slot=?", repo, r.Host, r.Client, r.Worktree, slot).Scan(&agent, &agentName)
 		if errors.Is(err, sql.ErrNoRows) {
@@ -311,6 +318,9 @@ func (t *transaction) session(r Request) (map[string]any, error) {
 			break
 		}
 		slot++
+	}
+	if prior != "" {
+		agent, agentName = prior, priorName
 	}
 	var parent any
 	if r.ParentSessionID != "" {
@@ -470,4 +480,17 @@ func timestamp(ms sql.NullInt64) any {
 		return nil
 	}
 	return time.UnixMilli(ms.Int64).UTC().Format(time.RFC3339Nano)
+}
+
+// priorAgent is the mailbox this session used last in repo, from the same host,
+// client and worktree, when no active Execution holds it now. It is "" otherwise.
+func (t *transaction) priorAgent(r Request, repo string) (id, name string, err error) {
+	err = t.row(`SELECT a.id,a.name FROM Execution e JOIN Agent a ON a.id=e.agent_id
+ WHERE e.host_id=? AND e.client=? AND e.session_id=? AND e.repository_id=? AND a.worktree=?
+ AND NOT EXISTS (SELECT 1 FROM Execution x WHERE x.agent_id=e.agent_id AND x.state='active')
+ ORDER BY e.generation DESC LIMIT 1`, r.Host, r.Client, r.SessionID, repo, r.Worktree).Scan(&id, &name)
+	if errors.Is(err, sql.ErrNoRows) {
+		return "", "", nil
+	}
+	return id, name, err
 }
