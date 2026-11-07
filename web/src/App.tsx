@@ -42,6 +42,8 @@ interface Draft {
   body: string;
   replyTo: string;
   key: string;
+  /** The repository the key was first sent from. A send from another view is another send. */
+  sentFrom?: string;
 }
 
 function newDraft(fields: Partial<Draft> = {}): Draft {
@@ -224,7 +226,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
       return;
     }
     let ignore = false;
-    void getThread(selectedId)
+    void getThread(selectedId, repositoryId)
       .then((detail) => {
         if (ignore) {
           return;
@@ -254,7 +256,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
     return () => {
       ignore = true;
     };
-  }, [phase, selectedId, t, threadRevision]);
+  }, [phase, repositoryId, selectedId, t, threadRevision]);
 
   const chooseLocale = (next: SupportedLocale) => {
     try {
@@ -278,10 +280,15 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
     }
   };
 
-  const submit = async (draft: Draft, clear: () => void) => {
+  const submit = async (start: Draft, keep: (draft: Draft) => void, clear: () => void) => {
     if (inFlight.current) {
       return;
     }
+    // The message belongs to the repository being read (ADR 004), and the hub refuses a key
+    // reused for another repository. A retry from another view therefore gets a new key, and
+    // the draft keeps it for its own retries.
+    const draft = start.sentFrom === undefined || start.sentFrom === repositoryId ? { ...start, sentFrom: repositoryId } : { ...start, key: humanKey(), sentFrom: repositoryId };
+    keep(draft);
     inFlight.current = true;
     setSending(true);
     setFormError("");
@@ -293,6 +300,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
         subject: draft.subject,
         body: draft.body,
         reply_to: draft.replyTo,
+        ...(repositoryId === "" ? {} : { repository_id: repositoryId }),
       });
       clear();
       setNotice(t("operator.sent"));
@@ -591,6 +599,9 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                     <article key={message.id} className="thread-message">
                       <header>
                         <strong>{message.sender}</strong>
+                        {overview !== null && message.repository_id !== undefined && message.repository_id !== repositoryId ? (
+                          <span className="message-repository">{repositoryName(overview, message.repository_id)}</span>
+                        ) : null}
                         <small>
                           {t("message.to")}: {message.recipients.map((recipient) => `${recipient.name} (${recipient.state})`).join(", ")}
                         </small>
@@ -603,7 +614,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                     className="search-form"
                     onSubmit={(event) => {
                       event.preventDefault();
-                      void submit(reply, () => setReply((current) => edited(current, { body: "" })));
+                      void submit(reply, setReply, () => setReply((current) => edited(current, { body: "" })));
                     }}
                   >
                     <h3>{t("operator.reply")}</h3>
@@ -640,7 +651,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                 className="search-form"
                 onSubmit={(event) => {
                   event.preventDefault();
-                  void submit(compose, () => setCompose(newDraft()));
+                  void submit(compose, setCompose, () => setCompose(newDraft()));
                 }}
               >
                 <label>

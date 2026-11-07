@@ -62,6 +62,8 @@ export interface ThreadRecipient {
 export interface ThreadMessage {
   id: string;
   sender: string;
+  /** The sender's repository. A thread can cross repositories (ADR 004). */
+  repository_id?: string;
   recipients: ThreadRecipient[];
   subject: string;
   body: string;
@@ -94,6 +96,8 @@ export interface OutgoingMessage {
   subject: string;
   body: string;
   reply_to: string;
+  /** The repository the operator writes from; the message belongs to it (ADR 004). */
+  repository_id?: string;
 }
 
 export interface ThreadQuery {
@@ -170,8 +174,10 @@ export function listThreads(query: ThreadQuery, signal?: AbortSignal): Promise<T
   return getJson(`/v1/ui/threads${suffix}`, signal);
 }
 
-export function getThread(id: string, signal?: AbortSignal): Promise<ThreadDetail> {
-  return getJson(`/v1/ui/threads/${encodeURIComponent(id)}`, signal);
+/** A thread as seen from repositoryId, or from the whole hub when it is empty. */
+export function getThread(id: string, repositoryId = "", signal?: AbortSignal): Promise<ThreadDetail> {
+  const suffix = repositoryId === "" ? "" : `?repository_id=${encodeURIComponent(repositoryId)}`;
+  return getJson(`/v1/ui/threads/${encodeURIComponent(id)}${suffix}`, signal);
 }
 
 export function sendMessage(message: OutgoingMessage, signal?: AbortSignal): Promise<void> {
