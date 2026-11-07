@@ -27,7 +27,7 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-var nonceInPrompt = regexp.MustCompile(`single line: ([0-9a-f]+)\.`)
+var nonceInPrompt = regexp.MustCompile(`containing exactly ([0-9a-f]+) to`)
 
 // fakeLiveClient does what a hooked client does on the live prompt: its hook
 // registers the session and claims the file, its MCP server returns the
@@ -60,6 +60,9 @@ func fakeLiveClient(mode string, args []string) int {
 		}
 		// Grok also loads Claude's hooks, so the session is not Grok's own.
 		client := "claude"
+		if name := os.Getenv("IRIS_FAKE_LIVE_NAME"); name != "" {
+			client = name
+		}
 		if mode == "otherclient" {
 			client = "grok"
 		}
@@ -90,7 +93,18 @@ func fakeLiveClient(mode string, args []string) int {
 			fmt.Println("execution_id:", own.ExecutionID)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(cwd, scratchFile), []byte(nonce[1]+"\n"), 0o600); err != nil {
+	if config := os.Getenv("IRIS_FAKE_CODEX_CONFIG"); config != "" {
+		// Codex trusts every directory it runs in, in the user's config.toml.
+		raw, _ := os.ReadFile(config)
+		raw = append(raw, "\n[projects."+integrate.TOMLString(cwd)+"]\ntrust_level = \"trusted\"\n"...)
+		raw = append(raw, os.Getenv("IRIS_FAKE_CODEX_EXTRA")...)
+		if err := os.WriteFile(config, raw, 0o600); err != nil {
+			fmt.Print(err)
+			return 10
+		}
+	}
+	old, _ := os.ReadFile(filepath.Join(cwd, scratchFile))
+	if err := os.WriteFile(filepath.Join(cwd, scratchFile), append(old, nonce[1]+"\n"...), 0o600); err != nil {
 		fmt.Print(err)
 		return 9
 	}
@@ -263,6 +277,35 @@ func TestLiveEnvReplacesTheHubAndDropsTheParentSession(t *testing.T) {
 	}
 }
 
+func TestNamedCodexRunsAndPutsItsConfigBack(t *testing.T) {
+	layout, config := codexLayout(t)
+	writeConfig(t, config, userCodexConfig)
+	t.Setenv("IRIS_FAKE_CODEX_CONFIG", config)
+	t.Setenv("IRIS_FAKE_LIVE_NAME", integrate.Codex)
+	plan := fakePlan(t, "nohook")
+	plan.Client = integrate.Codex
+	plan.Requires = "Review hooks once in /hooks"
+	res := RunLive(context.Background(), LiveOptions{Layout: layout, Timeout: time.Minute}, plan)
+	if res.HookFired || !strings.Contains(res.Detail, "it runs only after this step: Review hooks once in /hooks") {
+		t.Fatalf("%+v", res)
+	}
+	if got, _ := os.ReadFile(config); string(got) != userCodexConfig {
+		t.Fatalf("config.toml not restored:\n%s", got)
+	}
+	// A file the user changed meanwhile is left alone, and the report says so.
+	writeConfig(t, config, userCodexConfig)
+	t.Setenv("IRIS_FAKE_CODEX_EXTRA", "# the user edited this meanwhile\n")
+	plan = fakePlan(t, "full")
+	plan.Client = integrate.Codex
+	res = RunLive(context.Background(), LiveOptions{Layout: layout, Timeout: time.Minute}, plan)
+	if res.OK() || !res.HookFired || !strings.HasPrefix(res.Detail, config+" changed during the run in other ways") {
+		t.Fatalf("%+v", res)
+	}
+	if got, _ := os.ReadFile(config); !strings.HasSuffix(string(got), "# the user edited this meanwhile\n") {
+		t.Fatalf("an edited config.toml was rewritten:\n%s", got)
+	}
+}
+
 func TestLivePlansNeedAWorkingHookAndABinary(t *testing.T) {
 	layout := integrate.Layout{LookPath: func(name string) (string, error) {
 		if name == "kimi" {
@@ -287,6 +330,14 @@ func TestLivePlansNeedAWorkingHookAndABinary(t *testing.T) {
 	}
 	if only, _ := LivePlans(layout, rows, integrate.Grok); len(only) != 1 || only[0].Client != integrate.Grok {
 		t.Fatalf("%+v", only)
+	}
+	// Naming a client that needs a person runs it, and the plan says what it relies on.
+	if named, skipped := LivePlans(layout, rows, integrate.Codex); len(named) != 1 || named[0].Requires != "Review hooks once in /hooks" || len(skipped) != 0 {
+		t.Fatalf("%+v %v", named, skipped)
+	}
+	missing := []ClientReport{{Client: integrate.Codex, Status: StatusNeedsHuman, Detail: "client binary not found"}}
+	if named, skipped := LivePlans(layout, missing, integrate.Codex); len(named) != 0 || len(skipped) != 1 {
+		t.Fatalf("%+v %v", named, skipped)
 	}
 }
 

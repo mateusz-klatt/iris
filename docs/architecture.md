@@ -452,7 +452,14 @@ other clients' hooks (D5). If the scratch hub sees nothing from that hook, eithe
 stopped before running it, which Cursor does with exit 0 in an untrusted workspace, or a client
 that hides its environment from its hook reached the configured hub instead. Doctor then prints
 the client's output and the marker origin, so the hub's owner can find that repository and
-remove it with `iris admin forget`. The run is limited per
+remove it with `iris admin forget`. Naming a client with `--client` runs it even when doctor reports
+that it needs a person, because Codex's hook review cannot be read yet: the plan line says the
+hook depends on that step, and a missing session says so again. Codex runs with
+`sandbox_mode="workspace-write"`, `approval_policy="never"` and the Iris tools approved for that
+run only, never with full access. Codex records each directory it runs in as trusted, in
+`config.toml`. Doctor removes that scratch table afterwards, but only if removing it gives back
+the file's bytes from before the run. A file that changed in any other way meanwhile is left
+alone, and the report says so. The run is limited per
 client, three minutes by default.
 
 ### D15. Distribution

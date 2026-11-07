@@ -41,6 +41,9 @@ func upsertBlock(existing, block string) (string, error) {
 	return base + "\n" + block, nil
 }
 
+// TOMLString quotes s as a TOML basic string.
+func TOMLString(s string) string { return tomlString(s) }
+
 func tomlString(s string) string {
 	var b strings.Builder
 	b.WriteByte('"')

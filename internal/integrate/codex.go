@@ -30,6 +30,15 @@ func (codexClient) home(l Layout) (string, error) {
 	return l.envDir("CODEX_HOME", ".codex")
 }
 
+// CodexConfig is Codex's config.toml, where Codex records trusted directories.
+func CodexConfig(l Layout) (string, error) {
+	files, err := codexClient{}.Files(l)
+	if err != nil {
+		return "", err
+	}
+	return files[1], nil
+}
+
 func (c codexClient) Files(l Layout) ([]string, error) {
 	dir, err := c.home(l)
 	if err != nil {

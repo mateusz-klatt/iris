@@ -30,6 +30,9 @@ type LivePlan struct {
 	Client string
 	Binary string
 	Model  string
+	// Requires is the step a person must have done for the hook to run. It is
+	// set only when the user named a client that doctor cannot see is ready.
+	Requires string
 }
 
 // LiveResult is what one live run proved. Each field is a separate claim, so a
@@ -42,7 +45,7 @@ type LiveResult struct {
 	ClaimReached bool
 	// ToolsAnswered means the model's reply carries the execution id that only whoami returns.
 	ToolsAnswered bool
-	// FileEdited means the scratch file holds the line the prompt asked for.
+	// FileEdited means the scratch file holds the line the prompt asked to add.
 	FileEdited bool
 	// Marker is the scratch repository's origin, by which stray records can be found.
 	Marker string
@@ -56,6 +59,7 @@ func (r LiveResult) OK() bool {
 
 // LiveOptions configures live runs. Run replaces process execution in tests.
 type LiveOptions struct {
+	Layout integrate.Layout
 	// Timeout limits one client. Zero means the default.
 	Timeout time.Duration
 	Run     func(ctx context.Context, dir string, env []string, name string, args []string) ([]byte, error)
@@ -73,6 +77,9 @@ const scratchFile = "scratch.txt"
 type liveClient struct {
 	model string
 	args  func(model, prompt string) []string
+	// guard, when set, runs before the client and returns the clean-up that
+	// runs after it, which reports what it could not undo.
+	guard func(l integrate.Layout, repo string) func() string
 }
 
 var liveClients = map[string]liveClient{
@@ -81,7 +88,12 @@ var liveClients = map[string]liveClient{
 	integrate.Claude: {model: "haiku", args: func(model, prompt string) []string {
 		return []string{"-p", prompt, "--model", model, "--allowedTools", "Read,Edit,Write,mcp__plugin_iris_iris__whoami"}
 	}},
-	integrate.Codex:   {args: func(_, prompt string) []string { return []string{"exec", prompt} }},
+	// workspace-write lets the model edit only inside the scratch repository,
+	// and approval_policy never keeps it from waiting for a person. The Iris
+	// tools act only on the hub, so they are approved for this run.
+	integrate.Codex: {model: "gpt-6-luna", guard: codexTrust, args: func(model, prompt string) []string {
+		return []string{"exec", "-m", model, "-c", `sandbox_mode="workspace-write"`, "-c", `approval_policy="never"`, "-c", `mcp_servers.iris.default_tools_approval_mode="approve"`, prompt}
+	}},
 	integrate.Copilot: {args: func(_, prompt string) []string { return []string{"-p", prompt} }},
 	integrate.Cursor: {model: "auto", args: func(model, prompt string) []string {
 		return []string{"-p", "--model", model, prompt}
@@ -101,16 +113,22 @@ var liveClients = map[string]liveClient{
 // the offline canary, that need nothing from a person, and whose binary is on
 // the path. A client that still needs a person, such as Codex before its
 // hooks are reviewed, is skipped with the reason: its hook would not run, and
-// spending on it proves nothing. A non-empty only keeps that client alone.
+// spending on it proves nothing, unless only names it. A non-empty only keeps
+// that client alone.
 func LivePlans(layout integrate.Layout, rows []ClientReport, only string) (plans []LivePlan, skipped []string) {
 	for _, row := range rows {
 		if only != "" && row.Client != only {
 			continue
 		}
-		if row.Status == StatusNeedsHuman {
+		requires := ""
+		switch {
+		case row.Status == StatusNeedsHuman && only == row.Client && row.Detail != "client binary not found":
+			// Naming the client is the user's statement that the step is done.
+			requires = row.Detail
+		case row.Status == StatusNeedsHuman:
 			skipped = append(skipped, row.Client+": "+row.Detail)
-		}
-		if row.Status != StatusOK {
+			continue
+		case row.Status != StatusOK:
 			continue
 		}
 		bin, err := layout.Binary(row.Client)
@@ -122,7 +140,7 @@ func LivePlans(layout integrate.Layout, rows []ClientReport, only string) (plans
 		if model == "" {
 			model = "client default"
 		}
-		plans = append(plans, LivePlan{Client: row.Client, Binary: bin, Model: model})
+		plans = append(plans, LivePlan{Client: row.Client, Binary: bin, Model: model, Requires: requires})
 	}
 	return plans, skipped
 }
@@ -130,8 +148,8 @@ func LivePlans(layout integrate.Layout, rows []ClientReport, only string) (plans
 // RunLive runs one client headless in a scratch repository against a hub
 // that exists only for this run, so nothing is written to the configured hub
 // unless the client hides the environment from its hook.
-func RunLive(ctx context.Context, opt LiveOptions, plan LivePlan) LiveResult {
-	res := LiveResult{LivePlan: plan}
+func RunLive(ctx context.Context, opt LiveOptions, plan LivePlan) (res LiveResult) {
+	res = LiveResult{LivePlan: plan}
 	spec, ok := liveClients[plan.Client]
 	if !ok {
 		res.Detail = "no live invocation for " + plan.Client
@@ -151,6 +169,14 @@ func RunLive(ctx context.Context, opt LiveOptions, plan LivePlan) LiveResult {
 		return res
 	}
 	defer h.close()
+	if spec.guard != nil {
+		undo := spec.guard(opt.Layout, repo)
+		defer func() {
+			if note := undo(); note != "" {
+				res.Detail = strings.TrimPrefix(res.Detail+"; "+note, "; ")
+			}
+		}()
+	}
 	env := liveEnv(os.Environ(), h.url, h.tokenFile)
 	model := spec.model
 	args := spec.args(model, livePrompt(nonce))
@@ -174,13 +200,22 @@ func RunLive(ctx context.Context, opt LiveOptions, plan LivePlan) LiveResult {
 		}
 	}
 	got, _ := os.ReadFile(filepath.Join(repo, scratchFile))
-	res.FileEdited = strings.TrimSpace(string(got)) == nonce
+	// The prompt asks for a line to be added: asked to replace the whole
+	// file, Codex wrote an invalid patch every time (measured on macOS).
+	for _, line := range strings.Split(string(got), "\n") {
+		if strings.TrimSpace(line) == nonce {
+			res.FileEdited = true
+		}
+	}
 	var notes []string
 	switch {
 	case timedOut:
 		notes = append(notes, fmt.Sprintf("timed out after %s", opt.Timeout))
 	case runErr != nil:
 		notes = append(notes, "client failed: "+runErr.Error()+": "+clip(out))
+	}
+	if !res.HookFired && plan.Requires != "" {
+		notes = append(notes, "the hook did not fire; it runs only after this step: "+plan.Requires)
 	}
 	if !res.HookFired {
 		// A client can also stop before its hooks and still exit 0, as Cursor
@@ -198,7 +233,7 @@ func RunLive(ctx context.Context, opt LiveOptions, plan LivePlan) LiveResult {
 func livePrompt(nonce string) string {
 	return "This is an Iris doctor check in a scratch repository. Do exactly two things and nothing else. " +
 		"First, call the Iris MCP tool named whoami and copy the execution_id value it returns into your reply. " +
-		"Second, replace the whole content of the file " + scratchFile + " in the current directory with this single line: " + nonce + ". " +
+		"Second, append one line containing exactly " + nonce + " to the end of the file " + scratchFile + " in the current directory, keeping what is there. " +
 		"Do not run shell commands. End your reply with the execution_id."
 }
 
