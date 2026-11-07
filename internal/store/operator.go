@@ -331,7 +331,7 @@ func (t *transaction) readThread(r Request) (map[string]any, error) {
 		if _, err = t.exec("UPDATE Delivery SET execution_id=?,attempt=?,attention=0 WHERE id=?", operator.ID, attempt, u.id); err != nil {
 			return nil, err
 		}
-		if _, err = t.exec("INSERT INTO Ack VALUES(?,?,?,?)", u.id, operator.ID, attempt, now); err != nil {
+		if _, err = t.exec("INSERT INTO Ack(delivery_id,execution_id,attempt,acked_ms) VALUES(?,?,?,?)", u.id, operator.ID, attempt, now); err != nil {
 			return nil, err
 		}
 	}

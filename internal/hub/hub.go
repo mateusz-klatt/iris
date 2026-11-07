@@ -80,7 +80,8 @@ func New(s *store.Store, token string, allowedHosts []string) *Hub {
 		"POST /v1/executions/{id}/heartbeat": "heartbeat", "POST /v1/executions/{id}/end": "end",
 		"POST /v1/claims/touch": "touch", "POST /v1/claims": "claim", "POST /v1/claims/release": "release", "GET /v1/claims": "claims",
 		"POST /v1/messages": "messages", "GET /v1/inbox": "inbox", "POST /v1/deliveries/{id}/ack": "ack",
-		"GET /v1/agents": "agents", "GET /v1/status": "status", "GET /v1/events": "events",
+		"GET /v1/messages/{id}/status": "receipts",
+		"GET /v1/agents":               "agents", "GET /v1/status": "status", "GET /v1/events": "events",
 	} {
 		h.mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) { h.api(w, r, operation) })
 	}
@@ -231,7 +232,7 @@ func (h *Hub) api(w http.ResponseWriter, r *http.Request, operation string) {
 	if operation == "heartbeat" || operation == "end" {
 		req.ExecutionID = r.PathValue("id")
 	}
-	if operation == "ack" {
+	if operation == "ack" || operation == "receipts" {
 		req.Key = r.PathValue("id")
 	}
 	ctx := r.Context()

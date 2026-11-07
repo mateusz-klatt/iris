@@ -171,7 +171,7 @@ func TestAttentionMigrationBackfillsAndRollsBackAtEveryStep(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, q := range []string{"ALTER TABLE Delivery DROP COLUMN attention", "ALTER TABLE Repository DROP COLUMN contact_agent_id", "ALTER TABLE Execution DROP COLUMN watch_seen_ms", "PRAGMA user_version=7"} {
+	for _, q := range []string{"ALTER TABLE Delivery DROP COLUMN attention", "ALTER TABLE Repository DROP COLUMN contact_agent_id", "ALTER TABLE Execution DROP COLUMN watch_seen_ms", "DROP VIEW DeliveryState", "ALTER TABLE Ack DROP COLUMN handled_ms", "PRAGMA user_version=7"} {
 		if _, err = raw.Exec(q); err != nil {
 			t.Fatal(err)
 		}

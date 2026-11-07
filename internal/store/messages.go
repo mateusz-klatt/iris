@@ -2,7 +2,6 @@ package store
 
 import (
 	"database/sql"
-	"errors"
 	"time"
 )
 
@@ -142,21 +141,55 @@ func (t *transaction) ack(r Request, delivery string) (map[string]any, error) {
 	var recipient string
 	var assigned sql.NullString
 	var attempt int64
-	if err = t.row("SELECT recipient_agent_id,execution_id,attempt FROM Delivery WHERE id=?", delivery).Scan(&recipient, &assigned, &attempt); err != nil {
+	var acked bool
+	if err = t.row("SELECT recipient_agent_id,execution_id,attempt,EXISTS(SELECT 1 FROM Ack WHERE delivery_id=Delivery.id) FROM Delivery WHERE id=?", delivery).Scan(&recipient, &assigned, &attempt, &acked); err != nil {
 		return nil, fail("not_found", "unknown delivery")
+	}
+	if acked && r.Handled {
+		// Handled is said once the work is done, often from a later Execution of the same
+		// agent, so any of the recipient's live Executions may say it (ADR 005). It is
+		// monotone: a repeat keeps the first time, and nothing takes it back.
+		if recipient != e.AgentID {
+			return nil, fail("not_found", "unknown delivery")
+		}
+		_, err = t.exec("UPDATE Ack SET handled_ms=? WHERE delivery_id=? AND handled_ms IS NULL", t.s.clock.Now().UnixMilli(), delivery)
+		return map[string]any{}, err
 	}
 	if recipient != e.AgentID || !assigned.Valid || assigned.String != e.ID || attempt != r.Attempt || attempt <= 0 {
 		return nil, fail("conflict", "acknowledgement is stale or belongs to another Execution")
 	}
-	var acknowledged int
-	err = t.row("SELECT 1 FROM Ack WHERE delivery_id=?", delivery).Scan(&acknowledged)
-	if err == nil {
+	if acked {
 		return map[string]any{}, nil
 	}
+	now := t.s.clock.Now().UnixMilli()
+	handled := sql.NullInt64{Int64: now, Valid: r.Handled}
+	_, err = t.exec("INSERT INTO Ack(delivery_id,execution_id,attempt,acked_ms,handled_ms) VALUES(?,?,?,?,?)", delivery, e.ID, r.Attempt, now, handled)
+	return map[string]any{}, err
+}
 
-	if !errors.Is(err, sql.ErrNoRows) {
+// receipts is what the sender of message may see of it: each recipient's name, repository
+// and delivery state, and when it was acked or said handled (ADR 005). No subject or body.
+// Any Execution of the sending agent may ask; to anyone else the message does not exist.
+func (t *transaction) receipts(r Request, message string) (map[string]any, error) {
+	e, err := t.live(r.ExecutionID, r.Generation)
+	if err != nil {
 		return nil, err
 	}
-	_, err = t.exec("INSERT INTO Ack VALUES(?,?,?,?)", delivery, e.ID, r.Attempt, t.s.clock.Now().UnixMilli())
-	return map[string]any{}, err
+	var sender string
+	if err = t.row("SELECT x.agent_id FROM Message m JOIN Execution x ON x.id=m.sender_execution_id WHERE m.id=?", message).Scan(&sender); err != nil || sender != e.AgentID {
+		return nil, fail("not_found", "unknown message")
+	}
+	rows, err := t.rows(`SELECT CASE WHEN a.client='human' THEN 'human' ELSE a.name END,a.repository_id,d.state,COALESCE(d.handled_ms,d.acked_ms) FROM DeliveryState d JOIN Agent a ON a.id=d.recipient_agent_id WHERE d.message_id=? ORDER BY a.name`, message)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	recipients := []map[string]any{}
+	for rows.Next() {
+		var name, repo, state string
+		var at sql.NullInt64
+		rows.Scan(&name, &repo, &state, &at)
+		recipients = append(recipients, map[string]any{"recipient": name, "repository_id": repo, "state": state, "at": timestamp(at)})
+	}
+	return map[string]any{"message_id": message, "recipients": recipients}, rows.Err()
 }
