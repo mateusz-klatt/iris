@@ -325,7 +325,7 @@ const translation = {
     bulletList: "Listë me pika",
     fencedCode: "Bllok kodi",
     emptyPreview: "Nuk ka ende asgjë për të parë paraprakisht.",
-    characterCount: "{{count}} / {{maximum}} karaktere",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "Shtypni Ctrl+Enter ose Command+Enter për ta rishikuar.",
   },
   accessRole: { admin: "Administrator", operator: "Operator", viewer: "Shikues" },

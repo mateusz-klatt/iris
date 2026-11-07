@@ -325,7 +325,7 @@ const translation = {
     bulletList: "Aufzählungsliste",
     fencedCode: "Codeblock",
     emptyPreview: "Es gibt noch nichts für die Vorschau.",
-    characterCount: "{{count}} / {{maximum}} Zeichen",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "Drücken Sie Ctrl+Enter oder Command+Enter, um zu prüfen.",
   },
   accessRole: {

@@ -325,7 +325,7 @@ const translation = {
     bulletList: "Lijst met opsommingstekens",
     fencedCode: "Codeblok",
     emptyPreview: "Er is nog niets om te bekijken.",
-    characterCount: "{{count}} / {{maximum}} tekens",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "Druk op Ctrl+Enter of Command+Enter om te controleren.",
   },
   accessRole: {

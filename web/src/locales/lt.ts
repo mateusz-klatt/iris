@@ -325,7 +325,7 @@ const translation = {
     bulletList: "Sąrašas su ženkleliais",
     fencedCode: "Kodo blokas",
     emptyPreview: "Kol kas nėra ką peržiūrėti.",
-    characterCount: "{{count}} / {{maximum}} simbolių",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "Norėdami peržiūrėti, spauskite Ctrl+Enter arba Command+Enter.",
   },
   accessRole: {

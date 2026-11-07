@@ -325,7 +325,7 @@ const translation = {
     bulletList: "Saraksts ar aizzīmēm",
     fencedCode: "Koda bloks",
     emptyPreview: "Pagaidām nav ko priekšskatīt.",
-    characterCount: "{{count}} / {{maximum}} rakstzīmes",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "Lai pārskatītu, nospiediet Ctrl+Enter vai Command+Enter.",
   },
   accessRole: {

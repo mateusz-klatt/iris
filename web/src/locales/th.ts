@@ -325,7 +325,7 @@ const translation = {
     bulletList: "รายการสัญลักษณ์แสดงหัวข้อย่อย",
     fencedCode: "บล็อกโค้ด",
     emptyPreview: "ยังไม่มีสิ่งใดให้แสดงตัวอย่าง",
-    characterCount: "{{count}} / {{maximum}} อักขระ",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "กด Ctrl+Enter หรือ Command+Enter เพื่อตรวจทาน",
   },
   accessRole: { admin: "ผู้ดูแลระบบ", operator: "ผู้ดำเนินการ", viewer: "ผู้ดู" },

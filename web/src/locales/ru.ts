@@ -325,7 +325,7 @@ const translation = {
     bulletList: "Маркированный список",
     fencedCode: "Блок кода",
     emptyPreview: "Пока нечего просматривать.",
-    characterCount: "{{count}} / {{maximum}} символов",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "Нажмите Ctrl+Enter или Command+Enter, чтобы перейти к проверке.",
   },
   accessRole: {

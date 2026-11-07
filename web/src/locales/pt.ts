@@ -325,7 +325,7 @@ const translation = {
     bulletList: "Lista com marcas",
     fencedCode: "Bloco de código",
     emptyPreview: "Ainda não há nada para pré-visualizar.",
-    characterCount: "{{count}} / {{maximum}} carateres",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "Prima Ctrl+Enter ou Command+Enter para rever.",
   },
   accessRole: {

@@ -325,7 +325,7 @@ const translation = {
     bulletList: "Λίστα με κουκκίδες",
     fencedCode: "Μπλοκ κώδικα",
     emptyPreview: "Δεν υπάρχει ακόμη τίποτα για προεπισκόπηση.",
-    characterCount: "{{count}} / {{maximum}} χαρακτήρες",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "Πατήστε Ctrl+Enter ή Command+Enter για έλεγχο.",
   },
   accessRole: {

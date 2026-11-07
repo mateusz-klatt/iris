@@ -325,7 +325,7 @@ const translation = {
     bulletList: "Danh sách dấu đầu dòng",
     fencedCode: "Khối mã",
     emptyPreview: "Chưa có nội dung để xem trước.",
-    characterCount: "{{count}} / {{maximum}} ký tự",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "Nhấn Ctrl+Enter hoặc Command+Enter để kiểm tra.",
   },
   accessRole: { admin: "Quản trị viên", operator: "Người vận hành", viewer: "Người xem" },

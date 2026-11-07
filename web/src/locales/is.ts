@@ -325,7 +325,7 @@ const translation = {
     bulletList: "Punktalisti",
     fencedCode: "Kóðabálkur",
     emptyPreview: "Ekkert er tilbúið til forskoðunar enn.",
-    characterCount: "{{count}} / {{maximum}} stafir",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "Ýttu á Ctrl+Enter eða Command+Enter til að fara yfir.",
   },
   accessRole: {

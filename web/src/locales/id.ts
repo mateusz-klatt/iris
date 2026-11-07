@@ -325,7 +325,7 @@ const translation = {
     bulletList: "Daftar berpoin",
     fencedCode: "Blok kode",
     emptyPreview: "Belum ada yang dapat dipratinjau.",
-    characterCount: "{{count}} / {{maximum}} karakter",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "Tekan Ctrl+Enter atau Command+Enter untuk meninjau.",
   },
   accessRole: {

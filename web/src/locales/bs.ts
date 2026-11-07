@@ -325,7 +325,7 @@ const translation = {
     bulletList: "Lista s oznakama",
     fencedCode: "Blok koda",
     emptyPreview: "Još nema sadržaja za pregled.",
-    characterCount: "{{count}} / {{maximum}} znakova",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "Pritisnite Ctrl+Enter ili Command+Enter za pregled.",
   },
   accessRole: {

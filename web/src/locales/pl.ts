@@ -325,7 +325,7 @@ const translation = {
     bulletList: "Lista punktowana",
     fencedCode: "Blok kodu",
     emptyPreview: "Nie ma jeszcze nic do wyświetlenia.",
-    characterCount: "{{count}} / {{maximum}} znaków",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "Naciśnij Ctrl+Enter lub Command+Enter, aby sprawdzić.",
   },
   accessRole: {

@@ -325,7 +325,7 @@ const translation = {
     bulletList: "Маркований список",
     fencedCode: "Блок коду",
     emptyPreview: "Поки немає чого переглядати.",
-    characterCount: "{{count}} / {{maximum}} символів",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "Натисніть Ctrl+Enter або Command+Enter, щоб перейти до перевірки.",
   },
   accessRole: { admin: "Адміністратор", operator: "Оператор", viewer: "Спостерігач" },

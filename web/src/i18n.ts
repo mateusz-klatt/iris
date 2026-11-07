@@ -437,7 +437,7 @@ const resources = {
         bulletList: "Bulleted list",
         fencedCode: "Code block",
         emptyPreview: "Nothing to preview yet.",
-        characterCount: "{{count}} / {{maximum}} characters",
+        byteCount: "{{count}} / {{maximum}} B",
         shortcutHint: "Press Ctrl+Enter or Command+Enter to review.",
       },
       accessRole: {

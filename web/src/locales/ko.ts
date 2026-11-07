@@ -325,7 +325,7 @@ const translation = {
     bulletList: "글머리 기호 목록",
     fencedCode: "코드 블록",
     emptyPreview: "아직 미리 볼 내용이 없습니다.",
-    characterCount: "{{count}} / {{maximum}}자",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "검토하려면 Ctrl+Enter 또는 Command+Enter를 누르세요.",
   },
   accessRole: {

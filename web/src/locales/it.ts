@@ -325,7 +325,7 @@ const translation = {
     bulletList: "Elenco puntato",
     fencedCode: "Blocco di codice",
     emptyPreview: "Non c’è ancora nulla da visualizzare in anteprima.",
-    characterCount: "{{count}} / {{maximum}} caratteri",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "Premi Ctrl+Invio o Command+Invio per controllare.",
   },
   accessRole: {

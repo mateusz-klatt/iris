@@ -325,7 +325,7 @@ const translation = {
     bulletList: "Կետանշված ցանկ",
     fencedCode: "Կոդի բլոկ",
     emptyPreview: "Դեռ նախադիտելու բան չկա։",
-    characterCount: "{{count}} / {{maximum}} նիշ",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "Վերանայելու համար սեղմեք Ctrl+Enter կամ Command+Enter։",
   },
   accessRole: {

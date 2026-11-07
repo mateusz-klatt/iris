@@ -325,7 +325,7 @@ const translation = {
     bulletList: "רשימת תבליטים",
     fencedCode: "בלוק קוד",
     emptyPreview: "עדיין אין תוכן לתצוגה מקדימה.",
-    characterCount: "{{count}} / {{maximum}} תווים",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "יש ללחוץ על Ctrl+Enter או Command+Enter כדי לבדוק.",
   },
   accessRole: {

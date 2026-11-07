@@ -325,7 +325,7 @@ const translation = {
     bulletList: "বুলেট তালিকা",
     fencedCode: "কোড ব্লক",
     emptyPreview: "এখনও প্রিভিউ করার মতো কিছু নেই।",
-    characterCount: "{{count}} / {{maximum}} অক্ষর",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "পর্যালোচনার জন্য Ctrl+Enter বা Command+Enter চাপুন।",
   },
   accessRole: {

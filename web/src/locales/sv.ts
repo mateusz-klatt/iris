@@ -325,7 +325,7 @@ const translation = {
     bulletList: "Punktlista",
     fencedCode: "Kodblock",
     emptyPreview: "Det finns inget att förhandsgranska ännu.",
-    characterCount: "{{count}} / {{maximum}} tecken",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "Tryck Ctrl+Enter eller Command+Enter för att granska.",
   },
   accessRole: { admin: "Administratör", operator: "Operatör", viewer: "Läsare" },

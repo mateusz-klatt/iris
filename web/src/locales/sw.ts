@@ -325,7 +325,7 @@ const translation = {
     bulletList: "Orodha ya vitone",
     fencedCode: "Kizuizi cha msimbo",
     emptyPreview: "Bado hakuna cha kuhakiki.",
-    characterCount: "Vibambo {{count}} / {{maximum}}",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "Bonyeza Ctrl+Enter au Command+Enter ili kukagua.",
   },
   accessRole: { admin: "Msimamizi", operator: "Mwendeshaji", viewer: "Mtazamaji" },

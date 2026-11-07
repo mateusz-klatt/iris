@@ -325,7 +325,7 @@ const translation = {
     bulletList: "အမှတ်စဉ်မဲ့ စာရင်း",
     fencedCode: "ကုဒ်ဘလော့ခ်",
     emptyPreview: "အစမ်းကြည့်ရန် မည်သည့်အရာမျှ မရှိသေးပါ။",
-    characterCount: "စာလုံး {{count}} / {{maximum}}",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "စစ်ဆေးရန် Ctrl+Enter သို့မဟုတ် Command+Enter ကို နှိပ်ပါ။",
   },
   accessRole: {
