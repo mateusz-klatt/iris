@@ -10,10 +10,11 @@ import (
 )
 
 type claim struct {
-	Fence                                       int64
-	Execution, Repo, Kind, Path, Origin, Holder string
-	Epoch                                       int64
-	Expiry                                      sql.NullInt64
+	Fence                            int64
+	Execution, Repo, Kind, Path, Key string
+	Origin, Holder                   string
+	Epoch                            int64
+	Expiry                           sql.NullInt64
 }
 
 func (c claim) public() map[string]any {
@@ -33,12 +34,13 @@ func (t *transaction) conflict(c claim) (map[string]any, error) {
 		expiry = c.Expiry.Int64
 	}
 	out := c.public()
+	out["claimed_path"] = c.Path
 	out["expires_at"] = timestamp(sql.NullInt64{Int64: expiry, Valid: true})
 	return out, nil
 }
 
 func (t *transaction) claimRows(repo string) ([]claim, error) {
-	rows, err := t.rows(`SELECT c.fence,c.execution_id,c.repository_id,c.kind,c.path,c.origin,a.name,c.boot_epoch,c.expires_ms FROM Claim c JOIN Execution e ON e.id=c.execution_id JOIN Agent a ON a.id=e.agent_id WHERE c.repository_id=? AND c.revoked_ms IS NULL AND e.state='active' ORDER BY c.fence`, repo)
+	rows, err := t.rows(`SELECT c.fence,c.execution_id,c.repository_id,c.kind,c.path,c.path_key,c.origin,a.name,c.boot_epoch,c.expires_ms FROM Claim c JOIN Execution e ON e.id=c.execution_id JOIN Agent a ON a.id=e.agent_id WHERE c.repository_id=? AND c.revoked_ms IS NULL AND e.state='active' ORDER BY c.fence`, repo)
 	if err != nil {
 		return nil, err
 	}
@@ -46,7 +48,7 @@ func (t *transaction) claimRows(repo string) ([]claim, error) {
 	out := []claim{}
 	for rows.Next() {
 		var c claim
-		rows.Scan(&c.Fence, &c.Execution, &c.Repo, &c.Kind, &c.Path, &c.Origin, &c.Holder, &c.Epoch, &c.Expiry)
+		rows.Scan(&c.Fence, &c.Execution, &c.Repo, &c.Kind, &c.Path, &c.Key, &c.Origin, &c.Holder, &c.Epoch, &c.Expiry)
 		out = append(out, c)
 	}
 	return out, rows.Err()
@@ -62,7 +64,7 @@ func (t *transaction) claims(repo string) ([]map[string]any, error) {
 	}
 	return out, nil
 }
-func cleanPath(raw, kind, policy string, wide bool) (string, error) {
+func cleanPath(raw, kind string, wide bool) (string, error) {
 	if strings.ContainsAny(raw, "\\\x00*?[]") || strings.HasPrefix(raw, "/") || strings.Contains(raw, ":") {
 		return "", fail("bad_request", "claim path must be a relative POSIX path without globs")
 	}
@@ -77,9 +79,6 @@ func cleanPath(raw, kind, policy string, wide bool) (string, error) {
 	}
 	if p == "" && (kind != "prefix" || !wide) {
 		return "", fail("bad_request", "empty prefix needs repo_wide=true")
-	}
-	if policy == "folded" {
-		p = strings.ToLower(p)
 	}
 	return p, nil
 }
@@ -117,8 +116,8 @@ func (t *transaction) policy(repo string) (casePolicy, action string, err error)
 	return
 }
 
-// SetRepositoryPolicy configures a repository before claims are granted. Folding an
-// existing namespace is refused rather than silently merging differently cased paths.
+// SetRepositoryPolicy configures a repository. Changing the case policy rekeys its claims.
+// Two live claims that now share a key both stay: only a new claim can conflict.
 func (s *Store) SetRepositoryPolicy(ctx context.Context, repo, casePolicy, action string) error {
 	if casePolicy != "sensitive" && casePolicy != "folded" {
 		return fail("bad_request", "invalid case policy")
@@ -131,17 +130,10 @@ func (s *Store) SetRepositoryPolicy(ctx context.Context, repo, casePolicy, actio
 		if err != nil {
 			return err
 		}
-		if old != casePolicy {
-			var n int
-			if err = t.row("SELECT COUNT(*) FROM Claim WHERE repository_id=?", repo).Scan(&n); err != nil {
-				return err
-			}
-			if n > 0 {
-				return fail("conflict", "case policy is pinned once claims exist")
-			}
+		if _, err = t.exec("UPDATE Repository SET case_policy=?,conflict_action=? WHERE id=?", casePolicy, action, repo); err != nil || old == casePolicy {
+			return err
 		}
-		_, err = t.exec("UPDATE Repository SET case_policy=?,conflict_action=? WHERE id=?", casePolicy, action, repo)
-		return err
+		return t.rekeyRepository(repo)
 	})
 }
 func (t *transaction) touch(r Request) (map[string]any, error) {
@@ -161,9 +153,14 @@ func (t *transaction) touch(r Request) (map[string]any, error) {
 		// A replay cannot grant permission after the cached claims have expired or been released.
 		if cached["action"] == "allow" {
 			if grants, ok := cached["granted"].([]any); ok {
+				policy, _, err := t.policy(e.Repo)
+				if err != nil {
+					return nil, err
+				}
 				for _, p := range grants {
 					var n int
-					err = t.row("SELECT COUNT(*) FROM Claim WHERE execution_id=? AND (path=? OR (kind='prefix' AND (path='' OR substr(?,1,length(path)+1)=path||'/'))) AND revoked_ms IS NULL AND boot_epoch=?", e.ID, p, p, t.s.epoch).Scan(&n)
+					key := pathKey(p.(string), policy)
+					err = t.row("SELECT COUNT(*) FROM Claim WHERE execution_id=? AND (path_key=? OR (kind='prefix' AND (path_key='' OR substr(?,1,length(path_key)+1)=path_key||'/'))) AND revoked_ms IS NULL AND boot_epoch=?", e.ID, key, key, t.s.epoch).Scan(&n)
 					if err != nil {
 						return nil, err
 					}
@@ -193,15 +190,16 @@ func (t *transaction) touch(r Request) (map[string]any, error) {
 	normalized := []string{}
 	ignored := []string{}
 	for _, raw := range paths {
-		p, err := cleanPath(raw, "exact", policy, false)
+		p, err := cleanPath(raw, "exact", false)
 		if err != nil {
 			return nil, err
 		}
-		if seen[p] {
+		key := pathKey(p, policy)
+		if seen[key] {
 			continue
 		}
-		seen[p] = true
-		if defaultIgnored(p) {
+		seen[key] = true
+		if defaultIgnored(key) {
 			ignored = append(ignored, p)
 		} else {
 			normalized = append(normalized, p)
@@ -215,7 +213,7 @@ func (t *transaction) touch(r Request) (map[string]any, error) {
 	reuse := map[string]claim{}
 	for _, p := range normalized {
 		for _, c := range cs {
-			if !overlaps(p, "exact", c.Path, c.Kind) {
+			if !overlaps(pathKey(p, policy), "exact", c.Key, c.Kind) {
 				continue
 			}
 			if c.Execution == e.ID {
@@ -248,7 +246,7 @@ func (t *transaction) touch(r Request) (map[string]any, error) {
 		out["action"] = action
 		c := conflicts[0]
 		expiry := c["expires_at"]
-		out["message"] = fmt.Sprintf("Iris: %s is held by %s until %v (%s claim). Message them with the send tool, or work on something else. Do not bypass this with a shell command.", c["path"], c["holder"], expiry, c["origin"])
+		out["message"] = fmt.Sprintf("Iris: %s until %v (%s claim). Message them with the send tool, or work on something else. Do not bypass this with a shell command.", heldBy(c), expiry, c["origin"])
 		if action == "deny" {
 			out["message"] = out["message"].(string) + " Ask the human if you need help resolving this conflict."
 		}
@@ -266,7 +264,7 @@ func (t *transaction) touch(r Request) (map[string]any, error) {
 				}
 				continue
 			}
-			if _, err = t.exec("INSERT INTO Claim(execution_id,repository_id,kind,path,origin,boot_epoch,expires_ms) VALUES(?,?,'exact',?,'auto',?,?)", e.ID, e.Repo, p, t.s.epoch, t.s.clock.Now().Add(10*time.Minute).UnixMilli()); err != nil {
+			if _, err = t.exec("INSERT INTO Claim(execution_id,repository_id,kind,path,path_key,origin,boot_epoch,expires_ms) VALUES(?,?,'exact',?,?,'auto',?,?)", e.ID, e.Repo, p, pathKey(p, policy), t.s.epoch, t.s.clock.Now().Add(10*time.Minute).UnixMilli()); err != nil {
 				return nil, err
 			}
 		}
@@ -331,10 +329,11 @@ func (t *transaction) explicit(r Request) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	p, err := cleanPath(r.Path, r.Kind, policy, r.RepoWide)
+	p, err := cleanPath(r.Path, r.Kind, r.RepoWide)
 	if err != nil {
 		return nil, err
 	}
+	key := pathKey(p, policy)
 	cs, err := t.claimRows(e.Repo)
 	if err != nil {
 		return nil, err
@@ -342,11 +341,11 @@ func (t *transaction) explicit(r Request) (map[string]any, error) {
 	conflicts := []map[string]any{}
 	var reuse *claim
 	for _, c := range cs {
-		if !overlaps(p, r.Kind, c.Path, c.Kind) {
+		if !overlaps(key, r.Kind, c.Key, c.Kind) {
 			continue
 		}
 		if c.Execution == e.ID {
-			if c.Kind == r.Kind && c.Path == p {
+			if c.Kind == r.Kind && c.Key == key {
 				copy := c
 				reuse = &copy
 			}
@@ -361,6 +360,7 @@ func (t *transaction) explicit(r Request) (map[string]any, error) {
 			if err != nil {
 				return nil, err
 			}
+			v["path"] = p
 			conflicts = append(conflicts, v)
 		}
 	}
@@ -383,7 +383,7 @@ func (t *transaction) explicit(r Request) (map[string]any, error) {
 		if err = t.claimLimit(e, 1); err != nil {
 			return nil, err
 		}
-		res, err := t.exec("INSERT INTO Claim(execution_id,repository_id,kind,path,origin,boot_epoch,expires_ms) VALUES(?,?,?,?,'explicit',?,?)", e.ID, e.Repo, r.Kind, p, t.s.epoch, expiry)
+		res, err := t.exec("INSERT INTO Claim(execution_id,repository_id,kind,path,path_key,origin,boot_epoch,expires_ms) VALUES(?,?,?,?,?,'explicit',?,?)", e.ID, e.Repo, r.Kind, p, key, t.s.epoch, expiry)
 		if err != nil {
 			return nil, err
 		}

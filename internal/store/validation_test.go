@@ -48,9 +48,6 @@ func TestInvalidOperationsLeaveStateUnchanged(t *testing.T) {
 		t.Fatal("unknown repository policy accepted")
 	}
 	call(t, s, "claim", claimRequest(a, "held", "file", "exact"))
-	if s.SetRepositoryPolicy(context.Background(), repo, "folded", "deny") == nil {
-		t.Fatal("namespace folded after claims existed")
-	}
 	r := claimRequest(a, "ttl", "other", "exact")
 	r.TTLS = -1
 	expectError(t, s, "claim", r, "bad_request")

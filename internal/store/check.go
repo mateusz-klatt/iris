@@ -24,12 +24,13 @@ func (t *transaction) checkPaths(repo, host, worktree string, paths []string) (m
 	}
 	conflicts := []map[string]any{}
 	for _, raw := range paths {
-		p, err := cleanPath(raw, "exact", policy, false)
+		p, err := cleanPath(raw, "exact", false)
 		if err != nil {
 			return nil, err
 		}
+		key := pathKey(p, policy)
 		for _, c := range claims {
-			if !overlaps(p, "exact", c.Path, c.Kind) {
+			if !overlaps(key, "exact", c.Key, c.Kind) {
 				continue
 			}
 			var ch, cw string
@@ -50,7 +51,7 @@ func (t *transaction) checkPaths(repo, host, worktree string, paths []string) (m
 	message := ""
 	if len(conflicts) > 0 {
 		c := conflicts[0]
-		message = fmt.Sprintf("Iris: %s is held by %s until %v (%s claim). Message them with the send tool, or work on something else. Ask the human if you need help resolving this conflict.", c["path"], c["holder"], c["expires_at"], c["origin"])
+		message = fmt.Sprintf("Iris: %s until %v (%s claim). Message them with the send tool, or work on something else. Ask the human if you need help resolving this conflict.", heldBy(c), c["expires_at"], c["origin"])
 	}
 	return map[string]any{"message": message, "conflicts": conflicts}, nil
 }

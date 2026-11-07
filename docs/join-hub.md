@@ -40,9 +40,9 @@ iris doctor
 `~/.local/bin` is not on the default macOS `PATH`. Add the `export` line to `~/.zshrc`, because
 `iris guard` runs from Git's `PATH`.
 
-Claims compare paths exactly. The default macOS filesystem does not, so `SRC/A.GO` and `src/a.go`
-are one file but two claims, and neither the hooks nor `iris guard` see a conflict between them. The
-same applies to a name written in two Unicode forms. Spell paths as Git does.
+Claims ignore case and Unicode form, as the default macOS filesystem does, so `SRC/A.GO` and
+`src/a.go` conflict. A refusal names both spellings. See `docs/adr/003-path-identity.md` for the
+limits.
 
 ### Running the hub on this Mac
 

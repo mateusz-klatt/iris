@@ -24,12 +24,8 @@ func (t *transaction) reconcile(r Request) (map[string]any, error) {
 		_, err = t.exec("DELETE FROM ShellSnapshot WHERE execution_id IN (SELECT id FROM Execution WHERE repository_id=? AND host_id=? AND worktree=?)", e.Repo, e.Host, e.Worktree)
 		return empty, err
 	}
-	policy, _, err := t.policy(e.Repo)
-	if err != nil {
-		return nil, err
-	}
 	for p := range r.Status {
-		if _, err = cleanPath(p, "exact", policy, false); err != nil {
+		if _, err = cleanPath(p, "exact", false); err != nil {
 			return nil, err
 		}
 	}
