@@ -1,14 +1,30 @@
 package doctor
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/mateusz-klatt/iris/internal/integrate"
 )
+
+// allowed is permissions.allow of a settings file, decoded, so a Windows path compares as written.
+func allowed(t *testing.T, body string) []string {
+	t.Helper()
+	var doc struct {
+		Permissions struct {
+			Allow []string `json:"allow"`
+		} `json:"permissions"`
+	}
+	if err := json.Unmarshal([]byte(body), &doc); err != nil {
+		t.Fatalf("%v\n%s", err, body)
+	}
+	return doc.Permissions.Allow
+}
 
 func agyLayout(t *testing.T) (integrate.Layout, string, string) {
 	t.Helper()
@@ -52,7 +68,8 @@ func TestAgyWriteAllowsOnlyTheScratchFileForTheRun(t *testing.T) {
 	undo := agyWrite(l, repo)
 	during := read(t, path)
 	rule := agyWriteRule(repo)
-	if !strings.Contains(during, rule) || !strings.Contains(during, "mcp(iris/*)") || !strings.HasSuffix(rule, filepath.Join("repo", scratchFile)+")") {
+	allow := allowed(t, during)
+	if !slices.Contains(allow, rule) || !slices.Contains(allow, "mcp(iris/*)") || !strings.HasSuffix(rule, filepath.Join("repo", scratchFile)+")") {
 		t.Fatalf("during the run\n%s", during)
 	}
 	if note := undo(); note != "" {
@@ -66,7 +83,7 @@ func TestAgyWriteAllowsOnlyTheScratchFileForTheRun(t *testing.T) {
 func TestAgyWriteCreatesAndRemovesTheSettings(t *testing.T) {
 	l, path, repo := agyLayout(t)
 	undo := agyWrite(l, repo)
-	if !strings.Contains(read(t, path), "write_file(") {
+	if !slices.Contains(allowed(t, read(t, path)), agyWriteRule(repo)) {
 		t.Fatal("rule not written")
 	}
 	if note := undo(); note != "" {
@@ -79,7 +96,8 @@ func TestAgyWriteCreatesAndRemovesTheSettings(t *testing.T) {
 
 func TestAgyWriteKeepsARuleTheUserAlreadyHas(t *testing.T) {
 	l, path, repo := agyLayout(t)
-	mine := `{"permissions":{"allow":["` + agyWriteRule(repo) + `"]}}`
+	raw, _ := json.Marshal(map[string]any{"permissions": map[string]any{"allow": []string{agyWriteRule(repo)}}})
+	mine := string(raw) // the rule holds backslashes on Windows, so it is encoded, not pasted
 	seedSettings(t, path, mine)
 	undo := agyWrite(l, repo)
 	if read(t, path) != mine {
