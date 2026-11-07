@@ -69,7 +69,8 @@ func (t *transaction) claims(repo string) ([]map[string]any, error) {
 // refuseControl keeps control characters out of claims, the paths an agent names.
 // A claim path reaches other models in context, and a newline in it could start a
 // line that reads as Iris's own. Paths that git reports are not refused here, so a
-// repository with such a file still reconciles; they are escaped where shown.
+// repository with such a file still reconciles; they are escaped where shown. Every
+// C0 and C1 control character is refused, tab included, since no claim needs one.
 func refuseControl(raw string) error {
 	if display.HasControl(raw) {
 		return fail("bad_request", "claim path must not contain control characters such as a newline")

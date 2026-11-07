@@ -67,9 +67,8 @@ func (t *transaction) rekey(where string, args ...any) error {
 }
 
 // heldBy names both spellings when they differ, so that a refused agent can see why a path
-// it did not write the same way is taken.
-// heldBy is read by the refused model. Paths come from agents, and a path from
-// git can hold a newline, so each value is escaped onto one line.
+// it did not write the same way is taken. The refused model reads it, and a path from git
+// can hold a newline, so each value is escaped onto one line.
 func heldBy(c map[string]any) string {
 	path, holder, claimed := display.Inline(fmt.Sprint(c["path"])), display.Inline(fmt.Sprint(c["holder"])), display.Inline(fmt.Sprint(c["claimed_path"]))
 	if c["path"] == c["claimed_path"] {
