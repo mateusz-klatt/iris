@@ -51,40 +51,27 @@ func (h *Hub) authenticate(r *http.Request) principal {
 	return principal{name, tokenDigest(token)}
 }
 func (h *Hub) tokenRoutes() {
-	h.mux.HandleFunc("POST /v1/admin/forget", func(w http.ResponseWriter, r *http.Request) {
-		if !h.ownerOnly(w, r) {
-			return
-		}
-		req, err := decode(w, r)
-		if err != nil {
-			writeError(w, err)
-			return
-		}
-		out, err := h.call(r.Context(), "forget", req)
-		if err != nil {
-			writeError(w, err)
-			return
-		}
-		writeJSON(w, out)
-	})
-	// A repository's contact receives its repo: mail (ADR 004). Only the owner sets it:
-	// a host could otherwise redirect another repository's reports to itself.
-	h.mux.HandleFunc("POST /v1/admin/contact", func(w http.ResponseWriter, r *http.Request) {
-		if !h.ownerOnly(w, r) {
-			return
-		}
-		req, err := decode(w, r)
-		if err != nil {
-			writeError(w, err)
-			return
-		}
-		out, err := h.call(r.Context(), "contact", req)
-		if err != nil {
-			writeError(w, err)
-			return
-		}
-		writeJSON(w, out)
-	})
+	// forget removes records, and a repository's contact receives its repo: mail (ADR 004).
+	// Only the owner may do either: a host could otherwise erase others' history, or send
+	// another repository's reports to itself.
+	for route, op := range map[string]string{"POST /v1/admin/forget": "forget", "POST /v1/admin/contact": "contact"} {
+		h.mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) {
+			if !h.ownerOnly(w, r) {
+				return
+			}
+			req, err := decode(w, r)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			out, err := h.call(r.Context(), op, req)
+			if err != nil {
+				writeError(w, err)
+				return
+			}
+			writeJSON(w, out)
+		})
+	}
 	h.mux.HandleFunc("GET /v1/tokens", func(w http.ResponseWriter, r *http.Request) {
 		if !h.ownerOnly(w, r) {
 			return
