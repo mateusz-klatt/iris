@@ -37,6 +37,9 @@ type Runner struct {
 	Ancestor   func() (proc.Ancestor, error)
 	Host       func() string
 	Deadline   time.Duration
+	// after starts the deadline. Tests replace it so a deadline fires at a known
+	// stage rather than whenever a slow machine gets there.
+	after func(time.Duration) <-chan time.Time
 }
 
 // Run catches every failure, including panics, and always returns valid output
@@ -55,7 +58,11 @@ func (r Runner) Run() Output {
 	if deadline <= 0 {
 		deadline = DefaultDeadline
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), deadline)
+	after := r.after
+	if after == nil {
+		after = time.After
+	}
+	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	ch := make(chan Output, 1)
 	go func() {
@@ -71,9 +78,10 @@ func (r Runner) Run() Output {
 	case out := <-ch:
 		failureStage, failure = state.snapshot()
 		return out
-	case <-ctx.Done():
+	case <-after(deadline):
+		cancel()
 		failureStage, _ = state.snapshot()
-		failure = ctx.Err()
+		failure = context.DeadlineExceeded
 		return allow
 	}
 }
