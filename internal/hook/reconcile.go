@@ -24,7 +24,11 @@ func (r Runner) reconcile(ctx context.Context, ev Event) Output {
 	if !ok {
 		return allow
 	}
-	ctx, cancel := context.WithTimeout(ctx, ReconcileDeadline)
+	limit := r.ShellDeadline
+	if limit <= 0 {
+		limit = ReconcileDeadline
+	}
+	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	done := make(chan Output, 1)
 	go func() {

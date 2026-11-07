@@ -39,7 +39,9 @@ func (b *lines) Write(p []byte) (int, error) {
 }
 func (b *lines) String() string { b.mu.Lock(); defer b.mu.Unlock(); return b.text }
 func TestBurstReconnectNoDuplicateLine(t *testing.T) {
-	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	// This only bounds a hang. No assertion below depends on it, so it is generous: a fully
+	// loaded Windows runner once needed more than 12 s just to attach the monitor.
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	s, err := store.Open(filepath.Join(t.TempDir(), "hub.db"), nil)
 	if err != nil {
@@ -55,6 +57,12 @@ func TestBurstReconnectNoDuplicateLine(t *testing.T) {
 	}
 	a, b := register("a"), register("b")
 	var sockets atomic.Int32
+	// The window is measured on a clock this test moves. Each event the monitor consumes is
+	// followed by an acknowledging request, and a reset by a snapshot request, so the test
+	// moves the clock only once the monitor has counted all three messages.
+	clock := &testClock{at: time.Unix(1_800_000_000, 0)}
+	var resumed atomic.Bool
+	var acks, resets atomic.Int32
 	cut := make(chan struct{})
 	resume := make(chan struct{})
 	attached := make(chan struct{})
@@ -64,6 +72,14 @@ func TestBurstReconnectNoDuplicateLine(t *testing.T) {
 	real.PingInterval = 20 * time.Millisecond
 	server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/watch" {
+			if r.URL.Path == "/v1/events" && resumed.Load() {
+				switch q := r.URL.Query(); {
+				case q.Get("consumer_id") == "iris-watch":
+					acks.Add(1)
+				case q.Has("stream"):
+					resets.Add(1)
+				}
+			}
 			real.ServeHTTP(w, r)
 			return
 		}
@@ -127,7 +143,7 @@ func TestBurstReconnectNoDuplicateLine(t *testing.T) {
 	output := &lines{}
 	done := make(chan error, 1)
 	go func() {
-		done <- (&Runner{Resolver: resolver, Output: output, Window: 2 * time.Second, Backoff: 10 * time.Millisecond}).Run(ctx)
+		done <- (&Runner{Resolver: resolver, Output: output, Window: 2 * time.Second, Backoff: 10 * time.Millisecond, Now: clock.Now}).Run(ctx)
 	}()
 	send := func(key string) {
 		_, err := s.Call(ctx, "messages", store.Request{ExecutionID: a["execution_id"].(string), Generation: 1, Key: key, To: []string{b["agent"].(map[string]any)["name"].(string)}, Body: "DO NOT OUTPUT THIS"})
@@ -149,7 +165,19 @@ func TestBurstReconnectNoDuplicateLine(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		send(fmt.Sprint(i))
 	}
+	resumed.Store(true)
 	close(resume)
+	for acks.Load() < 3 && resets.Load() == 0 {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("the monitor did not consume the burst: %d acks, %q", acks.Load(), output.String())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if got := output.String(); got != "Iris: 1 new message. Use the inbox tool.\n" {
+		t.Fatalf("a held line came out before its window: %q", got)
+	}
+	clock.Add(3 * time.Second)
 	want := "Iris: 1 new message. Use the inbox tool.\nIris: 3 new messages. Use the inbox tool.\n"
 	deadline := time.Now().Add(6 * time.Second)
 	for time.Now().Before(deadline) {
@@ -178,4 +206,22 @@ func TestBurstReconnectNoDuplicateLine(t *testing.T) {
 	if len(inbox["deliveries"].([]map[string]any)) != 4 {
 		t.Fatal(string(raw))
 	}
+}
+
+// testClock is a clock that moves only when a test says so.
+type testClock struct {
+	mu sync.Mutex
+	at time.Time
+}
+
+func (c *testClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.at
+}
+
+func (c *testClock) Add(d time.Duration) {
+	c.mu.Lock()
+	c.at = c.at.Add(d)
+	c.mu.Unlock()
 }

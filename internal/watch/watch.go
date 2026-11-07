@@ -110,6 +110,24 @@ type Runner struct {
 	Resolver        *binding.Resolver
 	Output          io.Writer
 	Window, Backoff time.Duration
+	// Now reads the clock for the coalescing window. Nil means time.Now.
+	Now func() time.Time
+	// after waits out a backoff. Tests replace it to see each delay without waiting.
+	after func(time.Duration) <-chan time.Time
+}
+
+func (r *Runner) wait(d time.Duration) <-chan time.Time {
+	if r.after != nil {
+		return r.after(d)
+	}
+	return time.After(d)
+}
+
+func (r *Runner) now() time.Time {
+	if r.Now != nil {
+		return r.Now()
+	}
+	return time.Now()
 }
 
 func (r *Runner) Run(ctx context.Context) error {
@@ -131,21 +149,19 @@ func (r *Runner) Run(ctx context.Context) error {
 			return nil
 		}
 		// Keep flushing pending attention even during a network outage.
-		wait := time.NewTimer(delay)
+		wait := r.wait(delay)
 		tick := time.NewTicker(100 * time.Millisecond)
 	waiting:
 		for {
 			select {
 			case <-ctx.Done():
-				wait.Stop()
 				tick.Stop()
 				return nil
-			case <-wait.C:
+			case <-wait:
 				break waiting
-			case now := <-tick.C:
-				if err = coalesce.Flush(now); err != nil {
+			case <-tick.C:
+				if err = coalesce.Flush(r.now()); err != nil {
 					tick.Stop()
-					wait.Stop()
 					return err
 				}
 			}
@@ -240,8 +256,8 @@ func (r *Runner) connect(ctx context.Context, b binding.Bound, cursor *int64, st
 			return nil
 		case err := <-fail:
 			return readFailure(ctx, err)
-		case now := <-tick.C:
-			if err = c.Flush(now); err != nil {
+		case <-tick.C:
+			if err = c.Flush(r.now()); err != nil {
 				return err
 			}
 		case f := <-frames:
@@ -264,7 +280,7 @@ func (r *Runner) connect(ctx context.Context, b binding.Bound, cursor *int64, st
 				if snapshot.Pending != nil { // an older hub does not send it
 					waiting = *snapshot.Pending
 				}
-				if err = c.Add(time.Now(), "inbox_changed", waiting); err != nil {
+				if err = c.Add(r.now(), "inbox_changed", waiting); err != nil {
 					return err
 				}
 				continue
@@ -274,7 +290,7 @@ func (r *Runner) connect(ctx context.Context, b binding.Bound, cursor *int64, st
 			}
 			*stream = f.Stream
 			*cursor = f.Cursor
-			if err = c.Add(time.Now(), f.Kind, 1); err != nil {
+			if err = c.Add(r.now(), f.Kind, 1); err != nil {
 				return err
 			}
 			// Persist only a cursor consumed here, never a socket writer's high-water mark.
