@@ -30,11 +30,18 @@ func Relative(root, path string) (string, error) {
 	if rp.vol != pp.vol {
 		return "", ErrEscape
 	}
+	// A drive letter means Windows names: case-insensitive directories, and trailing dots
+	// and spaces that Win32 strips. Measured on NTFS, both reached one file under another name.
+	windows := rp.vol != ""
+	if windows {
+		rp.parts = win32Names(rp.parts)
+		pp.parts = win32Names(pp.parts)
+	}
 	if len(pp.parts) < len(rp.parts) {
 		return "", ErrEscape
 	}
 	for i, seg := range rp.parts {
-		if pp.parts[i] != seg {
+		if pp.parts[i] != seg && !(windows && strings.EqualFold(pp.parts[i], seg)) {
 			return "", ErrEscape
 		}
 	}
@@ -43,6 +50,19 @@ func Relative(root, path string) (string, error) {
 		return "", ErrEscape
 	}
 	return strings.Join(rest, "/"), nil
+}
+
+// win32Names drops the trailing dots and spaces that Win32 removes from every name.
+// A name made only of them is left alone, as Win32 does not reduce it to nothing.
+func win32Names(parts []string) []string {
+	out := make([]string, len(parts))
+	for i, seg := range parts {
+		out[i] = seg
+		if t := strings.TrimRight(seg, ". "); t != "" {
+			out[i] = t
+		}
+	}
+	return out
 }
 
 type lexPath struct {

@@ -58,6 +58,39 @@ hub writes little, but a hub that keeps failing adds lines at each restart, whic
 
 ## Windows
 
+### From a release
+
+No release is published yet. These steps were measured on a snapshot of the same archives and
+manifests.
+
+```powershell
+Expand-Archive iris_<version>_windows_amd64.zip -DestinationPath "$env:LOCALAPPDATA\Programs\iris"
+$env:PATH += ";$env:LOCALAPPDATA\Programs\iris"
+New-Item -ItemType Directory -Force "$env:APPDATA\iris" | Out-Null
+scp <user>@<hub-host>:.config/iris/hub.token "$env:APPDATA\iris\hub.token"
+iris setup --hub https://<hub> --clients claude --yes
+iris doctor
+```
+
+The PATH line lasts for this window. Add the folder to your user PATH to keep it. The binary is not
+signed yet. A zip extracted with Explorer keeps the download's Mark of the Web, so Windows may check
+it with SmartScreen on first start. `Expand-Archive` does not carry the mark over.
+
+With Scoop, from the `mateusz-klatt/scoop-bucket` bucket once it is published:
+
+```powershell
+scoop bucket add mateusz-klatt https://github.com/mateusz-klatt/scoop-bucket
+scoop install iris
+```
+
+Scoop puts `iris` on PATH through its shims folder. Then place the token and run `iris setup` and
+`iris doctor` as above. The manifest was measured with a local install; the bucket does not exist yet.
+
+winget will offer `MateuszKlatt.Iris`. The manifest passes `winget validate`, but an install was not
+measured, because a local manifest needs an administrator to enable.
+
+### From source
+
 In PowerShell, with Go and Git installed:
 
 ```powershell
