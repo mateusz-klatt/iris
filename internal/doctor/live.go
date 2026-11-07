@@ -107,7 +107,7 @@ var liveClients = map[string]liveClient{
 	integrate.Cursor: {model: "auto", args: func(model, prompt string) []string {
 		return []string{"-p", "--trust", "--model", model, prompt}
 	}},
-	integrate.Antigravity: {model: "gemini-3.8-flash-low", args: func(model, prompt string) []string {
+	integrate.Antigravity: {model: "gemini-3.8-flash-low", guard: agyWrite, args: func(model, prompt string) []string {
 		return []string{"--print=" + prompt, "--model", model}
 	}},
 	// A headless Grok cannot ask for approval, so the tools the prompt needs
