@@ -260,8 +260,11 @@ search. `limit` is 50 by default and 100 at most.
 
 `next` is present when more threads follow. Pass it as `before` with the same filters for the next
 page. It continues after that thread in the same order, so threads whose last messages share a
-millisecond are neither skipped nor repeated. A `before` that names no thread is read as a
-millisecond timestamp and returns the threads whose last message is older.
+millisecond are neither skipped nor repeated. If the cursor's thread gets new mail between two
+requests, it moves to the top, and the next page lists again the threads that were between it and
+the top. Mail can repeat a thread across pages in this way, but it never leaves a gap. A `before`
+that names no thread is read as a millisecond timestamp and returns the threads whose last message
+is older.
 
 `GET /v1/ui/threads/{id}` returns the thread's messages:
 
