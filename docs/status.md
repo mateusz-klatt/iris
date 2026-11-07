@@ -40,7 +40,13 @@ Against the production hub, over TLS:
 - **WSL:** #39 measured DNS, TLS and server stalls of several seconds on `/v1/status`. With the second
   request, the p99 over 250 of those requests was 371 ms (#39). Real hooks were not re-measured there.
 - **Windows 11, before #39:** four runs of 100 with ESET active and Defender off measured p50 172 to
-  182 ms and p95 222 to 366 ms. Six of 400 failed open. It has not been re-measured since #39.
+  182 ms and p95 222 to 366 ms. Six of 400 failed open.
+- **Windows 11, after #39 (2026-11-07, `main-63024fb`, hub `bf0e899`):** one session of 100 pre-edit
+  hooks, each a new `iris.exe hook` process, on a home connection with ESET active: p50 263 ms, p95
+  416 ms, max 498 ms, min 171 ms. None reached the deadline, all 100 answered allow, and no failure
+  was logged, so every edit got a real claim rather than the fail-open answer. A single run: the p50
+  rise against the earlier runs is not attributed to #39, which only adds a second request when the
+  first is slow.
 
 ## Measured behaviour
 
@@ -96,7 +102,6 @@ Against the production hub, over TLS:
   notarization have not run.
 - **Not measured:** Defender, the SmartScreen window, Apple silicon, Gatekeeper's dialog and "Open
   Anyway", and a Mac or PC whose policy forbids unsigned code.
-- **Production hook latency on Windows since #39.**
 - **An internal/integrate test that fails under load.** One run of four failed on Windows with every
   CPU busy. It has not reproduced since, and its name was not captured. Pending a -v loop under load
   when the PC is free.
