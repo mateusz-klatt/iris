@@ -460,3 +460,33 @@ func TestACreatedDirectoryWithSomethingInItStays(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// A created directory the user replaced with a link keeps the link: os.Remove would delete it.
+func TestACreatedDirectoryReplacedByALinkStays(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("creating a symlink needs a privilege on Windows")
+	}
+	l := testLayout(t)
+	grok, _ := ByName(Grok)
+	files, _ := grok.Files(l)
+	if err := grok.Install(l, nil); err != nil {
+		t.Fatal(err)
+	}
+	hooks := filepath.Dir(files[0])
+	elsewhere := t.TempDir()
+	if err := os.Rename(files[0], filepath.Join(elsewhere, filepath.Base(files[0]))); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(hooks); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(elsewhere, hooks); err != nil {
+		t.Fatal(err)
+	}
+	if err := grok.Remove(l, nil); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Lstat(hooks); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the user's link is gone: %v", err)
+	}
+}

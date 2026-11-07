@@ -85,9 +85,12 @@ func unwireFile(stateDir, path string, rec manifestFile, strip stripFunc) error 
 
 // removeDirs takes out the directories Iris created for a file, deepest first. One that holds
 // anything stays. Measured on Grok: ~/.grok/hooks was left behind, empty, after remove.
+// A path that is now a link stays: removing it would delete the user's link, whatever it points to.
 func removeDirs(rec manifestFile) {
 	for _, d := range rec.Dirs {
-		_ = os.Remove(d)
+		if info, err := os.Lstat(d); err == nil && info.IsDir() {
+			_ = os.Remove(d)
+		}
 	}
 }
 
