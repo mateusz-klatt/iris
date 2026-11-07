@@ -42,6 +42,8 @@ interface Draft {
   body: string;
   replyTo: string;
   key: string;
+  /** The repository the key was first sent from. A send from another view is another send. */
+  sentFrom?: string;
 }
 
 function newDraft(fields: Partial<Draft> = {}): Draft {
@@ -278,10 +280,15 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
     }
   };
 
-  const submit = async (draft: Draft, clear: () => void) => {
+  const submit = async (start: Draft, keep: (draft: Draft) => void, clear: () => void) => {
     if (inFlight.current) {
       return;
     }
+    // The message belongs to the repository being read (ADR 004), and the hub refuses a key
+    // reused for another repository. A retry from another view therefore gets a new key, and
+    // the draft keeps it for its own retries.
+    const draft = start.sentFrom === undefined || start.sentFrom === repositoryId ? { ...start, sentFrom: repositoryId } : { ...start, key: humanKey(), sentFrom: repositoryId };
+    keep(draft);
     inFlight.current = true;
     setSending(true);
     setFormError("");
@@ -293,7 +300,6 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
         subject: draft.subject,
         body: draft.body,
         reply_to: draft.replyTo,
-        // The message belongs to the repository the operator is reading (ADR 004).
         ...(repositoryId === "" ? {} : { repository_id: repositoryId }),
       });
       clear();
@@ -608,7 +614,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                     className="search-form"
                     onSubmit={(event) => {
                       event.preventDefault();
-                      void submit(reply, () => setReply((current) => edited(current, { body: "" })));
+                      void submit(reply, setReply, () => setReply((current) => edited(current, { body: "" })));
                     }}
                   >
                     <h3>{t("operator.reply")}</h3>
@@ -645,7 +651,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                 className="search-form"
                 onSubmit={(event) => {
                   event.preventDefault();
-                  void submit(compose, () => setCompose(newDraft()));
+                  void submit(compose, setCompose, () => setCompose(newDraft()));
                 }}
               >
                 <label>

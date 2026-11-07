@@ -301,6 +301,39 @@ describe("Iris operator console", () => {
     expect(bodies[0]).toMatchObject({ repository_id: "rp_iris", reply_to: "ms_root" });
   }, 40000);
 
+  it("gives a retry from another repository's view a new key", async () => {
+    const user = userEvent.setup({ delay: null });
+    const bodies: { key: string; repository_id?: string }[] = [];
+    server.use(
+      http.get("*/v1/ui/overview", () =>
+        HttpResponse.json({
+          ...sessionOverview,
+          repositories: [...sessionOverview.repositories, { id: "rp_snapper", name: "snapper", aliases: [] }],
+        }),
+      ),
+      http.post("*/v1/ui/messages", async ({ request }) => {
+        bodies.push((await request.json()) as { key: string; repository_id?: string });
+        return bodies.length === 1 ? new HttpResponse(null, { status: 500 }) : new HttpResponse(null, { status: 204 });
+      }),
+    );
+    await showSession();
+    const compose = document.getElementById("compose");
+    if (compose === null) {
+      throw new Error("missing compose");
+    }
+    const view = within(compose);
+    await user.type(view.getByRole("textbox", { name: "Recipients" }), "claude-host");
+    await user.type(view.getByRole("textbox", { name: "Subject" }), "Status");
+    await user.type(view.getByRole("textbox", { name: "Message" }), "Status?");
+    await user.click(view.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    await user.selectOptions(screen.getByRole("combobox", { name: "Repository" }), "rp_snapper");
+    await user.click(view.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(bodies).toHaveLength(2));
+    expect(bodies[1]?.repository_id).toBe("rp_snapper");
+    expect(bodies[1]?.key).not.toBe(bodies[0]?.key);
+  }, 40000);
+
   it("replies and sends as human", async () => {
     const user = userEvent.setup({ delay: null });
     const bodies: unknown[] = [];
