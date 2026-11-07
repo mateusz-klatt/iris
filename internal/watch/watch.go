@@ -29,7 +29,8 @@ func Stopped(w io.Writer, reason string) error {
 }
 
 // recoveryGrace is how long lost answers may last before the monitor believes them without a
-// heartbeat. The hub keeps a recovering session for 120 s after a restart; past that, an
+// heartbeat. The hub keeps a recovering session for 120 s after a restart (the recovery_deadline
+// set in store.openDatabase; change both together); past that, an
 // Execution still answered lost is gone. It matters when the monitor never bound at all, so no
 // heartbeat ever runs to confirm it.
 const recoveryGrace = 150 * time.Second
