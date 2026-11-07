@@ -157,7 +157,8 @@ jobs:
         run: |
           set -euo pipefail
           docker images
-          image=$(docker images --format '{{.Repository}}:{{.Tag}}' ghcr.io/mateusz-klatt/iris | head -1)
+          # The runner is amd64, and both platforms are loaded in no fixed order.
+          image=$(docker images --format '{{.Repository}}:{{.Tag}}' ghcr.io/mateusz-klatt/iris | grep -- '-amd64$')
           test -n "$image"
           test "$(docker image inspect --format '{{.Config.User}}' "$image")" = "65532:65532"
           docker volume create iris-image-check
