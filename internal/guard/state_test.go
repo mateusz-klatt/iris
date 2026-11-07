@@ -38,7 +38,7 @@ func TestTheHintAgreesWithGitAboutWhereTheHookIs(t *testing.T) {
 				if state, _, err := Status(ctx, where); err != nil || state != StateMissing {
 					t.Fatalf("%s: %q %v", where, state, err)
 				}
-				if err = Install(ctx, where); err != nil {
+				if err = Install(ctx, where, testIris); err != nil {
 					t.Fatal(err)
 				}
 				if NeedsHint(repo) {

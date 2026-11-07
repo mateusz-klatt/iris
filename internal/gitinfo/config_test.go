@@ -6,6 +6,25 @@ import (
 	"testing"
 )
 
+func TestConfigStringDecodesValuesAsGitWritesThem(t *testing.T) {
+	for raw, want := range map[string]string{
+		` C:\\hooks`:                  `C:\hooks`,
+		` "C:\\Program Files\\hooks"`: `C:\Program Files\hooks`,
+		` "a b" # comment`:            "a b",
+		`  x  y  ; comment`:           "x  y",
+		` "  lead"`:                   "  lead",
+		` say \"hi\"`:                 `say "hi"`,
+		` a\tb\nc\bd`:                 "a\tb\nc\bd",
+		` ends\`:                      `ends\`,
+		` "#not a comment"`:           "#not a comment",
+		` x "" y`:                     "x  y",
+	} {
+		if got := configString(raw); got != want {
+			t.Errorf("%q: %q, want %q", raw, got, want)
+		}
+	}
+}
+
 func TestConfigValueReadsTheRepositoryConfigAsGitDoes(t *testing.T) {
 	common := t.TempDir()
 	config := `# a comment

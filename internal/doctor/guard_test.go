@@ -24,7 +24,7 @@ func TestDoctorReportsTheGuardOfItsRepository(t *testing.T) {
 	if got := guardLine(ctx, dir); !strings.HasPrefix(got, "not installed (") || !strings.HasSuffix(got, "run `iris guard install`") {
 		t.Fatal(got)
 	}
-	if err := guard.Install(ctx, dir); err != nil {
+	if err := guard.Install(ctx, dir, "/usr/local/bin/iris"); err != nil {
 		t.Fatal(err)
 	}
 	if got := guardLine(ctx, dir); !strings.HasPrefix(got, "installed (") || !strings.Contains(got, "pre-commit") {

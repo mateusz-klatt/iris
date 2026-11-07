@@ -36,7 +36,59 @@ func (r Repo) ConfigValue(section, key string) (string, bool) {
 			// A key with no value is true in git.
 			v = "true"
 		}
-		value, found = unquote(strings.TrimSpace(v)), true
+		value, found = configString(v), true
 	}
 	return value, found
+}
+
+// configString decodes a value as git writes it. Double quotes keep
+// whitespace and comment characters, a backslash escapes \, ", n, t and b,
+// and # or ; outside quotes starts a comment. git config stores a Windows
+// path's backslashes escaped, as C:\\hooks.
+func configString(raw string) string {
+	var b strings.Builder
+	quoted := false
+	// Unquoted whitespace is kept only between other characters, so it is
+	// held back until something follows it, and dropped before the first.
+	pending := ""
+	put := func(s string) {
+		if b.Len() > 0 {
+			b.WriteString(pending)
+		}
+		pending = ""
+		b.WriteString(s)
+	}
+	for i := 0; i < len(raw); i++ {
+		c := raw[i]
+		switch {
+		case c == '\\' && i+1 < len(raw):
+			i++
+			put(unescape(raw[i]))
+		case c == '"':
+			quoted = !quoted
+			if b.Len() > 0 {
+				b.WriteString(pending)
+			}
+			pending = ""
+		case !quoted && (c == '#' || c == ';'):
+			return b.String()
+		case !quoted && (c == ' ' || c == '\t'):
+			pending += string(c)
+		default:
+			put(string(c))
+		}
+	}
+	return b.String()
+}
+
+func unescape(c byte) string {
+	switch c {
+	case 'n':
+		return "\n"
+	case 't':
+		return "\t"
+	case 'b':
+		return "\b"
+	}
+	return string(c)
 }
