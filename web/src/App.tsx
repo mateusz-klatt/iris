@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -124,6 +124,8 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
   // One send at a time: a second submit while one is pending would be a second send. The ref
   // stops one that comes before React re-renders; the state disables the buttons.
   const inFlight = useRef(false);
+  // Counts overview loads, so only the newest one lands. Closing the watch bumps it too.
+  const overviewRequest = useRef(0);
   const [sending, setSending] = useState(false);
   const [notice, setNotice] = useState("");
   const [formError, setFormError] = useState("");
@@ -156,39 +158,44 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
     document.body.dataset.humanUnread = String(overview.human_unread);
   }, [overview]);
 
-  useEffect(() => {
-    let ignore = false;
-    let request = 0;
-    const load = async () => {
-      const current = ++request;
-      try {
-        const [nextOverview, nextDoctor] = await Promise.all([getOverview(), getDoctor()]);
-        if (ignore || current !== request) {
-          return;
-        }
-        setOverview(nextOverview);
-        setDoctor(nextDoctor);
-        setPhase("ready");
-      } catch (error) {
-        if (ignore || current !== request || isAbort(error)) {
-          return;
-        }
-        setPhase(error instanceof ApiError && error.status === 401 ? "unauthorized" : "error");
+  // Reloads the overview on the watch's current connection. What the operator does reloads it
+  // this way: reconnecting instead would make every read a new socket, whose first frame
+  // reloads the open thread, which reads it again, without end.
+  const reload = useCallback(async () => {
+    const current = ++overviewRequest.current;
+    try {
+      const [nextOverview, nextDoctor] = await Promise.all([getOverview(), getDoctor()]);
+      if (current !== overviewRequest.current) {
+        return;
       }
-    };
-    void load();
+      setOverview(nextOverview);
+      setDoctor(nextDoctor);
+      setPhase("ready");
+    } catch (error) {
+      if (current !== overviewRequest.current || isAbort(error)) {
+        return;
+      }
+      setPhase(error instanceof ApiError && error.status === 401 ? "unauthorized" : "error");
+    }
+  }, []);
+
+  // revision changes only to retry after an error, which reconnects too.
+  useEffect(() => {
+    const requests = overviewRequest;
+    void reload();
     const stop = connect((frame: WatchFrame) => {
       if (frame.kind.length === 0) {
         return;
       }
-      void load();
+      void reload();
       setThreadRevision((value) => value + 1);
     }, setStream);
     return () => {
-      ignore = true;
+      // A load still in flight lands on a closed view, so it is dropped.
+      requests.current++;
       stop();
     };
-  }, [connect, revision]);
+  }, [connect, reload, revision]);
 
   useEffect(() => {
     if (phase !== "ready") {
@@ -236,7 +243,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
         // Opening a thread reads the operator's mail in it (A13); the overview's unread
         // counts then follow. A failure here leaves the mail unread, which is safe.
         readThread(selectedId, repositoryId)
-          .then(() => setRevision((value) => value + 1))
+          .then(() => void reload())
           .catch(() => undefined);
         const last = detail.messages.at(-1);
         if (last !== undefined) {
@@ -262,7 +269,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
     return () => {
       ignore = true;
     };
-  }, [phase, repositoryId, selectedId, t, threadRevision]);
+  }, [phase, reload, repositoryId, selectedId, t, threadRevision]);
 
   const chooseLocale = (next: SupportedLocale) => {
     try {
@@ -311,7 +318,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
       clear();
       setNotice(t("operator.sent"));
       setThreadRevision((value) => value + 1);
-      setRevision((value) => value + 1);
+      void reload();
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
         setPhase("unauthorized");
@@ -329,7 +336,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
     setFormError("");
     try {
       await revokeClaim(claim.fence);
-      setRevision((value) => value + 1);
+      void reload();
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
         setPhase("unauthorized");
@@ -397,7 +404,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
             <section id="overview" className="panel" aria-labelledby="clients-title">
               <div className="panel-heading">
                 <h1 id="clients-title">{t("operator.doctorTitle")}</h1>
-                <button type="button" className="primary-button" onClick={() => setRevision((value) => value + 1)}>
+                <button type="button" className="primary-button" onClick={() => void reload()}>
                   {t("operator.doctorRefresh")}
                 </button>
               </div>
