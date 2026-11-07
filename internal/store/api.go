@@ -186,7 +186,7 @@ func (t *transaction) events(r Request) (map[string]any, error) {
 			events = append(events, event)
 		}
 		err = rows.Err()
-		rows.Close()
+		_ = rows.Close()
 		if err != nil {
 			return nil, err
 		}

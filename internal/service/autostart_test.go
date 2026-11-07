@@ -190,10 +190,10 @@ func TestRunnerHelper(t *testing.T) {
 	case "":
 		return
 	case "speak":
-		os.Stdout.WriteString("  said  \n")
+		_, _ = os.Stdout.WriteString("  said  \n")
 		os.Exit(0)
 	case "complain":
-		os.Stderr.WriteString("refused\n")
+		_, _ = os.Stderr.WriteString("refused\n")
 		os.Exit(3)
 	default:
 		os.Exit(4)

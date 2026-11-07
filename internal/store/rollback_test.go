@@ -119,7 +119,7 @@ func databaseState(t *testing.T, s *Store) string {
 		if err = rows.Err(); err != nil {
 			t.Fatal(err)
 		}
-		rows.Close()
+		_ = rows.Close()
 	}
 	raw, err := json.Marshal(out)
 	if err != nil {

@@ -130,7 +130,7 @@ func (h *Hub) uiWatch(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	defer conn.CloseNow()
+	defer func() { _ = conn.CloseNow() }()
 	if !h.trackSocket(r, conn, p) {
 		return
 	}

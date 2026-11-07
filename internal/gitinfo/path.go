@@ -41,7 +41,7 @@ func Relative(root, path string) (string, error) {
 		return "", ErrEscape
 	}
 	for i, seg := range rp.parts {
-		if pp.parts[i] != seg && !(windows && strings.EqualFold(pp.parts[i], seg)) {
+		if pp.parts[i] != seg && (!windows || !strings.EqualFold(pp.parts[i], seg)) {
 			return "", ErrEscape
 		}
 	}

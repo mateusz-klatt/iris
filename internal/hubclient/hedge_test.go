@@ -38,7 +38,7 @@ func hedged(t *testing.T, primary, backup tripFunc, path string) (*http.Response
 
 func read(t *testing.T, res *http.Response) string {
 	t.Helper()
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	raw, err := io.ReadAll(res.Body)
 	if err != nil {
 		t.Fatal(err)

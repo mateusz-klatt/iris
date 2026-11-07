@@ -68,12 +68,12 @@ func setup(args []string, env setupEnv) int {
 		return 2
 	}
 	if fs.NArg() != 0 {
-		fmt.Fprintln(env.errw, "usage: iris setup [--yes] [--hub-url url]")
+		_, _ = fmt.Fprintln(env.errw, "usage: iris setup [--yes] [--hub-url url]")
 		return 2
 	}
 	resolved := (hubclient.EnvConfig{Getenv: env.getenv, DefaultTokenFile: env.tokenFile}).Load()
 	if err := resolved.ConfigErr(); err != nil {
-		fmt.Fprintln(env.errw, err)
+		_, _ = fmt.Fprintln(env.errw, err)
 		return 1
 	}
 	tokenFile := resolved.TokenFile
@@ -82,7 +82,7 @@ func setup(args []string, env setupEnv) int {
 		hubURL = resolved.HubURL()
 	}
 	if err := hubclient.ValidateURL(hubURL); err != nil {
-		fmt.Fprintln(env.errw, err)
+		_, _ = fmt.Fprintln(env.errw, err)
 		return 2
 	}
 	layout := env.layout
@@ -93,7 +93,7 @@ func setup(args []string, env setupEnv) int {
 			name = strings.TrimSpace(name)
 			c, ok := integrate.ByName(name)
 			if !ok {
-				fmt.Fprintf(env.errw, "unknown client %q\n", name)
+				_, _ = fmt.Fprintf(env.errw, "unknown client %q\n", name)
 				return 2
 			}
 			selected[c.Name()] = true
@@ -116,47 +116,47 @@ func setup(args []string, env setupEnv) int {
 		}
 		list, err := c.Files(layout)
 		if err != nil {
-			fmt.Fprintf(env.errw, "%s: %v\n", name, err)
+			_, _ = fmt.Fprintf(env.errw, "%s: %v\n", name, err)
 			return 1
 		}
 		files = append(files, list...)
 	}
 	listen, local := loopbackListen(hubURL)
-	fmt.Fprintf(env.out, "Hub: %s\n", hubURL)
+	_, _ = fmt.Fprintf(env.out, "Hub: %s\n", hubURL)
 	if local {
-		fmt.Fprintf(env.out, "Service: %s\n", serveCommand(listen, tokenFile))
+		_, _ = fmt.Fprintf(env.out, "Service: %s\n", serveCommand(listen, tokenFile))
 	} else {
-		fmt.Fprintln(env.out, "Service: remote hub, local service skipped")
+		_, _ = fmt.Fprintln(env.out, "Service: remote hub, local service skipped")
 	}
 	if len(files) == 0 {
-		fmt.Fprintln(env.out, "Files: none (no client binary found)")
+		_, _ = fmt.Fprintln(env.out, "Files: none (no client binary found)")
 	} else {
-		fmt.Fprintln(env.out, "Files:")
+		_, _ = fmt.Fprintln(env.out, "Files:")
 		for _, f := range files {
-			fmt.Fprintf(env.out, "  %s\n", f)
+			_, _ = fmt.Fprintf(env.out, "  %s\n", f)
 		}
 	}
 	configFile := resolved.ConfigFile
-	fmt.Fprintf(env.out, "Client configuration: %s\n", configFile)
+	_, _ = fmt.Fprintf(env.out, "Client configuration: %s\n", configFile)
 	if override := strings.TrimSpace(env.getenv("IRIS_HUB_URL")); override != "" && !sameHub(override, hubURL) {
-		fmt.Fprintf(env.out, "IRIS_HUB_URL is set to %s and overrides this hub for every command that sees it. Unset it to use %s.\n", override, hubURL)
+		_, _ = fmt.Fprintf(env.out, "IRIS_HUB_URL is set to %s and overrides this hub for every command that sees it. Unset it to use %s.\n", override, hubURL)
 	}
 	if !local && tokenMissing(tokenFile) {
-		fmt.Fprintf(env.out, "Place the hub bearer token in %s (setup cannot fetch it).\n", tokenFile)
+		_, _ = fmt.Fprintf(env.out, "Place the hub bearer token in %s (setup cannot fetch it).\n", tokenFile)
 	}
 	if !*yes {
-		fmt.Fprint(env.out, "Proceed? [y/N] ")
+		_, _ = fmt.Fprint(env.out, "Proceed? [y/N] ")
 		line, _ := bufio.NewReader(env.in).ReadString('\n')
 		line = strings.TrimSpace(strings.ToLower(line))
 		if line != "y" && line != "yes" {
 			for _, name := range integrate.Names {
-				fmt.Fprintf(env.out, "Iris inactive on %s\n", name)
+				_, _ = fmt.Fprintf(env.out, "Iris inactive on %s\n", name)
 			}
 			return 0
 		}
 	}
 	if err := hubclient.WriteConfig(configFile, hubclient.FileConfig{Hub: hubURL, TokenFile: tokenFile}); err != nil {
-		fmt.Fprintln(env.errw, err)
+		_, _ = fmt.Fprintln(env.errw, err)
 		return 1
 	}
 	code := 0
@@ -170,7 +170,7 @@ func setup(args []string, env setupEnv) int {
 		}
 		if err != nil {
 			serviceErr = err
-			fmt.Fprintf(env.errw, "service: %v\n", err)
+			_, _ = fmt.Fprintf(env.errw, "service: %v\n", err)
 			code = 1
 		}
 	}
@@ -182,7 +182,7 @@ func setup(args []string, env setupEnv) int {
 		// integrate.Names is the only set that reaches this loop, and ByName resolves every one of them.
 		c, _ := integrate.ByName(name)
 		if err := c.Install(layout, env.plugins); err != nil {
-			fmt.Fprintf(env.errw, "%s: %v\n", name, err)
+			_, _ = fmt.Fprintf(env.errw, "%s: %v\n", name, err)
 			code = 1
 			continue
 		}
@@ -192,29 +192,29 @@ func setup(args []string, env setupEnv) int {
 	defer cancel()
 	res, err := env.runDoctor(ctx, doctor.Options{Layout: layout, HubURL: hubURL, TokenFile: tokenFile})
 	if err != nil {
-		fmt.Fprintln(env.errw, err)
+		_, _ = fmt.Fprintln(env.errw, err)
 		code = 1
 	} else {
 		if local && !res.HubUp && serviceErr == nil {
 			serviceErr = fmt.Errorf("hub is unreachable after service installation")
 		}
-		fmt.Fprint(env.out, res.Format())
+		_, _ = fmt.Fprint(env.out, res.Format())
 		if res.ExitCode() != 0 {
 			code = 1
 		}
 	}
 	for _, name := range integrate.Names {
 		if !done[name] {
-			fmt.Fprintf(env.out, "Iris inactive on %s\n", name)
+			_, _ = fmt.Fprintf(env.out, "Iris inactive on %s\n", name)
 			continue
 		}
 		c, _ := integrate.ByName(name)
 		if step := c.Human(); step != "" {
-			fmt.Fprintf(env.out, "%s: %s\n", name, step)
+			_, _ = fmt.Fprintf(env.out, "%s: %s\n", name, step)
 		}
 	}
 	if serviceErr != nil {
-		fmt.Fprintf(env.out, "Service could not start: %v\nNext step: %s\n", serviceErr, serveCommand(listen, tokenFile))
+		_, _ = fmt.Fprintf(env.out, "Service could not start: %v\nNext step: %s\n", serviceErr, serveCommand(listen, tokenFile))
 	}
 	return code
 }

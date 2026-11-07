@@ -34,7 +34,7 @@ func (t *transaction) backfillRepositoryNames() error {
 		ids = append(ids, id)
 	}
 	err = rows.Err()
-	rows.Close()
+	_ = rows.Close()
 	if err != nil {
 		return err
 	}
@@ -55,7 +55,7 @@ func (t *transaction) backfillRepositoryNames() error {
 			}
 		}
 		err = rows.Err()
-		rows.Close()
+		_ = rows.Close()
 		if err != nil {
 			return err
 		}

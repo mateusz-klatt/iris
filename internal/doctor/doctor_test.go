@@ -240,15 +240,14 @@ func TestLiveIsOptIn(t *testing.T) {
 			return nil
 		},
 	}
-	res, err := Run(context.Background(), opt)
-	if err != nil {
+	if _, err := Run(context.Background(), opt); err != nil {
 		t.Fatal(err)
 	}
 	if calls != 0 {
 		t.Fatal(calls)
 	}
 	opt.Live = true
-	res, err = Run(context.Background(), opt)
+	res, err := Run(context.Background(), opt)
 	if err != nil {
 		t.Fatal(err)
 	}

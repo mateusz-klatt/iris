@@ -142,7 +142,7 @@ func openDatabase(filename string, clock Clock, driverName string) (*Store, erro
 	s := &Store{db: db, lock: lock, clock: clock, changed: make(chan struct{})}
 	for _, q := range []string{"PRAGMA foreign_keys=ON", "PRAGMA journal_mode=WAL", "PRAGMA synchronous=FULL", "PRAGMA busy_timeout=5000"} {
 		if _, err = db.Exec(q); err != nil {
-			s.Close()
+			_ = s.Close()
 			return nil, err
 		}
 	}
@@ -204,7 +204,7 @@ func openDatabase(filename string, clock Clock, driverName string) (*Store, erro
 		return t.expire()
 	})
 	if err != nil {
-		s.Close()
+		_ = s.Close()
 		return nil, err
 	}
 	return s, nil
@@ -224,10 +224,10 @@ func (s *Store) transact(ctx context.Context, f func(*transaction) error) error 
 	if err != nil {
 		return err
 	}
-	defer c.Close()
+	defer func() { _ = c.Close() }()
 	// Cancellation can be reported after SQLite has executed BEGIN. Install cleanup
 	// before starting it, so that error cannot leak an open transaction into the pool.
-	defer c.ExecContext(context.Background(), "ROLLBACK") // also covers cancellation and panics
+	defer func() { _, _ = c.ExecContext(context.Background(), "ROLLBACK") }() // also covers cancellation and panics
 	if _, err = c.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
 		return err
 	}
@@ -268,7 +268,7 @@ func (t *transaction) expire() error {
 		old = append(old, x)
 	}
 	err = rows.Err()
-	rows.Close()
+	_ = rows.Close()
 	if err != nil {
 		return err
 	}

@@ -226,12 +226,12 @@ func looseParents(common, sha string) ([]string, bool) {
 	if err != nil {
 		return nil, false
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	r, err := zlib.NewReader(f)
 	if err != nil {
 		return nil, false
 	}
-	defer r.Close()
+	defer func() { _ = r.Close() }()
 	body, err := io.ReadAll(io.LimitReader(r, 1<<20))
 	if err != nil {
 		return nil, false

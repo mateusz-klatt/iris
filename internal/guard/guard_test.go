@@ -40,8 +40,11 @@ func realPath(t *testing.T, path string) string {
 // TestMain keeps the developer's git configuration out of these repositories. A global
 // commit.gpgsign otherwise makes every test commit depend on a signing tool.
 func TestMain(m *testing.M) {
-	os.Setenv("GIT_CONFIG_GLOBAL", os.DevNull)
-	os.Setenv("GIT_CONFIG_NOSYSTEM", "1")
+	for key, value := range map[string]string{"GIT_CONFIG_GLOBAL": os.DevNull, "GIT_CONFIG_NOSYSTEM": "1"} {
+		if err := os.Setenv(key, value); err != nil {
+			panic(err)
+		}
+	}
 	os.Exit(m.Run())
 }
 
@@ -156,7 +159,7 @@ func TestCheckStagedRenameAndHubFailure(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	ctx := context.Background()
 	registered, err := s.Call(ctx, "sessions", store.Request{Client: "codex", Host: "holder", SessionID: "holder", Cwd: "/other", Worktree: "/other", RemoteURL: "https://example.com/shop.git"})
 	if err != nil {

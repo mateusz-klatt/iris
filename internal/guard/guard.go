@@ -62,7 +62,7 @@ func Install(ctx context.Context, dir string) error {
 	}
 	backup := p + ".iris-original"
 	if _, e := os.Lstat(backup); !errors.Is(e, os.ErrNotExist) {
-		return errors.New("Iris hook backup already exists; refusing to replace it")
+		return errors.New("an Iris hook backup already exists; refusing to replace it")
 	}
 	if err = os.MkdirAll(filepath.Dir(p), 0755); err != nil {
 		return err
@@ -72,7 +72,7 @@ func Install(ctx context.Context, dir string) error {
 		return err
 	}
 	tmp := f.Name()
-	defer os.Remove(tmp)
+	defer func() { _ = os.Remove(tmp) }()
 	_, err = f.Write(wrapper(old != nil))
 	err = errors.Join(err, f.Close(), os.Chmod(tmp, 0o700))
 	if err == nil && old != nil {

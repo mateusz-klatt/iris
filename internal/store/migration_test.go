@@ -26,7 +26,7 @@ func TestUpgradeBackfillsNamesAndPreservesTokens(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	for id, want := range map[string]string{"remote": "iris", "local": "local", "empty": "."} {
 		var got string
 		if err = s.db.QueryRow("SELECT name FROM Repository WHERE id=?", id).Scan(&got); err != nil || got != want {
@@ -48,11 +48,11 @@ func TestOpenRejectsInvalidFilesystemAndSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	if s, err := Open(filepath.Join(file, "db"), nil); err == nil {
-		s.Close()
+		_ = s.Close()
 		t.Fatal("regular-file parent accepted")
 	}
 	if s, err := Open(file, nil); err == nil {
-		s.Close()
+		_ = s.Close()
 		t.Fatal("corrupt SQLite accepted")
 	}
 	loop := filepath.Join(dir, "loop")
@@ -60,7 +60,7 @@ func TestOpenRejectsInvalidFilesystemAndSchema(t *testing.T) {
 		t.Fatal(err)
 	}
 	if s, err := Open(loop, nil); err == nil {
-		s.Close()
+		_ = s.Close()
 		t.Fatal("symlink loop accepted")
 	}
 	// A malformed migration must roll back without retaining the database lock.
@@ -72,10 +72,10 @@ func TestOpenRejectsInvalidFilesystemAndSchema(t *testing.T) {
 	if _, err = db.Exec("CREATE TABLE Repository(wrong TEXT)"); err != nil {
 		t.Fatal(err)
 	}
-	db.Close()
+	_ = db.Close()
 	for i := 0; i < 2; i++ {
 		if s, err := Open(bad, nil); err == nil {
-			s.Close()
+			_ = s.Close()
 			t.Fatal("malformed existing schema accepted")
 		}
 	}
