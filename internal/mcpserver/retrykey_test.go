@@ -79,8 +79,9 @@ func TestAnIdenticalSendInALaterWindowGetsANewKey(t *testing.T) {
 	}
 }
 
-// Different arguments get different keys, a key the caller passes wins, and claim derives its
-// key the same way.
+// Different arguments get different keys, and a key the caller passes wins. A claim keeps a
+// fresh key: the same claim after a release within the window must be a new claim, not the
+// released one replayed from the hub's cache.
 func TestDerivedKeysFollowTheArgumentsAndAnExplicitKeyWins(t *testing.T) {
 	at(t, time.Unix(1_800_000_000, 0))
 	f := &fakeHub{reply: `{}`}
@@ -91,7 +92,22 @@ func TestDerivedKeysFollowTheArgumentsAndAnExplicitKeyWins(t *testing.T) {
 	c1, _ := use(t, session, "claim", map[string]any{"kind": "exact", "path": "p"})
 	c2, _ := use(t, session, "claim", map[string]any{"kind": "exact", "path": "p"})
 	c3, _ := use(t, session, "claim", map[string]any{"kind": "exact", "path": "q"})
-	if a["key"] == b["key"] || mine["key"] != "mine" || c1["key"] != c2["key"] || c1["key"] == c3["key"] || c1["key"] == a["key"] {
+	if a["key"] == b["key"] || mine["key"] != "mine" || c1["key"] == c2["key"] || c1["key"] == c3["key"] || strings.HasPrefix(c1["key"].(string), "derived:") {
 		t.Fatalf("send %v %v %v, claim %v %v %v", a["key"], b["key"], mine["key"], c1["key"], c2["key"], c3["key"])
+	}
+}
+
+// Claim, release, then the same claim again within the window must be a new claim. A key
+// derived from the arguments would make the hub replay the released claim from its cache, which
+// then fails as no longer live, so every claim without a key gets a fresh one.
+func TestClaimReleaseClaimUsesAFreshKeyEachTime(t *testing.T) {
+	at(t, time.Unix(1_800_000_000, 0))
+	f := &fakeHub{reply: `{"fence":7,"token":"tok"}`}
+	session := connect(t, f)
+	first, _ := use(t, session, "claim", map[string]any{"kind": "exact", "path": "p"})
+	use(t, session, "release", map[string]any{"fence": 7, "token": "tok"})
+	second, _ := use(t, session, "claim", map[string]any{"kind": "exact", "path": "p"})
+	if first["key"] == second["key"] {
+		t.Fatalf("the claim after the release reused key %v", first["key"])
 	}
 }

@@ -9,13 +9,15 @@ Requests and responses are JSON. Authentication is `Authorization: Bearer <token
 are idempotent by fence and delivery attempt respectively.
 
 Where the key comes from matters, because a key the caller first learns from a response is lost
-with that response. `iris mcp` uses the `key` a model passes. Without one it derives the key from
+with that response. `iris mcp` uses the `key` a model passes. Without one, a send derives its key from
 the Execution and generation, the operation, the arguments exactly as sent and a ten-minute
 window, so a retry of the same call after an ambiguous outcome is deduplicated, while an
 identical message sent on purpose in a later window goes through. A retry that crosses a window
 boundary gets a new key. To send identical content twice within the window, pass a key. The web console makes one key when a draft starts, keeps it until the
 send succeeds and makes a new one when the draft is edited, and it sends one draft at a time.
-Every mutation's response and error carry the key used (gap review A9). Errors look like this:
+A claim without a key gets a fresh one, because the same claim after a release within the window
+must be a new claim, not the released one replayed. Every mutation's response and error carry
+the key used (gap review A9). Errors look like this:
 
 ```json
 {"error":{"code":"conflict","message":"human readable","details":{}}}

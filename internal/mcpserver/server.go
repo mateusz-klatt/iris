@@ -175,10 +175,13 @@ func call(ctx context.Context, h *hubclient.Client, b binding.Bound, name string
 	case "watch_ticket":
 		path = "/v1/wake-tickets"
 	}
-	if name == "send" || name == "claim" {
-		if in.Key == "" {
-			body["key"] = derivedKey(name, body, now())
-		}
+	// Only a send derives its key. A claim, then a release, then the same claim within the
+	// window would replay the released claim from the hub's cache, so a claim keeps a fresh key.
+	if in.Key == "" && name == "send" {
+		body["key"] = derivedKey(name, body, now())
+	}
+	if in.Key == "" && name == "claim" {
+		body["key"] = binding.Key()
 	}
 	if method == "GET" {
 		path += "?" + q.Encode()
