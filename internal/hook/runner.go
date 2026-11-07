@@ -220,7 +220,14 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		default:
 			return state.fail(hookFailure("hub returned an invalid touch action"), allow)
 		}
-		return r.finish(ev, Encode(ev, decisionFromTouch(touch)))
+		d := decisionFromTouch(touch)
+		if d.Action == ActionAllow && carriesToolContext(ev.Client) {
+			// The touch already brought the counts, so this costs no request.
+			if note := r.attentionNote(ev, touch.Attention, false); note != "" {
+				d.Context = strings.TrimSpace(d.Context + "\n" + note)
+			}
+		}
+		return r.finish(ev, Encode(ev, d))
 	}
 }
 

@@ -156,3 +156,29 @@ func TestMemoryKeepsCountsBesideTheGeneration(t *testing.T) {
 		t.Fatal(latest, told)
 	}
 }
+
+// attentionTouchHub answers a touch with the attention the test sets.
+type attentionTouchHub struct {
+	attentionHub
+	touchAt *hubclient.Attention
+}
+
+func (h attentionTouchHub) Touch(context.Context, hubclient.TouchRequest) (hubclient.TouchResponse, error) {
+	return hubclient.TouchResponse{Action: "allow", Attention: *h.touchAt}, nil
+}
+
+// An allowed edit carries the note on clients that show pre-edit context, at no extra request,
+// and never on a refused edit or on clients that do not show it.
+func TestAnAllowedEditSaysNewEventsOnClientsThatShowIt(t *testing.T) {
+	for _, c := range []Client{ClientCodex, ClientClaude, ClientKimi} {
+		root := gitRepo(t)
+		calls := 0
+		at := &hubclient.Attention{Unread: 1}
+		hub := attentionTouchHub{attentionHub: attentionHub{now: &hubclient.Attention{}, calls: &calls}, touchAt: at}
+		out := Runner{ClientName: string(c), EventName: "PreToolUse", Stdin: strings.NewReader(editPayload(c, root)), Hub: hub, Getenv: failureEnv(t), after: never, logAfter: never}.Run()
+		said := strings.Contains(string(out.Stdout)+string(out.Stderr), "1 unread message")
+		if said != carriesToolContext(c) {
+			t.Fatalf("%s: said %v, carries %v: %s", c, said, carriesToolContext(c), out.Stdout)
+		}
+	}
+}

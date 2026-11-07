@@ -24,6 +24,12 @@ func carriesPromptContext(c Client) bool {
 	}
 }
 
+// carriesToolContext is whether a client shows an allowed pre-edit hook's context to the model.
+// Measured on macOS with a marker in the hook's output: Claude Code and Codex 0.167.0 did, for
+// PreToolUse and PostToolUse alike. Kimi 2.5.2 did not, and Antigravity's pre-tool answer has no
+// context field (its PreInvocation hook, which runs before every model call, already says it).
+func carriesToolContext(c Client) bool { return c == ClientClaude || c == ClientCodex }
+
 func promptEvent(ev Event) bool {
 	return ev.Kind == KindPrompt || (ev.Kind == KindPreInvocation && ev.Client == ClientAntigravity)
 }
