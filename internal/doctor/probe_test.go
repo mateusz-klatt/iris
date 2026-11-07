@@ -335,15 +335,15 @@ func TestCommandVersionReadsTheFirstLine(t *testing.T) {
 	}
 	t.Setenv("IRIS_FAKE_EXIT", "0")
 	t.Setenv("IRIS_FAKE_STDOUT", "  1.2.3 \nbuilt today\n")
-	if got, err := commandVersion(context.Background(), bin); got != "1.2.3" || err != nil {
+	if got, err := commandVersion(context.Background(), bin, time.Minute); got != "1.2.3" || err != nil {
 		t.Fatalf("%q %v", got, err)
 	}
 	t.Setenv("IRIS_FAKE_STDOUT", "1.2.3")
-	if got, err := commandVersion(context.Background(), bin); got != "1.2.3" || err != nil {
+	if got, err := commandVersion(context.Background(), bin, time.Minute); got != "1.2.3" || err != nil {
 		t.Fatalf("%q %v", got, err)
 	}
 	t.Setenv("IRIS_FAKE_EXIT", "1")
-	if _, err := commandVersion(context.Background(), bin); err == nil {
+	if _, err := commandVersion(context.Background(), bin, time.Minute); err == nil {
 		t.Fatal("failing client gave a version")
 	}
 }
@@ -482,6 +482,32 @@ func TestHookWithoutAClientNeedsAHuman(t *testing.T) {
 	t.Setenv("IRIS_FAKE_EXIT", "0")
 	row := grokRow(t, Options{Layout: grokLayout(t, false)})
 	if row.Status != StatusNeedsHuman || row.Detail != "client binary not found" {
+		t.Fatalf("%+v", row)
+	}
+}
+
+func TestSlowVersionIsATimeoutNotAMissingBinary(t *testing.T) {
+	t.Setenv("IRIS_FAKE_STDOUT", "{}")
+	t.Setenv("IRIS_FAKE_EXIT", "0")
+	row := grokRow(t, Options{Layout: grokLayout(t, true), VersionTimeout: time.Nanosecond})
+	if row.Status != StatusOK || row.Detail != "version check timed out" || row.Version != "" {
+		t.Fatalf("%+v", row)
+	}
+}
+
+func TestBrokenClientBinaryIsNotCalledMissing(t *testing.T) {
+	t.Setenv("IRIS_FAKE_STDOUT", "{}")
+	t.Setenv("IRIS_FAKE_EXIT", "0")
+	layout := grokLayout(t, true)
+	client, err := layout.LookPath("grok")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(client, []byte("not a program"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	row := grokRow(t, Options{Layout: layout})
+	if row.Status != StatusNeedsHuman || !strings.HasPrefix(row.Detail, "version check failed: ") {
 		t.Fatalf("%+v", row)
 	}
 }

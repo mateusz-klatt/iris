@@ -68,7 +68,13 @@ type Options struct {
 	Live      bool
 	LiveRun   func(ctx context.Context, name string, args []string) error
 	Now       func() time.Time
+	// VersionTimeout limits one client --version call. Zero means the default.
+	VersionTimeout time.Duration
 }
+
+// versionTimeout is long enough for a normal client and short enough to keep doctor usable.
+// A first start under antivirus can still pass it, which says nothing about the client.
+const versionTimeout = 3 * time.Second
 
 // Run checks the hub and every client. It does not grant trust.
 func Run(ctx context.Context, opt Options) (Result, error) {
@@ -77,6 +83,9 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 	}
 	if opt.HTTP == nil {
 		opt.HTTP = http.DefaultClient
+	}
+	if opt.VersionTimeout == 0 {
+		opt.VersionTimeout = versionTimeout
 	}
 	resolved := (hubclient.EnvConfig{Getenv: opt.Layout.GetenvOr, DefaultTokenFile: defaultTokenFile(opt.Layout)}).Load()
 	hubURL, source := resolved.HubURL(), resolved.Source
@@ -173,10 +182,10 @@ func (r Result) Format() string {
 
 func checkClient(ctx context.Context, opt Options, c integrate.Client) ClientReport {
 	row := ClientReport{Client: c.Name(), Status: StatusNotConfigured, Detail: "configuration is absent"}
-	if bin, err := opt.Layout.Binary(c.Name()); err == nil {
-		if ver, err := commandVersion(ctx, bin); err == nil {
-			row.Version = ver
-		}
+	bin, binErr := opt.Layout.Binary(c.Name())
+	var versionErr error
+	if binErr == nil {
+		row.Version, versionErr = commandVersion(ctx, bin, opt.VersionTimeout)
 	}
 	// Iris is measured on Kimi Code 2. An older kimi, whether an early Kimi Code or the
 	// separate kimi-cli, says so here instead of reporting missing configuration.
@@ -187,7 +196,7 @@ func checkClient(ctx context.Context, opt Options, c integrate.Client) ClientRep
 	in, err := c.Canary(opt.Layout)
 	if err != nil {
 		if errors.Is(err, integrate.ErrNotConfigured) {
-			if _, berr := opt.Layout.Binary(c.Name()); berr != nil {
+			if binErr != nil {
 				row.Detail = "client binary not found"
 			}
 		} else {
@@ -226,13 +235,19 @@ func checkClient(ctx context.Context, opt Options, c integrate.Client) ClientRep
 		row.Detail = step
 		return row
 	}
-	if row.Version == "" {
-		row.Status = StatusNeedsHuman
-		row.Detail = "client binary not found"
-		return row
-	}
 	row.Status = StatusOK
 	row.Detail = ""
+	switch {
+	case binErr != nil:
+		row.Status = StatusNeedsHuman
+		row.Detail = "client binary not found"
+	case errors.Is(versionErr, context.DeadlineExceeded):
+		// The hook has just answered, so a slow version call is a note, not a fault.
+		row.Detail = "version check timed out"
+	case versionErr != nil:
+		row.Status = StatusNeedsHuman
+		row.Detail = "version check failed: " + versionErr.Error()
+	}
 	return row
 }
 
@@ -284,12 +299,15 @@ func validHook(client string, stdout []byte, exit int) error {
 	return nil
 }
 
-func commandVersion(ctx context.Context, bin string) (string, error) {
-	cctx, cancel := context.WithTimeout(ctx, 3*time.Second)
+func commandVersion(ctx context.Context, bin string, limit time.Duration) (string, error) {
+	cctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
 	cmd := exec.CommandContext(cctx, bin, "--version")
 	cmd.Stdin = closedStdin()
 	out, err := cmd.Output()
+	if cctx.Err() != nil {
+		return "", cctx.Err()
+	}
 	if err != nil {
 		return "", err
 	}
