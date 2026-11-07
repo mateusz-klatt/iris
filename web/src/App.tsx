@@ -17,6 +17,7 @@ import {
   type DoctorStatus,
   type Overview,
   type ThreadDetail,
+  type ThreadMessage,
   type ThreadSummary,
   type WatchFrame,
   type WatchStatus,
@@ -45,14 +46,42 @@ interface Draft {
   key: string;
   /** The repository the key was first sent from. A send from another view is another send. */
   sentFrom?: string;
+  /** The thread a reply draft is for. */
+  thread?: string;
+  /**
+   * Whether the console made this reply draft and the operator has not touched it, so a refresh
+   * may replace it. An edit makes it the operator's, and a live refresh never discards it (A14).
+   */
+  offered?: boolean;
 }
 
 function newDraft(fields: Partial<Draft> = {}): Draft {
   return { to: "", subject: "", body: "", replyTo: "", ...fields, key: humanKey() };
 }
 
+// operatorName is the sender name the hub gives the console's own messages.
+const operatorName = "human";
+
+// replyDraft starts a reply to a thread. It answers the other party: the latest sender who is not
+// the operator, or, in a thread only the operator has written to, whom they wrote to. Answering
+// the latest sender would address a follow-up after the operator's own message back to them.
+function replyDraft(thread: string, messages: ThreadMessage[]): Draft | null {
+  const last = messages.at(-1);
+  if (last === undefined) {
+    return null;
+  }
+  const other = [...messages].reverse().find((message) => message.sender !== operatorName);
+  const to =
+    other?.sender ??
+    last.recipients
+      .map((recipient) => recipient.name)
+      .filter((name) => name !== operatorName)
+      .join(", ");
+  return newDraft({ to, subject: last.subject.startsWith("Re:") ? last.subject : `Re: ${last.subject}`, replyTo: last.id, thread, offered: true });
+}
+
 function edited(draft: Draft, change: Partial<Draft>): Draft {
-  return { ...draft, ...change, key: humanKey() };
+  return { ...draft, ...change, key: humanKey(), offered: false };
 }
 
 function isAbort(error: unknown): boolean {
@@ -247,15 +276,11 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
         readThread(selectedId, repositoryId)
           .then(() => void reload())
           .catch(() => undefined);
-        const last = detail.messages.at(-1);
-        if (last !== undefined) {
-          setReply(
-            newDraft({
-              to: last.sender,
-              subject: last.subject.startsWith("Re:") ? last.subject : `Re: ${last.subject}`,
-              replyTo: last.id,
-            }),
-          );
+        // A reply is per thread: opening another thread replaces even an edited draft, so one
+        // thread's words never go out as a reply in another.
+        const fresh = replyDraft(detail.id, detail.messages);
+        if (fresh !== null) {
+          setReply((current) => (current.thread === detail.id && current.offered === false ? current : fresh));
         }
       })
       .catch((error: unknown) => {
@@ -629,7 +654,11 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                     className="search-form"
                     onSubmit={(event) => {
                       event.preventDefault();
-                      void submit(reply, setReply, () => setReply((current) => edited(current, { body: "" })));
+                      void submit(reply, setReply, () =>
+                        // A sent reply leaves nothing of the operator's to keep, so the next
+                        // refresh may answer the newest message.
+                        setReply((current) => ({ ...edited(current, { body: "" }), offered: true })),
+                      );
                     }}
                   >
                     <h3>{t("operator.reply")}</h3>
