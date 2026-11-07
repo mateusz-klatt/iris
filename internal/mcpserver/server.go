@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/url"
+	"strings"
 	"time"
 
 	"github.com/mateusz-klatt/iris/internal/binding"
@@ -143,6 +144,10 @@ func call(ctx context.Context, h *hubclient.Client, b binding.Bound, name string
 		body["token"] = in.Token
 		body["all"] = in.All
 	case "ack":
+		// An empty id would build /v1/deliveries//ack, which the hub can only call an unknown route.
+		if strings.TrimSpace(in.Delivery) == "" {
+			return nil, &hubclient.Error{Code: "bad_request", Message: "delivery_id is required: pass the id of a delivery from inbox, with its attempt"}
+		}
 		path = "/v1/deliveries/" + url.PathEscape(in.Delivery) + "/ack"
 		body["attempt"] = in.Attempt
 	case "watch_ticket":
