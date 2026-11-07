@@ -83,6 +83,20 @@ func runService(args []string) int {
 		if st.Detail != "" {
 			fmt.Println(st.Detail)
 		}
+		return statusExit(st)
+	}
+	return 0
+}
+
+// statusExit follows systemctl and LSB, so that scripts can tell the states
+// apart on every OS: 0 running, 3 installed but not running, 4 not installed.
+// A status that could not be read at all is 1, as for the other commands.
+func statusExit(st service.Status) int {
+	switch {
+	case !st.Installed:
+		return 4
+	case !st.Active:
+		return 3
 	}
 	return 0
 }

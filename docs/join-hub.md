@@ -90,7 +90,8 @@ limits.
 
 With a loopback `--hub`, `iris setup` installs a LaunchAgent at `~/Library/LaunchAgents/iris.plist`.
 `iris service status` reports `active: true` only while the hub process runs. launchd restarts a hub
-that exits, so a job can stay loaded and be inactive.
+that exits, so a job can stay loaded and be inactive. The command exits 0 when the hub runs, 3 when it is
+installed but not running, and 4 when it is not installed.
 
 The hub writes to `~/Library/Logs/iris/hub.log`. When `iris service install` or `iris service start`
 finds that file at 10 MiB or more, it moves it to `hub.log.1`, replacing the previous one. Nothing

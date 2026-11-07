@@ -379,6 +379,9 @@ immediately. `service start` detaches `iris serve` without a console, logging be
 database; `service stop` checks the pid file's process creation time before termination.
 Start is a no-op if the hub responds, and the database OS lock still guards against two hubs.
 The Run value starts at logon; it does not supervise or restart a crashed hub.
+`iris service status` exits as `systemctl status` and LSB do, on every OS, so that scripts can rely
+on it: 0 when the hub runs, 3 when it is installed but not running, 4 when it is not installed,
+and 1 when the state cannot be read.
 
 Writes are idempotent, backed up and validated before saving, which matters because Kimi drops
 its entire hooks section over one bad key (measured).
