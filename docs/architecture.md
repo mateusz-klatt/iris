@@ -261,8 +261,11 @@ Changes from the reference schema:
    A hook is a new process for every tool call, so it keeps the last generation for its session
    in a file beside the token and sends it as that proof. Without proof, a recovering session's
    edit is refused instead of allowed: its claims still block others, and an allowed edit would
-   be unclaimed. Anyone who can read that file can read the token, so this proves no more than
-   the token already does. Measured with a real Claude Code client before this change, a
+   be unclaimed. The file is protected as the token is: mode 0600 in a 0700 directory, and on
+   Windows the token's owner-only DACL, which the directory passes to each file it creates. So
+   anyone who can read that file can read the token, and the file proves no more than the token
+   already does. That is protection from other users, not from an administrator, who can still take
+   ownership of either file. Measured with a real Claude Code client before this change, a
    session's edits went through unclaimed for up to the full 120 s, and its claims were then
    lost. With a heartbeating `iris mcp` that was one edit. An `iris mcp` binds on its first tool
    call, and only a bound one heartbeats. After the change, with and without `iris mcp`, all 16
