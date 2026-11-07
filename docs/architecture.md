@@ -114,12 +114,18 @@ these clients is JSON with exit 0, so a non-zero status can only mean a crash or
 binary, and either one must become the client's recorded allow output:
 
 ```sh
-command -v iris >/dev/null 2>&1 && iris hook --client copilot --event preToolUse || echo '{}'
+if [ -x /path/to/iris ]; then /path/to/iris hook --client copilot --event preToolUse;
+elif command -v iris >/dev/null 2>&1; then iris hook --client copilot --event preToolUse;
+else false; fi || echo '{}'
 ```
 
-`command -v` does not exist on Windows. There the guard uses `where` in a `cmd` shim for
-Antigravity, and `Get-Command` plus `$LASTEXITCODE` in Copilot's `powershell` field. The guard
-is covered by tests on each OS. Other clients use direct exec. Integrations refer to the stable
+The guard runs the path recorded at integration first, and `iris` from `PATH` only if that path
+is gone. An earlier guard tested only `command -v iris` and then ran the recorded path. When the
+client's `PATH` lacked that directory, every hook was skipped without a trace: measured with
+Copilot on macOS, no session reached the hub and `hook-failures.log` stayed empty, because iris
+never started. On Windows the guard uses `if exist` and then `where` in a `cmd` shim for
+Antigravity, and `Test-Path`, then `Get-Command`, plus `$LASTEXITCODE` in Copilot's `powershell`
+field. The guard is covered by tests on each OS. Other clients use direct exec. Integrations refer to the stable
 command path, never a versioned package directory.
 
 ### D5. Clients load each other's configuration
