@@ -518,5 +518,15 @@ func eventTimeout(client, event string) int {
 	if sessionEndCapped(client, event) {
 		return 1
 	}
+	if client == Antigravity {
+		return antigravityTimeout
+	}
 	return 3
 }
+
+// antigravityTimeout is Antigravity's hook timeout in seconds. On Antigravity a timed-out hook is
+// killed and the tool call fails, so the timeout denies every tool, MCP tools included (measured
+// on 1.5.3). No guard can turn that into an allow. The timeout is therefore set well above
+// Iris's own 1.5 s deadline, so a slow hook gives up and allows before Antigravity kills it.
+// Measured: with 10, a hook that took 5 s was waited for, and one that slept 15 s was killed.
+const antigravityTimeout = 10
