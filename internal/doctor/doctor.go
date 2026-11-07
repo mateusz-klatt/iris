@@ -221,13 +221,17 @@ func checkClient(ctx context.Context, opt Options, c integrate.Client) ClientRep
 		row.Detail = err.Error()
 		return row
 	}
-	if step := c.Human(); step != "" {
+	step, note := c.Human(), ""
+	if r, ok := c.(integrate.Reviewer); ok {
+		step, note = r.Review(opt.Layout)
+	}
+	if step != "" {
 		row.Status = StatusNeedsHuman
 		row.Detail = step
 		return row
 	}
 	row.Status = StatusOK
-	row.Detail = ""
+	row.Detail = note
 	switch {
 	case binErr != nil:
 		row.Status = StatusNeedsHuman

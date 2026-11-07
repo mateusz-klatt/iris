@@ -405,6 +405,16 @@ once in `/hooks`; project hooks need trust on Cursor, Copilot and Grok. Kimi has
 hooks at all. Monitors require the Claude plugin, so `iris integrate claude` installs one,
 generated from files embedded in the binary.
 
+Codex records a review in its own `config.toml`, as one `[hooks.state."<hooks.json>:<event>:<group>:<hook>"]`
+table with a `trusted_hash` per hook (measured on 0.167.0). Doctor reports Codex as ok only when
+every Iris hook has such a table, keyed by the `hooks.json` path Codex builds from `HOME` or
+`CODEX_HOME` and by Iris's position in each event. Otherwise it asks for the review, as before.
+It does not check the hash, which could not be reproduced, and a table left by an earlier hook at
+the same position would also pass. So the ok row says "hash not verified" and names
+`iris doctor --live --client codex` as the proof that the hooks run. Iris never writes those
+tables, because they are Codex's. Doctor also reports an Iris MCP table written before
+`env_vars` and `default_tools_approval_mode` existed, and gives `iris integrate codex` as the fix.
+
 Codex's `[mcp_servers.iris]` table carries two more keys, both measured on Codex 0.167.0 and both
 removed with the table:
 
