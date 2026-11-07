@@ -6,7 +6,7 @@ func TestCheckOtherWorktreeAndExpiry(t *testing.T) {
 	s, clock, _ := testStore(t)
 	holder, info := session(t, s, 1)
 	call(t, s, "claim", claimRequest(holder, "claim", "src", "prefix"))
-	r := Request{Host: "host", Worktree: "/repo/w2", RemoteURL: "https://example.com/team/iris.git", RootCommit: "root", Paths: []string{"src/file\nname"}}
+	r := Request{Host: "host", Worktree: "/repo/w2", RemoteURL: "https://example.com/team/project.git", RootCommit: "root", Paths: []string{"src/file\nname"}}
 	if out := call(t, s, "check", r); out["message"] == "" {
 		t.Fatal("missing conflict", out)
 	}

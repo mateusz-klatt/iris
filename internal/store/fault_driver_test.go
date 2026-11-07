@@ -141,7 +141,7 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 				r = Request{Client: "codex", Host: "host", SessionID: "new-slot", Cwd: "/repo/w1", Worktree: "/repo/w1"}
 			case "check-known":
 				route = "check"
-				r = Request{Host: "host", Worktree: "/repo/w1", RemoteURL: "https://example.com/team/iris.git", RootCommit: "root", Paths: []string{"held"}}
+				r = Request{Host: "host", Worktree: "/repo/w1", RemoteURL: "https://example.com/team/project.git", RootCommit: "root", Paths: []string{"held"}}
 			case "policy":
 				// Use an independent namespace whose policy is not pinned by claims.
 				independent := call(t, s, "sessions", Request{Client: "codex", Host: "policy", SessionID: "policy", Cwd: "/policy", RemoteURL: "https://policy.example/policy.git"})
@@ -204,7 +204,7 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 				r.Stream = "old-stream"
 				r.ConsumerID = "reader"
 			case "check":
-				r = Request{Host: "elsewhere", Cwd: "/other", Worktree: "/other", RemoteURL: "https://example.com/team/iris.git", RootCommit: "root", Paths: []string{"held"}}
+				r = Request{Host: "elsewhere", Cwd: "/other", Worktree: "/other", RemoteURL: "https://example.com/team/project.git", RootCommit: "root", Paths: []string{"held"}}
 			case "reconcile":
 				r.Kind = "after"
 				r.Status = map[string]string{"file": "MM"}

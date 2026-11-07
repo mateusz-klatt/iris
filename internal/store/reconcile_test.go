@@ -19,7 +19,7 @@ func TestShellReconciliation(t *testing.T) {
 		t.Fatal("unchanged status warned", out)
 	}
 	// A second Execution in this same worktree makes attribution impossible.
-	call(t, s, "sessions", Request{Client: "claude", Host: "host", Cwd: "/repo/w2", Worktree: "/repo/w2", RemoteURL: "https://example.com/team/iris.git", RootCommit: "root", SessionID: "shared"})
+	call(t, s, "sessions", Request{Client: "claude", Host: "host", Cwd: "/repo/w2", Worktree: "/repo/w2", RemoteURL: "https://example.com/team/project.git", RootCommit: "root", SessionID: "shared"})
 	shell.Status = map[string]string{"src/other": "??"}
 	if out := call(t, s, "reconcile", shell); out["message"] != "" {
 		t.Fatal("shared worktree warned", out)
