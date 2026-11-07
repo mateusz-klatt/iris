@@ -325,7 +325,7 @@ const translation = {
     bulletList: "Punktopstilling",
     fencedCode: "Kodeblok",
     emptyPreview: "Der er endnu intet at forhåndsvise.",
-    characterCount: "{{count}} / {{maximum}} tegn",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "Tryk på Ctrl+Enter eller Command+Enter for at gennemse.",
   },
   accessRole: {

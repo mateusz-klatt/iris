@@ -325,7 +325,7 @@ const translation = {
     bulletList: "Liste à puces",
     fencedCode: "Bloc de code",
     emptyPreview: "Rien à prévisualiser pour le moment.",
-    characterCount: "{{count}} / {{maximum}} caractères",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "Appuyez sur Ctrl+Entrée ou Commande+Entrée pour vérifier.",
   },
   accessRole: {

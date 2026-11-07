@@ -325,7 +325,7 @@ const translation = {
     bulletList: "Листа са ознакама",
     fencedCode: "Блок кода",
     emptyPreview: "Још нема садржаја за преглед.",
-    characterCount: "{{count}} / {{maximum}} знакова",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "Притисните Ctrl+Enter или Command+Enter за проверу.",
   },
   accessRole: { admin: "Администратор", operator: "Оператор", viewer: "Посматрач" },

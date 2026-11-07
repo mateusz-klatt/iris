@@ -325,7 +325,7 @@ const translation = {
     bulletList: "Odrážkový seznam",
     fencedCode: "Blok kódu",
     emptyPreview: "Zatím není co zobrazit.",
-    characterCount: "{{count}} / {{maximum}} znaků",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "Kontrolu spustíte stisknutím Ctrl+Enter nebo Command+Enter.",
   },
   accessRole: {

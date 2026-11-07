@@ -325,7 +325,7 @@ const translation = {
     bulletList: "箇条書き",
     fencedCode: "コードブロック",
     emptyPreview: "プレビューする内容はまだありません。",
-    characterCount: "{{count}} / {{maximum}}文字",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "確認するには Ctrl+Enter または Command+Enter を押してください。",
   },
   accessRole: {

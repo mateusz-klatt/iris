@@ -325,7 +325,7 @@ const translation = {
     bulletList: "項目符號清單",
     fencedCode: "程式碼區塊",
     emptyPreview: "目前沒有可預覽的內容。",
-    characterCount: "{{count}} / {{maximum}} 個字元",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "按 Ctrl+Enter 或 Command+Enter 進行檢閱。",
   },
   accessRole: { admin: "管理員", operator: "操作員", viewer: "檢視者" },

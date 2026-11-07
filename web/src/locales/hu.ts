@@ -325,7 +325,7 @@ const translation = {
     bulletList: "Felsorolás",
     fencedCode: "Kódblokk",
     emptyPreview: "Még nincs megjeleníthető előnézet.",
-    characterCount: "{{count}} / {{maximum}} karakter",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "Az ellenőrzéshez nyomja meg a Ctrl+Enter vagy a Command+Enter billentyűkombinációt.",
   },
   accessRole: {

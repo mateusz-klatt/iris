@@ -325,7 +325,7 @@ const translation = {
     bulletList: "Senarai berbulet",
     fencedCode: "Blok kod",
     emptyPreview: "Belum ada apa-apa untuk dipratonton.",
-    characterCount: "{{count}} / {{maximum}} aksara",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "Tekan Ctrl+Enter atau Command+Enter untuk menyemak.",
   },
   accessRole: {

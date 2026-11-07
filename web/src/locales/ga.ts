@@ -325,7 +325,7 @@ const translation = {
     bulletList: "Liosta urchair",
     fencedCode: "Bloc cóid",
     emptyPreview: "Níl aon rud le réamhamharc go fóill.",
-    characterCount: "{{count}} / {{maximum}} carachtar",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "Brúigh Ctrl+Enter nó Command+Enter chun athbhreithniú a dhéanamh.",
   },
   accessRole: {

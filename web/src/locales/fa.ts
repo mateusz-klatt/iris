@@ -325,7 +325,7 @@ const translation = {
     bulletList: "فهرست نشانه‌دار",
     fencedCode: "بلوک کد",
     emptyPreview: "هنوز چیزی برای پیش‌نمایش وجود ندارد.",
-    characterCount: "{{count}} / {{maximum}} نویسه",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "برای بازبینی، Ctrl+Enter یا Command+Enter را فشار دهید.",
   },
   accessRole: {

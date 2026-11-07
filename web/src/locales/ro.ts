@@ -325,7 +325,7 @@ const translation = {
     bulletList: "Listă cu marcatori",
     fencedCode: "Bloc de cod",
     emptyPreview: "Nu este nimic de previzualizat încă.",
-    characterCount: "{{count}} / {{maximum}} caractere",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "Apasă Ctrl+Enter sau Command+Enter pentru examinare.",
   },
   accessRole: {

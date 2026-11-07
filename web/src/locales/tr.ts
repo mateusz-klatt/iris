@@ -325,7 +325,7 @@ const translation = {
     bulletList: "Madde işaretli liste",
     fencedCode: "Kod bloğu",
     emptyPreview: "Henüz önizlenecek bir şey yok.",
-    characterCount: "{{count}} / {{maximum}} karakter",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "İncelemek için Ctrl+Enter veya Command+Enter tuşlarına basın.",
   },
   accessRole: { admin: "Yönetici", operator: "Operatör", viewer: "Görüntüleyici" },

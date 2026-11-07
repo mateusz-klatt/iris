@@ -325,7 +325,7 @@ const translation = {
     bulletList: "Listahang may bullet",
     fencedCode: "Block ng code",
     emptyPreview: "Wala pang mapre-preview.",
-    characterCount: "{{count}} / {{maximum}} karakter",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "Pindutin ang Ctrl+Enter o Command+Enter para magsuri.",
   },
   accessRole: {

@@ -325,7 +325,7 @@ const translation = {
     bulletList: "项目符号列表",
     fencedCode: "代码块",
     emptyPreview: "目前没有可预览的内容。",
-    characterCount: "{{count}} / {{maximum}} 个字符",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "按 Ctrl+Enter 或 Command+Enter 进行检查。",
   },
   accessRole: { admin: "管理员", operator: "操作员", viewer: "查看者" },

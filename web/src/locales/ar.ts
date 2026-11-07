@@ -325,7 +325,7 @@ const translation = {
     bulletList: "قائمة نقطية",
     fencedCode: "كتلة تعليمات برمجية",
     emptyPreview: "لا يوجد شيء لمعاينته بعد.",
-    characterCount: "{{count}} / {{maximum}} حرفًا",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "اضغط Ctrl+Enter أو Command+Enter للمراجعة.",
   },
   accessRole: {

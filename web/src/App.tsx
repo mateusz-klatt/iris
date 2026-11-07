@@ -33,7 +33,28 @@ import {
 import { readUiLocale, writeUiLocale } from "./preferences";
 import "./app.css";
 
-const maximumBodyLength = 16 * 1024;
+// The hub limits a message by its UTF-8 bytes, not by characters: a draft of 16 KiB of
+// characters outside ASCII can be several times that (gap review A11).
+const maximumBodyBytes = 16 * 1024;
+const maximumSubjectBytes = 1024;
+const encoder = new TextEncoder();
+
+function byteLength(text: string): number {
+  return encoder.encode(text).length;
+}
+
+// SubjectSize says a subject is too long, which is otherwise only a disabled Send button.
+function SubjectSize({ subject }: { subject: string }) {
+  const { t } = useTranslation();
+  const size = byteLength(subject);
+  return size > maximumSubjectBytes ? <p role="alert">{t("markdown.byteCount", { count: size, maximum: maximumSubjectBytes })}</p> : null;
+}
+
+// sendable is whether the hub can take the draft as it is.
+function sendable(draft: Draft): boolean {
+  const body = byteLength(draft.body);
+  return draft.to.length > 0 && draft.subject.length > 0 && body > 0 && body <= maximumBodyBytes && byteLength(draft.subject) <= maximumSubjectBytes;
+}
 
 // A draft carries the retry key of its send. The key is made with the draft and kept until the
 // send succeeds, so retrying after an ambiguous failure cannot send twice (gap review A9). An
@@ -670,15 +691,16 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                       {t("operator.subject")}
                       <input value={reply.subject} onChange={(event) => setReply(edited(reply, { subject: event.target.value }))} />
                     </label>
+                    <SubjectSize subject={reply.subject} />
                     <label>
                       {t("operator.body")}
                       <textarea value={reply.body} onChange={(event) => setReply(edited(reply, { body: event.target.value }))} />
                     </label>
-                    <p>{t("markdown.characterCount", { count: reply.body.length, maximum: maximumBodyLength })}</p>
+                    <p>{t("markdown.byteCount", { count: byteLength(reply.body), maximum: maximumBodyBytes })}</p>
                     <button
                       type="submit"
                       className="primary-button"
-                      disabled={sending || reply.to.length === 0 || reply.subject.length === 0 || reply.body.length === 0 || reply.body.length > maximumBodyLength}
+                      disabled={sending || !sendable(reply)}
                     >
                       {t("operator.reply")}
                     </button>
@@ -706,15 +728,16 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                   {t("operator.subject")}
                   <input value={compose.subject} onChange={(event) => setCompose(edited(compose, { subject: event.target.value }))} />
                 </label>
+                <SubjectSize subject={compose.subject} />
                 <label>
                   {t("operator.body")}
                   <textarea value={compose.body} onChange={(event) => setCompose(edited(compose, { body: event.target.value }))} />
                 </label>
-                <p>{t("markdown.characterCount", { count: compose.body.length, maximum: maximumBodyLength })}</p>
+                <p>{t("markdown.byteCount", { count: byteLength(compose.body), maximum: maximumBodyBytes })}</p>
                 <button
                   type="submit"
                   className="primary-button"
-                  disabled={sending || compose.to.length === 0 || compose.subject.length === 0 || compose.body.length === 0 || compose.body.length > maximumBodyLength}
+                  disabled={sending || !sendable(compose)}
                 >
                   {t("operator.send")}
                 </button>

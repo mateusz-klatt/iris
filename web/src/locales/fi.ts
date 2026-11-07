@@ -325,7 +325,7 @@ const translation = {
     bulletList: "Luettelomerkitty lista",
     fencedCode: "Koodilohko",
     emptyPreview: "Esikatseltavaa ei ole vielä.",
-    characterCount: "{{count}} / {{maximum}} merkkiä",
+    byteCount: "{{count}} / {{maximum}} B",
     shortcutHint: "Tarkista painamalla Ctrl+Enter tai Command+Enter.",
   },
   accessRole: {
