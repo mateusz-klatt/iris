@@ -363,6 +363,7 @@ const translation = {
     statusNotConfigured: "Nieskonfigurowany",
     statusNeedsHuman: "Wymaga działania człowieka",
     statusSilent: "Brak odpowiedzi",
+    statusSlow: "Powolny",
     cause: "Przyczyna",
     repositories: "Repozytoria",
     agents: "Agenci",

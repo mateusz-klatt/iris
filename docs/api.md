@@ -275,7 +275,10 @@ and sends as `human`.
   "status":"needs_human","detail":"Review hooks once in /hooks","last_hook_at":"..."}]}
 ```
 
-`status` is `ok`, `not_configured`, `needs_human` or `silent`. Before the first report, `checked_at` is
+`status` is `ok`, `not_configured`, `needs_human`, `silent` or `slow`. `slow` means the hooks run,
+but shell reconciliation passed its budget more than ten times in 24 hours, so those commands'
+changes went unclaimed. A doctor sends it as `silent`, with `slow: ` in the detail, to a hub that
+refuses it. Before the first report, `checked_at` is
 null and `clients` is empty. `expires_at` on a claim is null when it has no expiry.
 
 `GET /v1/ui/watch` upgrades to a WebSocket, with frames `{"cursor":124,"kind":"changed"}`. The UI

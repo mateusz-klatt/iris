@@ -75,7 +75,8 @@ export interface ThreadDetail {
   messages: ThreadMessage[];
 }
 
-export type DoctorStatus = "ok" | "not_configured" | "needs_human" | "silent";
+// slow: hooks run, but shell reconciliation often passes its budget, so changes go unclaimed.
+export type DoctorStatus = "ok" | "not_configured" | "needs_human" | "silent" | "slow";
 
 export interface DoctorClient {
   client: string;

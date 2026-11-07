@@ -70,10 +70,10 @@ func TestOperatorMailThreadsAndOverview(t *testing.T) {
 		t.Fatal("operator revoke failed")
 	}
 	expectError(t, s, "ui_revoke", Request{Fence: 999999}, "not_found")
-	report := Request{CheckedAt: "2026-11-06T00:00:00Z", Clients: []map[string]any{{"status": "ok"}, {"status": "not_configured"}, {"status": "needs_human"}, {"status": "silent"}}}
+	report := Request{CheckedAt: "2026-11-06T00:00:00Z", Clients: []map[string]any{{"status": "ok"}, {"status": "not_configured"}, {"status": "needs_human"}, {"status": "silent"}, {"status": "slow"}}}
 	call(t, s, "ui_doctor_put", report)
 	got := call(t, s, "ui_doctor_get", Request{})
-	if got["checked_at"] != report.CheckedAt || len(got["clients"].([]any)) != 4 {
+	if got["checked_at"] != report.CheckedAt || len(got["clients"].([]any)) != 5 {
 		t.Fatal(got)
 	}
 	expectError(t, s, "ui_doctor_put", Request{Clients: []map[string]any{{"status": "invalid"}}}, "bad_request")

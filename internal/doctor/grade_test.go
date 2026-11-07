@@ -1,7 +1,11 @@
 package doctor
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -75,5 +79,34 @@ func TestTheHubIsSentSlowAsSilent(t *testing.T) {
 	}
 	if local.Clients[0].Status != StatusSlow {
 		t.Fatal("publishing changed the local report")
+	}
+}
+
+// A hub that knows "slow" gets it as is. One from before it answers 400, and doctor then
+// sends the report again with slow as silent, so the report is still stored.
+func TestSlowIsSentAsIsAndAsSilentToAnOlderHub(t *testing.T) {
+	report := Report{Clients: []ClientReport{{Client: "claude", Status: StatusSlow, Detail: "11 shell"}}}
+	for _, old := range []bool{false, true} {
+		var got []string
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			var in Report
+			_ = json.NewDecoder(r.Body).Decode(&in)
+			got = append(got, in.Clients[0].Status)
+			if old && in.Clients[0].Status == StatusSlow {
+				http.Error(w, `{"error":{"code":"bad_request"}}`, http.StatusBadRequest)
+			}
+		}))
+		err := storeReport(context.Background(), srv.URL, "t", report, srv.Client())
+		srv.Close()
+		want := []string{StatusSlow}
+		if old {
+			want = []string{StatusSlow, StatusSilent}
+		}
+		if err != nil || strings.Join(got, ",") != strings.Join(want, ",") {
+			t.Fatalf("old %v: sent %v, err %v", old, got, err)
+		}
+	}
+	if hasSlow(Report{Clients: []ClientReport{{Status: StatusOK}}}) {
+		t.Fatal("a report without slow reads as slow")
 	}
 }

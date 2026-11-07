@@ -474,6 +474,7 @@ const resources = {
         statusNotConfigured: "Not configured",
         statusNeedsHuman: "Needs a human step",
         statusSilent: "Silent",
+        statusSlow: "Slow",
         cause: "Cause",
         repositories: "Repositories",
         agents: "Agents",

@@ -81,7 +81,7 @@ func (t *transaction) operator(op string, r Request) (map[string]any, error) {
 	case "ui_doctor_put":
 		for _, c := range r.Clients {
 			switch c["status"] {
-			case "ok", "not_configured", "needs_human", "silent":
+			case "ok", "not_configured", "needs_human", "silent", "slow":
 			default:
 				return nil, fail("bad_request", "invalid doctor status")
 			}
