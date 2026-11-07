@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -107,5 +108,11 @@ func TestReconciliationRespectsTheClaimLimit(t *testing.T) {
 	for i := range 501 {
 		shell.Status[fmt.Sprintf("f%03d", i)] = "??"
 	}
-	expectError(t, s, "reconcile", shell, "too_large")
+	// One command can change more files than the limit: claim up to it, keep the reconcile
+	// answer, and say what was left, rather than fail and lose the conflict warning.
+	out := call(t, s, "reconcile", shell)
+	claimed, _ := out["claimed"].([]string)
+	if len(claimed) != 500 || !strings.Contains(out["message"].(string), "left 1 unclaimed") {
+		t.Fatalf("%d claimed, message %q", len(claimed), out["message"])
+	}
 }
