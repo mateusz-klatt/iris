@@ -13,6 +13,19 @@ func (codexClient) Name() string { return Codex }
 
 func (codexClient) Human() string { return "Review hooks once in /hooks" }
 
+// codexMCPPolicy is the rest of the iris server table.
+//
+// Codex starts MCP servers with a filtered environment, and its hooks with the full one. Without
+// env_vars an IRIS_HUB_URL override reached the hooks but not `iris mcp`, so claims went to one hub
+// and messages to another (measured on 0.167.0).
+//
+// default_tools_approval_mode applies to this server only. Without it every Iris tool call asks,
+// and with approval_policy "never" each one is refused. Iris tools act only on the hub, never on
+// files or a shell. "writes" was measured to refuse even whoami, because the tools carry no
+// read-only annotation.
+const codexMCPPolicy = "env_vars = [\"IRIS_HUB_URL\", \"IRIS_TOKEN_FILE\", \"IRIS_EXECUTION\"]\n" +
+	"default_tools_approval_mode = \"approve\"\n"
+
 func (codexClient) home(l Layout) (string, error) {
 	return l.envDir("CODEX_HOME", ".codex")
 }
@@ -53,7 +66,7 @@ func (c codexClient) Install(l Layout, _ Plugins) error {
 	}); err != nil {
 		return err
 	}
-	block := wrapBlock(fmt.Sprintf("[mcp_servers.iris]\ncommand = %s\nargs = [\"mcp\", \"--client\", \"codex\"]\n", tomlString(iris)))
+	block := wrapBlock(fmt.Sprintf("[mcp_servers.iris]\ncommand = %s\nargs = [\"mcp\", \"--client\", \"codex\"]\n%s", tomlString(iris), codexMCPPolicy))
 	return l.update(Codex, files[1], func(existing []byte) ([]byte, error) {
 		next, err := upsertBlock(string(existing), block)
 		if err != nil {
