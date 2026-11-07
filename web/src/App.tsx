@@ -17,6 +17,7 @@ import {
   type DoctorStatus,
   type Overview,
   type ThreadDetail,
+  type ThreadMessage,
   type ThreadSummary,
   type WatchFrame,
   type WatchStatus,
@@ -49,6 +50,27 @@ interface Draft {
 
 function newDraft(fields: Partial<Draft> = {}): Draft {
   return { to: "", subject: "", body: "", replyTo: "", ...fields, key: humanKey() };
+}
+
+// operatorName is the sender name the hub gives the console's own messages.
+const operatorName = "human";
+
+// replyDraft starts a reply to a thread. It answers the other party: the latest sender who is not
+// the operator, or, in a thread only the operator has written to, whom they wrote to. Answering
+// the latest sender would address a follow-up after the operator's own message back to them.
+function replyDraft(messages: ThreadMessage[]): Draft | null {
+  const last = messages.at(-1);
+  if (last === undefined) {
+    return null;
+  }
+  const other = [...messages].reverse().find((message) => message.sender !== operatorName);
+  const to =
+    other?.sender ??
+    last.recipients
+      .map((recipient) => recipient.name)
+      .filter((name) => name !== operatorName)
+      .join(", ");
+  return newDraft({ to, subject: last.subject.startsWith("Re:") ? last.subject : `Re: ${last.subject}`, replyTo: last.id });
 }
 
 function edited(draft: Draft, change: Partial<Draft>): Draft {
@@ -121,6 +143,10 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
   const [thread, setThread] = useState<ThreadDetail | null>(null);
   const [compose, setCompose] = useState<Draft>(newDraft);
   const [reply, setReply] = useState<Draft>(newDraft);
+  // The reply draft the console made itself, and the thread it is for. A draft that is still that
+  // one may be replaced when the thread refreshes; one the operator has edited is theirs, and a
+  // live refresh never discards it (gap review A14).
+  const offered = useRef<{ thread: string; draft: Draft } | null>(null);
   // One send at a time: a second submit while one is pending would be a second send. The ref
   // stops one that comes before React re-renders; the state disables the buttons.
   const inFlight = useRef(false);
@@ -245,15 +271,16 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
         readThread(selectedId, repositoryId)
           .then(() => void reload())
           .catch(() => undefined);
-        const last = detail.messages.at(-1);
-        if (last !== undefined) {
-          setReply(
-            newDraft({
-              to: last.sender,
-              subject: last.subject.startsWith("Re:") ? last.subject : `Re: ${last.subject}`,
-              replyTo: last.id,
-            }),
-          );
+        const fresh = replyDraft(detail.messages);
+        if (fresh !== null) {
+          setReply((current) => {
+            const mine = offered.current;
+            if (mine !== null && mine.thread === detail.id && current !== mine.draft) {
+              return current;
+            }
+            offered.current = { thread: detail.id, draft: fresh };
+            return fresh;
+          });
         }
       })
       .catch((error: unknown) => {
@@ -627,7 +654,15 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                     className="search-form"
                     onSubmit={(event) => {
                       event.preventDefault();
-                      void submit(reply, setReply, () => setReply((current) => edited(current, { body: "" })));
+                      void submit(reply, setReply, () =>
+                        setReply((current) => {
+                          // A sent reply leaves nothing of the operator's to keep, so the next
+                          // refresh may answer the newest message.
+                          const next = edited(current, { body: "" });
+                          offered.current = { thread: thread.id, draft: next };
+                          return next;
+                        }),
+                      );
                     }}
                   >
                     <h3>{t("operator.reply")}</h3>
