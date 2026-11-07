@@ -4,7 +4,6 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"encoding/base64"
-	"log"
 	"net/http"
 	"strings"
 
@@ -157,7 +156,7 @@ func (h *Hub) logPrincipal(r *http.Request, p principal) {
 		return
 	}
 	if h.AccessLog {
-		log.Printf("authenticated request: token=%q method=%q path=%q peer=%q", p.name, r.Method, r.URL.Path, r.RemoteAddr)
+		h.logger().Printf("authenticated request: token=%q method=%q path=%q peer=%q", p.name, r.Method, r.URL.Path, r.RemoteAddr)
 		return
 	}
 	h.usedMu.Lock()
@@ -165,6 +164,6 @@ func (h *Hub) logPrincipal(r *http.Request, p principal) {
 	h.used[p.name] = true
 	h.usedMu.Unlock()
 	if first {
-		log.Printf("token first used since start: token=%q peer=%q", p.name, r.RemoteAddr)
+		h.logger().Printf("token first used since start: token=%q peer=%q", p.name, r.RemoteAddr)
 	}
 }

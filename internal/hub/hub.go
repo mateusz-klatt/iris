@@ -46,6 +46,8 @@ type Hub struct {
 	// AccessLog logs every authenticated request. Off, only a token's first use since
 	// start is logged; authentication failures are logged either way.
 	AccessLog bool
+	// Log receives the hub's log lines; nil uses the standard logger.
+	Log       *log.Logger
 	usedMu    sync.Mutex
 	used      map[string]bool
 	publicURL *url.URL
@@ -215,7 +217,7 @@ func decode(w http.ResponseWriter, r *http.Request) (store.Request, error) {
 func (h *Hub) api(w http.ResponseWriter, r *http.Request, operation string) {
 	if operation == "status" && !h.authorized(r) {
 		if r.Header.Get("Authorization") != "" {
-			log.Printf("authentication failed: peer=%q reason=invalid status token", r.RemoteAddr)
+			h.logger().Printf("authentication failed: peer=%q reason=invalid status token", r.RemoteAddr)
 		}
 		writeJSON(w, map[string]string{"status": "ok"})
 		return
@@ -503,7 +505,14 @@ func (h *Hub) ping(ctx context.Context, conn *websocket.Conn) bool {
 	return true
 }
 
+func (h *Hub) logger() *log.Logger {
+	if h.Log != nil {
+		return h.Log
+	}
+	return log.Default()
+}
+
 func (h *Hub) reject(w http.ResponseWriter, r *http.Request, reason string) {
-	log.Printf("authentication failed: peer=%q reason=%q", r.RemoteAddr, reason)
+	h.logger().Printf("authentication failed: peer=%q reason=%q", r.RemoteAddr, reason)
 	writeError(w, &store.Error{Code: "unauthorized", Message: reason})
 }

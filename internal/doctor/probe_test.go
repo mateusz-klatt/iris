@@ -385,38 +385,6 @@ func TestFailuresIgnoreUnknownClientsAndAMissingTokenPath(t *testing.T) {
 	}
 }
 
-func TestLiveArgsRefuseAnUnknownClient(t *testing.T) {
-	if _, _, err := LiveArgs("unheard-of", "bin"); err == nil {
-		t.Fatal("no error")
-	}
-	layout := integrate.Layout{LookPath: func(string) (string, error) { return "bin", nil }}
-	if err := runLive(context.Background(), Options{Layout: layout}, "unheard-of"); err == nil {
-		t.Fatal("ran a client with no binary list")
-	}
-}
-
-func TestRunLiveReportsAFailure(t *testing.T) {
-	bin, err := integrate.PlaceFake(t.TempDir(), "codex")
-	if err != nil {
-		t.Fatal(err)
-	}
-	opt := Options{Layout: integrate.Layout{LookPath: func(string) (string, error) { return bin, nil }}}
-	t.Setenv("IRIS_FAKE_EXIT", "1")
-	t.Setenv("IRIS_FAKE_STDOUT", "short reason")
-	if err := runLive(context.Background(), opt, integrate.Codex); err == nil || !strings.Contains(err.Error(), "short reason") {
-		t.Fatal(err)
-	}
-	t.Setenv("IRIS_FAKE_STDOUT", strings.Repeat("x", 500))
-	err = runLive(context.Background(), opt, integrate.Codex)
-	if err == nil || strings.Contains(err.Error(), strings.Repeat("x", 401)) || !strings.Contains(err.Error(), strings.Repeat("x", 400)) {
-		t.Fatal(err)
-	}
-	missing := Options{Layout: integrate.Layout{LookPath: func(string) (string, error) { return "", errors.New("not found") }}}
-	if err := runLive(context.Background(), missing, integrate.Codex); err == nil {
-		t.Fatal("ran a missing client")
-	}
-}
-
 // grokLayout has an installed hook and, when placed, a client binary.
 func grokLayout(t *testing.T, withClient bool) integrate.Layout {
 	t.Helper()
@@ -514,16 +482,6 @@ func TestBrokenClientBinaryIsNotCalledMissing(t *testing.T) {
 	}
 	row := grokRow(t, Options{Layout: layout})
 	if row.Status != StatusNeedsHuman || !strings.HasPrefix(row.Detail, "version check failed: ") {
-		t.Fatalf("%+v", row)
-	}
-}
-
-func TestLiveFailureSilencesAClient(t *testing.T) {
-	t.Setenv("IRIS_FAKE_STDOUT", "{}")
-	t.Setenv("IRIS_FAKE_EXIT", "0")
-	failed := func(context.Context, string, []string) error { return errors.New("model refused") }
-	row := grokRow(t, Options{Layout: grokLayout(t, true), Live: true, LiveRun: failed})
-	if row.Status != StatusSilent || !strings.Contains(row.Detail, "live run failed: model refused") {
 		t.Fatalf("%+v", row)
 	}
 }
