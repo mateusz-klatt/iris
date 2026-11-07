@@ -66,6 +66,7 @@ func (t *transaction) claims(repo string) ([]map[string]any, error) {
 	}
 	return out, nil
 }
+
 // refuseControl keeps control characters out of claims, the paths an agent names.
 // A claim path reaches other models in context, and a newline in it could start a
 // line that reads as Iris's own. Paths that git reports are not refused here, so a
