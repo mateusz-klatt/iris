@@ -112,6 +112,11 @@ function edited(draft: Draft, change: Partial<Draft>): Draft {
   return { ...draft, ...change, key: humanKey(), offered: false };
 }
 
+// threadFilters names the filters a thread list was opened under.
+function threadFilters(repositoryId: string, agent: string, query: string): string {
+  return JSON.stringify([repositoryId, agent, query]);
+}
+
 function isAbort(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
 }
@@ -175,6 +180,10 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
   const [query, setQuery] = useState("");
   const [searchDraft, setSearchDraft] = useState("");
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
+  // How many pages of threads the operator has opened under which filters, and the cursor of
+  // the page after them. Other filters show other threads, so their older pages are not open.
+  const [openedPages, setOpenedPages] = useState({ filters: "", pages: 1 });
+  const [olderCursor, setOlderCursor] = useState<string | undefined>(undefined);
   const [threadsError, setThreadsError] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [thread, setThread] = useState<ThreadDetail | null>(null);
@@ -261,15 +270,30 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
       return;
     }
     let ignore = false;
-    void listThreads({
-      repository_id: repositoryId,
-      agent,
-      q: query,
-      limit: 50,
-    })
-      .then((page) => {
+    // Every refresh walks all the pages the operator has opened, from the newest. Reloading the
+    // first page alone would let a new thread push one off it into a gap that no page shows,
+    // and holding the old cursors would keep stale ones (gap review A15).
+    const walk = async () => {
+      const filters = threadFilters(repositoryId, agent, query);
+      const threadPages = openedPages.filters === filters ? openedPages.pages : 1;
+      const all: ThreadSummary[] = [];
+      let before: string | undefined;
+      for (let page = 0; page < threadPages; page++) {
+        const next = await listThreads({ repository_id: repositoryId, agent, q: query, before, limit: 50 });
+        // A thread that got mail between two pages moves up and is listed again; keep it once.
+        all.push(...next.threads.filter((item) => !all.some((seen) => seen.id === item.id)));
+        before = next.next;
+        if (before === undefined || ignore) {
+          break;
+        }
+      }
+      return { all, before };
+    };
+    void walk()
+      .then(({ all, before }) => {
         if (!ignore) {
-          setThreads(page.threads);
+          setThreads(all);
+          setOlderCursor(before);
           setThreadsError(false);
         }
       })
@@ -286,7 +310,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
     return () => {
       ignore = true;
     };
-  }, [agent, phase, query, repositoryId, threadRevision]);
+  }, [agent, openedPages, phase, query, repositoryId, threadRevision]);
 
   useEffect(() => {
     if (phase !== "ready" || selectedId === null) {
@@ -663,6 +687,17 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                   ))}
                 </ul>
               )}
+              {olderCursor !== undefined ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    const filters = threadFilters(repositoryId, agent, query);
+                    setOpenedPages((opened) => ({ filters, pages: opened.filters === filters ? opened.pages + 1 : 2 }));
+                  }}
+                >
+                  {t("operator.olderThreads")}
+                </button>
+              ) : null}
               {thread !== null ? (
                 <article className="message-detail" aria-labelledby="thread-title">
                   <header className="page-heading">

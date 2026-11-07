@@ -385,6 +385,7 @@ const translation = {
     body: "پیام",
     loadError: "Iris نتوانست این نما را بارگیری کند.",
     emptyThreads: "در این نما رشته‌ای نیست.",
+    olderThreads: "رشته‌های قدیمی‌تر",
     participants: "شرکت‌کنندگان",
     unread: "{{count}} خوانده‌نشده",
     back: "بازگشت به رشته‌ها",

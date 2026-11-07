@@ -376,6 +376,7 @@ const translation = {
     body: "消息",
     loadError: "Iris 无法加载此视图。",
     emptyThreads: "此视图中没有会话。",
+    olderThreads: "更早的会话",
     participants: "参与者",
     unread: "{{count}} 条未读",
     back: "返回会话列表",

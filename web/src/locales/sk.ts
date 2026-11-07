@@ -376,6 +376,7 @@ const translation = {
     body: "Správa",
     loadError: "Iris nemohol načítať toto zobrazenie.",
     emptyThreads: "V tomto zobrazení nie sú žiadne vlákna.",
+    olderThreads: "Staršie vlákna",
     participants: "Účastníci",
     unread: "Neprečítané: {{count}}",
     back: "Späť na vlákna",

@@ -385,6 +385,7 @@ const translation = {
     body: "Besked",
     loadError: "Iris kunne ikke indlæse denne visning.",
     emptyThreads: "Ingen tråde i denne visning.",
+    olderThreads: "Ældre tråde",
     participants: "Deltagere",
     unread: "Ulæste: {{count}}",
     back: "Tilbage til tråde",

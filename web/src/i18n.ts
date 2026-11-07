@@ -496,6 +496,7 @@ const resources = {
         body: "Message",
         loadError: "Iris could not load this view.",
         emptyThreads: "No threads in this view.",
+        olderThreads: "Older threads",
         participants: "Participants",
         unread: "{{count}} unread",
         back: "Back to threads",

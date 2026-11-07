@@ -385,6 +385,7 @@ const translation = {
     body: "Skilaboð",
     loadError: "Iris gat ekki hlaðið þessu yfirliti.",
     emptyThreads: "Engir þræðir í þessu yfirliti.",
+    olderThreads: "Eldri þræðir",
     participants: "Þátttakendur",
     unread: "{{count}} ólesin",
     back: "Aftur í þræði",

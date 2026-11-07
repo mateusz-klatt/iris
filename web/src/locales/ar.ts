@@ -385,6 +385,7 @@ const translation = {
     body: "الرسالة",
     loadError: "تعذّر على Iris تحميل هذا العرض.",
     emptyThreads: "لا توجد سلاسل رسائل في هذا العرض.",
+    olderThreads: "سلاسل رسائل أقدم",
     participants: "المشاركون",
     unread: "غير المقروءة: {{count}}",
     back: "العودة إلى سلاسل الرسائل",

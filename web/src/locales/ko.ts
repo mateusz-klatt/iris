@@ -385,6 +385,7 @@ const translation = {
     body: "메시지",
     loadError: "Iris가 이 보기를 불러오지 못했습니다.",
     emptyThreads: "이 보기에 스레드가 없습니다.",
+    olderThreads: "이전 스레드",
     participants: "참여자",
     unread: "읽지 않음 {{count}}개",
     back: "스레드로 돌아가기",

@@ -376,6 +376,7 @@ const translation = {
     body: "Mesazhi",
     loadError: "Iris nuk mundi ta ngarkonte këtë pamje.",
     emptyThreads: "Nuk ka biseda në këtë pamje.",
+    olderThreads: "Biseda më të vjetra",
     participants: "Pjesëmarrësit",
     unread: "Të palexuara: {{count}}",
     back: "Kthehu te bisedat",

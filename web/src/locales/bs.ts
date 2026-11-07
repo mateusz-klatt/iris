@@ -385,6 +385,7 @@ const translation = {
     body: "Poruka",
     loadError: "Iris nije mogao učitati ovaj prikaz.",
     emptyThreads: "Nema niti u ovom prikazu.",
+    olderThreads: "Starije niti",
     participants: "Učesnici",
     unread: "Nepročitano: {{count}}",
     back: "Nazad na niti",

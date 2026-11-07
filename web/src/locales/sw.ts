@@ -376,6 +376,7 @@ const translation = {
     body: "Ujumbe",
     loadError: "Iris haikuweza kupakia mwonekano huu.",
     emptyThreads: "Hakuna mazungumzo katika mwonekano huu.",
+    olderThreads: "Mazungumzo ya zamani zaidi",
     participants: "Washiriki",
     unread: "Zisizosomwa: {{count}}",
     back: "Rudi kwenye mazungumzo",

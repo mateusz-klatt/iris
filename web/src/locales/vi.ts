@@ -376,6 +376,7 @@ const translation = {
     body: "Tin nhắn",
     loadError: "Iris không thể tải chế độ xem này.",
     emptyThreads: "Không có chuỗi thư nào trong chế độ xem này.",
+    olderThreads: "Chuỗi thư cũ hơn",
     participants: "Người tham gia",
     unread: "{{count}} chưa đọc",
     back: "Quay lại chuỗi thư",

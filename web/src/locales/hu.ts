@@ -385,6 +385,7 @@ const translation = {
     body: "Üzenet",
     loadError: "Az Iris nem tudta betölteni ezt a nézetet.",
     emptyThreads: "Ebben a nézetben nincsenek szálak.",
+    olderThreads: "Régebbi szálak",
     participants: "Résztvevők",
     unread: "{{count}} olvasatlan",
     back: "Vissza a szálakhoz",
