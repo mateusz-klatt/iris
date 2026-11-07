@@ -33,6 +33,7 @@ func TestFailOpenEveryClient(t *testing.T) {
 					panic("boom")
 				},
 				Deadline: 200 * time.Millisecond,
+				logWait:  roomy,
 			}.Run()
 			assertAllow(t, c, out)
 		})
@@ -41,8 +42,19 @@ func TestFailOpenEveryClient(t *testing.T) {
 				time.Sleep(2 * time.Second)
 			}))
 			t.Cleanup(func() { srv.CloseClientConnections() })
+			r := editRunner(t, c, srv.URL, 40*time.Millisecond)
+			// The answer must not wait for the failure log, so the write can outlive Run.
+			// Wait for it before the temporary directory is removed.
+			logged := make(chan struct{})
+			r.logged = func() { close(logged) }
+			t.Cleanup(func() {
+				select {
+				case <-logged:
+				case <-time.After(roomy):
+				}
+			})
 			start := time.Now()
-			out := editRunner(t, c, srv.URL, 40*time.Millisecond).Run()
+			out := r.Run()
 			if time.Since(start) > 500*time.Millisecond {
 				t.Fatalf("deadline missed after %s", time.Since(start))
 			}
@@ -55,7 +67,9 @@ func TestFailOpenEveryClient(t *testing.T) {
 			}
 			addr := ln.Addr().String()
 			_ = ln.Close()
-			out := editRunner(t, c, "http://"+addr, time.Second).Run()
+			r := editRunner(t, c, "http://"+addr, roomy)
+			r.logWait = roomy
+			out := r.Run()
 			assertAllow(t, c, out)
 		})
 	}

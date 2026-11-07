@@ -300,7 +300,7 @@ func TestMalformedClientConfigStillLogsTheFailure(t *testing.T) {
 			return token
 		}
 		return ""
-	}}).Run()
+	}, Deadline: roomy, logWait: roomy}).Run()
 	assertAllow(t, ClientKimi, out)
 	deadline := time.Now().Add(time.Second)
 	for {

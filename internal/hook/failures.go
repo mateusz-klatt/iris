@@ -110,6 +110,9 @@ func (r Runner) recordFailure(stage string, err error) {
 	// must not delay the allow response beyond this small, fixed budget.
 	done := make(chan struct{})
 	go func() {
+		if r.logged != nil {
+			defer r.logged()
+		}
 		defer close(done)
 		defer func() { _ = recover() }()
 		token, errPath := (hubclient.EnvConfig{Getenv: r.Getenv}).TokenPath()
@@ -123,7 +126,11 @@ func (r Runner) recordFailure(stage string, err error) {
 		entry := Failure{Time: time.Now().UTC(), Client: client, Event: boundedLabel(r.EventName), Stage: stage, Error: failureText(err)}
 		_ = appendFailure(token, entry)
 	}()
-	timer := time.NewTimer(failureLogBudget)
+	wait := r.logWait
+	if wait <= 0 {
+		wait = failureLogBudget
+	}
+	timer := time.NewTimer(wait)
 	defer timer.Stop()
 	select {
 	case <-done:
