@@ -17,10 +17,9 @@ import (
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 )
 
-// A stream that connects and then drops is not a failure to connect. Without this the
-// delay only ever doubled, so after a few hub restarts every later drop waited the full
-// cap before reconnecting.
-func TestBackoffStartsAgainAfterAStreamThatConnected(t *testing.T) {
+// streams serves a stream that opens and closes at once, and records each backoff.
+func streams(t *testing.T, now func() time.Time, n int) []time.Duration {
+	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v1/bind":
@@ -49,10 +48,11 @@ func TestBackoffStartsAgainAfterAStreamThatConnected(t *testing.T) {
 		}},
 		Output:  &bytes.Buffer{},
 		Backoff: 4 * time.Millisecond,
+		Now:     now,
 		after: func(d time.Duration) <-chan time.Time {
 			mu.Lock()
 			seen = append(seen, d)
-			if len(seen) == 5 {
+			if len(seen) == n {
 				cancel()
 			}
 			mu.Unlock()
@@ -66,9 +66,39 @@ func TestBackoffStartsAgainAfterAStreamThatConnected(t *testing.T) {
 	}
 	mu.Lock()
 	defer mu.Unlock()
-	for i, d := range seen {
+	return seen
+}
+
+// A stream that stayed up and then dropped, as at a hub restart, is not a failure to
+// connect. Without this the delay only ever doubled, so after a few restarts every later
+// drop waited the full cap. On main this saw 4, 8, 16, 32 and 64 ms.
+func TestBackoffStartsAgainAfterAStreamThatStayedUp(t *testing.T) {
+	var mu sync.Mutex
+	clock := time.Unix(1800000000, 0)
+	lasting := func() time.Time {
+		mu.Lock()
+		defer mu.Unlock()
+		clock = clock.Add(time.Minute) // every reading is a minute later than the last
+		return clock
+	}
+	for i, d := range streams(t, lasting, 5) {
 		if d != 4*time.Millisecond {
-			t.Fatalf("drop %d waited %v after a stream that had connected: %v", i+1, d, seen)
+			t.Fatalf("drop %d waited %v after a stream that stayed up", i+1, d)
+		}
+	}
+}
+
+// A hub that accepts and closes at once still gets a growing backoff, not a retry every base delay.
+func TestAStreamThatClosesAtOnceKeepsBackingOff(t *testing.T) {
+	still := time.Unix(1800000000, 0)
+	got := streams(t, func() time.Time { return still }, 4)
+	want := []time.Duration{4 * time.Millisecond, 8 * time.Millisecond, 16 * time.Millisecond, 32 * time.Millisecond}
+	if len(got) != len(want) {
+		t.Fatal(got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("%v, want %v", got, want)
 		}
 	}
 }

@@ -119,9 +119,9 @@ type Runner struct {
 	Now func() time.Time
 	// after waits out a backoff. Tests replace it to see each delay without waiting.
 	after func(time.Duration) <-chan time.Time
-	// streamed is set once a stream has opened, so a drop after a working connection
-	// starts the backoff again instead of continuing it.
-	streamed bool
+	// opened is when the current stream opened. A drop after a stream that stayed up for
+	// at least the cap starts the backoff again; one that closes at once keeps backing off.
+	opened time.Time
 }
 
 func (r *Runner) wait(d time.Duration) <-chan time.Time {
@@ -152,14 +152,14 @@ func (r *Runner) Run(ctx context.Context) error {
 		call, cancel := context.WithTimeout(ctx, 5*time.Second)
 		b, err := r.Resolver.Resolve(call, "")
 		cancel()
-		r.streamed = false
+		r.opened = time.Time{}
 		if err == nil {
 			err = r.connect(ctx, b, &cursor, &stream, coalesce)
 		}
 		if errors.As(err, new(outputError)) {
 			return err
 		}
-		if r.streamed {
+		if !r.opened.IsZero() && r.now().Sub(r.opened) >= maxBackoff {
 			delay = base
 		}
 		if binding.IsCode(err, "lost") {
@@ -251,7 +251,7 @@ func (r *Runner) connect(ctx context.Context, b binding.Bound, cursor *int64, st
 	if err != nil {
 		return err
 	}
-	r.streamed = true
+	r.opened = r.now()
 	defer conn.CloseNow()
 	c.Recount = func() (int, bool) { return r.waiting(ctx, b, *cursor) }
 	readCtx, stop := context.WithCancel(ctx)
