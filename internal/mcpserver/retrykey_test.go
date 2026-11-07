@@ -33,6 +33,11 @@ func TestARetryAfterALostResponseReusesTheKey(t *testing.T) {
 			lose = false
 			mu.Unlock()
 			f.ServeHTTP(w, r)
+			// Recorded before the answer can reach the caller: once the connection drops, the
+			// caller retries, and the test reads keys as soon as the retry returns.
+			mu.Lock()
+			keys = append(keys, f.last(t).body["key"].(string))
+			mu.Unlock()
 			if drop {
 				// The hub has the message, but the caller never hears so.
 				conn, _, err := w.(http.Hijacker).Hijack()
@@ -40,9 +45,6 @@ func TestARetryAfterALostResponseReusesTheKey(t *testing.T) {
 					_ = conn.Close()
 				}
 			}
-			mu.Lock()
-			keys = append(keys, f.last(t).body["key"].(string))
-			mu.Unlock()
 			return
 		}
 		f.ServeHTTP(w, r)
