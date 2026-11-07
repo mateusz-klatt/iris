@@ -70,7 +70,7 @@ func definedOutside(existing, block string) (string, bool) {
 				current = n
 				continue
 			}
-			key, _, isKey := strings.Cut(l, "=")
+			key, value, isKey := strings.Cut(l, "=")
 			if !isKey || strings.HasPrefix(strings.TrimSpace(l), "#") {
 				continue
 			}
@@ -79,7 +79,10 @@ func definedOutside(existing, block string) (string, bool) {
 			if current != "" {
 				full = current + "." + key
 			}
-			if full == name || strings.HasPrefix(full, name+".") || (parent != "" && current == parent && key == leaf) {
+			// mcp_servers = { iris = {…} } defines the table inline in its parent's value.
+			compact := strings.ReplaceAll(strings.ReplaceAll(value, " ", ""), "\"", "")
+			inline := full == parent && (strings.Contains(compact, "{"+leaf+"=") || strings.Contains(compact, ","+leaf+"="))
+			if full == name || strings.HasPrefix(full, name+".") || (parent != "" && current == parent && key == leaf) || inline {
 				return "[" + name + "]", true
 			}
 		}

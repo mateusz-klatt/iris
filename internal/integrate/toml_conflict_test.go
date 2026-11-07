@@ -17,6 +17,8 @@ func TestInstallRefusesAnUnmarkedIrisTable(t *testing.T) {
 		"inline in parent": "[mcp_servers]\niris = { command = \"mine\" }\n",
 		"dotted in parent": "[mcp_servers]\niris.command = \"mine\"\n",
 		"dotted top level": "mcp_servers.iris.command = \"mine\"\n",
+		"inline at root":   "mcp_servers = { iris = { command = \"mine\" } }\n",
+		"inline, second":   "mcp_servers = { other = {}, \"iris\" = { command = \"mine\" } }\n",
 	}
 	for name, mine := range forms {
 		for _, client := range []string{Codex, Grok} {
@@ -52,6 +54,9 @@ func TestUnrelatedTablesAreNotConflicts(t *testing.T) {
 	// A line of a multi-line array starts with [ but is no table header.
 	nested := "pairs = [\n  [\"mcp_servers.iris\", 2],\n]\n"
 	if _, err := upsertBlock(nested, block); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := upsertBlock("mcp_servers = { other = { command = \"iris\" } }\n", block); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := upsertBlock("[mcp_servers]\nother = { command = \"x\" }\n", block); err != nil {
