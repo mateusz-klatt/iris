@@ -299,3 +299,13 @@ func TestIsCodeNeedsAHubError(t *testing.T) {
 		t.Fatal("plain error")
 	}
 }
+
+// Lost reports the heartbeat's verdict, and only that: a fresh resolver is not lost.
+func TestLostReportsOnlyTheHeartbeatsVerdict(t *testing.T) {
+	if (&Resolver{}).Lost() {
+		t.Fatal("a fresh resolver reads as lost")
+	}
+	if !(&Resolver{lost: true}).Lost() {
+		t.Fatal("a resolver the heartbeat found lost reads as live")
+	}
+}

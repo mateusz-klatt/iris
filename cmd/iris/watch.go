@@ -7,6 +7,7 @@ import (
 	"github.com/mateusz-klatt/iris/internal/binding"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 	"github.com/mateusz-klatt/iris/internal/watch"
+	"io"
 	"os"
 	"os/signal"
 	"syscall"
@@ -32,5 +33,26 @@ func runWatch(args []string) error {
 	defer func() { cancel(); <-maintained; parent.Close() }()
 	resolver := binding.New(&hubclient.Client{Config: hubclient.NewConfig()}, *client)
 	go func() { defer close(maintained); resolver.Maintain(ctx, "watch", 20*time.Second, parent.Alive, cancel) }()
-	return (&watch.Runner{Resolver: resolver, Output: os.Stdout}).Run(ctx)
+	err = (&watch.Runner{Resolver: resolver, Output: os.Stdout}).Run(ctx)
+	return stopLine(os.Stdout, err, parent.Alive())
+}
+
+// stopLine makes sure a monitor that ends says why on its output, which reaches the model. Run
+// has already said it for a lost generation; a failure to print cannot be printed.
+func stopLine(w io.Writer, err error, parentAlive bool) error {
+	var reason string
+	switch {
+	case errors.Is(err, watch.ErrLost):
+		return err
+	case err != nil:
+		reason = err.Error()
+	case !parentAlive:
+		reason = "the client process ended"
+	default:
+		reason = "the monitor was stopped"
+	}
+	if perr := watch.Stopped(w, reason); perr != nil && err == nil {
+		return perr
+	}
+	return err
 }
