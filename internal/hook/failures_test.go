@@ -24,13 +24,18 @@ func failureEnv(t *testing.T) func(string) string {
 	}
 }
 
-type failureHub struct{ stage string }
+type failureHub struct {
+	stage string
+	// entered is closed when RegisterSession starts, for a deadline that must fire there.
+	entered chan struct{}
+}
 
 func (h failureHub) RegisterSession(ctx context.Context, _ hubclient.SessionRequest) (hubclient.SessionResponse, error) {
 	if h.stage == "session" {
 		return hubclient.SessionResponse{}, &hubclient.Error{Code: "unauthorized", Message: "SECRET PAYLOAD"}
 	}
 	if h.stage == "timeout" {
+		close(h.entered)
 		<-ctx.Done()
 		return hubclient.SessionResponse{}, ctx.Err()
 	}
@@ -71,7 +76,17 @@ func TestFailureLogStagesAndPrivacy(t *testing.T) {
 			r.Stdin = strings.NewReader(`{"session_id":"s","cwd":"/repo","tool_name":"Write","tool_input":{}}`)
 		}},
 		{"panic", "repository", func(r *Runner) { r.Find = func(string) (gitinfo.Repo, error) { panic("SECRET PAYLOAD") } }},
-		{"timeout", "session", func(r *Runner) { r.Hub = failureHub{stage: "timeout"}; r.Deadline = 10 * time.Millisecond }},
+		{"timeout", "session", func(r *Runner) {
+			// The deadline fires only once the hook is waiting on the hub, so the stage it
+			// records cannot depend on how fast the machine reached it.
+			entered := make(chan struct{})
+			r.Hub = failureHub{stage: "timeout", entered: entered}
+			r.after = func(time.Duration) <-chan time.Time {
+				fired := make(chan time.Time)
+				go func() { <-entered; close(fired) }()
+				return fired
+			}
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			getenv := failureEnv(t)
