@@ -422,7 +422,7 @@ func TestServeAnnouncesNothingWhenThePortIsTaken(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer taken.Close()
+	defer func() { _ = taken.Close() }()
 	dir := t.TempDir()
 	var serveErr error
 	_, stderr := capture(t, func() {

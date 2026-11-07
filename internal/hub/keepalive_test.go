@@ -22,7 +22,7 @@ func TestWatchKeepalive(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer db.Close()
+			defer func() { _ = db.Close() }()
 			s := httptest.NewUnstartedServer(nil)
 			h := New(db, "test-secret", []string{s.Listener.Addr().String()})
 			h.PingInterval = 20 * time.Millisecond
@@ -44,7 +44,7 @@ func TestWatchKeepalive(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer conn.CloseNow()
+			defer func() { _ = conn.CloseNow() }()
 			frames := make(chan map[string]any, 10)
 			failures := make(chan error, 1)
 			go func() {

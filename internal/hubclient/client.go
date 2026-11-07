@@ -171,7 +171,7 @@ func (c *Client) Do(ctx context.Context, method, path string, body, dest any) er
 	if err != nil {
 		return err
 	}
-	defer res.Body.Close()
+	defer func() { _ = res.Body.Close() }()
 	slurp, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
 	if err != nil {
 		return err

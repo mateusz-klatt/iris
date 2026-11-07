@@ -37,7 +37,7 @@ func nearest(self int, get func(int) (Snapshot, bool)) (Ancestor, error) {
 	if !ok {
 		return Ancestor{}, ErrNotFound
 	}
-	return Ancestor{PID: s.PID, PPID: s.PPID, Name: s.Name, StartMS: s.StartMS}, nil
+	return Ancestor(s), nil
 }
 
 // NearestFrom walks parents of self using get. Shells are skipped. The first

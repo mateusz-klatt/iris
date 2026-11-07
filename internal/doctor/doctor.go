@@ -209,7 +209,7 @@ func checkClient(ctx context.Context, opt Options, c integrate.Client) ClientRep
 	if dirErr != nil {
 		dir = string(os.PathSeparator)
 	} else {
-		defer os.RemoveAll(dir)
+		defer func() { _ = os.RemoveAll(dir) }()
 	}
 	payload := canaryPayload(c.Name(), dir)
 	stdout, exit, runErr := in.Run(ctx, payload)
@@ -362,7 +362,7 @@ func probeHub(ctx context.Context, base, token string, tokenErr error, hc *http.
 	if err != nil {
 		return hubProbe{detail: "hub unreachable"}
 	}
-	res.Body.Close()
+	_ = res.Body.Close()
 	if res.StatusCode >= 500 {
 		return hubProbe{detail: "hub status " + res.Status}
 	}
@@ -373,8 +373,8 @@ func probeHub(ctx context.Context, base, token string, tokenErr error, hc *http.
 	if err != nil {
 		return hubProbe{up: true, unchecked: true, tokenDetail: "token check failed"}
 	}
-	io.Copy(io.Discard, res.Body)
-	res.Body.Close()
+	_, _ = io.Copy(io.Discard, res.Body)
+	_ = res.Body.Close()
 	switch {
 	case res.StatusCode == http.StatusUnauthorized:
 		return hubProbe{up: true, tokenDetail: "token was rejected"}
@@ -393,8 +393,8 @@ func putReport(ctx context.Context, base, token string, report Report, hc *http.
 	if err != nil {
 		return err
 	}
-	defer res.Body.Close()
-	io.Copy(io.Discard, res.Body)
+	defer func() { _ = res.Body.Close() }()
+	_, _ = io.Copy(io.Discard, res.Body)
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		return fmt.Errorf("PUT /v1/ui/doctor: %s", res.Status)
 	}

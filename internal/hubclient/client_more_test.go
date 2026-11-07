@@ -124,9 +124,6 @@ func TestLoadAndWriteConfigFailures(t *testing.T) {
 	if loaded := e.Load(); loaded.err == nil {
 		t.Fatal("read error ignored")
 	}
-	if _, err := (EnvConfig{Getenv: func(string) string { return "" }}).TokenPath(); err != nil && os.Getenv("XDG_CONFIG_HOME") == "" && os.Getenv("HOME") == "" {
-		// TokenPath fails only when no default path can be built.
-	}
 	t.Setenv("HOME", "")
 	t.Setenv("USERPROFILE", "")
 	t.Setenv("AppData", "")
@@ -150,7 +147,7 @@ func TestLoadAndWriteConfigFailures(t *testing.T) {
 	}
 
 	explicit := filepath.Join(dir, "missing-token")
-	os.Remove(filepath.Join(dir, "client.json"))
+	_ = os.Remove(filepath.Join(dir, "client.json"))
 	loaded := (EnvConfig{DefaultTokenFile: token, Getenv: func(k string) string {
 		if k == "IRIS_TOKEN_FILE" {
 			return explicit
@@ -202,7 +199,7 @@ func TestDoReadsABrokenBodyAndTouchReportsHubErrors(t *testing.T) {
 	origWrite, origClose := prepareConfigWrite, prepareConfigClose
 	t.Cleanup(func() { prepareConfigWrite, prepareConfigClose = origWrite, origClose })
 	dest := filepath.Join(t.TempDir(), "client.json")
-	prepareConfigWrite = func(f *os.File) { f.Close() }
+	prepareConfigWrite = func(f *os.File) { _ = f.Close() }
 	if err := WriteConfig(dest, FileConfig{Hub: "https://iris.example", TokenFile: "t"}); err == nil {
 		t.Fatal("write to a closed file succeeded")
 	}
@@ -210,7 +207,7 @@ func TestDoReadsABrokenBodyAndTouchReportsHubErrors(t *testing.T) {
 		t.Fatal("partial config was renamed", err)
 	}
 	prepareConfigWrite = func(*os.File) {}
-	prepareConfigClose = func(f *os.File) { f.Close() }
+	prepareConfigClose = func(f *os.File) { _ = f.Close() }
 	if err := WriteConfig(dest, FileConfig{Hub: "https://iris.example", TokenFile: "t"}); err == nil {
 		t.Fatal("closing twice succeeded")
 	}

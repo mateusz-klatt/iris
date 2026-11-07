@@ -252,7 +252,7 @@ func (r *Runner) connect(ctx context.Context, b binding.Bound, cursor *int64, st
 		return err
 	}
 	r.opened = r.now()
-	defer conn.CloseNow()
+	defer func() { _ = conn.CloseNow() }()
 	c.Recount = func() (int, bool) { return r.waiting(ctx, b, *cursor) }
 	readCtx, stop := context.WithCancel(ctx)
 	defer stop()

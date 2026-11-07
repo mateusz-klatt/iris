@@ -83,13 +83,13 @@ func TestWebSocketQuotaAndFailedUpgradeRelease(t *testing.T) {
 	headers := http.Header{"Authorization": {"Bearer test-secret"}}
 	c, resp, err := websocket.Dial(ctx, watchURL(s, session["execution_id"], 0), &websocket.DialOptions{HTTPHeader: headers, Subprotocols: []string{"iris.v1"}})
 	if err == nil {
-		c.CloseNow()
+		_ = c.CloseNow()
 		t.Fatal("socket cap ignored")
 	}
 	if resp == nil || resp.StatusCode != 429 || resp.Header.Get("Retry-After") == "" {
 		t.Fatal(resp, err)
 	}
-	conn.CloseNow()
+	_ = conn.CloseNow()
 	// Observe release rather than relying on scheduler timing.
 	deadline := time.NewTimer(2 * time.Second)
 	defer deadline.Stop()
@@ -116,7 +116,7 @@ func TestWebSocketQuotaAndFailedUpgradeRelease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response.Body.Close()
+	_ = response.Body.Close()
 	if response.StatusCode != 426 {
 		t.Fatal(response.StatusCode)
 	}

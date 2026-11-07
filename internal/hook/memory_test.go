@@ -344,7 +344,7 @@ func TestTheRecoveryWindowNeverAllowsAnUnclaimedEdit(t *testing.T) {
 		server.Config.Handler = hub.New(database, "secret", []string{server.Listener.Addr().String()})
 		server.Start()
 		url = server.URL
-		return func() { server.Close(); database.Close() }
+		return func() { server.Close(); _ = database.Close() }
 	}
 	env := func(k string) string {
 		switch k {

@@ -190,7 +190,7 @@ func (t *transaction) repository(r Request) (string, error) {
 			repo = candidate
 		}
 		err = rows.Err()
-		rows.Close()
+		_ = rows.Close()
 		if err != nil {
 			return "", err
 		}
@@ -385,7 +385,7 @@ func (t *transaction) bind(r Request) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	var matches []execution
 	for rows.Next() {
 		var e execution
@@ -456,7 +456,7 @@ func (t *transaction) agents(repo string) ([]map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := []map[string]any{}
 	for rows.Next() {
 		var a, n, c, w, b, s string

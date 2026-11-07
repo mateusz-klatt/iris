@@ -152,7 +152,7 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	if strings.HasPrefix(r.URL.Path, "/v1/") && r.URL.Path != "/v1/status" && r.URL.Path != "/v1/watch" && !h.authorized(r) && !(strings.HasPrefix(r.URL.Path, "/v1/ui/") && r.URL.Path != "/v1/ui/links" && h.cookieAuthorized(r)) {
+	if strings.HasPrefix(r.URL.Path, "/v1/") && r.URL.Path != "/v1/status" && r.URL.Path != "/v1/watch" && !h.authorized(r) && (!strings.HasPrefix(r.URL.Path, "/v1/ui/") || r.URL.Path == "/v1/ui/links" || !h.cookieAuthorized(r)) {
 		h.reject(w, r, h.refusal(r))
 		return
 	}
@@ -398,7 +398,7 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		return
 	}
-	defer conn.CloseNow()
+	defer func() { _ = conn.CloseNow() }()
 	if !h.trackSocket(r, conn, p) {
 		return
 	}

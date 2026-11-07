@@ -114,7 +114,7 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	token, err := config.Token(cfg.TokenFile)
 	if err != nil {
 		return err
@@ -130,7 +130,7 @@ func run(args []string) error {
 	handler.AccessLog = *accessLog
 	if *publicURL != "" {
 		// The same origin was accepted before the store was opened.
-		handler.SetPublicURL(*publicURL)
+		_ = handler.SetPublicURL(*publicURL)
 	}
 	handler.SetUI(webui.Handler())
 	server := &http.Server{Handler: handler, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 10 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16 << 10}

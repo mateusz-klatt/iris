@@ -89,7 +89,7 @@ func TestConnectAcksACursorAndStopsOnAResetFailure(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.CloseNow()
+		defer func() { _ = conn.CloseNow() }()
 		ctx := r.Context()
 		_ = conn.Write(ctx, websocket.MessageText, []byte(`{"stream":"s","cursor":4,"kind":"inbox_changed"}`))
 		_ = conn.Write(ctx, websocket.MessageText, []byte(`{"stream":"s","cursor":4,"kind":"inbox_changed"}`))
@@ -132,7 +132,7 @@ func TestConnectReturnsWhenTheSocketClosesOrTheContextEnds(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.CloseNow()
+		defer func() { _ = conn.CloseNow() }()
 		<-r.Context().Done()
 	}))
 	defer hold.Close()
@@ -232,12 +232,13 @@ func TestConnectResetSnapshotAndAckFailure(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.CloseNow()
+		defer func() { _ = conn.CloseNow() }()
 		ctx := r.Context()
 		body := []byte(`{"kind":"reset"}`)
-		if mode == "bad" {
+		switch mode {
+		case "bad":
 			body = []byte("not-json")
-		} else if mode == "ack" {
+		case "ack":
 			body = []byte(`{"stream":"s","cursor":3,"kind":"inbox_changed"}`)
 		}
 		_ = conn.Write(ctx, websocket.MessageText, body)
@@ -294,7 +295,7 @@ func TestConnectStopsAReaderWhenTheContextEndsDuringAWrite(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.CloseNow()
+		defer func() { _ = conn.CloseNow() }()
 		for i := 0; i < 4; i++ {
 			if conn.Write(r.Context(), websocket.MessageText, []byte(`{"stream":"s","cursor":`+string(rune('1'+i))+`,"kind":"inbox_changed"}`)) != nil {
 				return
@@ -353,7 +354,7 @@ func TestRunReturnsAFlushFailure(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.CloseNow()
+		defer func() { _ = conn.CloseNow() }()
 		_ = conn.Write(r.Context(), websocket.MessageText, []byte(`{"stream":"s","cursor":1,"kind":"inbox_changed"}`))
 		<-r.Context().Done()
 	}))

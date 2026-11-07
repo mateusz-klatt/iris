@@ -47,7 +47,7 @@ func TestTokenLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	if _, err = s.AuthenticateToken(ctx, secret); err != nil {
 		t.Fatal("token did not survive restart", err)
 	}

@@ -46,7 +46,7 @@ func (s *Store) ListTokens(ctx context.Context) ([]map[string]any, error) {
 		if err != nil {
 			return err
 		}
-		defer rows.Close()
+		defer func() { _ = rows.Close() }()
 		for rows.Next() {
 			var name string
 			var created, count int64

@@ -103,7 +103,7 @@ func (h *Hub) tokenRoutes() {
 		digest, err := h.store.RevokeToken(r.Context(), r.PathValue("name"))
 		if err == nil {
 			for conn := range h.sockets[digest] {
-				go conn.Close(websocket.StatusPolicyViolation, "bearer token revoked")
+				go func() { _ = conn.Close(websocket.StatusPolicyViolation, "bearer token revoked") }()
 			}
 			for key, t := range h.tickets {
 				if t.principal.digest == digest {

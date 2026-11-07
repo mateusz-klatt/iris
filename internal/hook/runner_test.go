@@ -54,7 +54,7 @@ func TestFailOpenEveryClient(t *testing.T) {
 				t.Fatal(err)
 			}
 			addr := ln.Addr().String()
-			ln.Close()
+			_ = ln.Close()
 			out := editRunner(t, c, "http://"+addr, time.Second).Run()
 			assertAllow(t, c, out)
 		})
@@ -78,10 +78,10 @@ func TestEndToEndFakeHub(t *testing.T) {
 		switch r.URL.Path {
 		case "/v1/sessions":
 			sessions = append(sessions, body)
-			fmt.Fprintf(w, `{"execution_id":"ex_1","generation":3,"handle":"ex_1","agent":{"name":"claude-host"},"peers":[{"name":"codex-host","client":"codex","state":"active","branch":"main"}],"claims":[{"path":"src/a.go","holder":"codex-host","origin":"auto","expires_at":"14:32"}],"unread":2}`)
+			_, _ = fmt.Fprintf(w, `{"execution_id":"ex_1","generation":3,"handle":"ex_1","agent":{"name":"claude-host"},"peers":[{"name":"codex-host","client":"codex","state":"active","branch":"main"}],"claims":[{"path":"src/a.go","holder":"codex-host","origin":"auto","expires_at":"14:32"}],"unread":2}`)
 		case "/v1/claims/touch":
 			touches = append(touches, body)
-			fmt.Fprint(w, `{"action":"deny","message":"src/a.go is held by codex-host"}`)
+			_, _ = fmt.Fprint(w, `{"action":"deny","message":"src/a.go is held by codex-host"}`)
 		default:
 			w.WriteHeader(http.StatusNoContent)
 		}
@@ -163,10 +163,10 @@ func TestEndToEndFakeHub(t *testing.T) {
 	t.Run("ask-on-codex", func(t *testing.T) {
 		askSrv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			if r.URL.Path == "/v1/claims/touch" {
-				fmt.Fprint(w, `{"action":"ask","message":"conflict"}`)
+				_, _ = fmt.Fprint(w, `{"action":"ask","message":"conflict"}`)
 				return
 			}
-			fmt.Fprint(w, `{"execution_id":"ex_1","generation":1,"handle":"ex_1"}`)
+			_, _ = fmt.Fprint(w, `{"execution_id":"ex_1","generation":1,"handle":"ex_1"}`)
 		}))
 		defer askSrv.Close()
 		out := Runner{

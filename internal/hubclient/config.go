@@ -168,10 +168,10 @@ func WriteConfig(path string, f FileConfig) error {
 		return err
 	}
 	name := temp.Name()
-	defer os.Remove(name)
+	defer func() { _ = os.Remove(name) }()
 	prepareConfigWrite(temp)
 	if _, err = temp.Write(append(raw, '\n')); err != nil {
-		temp.Close()
+		_ = temp.Close()
 		return err
 	}
 	prepareConfigClose(temp)

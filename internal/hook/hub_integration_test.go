@@ -75,7 +75,7 @@ func TestCapturedEditsAgainstRealHub(t *testing.T) {
 					if err != nil {
 						t.Fatal(err)
 					}
-					defer database.Close()
+					defer func() { _ = database.Close() }()
 					server := httptest.NewUnstartedServer(nil)
 					server.Config.Handler = hub.New(database, "secret", []string{server.Listener.Addr().String()})
 					server.Start()

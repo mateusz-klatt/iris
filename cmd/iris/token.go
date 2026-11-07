@@ -29,7 +29,7 @@ func tokenCommand(ctx context.Context, client *hubclient.Client, args []string, 
 		if err := client.Do(ctx, "POST", "/v1/tokens", map[string]string{"host": args[1]}, &out); err != nil {
 			return err
 		}
-		fmt.Fprintln(stdout, out.Token)
+		_, _ = fmt.Fprintln(stdout, out.Token)
 	case len(args) == 1 && args[0] == "list":
 		var out struct {
 			Tokens []struct {
@@ -45,13 +45,13 @@ func tokenCommand(ctx context.Context, client *hubclient.Client, args []string, 
 			if token.Revoked != nil {
 				state = "revoked"
 			}
-			fmt.Fprintf(stdout, "%s\t%s\n", token.Name, state)
+			_, _ = fmt.Fprintf(stdout, "%s\t%s\n", token.Name, state)
 		}
 	case len(args) == 2 && args[0] == "revoke":
 		if err := client.Do(ctx, "DELETE", "/v1/tokens/"+url.PathEscape(args[1]), nil, nil); err != nil {
 			return err
 		}
-		fmt.Fprintln(stdout, "revoked", args[1])
+		_, _ = fmt.Fprintln(stdout, "revoked", args[1])
 	default:
 		return errors.New(tokenUsage)
 	}

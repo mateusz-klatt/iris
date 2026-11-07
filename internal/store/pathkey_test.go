@@ -239,7 +239,7 @@ func TestRecoveryCarriesTheKey(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer restarted.Close()
+	defer func() { _ = restarted.Close() }()
 	r := worktreeRequest(1)
 	r.Generation = a.Generation
 	call(t, restarted, "sessions", r)
@@ -278,7 +278,7 @@ func oldDatabase(t *testing.T) (file string, held []string) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer raw.Close()
+	defer func() { _ = raw.Close() }()
 	for _, q := range []string{"ALTER TABLE Claim DROP COLUMN path_key", "UPDATE Repository SET case_policy='sensitive'", "PRAGMA user_version=5"} {
 		if _, err = raw.Exec(q); err != nil {
 			t.Fatal(err)
@@ -307,13 +307,13 @@ func TestMigrationBackfillsEveryClaimAndFoldsEveryRepository(t *testing.T) {
 	if err = s.db.QueryRow("SELECT COUNT(*) FROM Repository WHERE case_policy<>'folded'").Scan(&sensitive); err != nil || sensitive != 0 {
 		t.Fatal(sensitive, err)
 	}
-	s.Close()
+	_ = s.Close()
 	// A second open changes nothing, and a migrated claim refuses another spelling.
 	again, err := Open(file, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer again.Close()
+	defer func() { _ = again.Close() }()
 	r := worktreeRequest(9)
 	r.Host = "other"
 	out := call(t, again, "sessions", r)
@@ -329,7 +329,7 @@ func TestPathKeyMigrationRollsBackAtEveryStep(t *testing.T) {
 	name := registerFaultDriver(f)
 	if s, err := openDatabase(file, nil, name); !errors.Is(err, errStorageFault) {
 		if s != nil {
-			s.Close()
+			_ = s.Close()
 		}
 		t.Fatal("discovery", err)
 	}
@@ -352,7 +352,7 @@ func TestPathKeyMigrationRollsBackAtEveryStep(t *testing.T) {
 		f.at = 0
 		if !errors.Is(err, errStorageFault) {
 			if s != nil {
-				s.Close()
+				_ = s.Close()
 			}
 			t.Fatalf("fault %d %s: %v", i+1, label, err)
 		}
@@ -370,13 +370,13 @@ func TestPathKeyMigrationRollsBackAtEveryStep(t *testing.T) {
 		if err = raw.QueryRow("SELECT COUNT(*) FROM Repository WHERE case_policy='folded'").Scan(&folded); err != nil || folded != 0 {
 			t.Fatalf("fault %d %s left a folded repository: %v", i+1, label, err)
 		}
-		raw.Close()
+		_ = raw.Close()
 	}
 	s, err := Open(file, nil)
 	if err != nil {
 		t.Fatal("the failed upgrade could not be retried", err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	var key string
 	if err = s.db.QueryRow("SELECT path_key FROM Claim WHERE path=?", held[0]).Scan(&key); err != nil || key != pathKey(held[0], "folded") {
 		t.Fatal(key, err)
@@ -401,7 +401,7 @@ func TestClaimsFromAnOlderBinaryAreKeyedAtTheNextStart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer restarted.Close()
+	defer func() { _ = restarted.Close() }()
 	for path, want := range map[string]string{"Docs/Guide": "docs/guide", "": ""} {
 		var key string
 		if err = restarted.db.QueryRow("SELECT path_key FROM Claim WHERE path=?", path).Scan(&key); err != nil || key != want {

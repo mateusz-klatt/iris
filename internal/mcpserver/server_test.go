@@ -86,7 +86,7 @@ func connect(t *testing.T, f *fakeHub) *mcp.ClientSession {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { session.Close() })
+	t.Cleanup(func() { _ = session.Close() })
 	return session
 }
 
@@ -267,7 +267,7 @@ func TestAnExecutionThatCannotBindIsReported(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 	out, failed := use(t, session, "peers", nil)
 	if !failed || out["error"].(map[string]any)["code"] != "unbound" {
 		t.Fatal(out)

@@ -65,7 +65,7 @@ func TestMonitorCursorFailureReleasesMonitor(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	response.Body.Close()
+	_ = response.Body.Close()
 	if response.StatusCode != 400 || fail.Load() {
 		t.Fatal("cursor failure was not exercised", response.StatusCode)
 	}
@@ -82,7 +82,7 @@ func TestMonitorCursorFailureReleasesMonitor(t *testing.T) {
 		raw, _ := io.ReadAll(response.Body)
 		t.Fatal("cursor retry failed", err, string(raw))
 	}
-	defer conn.CloseNow()
+	defer func() { _ = conn.CloseNow() }()
 }
 func TestStreamIOFailuresReleaseResources(t *testing.T) {
 	for _, kind := range []string{"event-write", "waiting-write", "reset-write", "ui-write", "ui-query", "watch-ping", "ui-ping"} {
@@ -126,7 +126,7 @@ func TestStreamIOFailuresReleaseResources(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer conn.CloseNow()
+			defer func() { _ = conn.CloseNow() }()
 			assertStreamClosedAndReleased(t, h, conn)
 		})
 	}
@@ -160,7 +160,7 @@ func TestRevokedDuringAcceptReleasesStream(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			defer conn.CloseNow()
+			defer func() { _ = conn.CloseNow() }()
 			assertStreamClosedAndReleased(t, h, conn)
 		})
 	}
@@ -191,7 +191,7 @@ func TestWakeUpgradeHonorsIssuerQuota(t *testing.T) {
 	defer cancel()
 	conn, resp, err := websocket.Dial(ctx, ticket["url"].(string), &websocket.DialOptions{Subprotocols: protocols})
 	if err == nil {
-		conn.CloseNow()
+		_ = conn.CloseNow()
 		t.Fatal("wake upgrade bypassed token quota")
 	}
 	if resp == nil || resp.StatusCode != 429 || resp.Header.Get("Retry-After") == "" {

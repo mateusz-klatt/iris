@@ -48,7 +48,7 @@ func (t *transaction) rekey(where string, args ...any) error {
 		entries = append(entries, e)
 	}
 	err = rows.Err()
-	rows.Close()
+	_ = rows.Close()
 	if err != nil {
 		return err
 	}

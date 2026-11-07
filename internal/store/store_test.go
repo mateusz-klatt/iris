@@ -230,7 +230,7 @@ func TestHeartbeatReattachesAfterRestart(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer reopened.Close()
+	defer func() { _ = reopened.Close() }()
 	expectError(t, reopened, "validate", a, "lost")
 	stale := a
 	stale.Source, stale.Generation = "watch", a.Generation+1
@@ -248,13 +248,13 @@ func TestHeartbeatReattachesAfterRestart(t *testing.T) {
 		t.Fatal("a reattached shim keeps the strong lease")
 	}
 	c.advance(121 * time.Second)
-	reopened.Close()
+	_ = reopened.Close()
 	reopened.lock = nil
 	late, err := Open(file, c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer late.Close()
+	defer func() { _ = late.Close() }()
 	c.advance(121 * time.Second)
 	expectError(t, late, "heartbeat", hb, "lost")
 }
@@ -274,7 +274,7 @@ func TestRestartRecoveryDoesNotExtend(t *testing.T) {
 	}
 	defer func() {
 		if reopened.lock != nil {
-			reopened.Close()
+			_ = reopened.Close()
 		}
 	}()
 	expectError(t, reopened, "validate", a, "lost")
@@ -286,7 +286,7 @@ func TestRestartRecoveryDoesNotExtend(t *testing.T) {
 	reattach.Generation = 0
 	expectError(t, reopened, "sessions", reattach, "lost")
 	c.advance(time.Minute)
-	reopened.Close()
+	_ = reopened.Close()
 	reopened.lock = nil
 	reopened, err = Open(file, c)
 	if err != nil {
@@ -317,13 +317,13 @@ func TestRecoverSameGeneration(t *testing.T) {
 	a, ao := session(t, s, 1)
 	q := claimRequest(a, "x", "held", "exact")
 	old := call(t, s, "claim", q)
-	s.Close()
+	_ = s.Close()
 	s.lock = nil
 	n, err := Open(file, c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer n.Close()
+	defer func() { _ = n.Close() }()
 	out := call(t, n, "sessions", Request{Client: "codex", Host: "host", Cwd: "/repo/w1", SessionID: "1", Generation: 1})
 	if out["execution_id"] != ao["execution_id"] {
 		t.Fatal(out)
@@ -373,13 +373,13 @@ func TestDeliveryRetryAckAndCrash(t *testing.T) {
 	wrong.Key = ack.Key
 	wrong.Attempt = 2
 	expectError(t, s, "ack", wrong, "conflict")
-	s.Close()
+	_ = s.Close()
 	s.lock = nil
 	n, err := Open(file, c)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer n.Close()
+	defer func() { _ = n.Close() }()
 	call(t, n, "sessions", Request{Client: "codex", Host: "host", Cwd: "/repo/w2", SessionID: "2", Generation: 1})
 	expectError(t, n, "ack", ack, "conflict")
 	third := call(t, n, "inbox", b)["deliveries"].([]map[string]any)[0]
@@ -396,7 +396,7 @@ func TestDeliveryRetryAckAndCrash(t *testing.T) {
 func TestRollbackAndLock(t *testing.T) {
 	s, _, file := testStore(t)
 	if second, err := Open(file, nil); err == nil {
-		second.Close()
+		_ = second.Close()
 		t.Fatal("second hub acquired lock")
 	}
 	a, _ := session(t, s, 1)
@@ -593,7 +593,7 @@ func TestCrashRecovery(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	counts := call(t, s, "status", Request{})["counts"].(map[string]int)
 	if counts["Message"] != 1 || counts["Delivery"] != 1 {
 		t.Fatal(counts)

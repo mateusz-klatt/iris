@@ -42,7 +42,7 @@ func TestHookLatency(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	server := httptest.NewUnstartedServer(nil)
 	server.Config.Handler = hub.New(s, "latency-token", []string{server.Listener.Addr().String()})
 	server.Start()
