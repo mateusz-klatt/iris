@@ -31,6 +31,8 @@ prevents arbitrary writes nor resolves a conflict.
 On clients with shell pre/post hooks, Iris records porcelain status before the shell
 and compares the post-tool status with that hub-stored snapshot, within 300 ms.
 Post-tool failures also reconcile because a failed shell can have written files.
+A changed path that no other Execution holds is then claimed automatically for this session, for
+10 minutes, as an edit tool's path would have been; one held elsewhere is reported, not taken.
 Warnings use the client's context output. Multiple live Executions in the same
 host/worktree suppress attribution and warnings. Non-shell tools do not scan status.
 

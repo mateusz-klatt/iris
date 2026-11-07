@@ -213,8 +213,10 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 			case "check":
 				r = Request{Host: "elsewhere", Cwd: "/other", Worktree: "/other", RemoteURL: "https://example.com/team/project.git", RootCommit: "root", Paths: []string{"held"}}
 			case "reconcile":
+				// dir/x is a's own automatic claim, renewed; dir/y is c's, so it is checked
+				// against the family and left alone.
 				r.Kind = "after"
-				r.Status = map[string]string{"file": "MM"}
+				r.Status = map[string]string{"file": "MM", "dir/x": " M", "dir/y": " M"}
 			case "ui_threads":
 				r = Request{RepositoryID: repo, Agent: name, Q: "persisted", Before: "9999999999999"}
 			case "ui_thread":
