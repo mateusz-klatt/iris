@@ -86,7 +86,7 @@ func TestInstallRemove(t *testing.T) {
 				t.Fatal(err)
 			}
 			for range 2 {
-				if err = Install(ctx, nested); err != nil {
+				if err = Install(ctx, nested, testIris); err != nil {
 					t.Fatal(err)
 				}
 			}
@@ -100,7 +100,7 @@ func TestInstallRemove(t *testing.T) {
 			if Remove(ctx, nested) == nil {
 				t.Fatal("removed changed hook")
 			}
-			if err = os.WriteFile(p, wrapper(true), 0755); err != nil {
+			if err = os.WriteFile(p, wrapper(testIris, true), 0755); err != nil {
 				t.Fatal(err)
 			}
 			if err = Remove(ctx, nested); err != nil {
@@ -128,7 +128,7 @@ func TestInstallWithoutExistingHook(t *testing.T) {
 	dir := t.TempDir()
 	git(t, dir, "init")
 	ctx := context.Background()
-	if err := Install(ctx, dir); err != nil {
+	if err := Install(ctx, dir, testIris); err != nil {
 		t.Fatal(err)
 	}
 	if err := Remove(ctx, dir); err != nil {
@@ -219,7 +219,7 @@ func TestInstalledHookChainsAndStopsOnDenial(t *testing.T) {
 	if err = os.WriteFile(p, original, 0755); err != nil {
 		t.Fatal(err)
 	}
-	if err = Install(context.Background(), dir); err != nil {
+	if err = Install(context.Background(), dir, filepath.Join(bin, name)); err != nil {
 		t.Fatal(err)
 	}
 	commit := func() {

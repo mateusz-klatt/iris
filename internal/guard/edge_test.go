@@ -69,7 +69,7 @@ func replaceRename(t *testing.T, fn func(from, to string) error) {
 
 func TestEveryCommandRefusesADirectoryOutsideGit(t *testing.T) {
 	dir := t.TempDir()
-	if err := Install(bg, dir); !errors.Is(err, gitinfo.ErrNotRepo) {
+	if err := Install(bg, dir, testIris); !errors.Is(err, gitinfo.ErrNotRepo) {
 		t.Fatal(err)
 	}
 	if err := Remove(bg, dir); !errors.Is(err, gitinfo.ErrNotRepo) {
@@ -82,7 +82,7 @@ func TestEveryCommandRefusesADirectoryOutsideGit(t *testing.T) {
 
 func TestGitFailureIsReported(t *testing.T) {
 	dir := brokenRepo(t)
-	if err := Install(bg, dir); err == nil || !strings.Contains(err.Error(), "find Git hooks directory") {
+	if err := Install(bg, dir, testIris); err == nil || !strings.Contains(err.Error(), "find Git hooks directory") {
 		t.Fatal(err)
 	}
 	if _, err := Check(bg, dir, nil); err == nil {
@@ -95,7 +95,7 @@ func TestInstallRefusesAHookItCannotRead(t *testing.T) {
 	if err := os.MkdirAll(hook, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := Install(bg, dir); err == nil {
+	if err := Install(bg, dir, testIris); err == nil {
 		t.Fatal("no error")
 	}
 	if err := Remove(bg, dir); err == nil {
@@ -114,7 +114,7 @@ func TestInstallRefusesASymlink(t *testing.T) {
 	if err := os.Symlink(target, hook); err != nil {
 		t.Fatal(err)
 	}
-	if err := Install(bg, dir); err == nil || !strings.Contains(err.Error(), "symlink") {
+	if err := Install(bg, dir, testIris); err == nil || !strings.Contains(err.Error(), "symlink") {
 		t.Fatal(err)
 	}
 }
@@ -123,7 +123,7 @@ func TestInstallRefusesToReplaceABackup(t *testing.T) {
 	dir, hook := repoHook(t)
 	seed(t, hook, "#!/bin/sh\nmine\n")
 	seed(t, hook+".iris-original", "older\n")
-	if err := Install(bg, dir); err == nil || !strings.Contains(err.Error(), "backup already exists") {
+	if err := Install(bg, dir, testIris); err == nil || !strings.Contains(err.Error(), "backup already exists") {
 		t.Fatal(err)
 	}
 	if got := mustRead(t, hook); string(got) != "#!/bin/sh\nmine\n" {
@@ -143,7 +143,7 @@ func TestInstallCannotCreateTheHooksDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(parent, 0o755) })
-	if err := Install(bg, dir); !errors.Is(err, os.ErrPermission) {
+	if err := Install(bg, dir, testIris); !errors.Is(err, os.ErrPermission) {
 		t.Fatal(err)
 	}
 }
@@ -159,7 +159,7 @@ func TestInstallCannotWriteInTheHooksDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = os.Chmod(hooks, 0o755) })
-	if err := Install(bg, dir); err == nil {
+	if err := Install(bg, dir, testIris); err == nil {
 		t.Fatal("no error")
 	}
 }
@@ -169,7 +169,7 @@ func TestInstallLeavesTheOriginalInPlaceWhenBackupFails(t *testing.T) {
 	seed(t, hook, "#!/bin/sh\nmine\n")
 	failure := errors.New("no rename")
 	replaceRename(t, func(string, string) error { return failure })
-	if err := Install(bg, dir); !errors.Is(err, failure) {
+	if err := Install(bg, dir, testIris); !errors.Is(err, failure) {
 		t.Fatal(err)
 	}
 	if got := mustRead(t, hook); string(got) != "#!/bin/sh\nmine\n" {
@@ -188,7 +188,7 @@ func TestInstallRollsBackWhenTheNewHookCannotBePlaced(t *testing.T) {
 		}
 		return os.Rename(from, to)
 	})
-	if err := Install(bg, dir); !errors.Is(err, failure) {
+	if err := Install(bg, dir, testIris); !errors.Is(err, failure) {
 		t.Fatal(err)
 	}
 	if got := mustRead(t, hook); string(got) != original {
@@ -203,7 +203,7 @@ func TestInstallWithoutAHookHasNothingToRollBack(t *testing.T) {
 	dir, hook := repoHook(t)
 	failure := errors.New("no rename")
 	replaceRename(t, func(string, string) error { return failure })
-	if err := Install(bg, dir); !errors.Is(err, failure) {
+	if err := Install(bg, dir, testIris); !errors.Is(err, failure) {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(hook); !errors.Is(err, os.ErrNotExist) {
@@ -216,13 +216,13 @@ func TestRemoveRefusesAChainWithoutItsOriginal(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(hook), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(hook, wrapper(true), 0o755); err != nil {
+	if err := os.WriteFile(hook, wrapper(testIris, true), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := Remove(bg, dir); !errors.Is(err, os.ErrNotExist) {
 		t.Fatal(err)
 	}
-	if !bytes.Equal(mustRead(t, hook), wrapper(true)) {
+	if !bytes.Equal(mustRead(t, hook), wrapper(testIris, true)) {
 		t.Fatal("hook was removed with nothing to restore")
 	}
 }
@@ -230,7 +230,7 @@ func TestRemoveRefusesAChainWithoutItsOriginal(t *testing.T) {
 func TestRemoveCannotDeleteTheHook(t *testing.T) {
 	needsPermissions(t)
 	dir, hook := repoHook(t)
-	if err := Install(bg, dir); err != nil {
+	if err := Install(bg, dir, testIris); err != nil {
 		t.Fatal(err)
 	}
 	hooks := filepath.Dir(hook)
@@ -260,7 +260,7 @@ func TestInstalledHookRunsOnlyForItsOwner(t *testing.T) {
 		t.Skip("Windows has no such mode")
 	}
 	dir, hook := repoHook(t)
-	if err := Install(bg, dir); err != nil {
+	if err := Install(bg, dir, testIris); err != nil {
 		t.Fatal(err)
 	}
 	info, err := os.Stat(hook)

@@ -5,10 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
+	"runtime"
+	"strings"
 	"time"
 
 	"github.com/mateusz-klatt/iris/internal/guard"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
+	"github.com/mateusz-klatt/iris/internal/integrate"
 )
 
 func runGuard(args []string) error {
@@ -28,7 +32,7 @@ func runGuard(args []string) error {
 	defer cancel()
 	switch args[0] {
 	case "install":
-		return guard.Install(ctx, dir)
+		return guard.Install(ctx, dir, guardIris(integrate.Layout{}.Iris(), os.Executable, runtime.GOOS))
 	case "remove":
 		return guard.Remove(ctx, dir)
 	case "check":
@@ -44,4 +48,20 @@ func runGuard(args []string) error {
 	default:
 		return errors.New(help) //nolint:staticcheck // usage text for a person, shown as written
 	}
+}
+
+// guardIris is the path the pre-commit hook runs first: the stable command on PATH, as the client
+// integrations record it, or this binary when iris is not on PATH. Git runs hooks with its own sh,
+// which on Windows reads forward slashes.
+func guardIris(onPath string, self func() (string, error), goos string) string {
+	p := onPath
+	if !filepath.IsAbs(p) {
+		if exe, err := self(); err == nil {
+			p = exe
+		}
+	}
+	if goos == "windows" {
+		p = strings.ReplaceAll(p, `\`, "/")
+	}
+	return p
 }

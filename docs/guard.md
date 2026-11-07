@@ -4,7 +4,11 @@
 Git resolves the hooks directory, including linked worktrees and `core.hooksPath`.
 An existing hook is saved as `pre-commit.iris-original` and runs after a successful
 Iris check. `iris guard remove` restores it; removal refuses to discard edited hooks.
-No hook is installed automatically. The `iris` binary must be on Git's PATH.
+No hook is installed automatically. The hook runs the `iris` recorded at install, then `iris`
+from Git's PATH if that path is gone. With neither it prints `Iris guard: iris not found; commit
+not checked` and allows the commit, so an uninstalled iris cannot block commits. A hook written
+by an earlier version, which found iris only on PATH and failed with 127 without it, is upgraded
+by the next `iris guard install`; hooks Iris did not write are kept as the chained original.
 
 `iris guard check` reads staged paths, including both ends of renames and deletions.
 It refuses paths claimed by an Execution in another worktree. Claims in the same
