@@ -40,11 +40,31 @@ jobs:
         # The 100% gate is enforced after the scan, so Sonar always gets the data.
         continue-on-error: true
         run: npm run coverage --prefix web
+      # Runs that Dependabot triggers get no repository secrets, so the scanner cannot
+      # authenticate and fails whatever the change. Those runs skip the analysis and say so.
+      # main's own run after the merge has the token, so the gate on main still decides.
+      # The coverage gate below runs either way.
+      - name: Is the Sonar token available?
+        id: sonar_token
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          if [ -n "$SONAR_TOKEN" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          elif [ "$GITHUB_EVENT_NAME" = push ]; then
+            echo "::error title=Sonar token missing::main's run must have SONAR_TOKEN; the analysis cannot be skipped here."
+            exit 1
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Sonar skipped::SONAR_TOKEN is not available to this run (Dependabot gets no repository secrets), so the SonarCloud analysis was skipped. main's analysis after the merge still runs."
+          fi
       - name: SonarCloud Scan
+        if: ${{ steps.sonar_token.outputs.present == 'true' }}
         uses: SonarSource/sonarqube-scan-action@e805d875275f728fac1885b413934be6d7c63f65 # v8.4.1
         env:
           SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
       - name: SonarCloud Quality Gate
+        if: ${{ steps.sonar_token.outputs.present == 'true' }}
         uses: SonarSource/sonarqube-quality-gate-action@7a5fffe8e523c40e0c740b6bc2712ab503e52efa
         timeout-minutes: 5
         env:
