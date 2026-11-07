@@ -120,6 +120,43 @@ func TestEveryToolIsListed(t *testing.T) {
 	}
 }
 
+// The annotations are what a client sees, so they are checked over the wire.
+func TestToolAnnotationsSayWhatEachToolDoesToTheHub(t *testing.T) {
+	s := connect(t, &fakeHub{})
+	list, err := s.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type hint struct{ readOnly, destructive, idempotent bool }
+	want := map[string]hint{
+		"whoami": {readOnly: true}, "peers": {readOnly: true}, "claims": {readOnly: true},
+		"inbox": {}, "send": {}, "claim": {}, "watch_ticket": {},
+		"ack":     {idempotent: true},
+		"release": {destructive: true, idempotent: true},
+	}
+	for _, tool := range list.Tools {
+		a := tool.Annotations
+		w, ok := want[tool.Name]
+		if !ok || a == nil {
+			t.Fatalf("%s: %+v", tool.Name, a)
+		}
+		if a.OpenWorldHint == nil || *a.OpenWorldHint {
+			t.Fatalf("%s is not closed-world", tool.Name)
+		}
+		if a.ReadOnlyHint != w.readOnly || a.IdempotentHint != w.idempotent {
+			t.Fatalf("%s: %+v, want %+v", tool.Name, a, w)
+		}
+		// destructiveHint means something only for a tool that writes.
+		if !w.readOnly && (a.DestructiveHint == nil || *a.DestructiveHint != w.destructive) {
+			t.Fatalf("%s: destructive %v, want %v", tool.Name, a.DestructiveHint, w.destructive)
+		}
+		delete(want, tool.Name)
+	}
+	if len(want) != 0 {
+		t.Fatalf("not listed: %v", want)
+	}
+}
+
 // whoami's binding is cached, so it proves it to the hub. A dead token must not look healthy.
 func TestWhoamiProvesItsBindingToTheHub(t *testing.T) {
 	f := &fakeHub{reply: "{}"}
