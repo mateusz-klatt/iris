@@ -17,6 +17,17 @@ import (
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 )
 
+// ErrLost ends Run once a heartbeat confirms that this session's generation is gone at the
+// hub. Run has already said so on its output.
+var ErrLost = errors.New("this session's generation is gone at the hub")
+
+// Stopped prints the line a monitor gives when it ends, so a dead monitor is never silent:
+// its output reaches the model, which then knows notifications have stopped.
+func Stopped(w io.Writer, reason string) error {
+	_, err := fmt.Fprintf(w, "Iris: notifications stopped: %s.\n", reason)
+	return err
+}
+
 // maxBackoff caps reconnect delay. Tests shrink it so the cap is observable.
 var maxBackoff = 30 * time.Second
 
@@ -179,8 +190,11 @@ func (r *Runner) Run(ctx context.Context) error {
 		if !r.opened.IsZero() && r.now().Sub(r.opened) >= maxBackoff {
 			delay = base
 		}
-		if binding.IsCode(err, "lost") {
-			return nil
+		// A lost answer from the stream or a bind can be a session still recovering after a
+		// hub restart, so it is retried like any other failure. Only the heartbeat's verdict
+		// ends the monitor, and then with a line, never silently.
+		if binding.IsCode(err, "lost") && r.Resolver.Lost() {
+			return r.lost()
 		}
 		// Say it once: each retry would cost the model another turn.
 		rejected := binding.IsCode(err, "unauthorized")
@@ -198,7 +212,7 @@ func (r *Runner) Run(ctx context.Context) error {
 			select {
 			case <-ctx.Done():
 				tick.Stop()
-				return nil
+				return r.ended()
 			case <-wait:
 				break waiting
 			case <-tick.C:
@@ -214,7 +228,23 @@ func (r *Runner) Run(ctx context.Context) error {
 			delay = maxBackoff
 		}
 	}
+	return r.ended()
+}
+
+// ended is Run's result when its context ends. The heartbeat cancels it once the generation is
+// gone, and that is said; any other cancellation is the caller's, who says why.
+func (r *Runner) ended() error {
+	if r.Resolver.Lost() {
+		return r.lost()
+	}
 	return nil
+}
+
+func (r *Runner) lost() error {
+	if err := Stopped(r.Output, "the hub no longer has this session's generation; restart the monitor once the session is back"); err != nil {
+		return outputError{err}
+	}
+	return ErrLost
 }
 
 // waiting reads how much mail is unfetched. An older hub does not say.

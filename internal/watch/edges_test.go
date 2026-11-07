@@ -9,6 +9,7 @@ import (
 	"reflect"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -206,16 +207,6 @@ func TestRunCapsBackoffAndDefaultsAMissingDelay(t *testing.T) {
 	}
 	runner.after = nil
 
-	lost := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusConflict)
-		_, _ = w.Write([]byte(`{"error":{"code":"lost","message":"restart"}}`))
-	}))
-	defer lost.Close()
-	runner.Backoff = 0
-	runner.Resolver = binding.New(&hubclient.Client{Config: testConfig{url: lost.URL}}, "claude")
-	if err := runner.Run(context.Background()); err != nil {
-		t.Fatal(err)
-	}
 }
 
 func TestConnectResetSnapshotAndAckFailure(t *testing.T) {
@@ -323,17 +314,64 @@ func TestConnectStopsAReaderWhenTheContextEndsDuringAWrite(t *testing.T) {
 	}
 }
 
-func TestRunStopsForALostExecutionAndACancelledContext(t *testing.T) {
+// A lost answer to a bind can be a session still recovering after a hub restart, so the monitor
+// keeps retrying and prints nothing; only its context ends it.
+func TestALostBindIsRetriedNotTheEnd(t *testing.T) {
+	var binds atomic.Int32
 	lost := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		binds.Add(1)
 		w.WriteHeader(http.StatusConflict)
 		_, _ = w.Write([]byte(`{"error":{"code":"lost","message":"restart"}}`))
 	}))
 	defer lost.Close()
-	runner := &Runner{Resolver: binding.New(&hubclient.Client{Config: testConfig{url: lost.URL}}, "claude"), Output: &bytes.Buffer{}, Backoff: time.Millisecond}
-	if err := runner.Run(context.Background()); err != nil {
-		t.Fatal(err)
+	out := &bytes.Buffer{}
+	runner := &Runner{Resolver: binding.New(&hubclient.Client{Config: testConfig{url: lost.URL}}, "claude"), Output: out, Backoff: time.Millisecond}
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+	if err := runner.Run(ctx); err != nil || out.Len() != 0 || binds.Load() < 2 {
+		t.Fatalf("err %v, output %q, %d binds", err, out.String(), binds.Load())
 	}
+}
 
+// Once a heartbeat confirms the generation is gone, the monitor says so in one line and ends.
+func TestAGenerationTheHeartbeatFindsGoneEndsWithALine(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/v1/bind":
+			_, _ = w.Write([]byte(`{"execution_id":"ex","generation":1,"repository_id":"r","agent":{"name":"claude-host"}}`))
+		case strings.HasSuffix(r.URL.Path, "/heartbeat"):
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(`{"error":{"code":"lost","message":"gone"}}`))
+		default:
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(`{"error":{"code":"lost","message":"recovering"}}`))
+		}
+	}))
+	defer srv.Close()
+	resolver := binding.New(&hubclient.Client{Config: testConfig{url: srv.URL}}, "claude")
+	resolver.Getenv = func(k string) string {
+		if k == "IRIS_EXECUTION" {
+			return "ex"
+		}
+		return ""
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	go resolver.Maintain(ctx, "watch", 20*time.Millisecond, func() bool { return true }, cancel)
+	out := &lines{}
+	err := (&Runner{Resolver: resolver, Output: out, Backoff: time.Millisecond}).Run(ctx)
+	if !errors.Is(err, ErrLost) || strings.Count(out.String(), "Iris: notifications stopped: ") != 1 {
+		t.Fatalf("err %v, output %q", err, out.String())
+	}
+	// The line is the monitor's last word even when it cannot be printed.
+	broken := &Runner{Resolver: resolver, Output: failWriter{err: errors.New("closed")}}
+	if err := broken.Run(context.Background()); err == nil || errors.Is(err, ErrLost) {
+		t.Fatalf("a failed stop line: %v", err)
+	}
+}
+
+func TestRunStopsForACancelledContext(t *testing.T) {
+	runner := &Runner{Output: &bytes.Buffer{}, Backoff: time.Millisecond}
 	ctx, cancel := context.WithCancel(context.Background())
 	time.AfterFunc(50*time.Millisecond, cancel)
 	runner.Resolver = binding.New(&hubclient.Client{Config: testConfig{url: "http://127.0.0.1:1"}}, "claude")
