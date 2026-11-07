@@ -319,6 +319,9 @@ type manifestFile struct {
 	Client  string `json:"client"`
 	Created bool   `json:"created"`
 	Backup  string `json:"backup,omitempty"`
+	// Dirs are the directories the write had to create, deepest first. Remove takes them out
+	// again when they are empty. A directory that existed before, even empty, is never listed.
+	Dirs []string `json:"dirs,omitempty"`
 }
 
 func manifestPath(stateDir string) string {
@@ -389,7 +392,9 @@ func (l Layout) remember(client, path string, existing []byte, absent bool) erro
 		return nil
 	}
 	rec := manifestFile{Client: client, Created: absent}
-	if !absent {
+	if absent {
+		rec.Dirs = missingDirs(filepath.Dir(path))
+	} else {
 		name := base64.RawURLEncoding.EncodeToString([]byte(path))
 		rel := filepath.Join("integrate", "backup", name)
 		if err := atomicWrite(filepath.Join(dir, rel), existing); err != nil {
@@ -399,6 +404,18 @@ func (l Layout) remember(client, path string, existing []byte, absent bool) erro
 	}
 	m.Files[path] = rec
 	return saveManifest(dir, m)
+}
+
+// missingDirs lists dir and each parent that does not exist yet, deepest first.
+func missingDirs(dir string) []string {
+	var out []string
+	for ; dir != filepath.Dir(dir); dir = filepath.Dir(dir) {
+		if _, err := os.Lstat(dir); err == nil {
+			break
+		}
+		out = append(out, dir)
+	}
+	return out
 }
 
 func refuseSpecial(path string) error {

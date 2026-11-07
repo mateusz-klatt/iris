@@ -58,6 +58,7 @@ func unwireFile(stateDir, path string, rec manifestFile, strip stripFunc) error 
 	data, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		_ = os.Remove(backup)
+		removeDirs(rec)
 		return nil
 	}
 	if err != nil {
@@ -69,7 +70,9 @@ func unwireFile(stateDir, path string, rec manifestFile, strip stripFunc) error 
 	}
 	switch {
 	case rec.Created && hasNoContent(next):
-		err = os.Remove(path)
+		if err = os.Remove(path); err == nil {
+			removeDirs(rec)
+		}
 	case removed:
 		err = atomicWrite(path, asFound(path, next, backup, strip))
 	}
@@ -78,6 +81,14 @@ func unwireFile(stateDir, path string, rec manifestFile, strip stripFunc) error 
 	}
 	_ = os.Remove(backup)
 	return nil
+}
+
+// removeDirs takes out the directories Iris created for a file, deepest first. One that holds
+// anything stays. Measured on Grok: ~/.grok/hooks was left behind, empty, after remove.
+func removeDirs(rec manifestFile) {
+	for _, d := range rec.Dirs {
+		_ = os.Remove(d)
+	}
 }
 
 // asFound returns the backup bytes when next differs from them only by
