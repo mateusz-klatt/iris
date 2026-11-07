@@ -49,9 +49,11 @@ func putNestedHook(doc map[string]any, event string, hook map[string]any, match 
 	if !ok {
 		return ErrBroken
 	}
-	// Only Iris's own handler is replaced. A person's handler in the same group, and the group's
-	// own keys such as its matcher, stay: replacing the whole group deleted them (gap review A6).
-	replaced := false
+	// Iris's handler lives in a group of its own, with no matcher, so it runs for every tool. In a
+	// group that also holds a person's handlers, only Iris's handler is taken out and the group,
+	// matcher included, stays as they wrote it: replacing the whole group deleted their handlers
+	// (gap review A6), and leaving Iris in it would make Iris inherit their matcher and skip edits.
+	placed := false
 	var out []any
 	for _, item := range arr {
 		if !match(item) {
@@ -59,31 +61,26 @@ func putNestedHook(doc map[string]any, event string, hook map[string]any, match 
 			continue
 		}
 		g, isGroup := item.(map[string]any)
-		handlers, hasHandlers := g["hooks"].([]any)
-		if !isGroup || !hasHandlers {
-			// A handler written directly in the event list, as some clients allow.
-			if !replaced {
-				out = append(out, group)
-				replaced = true
+		handlers, _ := g["hooks"].([]any)
+		var theirs []any
+		for _, h := range handlers {
+			if !match(h) {
+				theirs = append(theirs, h)
 			}
+		}
+		if isGroup && len(theirs) > 0 {
+			g["hooks"] = theirs
+			out = append(out, g)
 			continue
 		}
-		var kept []any
-		for _, h := range handlers {
-			switch {
-			case !match(h):
-				kept = append(kept, h)
-			case !replaced:
-				kept = append(kept, hook)
-				replaced = true
-			}
-		}
-		if len(kept) > 0 {
-			g["hooks"] = kept
-			out = append(out, g)
+		// Iris's own group, or a handler written directly in the list: the canonical group
+		// takes the place of the first one, and later copies go.
+		if !placed {
+			out = append(out, group)
+			placed = true
 		}
 	}
-	if !replaced {
+	if !placed {
 		out = append(out, group)
 	}
 	hooks[event] = out

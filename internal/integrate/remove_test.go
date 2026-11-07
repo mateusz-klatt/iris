@@ -520,6 +520,17 @@ func TestReintegrateKeepsSiblingHandlersAndGroupKeys(t *testing.T) {
 	if !strings.Contains(text, `"beside"`) || !strings.Contains(text, `"matcher": "mine"`) {
 		t.Fatalf("lost the person's handler or the group's matcher\n%s", text)
 	}
+	// Iris must not inherit the person's matcher, or its PreToolUse would skip other tools.
+	var after map[string]any
+	if err := json.Unmarshal([]byte(text), &after); err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range after["hooks"].(map[string]any)["Stop"].([]any) {
+		group := g.(map[string]any)
+		if treeContains(group, "--client codex --event Stop") && (group["matcher"] != nil || len(group["hooks"].([]any)) != 1) {
+			t.Fatalf("Iris shares a group or a matcher: %v", group)
+		}
+	}
 	for _, event := range []string{"Stop", "SessionEnd"} {
 		if n := strings.Count(text, "--client codex --event "+event); n != 1 {
 			t.Fatalf("%d Iris %s handlers, want 1\n%s", n, event, text)
