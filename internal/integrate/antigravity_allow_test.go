@@ -59,8 +59,10 @@ func TestAntigravitySettingsCreatedByIrisGoAway(t *testing.T) {
 
 func TestAllowRulesKeepOtherRulesAndRefuseWrongTypes(t *testing.T) {
 	doc := map[string]any{"permissions": map[string]any{"allow": []any{"a", AgyAllowRule}, "deny": []any{"b"}}}
-	if !RemoveAllowRule(doc, AgyAllowRule) || RemoveAllowRule(doc, AgyAllowRule) {
-		t.Fatal("remove should report once")
+	first := RemoveAllowRule(doc, AgyAllowRule)
+	second := RemoveAllowRule(doc, AgyAllowRule)
+	if !first || second {
+		t.Fatalf("remove reported %v then %v, want true then false", first, second)
 	}
 	perms := doc["permissions"].(map[string]any)
 	if len(perms["allow"].([]any)) != 1 || perms["deny"] == nil {
@@ -71,7 +73,12 @@ func TestAllowRulesKeepOtherRulesAndRefuseWrongTypes(t *testing.T) {
 		t.Fatalf("empty containers left: %v", only)
 	}
 	twice := map[string]any{}
-	if AddAllowRule(twice, "r") != nil || AddAllowRule(twice, "r") != nil || len(twice["permissions"].(map[string]any)["allow"].([]any)) != 1 {
+	for range 2 {
+		if err := AddAllowRule(twice, "r"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(twice["permissions"].(map[string]any)["allow"].([]any)) != 1 {
 		t.Fatalf("a rule added twice: %v", twice)
 	}
 	for _, bad := range []map[string]any{{"permissions": "x"}, {"permissions": map[string]any{"allow": "x"}}} {
