@@ -44,7 +44,7 @@ func (t *transaction) claimRows(repo string) ([]claim, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	out := []claim{}
 	for rows.Next() {
 		var c claim

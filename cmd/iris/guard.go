@@ -18,7 +18,7 @@ func runGuard(args []string) error {
 		return nil
 	}
 	if len(args) != 1 {
-		return errors.New(help)
+		return errors.New(help) //nolint:staticcheck // usage text for a person, shown as written
 	}
 	dir, err := os.Getwd()
 	if err != nil {
@@ -42,6 +42,6 @@ func runGuard(args []string) error {
 		}
 		return nil
 	default:
-		return errors.New(help)
+		return errors.New(help) //nolint:staticcheck // usage text for a person, shown as written
 	}
 }

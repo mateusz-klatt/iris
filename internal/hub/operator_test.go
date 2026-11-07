@@ -68,7 +68,7 @@ func TestOperatorThreadsAndSecurity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer ws.CloseNow()
+	defer func() { _ = ws.CloseNow() }()
 	_, frame, err := ws.Read(ctx)
 	if err != nil {
 		t.Fatal(err)
@@ -82,7 +82,7 @@ func TestOperatorThreadsAndSecurity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res.Body.Close()
+	_ = res.Body.Close()
 	if res.StatusCode != 303 || len(res.Cookies()) != 1 {
 		t.Fatal(res.Status)
 	}
@@ -94,7 +94,7 @@ func TestOperatorThreadsAndSecurity(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	res.Body.Close()
+	_ = res.Body.Close()
 	if res.StatusCode != 401 {
 		t.Fatal("reused login", res.Status)
 	}
@@ -121,7 +121,7 @@ func TestOperatorThreadsAndSecurity(t *testing.T) {
 			t.Fatal(path, w.Code)
 		}
 	}
-	h.SetUI(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { io.WriteString(w, "static") }))
+	h.SetUI(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = io.WriteString(w, "static") }))
 	req = httptest.NewRequest("GET", s.URL+"/", nil)
 	w = httptest.NewRecorder()
 	h.ServeHTTP(w, req)
@@ -140,17 +140,17 @@ func TestOneMonitorPerExecution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.CloseNow()
+	defer func() { _ = conn.CloseNow() }()
 	other, res, err := websocket.Dial(ctx, endpoint, options)
 	if other != nil {
-		other.CloseNow()
+		_ = other.CloseNow()
 	}
 	if err == nil || res.StatusCode != 409 {
 		t.Fatal("duplicate monitor accepted")
 	}
 	send(t, s, a, b, "first")
 	first := frame(t, conn)
-	conn.CloseNow()
+	_ = conn.CloseNow()
 	send(t, s, a, b, "second")
 	send(t, s, a, b, "third")
 	endpoint = watchURL(s, b["execution_id"], int64(first["cursor"].(float64))) + "&consumer_id=iris-watch"
@@ -165,7 +165,7 @@ func TestOneMonitorPerExecution(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer again.CloseNow()
+	defer func() { _ = again.CloseNow() }()
 	second, third := frame(t, again), frame(t, again)
 	if first["cursor"].(float64) >= second["cursor"].(float64) || second["cursor"].(float64) >= third["cursor"].(float64) {
 		t.Fatal(first, second, third)

@@ -23,7 +23,7 @@ func TestNamedTokenRevokesStreams(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		if resp.StatusCode != status {
 			t.Fatal(path, resp.StatusCode)
 		}
@@ -37,7 +37,7 @@ func TestNamedTokenRevokesStreams(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { c.CloseNow() })
+		t.Cleanup(func() { _ = c.CloseNow() })
 		return c
 	}
 	bearer := open(watchURL(s, session["execution_id"], 0), []string{"iris.v1"}, headers)
@@ -53,7 +53,7 @@ func TestNamedTokenRevokesStreams(t *testing.T) {
 		Protocols []string `json:"protocols"`
 	}
 	err = json.NewDecoder(resp.Body).Decode(&ticket)
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -73,7 +73,7 @@ func TestNamedTokenRevokesStreams(t *testing.T) {
 	call("/v1/agents", 401)
 	c, resp, err := websocket.Dial(ctx, watchURL(s, session["execution_id"], 0), &websocket.DialOptions{HTTPHeader: headers, Subprotocols: []string{"iris.v1"}})
 	if err == nil {
-		c.CloseNow()
+		_ = c.CloseNow()
 		t.Fatal("revoked token opened websocket")
 	}
 	if resp == nil || resp.StatusCode != 401 {
@@ -100,7 +100,7 @@ func TestOnlyTheOwnerManagesTokens(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer resp.Body.Close()
+		defer func() { _ = resp.Body.Close() }()
 		return resp.StatusCode
 	}
 	for _, route := range []struct{ method, path, body string }{
@@ -134,7 +134,7 @@ func TestForgetIsForTheOwnerOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusForbidden {
 		t.Fatal(resp.StatusCode)
 	}
@@ -143,7 +143,7 @@ func TestForgetIsForTheOwnerOnly(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusUnauthorized {
 		t.Fatal("anonymous", resp.StatusCode)
 	}

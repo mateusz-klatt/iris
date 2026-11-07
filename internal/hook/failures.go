@@ -172,7 +172,7 @@ func appendFailure(tokenFile string, entry Failure) error {
 	if err != nil {
 		return err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if err = lockFailureLog(f); err != nil {
 		return err
 	}
@@ -240,7 +240,7 @@ func ReadRecentFailures(tokenFile string, limit int) ([]Failure, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	if err = lockFailureLogShared(f); err != nil {
 		return nil, err
 	}

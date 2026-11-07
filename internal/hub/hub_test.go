@@ -25,7 +25,7 @@ func setup(t *testing.T) (*Hub, *httptest.Server) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 	server := httptest.NewUnstartedServer(nil)
 	h := New(s, "test-secret", []string{server.Listener.Addr().String()})
 	server.Config.Handler = h
@@ -52,7 +52,7 @@ func request(t *testing.T, s *httptest.Server, method, path string, value any, s
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	var out map[string]any
 	if err = json.NewDecoder(resp.Body).Decode(&out); err != nil {
 		t.Fatal(err)
@@ -79,7 +79,7 @@ func dial(t *testing.T, s *httptest.Server, ex any, after int64) *websocket.Conn
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { conn.CloseNow() })
+	t.Cleanup(func() { _ = conn.CloseNow() })
 	return conn
 }
 func frame(t *testing.T, conn *websocket.Conn) map[string]any {
@@ -153,7 +153,7 @@ func TestWatchReconnectIsolationReset(t *testing.T) {
 		t.Fatal(one)
 	}
 	cursor := int64(one["cursor"].(float64))
-	conn.CloseNow()
+	_ = conn.CloseNow()
 	send(t, s, a, c, "other-recipient")
 	send(t, s, a, b, "two")
 	send(t, s, a, b, "three")
@@ -162,7 +162,7 @@ func TestWatchReconnectIsolationReset(t *testing.T) {
 	if two["kind"] != "inbox_changed" || two["cursor"].(float64) >= three["cursor"].(float64) {
 		t.Fatal(two, three)
 	}
-	again.CloseNow()
+	_ = again.CloseNow()
 	// Watching never fetches or acknowledges messages.
 	inbox := request(t, s, "GET", "/v1/inbox?execution_id="+b["execution_id"].(string), nil, 200)
 	if len(inbox["deliveries"].([]any)) != 3 {
@@ -203,14 +203,14 @@ func TestWakeTicketsRotateScopeExpireAndDie(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			t.Cleanup(func() { conn.CloseNow() })
+			t.Cleanup(func() { _ = conn.CloseNow() })
 		} else {
 			if err == nil {
-				conn.CloseNow()
+				_ = conn.CloseNow()
 				t.Fatal("invalid ticket accepted")
 			}
 			if resp != nil && resp.Body != nil {
-				resp.Body.Close()
+				_ = resp.Body.Close()
 			}
 		}
 		return conn
@@ -228,7 +228,7 @@ func TestWakeTicketsRotateScopeExpireAndDie(t *testing.T) {
 	if frame(t, conn)["kind"] != "inbox_changed" {
 		t.Fatal("missing wake")
 	}
-	conn.CloseNow()
+	_ = conn.CloseNow()
 	dead := issue()
 	request(t, s, "POST", "/v1/executions/"+b["execution_id"].(string)+"/end", map[string]any{"generation": 1}, 200)
 	try(dead["url"].(string), protocols(dead), false)
@@ -256,8 +256,8 @@ func TestTransportAndInputGuards(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		io.Copy(io.Discard, resp.Body)
-		resp.Body.Close()
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
 		if resp.StatusCode != tc.status {
 			t.Fatalf("%+v: %d", tc, resp.StatusCode)
 		}
@@ -272,7 +272,7 @@ func TestTransportAndInputGuards(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 	if resp.StatusCode != 400 {
 		t.Fatal(resp.StatusCode)
 	}
@@ -294,7 +294,7 @@ func TestConnectedWakeTicketRevocation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		t.Cleanup(func() { conn.CloseNow() })
+		t.Cleanup(func() { _ = conn.CloseNow() })
 		return conn
 	}
 	closed := func(conn *websocket.Conn) {
@@ -324,7 +324,7 @@ func monitor(t *testing.T, s *httptest.Server, ex any, after int64) *websocket.C
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { conn.CloseNow() })
+	t.Cleanup(func() { _ = conn.CloseNow() })
 	return conn
 }
 
@@ -349,7 +349,7 @@ func TestEventForFetchedMailDoesNotAskForAttention(t *testing.T) {
 	_, s := setup(t)
 	a, b := register(t, s, 1), register(t, s, 2)
 	conn := monitor(t, s, b["execution_id"], 0)
-	conn.CloseNow()
+	_ = conn.CloseNow()
 	send(t, s, a, b, "one")
 	request(t, s, "GET", "/v1/inbox?execution_id="+b["execution_id"].(string), nil, 200)
 	again := dial(t, s, b["execution_id"], 0)

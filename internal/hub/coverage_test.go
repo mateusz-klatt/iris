@@ -116,10 +116,10 @@ func TestPingFailureAndUIUpgradeQuota(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.CloseNow()
+	defer func() { _ = conn.CloseNow() }()
 	other, response, err := websocket.Dial(ctx, url, options)
 	if err == nil {
-		other.CloseNow()
+		_ = other.CloseNow()
 		t.Fatal("UI socket cap bypassed")
 	}
 	if response.StatusCode != 429 {
@@ -196,7 +196,7 @@ func TestNegativeWatchCursorClosesStream(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.CloseNow()
+	defer func() { _ = conn.CloseNow() }()
 	_, _, err = conn.Read(ctx)
 	if websocket.CloseStatus(err) != websocket.StatusPolicyViolation {
 		t.Fatal("invalid cursor stream remained open", err)
@@ -219,7 +219,7 @@ func TestRevocationBetweenAuthenticationAndUpgrade(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.CloseNow()
+		defer func() { _ = conn.CloseNow() }()
 		if h.trackSocket(r, conn, p) {
 			h.untrackSocket(conn, p)
 			t.Error("revoked principal registered stream")
@@ -231,7 +231,7 @@ func TestRevocationBetweenAuthenticationAndUpgrade(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer conn.CloseNow()
+	defer func() { _ = conn.CloseNow() }()
 	_, _, err = conn.Read(ctx)
 	if websocket.CloseStatus(err) != websocket.StatusPolicyViolation {
 		t.Fatal("revocation race left socket open", err)

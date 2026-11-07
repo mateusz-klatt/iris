@@ -14,7 +14,7 @@ func lockDatabase(path string) (*os.File, error) {
 		return nil, err
 	}
 	if err = unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB); err != nil {
-		f.Close()
+		_ = f.Close()
 		return nil, fmt.Errorf("database already owned by another hub: %w", err)
 	}
 	return f, nil

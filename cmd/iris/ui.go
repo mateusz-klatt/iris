@@ -19,7 +19,7 @@ func openBrowser(argv []string) bool {
 	if err = command.Start(); err != nil {
 		return false
 	}
-	go command.Wait()
+	go func() { _ = command.Wait() }()
 	return true
 }
 

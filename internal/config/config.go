@@ -53,14 +53,14 @@ func Token(filename string) (string, error) {
 	f, err := os.OpenFile(filename, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if err == nil {
 		if err = secureToken(filename); err != nil {
-			f.Close()
-			os.Remove(filename)
+			_ = f.Close()
+			_ = os.Remove(filename)
 			return "", err
 		}
 		var b [32]byte
 		if _, err = readEntropy(b[:]); err != nil {
-			f.Close()
-			os.Remove(filename)
+			_ = f.Close()
+			_ = os.Remove(filename)
 			return "", err
 		}
 		token := base64.RawURLEncoding.EncodeToString(b[:])
@@ -73,7 +73,7 @@ func Token(filename string) (string, error) {
 			err = closeErr
 		}
 		if err != nil {
-			os.Remove(filename)
+			_ = os.Remove(filename)
 			return "", err
 		}
 		return token, nil

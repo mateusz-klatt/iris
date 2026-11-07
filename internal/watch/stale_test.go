@@ -29,7 +29,7 @@ func startHub(t *testing.T) realHub {
 	if err != nil {
 		t.Fatal(err)
 	}
-	t.Cleanup(func() { s.Close() })
+	t.Cleanup(func() { _ = s.Close() })
 	server := httptest.NewUnstartedServer(nil)
 	h := hub.New(s, "token", []string{server.Listener.Addr().String()})
 	h.PingInterval = 20 * time.Millisecond
@@ -195,7 +195,7 @@ func TestAResetAnnouncesOnlyMailStillWaiting(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer conn.CloseNow()
+		defer func() { _ = conn.CloseNow() }()
 		_ = conn.Write(r.Context(), websocket.MessageText, []byte(`{"stream":"new","cursor":9,"kind":"reset"}`))
 		<-r.Context().Done()
 	}))

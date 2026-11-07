@@ -26,7 +26,7 @@ func TestConfigPrecedence(t *testing.T) {
 		t.Fatal(r)
 	}
 	r.HubURL()
-	r.TokenPath()
+	_, _ = r.TokenPath()
 	r.HubURL()
 	if reads != 1 {
 		t.Fatal("configuration reread", reads)

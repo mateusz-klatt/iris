@@ -104,7 +104,7 @@ func (t *transaction) overview() (map[string]any, error) {
 		ids = append(ids, id)
 	}
 	err = rows.Err()
-	rows.Close()
+	_ = rows.Close()
 	if err != nil {
 		return nil, err
 	}
@@ -124,7 +124,7 @@ func (t *transaction) overview() (map[string]any, error) {
 			aliases = append(aliases, a)
 		}
 		err = rows.Err()
-		rows.Close()
+		_ = rows.Close()
 		if err != nil {
 			return nil, err
 		}
@@ -150,7 +150,7 @@ func (t *transaction) overview() (map[string]any, error) {
 		agents = append(agents, map[string]any{"id": id, "name": name, "client": client, "host": host, "repository_id": repo, "worktree": worktree, "branch": branch, "state": state, "last_seen": timestamp(sql.NullInt64{Int64: seen, Valid: seen > 0}), "unread": unread})
 	}
 	err = rows.Err()
-	rows.Close()
+	_ = rows.Close()
 	if err != nil {
 		return nil, err
 	}
@@ -192,7 +192,7 @@ func (t *transaction) threads(r Request) (map[string]any, error) {
 		out = append(out, map[string]any{"id": id, "subject": subject, "count": count, "last_at": timestamp(sql.NullInt64{Int64: at, Valid: true}), "unread": unread})
 	}
 	err = rows.Err()
-	rows.Close()
+	_ = rows.Close()
 	if err != nil {
 		return nil, err
 	}
@@ -208,7 +208,7 @@ func (t *transaction) threads(r Request) (map[string]any, error) {
 			names = append(names, name)
 		}
 		err = rows.Err()
-		rows.Close()
+		_ = rows.Close()
 		if err != nil {
 			return nil, err
 		}
@@ -230,7 +230,7 @@ func (t *transaction) thread(id string) (map[string]any, error) {
 		messages = append(messages, map[string]any{"id": mid, "thread_id": id, "sender": sender, "subject": subject, "body": body, "created_at": timestamp(sql.NullInt64{Int64: at, Valid: true}), "reply_to": reply.String})
 	}
 	err = rows.Err()
-	rows.Close()
+	_ = rows.Close()
 	if err != nil {
 		return nil, err
 	}
@@ -249,7 +249,7 @@ func (t *transaction) thread(id string) (map[string]any, error) {
 			recipients = append(recipients, map[string]any{"name": name, "state": state})
 		}
 		err = rows.Err()
-		rows.Close()
+		_ = rows.Close()
 		if err != nil {
 			return nil, err
 		}

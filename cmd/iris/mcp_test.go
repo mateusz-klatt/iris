@@ -30,7 +30,7 @@ func TestMCPStdio(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	httpServer := httptest.NewUnstartedServer(nil)
 	httpServer.Config.Handler = hub.New(s, "secret", []string{httpServer.Listener.Addr().String()})
 	httpServer.Start()
@@ -49,7 +49,7 @@ func TestMCPStdio(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer session.Close()
+	defer func() { _ = session.Close() }()
 	status, _ := s.Call(ctx, "status", store.Request{})
 	if status["counts"].(map[string]int)["Execution"] != 0 {
 		t.Fatal("binding was not lazy")

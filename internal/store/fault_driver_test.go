@@ -48,7 +48,7 @@ func (d faultDriver) Open(name string) (driver.Conn, error) {
 		return nil, err
 	}
 	if _, err = c.(driver.ExecerContext).ExecContext(context.Background(), "PRAGMA foreign_keys=ON", nil); err != nil {
-		c.Close()
+		_ = c.Close()
 		return nil, err
 	}
 	return faultConn{Conn: c, fault: d.fault}, nil
@@ -293,7 +293,7 @@ func TestFaultDriverPreservesEOF(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }()
 	if rows.Next() || rows.Err() != nil {
 		t.Fatal("empty result changed", rows.Err())
 	}
@@ -321,12 +321,12 @@ func TestMigrationStorageFailuresAreAtomic(t *testing.T) {
 			}
 			version = 2
 		}
-		raw.Close()
+		_ = raw.Close()
 		f := &storageFault{discover: true}
 		name := registerFaultDriver(f)
 		if s, err := openDatabase(file, nil, name); !errors.Is(err, errStorageFault) {
 			if s != nil {
-				s.Close()
+				_ = s.Close()
 			}
 			t.Fatal("migration discovery", err)
 		}
@@ -340,7 +340,7 @@ func TestMigrationStorageFailuresAreAtomic(t *testing.T) {
 			f.at = 0
 			if !errors.Is(err, errStorageFault) {
 				if s != nil {
-					s.Close()
+					_ = s.Close()
 				}
 				t.Fatalf("migration fault %d %s: %v", i+1, label, err)
 			}
@@ -353,21 +353,21 @@ func TestMigrationStorageFailuresAreAtomic(t *testing.T) {
 			if err = raw.QueryRow("PRAGMA user_version").Scan(&got); err != nil || got != version {
 				t.Fatal("partial migration", got, err)
 			}
-			raw.Close()
+			_ = raw.Close()
 		}
 		f.at = 0
 		s, err := openDatabase(file, nil, name)
 		if err != nil {
 			t.Fatal("migration retry", err)
 		}
-		s.Close()
+		_ = s.Close()
 	}
 }
 func TestOpenFilesystemFailuresReleaseOwnership(t *testing.T) {
 	dir := t.TempDir()
 	// A directory cannot be opened as the writable SQLite file.
 	if s, err := Open(dir, nil); err == nil {
-		s.Close()
+		_ = s.Close()
 		t.Fatal("directory accepted as database")
 	}
 	path := filepath.Join(t.TempDir(), "blocked.db")
@@ -375,11 +375,11 @@ func TestOpenFilesystemFailuresReleaseOwnership(t *testing.T) {
 		t.Fatal(err)
 	}
 	if s, err := Open(path, nil); err == nil {
-		s.Close()
+		_ = s.Close()
 		t.Fatal("invalid lock file accepted")
 	}
 	if s, err := openDatabase(filepath.Join(t.TempDir(), "unknown.db"), nil, "unregistered-iris-driver"); err == nil {
-		s.Close()
+		_ = s.Close()
 		t.Fatal("unknown driver accepted")
 	}
 

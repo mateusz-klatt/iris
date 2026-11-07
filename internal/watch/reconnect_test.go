@@ -45,7 +45,7 @@ func TestBurstReconnectNoDuplicateLine(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer s.Close()
+	defer func() { _ = s.Close() }()
 	register := func(id string) map[string]any {
 		out, err := s.Call(ctx, "sessions", store.Request{Client: "claude", Host: "host", SessionID: id, Cwd: "/repo"})
 		if err != nil {
@@ -79,10 +79,10 @@ func TestBurstReconnectNoDuplicateLine(t *testing.T) {
 		upstreamURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/relay" + "?" + r.URL.RawQuery
 		upstream, _, err := websocket.Dial(r.Context(), upstreamURL, &websocket.DialOptions{HTTPHeader: http.Header{"Authorization": {"Bearer token"}}, Subprotocols: []string{"iris.v1"}})
 		if err != nil {
-			http.Error(w, "retry", 503)
+			http.Error(w, "retry", http.StatusServiceUnavailable)
 			return
 		}
-		defer upstream.CloseNow()
+		defer func() { _ = upstream.CloseNow() }()
 		// The hub has placed this monitor at the newest event, so anything sent from
 		// here on arrives as a frame and not as mail already waiting.
 		attach.Do(func() { close(attached) })
@@ -90,7 +90,7 @@ func TestBurstReconnectNoDuplicateLine(t *testing.T) {
 		if err != nil {
 			return
 		}
-		defer downstream.CloseNow()
+		defer func() { _ = downstream.CloseNow() }()
 		relayCtx := downstream.CloseRead(r.Context())
 		for {
 			_, raw, err := upstream.Read(relayCtx)
