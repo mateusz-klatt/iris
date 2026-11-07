@@ -434,3 +434,25 @@ func TestServeAnnouncesNothingWhenThePortIsTaken(t *testing.T) {
 		t.Fatalf("a hub that never bound said %q", stderr)
 	}
 }
+
+func TestGuardRecordsTheStableIris(t *testing.T) {
+	self := func() (string, error) { return "/opt/iris/libexec/iris", nil }
+	broken := func() (string, error) { return "", errors.New("no executable") }
+	abs, _ := filepath.Abs(filepath.Join("bin", "iris"))
+	cases := []struct {
+		onPath string
+		self   func() (string, error)
+		goos   string
+		want   string
+	}{
+		{abs, self, "linux", abs},
+		{"iris", self, "darwin", "/opt/iris/libexec/iris"},
+		{"iris", broken, "linux", "iris"},
+		{"iris.exe", func() (string, error) { return `C:\Program Files\iris\iris.exe`, nil }, "windows", "C:/Program Files/iris/iris.exe"},
+	}
+	for _, tc := range cases {
+		if got := guardIris(tc.onPath, tc.self, tc.goos); got != tc.want {
+			t.Errorf("guardIris(%q, %s) = %q, want %q", tc.onPath, tc.goos, got, tc.want)
+		}
+	}
+}
