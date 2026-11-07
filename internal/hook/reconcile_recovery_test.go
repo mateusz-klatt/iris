@@ -46,7 +46,7 @@ func TestShellReconciliationCarriesTheRecoveryProof(t *testing.T) {
 		hub, reconciled := newHub()
 		r, ev := shellRunner(hub, root)
 		out := r.reconcile(context.Background(), ev, &runState{})
-		if !strings.Contains(string(out.Stdout), "cannot prove it is the same one") || !strings.Contains(string(out.Stdout), "deny") || *reconciled != 0 {
+		if !strings.Contains(string(out.Stdout), "at most about two minutes") || !strings.Contains(string(out.Stdout), "deny") || *reconciled != 0 {
 			t.Fatalf("reconciled %d: %s", *reconciled, out.Stdout)
 		}
 	})
@@ -103,8 +103,14 @@ func TestShellReconciliationRecordsEveryFailOpen(t *testing.T) {
 		}
 		state := &runState{}
 		out := r.reconcile(context.Background(), ev, state)
-		if _, err := state.snapshot(); !isAllow(out) || err == nil {
-			t.Fatalf("err %v: %s", err, out.Stdout)
+		// Only running past the budget is degraded, which doctor reports without calling the
+		// client silent; the same stage failing any other way is not.
+		stage, err := state.snapshot()
+		if !isAllow(out) || !(Failure{Stage: stage, Error: failureText(err)}).Degraded() {
+			t.Fatalf("stage %q err %v: %s", stage, err, out.Stdout)
+		}
+		if (Failure{Stage: stage, Error: "dependency failure (*errors.errorString)"}).Degraded() {
+			t.Fatal("a failed git status was graded as only slow")
 		}
 	})
 	t.Run("rejected token", func(t *testing.T) {

@@ -27,6 +27,9 @@ const (
 	StatusNotConfigured = "not_configured"
 	StatusNeedsHuman    = "needs_human"
 	StatusSilent        = "silent"
+	// StatusSlow is graded here only. Until the hub knows it, the report sends it as silent
+	// with a "slow: " detail; see published.
+	StatusSlow = "slow"
 )
 
 // Report is the body stored with PUT /v1/ui/doctor.
@@ -119,7 +122,7 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 	}
 	res.Guard = guardLine(ctx, opt.Dir)
 	if probe.up && probe.tokenOK {
-		if err := putReport(ctx, hubURL, token, res.Report, opt.HTTP); err != nil {
+		if err := putReport(ctx, hubURL, token, published(res.Report), opt.HTTP); err != nil {
 			res.StoreError = err.Error()
 		} else {
 			res.Stored = true
@@ -146,13 +149,13 @@ func guardLine(ctx context.Context, dir string) string {
 	return state + " (" + path + "); run `iris guard install`"
 }
 
-// ExitCode is 1 when the hub or token is unusable, or any client is silent.
+// ExitCode is 1 when the hub or token is unusable, or any client is silent or slow.
 func (r Result) ExitCode() int {
 	if !r.HubUp || !r.TokenOK {
 		return 1
 	}
 	for _, c := range r.Report.Clients {
-		if c.Status == StatusSilent {
+		if c.Status == StatusSilent || c.Status == StatusSlow {
 			return 1
 		}
 	}
@@ -278,34 +281,77 @@ func checkClient(ctx context.Context, opt Options, c integrate.Client) ClientRep
 // says nothing about whether the client is protected now.
 const failureWindow = 24 * time.Hour
 
-// applyFailures marks a client silent when hook-failures.log, beside the token
-// file, has a recent entry for it. A hook that failed open did not protect the turn.
-// An entry proves that a hook ran, so it counts even when doctor found no configuration.
+// slowLimit is how many over-budget shell reconciliations in failureWindow a client can have
+// before doctor says so. One is a cold cache; many mean changes routinely go unclaimed.
+const slowLimit = 10
+
+// applyFailures grades each client by its entries in hook-failures.log, beside the token
+// file. A failure that shows the hook is broken makes the client silent: that hook did not
+// protect the turn. A shell reconcile that only ran past its budget is degraded: the row
+// keeps its status with a note, unless there were more than slowLimit of them, which makes it
+// slow. An entry proves that a hook ran, so it counts even when doctor found no configuration.
 func applyFailures(res *Result, tokenFile string, now time.Time) error {
 	if strings.TrimSpace(tokenFile) == "" {
 		return nil
 	}
-	entries, err := hook.ReadRecentFailures(tokenFile, 20)
+	entries, err := hook.ReadRecentFailures(tokenFile, failureRead)
 	if err != nil {
 		return err
 	}
-	by := map[string][]string{}
+	broken := map[string][]string{}
+	degraded := map[string]int{}
 	for _, entry := range entries {
 		name := integrate.Canonical(entry.Client)
 		if name == "" || now.Sub(entry.Time) > failureWindow {
 			continue
 		}
-		by[name] = append(by[name], entry.Event+" "+entry.Stage+": "+entry.Error)
-	}
-	for i := range res.Report.Clients {
-		parts := by[res.Report.Clients[i].Client]
-		if len(parts) == 0 {
+		if entry.Degraded() {
+			degraded[name]++
 			continue
 		}
-		res.Report.Clients[i].Status = StatusSilent
-		res.Report.Clients[i].Detail = "recent hook failure: " + strings.Join(parts, "; ")
+		broken[name] = append(broken[name], entry.Event+" "+entry.Stage+": "+entry.Error)
+	}
+	for i := range res.Report.Clients {
+		row := &res.Report.Clients[i]
+		n := degraded[row.Client]
+		switch {
+		case len(broken[row.Client]) > 0:
+			row.Status = StatusSilent
+			row.Detail = "recent hook failure: " + strings.Join(broken[row.Client], "; ")
+		case n > slowLimit:
+			row.Status = StatusSlow
+			row.Detail = fmt.Sprintf("%d shell reconciliations ran past their %s budget in 24 h, so those commands' changes went unclaimed; git status is slow here, as on a big or cold worktree or a loaded machine", n, hook.ReconcileDeadline)
+		case n > 0:
+			row.Detail = joinDetail(row.Detail, fmt.Sprintf("degraded: %d shell reconciliation(s) ran past their %s budget in 24 h", n, hook.ReconcileDeadline))
+		}
 	}
 	return nil
+}
+
+// failureRead is how many log entries doctor reads: enough to count past slowLimit for every
+// client at once, and still within the 64 KiB the log keeps.
+const failureRead = 500
+
+func joinDetail(detail, note string) string {
+	if detail == "" {
+		return note
+	}
+	return detail + "; " + note
+}
+
+// published is the report as today's hub accepts it: a hub that does not know "slow" refuses
+// the whole report, so a slow row goes as silent with its grade in the detail.
+func published(r Report) Report {
+	out := r
+	out.Clients = make([]ClientReport, len(r.Clients))
+	for i, c := range r.Clients {
+		if c.Status == StatusSlow {
+			c.Status = StatusSilent
+			c.Detail = "slow: " + c.Detail
+		}
+		out.Clients[i] = c
+	}
+	return out
 }
 
 func validHook(client string, stdout []byte, exit int) error {

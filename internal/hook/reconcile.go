@@ -58,7 +58,7 @@ func (r Runner) reconcile(ctx context.Context, ev Event, state *runState) Output
 			// A recovering session without its proof must not run unclaimed changes past it, as
 			// an edit may not. After the call, only a warning is possible.
 			if ev.Kind == KindPreTool {
-				done <- Encode(ev, Decision{Action: ActionDeny, Reason: recovering})
+				done <- Encode(ev, Decision{Action: ActionDeny, Reason: shellRefused})
 				return
 			}
 			done <- state.fail(err, Encode(ev, Decision{Action: ActionWarn, Context: shellRecovering}))
@@ -98,9 +98,13 @@ func (r Runner) reconcile(ctx context.Context, ev Event, state *runState) Output
 	case out := <-done:
 		return out
 	case <-ctx.Done():
-		return state.fail(hookFailure("shell reconciliation passed its deadline"), allow)
+		return state.fail(hookFailure(shellOverBudget), allow)
 	}
 }
+
+// shellRefused is the denial of a shell call during recovery. Every command is refused, read-only
+// ones too, because the hook cannot tell beforehand which ones change files.
+const shellRefused = "Iris: the hub restarted and this session cannot prove it is the same one yet, so the command is refused rather than run unchecked. This lasts at most about two minutes, until the session reattaches; retry shortly."
 
 // shellRecovering is the warning after a shell call that could not be checked during recovery.
 const shellRecovering = "Iris: the hub restarted and this session cannot prove it is the same one yet, so the changes this command made were not checked or claimed. Other agents cannot see them until the session reattaches."
