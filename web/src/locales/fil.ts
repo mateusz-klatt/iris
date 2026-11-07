@@ -385,6 +385,7 @@ const translation = {
     body: "Mensahe",
     loadError: "Hindi ma-load ng Iris ang view na ito.",
     emptyThreads: "Walang thread sa view na ito.",
+    olderThreads: "Mas lumang mga thread",
     participants: "Mga kalahok",
     unread: "{{count}} hindi pa nababasa",
     back: "Bumalik sa mga thread",

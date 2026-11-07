@@ -385,6 +385,7 @@ const translation = {
     body: "Μήνυμα",
     loadError: "Το Iris δεν μπόρεσε να φορτώσει αυτή την προβολή.",
     emptyThreads: "Δεν υπάρχουν νήματα σε αυτή την προβολή.",
+    olderThreads: "Παλαιότερα νήματα",
     participants: "Συμμετέχοντες",
     unread: "Μη αναγνωσμένα: {{count}}",
     back: "Πίσω στα νήματα",

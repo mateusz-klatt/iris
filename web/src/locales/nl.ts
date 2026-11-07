@@ -385,6 +385,7 @@ const translation = {
     body: "Bericht",
     loadError: "Iris kon deze weergave niet laden.",
     emptyThreads: "Geen gesprekken in deze weergave.",
+    olderThreads: "Oudere gesprekken",
     participants: "Deelnemers",
     unread: "{{count}} ongelezen",
     back: "Terug naar gesprekken",

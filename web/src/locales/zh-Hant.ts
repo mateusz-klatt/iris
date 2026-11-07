@@ -376,6 +376,7 @@ const translation = {
     body: "訊息",
     loadError: "Iris 無法載入此檢視。",
     emptyThreads: "此檢視中沒有討論串。",
+    olderThreads: "較早的討論串",
     participants: "參與者",
     unread: "{{count}} 則未讀",
     back: "返回討論串",

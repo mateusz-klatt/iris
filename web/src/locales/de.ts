@@ -385,6 +385,7 @@ const translation = {
     body: "Nachricht",
     loadError: "Iris konnte diese Ansicht nicht laden.",
     emptyThreads: "Keine Threads in dieser Ansicht.",
+    olderThreads: "Ältere Threads",
     participants: "Teilnehmer",
     unread: "{{count}} ungelesen",
     back: "Zurück zu den Threads",

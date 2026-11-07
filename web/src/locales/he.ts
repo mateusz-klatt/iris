@@ -385,6 +385,7 @@ const translation = {
     body: "הודעה",
     loadError: "Iris לא הצליח לטעון את התצוגה הזו.",
     emptyThreads: "אין שרשורים בתצוגה הזו.",
+    olderThreads: "שרשורים ישנים יותר",
     participants: "משתתפים",
     unread: "לא נקראו: {{count}}",
     back: "חזרה לשרשורים",

@@ -385,6 +385,7 @@ const translation = {
     body: "বার্তা",
     loadError: "Iris এই ভিউ লোড করতে পারেনি।",
     emptyThreads: "এই ভিউতে কোনো থ্রেড নেই।",
+    olderThreads: "পুরোনো থ্রেড",
     participants: "অংশগ্রহণকারী",
     unread: "{{count}}টি অপঠিত",
     back: "থ্রেডে ফিরে যান",

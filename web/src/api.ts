@@ -52,6 +52,8 @@ export interface ThreadSummary {
 
 export interface ThreadsPage {
   threads: ThreadSummary[];
+  /** Present when older threads follow: pass it as `before` for the next page. */
+  next?: string;
 }
 
 export interface ThreadRecipient {

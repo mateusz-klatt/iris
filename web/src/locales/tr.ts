@@ -376,6 +376,7 @@ const translation = {
     body: "İleti",
     loadError: "Iris bu görünümü yükleyemedi.",
     emptyThreads: "Bu görünümde ileti dizisi yok.",
+    olderThreads: "Daha eski ileti dizileri",
     participants: "Katılımcılar",
     unread: "{{count}} okunmamış",
     back: "İleti dizilerine dön",

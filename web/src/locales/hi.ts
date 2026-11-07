@@ -385,6 +385,7 @@ const translation = {
     body: "संदेश",
     loadError: "Iris यह दृश्य लोड नहीं कर सका।",
     emptyThreads: "इस दृश्य में कोई थ्रेड नहीं है।",
+    olderThreads: "पुराने थ्रेड",
     participants: "प्रतिभागी",
     unread: "{{count}} अपठित",
     back: "थ्रेड पर वापस जाएँ",

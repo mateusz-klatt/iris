@@ -385,6 +385,7 @@ const translation = {
     body: "メッセージ",
     loadError: "Iris はこのビューを読み込めませんでした。",
     emptyThreads: "このビューにはスレッドがありません。",
+    olderThreads: "以前のスレッド",
     participants: "参加者",
     unread: "未読 {{count}} 件",
     back: "スレッドに戻る",

@@ -376,6 +376,7 @@ const translation = {
     body: "Meddelande",
     loadError: "Iris kunde inte läsa in den här vyn.",
     emptyThreads: "Inga trådar i den här vyn.",
+    olderThreads: "Äldre trådar",
     participants: "Deltagare",
     unread: "Olästa: {{count}}",
     back: "Tillbaka till trådar",

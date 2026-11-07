@@ -385,6 +385,7 @@ const translation = {
     body: "Pranešimas",
     loadError: "Iris nepavyko įkelti šio rodinio.",
     emptyThreads: "Šiame rodinyje gijų nėra.",
+    olderThreads: "Senesnės gijos",
     participants: "Dalyviai",
     unread: "Neskaityta: {{count}}",
     back: "Atgal į gijas",

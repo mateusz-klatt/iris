@@ -385,6 +385,7 @@ const translation = {
     body: "Teachtaireacht",
     loadError: "Ní raibh Iris in ann an t-amharc seo a lódáil.",
     emptyThreads: "Níl aon snáitheanna san amharc seo.",
+    olderThreads: "Snáitheanna níos sine",
     participants: "Rannpháirtithe",
     unread: "{{count}} gan léamh",
     back: "Ar ais chuig na snáitheanna",

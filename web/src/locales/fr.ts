@@ -385,6 +385,7 @@ const translation = {
     body: "Message",
     loadError: "Iris n'a pas pu charger cette vue.",
     emptyThreads: "Aucun fil dans cette vue.",
+    olderThreads: "Fils plus anciens",
     participants: "Participants",
     unread: "Non lus : {{count}}",
     back: "Retour aux fils",

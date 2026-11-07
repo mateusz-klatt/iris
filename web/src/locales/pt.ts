@@ -385,6 +385,7 @@ const translation = {
     body: "Mensagem",
     loadError: "O Iris não conseguiu carregar esta vista.",
     emptyThreads: "Não há conversas nesta vista.",
+    olderThreads: "Conversas mais antigas",
     participants: "Participantes",
     unread: "{{count}} por ler",
     back: "Voltar às conversas",

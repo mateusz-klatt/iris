@@ -385,6 +385,7 @@ const translation = {
     body: "Ziņojums",
     loadError: "Iris nevarēja ielādēt šo skatu.",
     emptyThreads: "Šajā skatā nav pavedienu.",
+    olderThreads: "Vecāki pavedieni",
     participants: "Dalībnieki",
     unread: "Nelasīti: {{count}}",
     back: "Atpakaļ uz pavedieniem",

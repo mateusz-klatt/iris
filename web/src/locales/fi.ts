@@ -385,6 +385,7 @@ const translation = {
     body: "Viesti",
     loadError: "Iris ei voinut ladata tätä näkymää.",
     emptyThreads: "Tässä näkymässä ei ole ketjuja.",
+    olderThreads: "Vanhemmat ketjut",
     participants: "Osallistujat",
     unread: "Lukemattomia: {{count}}",
     back: "Takaisin ketjuihin",

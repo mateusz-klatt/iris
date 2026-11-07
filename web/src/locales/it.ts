@@ -385,6 +385,7 @@ const translation = {
     body: "Messaggio",
     loadError: "Iris non è riuscito a caricare questa vista.",
     emptyThreads: "Nessuna discussione in questa vista.",
+    olderThreads: "Discussioni precedenti",
     participants: "Partecipanti",
     unread: "Da leggere: {{count}}",
     back: "Torna alle discussioni",

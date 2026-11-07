@@ -385,6 +385,7 @@ const translation = {
     body: "Wiadomość",
     loadError: "Iris nie mógł wczytać tego widoku.",
     emptyThreads: "Brak wątków w tym widoku.",
+    olderThreads: "Starsze wątki",
     participants: "Uczestnicy",
     unread: "Nieprzeczytane: {{count}}",
     back: "Wróć do wątków",

@@ -385,6 +385,7 @@ const translation = {
     body: "Сообщение",
     loadError: "Iris не удалось загрузить это представление.",
     emptyThreads: "В этом представлении нет цепочек.",
+    olderThreads: "Более старые цепочки",
     participants: "Участники",
     unread: "Непрочитанных: {{count}}",
     back: "Назад к цепочкам",

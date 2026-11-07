@@ -376,6 +376,7 @@ const translation = {
     body: "ข้อความ",
     loadError: "Iris โหลดมุมมองนี้ไม่ได้",
     emptyThreads: "ไม่มีเธรดในมุมมองนี้",
+    olderThreads: "เธรดที่เก่ากว่า",
     participants: "ผู้เข้าร่วม",
     unread: "ยังไม่ได้อ่าน {{count}} รายการ",
     back: "กลับไปที่เธรด",

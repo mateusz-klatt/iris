@@ -385,6 +385,7 @@ const translation = {
     body: "မက်ဆေ့ချ်",
     loadError: "Iris သည် ဤမြင်ကွင်းကို ဖွင့်၍ မရပါ။",
     emptyThreads: "ဤမြင်ကွင်းတွင် thread မရှိပါ။",
+    olderThreads: "ယခင် thread များ",
     participants: "ပါဝင်သူများ",
     unread: "မဖတ်ရသေးသော {{count}} ခု",
     back: "Thread များသို့ ပြန်သွားရန်",

@@ -385,6 +385,7 @@ const translation = {
     body: "Mesaj",
     loadError: "Iris nu a putut încărca această vizualizare.",
     emptyThreads: "Nu există fire în această vizualizare.",
+    olderThreads: "Fire mai vechi",
     participants: "Participanți",
     unread: "Necitite: {{count}}",
     back: "Înapoi la fire",

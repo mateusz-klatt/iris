@@ -376,6 +376,7 @@ const translation = {
     body: "Повідомлення",
     loadError: "Iris не вдалося завантажити це подання.",
     emptyThreads: "У цьому поданні немає ланцюжків.",
+    olderThreads: "Старіші ланцюжки",
     participants: "Учасники",
     unread: "Непрочитаних: {{count}}",
     back: "Назад до ланцюжків",

@@ -385,6 +385,7 @@ const translation = {
     body: "Melding",
     loadError: "Iris kunne ikke laste inn denne visningen.",
     emptyThreads: "Ingen tråder i denne visningen.",
+    olderThreads: "Eldre tråder",
     participants: "Deltakere",
     unread: "Uleste: {{count}}",
     back: "Tilbake til tråder",

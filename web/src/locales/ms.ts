@@ -385,6 +385,7 @@ const translation = {
     body: "Mesej",
     loadError: "Iris tidak dapat memuatkan paparan ini.",
     emptyThreads: "Tiada bebenang dalam paparan ini.",
+    olderThreads: "Bebenang lebih lama",
     participants: "Peserta",
     unread: "{{count}} belum dibaca",
     back: "Kembali ke bebenang",

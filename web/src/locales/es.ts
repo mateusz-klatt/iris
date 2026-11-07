@@ -385,6 +385,7 @@ const translation = {
     body: "Mensaje",
     loadError: "Iris no pudo cargar esta vista.",
     emptyThreads: "No hay hilos en esta vista.",
+    olderThreads: "Hilos anteriores",
     participants: "Participantes",
     unread: "{{count}} sin leer",
     back: "Volver a los hilos",

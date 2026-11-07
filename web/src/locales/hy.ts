@@ -385,6 +385,7 @@ const translation = {
     body: "Հաղորդագրություն",
     loadError: "Iris-ը չկարողացավ բեռնել այս տեսքը։",
     emptyThreads: "Այս տեսքում թեմաներ չկան։",
+    olderThreads: "Ավելի հին թեմաներ",
     participants: "Մասնակիցներ",
     unread: "{{count}} չկարդացված",
     back: "Վերադառնալ թեմաներին",
