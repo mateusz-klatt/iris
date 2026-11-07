@@ -159,6 +159,9 @@ jobs:
           make web
           mkdir -p "$RUNNER_TEMP/webui-dist"
           cp -a internal/webui/dist/. "$RUNNER_TEMP/webui-dist/"
+          # Vite's output is deterministic, so mark the copy: only the copy branch of
+          # `make web` can then produce what the last step compares.
+          printf '\n<!-- handed over by CI -->\n' >> "$RUNNER_TEMP/webui-dist/index.html"
           # GoReleaser refuses a dirty tree, so put the placeholder back.
           git checkout -- internal/webui/dist
           test -z "$(git status --porcelain --untracked-files=no)"
@@ -174,6 +177,7 @@ jobs:
         run: |
           set -euo pipefail
           cmp internal/webui/dist/index.html "$RUNNER_TEMP/webui-dist/index.html"
+          grep -q 'handed over by CI' internal/webui/dist/index.html
       - name: The snapshot made an SBOM for every archive
         shell: bash
         run: |
