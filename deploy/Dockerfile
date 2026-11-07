@@ -1,12 +1,12 @@
 # Build from the repository root: docker build -f deploy/Dockerfile .
-FROM node:26-bookworm-slim AS console
+FROM node:26-bookworm-slim@sha256:add5c17c14752c54d2f3d519ec46a3815684d41c33f198bcb09fb998f7dcbf68 AS console
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
 RUN npm ci --ignore-scripts
 COPY web/ ./
 RUN npm run build
 
-FROM golang:1.27.3-bookworm AS binary
+FROM golang:1.27.3-bookworm@sha256:dc0963f32053e4bc451d24d87e3892d42d01021b61f093e98eb95c0352bb84b0 AS binary
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
