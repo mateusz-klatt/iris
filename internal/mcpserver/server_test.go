@@ -119,7 +119,7 @@ func TestEveryToolIsListed(t *testing.T) {
 	for _, tool := range list.Tools {
 		names = append(names, tool.Name)
 	}
-	for _, want := range []string{"whoami", "peers", "send", "inbox", "ack", "claim", "release", "claims", "watch_ticket"} {
+	for _, want := range []string{"whoami", "peers", "send", "inbox", "ack", "receipts", "claim", "release", "claims", "watch_ticket"} {
 		if !strings.Contains(strings.Join(names, ","), want) {
 			t.Fatal(want, names)
 		}
@@ -135,7 +135,7 @@ func TestToolAnnotationsSayWhatEachToolDoesToTheHub(t *testing.T) {
 	}
 	type hint struct{ readOnly, destructive, idempotent bool }
 	want := map[string]hint{
-		"whoami": {readOnly: true}, "peers": {readOnly: true}, "claims": {readOnly: true},
+		"whoami": {readOnly: true}, "peers": {readOnly: true}, "claims": {readOnly: true}, "receipts": {readOnly: true},
 		"inbox": {}, "send": {}, "claim": {}, "watch_ticket": {},
 		"ack":     {idempotent: true},
 		"release": {destructive: true, idempotent: true},
@@ -198,6 +198,8 @@ func TestToolsReachTheirRoutes(t *testing.T) {
 		{"claim", map[string]any{"kind": "exact", "path": "p", "key": "k", "ttl_s": 9}, "POST", "/v1/claims", "ttl_s", float64(9)},
 		{"release", map[string]any{"fence": 7, "token": "t"}, "POST", "/v1/claims/release", "fence", float64(7)},
 		{"ack", map[string]any{"delivery_id": "a/b", "attempt": 2}, "POST", "/v1/deliveries/a%2Fb/ack", "attempt", float64(2)},
+		{"ack", map[string]any{"delivery_id": "d", "handled": true}, "POST", "/v1/deliveries/d/ack", "handled", true},
+		{"receipts", map[string]any{"message_id": "ms/1"}, "GET", "/v1/messages/ms%2F1/status?execution_id=ex", "", nil},
 		{"watch_ticket", nil, "POST", "/v1/wake-tickets", "generation", float64(3)},
 	}
 	for _, tc := range cases {
@@ -322,6 +324,16 @@ func TestToolErrorHidesNothingButWrapsPlainErrors(t *testing.T) {
 	res := toolError(errors.New("no route"))
 	if !res.IsError || !strings.Contains(res.Content[0].(*mcp.TextContent).Text, "unavailable") {
 		t.Fatal(res)
+	}
+}
+
+// Without a message id the status route would not exist, so it is refused before the hub.
+func TestReceiptsWithoutAMessageIDIsRefused(t *testing.T) {
+	f := &fakeHub{}
+	out, failed := use(t, connect(t, f), "receipts", map[string]any{"message_id": " "})
+	e, _ := out["error"].(map[string]any)
+	if !failed || e["code"] != "bad_request" || !strings.Contains(e["message"].(string), "message_id") || len(f.calls) != 0 {
+		t.Fatal(out, f.calls)
 	}
 }
 
