@@ -113,6 +113,35 @@ func TestShellReconciliationRecordsEveryFailOpen(t *testing.T) {
 			t.Fatal("a failed git status was graded as only slow")
 		}
 	})
+	// The deadline also kills git status, which then fails. That failure belongs to the budget:
+	// whether it lands before the deadline's own entry or after it, the one entry left is
+	// degraded, never a broken status (#127 review).
+	t.Run("killed git status, either order", func(t *testing.T) {
+		for _, late := range []bool{false, true} {
+			for range 50 {
+				r, ev := shellRunner(scriptHub{}, root)
+				r.ShellDeadline = time.Millisecond
+				release, returned := make(chan struct{}), make(chan struct{})
+				r.Status = func(ctx context.Context, _ string) (map[string]string, error) {
+					defer close(returned)
+					<-ctx.Done()
+					if late {
+						<-release
+					}
+					return nil, ctx.Err()
+				}
+				state := &runState{}
+				out := r.reconcile(context.Background(), ev, state)
+				close(release)
+				<-returned
+				time.Sleep(time.Millisecond) // let the interrupted call report, as it would in a real hook
+				stage, err := state.snapshot()
+				if !isAllow(out) || !(Failure{Stage: stage, Error: failureText(err)}).Degraded() {
+					t.Fatalf("late %v: stage %q err %v", late, stage, err)
+				}
+			}
+		}
+	})
 	t.Run("rejected token", func(t *testing.T) {
 		r, ev := shellRunner(scriptHub{regErr: &hubclient.Error{Code: "unauthorized", Message: "revoked"}}, root)
 		state := &runState{}

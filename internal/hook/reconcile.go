@@ -3,6 +3,7 @@ package hook
 import (
 	"context"
 	"errors"
+	"sync/atomic"
 	"time"
 
 	"github.com/mateusz-klatt/iris/internal/gitinfo"
@@ -34,12 +35,26 @@ func (r Runner) reconcile(ctx context.Context, ev Event, state *runState) Output
 	}
 	ctx, cancel := context.WithTimeout(ctx, limit)
 	defer cancel()
+	// settle records only the first outcome. When the budget runs out, the git status or hub
+	// call it interrupts fails too, and that failure is the budget's, not a broken hook's:
+	// otherwise it could land first or overwrite the budget's entry, and doctor would call a
+	// client silent for one slow git status.
+	var settled atomic.Bool
+	settle := func(err error, out Output) Output {
+		if !settled.CompareAndSwap(false, true) {
+			return out
+		}
+		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+			err = hookFailure(shellOverBudget)
+		}
+		return state.fail(err, out)
+	}
 	done := make(chan Output, 1)
 	go func() {
 		// Keep the same fail-open guarantee as the main hook, including dependency panics.
 		defer func() {
 			if recover() != nil {
-				done <- state.fail(hookFailure("panic during shell reconciliation"), allow)
+				done <- settle(hookFailure("panic during shell reconciliation"), allow)
 			}
 		}()
 		state.at("shell repository")
@@ -49,7 +64,7 @@ func (r Runner) reconcile(ctx context.Context, ev Event, state *runState) Output
 			return
 		}
 		if err != nil {
-			done <- state.fail(err, allow)
+			done <- settle(err, allow)
 			return
 		}
 		state.at("shell session")
@@ -61,11 +76,11 @@ func (r Runner) reconcile(ctx context.Context, ev Event, state *runState) Output
 				done <- Encode(ev, Decision{Action: ActionDeny, Reason: shellRefused})
 				return
 			}
-			done <- state.fail(err, Encode(ev, Decision{Action: ActionWarn, Context: shellRecovering}))
+			done <- settle(err, Encode(ev, Decision{Action: ActionWarn, Context: shellRecovering}))
 			return
 		}
 		if err != nil {
-			done <- state.fail(err, r.failOpen(ev, err, allow))
+			done <- settle(err, r.failOpen(ev, err, allow))
 			return
 		}
 		state.at("shell status")
@@ -75,7 +90,7 @@ func (r Runner) reconcile(ctx context.Context, ev Event, state *runState) Output
 		}
 		snapshot, err := status(ctx, repo.Worktree)
 		if err != nil {
-			done <- state.fail(err, allow)
+			done <- settle(err, allow)
 			return
 		}
 		phase := "after"
@@ -85,7 +100,7 @@ func (r Runner) reconcile(ctx context.Context, ev Event, state *runState) Output
 		state.at("shell reconcile")
 		out, err := hub.Reconcile(ctx, hubclient.ReconcileRequest{ExecutionID: sess.ExecutionID, Generation: sess.Generation, Kind: phase, Status: snapshot})
 		if err != nil {
-			done <- state.fail(err, r.failOpen(ev, err, allow))
+			done <- settle(err, r.failOpen(ev, err, allow))
 			return
 		}
 		if out.Message == "" {
@@ -98,7 +113,7 @@ func (r Runner) reconcile(ctx context.Context, ev Event, state *runState) Output
 	case out := <-done:
 		return out
 	case <-ctx.Done():
-		return state.fail(hookFailure(shellOverBudget), allow)
+		return settle(hookFailure(shellOverBudget), allow)
 	}
 }
 
