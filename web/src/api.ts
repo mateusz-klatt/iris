@@ -182,8 +182,16 @@ export function getThread(id: string, repositoryId = "", signal?: AbortSignal): 
 }
 
 /** Marks the operator's mail in a thread as read, in repositoryId or the whole hub (A13). */
-export function readThread(id: string, repositoryId = "", signal?: AbortSignal): Promise<void> {
-  return postJson(`/v1/ui/threads/${encodeURIComponent(id)}/read`, { repository_id: repositoryId }, signal);
+/** Reads the operator's mail in a thread, and says how many deliveries that read. */
+export async function readThread(id: string, repositoryId = "", signal?: AbortSignal): Promise<number> {
+  const response = await request(`/v1/ui/threads/${encodeURIComponent(id)}/read`, {
+    method: "POST",
+    signal,
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ repository_id: repositoryId }),
+  });
+  const out = (await response.json()) as { read: number };
+  return out.read;
 }
 
 export function sendMessage(message: OutgoingMessage, signal?: AbortSignal): Promise<void> {

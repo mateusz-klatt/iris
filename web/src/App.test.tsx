@@ -481,6 +481,61 @@ describe("Iris operator console", () => {
     expect(reads).toBeLessThanOrEqual(2);
   }, 40000);
 
+  // Every watch frame reloads the open thread. With nothing unread for the operator, that GET
+  // is all it costs: no read, and no second overview.
+  it("reads only a thread with unread operator mail, and reloads only after a read that read", async () => {
+    const user = userEvent.setup({ delay: null });
+    let onFrame: ((frame: WatchFrame) => void) | undefined;
+    let reads = 0;
+    let overviews = 0;
+    let read = 0;
+    let state = "acked";
+    server.events.on("request:start", ({ request }) => {
+      if (new URL(request.url).pathname === "/v1/ui/overview") {
+        overviews++;
+      }
+    });
+    server.use(
+      http.get("*/v1/ui/threads/:id", () =>
+        HttpResponse.json({ ...threadDetail, messages: threadDetail.messages.map((message) => ({ ...message, recipients: [{ name: "human", state }] })) }),
+      ),
+      http.post("*/v1/ui/threads/:id/read", () => {
+        reads++;
+        return HttpResponse.json({ read });
+      }),
+    );
+    render(
+      <App
+        connect={(frame, status) => {
+          onFrame = frame;
+          status?.("live");
+          return () => undefined;
+        }}
+      />,
+    );
+    await user.click(await screen.findByRole("button", { name: /Rollout check/ }));
+    await screen.findByRole("article", { name: "Rollout check" });
+    const settled = overviews;
+    onFrame?.({ cursor: 1, kind: "changed" });
+    await waitFor(() => expect(overviews).toBe(settled + 1));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(reads).toBe(0);
+
+    // Unread, but the hub reads nothing (another repository's human, say): no reload.
+    state = "pending";
+    onFrame?.({ cursor: 2, kind: "changed" });
+    await waitFor(() => expect(reads).toBe(1));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(overviews).toBe(settled + 2);
+
+    // A read that read reloads the overview once.
+    read = 1;
+    onFrame?.({ cursor: 3, kind: "changed" });
+    await waitFor(() => expect(reads).toBe(2));
+    await waitFor(() => expect(overviews).toBe(settled + 4));
+    server.events.removeAllListeners();
+  }, 40000);
+
   it("renders the hub's real empty report and claims with no expiry", async () => {
     server.use(
       http.get("*/v1/ui/doctor", () => HttpResponse.json({ checked_at: null, clients: [] })),

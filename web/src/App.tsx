@@ -101,6 +101,13 @@ function replyDraft(thread: string, messages: ThreadMessage[]): Draft | null {
   return newDraft({ to, subject: last.subject.startsWith("Re:") ? last.subject : `Re: ${last.subject}`, replyTo: last.id, thread, offered: true });
 }
 
+// unreadForOperator is whether a thread holds mail to the operator not yet acknowledged.
+function unreadForOperator(detail: ThreadDetail): boolean {
+  return detail.messages.some((message) =>
+    message.recipients.some((recipient) => recipient.name === operatorName && recipient.state !== "acked" && recipient.state !== "handled"),
+  );
+}
+
 function edited(draft: Draft, change: Partial<Draft>): Draft {
   return { ...draft, ...change, key: humanKey(), offered: false };
 }
@@ -293,10 +300,18 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
         }
         setThread(detail);
         // Opening a thread reads the operator's mail in it (A13); the overview's unread
-        // counts then follow. A failure here leaves the mail unread, which is safe.
-        readThread(selectedId, repositoryId)
-          .then(() => void reload())
-          .catch(() => undefined);
+        // counts then follow. A failure here leaves the mail unread, which is safe. Every
+        // watch frame reloads the open thread, so a thread with nothing unread costs that
+        // GET only: no read, and no second overview.
+        if (unreadForOperator(detail)) {
+          readThread(selectedId, repositoryId)
+            .then((read) => {
+              if (read > 0) {
+                void reload();
+              }
+            })
+            .catch(() => undefined);
+        }
         // A reply is per thread: opening another thread replaces even an edited draft, so one
         // thread's words never go out as a reply in another.
         const fresh = replyDraft(detail.id, detail.messages);
