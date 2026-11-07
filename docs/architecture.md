@@ -480,7 +480,7 @@ filters its MCP servers' environment, so its integration names these variables i
 An integration written before that keeps its MCP server on the configured hub until
 `iris integrate codex` runs again (measured on macOS). The prompt asks the model to call `whoami` and to rewrite one file. The run reports
 four facts: the hook registered the scratch session, the pre-edit hook was granted the claim,
-the reply carries the execution id that only `whoami` returns, and the file holds the requested
+the reply carries the scratch repository's id, which `whoami` returns and the hook's session context does not (the execution id is in that context, so echoing it would prove nothing), and the file holds the requested
 line. Only sessions that the named client's own hook registered count, because Grok also loads
 other clients' hooks (D5). If the scratch hub sees nothing from that hook, either the client
 stopped before running it, which Cursor does with exit 0 in an untrusted workspace, or a client

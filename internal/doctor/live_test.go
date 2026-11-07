@@ -89,8 +89,21 @@ func fakeLiveClient(mode string, args []string) int {
 			fmt.Print(err)
 			return 8
 		}
-		if mode != "nomcp" {
+		switch mode {
+		case "nomcp":
+		case "echo":
+			// The handle from the hook's session context, echoed with no MCP call behind it.
 			fmt.Println("execution_id:", own.ExecutionID)
+		default:
+			// What the Iris whoami tool does: bind with the handle and report the binding.
+			var bound struct {
+				RepositoryID string `json:"repository_id"`
+			}
+			if err := hub.Do(ctx, "POST", "/v1/bind", map[string]any{"client": client, "host": "fake", "cwd": cwd, "execution": own.ExecutionID}, &bound); err != nil {
+				fmt.Print(err)
+				return 11
+			}
+			fmt.Println("repository_id:", bound.RepositoryID)
 		}
 	}
 	if config := os.Getenv("IRIS_FAKE_CODEX_CONFIG"); config != "" {
@@ -150,6 +163,8 @@ func TestLiveRunSaysWhichPartFailed(t *testing.T) {
 		{mode: "foreign", edit: true, detail: "the hook used the configured hub"},
 		{mode: "otherclient", edit: true, detail: "the hook used the configured hub"},
 		{mode: "nomcp", hook: true, claim: true, edit: true},
+		// The execution id is in the hook's session context, so echoing it proves no MCP call (gap B7).
+		{mode: "echo", hook: true, claim: true, edit: true},
 		{mode: "held", hook: true, tools: true, edit: true},
 		{mode: "fail", detail: "client failed: "},
 	} {
@@ -168,7 +183,7 @@ func TestLiveRunSaysWhichPartFailed(t *testing.T) {
 			if tc.mode != "fail" && !strings.Contains(res.Detail, "client output: ") {
 				t.Fatalf("a client that exits 0 must show its output when a fact fails: %q", res.Detail)
 			}
-			if tc.mode == "nomcp" && !strings.HasPrefix(res.Detail, "client output: ") {
+			if (tc.mode == "nomcp" || tc.mode == "echo") && !strings.HasPrefix(res.Detail, "client output: ") {
 				t.Fatalf("MCP failed alone, so the output is the whole explanation: %q", res.Detail)
 			}
 			if tc.mode == "fail" && !strings.Contains(res.Detail, "the model is not available") {
