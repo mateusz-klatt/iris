@@ -74,7 +74,7 @@ func Install(ctx context.Context, dir string) error {
 	tmp := f.Name()
 	defer os.Remove(tmp)
 	_, err = f.Write(wrapper(old != nil))
-	err = errors.Join(err, f.Close(), os.Chmod(tmp, 0755))
+	err = errors.Join(err, f.Close(), os.Chmod(tmp, 0o700))
 	if err == nil && old != nil {
 		err = rename(p, backup)
 	}
