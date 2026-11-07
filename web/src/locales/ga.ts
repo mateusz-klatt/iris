@@ -351,7 +351,7 @@ const translation = {
     message: "Níorbh fhéidir an teachtaireacht seo a lódáil.",
     unauthorized: "Chuaigh do sheisiún in éag. Tú á atreorú chuig an logáil isteach.",
   },
-  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol) on 2026-11-07; not yet reviewed by a native speaker.
+  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
     signIn: "Níl an brabhsálaí seo sínithe isteach. Ar an ríomhaire seo, rith {{command}} agus oscail an nasc a phriontálann sé.",
     waiting: "Ag fanacht leis an gcéad seisiún.",
@@ -369,7 +369,7 @@ const translation = {
     claims: "Áirithintí",
     none: "Faic go fóill.",
     revoke: "Cúlghair",
-    revoking: "Á chúlghairm…",
+    revoking: "Á cúlghairm…",
     threads: "Snáitheanna",
     search: "Cuardaigh snáitheanna",
     repository: "Stór",
@@ -382,7 +382,7 @@ const translation = {
     recipients: "Faighteoirí",
     subject: "Ábhar",
     body: "Teachtaireacht",
-    loadError: "Níorbh fhéidir le Iris an t-amharc seo a lódáil.",
+    loadError: "Ní raibh Iris in ann an t-amharc seo a lódáil.",
     emptyThreads: "Níl aon snáitheanna san amharc seo.",
     participants: "Rannpháirtithe",
     unread: "{{count}} gan léamh",

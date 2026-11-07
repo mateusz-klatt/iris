@@ -351,7 +351,7 @@ const translation = {
     message: "Nepavyko įkelti šio pranešimo.",
     unauthorized: "Jūsų seansas baigėsi. Nukreipiama prisijungti.",
   },
-  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol) on 2026-11-07; not yet reviewed by a native speaker.
+  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
     signIn: "Ši naršyklė neprisijungusi. Šiame kompiuteryje paleiskite {{command}} ir atidarykite pateiktą nuorodą.",
     waiting: "Laukiama pirmosios sesijos.",

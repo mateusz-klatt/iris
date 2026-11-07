@@ -351,7 +351,7 @@ const translation = {
     message: "এই বার্তা লোড করা যায়নি।",
     unauthorized: "আপনার সেশনের মেয়াদ শেষ হয়েছে। সাইন-ইন পৃষ্ঠায় নেওয়া হচ্ছে।",
   },
-  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol) on 2026-11-07; not yet reviewed by a native speaker.
+  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
     signIn: "এই ব্রাউজারে সাইন ইন করা নেই। এই কম্পিউটারে {{command}} চালান এবং এটি যে লিংক দেখায় সেটি খুলুন।",
     waiting: "প্রথম সেশনের অপেক্ষায়।",

@@ -342,7 +342,7 @@ const translation = {
     message: "ไม่สามารถโหลดข้อความนี้ได้",
     unauthorized: "เซสชันหมดอายุ กำลังเปลี่ยนเส้นทางไปยังหน้าเข้าสู่ระบบ",
   },
-  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol) on 2026-11-07; not yet reviewed by a native speaker.
+  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
     signIn: "เบราว์เซอร์นี้ยังไม่ได้ลงชื่อเข้าใช้ บนคอมพิวเตอร์เครื่องนี้ ให้เรียกใช้ {{command}} แล้วเปิดลิงก์ที่แสดงออกมา",
     waiting: "กำลังรอเซสชันแรก",

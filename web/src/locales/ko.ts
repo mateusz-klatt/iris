@@ -351,7 +351,7 @@ const translation = {
     message: "이 메시지를 불러올 수 없습니다.",
     unauthorized: "세션이 만료되었습니다. 로그인 화면으로 이동합니다.",
   },
-  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol) on 2026-11-07; not yet reviewed by a native speaker.
+  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
     signIn: "이 브라우저는 로그인되어 있지 않습니다. 이 컴퓨터에서 {{command}}을(를) 실행하고 출력된 링크를 여세요.",
     waiting: "첫 세션을 기다리는 중입니다.",

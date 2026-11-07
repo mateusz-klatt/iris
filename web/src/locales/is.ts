@@ -351,7 +351,7 @@ const translation = {
     message: "Ekki tókst að hlaða þessum skilaboðum.",
     unauthorized: "Setan þín er útrunnin. Þér er vísað á innskráningu.",
   },
-  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol) on 2026-11-07; not yet reviewed by a native speaker.
+  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
     signIn: "Þessi vafri er ekki innskráður. Keyrðu {{command}} á þessari tölvu og opnaðu tengilinn sem hún prentar.",
     waiting: "Beðið eftir fyrstu lotunni.",

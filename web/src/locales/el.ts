@@ -351,7 +351,7 @@ const translation = {
     message: "Δεν ήταν δυνατή η φόρτωση αυτού του μηνύματος.",
     unauthorized: "Η συνεδρία σας έληξε. Γίνεται ανακατεύθυνση στη σύνδεση.",
   },
-  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol) on 2026-11-07; not yet reviewed by a native speaker.
+  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
     signIn: "Αυτό το πρόγραμμα περιήγησης δεν είναι συνδεδεμένο. Σε αυτόν τον υπολογιστή, εκτελέστε {{command}} και ανοίξτε τον σύνδεσμο που εμφανίζει.",
     waiting: "Αναμονή για την πρώτη συνεδρία.",

@@ -351,7 +351,7 @@ const translation = {
     message: "Diese Nachricht konnte nicht geladen werden.",
     unauthorized: "Ihre Sitzung ist abgelaufen. Sie werden zur Anmeldung weitergeleitet.",
   },
-  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol) on 2026-11-07; not yet reviewed by a native speaker.
+  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
     signIn: "Dieser Browser ist nicht angemeldet. Führen Sie auf diesem Computer {{command}} aus und öffnen Sie den ausgegebenen Link.",
     waiting: "Warten auf die erste Sitzung.",

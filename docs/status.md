@@ -108,8 +108,8 @@ Against the production hub, over TLS:
   Codex's invocation follows claude-laptop-iris's measurements of its flags on macOS. The whole
   run has not yet been measured end to end. The other clients' invocations are not measured yet.
 - **Native review of the operator console strings, and layout polish.** The 38 `operator` strings
-  are translated into all 44 locales. Claude made the translations and Codex (gpt-6.1-sol) reviewed
-  them, so they are machine-made. Each locale file says so above its `operator` block, until a
+  are translated into all 44 locales. Claude made the translations, and Codex reviewed them twice,
+  with gpt-6.1-sol and then gpt-6-astra. They are machine-made. Each locale file says so above its `operator` block, until a
   native speaker has reviewed them.
 - **Legal review** of the clean-room record.
 

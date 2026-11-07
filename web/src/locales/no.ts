@@ -351,7 +351,7 @@ const translation = {
     message: "Kunne ikke laste denne meldingen.",
     unauthorized: "Økten din er utløpt. Omdirigerer til innlogging.",
   },
-  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol) on 2026-11-07; not yet reviewed by a native speaker.
+  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
     signIn: "Denne nettleseren er ikke logget inn. Kjør {{command}} på denne datamaskinen, og åpne lenken den skriver ut.",
     waiting: "Venter på den første økten.",

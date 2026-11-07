@@ -351,7 +351,7 @@ const translation = {
     message: "Acest mesaj nu a putut fi încărcat.",
     unauthorized: "Sesiunea a expirat. Se redirecționează către autentificare.",
   },
-  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol) on 2026-11-07; not yet reviewed by a native speaker.
+  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
     signIn: "Nu v-ați autentificat în acest browser. Pe acest computer, rulați {{command}} și deschideți linkul afișat.",
     waiting: "Se așteaptă prima sesiune.",

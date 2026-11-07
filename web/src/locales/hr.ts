@@ -351,7 +351,7 @@ const translation = {
     message: "Nije moguće učitati ovu poruku.",
     unauthorized: "Sesija je istekla. Preusmjeravanje na prijavu.",
   },
-  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol) on 2026-11-07; not yet reviewed by a native speaker.
+  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
     signIn: "Ovaj preglednik nije prijavljen. Na ovom računalu pokrenite {{command}} i otvorite poveznicu koju ispiše.",
     waiting: "Čeka se prva sesija.",
@@ -385,7 +385,7 @@ const translation = {
     loadError: "Iris nije mogao učitati ovaj prikaz.",
     emptyThreads: "U ovom prikazu nema niti.",
     participants: "Sudionici",
-    unread: "{{count}} nepročitano",
+    unread: "Nepročitano: {{count}}",
     back: "Natrag na niti",
     compose: "Nova poruka",
     detail: "Pojedinosti",

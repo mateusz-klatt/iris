@@ -342,7 +342,7 @@ const translation = {
     message: "無法載入此訊息。",
     unauthorized: "工作階段已過期。正在重新導向至登入頁面。",
   },
-  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol) on 2026-11-07; not yet reviewed by a native speaker.
+  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
     signIn: "此瀏覽器尚未登入。請在這台電腦上執行 {{command}}，然後開啟它輸出的連結。",
     waiting: "正在等待第一個工作階段。",

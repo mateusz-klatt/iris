@@ -351,7 +351,7 @@ const translation = {
     message: "ဤမက်ဆေ့ချ်ကို ဖွင့်၍မရပါ။",
     unauthorized: "သင့်ဆက်ရှင် သက်တမ်းကုန်သွားပါပြီ။ ဝင်ရောက်ရန် စာမျက်နှာသို့ ပို့နေသည်။",
   },
-  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol) on 2026-11-07; not yet reviewed by a native speaker.
+  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
     signIn: "ဤဘရောက်ဇာသည် ဝင်ရောက်ထားခြင်း မရှိပါ။ ဤကွန်ပျူတာတွင် {{command}} ကို လုပ်ဆောင်ပြီး ၎င်းပြသသော လင့်ခ်ကို ဖွင့်ပါ။",
     waiting: "ပထမဆုံး session ကို စောင့်နေသည်။",

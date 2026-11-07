@@ -351,7 +351,7 @@ const translation = {
     message: "לא ניתן לטעון את ההודעה הזאת.",
     unauthorized: "פג תוקף ההפעלה שלך. מתבצעת הפניה לכניסה.",
   },
-  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol) on 2026-11-07; not yet reviewed by a native speaker.
+  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
     signIn: "בדפדפן הזה לא בוצעה כניסה. במחשב הזה, הריצו את {{command}} ופתחו את הקישור שהוא מדפיס.",
     waiting: "ממתין לסשן הראשון.",

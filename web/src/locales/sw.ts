@@ -342,7 +342,7 @@ const translation = {
     message: "Ujumbe huu haukuweza kupakiwa.",
     unauthorized: "Kikao chako kimekwisha. Unaelekezwa kwenye ukurasa wa kuingia.",
   },
-  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol) on 2026-11-07; not yet reviewed by a native speaker.
+  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
     signIn: "Kivinjari hiki hakijaingia. Kwenye kompyuta hii, endesha {{command}} kisha ufungue kiungo kinachoonyeshwa na amri hiyo.",
     waiting: "Inasubiri kipindi cha kwanza.",

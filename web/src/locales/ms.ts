@@ -351,7 +351,7 @@ const translation = {
     message: "Mesej ini tidak dapat dimuatkan.",
     unauthorized: "Sesi anda telah tamat. Mengubah hala ke log masuk.",
   },
-  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol) on 2026-11-07; not yet reviewed by a native speaker.
+  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
     signIn: "Pelayar ini belum log masuk. Pada komputer ini, jalankan {{command}} dan buka pautan yang dicetaknya.",
     waiting: "Menunggu sesi pertama.",

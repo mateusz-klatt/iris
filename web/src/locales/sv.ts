@@ -342,7 +342,7 @@ const translation = {
     message: "Det gick inte att läsa in det här meddelandet.",
     unauthorized: "Din session har löpt ut. Du omdirigeras till inloggningen.",
   },
-  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol) on 2026-11-07; not yet reviewed by a native speaker.
+  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
     signIn: "Den här webbläsaren är inte inloggad. Kör {{command}} på den här datorn och öppna länken som skrivs ut.",
     waiting: "Väntar på den första sessionen.",

@@ -342,7 +342,7 @@ const translation = {
     message: "Ky mesazh nuk mund të ngarkohej.",
     unauthorized: "Sesioni juaj skadoi. Po ridrejtoheni te hyrja.",
   },
-  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol) on 2026-11-07; not yet reviewed by a native speaker.
+  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
     signIn: "Ky shfletues nuk është i identifikuar. Në këtë kompjuter, ekzekutoni {{command}} dhe hapni lidhjen që shfaq.",
     waiting: "Në pritje të seancës së parë.",

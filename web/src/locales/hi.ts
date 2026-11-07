@@ -351,7 +351,7 @@ const translation = {
     message: "यह संदेश लोड नहीं हो सका।",
     unauthorized: "आपका सत्र समाप्त हो गया है। साइन इन पेज पर भेजा जा रहा है।",
   },
-  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol) on 2026-11-07; not yet reviewed by a native speaker.
+  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
     signIn: "इस ब्राउज़र में साइन इन नहीं किया गया है। इस कंप्यूटर पर {{command}} चलाएँ और उसके द्वारा दिखाया गया लिंक खोलें।",
     waiting: "पहले सत्र की प्रतीक्षा हो रही है।",

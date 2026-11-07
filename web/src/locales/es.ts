@@ -351,7 +351,7 @@ const translation = {
     message: "No se pudo cargar este mensaje.",
     unauthorized: "Tu sesión ha expirado. Redirigiendo al inicio de sesión.",
   },
-  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol) on 2026-11-07; not yet reviewed by a native speaker.
+  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
     signIn: "Este navegador no ha iniciado sesión. En este equipo, ejecute {{command}} y abra el enlace que muestra.",
     waiting: "Esperando la primera sesión.",

@@ -342,7 +342,7 @@ const translation = {
     message: "Не вдалося завантажити це повідомлення.",
     unauthorized: "Термін дії сеансу минув. Переспрямовуємо на сторінку входу.",
   },
-  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol) on 2026-11-07; not yet reviewed by a native speaker.
+  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
     signIn: "У цьому браузері не виконано вхід. На цьому комп'ютері запустіть {{command}} і відкрийте посилання, яке виведе команда.",
     waiting: "Очікування першого сеансу.",

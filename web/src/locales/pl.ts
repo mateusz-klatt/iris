@@ -351,7 +351,7 @@ const translation = {
     message: "Nie udało się wczytać tej wiadomości.",
     unauthorized: "Sesja wygasła. Przekierowujemy do logowania.",
   },
-  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol) on 2026-11-07; not yet reviewed by a native speaker.
+  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
     signIn: "Ta przeglądarka nie jest zalogowana. Na tym komputerze uruchom {{command}} i otwórz wyświetlony link.",
     waiting: "Oczekiwanie na pierwszą sesję.",

@@ -351,7 +351,7 @@ const translation = {
     message: "Hindi ma-load ang mensaheng ito.",
     unauthorized: "Nag-expire ang iyong session. Ire-redirect ka sa pag-sign in.",
   },
-  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol) on 2026-11-07; not yet reviewed by a native speaker.
+  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
     signIn: "Hindi naka-sign in ang browser na ito. Sa computer na ito, patakbuhin ang {{command}} at buksan ang link na ipi-print nito.",
     waiting: "Hinihintay ang unang session.",

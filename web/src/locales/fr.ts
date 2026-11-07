@@ -351,7 +351,7 @@ const translation = {
     message: "Impossible de charger ce message.",
     unauthorized: "Votre session a expiré. Redirection vers la connexion.",
   },
-  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol) on 2026-11-07; not yet reviewed by a native speaker.
+  // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
     signIn: "Ce navigateur n'est pas connecté. Sur cet ordinateur, exécutez {{command}} et ouvrez le lien affiché.",
     waiting: "En attente de la première session.",
