@@ -11,6 +11,7 @@ import (
 	"log"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -88,7 +89,11 @@ var liveClients = map[string]liveClient{
 	integrate.Antigravity: {model: "gemini-3.8-flash-low", args: func(model, prompt string) []string {
 		return []string{"--print=" + prompt, "--model", model}
 	}},
-	integrate.Grok: {args: func(_, prompt string) []string { return []string{"-p", prompt} }},
+	// A headless Grok cannot ask for approval, so the tools the prompt needs
+	// are allowed by name. Measured on macOS by claude-laptop-iris.
+	integrate.Grok: {args: func(_, prompt string) []string {
+		return []string{"-p", prompt, "--allow", "iris__whoami", "--allow", "Edit", "--allow", "Write"}
+	}},
 	integrate.Kimi: {args: func(_, prompt string) []string { return []string{"-p", prompt} }},
 }
 
@@ -160,7 +165,7 @@ func RunLive(ctx context.Context, opt LiveOptions, plan LivePlan) LiveResult {
 	out, runErr := run(cctx, repo, env, plan.Binary, args)
 	timedOut := cctx.Err() != nil
 	cancel()
-	seen := h.rec.snapshot(res.Marker)
+	seen := h.rec.snapshot(res.Marker, plan.Client)
 	res.HookFired = len(seen.executions) > 0
 	res.ClaimReached = seen.claimed
 	for _, e := range seen.executions {
@@ -178,7 +183,13 @@ func RunLive(ctx context.Context, opt LiveOptions, plan LivePlan) LiveResult {
 		notes = append(notes, "client failed: "+runErr.Error()+": "+clip(out))
 	}
 	if !res.HookFired {
-		notes = append(notes, "the scratch hub saw no session; the hook may have used the configured hub instead, under the repository with origin "+res.Marker+", which the hub's owner can remove with `iris admin forget`")
+		// A client can also stop before its hooks and still exit 0, as Cursor
+		// does in an untrusted workspace, so its output is shown either way.
+		note := "the scratch hub saw no session from this client's hook. Either the client stopped before running it, or the hook used the configured hub, under the repository with origin " + res.Marker + ", which the hub's owner can remove with `iris admin forget`"
+		if runErr == nil && !timedOut {
+			note += "; client output: " + clip(out)
+		}
+		notes = append(notes, note)
 	}
 	res.Detail = strings.Join(notes, "; ")
 	return res
@@ -278,7 +289,7 @@ func startScratchHub(dir string) (*scratchHub, error) {
 	rec := &recorder{next: handler}
 	server := &http.Server{Handler: rec, ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = server.Serve(listener) }()
-	return &scratchHub{url: "http://" + addr, tokenFile: tokenFile, rec: rec, store: s, server: server}, nil
+	return &scratchHub{url: (&url.URL{Scheme: "http", Host: addr}).String(), tokenFile: tokenFile, rec: rec, store: s, server: server}, nil
 }
 
 func (h *scratchHub) close() {
@@ -297,7 +308,7 @@ type recorder struct {
 	claims   []string
 }
 
-type recordedSession struct{ remote, execution string }
+type recordedSession struct{ client, remote, execution string }
 
 func (rec *recorder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	route := r.Method + " " + r.URL.Path
@@ -319,7 +330,7 @@ func (rec *recorder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var out hubclient.SessionResponse
 		_ = json.Unmarshal(body, &in)
 		_ = json.Unmarshal(cw.body.Bytes(), &out)
-		rec.sessions = append(rec.sessions, recordedSession{remote: in.RemoteURL, execution: out.ExecutionID})
+		rec.sessions = append(rec.sessions, recordedSession{client: in.Client, remote: in.RemoteURL, execution: out.ExecutionID})
 		return
 	}
 	var in hubclient.TouchRequest
@@ -339,13 +350,15 @@ type observed struct {
 	claimed    bool
 }
 
-// snapshot keeps only what belongs to the scratch repository.
-func (rec *recorder) snapshot(marker string) observed {
+// snapshot keeps only what the named client's hook did in the scratch
+// repository. Some clients also load other clients' hooks (D5), and those
+// must not count for it.
+func (rec *recorder) snapshot(marker, client string) observed {
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
 	var s observed
 	for _, sess := range rec.sessions {
-		if sess.remote == marker && sess.execution != "" {
+		if sess.remote == marker && sess.client == client && sess.execution != "" {
 			s.executions = append(s.executions, sess.execution)
 		}
 	}
