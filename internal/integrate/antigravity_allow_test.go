@@ -112,3 +112,13 @@ func TestAUserAllowRuleForIrisSurvivesRemove(t *testing.T) {
 		t.Fatalf("the user's own rule was removed\n got %q\nwant %q", got, mine)
 	}
 }
+
+func TestAgySettingsNeedsAHome(t *testing.T) {
+	if _, err := AgySettings(homeless(t)); err == nil {
+		t.Fatal("settings path without a home")
+	}
+	got, err := AgySettings(testLayout(t))
+	if err != nil || !strings.HasSuffix(got, filepath.Join(".gemini", "antigravity-cli", "settings.json")) {
+		t.Fatalf("%q %v", got, err)
+	}
+}
