@@ -47,6 +47,8 @@ func (t *transaction) send(r Request) (map[string]any, error) {
 			cross++
 		}
 	}
+	// Counted before the inserts, so a send that then fails on storage still uses its
+	// share. That errs on the side of the limit, and the count is in memory, not rolled back.
 	if cross > 0 && !t.s.allowCross(principalOf(t.ctx), cross, t.s.clock.Now()) {
 		return nil, crossRefused()
 	}
