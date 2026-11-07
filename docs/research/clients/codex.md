@@ -195,6 +195,9 @@ Start with one hub, explicit session binding, exact/prefix claims, durable inbox
 
 ## G. Unknowns
 
+Section H below settles several of these on macOS with 0.167.0: edit and deny, MCP calls, failure
+semantics and the hook review. What it leaves open is said there.
+
 [UNVERIFIED] Genuine Luna edit/deny and MCP tool-call metadata: rerun authenticated canary with correctly routed Code Mode custom calls. Auth was unavailable; four launches exhausted. [MEASURED] App-server hooks did not fire. [SOURCE https://github.com/openai/codex/blob/rust-v0.166.0/codex-rs/cli/src/main.rs] Its app-server branch does not propagate the exec hook-bypass override; review/persist trust before retesting. [UNVERIFIED] No claims of a successful edit denial, live subagent/compaction/async behavior, HTTP MCP loopback, queue execution, TUI attachment, Windows/macOS sandbox reachability or p95 latency. Verify those on target platforms with real Iris binary and Go/modernc tests. See fixture provenance before selecting golden tests.
 
 ## H. Measured on macOS, 0.167.0 (2026-11-07)
@@ -248,15 +251,21 @@ servers. With `client.json` on a dead port and `IRIS_HUB_URL` on the live hub, t
 the live hub, while `whoami` dialed the dead port. `env_vars` naming the Iris variables fixed it
 (#86). Under `approval_policy="never"` every MCP call was refused with "MCP tool call requires
 approval, but approval policy is never". `default_tools_approval_mode="approve"` in the Iris table
-fixed that. `writes` refused even `whoami`, because the Iris tools carried no read-only annotation.
+fixed that. The other value tried, `writes`, approves only tools marked read-only and asks for the
+rest; it refused even `whoami`, because the Iris tools carried no read-only annotation.
 On macOS automatic binding is not available for Codex. The first `whoami` answered `unbound`, and the
-model then passed the SessionStart handle itself (rung 4).
+model then passed the SessionStart handle itself as the tool's `execution` argument, the explicit
+handle rung of D6 in `docs/architecture.md`.
 
 **Failure semantics.** [MEASURED] A hook that exits 1, one that sleeps past the 3 s timeout, and one
-whose binary is missing all allowed the edit, matching section 3. A claimed file was denied with
+whose binary is missing all allowed the edit, matching the failure table in D3 of
+`docs/architecture.md`. A claimed file was denied with
 "Command blocked by PreToolUse hook: Iris: …". The free file was claimed automatically, and the
 claim was released at session end.
 
 **Edit wording.** [MEASURED] "Replace the whole content of the file" made the model write a patch
 that deletes and adds the same path, which `apply_patch` rejects. That happened three times out of
 three. "Append one line" produced an `Update File` hunk that worked.
+
+**Still open after H.** Not measured here: attention and wake in the TUI, subagent, compaction and
+async hooks, app-server sessions, Windows and Linux, and hook latency in Codex itself.
