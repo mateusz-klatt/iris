@@ -108,3 +108,23 @@ func TestDriftOutsideHomeKeepsItsPath(t *testing.T) {
 		t.Fatalf("%+v", row)
 	}
 }
+
+// A stand-in that answers {} and exits 0, such as a guard wrapper that never runs Iris, used to
+// pass. Only iris hook answers doctor's nonce, so without that receipt the row is silent.
+func TestAHookThatDoesNotReachIrisIsSilent(t *testing.T) {
+	t.Setenv("IRIS_FAKE_STDOUT", "{}")
+	t.Setenv("IRIS_FAKE_EXIT", "0")
+	layout := doctorLayout(t)
+	codex, _ := integrate.ByName(integrate.Codex)
+	if err := codex.Install(layout, nil); err != nil {
+		t.Fatal(err)
+	}
+	if row := doctorRow(t, layout, integrate.Codex); row.Status == StatusSilent {
+		t.Fatalf("with a receipt: %+v", row)
+	}
+	t.Setenv("IRIS_FAKE_NO_RECEIPT", "1")
+	row := doctorRow(t, layout, integrate.Codex)
+	if row.Status != StatusSilent || !strings.Contains(row.Detail, "not from Iris") {
+		t.Fatalf("%+v", row)
+	}
+}

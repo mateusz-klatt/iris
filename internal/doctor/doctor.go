@@ -4,6 +4,8 @@ package doctor
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -241,15 +243,24 @@ func checkClient(ctx context.Context, opt Options, c integrate.Client) ClientRep
 		defer func() { _ = os.RemoveAll(dir) }()
 	}
 	payload := canaryPayload(c.Name(), dir)
-	stdout, exit, runErr := in.Run(ctx, payload)
+	nonce := canaryNonce()
+	ran, runErr := in.Run(ctx, payload, hook.CanaryNonce+"="+nonce)
 	if runErr != nil {
 		row.Status = StatusSilent
 		row.Detail = "hook command failed: " + runErr.Error()
 		return row
 	}
-	if err := validHook(c.Name(), stdout, exit); err != nil {
+	if err := validHook(c.Name(), ran.Stdout, ran.Exit); err != nil {
 		row.Status = StatusSilent
 		row.Detail = err.Error()
+		return row
+	}
+	// Exit 0 and valid JSON are what a stand-in prints too. Only iris hook answers the nonce,
+	// so its line proves this configured command reaches Iris (gap review C3). It cannot prove
+	// that the client loads the command and fires it; doctor --live does that.
+	if !bytes.Contains(ran.Stderr, []byte("iris: canary "+nonce+"\n")) {
+		row.Status = StatusSilent
+		row.Detail = "the hook command answered, but not from Iris: no canary receipt on stderr"
 		return row
 	}
 	// The canary ran one hook. The rest of the configuration, every other hook event and the
@@ -565,4 +576,11 @@ func homeRelative(l integrate.Layout, paths []string) []string {
 		out[i] = p
 	}
 	return out
+}
+
+// canaryNonce is a fresh random value for one canary, which only iris hook echoes back.
+func canaryNonce() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:]) // crypto/rand.Read always fills b or crashes the program.
+	return hex.EncodeToString(b[:])
 }

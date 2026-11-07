@@ -50,7 +50,11 @@ type runState struct {
 	mu    sync.Mutex
 	stage string
 	err   error
+	// receipt is the doctor canary's proof that Iris ran, for stderr; see canaryReceipt.
+	receipt []byte
 }
+
+func (s *runState) received(b []byte) { s.mu.Lock(); s.receipt = b; s.mu.Unlock() }
 
 func (s *runState) at(stage string) { s.mu.Lock(); s.stage = stage; s.mu.Unlock() }
 func (s *runState) fail(err error, out Output) Output {
@@ -64,6 +68,7 @@ func (s *runState) snapshot() (string, error) {
 	defer s.mu.Unlock()
 	return s.stage, s.err
 }
+func (s *runState) receiptLine() []byte { s.mu.Lock(); defer s.mu.Unlock(); return s.receipt }
 
 // failureText deliberately excludes dependency-provided messages: JSON errors,
 // filesystem paths, hub replies and panic values may contain untrusted payload data.

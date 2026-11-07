@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 	"time"
 
@@ -89,6 +90,7 @@ func (r Runner) Run() Output {
 	select {
 	case out := <-ch:
 		failureStage, failure = state.snapshot()
+		out.Stderr = append(out.Stderr, state.receiptLine()...)
 		return out
 	case <-after(deadline):
 		cancel()
@@ -120,6 +122,7 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 	if runner, cross := r.crossLoad(ev.SessionID, client); cross {
 		return FallbackAllow(runner)
 	}
+	state.received(r.canaryReceipt(ev))
 	// Some clients supply only a timestamp, not a tool call ID. Hash the raw
 	// bytes so a retry stays idempotent while distinct timestamped calls differ.
 	if ev.ToolCallID == "" {
@@ -479,4 +482,28 @@ func readPayload(r io.Reader) ([]byte, error) {
 		return nil, io.EOF
 	}
 	return io.ReadAll(io.LimitReader(r, 8<<20))
+}
+
+// CanarySession is the session id iris doctor's canary payload carries, and CanaryNonce the
+// variable it sets in the hook command's environment.
+const (
+	CanarySession = "iris-canary"
+	CanaryNonce   = "IRIS_DOCTOR_NONCE"
+)
+
+var canaryNonce = regexp.MustCompile(`^[0-9a-f]{16,64}$`)
+
+// canaryReceipt is the line that proves to iris doctor that its canary reached Iris, not a
+// wrapper that answers for it (gap review C3). It goes to stderr, never to the client's stdout,
+// and only for the canary's own session with doctor's nonce, which is hex, so nothing else can
+// ride on it.
+func (r Runner) canaryReceipt(ev Event) []byte {
+	nonce := ""
+	if r.Getenv != nil {
+		nonce = r.Getenv(CanaryNonce)
+	}
+	if ev.SessionID != CanarySession || !canaryNonce.MatchString(nonce) {
+		return nil
+	}
+	return []byte("iris: canary " + nonce + "\n")
 }
