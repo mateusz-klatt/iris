@@ -32,6 +32,42 @@ func TestGuardOutcomes(t *testing.T) {
 			out, code := runGuard(t, Guard(runtime.GOOS, tc.client, path, tc.event), guardPATH(t, dir), "IRIS_FAKE_EXIT=3")
 			assertGuardJSON(t, out, code, tc.allow)
 		})
+		// The client's PATH need not contain the recorded binary's directory. Checking PATH
+		// instead of the recorded path skipped every hook silently (measured with Copilot).
+		t.Run(tc.client+"/recorded path off PATH", func(t *testing.T) {
+			dir := t.TempDir()
+			path, err := PlaceFake(dir, "iris")
+			if err != nil {
+				t.Fatal(err)
+			}
+			out, code := runGuard(t, Guard(runtime.GOOS, tc.client, path, tc.event), guardPATH(t, ""), "IRIS_FAKE_EXIT=0", "IRIS_FAKE_STDOUT="+deny)
+			assertGuardJSON(t, out, code, deny)
+		})
+		// cmd splits an unquoted path at ( ) & and ^, inside the guard's blocks.
+		t.Run(tc.client+"/recorded path with shell characters", func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), "tools(1)&a^b")
+			if err := os.MkdirAll(dir, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			path, err := PlaceFake(dir, "iris")
+			if err != nil {
+				t.Fatal(err)
+			}
+			out, code := runGuard(t, Guard(runtime.GOOS, tc.client, path, tc.event), guardPATH(t, ""), "IRIS_FAKE_EXIT=0", "IRIS_FAKE_STDOUT="+deny)
+			assertGuardJSON(t, out, code, deny)
+			missing := filepath.Join(dir, "gone(2)", "iris")
+			out, code = runGuard(t, Guard(runtime.GOOS, tc.client, missing, tc.event), guardPATH(t, ""))
+			assertGuardJSON(t, out, code, tc.allow)
+		})
+		t.Run(tc.client+"/recorded path gone, iris on PATH", func(t *testing.T) {
+			dir := t.TempDir()
+			if _, err := PlaceFake(dir, "iris"); err != nil {
+				t.Fatal(err)
+			}
+			gone := filepath.Join(t.TempDir(), "moved", "iris")
+			out, code := runGuard(t, Guard(runtime.GOOS, tc.client, gone, tc.event), guardPATH(t, dir), "IRIS_FAKE_EXIT=0", "IRIS_FAKE_STDOUT="+deny)
+			assertGuardJSON(t, out, code, deny)
+		})
 		t.Run(tc.client+"/deny", func(t *testing.T) {
 			dir := t.TempDir()
 			path, err := PlaceFake(dir, "iris")
@@ -50,8 +86,15 @@ func TestWindowsGuardStrings(t *testing.T) {
 		t.Fatal(ps)
 	}
 	cmd := Guard("windows", Antigravity, `C:\iris\iris.exe`, "PreToolUse")
-	if !strings.Contains(cmd, "where") || !strings.HasSuffix(cmd, `|| echo {"decision":"allow"}`) {
+	if !strings.HasPrefix(cmd, `if exist "C:\iris\iris.exe" ("C:\iris\iris.exe" hook`) || !strings.Contains(cmd, "where iris") || !strings.HasSuffix(cmd, `|| echo {"decision":"allow"})`) {
 		t.Fatal(cmd)
+	}
+	spaced := Guard("windows", Antigravity, `C:\Program Files\iris\iris.exe`, "PreToolUse")
+	if !strings.HasPrefix(spaced, `if exist "C:\Program Files\iris\iris.exe" ("C:\Program Files\iris\iris.exe" hook`) {
+		t.Fatal(spaced)
+	}
+	if !strings.Contains(ps, "Test-Path -LiteralPath $i") || !strings.Contains(ps, `$i = 'C:\Program Files\iris\iris.exe'`) {
+		t.Fatal(ps)
 	}
 	cur := cursorCommand("windows", `C:\iris\iris.exe`, "sessionStart")
 	if !strings.Contains(cur, "& ") || !strings.Contains(cur, "--client cursor --event sessionStart") {
