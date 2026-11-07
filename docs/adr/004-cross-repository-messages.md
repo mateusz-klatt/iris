@@ -69,7 +69,9 @@ per-repository event fan-out.
 **8. Rate.** Cross-repository sends have their own quota, for example 120 recipient attempts per
 minute per credential. A send over it is refused as a whole with 429. Heartbeats and acks stay
 usable. Today's 6000 requests a minute per token, and 100 recipients per send, would let one
-credential flood every inbox on the hub with wakes.
+credential flood every inbox on the hub with wakes. The count is kept in the hub's memory, so a
+hub restart starts every window again, and a send is counted before its inserts, so one that then
+fails on storage still uses its share.
 
 **Schema.** The only new column is `Repository.contact_agent_id`. `Message`, `Delivery` and `Event`
 are reused.

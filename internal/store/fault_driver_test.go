@@ -107,7 +107,7 @@ func installFaultDriver(t *testing.T, s *Store, file string) *storageFault {
 }
 
 func TestStorageFailuresRollBackAndRetry(t *testing.T) {
-	for _, op := range []string{"sessions", "session-resume", "heartbeat-recovery", "session-new-slot", "session-learns-root", "touch-cached", "touch-conflict", "claim-conflict", "check-known", "policy", "bind", "heartbeat", "end", "touch", "claim", "claim-reuse", "claim-cached", "release", "claims", "messages", "message-cached", "inbox", "ack", "agents", "events", "events-reset", "status", "validate", "monitor_cursor", "check", "reconcile", "ui_overview", "ui_threads", "ui_thread", "ui_messages", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_events", "expire", "forget", "forget-repository"} {
+	for _, op := range []string{"sessions", "session-resume", "heartbeat-recovery", "session-new-slot", "session-learns-root", "touch-cached", "touch-conflict", "claim-conflict", "check-known", "policy", "bind", "heartbeat", "end", "touch", "claim", "claim-reuse", "claim-cached", "release", "claims", "messages", "message-repo", "contact", "message-cached", "inbox", "ack", "agents", "events", "events-reset", "status", "validate", "monitor_cursor", "check", "reconcile", "ui_overview", "ui_threads", "ui_thread", "ui_messages", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_events", "expire", "forget", "forget-repository"} {
 		t.Run(op, func(t *testing.T) {
 			s, clock, file := testStore(t)
 			a, ar := session(t, s, 1)
@@ -197,6 +197,14 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 			case "messages":
 				r = mail
 				r.Key = "new-mail"
+			case "message-repo":
+				// By repository name, which resolves to the repository's contact.
+				route = "messages"
+				call(t, s, "contact", Request{RepositoryID: repo, Agent: name})
+				r = mail
+				r.Key, r.To = "repo-mail", []string{"repo:project"}
+			case "contact":
+				r = Request{RepositoryID: repo, Agent: name}
 			case "message-cached":
 				route = "messages"
 				r = mail

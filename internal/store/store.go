@@ -44,6 +44,9 @@ var waiterSchema string
 //go:embed migrations/008.sql
 var attentionSchema string
 
+//go:embed migrations/009.sql
+var contactSchema string
+
 // Clock separates lease ticks from persisted wall-clock expiries. Tick must be monotonic
 // within a Store's lifetime; client timestamps never participate in lease decisions.
 type Clock interface {
@@ -198,6 +201,11 @@ func openDatabase(filename string, clock Clock, driverName string) (*Store, erro
 		}
 		if version < 8 {
 			if _, err := t.exec(attentionSchema); err != nil {
+				return err
+			}
+		}
+		if version < 9 {
+			if _, err := t.exec(contactSchema); err != nil {
 				return err
 			}
 		}
