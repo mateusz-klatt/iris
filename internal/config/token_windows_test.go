@@ -83,3 +83,13 @@ func TestRestrictToRefusesAnInvalidOwner(t *testing.T) {
 		t.Fatalf("%s became %s", before, after)
 	}
 }
+
+func TestOwnerOnlyAppliesTheTokenDACL(t *testing.T) {
+	dir := t.TempDir()
+	if err := OwnerOnly(dir); err != nil {
+		t.Fatal(err)
+	}
+	if got := dacl(t, dir); !strings.HasPrefix(got, "D:P") || strings.Count(got, "(") != 1 {
+		t.Fatalf("not owner-only and protected: %s", got)
+	}
+}

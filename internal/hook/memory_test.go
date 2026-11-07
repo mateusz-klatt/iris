@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mateusz-klatt/iris/internal/config"
 	"github.com/mateusz-klatt/iris/internal/hub"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 	"github.com/mateusz-klatt/iris/internal/store"
@@ -19,7 +20,7 @@ import (
 
 func newFileMemory(t *testing.T) fileMemory {
 	t.Helper()
-	return fileMemory{dir: filepath.Join(t.TempDir(), "sessions"), now: time.Now}
+	return fileMemory{dir: filepath.Join(t.TempDir(), "sessions"), now: time.Now, restrict: config.OwnerOnly}
 }
 
 func TestFileMemoryRemembersEachSessionApart(t *testing.T) {
@@ -90,7 +91,7 @@ func TestFileMemoryFailsQuietly(t *testing.T) {
 	if err := os.WriteFile(file, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
-	m := fileMemory{dir: filepath.Join(file, "sessions"), now: time.Now}
+	m := fileMemory{dir: filepath.Join(file, "sessions"), now: time.Now, restrict: config.OwnerOnly}
 	m.Remember("claude", "s", 1)
 	m.Forget("claude", "s")
 	m.prune()
@@ -125,7 +126,7 @@ func TestFileMemoryFailsQuietly(t *testing.T) {
 
 func TestFileMemoryPrunesOnlyStaleEntries(t *testing.T) {
 	now := time.Now()
-	m := fileMemory{dir: filepath.Join(t.TempDir(), "sessions"), now: func() time.Time { return now }}
+	m := fileMemory{dir: filepath.Join(t.TempDir(), "sessions"), now: func() time.Time { return now }, restrict: config.OwnerOnly}
 	m.Remember("claude", "old", 1)
 	m.Remember("claude", "new", 2)
 	old := now.Add(-memoryAge - time.Hour)
@@ -147,7 +148,7 @@ func TestMemoryLivesBesideTheToken(t *testing.T) {
 		return ""
 	}}
 	m, ok := r.memory().(fileMemory)
-	if !ok || m.dir != filepath.Join(filepath.Dir(token), "sessions") {
+	if !ok || m.dir != filepath.Join(filepath.Dir(token), "sessions") || m.restrict == nil {
 		t.Fatalf("%#v", r.memory())
 	}
 	if (Runner{}).memory() != nil {
@@ -388,5 +389,29 @@ func TestTheRecoveryWindowNeverAllowsAnUnclaimedEdit(t *testing.T) {
 	}
 	if out := hook("PreToolUse", writePayload(root, "fresh", "new.go")); !strings.Contains(out, "is held by") {
 		t.Fatalf("the fresh generation's edit was not claimed: %s", out)
+	}
+}
+
+// A file that cannot be protected is not kept, and neither is one in an unprotected directory.
+func TestFileMemoryKeepsNothingItCannotProtect(t *testing.T) {
+	refused := errors.New("acl")
+	for name, failOn := range map[string]func(string, string) bool{
+		"directory": func(path, dir string) bool { return path == dir },
+		"file":      func(path, dir string) bool { return path != dir },
+	} {
+		m := newFileMemory(t)
+		m.restrict = func(path string) error {
+			if failOn(path, m.dir) {
+				return refused
+			}
+			return nil
+		}
+		m.Remember("claude", "s", 3)
+		if m.Recall("claude", "s") != 0 {
+			t.Fatalf("%s: an unprotected generation was kept", name)
+		}
+		if entries, err := os.ReadDir(m.dir); err == nil && len(entries) != 0 {
+			t.Fatalf("%s: left %d entries", name, len(entries))
+		}
 	}
 }

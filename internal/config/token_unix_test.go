@@ -61,3 +61,16 @@ func TestTokenRefusesADirectoryAndAReadOnlyParent(t *testing.T) {
 		t.Fatal("created a token in a read-only directory")
 	}
 }
+
+func TestOwnerOnlyLeavesUnixModesAlone(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "f")
+	if err := os.WriteFile(path, nil, 0o640); err != nil {
+		t.Fatal(err)
+	}
+	if err := OwnerOnly(path); err != nil {
+		t.Fatal(err)
+	}
+	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o640 {
+		t.Fatal(info, err)
+	}
+}

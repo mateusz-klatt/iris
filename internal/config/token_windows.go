@@ -8,6 +8,11 @@ func secureToken(path string) error {
 	return restrictTo(path, windows.GetCurrentProcessToken().GetTokenUser)
 }
 
+// OwnerOnly gives a file or directory the token's protected DACL: one entry for the current
+// user, and nothing inherited. Files beside the token otherwise inherit SYSTEM and
+// Administrators from the user's profile.
+func OwnerOnly(path string) error { return secureToken(path) }
+
 // restrictTo replaces the file's DACL with one entry for its owner and drops inheritance.
 func restrictTo(path string, owner func() (*windows.Tokenuser, error)) error {
 	user, err := owner()

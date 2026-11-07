@@ -9,6 +9,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mateusz-klatt/iris/internal/config"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 )
 
@@ -26,11 +27,13 @@ type Memory interface {
 // own; this only clears the entries of sessions that never reached SessionEnd.
 const memoryAge = 30 * 24 * time.Hour
 
-// fileMemory stores one small file per session beside the token. Anyone who can read it can
-// read the token, which already grants everything the generation would.
+// fileMemory stores one small file per session beside the token, protected as the token is:
+// mode 0600 in a 0700 directory, and on Windows the token's owner-only DACL. So anyone who
+// can read it can read the token, which already grants everything the generation would.
 type fileMemory struct {
-	dir string
-	now func() time.Time
+	dir      string
+	now      func() time.Time
+	restrict func(string) error
 }
 
 func (m fileMemory) name(client, session string) string {
@@ -53,7 +56,7 @@ func (m fileMemory) Recall(client, session string) int {
 // Remember is best effort. A failed write only means the next restart costs this session
 // its proof, which is what every session had before.
 func (m fileMemory) Remember(client, session string, generation int) {
-	if err := os.MkdirAll(m.dir, 0o700); err != nil {
+	if err := os.MkdirAll(m.dir, 0o700); err != nil || m.restrict(m.dir) != nil {
 		return
 	}
 	f, err := os.CreateTemp(m.dir, ".tmp-*")
@@ -63,6 +66,10 @@ func (m fileMemory) Remember(client, session string, generation int) {
 	_, err = f.WriteString(strconv.Itoa(generation) + "\n")
 	if closeErr := f.Close(); err == nil {
 		err = closeErr
+	}
+	// The file is protected before it gets its name, so it is never readable as an entry.
+	if err == nil {
+		err = m.restrict(f.Name())
 	}
 	if err == nil {
 		err = os.Rename(f.Name(), m.name(client, session))
@@ -104,5 +111,5 @@ func (r Runner) memory() Memory {
 	if err != nil {
 		return nil
 	}
-	return fileMemory{dir: filepath.Join(filepath.Dir(token), "sessions"), now: time.Now}
+	return fileMemory{dir: filepath.Join(filepath.Dir(token), "sessions"), now: time.Now, restrict: config.OwnerOnly}
 }
