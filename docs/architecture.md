@@ -405,6 +405,18 @@ once in `/hooks`; project hooks need trust on Cursor, Copilot and Grok. Kimi has
 hooks at all. Monitors require the Claude plugin, so `iris integrate claude` installs one,
 generated from files embedded in the binary.
 
+Codex's `[mcp_servers.iris]` table carries two more keys, both measured on Codex 0.167.0 and both
+removed with the table:
+
+- `env_vars = ["IRIS_HUB_URL", "IRIS_TOKEN_FILE", "IRIS_EXECUTION"]`. Codex passes the full
+  environment to hooks but a filtered one to MCP servers. Without this an `IRIS_HUB_URL` override
+  sent the session's claims to one hub and its messages and `whoami` to another.
+- `default_tools_approval_mode = "approve"`. This approves the Iris server's tools without asking,
+  and applies to no other server. Without it Codex asks before every Iris call, and with
+  `approval_policy = "never"` it refuses them all. Iris tools act only on the hub, never on local
+  files or a shell. The `writes` mode would ask only for tools not marked read-only, but Iris's
+  tools carry no annotations, so `writes` refused even `whoami`.
+
 `iris doctor` runs offline by default: hub reachable, token valid, client version, configuration
 present, trust state, unknown tools seen, last hook received, and a synthetic canary through the
 configured hook command. `iris doctor --live` runs the real client on its cheapest model. It is
@@ -419,9 +431,10 @@ an origin of `https://example.invalid/iris-doctor-live/<random>.git`, never in o
 repositories. The client talks to a hub that doctor starts in-process on loopback with its own
 database and token, through `IRIS_HUB_URL` and `IRIS_TOKEN_FILE`, which take precedence over any
 `client.json`. Both are deleted afterwards, so a client that passes its environment to its hook
-and its MCP server leaves no records on the configured hub, and nothing needs `forget`. Codex's
-MCP server does not inherit these variables until its integration names them with `env_vars`
-(measured on macOS), so until then its `whoami` reaches the configured hub. The prompt asks the model to call `whoami` and to rewrite one file. The run reports
+and its MCP server leaves no records on the configured hub, and nothing needs `forget`. Codex
+filters its MCP servers' environment, so its integration names these variables in `env_vars`.
+An integration written before that keeps its MCP server on the configured hub until
+`iris integrate codex` runs again (measured on macOS). The prompt asks the model to call `whoami` and to rewrite one file. The run reports
 four facts: the hook registered the scratch session, the pre-edit hook was granted the claim,
 the reply carries the execution id that only `whoami` returns, and the file holds the requested
 line. Only sessions that the named client's own hook registered count, because Grok also loads

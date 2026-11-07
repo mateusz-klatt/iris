@@ -349,3 +349,45 @@ func readFiles(t *testing.T, files []string) []string {
 	}
 	return out
 }
+
+// Codex filters the environment of MCP servers but not of hooks. The iris table must name the
+// hub variables, or an IRIS_HUB_URL override splits one session across two hubs, and it must
+// approve Iris's own tools, or a headless run with approval_policy "never" refuses all of them.
+func TestCodexMCPServerKeepsTheHubOverrideAndNeedsNoApproval(t *testing.T) {
+	l := testLayout(t)
+	codex, _ := ByName(Codex)
+	files, _ := codex.Files(l)
+	if err := os.MkdirAll(filepath.Dir(files[1]), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mine := "# my settings\nmodel = \"x\"\n\n[projects.\"/work\"]\ntrust_level = \"trusted\"\n"
+	if err := os.WriteFile(files[1], []byte(mine), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := codex.Install(l, nil); err != nil {
+		t.Fatal(err)
+	}
+	text := string(mustRead(t, files[1]))
+	start := strings.Index(text, "[mcp_servers.iris]")
+	if start < 0 {
+		t.Fatalf("no iris table\n%s", text)
+	}
+	table := text[start:]
+	for _, line := range []string{
+		`env_vars = ["IRIS_HUB_URL", "IRIS_TOKEN_FILE", "IRIS_EXECUTION"]`,
+		`default_tools_approval_mode = "approve"`,
+	} {
+		if !strings.Contains(table, line+"\n") {
+			t.Fatalf("iris table lacks %s\n%s", line, table)
+		}
+	}
+	if strings.Count(text, "default_tools_approval_mode") != 1 {
+		t.Fatalf("approval set outside the iris table\n%s", text)
+	}
+	if err := codex.Remove(l, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(mustRead(t, files[1])); got != mine {
+		t.Fatalf("remove changed the user's file\n got: %q\nwant: %q", got, mine)
+	}
+}
