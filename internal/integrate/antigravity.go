@@ -3,6 +3,7 @@ package integrate
 import (
 	"fmt"
 	"path/filepath"
+	"slices"
 	"strings"
 )
 
@@ -63,6 +64,11 @@ func (c antigravityClient) Install(l Layout, _ Plugins) error {
 		return err
 	}
 	return l.update(Antigravity, files[2], func(existing []byte) ([]byte, error) {
+		// A rule the user already has stays theirs: the file is returned untouched, whatever its
+		// formatting, so it never enters the manifest and remove never strips it.
+		if doc, err := readObject(existing); err == nil && hasAllowRule(doc, AgyAllowRule) {
+			return existing, nil
+		}
 		return writeObject(existing, func(doc map[string]any) error {
 			return AddAllowRule(doc, AgyAllowRule)
 		})
@@ -90,6 +96,12 @@ func AddAllowRule(doc map[string]any, rule string) error {
 	}
 	perms["allow"] = append(allow, rule)
 	return nil
+}
+
+func hasAllowRule(doc map[string]any, rule string) bool {
+	perms, _ := doc["permissions"].(map[string]any)
+	allow, _ := perms["allow"].([]any)
+	return slices.Contains(allow, any(rule))
 }
 
 // RemoveAllowRule takes rule out of agy's permissions.allow, and the containers it leaves empty.

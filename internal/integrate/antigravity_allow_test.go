@@ -70,6 +70,10 @@ func TestAllowRulesKeepOtherRulesAndRefuseWrongTypes(t *testing.T) {
 	if !RemoveAllowRule(only, AgyAllowRule) || len(only) != 0 {
 		t.Fatalf("empty containers left: %v", only)
 	}
+	twice := map[string]any{}
+	if AddAllowRule(twice, "r") != nil || AddAllowRule(twice, "r") != nil || len(twice["permissions"].(map[string]any)["allow"].([]any)) != 1 {
+		t.Fatalf("a rule added twice: %v", twice)
+	}
 	for _, bad := range []map[string]any{{"permissions": "x"}, {"permissions": map[string]any{"allow": "x"}}} {
 		if err := AddAllowRule(bad, AgyAllowRule); !errors.Is(err, ErrBroken) {
 			t.Fatalf("%v: %v", bad, err)
@@ -86,7 +90,8 @@ func TestAUserAllowRuleForIrisSurvivesRemove(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(files[2]), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	mine := "{\n  \"permissions\": {\n    \"allow\": [\n      \"" + AgyAllowRule + "\"\n    ]\n  }\n}\n"
+	// Four-space indentation and a key Iris would sort differently: a rewrite would differ.
+	mine := "{\n    \"trustedWorkspaces\": [],\n    \"permissions\": {\n        \"allow\": [\n            \"" + AgyAllowRule + "\"\n        ]\n    }\n}\n"
 	if err := os.WriteFile(files[2], []byte(mine), 0o600); err != nil {
 		t.Fatal(err)
 	}
