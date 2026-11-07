@@ -103,6 +103,14 @@ answers first. Measured the same way, none took over 1.3 s. This is safe because
 registration, `touch` and session end can be repeated. Reconcile is not repeated. A network that is
 down for the whole 1.5 s still fails open, and that is recorded as above.
 
+A shell or Code Mode call is reconciled within its own budget, inside the 1.5 s: 300 ms when the
+hub is on this machine (a loopback address or `localhost`), and 1 s otherwise. A reconcile makes
+several hub calls on a new connection. Across a network the old 300 ms ran out routinely: 32
+times in 45 minutes on a Mac 60 to 80 ms from the hub. Each time, that command's changes went
+unchecked and unclaimed. The larger budget also leaves room for the second request at 300 ms. A
+hub name is not resolved to decide this, so a name that points at this machine gets the larger
+budget, which costs only time.
+
 Target latency is p95 under 50 ms on Linux and macOS and under 150 ms on Windows, measured in
 CI with the real binary.
 

@@ -320,9 +320,9 @@ func applyFailures(res *Result, tokenFile string, now time.Time) error {
 			row.Detail = "recent hook failure: " + strings.Join(broken[row.Client], "; ")
 		case n > slowLimit:
 			row.Status = StatusSlow
-			row.Detail = fmt.Sprintf("%d shell reconciliations ran past their %s budget in 24 h, so those commands' changes went unclaimed; git status is slow here, as on a big or cold worktree or a loaded machine", n, hook.ReconcileDeadline)
+			row.Detail = fmt.Sprintf("%d shell reconciliations ran past their budget (%s, or %s for a hub on this machine) in 24 h, so those commands' changes went unclaimed; git status or the hub is slow here, as on a big or cold worktree, a loaded machine or a slow network", n, hook.RemoteReconcileDeadline, hook.ReconcileDeadline)
 		case n > 0:
-			row.Detail = joinDetail(row.Detail, fmt.Sprintf("degraded: %d shell reconciliation(s) ran past their %s budget in 24 h", n, hook.ReconcileDeadline))
+			row.Detail = joinDetail(row.Detail, fmt.Sprintf("degraded: %d shell reconciliation(s) ran past their budget in 24 h", n))
 		}
 	}
 	return nil

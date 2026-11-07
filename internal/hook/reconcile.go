@@ -3,6 +3,9 @@ package hook
 import (
 	"context"
 	"errors"
+	"net"
+	neturl "net/url"
+	"strings"
 	"sync/atomic"
 	"time"
 
@@ -10,7 +13,43 @@ import (
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 )
 
-const ReconcileDeadline = 300 * time.Millisecond
+// ReconcileDeadline bounds a shell reconcile against a hub on this machine, and
+// RemoteReconcileDeadline one against a hub elsewhere. A reconcile makes several hub calls, and
+// each hook is a new process that opens its own connection: across a network 300 ms went past
+// routinely, leaving those commands' changes unclaimed (D3).
+const (
+	ReconcileDeadline       = 300 * time.Millisecond
+	RemoteReconcileDeadline = time.Second
+)
+
+// shellBudget is the reconcile budget for a hub at url. Only a loopback address or localhost
+// counts as this machine; a name that resolves to one is not looked up, so it gets the larger
+// budget, which costs only time.
+func shellBudget(url string) time.Duration {
+	u, err := neturl.Parse(url)
+	if err != nil || u.Hostname() == "" {
+		return ReconcileDeadline
+	}
+	host := u.Hostname()
+	if strings.EqualFold(host, "localhost") {
+		return ReconcileDeadline
+	}
+	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
+		return ReconcileDeadline
+	}
+	return RemoteReconcileDeadline
+}
+
+// shellLimit is the Runner's reconcile budget: ShellDeadline when set, else the configured hub's.
+func (r Runner) shellLimit() time.Duration {
+	if r.ShellDeadline > 0 {
+		return r.ShellDeadline
+	}
+	if r.Getenv == nil {
+		return ReconcileDeadline
+	}
+	return shellBudget(hubclient.EnvConfig{Getenv: r.Getenv}.HubURL())
+}
 
 type shellHub interface {
 	Reconcile(context.Context, hubclient.ReconcileRequest) (hubclient.CheckResponse, error)
@@ -29,11 +68,7 @@ func (r Runner) reconcile(ctx context.Context, ev Event, state *runState) Output
 	if !ok {
 		return allow
 	}
-	limit := r.ShellDeadline
-	if limit <= 0 {
-		limit = ReconcileDeadline
-	}
-	ctx, cancel := context.WithTimeout(ctx, limit)
+	ctx, cancel := context.WithTimeout(ctx, r.shellLimit())
 	defer cancel()
 	// settle records only the first outcome. When the budget runs out, the git status or hub
 	// call it interrupts fails too, and that failure is the budget's, not a broken hook's:
