@@ -431,6 +431,14 @@ removed with the table:
   files or a shell. The `writes` mode would ask only for tools not marked read-only, but Iris's
   tools carry no annotations, so `writes` refused even `whoami`.
 
+Antigravity gets one rule for the same reason. In print mode agy 1.5.3 denies every tool that
+needs a permission and stops with no output, so every Iris call from a headless session was
+refused (measured). `iris integrate antigravity` adds `"mcp(iris/*)"` to `permissions.allow` in
+the user's `~/.gemini/antigravity-cli/settings.json`, and `--remove` takes out exactly that entry.
+The rule covers the Iris server alone. agy reads it only from the user settings, not from a
+workspace `.gemini/settings.json` (measured), so a per-repository rule is not possible.
+`mcp(iris/whoami)`, `mcp(iris/*)` and `mcp(*)` matched; `mcp(iris)` and `mcp(iris:whoami)` did not.
+
 `iris doctor` runs offline by default: hub reachable, token valid, client version, configuration
 present, trust state, unknown tools seen, last hook received, and a synthetic canary through the
 configured hook command. `iris doctor --live` runs the real client, on its cheapest model where
