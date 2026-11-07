@@ -32,7 +32,7 @@ type failureHub struct {
 
 func (h failureHub) RegisterSession(ctx context.Context, _ hubclient.SessionRequest) (hubclient.SessionResponse, error) {
 	if h.stage == "session" {
-		return hubclient.SessionResponse{}, &hubclient.Error{Code: "unauthorized", Message: "SECRET PAYLOAD"}
+		return hubclient.SessionResponse{}, &hubclient.Error{Code: "unavailable", Message: "SECRET PAYLOAD"}
 	}
 	if h.stage == "timeout" {
 		close(h.entered)

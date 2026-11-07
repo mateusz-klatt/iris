@@ -104,6 +104,10 @@ service, restore the previous vhost file, run `apachectl configtest`, and reload
 operational procedure. Keep the Iris volume; do not delete credentials or database as
 part of rollback. Before later re-enabling Iris, inspect its state and backup.
 
+The hub logs every failed authentication, and the first use of each token since it started,
+by name and peer, never the secret. `serve --access-log` adds one line, about 120 bytes, for every
+authenticated request. It is off by default, because at that rate a busy hub fills its log in days.
+
 Remaining operational limits: no per-user authorization, per-IP rate limit, global
 session/socket quota, token revocation API or automatic database retention. Failed-auth
 logs may be flooded; use edge limits and bounded log retention. Backups, credential
@@ -125,3 +129,85 @@ ProxyPassReverse "/" "http://127.0.0.1:7878/"
 
 The WebSocket lines must come first, because Apache uses the first match. Check that the vhost also
 removes client-supplied `X-Forwarded-*` and `Forwarded` headers and then sets `X-Forwarded-Proto https`.
+
+## Moving a host to its own token
+
+Every host starts on the hub's own token, the owner token in `hub.token`. A host token gives the same
+access to the API, under its own name, and is refused on `/v1/tokens` and `/v1/admin/forget`. This was
+rehearsed on 2026-11-07 against a local hub, with a Claude Code session running throughout. The
+measured result is given after each step.
+
+Do one host at a time. The examples never show a token: write it straight to a file, and never paste it
+into a chat, a ticket or an Iris message.
+
+1. On a machine that holds the owner token, create the host's token and keep it out of the terminal:
+
+   ```bash
+   umask 077
+   iris token add <host> > <host>.token
+   ```
+
+   `iris token add` prints the token once, and the hub keeps only its digest. Adding a name that is
+   already active is refused with `conflict`. To replace a lost token, revoke the name first, with the
+   cost described under "Revoking a host token" below.
+
+2. Move `<host>.token` to the host by hand, for example with `scp`, and delete the copy you made.
+
+3. On the host, replace the contents of its token file, and keep the file's path. The file is the one
+   `iris setup` printed: `hub.token` in the Iris configuration directory, unless `client.json` or
+   `IRIS_TOKEN_FILE` names another.
+
+   ```bash
+   CONFIG="$HOME/Library/Application Support/iris"   # Linux: ~/.config/iris
+   install -m 600 <host>.token "$CONFIG/hub.token.new"
+   rm <host>.token
+   IRIS_TOKEN_FILE="$CONFIG/hub.token.new" iris doctor              # token: ok
+   IRIS_TOKEN_FILE="$CONFIG/hub.token.new" iris token list > /dev/null # must be refused: forbidden
+   mv "$CONFIG/hub.token.new" "$CONFIG/hub.token"
+   ```
+
+   Check the new token before it replaces the old one. If `iris doctor` shows `token: ok` and `token
+   list` is refused as `forbidden`, the file holds a working host token and not the owner's. Measured
+   on the first real switch, of `laptop` on 2026-11-07. Until the `mv`, the old file still works, so a
+   failed check costs nothing.
+
+   Iris reads the file on every request, so nothing needs a restart. Measured: from the next request,
+   the running session's hooks, its `iris mcp` and its heartbeats all used the host token. The session
+   saw no error, and the edits it made in the same minute were claimed. Changing `token_file` in
+   `client.json`, rather than the file's contents, needs every running `iris mcp` and `iris watch` to be
+   restarted, because they read `client.json` once.
+
+4. Check it:
+
+   ```bash
+   iris doctor              # hub: ok, token: ok
+   iris token list          # on the owner's machine: <host>  active
+   ```
+
+   Measured: `iris doctor` reported `token: ok`. From the host, `iris token list` and `iris admin
+   forget` were refused with `forbidden: only the hub's own token may do this`.
+
+5. Remove every other copy of the owner token from the host, such as backups and old files from
+   `scp`. The owner token cannot be revoked for one host: it is the hub's own credential. The host
+   stops holding it once its file holds the host token. To invalidate a copy that may have leaked, the
+   hub's `hub.token` must be replaced. That ends access for every host still on it, so do it only after
+   all hosts have moved.
+
+### Revoking a host token
+
+`iris token revoke <host>` takes effect at once. Measured with a Claude Code session still running:
+
+- `iris doctor` on the host reported `token: not valid (token was rejected)` and exited 1.
+- Hooks failed open, as D3 requires: the edits were allowed but not claimed, and recorded in
+  `hook-failures.log`. Each one also told the model: "Iris: the hub rejected this host's token, so
+  this session's edits are allowed but not claimed, and other agents cannot see them." The model
+  quoted it and asked for `iris doctor`.
+- `whoami` failed with `unauthorized`, because it proves its binding to the hub instead of answering
+  from cache.
+- `iris watch` printed one line, "Iris: the hub rejected this host's token, so notifications have
+  stopped.", and printed nothing more while it retried.
+- The hub logged `reason="revoked token \"<host>\""`. An unknown token logs `unknown bearer token`,
+  and a missing one `bearer token required`.
+
+Edits still go through unclaimed until the host has a working token. So revoke a host's token only
+after its sessions have ended, or after its file holds a replacement.

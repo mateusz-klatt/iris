@@ -4,6 +4,7 @@ package watch
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -79,6 +80,10 @@ func (c *Coalescer) Flush(now time.Time) error {
 	}
 	return nil
 }
+
+// outputError is a failure to print. Reconnecting cannot fix it, so Run stops on it.
+type outputError struct{ error }
+
 func (c *Coalescer) emit(now time.Time, kind string, p *pending) error {
 	var err error
 	if kind == "inbox_changed" {
@@ -95,7 +100,7 @@ func (c *Coalescer) emit(now time.Time, kind string, p *pending) error {
 		_, err = fmt.Fprintf(c.Output, "Iris: %d %s released. Use the claims tool.\n", p.count, noun)
 	}
 	if err != nil {
-		return err
+		return outputError{err}
 	}
 	p.count = 0
 	window := c.Window
@@ -110,42 +115,78 @@ type Runner struct {
 	Resolver        *binding.Resolver
 	Output          io.Writer
 	Window, Backoff time.Duration
+	// Now reads the clock for the coalescing window. Nil means time.Now.
+	Now func() time.Time
+	// after waits out a backoff. Tests replace it to see each delay without waiting.
+	after func(time.Duration) <-chan time.Time
+	// opened is when the current stream opened. A drop after a stream that stayed up for
+	// at least the cap starts the backoff again; one that closes at once keeps backing off.
+	opened time.Time
+}
+
+func (r *Runner) wait(d time.Duration) <-chan time.Time {
+	if r.after != nil {
+		return r.after(d)
+	}
+	return time.After(d)
+}
+
+func (r *Runner) now() time.Time {
+	if r.Now != nil {
+		return r.Now()
+	}
+	return time.Now()
 }
 
 func (r *Runner) Run(ctx context.Context) error {
 	coalesce := &Coalescer{Output: r.Output, Window: r.Window}
 	var cursor int64
 	stream := ""
-	delay := r.Backoff
-	if delay <= 0 {
-		delay = time.Second
+	warned := false
+	base := r.Backoff
+	if base <= 0 {
+		base = time.Second
 	}
+	delay := base
 	for ctx.Err() == nil {
 		call, cancel := context.WithTimeout(ctx, 5*time.Second)
 		b, err := r.Resolver.Resolve(call, "")
 		cancel()
+		r.opened = time.Time{}
 		if err == nil {
 			err = r.connect(ctx, b, &cursor, &stream, coalesce)
+		}
+		if errors.As(err, new(outputError)) {
+			return err
+		}
+		if !r.opened.IsZero() && r.now().Sub(r.opened) >= maxBackoff {
+			delay = base
 		}
 		if binding.IsCode(err, "lost") {
 			return nil
 		}
+		// Say it once: each retry would cost the model another turn.
+		rejected := binding.IsCode(err, "unauthorized")
+		if rejected && !warned {
+			if _, werr := fmt.Fprintln(r.Output, "Iris: the hub rejected this host's token, so notifications have stopped. Tell the user to run `iris doctor`."); werr != nil {
+				return werr
+			}
+		}
+		warned = rejected
 		// Keep flushing pending attention even during a network outage.
-		wait := time.NewTimer(delay)
+		wait := r.wait(delay)
 		tick := time.NewTicker(100 * time.Millisecond)
 	waiting:
 		for {
 			select {
 			case <-ctx.Done():
-				wait.Stop()
 				tick.Stop()
 				return nil
-			case <-wait.C:
+			case <-wait:
 				break waiting
-			case now := <-tick.C:
-				if err = coalesce.Flush(now); err != nil {
+			case <-tick.C:
+				if err = coalesce.Flush(r.now()); err != nil {
 					tick.Stop()
-					wait.Stop()
 					return err
 				}
 			}
@@ -202,11 +243,15 @@ func (r *Runner) connect(ctx context.Context, b binding.Bound, cursor *int64, st
 	q := url.Values{"execution_id": {b.ExecutionID}, "after": {fmt.Sprint(*cursor)}, "stream": {*stream}, "consumer_id": {"iris-watch"}}
 	u.RawQuery = q.Encode()
 	dial, cancel := context.WithTimeout(ctx, 5*time.Second)
-	conn, _, err := websocket.Dial(dial, u.String(), &websocket.DialOptions{HTTPClient: h.HTTP, HTTPHeader: http.Header{"Authorization": {"Bearer " + token}}, Subprotocols: []string{"iris.v1"}})
+	conn, resp, err := websocket.Dial(dial, u.String(), &websocket.DialOptions{HTTPClient: h.HTTP, HTTPHeader: http.Header{"Authorization": {"Bearer " + token}}, Subprotocols: []string{"iris.v1"}})
 	cancel()
+	if err != nil && resp != nil && resp.StatusCode == http.StatusUnauthorized {
+		return &hubclient.Error{Code: "unauthorized", Message: "the hub rejected the watch stream's token"}
+	}
 	if err != nil {
 		return err
 	}
+	r.opened = r.now()
 	defer func() { _ = conn.CloseNow() }()
 	c.Recount = func() (int, bool) { return r.waiting(ctx, b, *cursor) }
 	readCtx, stop := context.WithCancel(ctx)
@@ -240,8 +285,8 @@ func (r *Runner) connect(ctx context.Context, b binding.Bound, cursor *int64, st
 			return nil
 		case err := <-fail:
 			return readFailure(ctx, err)
-		case now := <-tick.C:
-			if err = c.Flush(now); err != nil {
+		case <-tick.C:
+			if err = c.Flush(r.now()); err != nil {
 				return err
 			}
 		case f := <-frames:
@@ -264,7 +309,7 @@ func (r *Runner) connect(ctx context.Context, b binding.Bound, cursor *int64, st
 				if snapshot.Pending != nil { // an older hub does not send it
 					waiting = *snapshot.Pending
 				}
-				if err = c.Add(time.Now(), "inbox_changed", waiting); err != nil {
+				if err = c.Add(r.now(), "inbox_changed", waiting); err != nil {
 					return err
 				}
 				continue
@@ -274,7 +319,7 @@ func (r *Runner) connect(ctx context.Context, b binding.Bound, cursor *int64, st
 			}
 			*stream = f.Stream
 			*cursor = f.Cursor
-			if err = c.Add(time.Now(), f.Kind, 1); err != nil {
+			if err = c.Add(r.now(), f.Kind, 1); err != nil {
 				return err
 			}
 			// Persist only a cursor consumed here, never a socket writer's high-water mark.

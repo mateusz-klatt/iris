@@ -255,6 +255,9 @@ func TestReconcileReportsItsPhase(t *testing.T) {
 		phase := ""
 		r, ev := shellRunner(scriptHub{phase: &phase, message: "changed"}, root)
 		r.Status = nil // the real git status
+		// This test is about the phase. Under full CPU load a real git status took longer
+		// than the 300 ms budget, and the hook rightly failed open.
+		r.ShellDeadline = time.Minute
 		ev.Kind = kind
 		out := r.reconcile(context.Background(), ev)
 		if phase != want || !strings.Contains(string(out.Stdout), "changed") {

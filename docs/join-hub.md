@@ -10,7 +10,7 @@ SSH, or by hand.
 
 ```bash
 git clone https://github.com/mateusz-klatt/iris.git && cd iris
-mkdir -p ~/.local/bin ~/.config/iris
+mkdir -p ~/.local/bin && mkdir -p -m 700 ~/.config/iris
 CGO_ENABLED=0 go build -o ~/.local/bin/iris ./cmd/iris
 scp <user>@<hub-host>:.config/iris/hub.token ~/.config/iris/hub.token
 chmod 600 ~/.config/iris/hub.token
@@ -25,10 +25,52 @@ In WSL, keep the repository in the Linux filesystem, not under `/mnt/c`.
 Iris keeps its configuration in `~/Library/Application Support/iris`, and it ignores `~/.config/iris`
 and `XDG_CONFIG_HOME`. A token copied to the Linux path leaves `iris doctor` reporting `token: not available`.
 
+### From a release
+
+No release is published yet. These steps were measured on a snapshot of the same archives, on an Intel
+Mac. Use `darwin_arm64` on Apple silicon; that archive was built but not run.
+
+```bash
+curl -fsSLO https://github.com/mateusz-klatt/iris/releases/download/v<version>/iris_<version>_darwin_arm64.tar.gz
+mkdir -p ~/.local/bin
+tar -xzf iris_<version>_darwin_arm64.tar.gz -C ~/.local/bin iris
+export PATH="$HOME/.local/bin:$PATH"
+CONFIG="$HOME/Library/Application Support/iris"
+mkdir -p -m 700 "$CONFIG"
+scp <user>@<hub-host>:.config/iris/hub.token "$CONFIG/hub.token"
+chmod 600 "$CONFIG/hub.token"
+iris setup --hub https://<hub> --clients claude --yes
+iris doctor
+```
+
+Download with `curl`, not a browser. The binary is not notarized yet. A browser marks the archive
+with `com.apple.quarantine`, `tar` and Archive Utility copy the mark onto `iris`, and macOS then holds
+`iris` at start: it prints nothing and does not exit. To run a binary that came through a browser,
+clear the mark once:
+
+```bash
+xattr -d com.apple.quarantine ~/.local/bin/iris
+```
+
+A `curl` download carries no mark and runs at once.
+
+With Homebrew, once the `mateusz-klatt/tap` tap is published:
+
+```bash
+brew install mateusz-klatt/tap/iris
+```
+
+Homebrew links `iris` into its `bin` directory, which is already on PATH. Then place the token and run
+`iris setup` and `iris doctor` as above. The formula was measured from a local tap. It sets no
+quarantine mark, so the binary runs. Installing it by its full name also marked it as trusted, which
+Homebrew 7 requires for a formula outside its own taps.
+
+### From source
+
 ```bash
 git clone https://github.com/mateusz-klatt/iris.git && cd iris
 CONFIG="$HOME/Library/Application Support/iris"
-mkdir -p ~/.local/bin "$CONFIG"
+mkdir -p ~/.local/bin && mkdir -p -m 700 "$CONFIG"
 CGO_ENABLED=0 go build -o ~/.local/bin/iris ./cmd/iris
 scp <user>@<hub-host>:.config/iris/hub.token "$CONFIG/hub.token"
 chmod 600 "$CONFIG/hub.token"
@@ -52,9 +94,11 @@ that exits, so a job can stay loaded and be inactive.
 
 The hub writes to `~/Library/Logs/iris/hub.log`. When `iris service install` or `iris service start`
 finds that file at 10 MiB or more, it moves it to `hub.log.1`, replacing the previous one. Nothing
-limits the log between those commands, because launchd has no rotation and keeps the file open. The
-hub writes little, but a hub that keeps failing adds lines at each restart, which launchd spaces about
-10 seconds apart. `iris service uninstall` leaves the logs in place.
+limits the log between those commands, because launchd has no rotation and keeps the file open. By
+default the hub logs a failed authentication, and each token's first use since it started, so the log
+grows slowly. `iris serve --access-log` would add a line per request, about 120 bytes each, and the
+LaunchAgent does not pass it. A hub that keeps failing adds lines at each restart, which launchd spaces
+about 10 seconds apart. `iris service uninstall` leaves the logs in place.
 
 ## Windows
 

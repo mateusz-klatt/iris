@@ -149,11 +149,31 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
       - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+      # The release workflow builds the console in a job of its own and hands it over as
+      # WEB_DIST. Build it the local way here, then give the snapshot the same hand-over,
+      # so both branches of `make web` run before the first tag.
+      - name: Build the console as the release web job does
+        shell: bash
+        run: |
+          set -euo pipefail
+          make web
+          mkdir -p "$RUNNER_TEMP/webui-dist"
+          cp -a internal/webui/dist/. "$RUNNER_TEMP/webui-dist/"
+          # GoReleaser refuses a dirty tree, so put the placeholder back.
+          git checkout -- internal/webui/dist
+          test -z "$(git status --porcelain --untracked-files=no)"
       # Keyless signing needs a release's OIDC identity, so only the SBOM is exercised here.
       - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
         with:
           version: v2.20.0
           args: release --snapshot --clean --skip=sign
+        env:
+          WEB_DIST: ${{ runner.temp }}/webui-dist
+      - name: The snapshot embedded the handed-over console
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmp internal/webui/dist/index.html "$RUNNER_TEMP/webui-dist/index.html"
       - name: The snapshot made an SBOM for every archive
         shell: bash
         run: |

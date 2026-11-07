@@ -6,8 +6,9 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
-	"sync/atomic"
+	"sync"
 	"testing"
 	"time"
 
@@ -159,25 +160,49 @@ func TestRunCapsBackoffAndDefaultsAMissingDelay(t *testing.T) {
 	orig := maxBackoff
 	t.Cleanup(func() { maxBackoff = orig })
 	maxBackoff = 5 * time.Millisecond
-	var dials atomicInt
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		dials.n.Add(1)
 		http.Error(w, "down", http.StatusServiceUnavailable)
 	}))
 	defer srv.Close()
-	ctx, cancel := context.WithTimeout(context.Background(), 120*time.Millisecond)
-	defer cancel()
+	// Each backoff is recorded and ends at once, so the sequence does not depend on how
+	// many dials a slow machine fits into a stretch of real time.
+	backoffs := func(runner *Runner, n int) []time.Duration {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		var mu sync.Mutex
+		var seen []time.Duration
+		runner.after = func(d time.Duration) <-chan time.Time {
+			mu.Lock()
+			seen = append(seen, d)
+			if len(seen) == n {
+				cancel()
+			}
+			mu.Unlock()
+			now := make(chan time.Time, 1)
+			now <- time.Time{}
+			return now
+		}
+		if err := runner.Run(ctx); err != nil {
+			t.Fatal(err)
+		}
+		mu.Lock()
+		defer mu.Unlock()
+		return seen
+	}
 	runner := &Runner{
 		Resolver: binding.New(&hubclient.Client{Config: testConfig{url: srv.URL}}, "claude"),
 		Output:   &bytes.Buffer{},
 		Backoff:  4 * time.Millisecond,
 	}
-	if err := runner.Run(ctx); err != nil {
-		t.Fatal(err)
+	ms := time.Millisecond
+	if got := backoffs(runner, 4); !reflect.DeepEqual(got, []time.Duration{4 * ms, 5 * ms, 5 * ms, 5 * ms}) {
+		t.Fatalf("backoff was not capped: %v", got)
 	}
-	if dials.n.Load() < 6 {
-		t.Fatalf("backoff was not capped: %d dials", dials.n.Load())
+	runner.Backoff = 0
+	if got := backoffs(runner, 1); !reflect.DeepEqual(got, []time.Duration{time.Second}) {
+		t.Fatalf("missing delay: %v", got)
 	}
+	runner.after = nil
 
 	lost := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusConflict)
@@ -190,8 +215,6 @@ func TestRunCapsBackoffAndDefaultsAMissingDelay(t *testing.T) {
 		t.Fatal(err)
 	}
 }
-
-type atomicInt struct{ n atomic.Int32 }
 
 func TestConnectResetSnapshotAndAckFailure(t *testing.T) {
 	var out bytes.Buffer

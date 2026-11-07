@@ -8,6 +8,10 @@ import (
 	"os"
 )
 
+// OwnerOnly is the Windows DACL's counterpart. On Unix the caller's mode bits already do
+// this, so there is nothing to add.
+func OwnerOnly(string) error { return nil }
+
 // unixLstat is the ownership check. Tests report a foreign uid without chown.
 var unixLstat = unix.Lstat
 

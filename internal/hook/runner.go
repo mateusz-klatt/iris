@@ -40,6 +40,9 @@ type Runner struct {
 	// Memory keeps each session's generation between hook processes. Nil means a file
 	// beside the token.
 	Memory Memory
+	// ShellDeadline bounds a shell reconcile. Zero means ReconcileDeadline. Tests that are
+	// not about the budget give it room, because a real git status is slow under load.
+	ShellDeadline time.Duration
 	// after starts the deadline. Tests replace it so a deadline fires at a known
 	// stage rather than whenever a slow machine gets there.
 	after func(time.Duration) <-chan time.Time
@@ -140,7 +143,7 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		state.at("session")
 		sess, err := r.register(ctx, ev, repo)
 		if err != nil {
-			return state.fail(err, allow)
+			return state.fail(err, r.failOpen(ev, err, allow))
 		}
 		return r.finish(ev, Encode(ev, Decision{Action: ActionAllow, Context: SessionText(sess)}))
 	case KindSessionEnd:
@@ -177,7 +180,7 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 			return r.finish(ev, Encode(ev, Decision{Action: ActionDeny, Reason: recovering}))
 		}
 		if err != nil {
-			return state.fail(err, allow)
+			return state.fail(err, r.failOpen(ev, err, allow))
 		}
 		state.at("touch")
 		touch, err := r.Hub.Touch(ctx, hubclient.TouchRequest{
@@ -189,7 +192,7 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 			RenameTo:    to,
 		})
 		if err != nil {
-			return state.fail(err, allow)
+			return state.fail(err, r.failOpen(ev, err, allow))
 		}
 		switch strings.ToLower(touch.Action) {
 		case "allow", "deny", "ask", "warn":
@@ -198,6 +201,19 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		}
 		return r.finish(ev, Encode(ev, decisionFromTouch(touch)))
 	}
+}
+
+// rejected tells the model that Iris is not protecting it. D3 still allows the edit, and
+// without this the session saw nothing at all when its token was revoked.
+const rejected = "Iris: the hub rejected this host's token, so this session's edits are allowed but not claimed, and other agents cannot see them. Tell the user to run `iris doctor`."
+
+// failOpen is D3's allow. A rejected token also tells the model, because a silent allow
+// looks exactly like protection.
+func (r Runner) failOpen(ev Event, err error, allow Output) Output {
+	if hubclient.IsCode(err, "unauthorized") {
+		return r.finish(ev, Encode(ev, Decision{Action: ActionAllow, Context: rejected}))
+	}
+	return allow
 }
 
 // recovering is the refusal while a session cannot yet prove itself after a hub restart.
