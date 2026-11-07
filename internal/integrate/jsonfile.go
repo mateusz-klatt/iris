@@ -2,6 +2,8 @@ package integrate
 
 import (
 	"encoding/json"
+	"maps"
+	"slices"
 	"strings"
 )
 
@@ -67,7 +69,7 @@ func matchesExec(v any, client, event string) bool {
 		if args, ok := t["args"].([]any); ok && argsMatch(args, client, event) {
 			return true
 		}
-		for _, child := range t {
+		for _, child := range inOrder(t) {
 			if matchesExec(child, client, event) {
 				return true
 			}
@@ -134,7 +136,7 @@ func treeContains(v any, needle string) bool {
 	case string:
 		return strings.Contains(t, needle)
 	case map[string]any:
-		for _, child := range t {
+		for _, child := range inOrder(t) {
 			if treeContains(child, needle) {
 				return true
 			}
@@ -170,7 +172,7 @@ func findArgv(v any, event string) (Invocation, bool) {
 				return Invocation{Argv: argv}, true
 			}
 		}
-		for _, child := range t {
+		for _, child := range inOrder(t) {
 			if in, ok := findArgv(child, event); ok {
 				return in, true
 			}
@@ -186,32 +188,38 @@ func findArgv(v any, event string) (Invocation, bool) {
 }
 
 func findNamedString(v any, key, needle string) (string, bool) {
-	var found string
-	var walk func(any)
-	walk = func(v any) {
-		if found != "" {
-			return
+	switch t := v.(type) {
+	case map[string]any:
+		if s, ok := t[key].(string); ok && strings.Contains(s, needle) {
+			return s, true
 		}
-		switch t := v.(type) {
-		case map[string]any:
-			if s, ok := t[key].(string); ok && strings.Contains(s, needle) {
-				found = s
-				return
+		for _, k := range slices.Sorted(maps.Keys(t)) {
+			if k == key {
+				continue
 			}
-			for childKey, child := range t {
-				if childKey == key {
-					continue
-				}
-				walk(child)
+			if s, ok := findNamedString(t[k], key, needle); ok {
+				return s, true
 			}
-		case []any:
-			for _, child := range t {
-				walk(child)
+		}
+	case []any:
+		for _, child := range t {
+			if s, ok := findNamedString(child, key, needle); ok {
+				return s, true
 			}
 		}
 	}
-	walk(v)
-	return found, found != ""
+	return "", false
+}
+
+// inOrder returns a map's values in key order. The searches here stop at the first match, so
+// ranging over the map itself made both the match found and the lines covered depend on Go's
+// random map order: findNamedString's coverage changed from run to run.
+func inOrder(m map[string]any) []any {
+	out := make([]any, 0, len(m))
+	for _, k := range slices.Sorted(maps.Keys(m)) {
+		out = append(out, m[k])
+	}
+	return out
 }
 
 func findShell(v any, event string) (string, bool) {
