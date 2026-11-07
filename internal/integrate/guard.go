@@ -48,20 +48,11 @@ func guardPowerShell(iris, client, event, allow string) string {
 }
 
 func guardCmd(iris, client, event, allow string) string {
-	run := iris
-	if strings.ContainsAny(iris, " \t\"") {
-		run = `"` + strings.ReplaceAll(iris, `"`, `""`) + `"`
-	}
+	// Always quoted: inside the ( … ) blocks an unquoted ) ends the block, and & or ^ split or
+	// escape the command (measured on Windows by claude-home-iris-be60dbb0).
+	run := `"` + strings.ReplaceAll(iris, `"`, `""`) + `"`
 	hook := " hook --client " + client + " --event " + event
 	// cmd echo prints quote characters literally. Do not wrap or double them. The closing
 	// parenthesis ends each echo, so the allow text must not contain one.
-	return "if exist " + quoted(run) + " (" + run + hook + " || echo " + allow + ") else (where iris >NUL 2>&1 && iris" + hook + " || echo " + allow + ")"
-}
-
-// quoted gives cmd's if exist one argument, whether or not run already carries quotes.
-func quoted(run string) string {
-	if strings.HasPrefix(run, `"`) {
-		return run
-	}
-	return `"` + run + `"`
+	return "if exist " + run + " (" + run + hook + " || echo " + allow + ") else (where iris >NUL 2>&1 && iris" + hook + " || echo " + allow + ")"
 }
