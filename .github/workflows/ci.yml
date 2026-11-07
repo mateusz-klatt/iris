@@ -154,6 +154,12 @@ jobs:
         env:
           CGO_ENABLED: "0"
           IRIS_MEASURE_LATENCY: "1"
+      # Fails if a shell reconcile against a hub 80 ms away runs out of its budget (D3).
+      - name: Run real shell hooks against a delayed remote hub and a loopback one
+        run: go test ./cmd/iris -run '^TestShellReconcileLatency$' -count=1 -v
+        env:
+          CGO_ENABLED: "0"
+          IRIS_MEASURE_LATENCY: "1"
   release-image:
     # The image has no shell, so only a real run shows the hub can write to /data.
     runs-on: ubuntu-latest
