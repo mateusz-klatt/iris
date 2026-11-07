@@ -65,6 +65,12 @@ func (f *fakeHub) last(t *testing.T) seen {
 
 func connect(t *testing.T, f *fakeHub) *mcp.ClientSession {
 	t.Helper()
+	return connectHandler(t, f)
+}
+
+// connectHandler is connect for a hub that does more than a fakeHub.
+func connectHandler(t *testing.T, f http.Handler) *mcp.ClientSession {
+	t.Helper()
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
 	resolver := &binding.Resolver{

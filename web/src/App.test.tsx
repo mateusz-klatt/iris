@@ -88,6 +88,117 @@ async function showSession() {
   expect(await screen.findByRole("heading", { name: "Clients" })).toBeVisible();
 }
 
+async function fillCompose(user: ReturnType<typeof userEvent.setup>, body: string) {
+  const compose = document.getElementById("compose");
+  if (compose === null) {
+    throw new Error("missing compose");
+  }
+  const view = within(compose);
+  await user.type(view.getByRole("textbox", { name: "Recipients" }), "claude-host");
+  await user.type(view.getByRole("textbox", { name: "Subject" }), "Check in");
+  await user.type(view.getByRole("textbox", { name: "Message" }), body);
+  return view;
+}
+
+// Gap review A9: a send keeps one retry key from the draft's start until it succeeds.
+describe("console send retries", () => {
+  it("retries a send whose response was lost with the same key", async () => {
+    const user = userEvent.setup({ delay: null });
+    const keys: string[] = [];
+    let lose = true;
+    server.use(
+      http.post("*/v1/ui/messages", async ({ request }) => {
+        keys.push(((await request.json()) as { key: string }).key);
+        if (lose) {
+          lose = false;
+          return HttpResponse.error();
+        }
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    await showSession();
+    const view = await fillCompose(user, "Are you there?");
+    await user.click(view.getByRole("button", { name: "Send" }));
+    expect(await screen.findByRole("alert")).toBeVisible();
+    await user.click(view.getByRole("button", { name: "Send" }));
+    expect(await screen.findByText("Sent.")).toBeVisible();
+    expect(keys).toHaveLength(2);
+    expect(keys[1]).toBe(keys[0]);
+  }, 20000);
+
+  it("sends once when Send is clicked again while the first is pending", async () => {
+    const user = userEvent.setup({ delay: null });
+    const pending = deferred<Response>();
+    let calls = 0;
+    server.use(
+      http.post("*/v1/ui/messages", async () => {
+        calls++;
+        return pending.promise;
+      }),
+    );
+    await showSession();
+    const view = await fillCompose(user, "Once only");
+    const send = view.getByRole("button", { name: "Send" });
+    await user.click(send);
+    await waitFor(() => expect(send).toBeDisabled());
+    await user.click(send);
+    expect(calls).toBe(1);
+    pending.resolve(new HttpResponse(null, { status: 204 }));
+    expect(await screen.findByText("Sent.")).toBeVisible();
+    expect(calls).toBe(1);
+  }, 20000);
+
+  it("sends once when the form is submitted twice before React re-renders", async () => {
+    const user = userEvent.setup({ delay: null });
+    const pending = deferred<Response>();
+    let calls = 0;
+    server.use(
+      http.post("*/v1/ui/messages", async () => {
+        calls++;
+        return pending.promise;
+      }),
+    );
+    await showSession();
+    const view = await fillCompose(user, "Twice in one tick");
+    const form = view.getByRole("button", { name: "Send" }).closest("form");
+    if (form === null) {
+      throw new Error("missing form");
+    }
+    act(() => {
+      form.requestSubmit();
+      form.requestSubmit();
+    });
+    await waitFor(() => expect(calls).toBe(1));
+    pending.resolve(new HttpResponse(null, { status: 204 }));
+    expect(await screen.findByText("Sent.")).toBeVisible();
+    expect(calls).toBe(1);
+  }, 20000);
+
+  it("gives a new key to the same message sent again after success, and to an edited draft", async () => {
+    const user = userEvent.setup({ delay: null });
+    const keys: string[] = [];
+    let fail = false;
+    server.use(
+      http.post("*/v1/ui/messages", async ({ request }) => {
+        keys.push(((await request.json()) as { key: string }).key);
+        return fail ? HttpResponse.error() : new HttpResponse(null, { status: 204 });
+      }),
+    );
+    await showSession();
+    let view = await fillCompose(user, "ping");
+    await user.click(view.getByRole("button", { name: "Send" }));
+    expect(await screen.findByText("Sent.")).toBeVisible();
+    view = await fillCompose(user, "ping");
+    fail = true;
+    await user.click(view.getByRole("button", { name: "Send" }));
+    expect(await screen.findByRole("alert")).toBeVisible();
+    await user.type(view.getByRole("textbox", { name: "Message" }), "!");
+    await user.click(view.getByRole("button", { name: "Send" }));
+    await waitFor(() => expect(keys).toHaveLength(3));
+    expect(new Set(keys).size).toBe(3);
+  }, 30000);
+});
+
 describe("Iris operator console", () => {
   it("shows repositories, agents, and claims from the overview", async () => {
     await showSession();

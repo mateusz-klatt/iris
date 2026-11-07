@@ -6,7 +6,16 @@ names so that independently built parts meet.
 
 Requests and responses are JSON. Authentication is `Authorization: Bearer <token>`. Retryable message and explicit-claim creation carry a client-chosen `key` (D9). Touch uses
 `tool_call_id`; lifecycle calls are idempotent by session/generation, and release and ack
-are idempotent by fence and delivery attempt respectively. Errors look like this:
+are idempotent by fence and delivery attempt respectively.
+
+Where the key comes from matters, because a key the caller first learns from a response is lost
+with that response. `iris mcp` uses the `key` a model passes. Without one it derives the key from
+the Execution and generation, the operation, the arguments exactly as sent and a ten-minute
+window, so a retry of the same call after an ambiguous outcome is deduplicated, while an
+identical message sent on purpose in a later window goes through. A retry that crosses a window
+boundary gets a new key. The web console makes one key when a draft starts, keeps it until the
+send succeeds and makes a new one when the draft is edited, and it sends one draft at a time.
+Every mutation's response and error carry the key used (gap review A9). Errors look like this:
 
 ```json
 {"error":{"code":"conflict","message":"human readable","details":{}}}
