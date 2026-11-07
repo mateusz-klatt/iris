@@ -224,27 +224,27 @@ func TestReconcileFailsOpen(t *testing.T) {
 	t.Run("repository", func(t *testing.T) {
 		r, ev := shellRunner(scriptHub{}, root)
 		r.Find = func(string) (gitinfo.Repo, error) { return gitinfo.Repo{}, errors.New("unreadable") }
-		if !isAllow(r.reconcile(ctx, ev)) {
+		if !isAllow(r.reconcile(ctx, ev, &runState{})) {
 			t.Fatal("not an allow")
 		}
 	})
 	t.Run("panic", func(t *testing.T) {
 		r, ev := shellRunner(scriptHub{}, root)
 		r.Find = func(string) (gitinfo.Repo, error) { panic("dependency") }
-		if !isAllow(r.reconcile(ctx, ev)) {
+		if !isAllow(r.reconcile(ctx, ev, &runState{})) {
 			t.Fatal("not an allow")
 		}
 	})
 	t.Run("session", func(t *testing.T) {
 		r, ev := shellRunner(scriptHub{regErr: errors.New("down")}, root)
-		if !isAllow(r.reconcile(ctx, ev)) {
+		if !isAllow(r.reconcile(ctx, ev, &runState{})) {
 			t.Fatal("not an allow")
 		}
 	})
 	t.Run("status", func(t *testing.T) {
 		r, ev := shellRunner(scriptHub{}, root)
 		r.Status = func(context.Context, string) (map[string]string, error) { return nil, errors.New("git") }
-		if !isAllow(r.reconcile(ctx, ev)) {
+		if !isAllow(r.reconcile(ctx, ev, &runState{})) {
 			t.Fatal("not an allow")
 		}
 	})
@@ -262,7 +262,7 @@ func TestReconcileReportsItsPhase(t *testing.T) {
 		r, ev := shellRunner(scriptHub{phase: &phase, message: "changed"}, root)
 		r.Status = nil // the real git status, within shellRunner's hour
 		ev.Kind = kind
-		out := r.reconcile(context.Background(), ev)
+		out := r.reconcile(context.Background(), ev, &runState{})
 		if phase != want || !strings.Contains(string(out.Stdout), "changed") {
 			t.Fatalf("%s: %q %s", kind, phase, out.Stdout)
 		}

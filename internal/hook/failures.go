@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"syscall"
 	"time"
@@ -29,6 +30,18 @@ type Failure struct {
 	Stage  string    `json:"stage"`
 	Error  string    `json:"error"`
 }
+
+// Degraded reports whether f shows only a shell reconcile that ran past its budget, as a big
+// or cold worktree or a loaded machine makes git status do. The hook still answered and the
+// command still ran; only that one reconciliation was skipped. Any other failure shows the
+// hook itself is broken.
+func (f Failure) Degraded() bool {
+	return strings.HasPrefix(f.Stage, "shell ") && f.Error == shellOverBudget
+}
+
+// shellOverBudget is what a shell reconcile records when it runs past ReconcileDeadline.
+const shellOverBudget = "shell reconciliation passed its deadline"
+
 type hookFailure string
 
 func (e hookFailure) Error() string { return string(e) }

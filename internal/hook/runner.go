@@ -127,7 +127,7 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		ev.ToolCallID = "payload:" + hex.EncodeToString(hash[:])
 	}
 	if shellEvent(ev) {
-		return r.finish(ev, r.reconcile(ctx, ev))
+		return r.finish(ev, r.reconcile(ctx, ev, state))
 	}
 	state.at("repository")
 	repo, err := r.repoFor(ev)
