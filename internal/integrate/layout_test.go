@@ -451,3 +451,20 @@ func TestStripMonitorsRefusesWhatIsNotAList(t *testing.T) {
 		t.Fatalf("%q %v %v", next, removed, err)
 	}
 }
+
+// With two matches, the searches return the same one every time: the one under the first key.
+// Ranging over the map made the answer, and the lines covered, depend on Go's map order.
+func TestTreeSearchesAreDeterministic(t *testing.T) {
+	doc := map[string]any{}
+	for _, k := range []string{"m", "c", "x", "a", "q", "b"} {
+		doc[k] = map[string]any{"commandWindows": "iris --event SessionStart " + k}
+	}
+	for range 50 {
+		if got, ok := findNamedString(doc, "commandWindows", "SessionStart"); !ok || got != "iris --event SessionStart a" {
+			t.Fatalf("%q %v", got, ok)
+		}
+	}
+	if got := inOrder(map[string]any{"b": 2, "a": 1, "c": 3}); len(got) != 3 || got[0] != 1 || got[1] != 2 || got[2] != 3 {
+		t.Fatal(got)
+	}
+}
