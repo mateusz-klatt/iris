@@ -112,17 +112,24 @@ func namePart(s string) string {
 // scpRemote is git's scp-like form, as in git@host:owner/repo.git. It is not a URL.
 var scpRemote = regexp.MustCompile(`^(?:[^@/]+@)?([^:/]+):([^/].*)$`)
 
+var defaultPorts = map[string]string{"https": "443", "http": "80", "ssh": "22", "git": "9418"}
+
 // remoteAlias names a repository by host and path, so that one repository cloned over
 // https on one machine and over ssh on another has one alias. It returns nothing for a
 // host that may mean something different on another machine.
 func remoteAlias(raw string) string {
 	raw = strings.TrimSpace(raw)
-	var host, repoPath string
+	var host, repoPath, port string
 	if u, err := url.Parse(raw); err == nil && u.Host != "" {
 		if u.Scheme != "https" && u.Scheme != "http" && u.Scheme != "ssh" && u.Scheme != "git" {
 			return ""
 		}
 		host, repoPath = u.Hostname(), u.Path
+		// A non-default port can be a different service on the same host, so it stays
+		// part of the identity. A default port is the same address written longer.
+		if p := u.Port(); p != "" && p != defaultPorts[u.Scheme] {
+			port = ":" + p
+		}
 	} else if m := scpRemote.FindStringSubmatch(raw); m != nil {
 		host, repoPath = m[1], m[2]
 	} else {
@@ -136,7 +143,7 @@ func remoteAlias(raw string) string {
 	if repoPath == "" {
 		return ""
 	}
-	return "remote:" + host + "/" + repoPath
+	return "remote:" + host + port + "/" + repoPath
 }
 
 func (t *transaction) repository(r Request) (string, error) {
@@ -159,6 +166,13 @@ func (t *transaction) repository(r Request) (string, error) {
 			}
 			if r.RootCommit != "" {
 				known = append(known, "root:"+r.RootCommit)
+				// The root learned now is this repository's root from here on, so a later
+				// session that presents a different one cannot join it by remote.
+				if root == "" {
+					if _, err = t.exec("UPDATE Repository SET root_commit=? WHERE id=? AND root_commit=''", r.RootCommit, repo); err != nil {
+						return "", err
+					}
+				}
 			}
 			for _, key := range known {
 				if _, err = t.exec("INSERT OR IGNORE INTO RepositoryAlias VALUES(?,?)", key, repo); err != nil {
