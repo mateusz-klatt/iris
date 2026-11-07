@@ -13,7 +13,7 @@ import (
 func startSession(t *testing.T, event, root string) string {
 	t.Helper()
 	payload := `{"session_id":"s","cwd":` + quote(root) + `}`
-	out := Runner{ClientName: "claude", EventName: event, Stdin: strings.NewReader(payload), Hub: scriptHub{}, Getenv: failureEnv(t), Deadline: roomy}.Run()
+	out := Runner{ClientName: "claude", EventName: event, Stdin: strings.NewReader(payload), Hub: scriptHub{}, Getenv: failureEnv(t), after: never}.Run()
 	if out.Exit != 0 {
 		t.Fatalf("exit %d: %s", out.Exit, out.Stderr)
 	}
