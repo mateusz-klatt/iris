@@ -269,5 +269,11 @@ claim was released at session end.
 that deletes and adds the same path, which `apply_patch` rejects. That happened three times out of
 three. "Append one line" produced an `Update File` hunk that worked.
 
+**Code Mode writes.** [MEASURED] `gpt-6-luna` wrote a file through the `js` tool
+(`mcp__node_repl__js`, `{"code": "…fs.appendFile(…)", "title": "…"}`) instead of `apply_patch`, so
+no pre-edit claim was taken. Codex fires PreToolUse and PostToolUse for that tool; PostToolUse also
+carries `tool_response`. Iris reconciles it like a shell: detection, not prevention.
+`gpt-6.1-terra` used `apply_patch` in every run.
+
 **Still open after H.** Not measured here: attention and wake in the TUI, subagent, compaction and
 async hooks, app-server sessions, Windows and Linux, and hook latency in Codex itself.

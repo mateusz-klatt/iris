@@ -532,6 +532,15 @@ The search index is updated in the same transaction.
 | User hooks need a step | no | review once | no | no | no | no | no |
 | Wake idle session | yes, plugin monitor | owned sessions | owned sessions | owned sessions | owned sessions | owned sessions | owned sessions |
 
+Codex can also write files from JavaScript. Its Code Mode `js` tool, `mcp__node_repl__js`, runs
+code such as `fs.appendFile` (measured on 0.167.0). `gpt-6-luna` used it instead of `apply_patch`
+for an ordinary edit, and with `js_repl = false` set. Codex fires PreToolUse and PostToolUse for
+it, with the code in `tool_input.code`. Iris cannot tell from code which files it will write, so
+the tool is reconciled like a shell: a write is detected afterwards, claimed automatically and
+reported with a warning. It is not refused beforehand. This is detection, not prevention. A write
+into a path someone else holds is reported, not stopped, and the pre-commit guard remains the
+last checkpoint.
+
 ## 4. Known gaps
 
 - The test suite passes on Windows and macOS in CI, but no real client has run there yet. Hook

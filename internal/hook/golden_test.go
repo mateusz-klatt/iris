@@ -243,6 +243,7 @@ func argvEvent(client, file string) string {
 const (
 	claudeSession = "b9f244d4-4326-45bf-8c3d-1d249f8f21b2"
 	codexSession  = "01a1adf0-8c32-7dd1-915f-250ba6059254"
+	codexJS       = "01a1b67e-ac49-7970-8edf-65c03ce13fac"
 	copilotA      = "05a1f795-918d-4cfb-aeb2-f17be274e1b8"
 	copilotB      = "5371905e-5625-4681-bcbc-73b28e2669bb"
 	kimiSession   = "session_114df8a5-1263-4744-bd4a-17c39274ffd6"
@@ -278,14 +279,16 @@ var fixtureWant = map[string]decoded{
 	"claude/Stop.json":                               {kind: KindStop, session: claudeSession, cwd: proj},
 	"claude/UserPromptSubmit.json":                   {kind: KindPrompt, session: claudeSession, cwd: proj},
 
-	"codex/PostToolUse-apply_patch.json": {kind: KindPostTool, session: codexSession, cwd: proj, tool: "apply_patch", class: ClassEdit, paths: []string{"allowed.txt"}, call: "exec-9935dec0-9319-4b3f-a7d9-2dd761d9377b"},
-	"codex/PostToolUse-bash.json":        {kind: KindPostTool, session: codexSession, cwd: proj, tool: "Bash", class: ClassShell, command: "pwd", call: "exec-64f22d9f-1034-4aed-8495-14643167a9ee"},
-	"codex/PreToolUse-apply_patch.json":  {kind: KindPreTool, session: codexSession, cwd: proj, tool: "apply_patch", class: ClassEdit, paths: []string{"allowed.txt"}, call: "exec-9935dec0-9319-4b3f-a7d9-2dd761d9377b"},
-	"codex/PreToolUse-bash.json":         {kind: KindPreTool, session: codexSession, cwd: proj, tool: "Bash", class: ClassShell, command: "pwd", call: "exec-64f22d9f-1034-4aed-8495-14643167a9ee"},
-	"codex/SessionEnd.json":              {kind: KindSessionEnd, session: codexSession, cwd: proj},
-	"codex/SessionStart.json":            {kind: KindSessionStart, session: codexSession, cwd: proj},
-	"codex/Stop.json":                    {kind: KindStop, session: codexSession, cwd: proj},
-	"codex/UserPromptSubmit.json":        {kind: KindPrompt, session: codexSession, cwd: proj},
+	"codex/PostToolUse-apply_patch.json":  {kind: KindPostTool, session: codexSession, cwd: proj, tool: "apply_patch", class: ClassEdit, paths: []string{"allowed.txt"}, call: "exec-9935dec0-9319-4b3f-a7d9-2dd761d9377b"},
+	"codex/PostToolUse-bash.json":         {kind: KindPostTool, session: codexSession, cwd: proj, tool: "Bash", class: ClassShell, command: "pwd", call: "exec-64f22d9f-1034-4aed-8495-14643167a9ee"},
+	"codex/PreToolUse-apply_patch.json":   {kind: KindPreTool, session: codexSession, cwd: proj, tool: "apply_patch", class: ClassEdit, paths: []string{"allowed.txt"}, call: "exec-9935dec0-9319-4b3f-a7d9-2dd761d9377b"},
+	"codex/PreToolUse-bash.json":          {kind: KindPreTool, session: codexSession, cwd: proj, tool: "Bash", class: ClassShell, command: "pwd", call: "exec-64f22d9f-1034-4aed-8495-14643167a9ee"},
+	"codex/PreToolUse-node_repl_js.json":  {kind: KindPreTool, session: codexJS, cwd: proj, tool: "mcp__node_repl__js", class: ClassShell, command: "const fs = await import(\"node:fs/promises\"); await fs.appendFile(\"free.txt\", \"viajs\\n\"); nodeRepl.write(\"appended\");", call: "exec-6efe95d3-edeb-434f-a54f-98108426ad80"},
+	"codex/PostToolUse-node_repl_js.json": {kind: KindPostTool, session: codexJS, cwd: proj, tool: "mcp__node_repl__js", class: ClassShell, command: "const fs = await import(\"node:fs/promises\"); await fs.appendFile(\"free.txt\", \"viajs\\n\"); nodeRepl.write(\"appended\");", call: "exec-6efe95d3-edeb-434f-a54f-98108426ad80"},
+	"codex/SessionEnd.json":               {kind: KindSessionEnd, session: codexSession, cwd: proj},
+	"codex/SessionStart.json":             {kind: KindSessionStart, session: codexSession, cwd: proj},
+	"codex/Stop.json":                     {kind: KindStop, session: codexSession, cwd: proj},
+	"codex/UserPromptSubmit.json":         {kind: KindPrompt, session: codexSession, cwd: proj},
 
 	"copilot/agentStop.json":                           {kind: KindStop, session: copilotA, cwd: proj},
 	"copilot/postToolUse-apply_patch.json":             {kind: KindPostTool, session: copilotA, cwd: proj, tool: "apply_patch", class: ClassEdit, paths: []string{"allowed.txt"}},
