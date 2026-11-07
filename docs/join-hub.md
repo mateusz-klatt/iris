@@ -169,9 +169,10 @@ client loads it; `iris doctor --live` does that.
 and `iris doctor` exits 1. The row names the failure, and `hook-failures.log` beside the token file
 keeps it. The row clears once the entry is more than 24 hours old.
 
-A shell command whose reconciliation ran past its 300 ms budget is graded differently. The hook
-still worked; that command's changes only went unclaimed, because `git status` was slow on a big or
-cold worktree or a loaded machine. Such entries leave the row `ok` with a `degraded` note. More than
+A shell command whose reconciliation ran past its budget is graded differently. The budget is 1 s,
+or 300 ms when the hub runs on the same machine. The hook still worked; that command's changes only
+went unclaimed, because `git status` or the hub was slow: a big or cold worktree, a loaded machine
+or a slow network. Such entries leave the row `ok` with a `degraded` note. More than
 10 of them in 24 hours make it `slow`, and `iris doctor` exits 1. A hub from before the `slow`
 status refuses it, so doctor sends such a hub the row as `silent`, with a detail starting `slow:`,
 and that is how its console shows it.
