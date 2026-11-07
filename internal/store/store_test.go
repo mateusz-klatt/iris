@@ -648,7 +648,11 @@ func TestOutboxNotificationFollowsCommit(t *testing.T) {
 	}
 }
 
-func TestMonitorCursorStartsAtTheNewestEventOnce(t *testing.T) {
+// A new monitor starts at the newest event and is told about the waiting mail. Asking
+// again before the monitor has saved a cursor tells it again: the first connection may
+// have failed before its reset frame went out (gap review A5). Once the monitor saves
+// its cursor, which it does after printing, the mail behind it is not announced again.
+func TestMonitorCursorAnnouncesWaitingMailUntilTheMonitorSavesItsCursor(t *testing.T) {
 	s, _, _ := testStore(t)
 	a, _ := session(t, s, 1)
 	b, br := session(t, s, 2)
@@ -658,9 +662,16 @@ func TestMonitorCursorStartsAtTheNewestEventOnce(t *testing.T) {
 	if number(first["cursor"]) == 0 || first["pending"] != 1 {
 		t.Fatal(first)
 	}
-	second := call(t, s, "monitor_cursor", b)
-	if number(second["cursor"]) != number(first["cursor"]) || second["pending"] != 0 {
-		t.Fatal(second)
+	again := call(t, s, "monitor_cursor", b)
+	if number(again["cursor"]) != number(first["cursor"]) || again["pending"] != 1 {
+		t.Fatalf("a cursor nobody saved hid the waiting mail: %v", again)
+	}
+	saved := b
+	saved.ConsumerID, saved.After = "iris-watch", number(first["cursor"])
+	call(t, s, "events", saved)
+	after := call(t, s, "monitor_cursor", b)
+	if number(after["cursor"]) != number(first["cursor"]) || after["pending"] != 0 {
+		t.Fatal(after)
 	}
 }
 

@@ -115,6 +115,11 @@ func (t *transaction) pendingDeliveries(agent string) (int, error) {
 // monitorCursor says where a monitor resumes. A new session is a new Execution
 // with no cursor, and it must not hear the agent's whole history again, so it
 // starts at the newest event and is told only about mail still waiting.
+//
+// Only the monitor writes its cursor, through events with its consumer id, and it
+// does so once it has printed everything up to that point. So a cursor here proves
+// the waiting mail behind it was announced. A first connection that fails before
+// its reset frame leaves no cursor, and the next one is told about the mail again.
 func (t *transaction) monitorCursor(r Request) (map[string]any, error) {
 	e, err := t.live(r.ExecutionID, 0)
 	if err != nil {
@@ -130,9 +135,6 @@ func (t *transaction) monitorCursor(r Request) (map[string]any, error) {
 		return nil, err
 	}
 	if err = t.row("SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name='Event'),0)").Scan(&cursor); err != nil {
-		return nil, err
-	}
-	if _, err = t.exec("INSERT INTO Cursor VALUES(?,?,?)", consumer, e.ID, cursor); err != nil {
 		return nil, err
 	}
 	pending, err := t.pendingDeliveries(e.AgentID)

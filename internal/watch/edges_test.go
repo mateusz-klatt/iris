@@ -263,7 +263,9 @@ func TestConnectResetSnapshotAndAckFailure(t *testing.T) {
 		t.Fatal(err)
 	}
 
+	// A fresh Runner: this one has saved cursor 9, and frame 3 is behind it.
 	mode = "ack"
+	r = &Runner{Resolver: r.Resolver}
 	err = r.connect(context.Background(), binding.Bound{ExecutionID: "ex"}, new(int64), new(string), &Coalescer{Output: &bytes.Buffer{}, Window: time.Hour})
 	if err == nil || !strings.Contains(err.Error(), "502") {
 		t.Fatal(err)
