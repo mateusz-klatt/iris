@@ -203,8 +203,8 @@ func TestServiceReportsEachLifecycleOutcome(t *testing.T) {
 				t.Fatalf("%s %d", verb, code)
 			}
 		}
-		if code := runService([]string{"status"}); code != 0 {
-			t.Fatal(code)
+		if code := runService([]string{"status"}); code != 4 {
+			t.Fatalf("not installed: %d", code)
 		}
 	})
 	if !strings.Contains(out, "installed") || !strings.Contains(out, "uninstalled") || !strings.Contains(out, "installed: false") {
@@ -228,6 +228,23 @@ func TestServiceReportsEachLifecycleOutcome(t *testing.T) {
 	mgr, err := userService("127.0.0.1:9", filepath.Join(t.TempDir(), "token"))
 	if err != nil || mgr == nil {
 		t.Fatal(err)
+	}
+}
+
+func TestServiceStatusExitCodesFollowSystemctl(t *testing.T) {
+	for _, tc := range []struct {
+		st   service.Status
+		code int
+	}{
+		{service.Status{Installed: true, Active: true}, 0},
+		{service.Status{Installed: true}, 3},
+		{service.Status{}, 4},
+		// A hub nobody installed may answer, but the service is still absent.
+		{service.Status{Active: true}, 4},
+	} {
+		if got := statusExit(tc.st); got != tc.code {
+			t.Fatalf("%+v: %d, want %d", tc.st, got, tc.code)
+		}
 	}
 }
 

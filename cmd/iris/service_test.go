@@ -59,7 +59,7 @@ func serviceSandbox(t *testing.T) *[]string {
 	var argv []string
 	hostService = func(_, _ string, got []string) service.Manager {
 		argv = got
-		return scriptedService{}
+		return scriptedService{status: service.Status{Installed: true, Active: true}}
 	}
 	return &argv
 }

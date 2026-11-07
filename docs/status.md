@@ -75,6 +75,10 @@ Against the production hub, over TLS:
   - The release image runs as non-root in CI, amd64 only (#46).
 - **Services.** launchd install, start, stop, crash loop and log were run for real on macOS under a
   scratch home (#25, #34). The Windows Run value started the hub with a minimal PATH (#48).
+  `systemd --user` ran for real on WSL with systemd enabled and linger on, using a scratch port,
+  token and database. Install wrote and enabled the unit and the hub answered. Status, stop and
+  start behaved as expected. A SIGKILL was restarted within 2 s; a SIGTERM was a clean stop and was
+  not restarted. The journal shows each start. Uninstall removed the unit and the saved settings.
 - **CI.** Linux, macOS and Windows pass the test suite, six targets cross-build, and the coverage
   gate requires 100% of Go and the console. That gate passes on `main`.
 
@@ -88,7 +92,8 @@ Against the production hub, over TLS:
 - **Not measured:** Defender, the SmartScreen window, Apple silicon, Gatekeeper's dialog and "Open
   Anyway", and a Mac or PC whose policy forbids unsigned code.
 - **Production hook latency on Windows since #39.**
-- **Services:** loading the LaunchAgent at login, and `systemd --user` running for real.
+- **Services:** loading the LaunchAgent at login, and the `systemd --user` unit starting at boot
+  after a reboot of the WSL VM.
 - **`iris doctor --live` on clients other than Claude Code.** It ran for real for Claude Code
   2.1.319 on WSL and on macOS against its scratch hub. Grok's allow flags were measured on macOS.
   The other clients' invocations are not measured yet.
