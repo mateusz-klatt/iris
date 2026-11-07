@@ -43,6 +43,7 @@ func Key() string {
 	_, _ = rand.Read(b[:]) // crypto/rand.Read always fills b or crashes the program.
 	return hex.EncodeToString(b[:])
 }
+
 // Lost reports whether a heartbeat found this binding's generation gone at the hub. Only
 // that confirms it: a lost answer to any other call can be a session still recovering
 // after a hub restart, which its next heartbeat reattaches.
@@ -51,6 +52,7 @@ func (r *Resolver) Lost() bool {
 	defer r.mu.Unlock()
 	return r.lost
 }
+
 func IsCode(err error, code string) bool {
 	var e *hubclient.Error
 	return errors.As(err, &e) && e.Code == code

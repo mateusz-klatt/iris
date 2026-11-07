@@ -28,6 +28,12 @@ func Stopped(w io.Writer, reason string) error {
 	return err
 }
 
+// recoveryGrace is how long lost answers may last before the monitor believes them without a
+// heartbeat. The hub keeps a recovering session for 120 s after a restart; past that, an
+// Execution still answered lost is gone. It matters when the monitor never bound at all, so no
+// heartbeat ever runs to confirm it.
+const recoveryGrace = 150 * time.Second
+
 // maxBackoff caps reconnect delay. Tests shrink it so the cap is observable.
 var maxBackoff = 30 * time.Second
 
@@ -176,6 +182,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		base = time.Second
 	}
 	delay := base
+	var lostSince time.Time
 	for ctx.Err() == nil {
 		call, cancel := context.WithTimeout(ctx, 5*time.Second)
 		b, err := r.Resolver.Resolve(call, "")
@@ -193,8 +200,16 @@ func (r *Runner) Run(ctx context.Context) error {
 		// A lost answer from the stream or a bind can be a session still recovering after a
 		// hub restart, so it is retried like any other failure. Only the heartbeat's verdict
 		// ends the monitor, and then with a line, never silently.
-		if binding.IsCode(err, "lost") && r.Resolver.Lost() {
-			return r.lost()
+		if binding.IsCode(err, "lost") {
+			now := r.now()
+			if lostSince.IsZero() {
+				lostSince = now
+			}
+			if r.Resolver.Lost() || now.Sub(lostSince) >= recoveryGrace {
+				return r.lost()
+			}
+		} else {
+			lostSince = time.Time{}
 		}
 		// Say it once: each retry would cost the model another turn.
 		rejected := binding.IsCode(err, "unauthorized")

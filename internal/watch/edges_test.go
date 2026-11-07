@@ -333,6 +333,37 @@ func TestALostBindIsRetriedNotTheEnd(t *testing.T) {
 	}
 }
 
+// A monitor that never bound has no heartbeat to confirm a loss, so lost answers that outlast the
+// hub's recovery window are believed: the monitor says so in one line and ends, instead of
+// retrying forever in silence. A non-lost answer in between starts the window again.
+func TestLostAnswersPastTheRecoveryWindowEndTheMonitor(t *testing.T) {
+	var answers atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if answers.Add(1) == 2 {
+			http.Error(w, "restarting", http.StatusServiceUnavailable)
+			return
+		}
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{"error":{"code":"lost","message":"unknown"}}`))
+	}))
+	defer srv.Close()
+	start := time.Unix(1_800_000_000, 0)
+	var calls atomic.Int64
+	// Each reading of the clock is a minute later than the last.
+	now := func() time.Time { return start.Add(time.Duration(calls.Add(1)) * time.Minute) }
+	out := &lines{}
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	err := (&Runner{Resolver: binding.New(&hubclient.Client{Config: testConfig{url: srv.URL}}, "claude"), Output: out, Backoff: time.Millisecond, Now: now}).Run(ctx)
+	if !errors.Is(err, ErrLost) || strings.Count(out.String(), "Iris: notifications stopped: ") != 1 {
+		t.Fatalf("err %v, output %q", err, out.String())
+	}
+	// Answer 2 was not lost, so the window restarted at answer 3 and needed three minutes more.
+	if n := answers.Load(); n < 5 {
+		t.Fatalf("ended after %d answers: a non-lost answer must restart the window", n)
+	}
+}
+
 // Once a heartbeat confirms the generation is gone, the monitor says so in one line and ends.
 func TestAGenerationTheHeartbeatFindsGoneEndsWithALine(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
