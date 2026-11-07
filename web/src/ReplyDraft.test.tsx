@@ -1,6 +1,7 @@
 import { render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
+import { StrictMode } from "react";
 import { beforeEach, describe, expect, it } from "vitest";
 import { App } from "./App";
 import type {
@@ -166,5 +167,37 @@ describe("console reply draft", () => {
     expect(detail.getByRole("textbox", { name: "Recipients" })).toHaveValue(
       "claude-host, codex-host",
     );
+  });
+
+  // StrictMode calls state updaters twice in development; the draft must come out the same.
+  it("offers and refreshes the draft the same way under StrictMode", async () => {
+    const user = userEvent.setup({ delay: null });
+    const bodies: unknown[] = [];
+    server.use(
+      http.post("*/v1/ui/messages", async ({ request }) => {
+        bodies.push(await request.json());
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    const thread = serveThread([...threadDetail.messages, message("ms_mine", "human", ["claude-host"])]);
+    const { feed, connect } = watched();
+    render(
+      <StrictMode>
+        <App connect={connect} />
+      </StrictMode>,
+    );
+    await user.click(await screen.findByRole("button", { name: /Rollout check/ }));
+    const detail = within(await screen.findByRole("article", { name: "Rollout check" }));
+    await waitFor(() => expect(detail.getByRole("textbox", { name: "Recipients" })).toHaveValue("claude-host"));
+    thread.messages = [...thread.messages, message("ms_next", "claude-host", ["human"])];
+    feed.send?.({ cursor: 300, kind: "changed" });
+    await screen.findByText("ms_next");
+    await user.type(detail.getByRole("textbox", { name: "Message" }), "Kept.");
+    feed.send?.({ cursor: 301, kind: "changed" });
+    await waitFor(() => expect(thread.loads).toBeGreaterThan(2));
+    expect(detail.getByRole("textbox", { name: "Message" })).toHaveValue("Kept.");
+    await user.click(detail.getByRole("button", { name: "Reply" }));
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    expect(bodies[0]).toMatchObject({ to: ["claude-host"], body: "Kept.", reply_to: "ms_next" });
   });
 });

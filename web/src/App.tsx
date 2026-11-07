@@ -46,6 +46,13 @@ interface Draft {
   key: string;
   /** The repository the key was first sent from. A send from another view is another send. */
   sentFrom?: string;
+  /** The thread a reply draft is for. */
+  thread?: string;
+  /**
+   * Whether the console made this reply draft and the operator has not touched it, so a refresh
+   * may replace it. An edit makes it the operator's, and a live refresh never discards it (A14).
+   */
+  offered?: boolean;
 }
 
 function newDraft(fields: Partial<Draft> = {}): Draft {
@@ -58,7 +65,7 @@ const operatorName = "human";
 // replyDraft starts a reply to a thread. It answers the other party: the latest sender who is not
 // the operator, or, in a thread only the operator has written to, whom they wrote to. Answering
 // the latest sender would address a follow-up after the operator's own message back to them.
-function replyDraft(messages: ThreadMessage[]): Draft | null {
+function replyDraft(thread: string, messages: ThreadMessage[]): Draft | null {
   const last = messages.at(-1);
   if (last === undefined) {
     return null;
@@ -70,11 +77,11 @@ function replyDraft(messages: ThreadMessage[]): Draft | null {
       .map((recipient) => recipient.name)
       .filter((name) => name !== operatorName)
       .join(", ");
-  return newDraft({ to, subject: last.subject.startsWith("Re:") ? last.subject : `Re: ${last.subject}`, replyTo: last.id });
+  return newDraft({ to, subject: last.subject.startsWith("Re:") ? last.subject : `Re: ${last.subject}`, replyTo: last.id, thread, offered: true });
 }
 
 function edited(draft: Draft, change: Partial<Draft>): Draft {
-  return { ...draft, ...change, key: humanKey() };
+  return { ...draft, ...change, key: humanKey(), offered: false };
 }
 
 function isAbort(error: unknown): boolean {
@@ -143,10 +150,6 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
   const [thread, setThread] = useState<ThreadDetail | null>(null);
   const [compose, setCompose] = useState<Draft>(newDraft);
   const [reply, setReply] = useState<Draft>(newDraft);
-  // The reply draft the console made itself, and the thread it is for. A draft that is still that
-  // one may be replaced when the thread refreshes; one the operator has edited is theirs, and a
-  // live refresh never discards it (gap review A14).
-  const offered = useRef<{ thread: string; draft: Draft } | null>(null);
   // One send at a time: a second submit while one is pending would be a second send. The ref
   // stops one that comes before React re-renders; the state disables the buttons.
   const inFlight = useRef(false);
@@ -271,16 +274,11 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
         readThread(selectedId, repositoryId)
           .then(() => void reload())
           .catch(() => undefined);
-        const fresh = replyDraft(detail.messages);
+        // A reply is per thread: opening another thread replaces even an edited draft, so one
+        // thread's words never go out as a reply in another.
+        const fresh = replyDraft(detail.id, detail.messages);
         if (fresh !== null) {
-          setReply((current) => {
-            const mine = offered.current;
-            if (mine !== null && mine.thread === detail.id && current !== mine.draft) {
-              return current;
-            }
-            offered.current = { thread: detail.id, draft: fresh };
-            return fresh;
-          });
+          setReply((current) => (current.thread === detail.id && current.offered === false ? current : fresh));
         }
       })
       .catch((error: unknown) => {
@@ -655,13 +653,9 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                     onSubmit={(event) => {
                       event.preventDefault();
                       void submit(reply, setReply, () =>
-                        setReply((current) => {
-                          // A sent reply leaves nothing of the operator's to keep, so the next
-                          // refresh may answer the newest message.
-                          const next = edited(current, { body: "" });
-                          offered.current = { thread: thread.id, draft: next };
-                          return next;
-                        }),
+                        // A sent reply leaves nothing of the operator's to keep, so the next
+                        // refresh may answer the newest message.
+                        setReply((current) => ({ ...edited(current, { body: "" }), offered: true })),
                       );
                     }}
                   >
