@@ -79,6 +79,11 @@ Against the production hub, over TLS:
   token and database. Install wrote and enabled the unit and the hub answered. Status, stop and
   start behaved as expected. A SIGKILL was restarted within 2 s; a SIGTERM was a clean stop and was
   not restarted. The journal shows each start. Uninstall removed the unit and the saved settings.
+  `iris service status` exited 0 while running, 3 after stop and 4 after uninstall (#85).
+  After `wsl --shutdown`, the unit was active about a second after the VM booted, and the hub
+  answered. That run had a confounder: the Codex desktop app restarts the VM within a second of
+  every shutdown, through a login shell, so a login session existed, and the run cannot show
+  whether linger alone starts it.
 - **CI.** Linux, macOS and Windows pass the test suite, six targets cross-build, and the coverage
   gate requires 100% of Go and the console. That gate passes on `main`.
 
@@ -92,8 +97,9 @@ Against the production hub, over TLS:
 - **Not measured:** Defender, the SmartScreen window, Apple silicon, Gatekeeper's dialog and "Open
   Anyway", and a Mac or PC whose policy forbids unsigned code.
 - **Production hook latency on Windows since #39.**
-- **Services:** loading the LaunchAgent at login, and the `systemd --user` unit starting at boot
-  after a reboot of the WSL VM.
+- **Services:** loading the LaunchAgent at login, the `systemd --user` unit starting at boot from
+  linger alone, without a login session (it needs the Codex desktop app closed first), and the
+  service exit codes on Windows.
 - **`iris doctor --live` on clients other than Claude Code.** It ran for real for Claude Code
   2.1.319 on WSL and on macOS against its scratch hub. Grok's allow flags were measured on macOS.
   The other clients' invocations are not measured yet.
