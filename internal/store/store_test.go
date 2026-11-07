@@ -381,11 +381,13 @@ func TestDeliveryRetryAckAndCrash(t *testing.T) {
 	}
 	defer func() { _ = n.Close() }()
 	call(t, n, "sessions", Request{Client: "codex", Host: "host", Cwd: "/repo/w2", SessionID: "2", Generation: 1})
-	expectError(t, n, "ack", ack, "conflict")
+	// The recovering session keeps its delivery across the restart, and a fetch after it raises
+	// the attempt, so the acknowledgement made for the fetch before the crash cannot settle it.
 	third := call(t, n, "inbox", b)["deliveries"].([]map[string]any)[0]
 	if third["id"] != first["id"] || number(third["attempt"]) != 3 {
 		t.Fatal(third)
 	}
+	expectError(t, n, "ack", ack, "conflict")
 	ack.Attempt = 3
 	call(t, n, "ack", ack)
 	call(t, n, "ack", ack)

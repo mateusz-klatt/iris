@@ -59,7 +59,7 @@ func (t *transaction) send(r Request) (map[string]any, error) {
 	deliveries := []map[string]any{}
 	for _, a := range recipients {
 		delivery := id("dl_")
-		if _, err = t.exec("INSERT INTO Delivery(id,message_id,recipient_agent_id) VALUES(?,?,?)", delivery, message, a.id); err != nil {
+		if _, err = t.exec("INSERT INTO Delivery(id,message_id,recipient_agent_id,attention) VALUES(?,?,?,1)", delivery, message, a.id); err != nil {
 			return nil, err
 		}
 		if err = t.event(a.id, "", "inbox_changed", delivery); err != nil {
@@ -101,7 +101,7 @@ func (t *transaction) inbox(r Request) (map[string]any, error) {
 		return nil, err
 	}
 	for _, d := range out {
-		if _, err = t.exec("UPDATE Delivery SET execution_id=?,attempt=? WHERE id=?", e.ID, d["attempt"], d["id"]); err != nil {
+		if _, err = t.exec("UPDATE Delivery SET execution_id=?,attempt=?,attention=0 WHERE id=?", e.ID, d["attempt"], d["id"]); err != nil {
 			return nil, err
 		}
 	}
