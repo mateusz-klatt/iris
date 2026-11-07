@@ -75,6 +75,10 @@ type Store struct {
 	epoch   int64
 	stream  string
 	changed chan struct{}
+	// cross counts cross-repository recipient attempts per credential, per minute. It is
+	// guarded by mu, which every transaction holds, and lost on restart, which is fine
+	// for a rate.
+	cross map[string]crossWindow
 }
 type transaction struct {
 	conn   *sql.Conn

@@ -57,7 +57,11 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 			out, err = t.ack(r, r.Key)
 		case "agents":
 			var v []map[string]any
-			v, err = t.agents(r.RepositoryID)
+			if r.All {
+				v, err = t.everyAgent()
+			} else {
+				v, err = t.agents(r.RepositoryID)
+			}
 			out = map[string]any{"agents": v}
 		case "events":
 			out, err = t.events(r)

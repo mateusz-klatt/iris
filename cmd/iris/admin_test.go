@@ -55,3 +55,30 @@ func TestAdminIsDispatched(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestAdminContactSetsAndClears(t *testing.T) {
+	var got []map[string]any
+	client := tokenClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/admin/contact" {
+			t.Errorf("%s", r.URL.Path)
+		}
+		var body map[string]any
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		got = append(got, body)
+		_, _ = w.Write([]byte(`{"repository_id":"rp","contact":""}`))
+	})
+	var out bytes.Buffer
+	for _, args := range [][]string{{"contact", "--repository", "rp", "claude-holzera-iris"}, {"contact", "--repository", "rp", "--clear"}} {
+		if err := adminCommand(context.Background(), client, args, &out); err != nil {
+			t.Fatal(args, err)
+		}
+	}
+	if got[0]["agent"] != "claude-holzera-iris" || got[1]["agent"] != "" || got[1]["repository_id"] != "rp" {
+		t.Fatal(got)
+	}
+	for _, bad := range [][]string{{"contact"}, {"contact", "--repository", "rp"}, {"contact", "--repository", "rp", "a", "--clear"}, {"contact", "--repository", "rp", "a", "b"}, {"contact", "--clear", "a"}} {
+		if err := adminCommand(context.Background(), client, bad, &out); err == nil || err.Error() != adminUsage {
+			t.Errorf("%v: %v", bad, err)
+		}
+	}
+}
