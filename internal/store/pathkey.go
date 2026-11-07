@@ -3,6 +3,7 @@ package store
 import (
 	"fmt"
 
+	"github.com/mateusz-klatt/iris/internal/display"
 	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
 )
@@ -66,10 +67,12 @@ func (t *transaction) rekey(where string, args ...any) error {
 }
 
 // heldBy names both spellings when they differ, so that a refused agent can see why a path
-// it did not write the same way is taken.
+// it did not write the same way is taken. The refused model reads it, and a path from git
+// can hold a newline, so each value is escaped onto one line.
 func heldBy(c map[string]any) string {
+	path, holder, claimed := display.Inline(fmt.Sprint(c["path"])), display.Inline(fmt.Sprint(c["holder"])), display.Inline(fmt.Sprint(c["claimed_path"]))
 	if c["path"] == c["claimed_path"] {
-		return fmt.Sprintf("%s is held by %s", c["path"], c["holder"])
+		return fmt.Sprintf("%s is held by %s", path, holder)
 	}
-	return fmt.Sprintf("%s is held by %s as %s", c["path"], c["holder"], c["claimed_path"])
+	return fmt.Sprintf("%s is held by %s as %s", path, holder, claimed)
 }

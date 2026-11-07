@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/mateusz-klatt/iris/internal/display"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 )
 
@@ -22,10 +23,10 @@ func SessionText(s hubclient.SessionResponse, notes ...string) string {
 	}
 	var head strings.Builder
 	head.WriteString("Iris handle: ")
-	head.WriteString(handle)
+	head.WriteString(display.Inline(handle))
 	if s.Agent.Name != "" {
 		head.WriteString(" (")
-		head.WriteString(s.Agent.Name)
+		head.WriteString(display.Inline(s.Agent.Name))
 		head.WriteString(")")
 	}
 	head.WriteString(".\n")
@@ -54,7 +55,8 @@ func peerLines(peers []hubclient.Peer) []string {
 		if branch == "" {
 			branch = "-"
 		}
-		lines = append(lines, fmt.Sprintf("- %s (%s, %s, branch %s)\n", p.Name, p.Client, p.State, branch))
+		// Every field comes from another session through the hub, so it is kept on one line.
+		lines = append(lines, fmt.Sprintf("- %s (%s, %s, branch %s)\n", display.Inline(p.Name), display.Inline(p.Client), display.Inline(p.State), display.Inline(branch)))
 	}
 	return lines
 }
@@ -66,7 +68,7 @@ func claimLines(claims []hubclient.Claim) []string {
 		if exp == "" {
 			exp = "no expiry"
 		}
-		lines = append(lines, fmt.Sprintf("- %s held by %s (%s) until %s\n", c.Path, c.Holder, c.Origin, exp))
+		lines = append(lines, fmt.Sprintf("- %s held by %s (%s) until %s\n", display.Inline(c.Path), display.Inline(c.Holder), display.Inline(c.Origin), display.Inline(exp)))
 	}
 	return lines
 }
