@@ -6,6 +6,7 @@ import {
   getDoctor,
   getOverview,
   getThread,
+  readThread,
   listThreads,
   revokeClaim,
   sendMessage,
@@ -232,6 +233,11 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
           return;
         }
         setThread(detail);
+        // Opening a thread reads the operator's mail in it (A13); the overview's unread
+        // counts then follow. A failure here leaves the mail unread, which is safe.
+        readThread(selectedId, repositoryId)
+          .then(() => setRevision((value) => value + 1))
+          .catch(() => undefined);
         const last = detail.messages.at(-1);
         if (last !== undefined) {
           setReply(

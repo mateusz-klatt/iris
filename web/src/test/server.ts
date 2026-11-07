@@ -152,6 +152,7 @@ export const server = setupServer(
     }
     return HttpResponse.json(threadDetail);
   }),
+  http.post("*/v1/ui/threads/:id/read", () => new HttpResponse(null, { status: 204 })),
   http.post("*/v1/ui/messages", () => new HttpResponse(null, { status: 204 })),
   http.post("*/v1/ui/claims/:fence/revoke", ({ params }) => {
     const fence = Number(params.fence);

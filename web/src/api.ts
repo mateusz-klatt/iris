@@ -180,6 +180,11 @@ export function getThread(id: string, repositoryId = "", signal?: AbortSignal): 
   return getJson(`/v1/ui/threads/${encodeURIComponent(id)}${suffix}`, signal);
 }
 
+/** Marks the operator's mail in a thread as read, in repositoryId or the whole hub (A13). */
+export function readThread(id: string, repositoryId = "", signal?: AbortSignal): Promise<void> {
+  return postJson(`/v1/ui/threads/${encodeURIComponent(id)}/read`, { repository_id: repositoryId }, signal);
+}
+
 export function sendMessage(message: OutgoingMessage, signal?: AbortSignal): Promise<void> {
   return postJson("/v1/ui/messages", message, signal);
 }
