@@ -43,7 +43,9 @@ type LiveResult struct {
 	HookFired bool
 	// ClaimReached means the pre-edit hook asked the hub for scratch.txt and was allowed.
 	ClaimReached bool
-	// ToolsAnswered means the model's reply carries the execution id that only whoami returns.
+	// ToolsAnswered means the reply carries the scratch repository's id, which the Iris whoami
+	// tool returns and the hook's session context does not: the execution id is in that context,
+	// so a model could echo it with MCP missing (gap review C2).
 	ToolsAnswered bool
 	// FileEdited means the scratch file holds the line the prompt asked to add.
 	FileEdited bool
@@ -205,8 +207,8 @@ func RunLive(ctx context.Context, opt LiveOptions, plan LivePlan) (res LiveResul
 	seen := h.rec.snapshot(res.Marker, plan.Client)
 	res.HookFired = len(seen.executions) > 0
 	res.ClaimReached = seen.claimed
-	for _, e := range seen.executions {
-		if bytes.Contains(out, []byte(e)) {
+	for _, r := range seen.repositories {
+		if bytes.Contains(out, []byte(r)) {
 			res.ToolsAnswered = true
 		}
 	}
@@ -244,9 +246,9 @@ func RunLive(ctx context.Context, opt LiveOptions, plan LivePlan) (res LiveResul
 
 func livePrompt(nonce string) string {
 	return "This is an Iris doctor check in a scratch repository. Do exactly two things and nothing else. " +
-		"First, call the Iris MCP tool named whoami and copy the execution_id value it returns into your reply. " +
+		"First, call the Iris MCP tool named whoami and copy the repository_id value it returns into your reply. " +
 		"Second, using your file editing tool, append one line containing exactly " + nonce + " to the end of the file " + scratchFile + " in the current directory, keeping what is there. " +
-		"Do not run shell commands or code to write the file. End your reply with the execution_id."
+		"Do not run shell commands or code to write the file. End your reply with the repository_id."
 }
 
 // inherited are dropped from the client's environment. The hub variables are
@@ -355,7 +357,7 @@ type recorder struct {
 	claims   []string
 }
 
-type recordedSession struct{ client, remote, execution string }
+type recordedSession struct{ client, remote, execution, repository string }
 
 func (rec *recorder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	route := r.Method + " " + r.URL.Path
@@ -377,7 +379,7 @@ func (rec *recorder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		var out hubclient.SessionResponse
 		_ = json.Unmarshal(body, &in)
 		_ = json.Unmarshal(cw.body.Bytes(), &out)
-		rec.sessions = append(rec.sessions, recordedSession{client: in.Client, remote: in.RemoteURL, execution: out.ExecutionID})
+		rec.sessions = append(rec.sessions, recordedSession{client: in.Client, remote: in.RemoteURL, execution: out.ExecutionID, repository: out.RepositoryID})
 		return
 	}
 	var in hubclient.TouchRequest
@@ -393,8 +395,9 @@ func (rec *recorder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 }
 
 type observed struct {
-	executions []string
-	claimed    bool
+	executions   []string
+	repositories []string
+	claimed      bool
 }
 
 // snapshot keeps only what the named client's hook did in the scratch
@@ -407,6 +410,7 @@ func (rec *recorder) snapshot(marker, client string) observed {
 	for _, sess := range rec.sessions {
 		if sess.remote == marker && sess.client == client && sess.execution != "" {
 			s.executions = append(s.executions, sess.execution)
+			s.repositories = append(s.repositories, sess.repository)
 		}
 	}
 	for _, c := range rec.claims {
