@@ -12,29 +12,16 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-// Windows refuses a read or a write through the sharing mode of another process's handle and
-// through ACLs, not through mode bits, so the Unix permission tests skip here. These reach the
-// same error paths the way a Windows user meets them: a file held open by an editor or a
-// scanner, a folder whose ACL forbids new files, a name Windows cannot hold.
+// Windows refuses a read or a write through ACLs, not through mode bits, so the Unix permission
+// tests skip here. These reach the same error paths the way a Windows user meets them: a file or
+// folder whose ACL denies the access, and a name Windows cannot hold.
+//
+// A file held open without sharing was tried first. It was refused locally but read without error
+// on the windows-latest runner, so it cannot carry a test.
 
-// lock opens path the way another process would, sharing only what share allows, until the test
-// ends.
-func lock(t *testing.T, path string, share uint32) {
-	t.Helper()
-	p, err := windows.UTF16PtrFromString(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	h, err := windows.CreateFile(p, windows.GENERIC_READ, share, nil, windows.OPEN_EXISTING, windows.FILE_ATTRIBUTE_NORMAL, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = windows.CloseHandle(h) })
-}
-
-// denyNewFiles gives dir a DACL that refuses adding files or folders to it, and restores full
-// access before the temporary directory is removed.
-func denyNewFiles(t *testing.T, dir string) {
+// setDACL replaces path's DACL with sddl, and gives Everyone full access again before the
+// temporary directory is removed.
+func setDACL(t *testing.T, path, sddl string) {
 	t.Helper()
 	set := func(sddl string) error {
 		sd, err := windows.SecurityDescriptorFromString(sddl)
@@ -45,23 +32,29 @@ func denyNewFiles(t *testing.T, dir string) {
 		if err != nil {
 			return err
 		}
-		return windows.SetNamedSecurityInfo(dir, windows.SE_FILE_OBJECT,
+		return windows.SetNamedSecurityInfo(path, windows.SE_FILE_OBJECT,
 			windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, dacl, nil)
 	}
-	// 0x6 is FILE_ADD_FILE and FILE_ADD_SUBDIRECTORY; WD is Everyone.
-	if err := set("D:P(D;;0x6;;;WD)(A;OICI;FA;;;WD)"); err != nil {
+	if err := set(sddl); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = set("D:P(A;OICI;FA;;;WD)") })
 }
 
-func TestUpdateCannotReadALockedFile(t *testing.T) {
+// denyRead lets Everyone do anything to a file but read its contents (0x1, FILE_READ_DATA).
+func denyRead(t *testing.T, file string) { setDACL(t, file, "D:P(D;;0x1;;;WD)(A;;FA;;;WD)") }
+
+// denyNewFiles refuses adding files or folders to dir (0x6, FILE_ADD_FILE and
+// FILE_ADD_SUBDIRECTORY). WD is Everyone.
+func denyNewFiles(t *testing.T, dir string) { setDACL(t, dir, "D:P(D;;0x6;;;WD)(A;OICI;FA;;;WD)") }
+
+func TestUpdateCannotReadADeniedFile(t *testing.T) {
 	dir := t.TempDir()
 	l := Layout{StateDir: filepath.Join(dir, "state")}
 	path := filepath.Join(dir, "config")
 	seedFile(t, path, "x")
-	lock(t, path, 0)
-	if err := l.update(Codex, path, writeNext); !errors.Is(err, windows.ERROR_SHARING_VIOLATION) {
+	denyRead(t, path)
+	if err := l.update(Codex, path, writeNext); !errors.Is(err, os.ErrPermission) {
 		t.Fatal(err)
 	}
 }
@@ -90,7 +83,7 @@ func TestAtomicWriteCannotCreateInADeniedFolder(t *testing.T) {
 	}
 }
 
-func TestUnwireCannotReadOrReplaceALockedFile(t *testing.T) {
+func TestUnwireCannotReadOrReplaceADeniedFile(t *testing.T) {
 	l := testLayout(t)
 	c, _ := ByName(Codex)
 	if err := c.Install(l, nil); err != nil {
@@ -99,15 +92,15 @@ func TestUnwireCannotReadOrReplaceALockedFile(t *testing.T) {
 	files, _ := c.Files(l)
 	editByHand(t, files[0])
 
-	t.Run("held without sharing", func(t *testing.T) {
-		lock(t, files[0], 0)
-		if err := c.Remove(l, nil); !errors.Is(err, windows.ERROR_SHARING_VIOLATION) {
+	t.Run("unreadable", func(t *testing.T) {
+		denyRead(t, files[0])
+		if err := c.Remove(l, nil); !errors.Is(err, os.ErrPermission) {
 			t.Fatal(err)
 		}
 	})
-	// Shared for reading only: Iris can read the file but cannot replace it.
-	t.Run("held for reading", func(t *testing.T) {
-		lock(t, files[0], windows.FILE_SHARE_READ)
+	// The file can be read, but the replacement cannot be created beside it.
+	t.Run("folder takes no new files", func(t *testing.T) {
+		denyNewFiles(t, filepath.Dir(files[0]))
 		if err := c.Remove(l, nil); !errors.Is(err, os.ErrPermission) {
 			t.Fatal(err)
 		}
