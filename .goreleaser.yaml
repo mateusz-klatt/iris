@@ -26,6 +26,24 @@ archives:
       - goos: windows
         formats: [zip]
     files: [LICENSE, docs/guard.md]
+# D15, prepared and inert. Without MACOS_SIGN_P12 this step is skipped and the darwin
+# binaries ship as Go builds them: amd64 unsigned, arm64 ad-hoc signed by the linker.
+# With the certificate alone they would be signed, and with the notary key too, notarized.
+# Neither has run with a real Apple credential. docs/release.md records what was measured.
+# docs/release.md names the secrets and the owner's steps.
+notarize:
+  macos:
+    - ids: [iris]
+      enabled: '{{ isEnvSet "MACOS_SIGN_P12" }}'
+      sign:
+        certificate: '{{ .Env.MACOS_SIGN_P12 }}'
+        password: '{{ envOrDefault "MACOS_SIGN_PASSWORD" "" }}'
+      notarize:
+        issuer_id: '{{ envOrDefault "MACOS_NOTARY_ISSUER_ID" "" }}'
+        key_id: '{{ envOrDefault "MACOS_NOTARY_KEY_ID" "" }}'
+        key: '{{ envOrDefault "MACOS_NOTARY_KEY" "" }}'
+        wait: true
+        timeout: 20m
 checksum:
   name_template: checksums.txt
 nfpms:
@@ -57,8 +75,10 @@ signs:
     cmd: cosign
     signature: '${artifact}.sigstore.json'
     args: [sign-blob, '--bundle=${signature}', '${artifact}', '--yes']
-# Deprecated in GoReleaser v2.20. Keep the formula until cask notarization is ready.
-# A formula avoids cask quarantine; it does not replace Apple notarization.
+# Deprecated in GoReleaser v2.20; homebrew_casks replaces it. Measured on macOS 26: a
+# cask install sets com.apple.quarantine and Gatekeeper then blocks the unsigned binary,
+# while a formula sets none. Replace this with homebrew_casks in the change that turns
+# notarization on. docs/release.md has the measured cask block.
 brews:
   - name: iris
     repository: {owner: mateusz-klatt, name: homebrew-tap}

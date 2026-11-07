@@ -82,3 +82,106 @@ Not measured: a real browser download, because no public asset exists yet; wheth
 window, because the screen was not watched; Defender, which is off on this machine; and a machine that
 enforces SmartScreen by policy. So this does not settle whether signing is needed. It shows that a
 console user and a Scoop user never meet the mark, and that an Explorer user does.
+
+## macOS artifacts, measured
+
+Measured on 2026-11-07 on an Intel Mac with macOS 26.7.1 and Homebrew 7.0.12. Nothing was published. The
+snapshot was built from `ed7e334` with `--skip=publish,sign,sbom,docker`.
+
+- Each darwin archive holds `iris`, `LICENSE` and `docs/guard.md`. The amd64 binary is not signed at
+  all. The arm64 binary carries the ad-hoc signature that Go's linker adds, which Apple silicon requires
+  to run anything. The arm64 archive was not run, because the host is Intel.
+- From an empty home directory with a minimal environment, the amd64 archive extracted into
+  `~/.local/bin` with that directory on PATH. With a loopback hub, `iris setup --hub <hub> --clients
+  claude --yes` installed and started the LaunchAgent, and `iris service status` reported `active: true`.
+  `iris doctor` reported `hub: ok`, `token: ok` and `claude ok`.
+- A real Claude Code session then ran on the plugin that setup generated. It called `whoami` and wrote a
+  file, and the hub recorded the agent and an automatic claim. Claude Code's login belongs to the user's
+  real home, so this session ran there with `--plugin-dir` pointing at the generated plugin, and with the
+  installed Iris plugin turned off.
+- The archives record the builder's user name as the owner of each file. In CI it is the runner's.
+
+### Gatekeeper and an unnotarized binary
+
+Each case below used the unsigned amd64 binary.
+
+| How it arrived | `com.apple.quarantine` on `iris` | What happened at start |
+|---|---|---|
+| Browser download, extracted with `tar` | yes, copied from the archive | Held: no output, never exited |
+| Browser download, extracted with Archive Utility | yes | Held the same way |
+| `curl` download, extracted with `tar` | no | Ran at once |
+| Homebrew formula from a local tap | no | Ran at once |
+| Homebrew cask from a local tap | yes, set by Homebrew Cask | Held the same way |
+| Any of the held ones after `xattr -d com.apple.quarantine` | no | Ran |
+
+The browser download was simulated: the archive was given the mark that Safari writes. `spctl --assess
+--type execute` rejected the binary in every case (`no usable signature`), but only a marked binary was
+held. A held process waited in state `S` until it was killed, which suggests that macOS was waiting on a
+dialog. The screen was not watched, so the dialog itself, and System Settings' "Open Anyway", were not
+seen. The table does not cover Apple silicon or a Mac whose policy forbids running unsigned code.
+
+So for the first release, notarization matters for anyone who downloads with a browser, and for any
+cask. It does not matter for `curl` or the formula.
+
+### Replacing `brews`
+
+`brews` is deprecated in GoReleaser v2.20, and `homebrew_casks` replaces it. Below is the block that
+was measured. It generated a cask that installed from a local tap and linked `iris`.
+
+```yaml
+homebrew_casks:
+  - name: iris
+    repository: {owner: mateusz-klatt, name: homebrew-tap}
+    homepage: https://github.com/mateusz-klatt/iris
+    description: Cooperative coordination for coding agents
+    skip_upload: true
+    binaries: [iris]
+    url:
+      template: 'https://github.com/mateusz-klatt/iris/releases/download/{{ .Tag }}/{{ .ArtifactName }}'
+```
+
+A cask quarantines what it installs, so with an unnotarized binary every cask user hits the held start
+above. Switch from `brews` to this block in the same change that turns notarization on. Until then
+`check` keeps reporting the deprecation. A cask hook that strips the mark would work around Gatekeeper
+for every user, so it is not proposed.
+
+### Signing and notarization
+
+`.goreleaser.yaml` has a `notarize.macos` entry, and `release.yml` passes it five secrets. With no
+`MACOS_SIGN_P12`, the step reports `skipped: disabled`. An unset GitHub secret arrives empty, and that
+also counts as unset. Measured with the snapshot, without any Apple credential:
+
+| Secrets | Result |
+|---|---|
+| None, or all empty | The step is skipped and the binaries are unchanged |
+| A certificate that is not a PKCS #12 file | The release stops: `unable to decode p12 file` |
+| A self-signed code-signing certificate | The release stops: quill finds no chain to an Apple root |
+
+Real signing and notarization have not been run. With the certificate alone the binaries would be
+signed but not notarized. With the API key as well, they are notarized, and GoReleaser waits up to 20
+minutes for Apple's answer. Apple does not staple a ticket to a bare binary, so Gatekeeper is expected
+to look it up online the first time it starts. That was not measured.
+
+| Secret | Value |
+|---|---|
+| `MACOS_SIGN_P12` | The Developer ID Application certificate with its private key, as a `.p12` file, base64-encoded |
+| `MACOS_SIGN_PASSWORD` | The password the `.p12` was exported with |
+| `MACOS_NOTARY_ISSUER_ID` | The App Store Connect issuer ID |
+| `MACOS_NOTARY_KEY_ID` | The App Store Connect API key ID |
+| `MACOS_NOTARY_KEY` | The API key's `.p8` file, base64-encoded |
+
+Steps for the owner, in the owner's Apple account. None of these were done here.
+
+1. Join the Apple Developer Program. A Developer ID certificate needs a paid membership, and only the
+   account holder can create one.
+2. Create a **Developer ID Application** certificate. In Xcode, it is under Settings, Accounts, Manage
+   Certificates. On the developer website, it is under Certificates, from a signing request made in
+   Keychain Access.
+3. In Keychain Access, export the certificate together with its private key as a `.p12` file with a
+   password. `base64 -i developer-id.p12` gives `MACOS_SIGN_P12`.
+4. In App Store Connect, under Users and Access, Integrations, create a team API key with the Developer
+   role. Download the `.p8` file: it can be downloaded only once. Note the key ID and the issuer ID.
+   `base64 -i AuthKey_<id>.p8` gives `MACOS_NOTARY_KEY`.
+5. Add the five values as repository secrets under Settings, Secrets and variables, Actions.
+6. Push a test tag only after deciding what it publishes: the release is a draft, but notarization
+   submits the binaries to Apple.
