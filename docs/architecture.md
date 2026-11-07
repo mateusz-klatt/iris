@@ -437,7 +437,12 @@ unrelated to Iris. It is
 billable, so it is opt-in: it names each client, binary and model first and asks, unless `--yes`
 is given. A client that still needs a person, such as Codex before its hooks are reviewed in
 `/hooks`, is skipped with that reason: no trust is bypassed, and a run whose hook cannot fire
-spends money to prove nothing. Output is per client binary, not per vendor, because the Cursor IDE and
+spends money to prove nothing. A client reported silent still runs: the cause may be an old
+failure in the log, and a live run is how to show that it works now. Every client runs on a
+named model, never its default, which can be expensive. Cursor gets `--trust`, which trusts only
+the scratch repository doctor created. Without it, a headless `cursor-agent` prints "Workspace
+Trust Required" and exits 0 having run nothing. That is trust in a temporary directory Iris made,
+not a bypass of trust in the user's own workspaces. Output is per client binary, not per vendor, because the Cursor IDE and
 `cursor-agent` differ.
 
 Each live run happens in a scratch repository under the temporary directory, with no commit and

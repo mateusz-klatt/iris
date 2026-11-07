@@ -326,7 +326,8 @@ func TestLivePlansNeedAWorkingHookAndABinary(t *testing.T) {
 		{Client: integrate.Kimi, Status: StatusOK},
 	}
 	plans, skipped := LivePlans(layout, rows, "")
-	if len(plans) != 2 || plans[0] != (LivePlan{Client: integrate.Claude, Binary: "/bin/claude", Model: "haiku"}) || plans[1] != (LivePlan{Client: integrate.Grok, Binary: "/bin/grok", Model: "client default"}) {
+	// A silent row may be an old failure, and live is how to prove the client works now.
+	if len(plans) != 3 || plans[0] != (LivePlan{Client: integrate.Claude, Binary: "/bin/claude", Model: "haiku"}) || plans[1].Client != integrate.Copilot || plans[2] != (LivePlan{Client: integrate.Grok, Binary: "/bin/grok", Model: "grok-4.7-build-fast"}) {
 		t.Fatalf("%+v", plans)
 	}
 	if strings.Join(skipped, "\n") != "codex: Review hooks once in /hooks\nkimi: client binary not found" {
@@ -352,12 +353,20 @@ func TestLiveInvocationsHaveNoTrustBypass(t *testing.T) {
 		if !ok {
 			t.Fatalf("%s has no live invocation", name)
 		}
+		// A client default may be an expensive model, so every client names one.
+		if spec.model == "" {
+			t.Fatalf("%s runs on its default model", name)
+		}
 		args := spec.args(spec.model, livePrompt("n"))
-		if !strings.Contains(strings.Join(args, " "), livePrompt("n")) {
-			t.Fatalf("%s drops the prompt: %v", name, args)
+		if !strings.Contains(strings.Join(args, " "), livePrompt("n")) || !strings.Contains(strings.Join(args, " "), spec.model) {
+			t.Fatalf("%s drops the prompt or the model: %v", name, args)
 		}
 		for _, a := range args {
 			for _, bad := range banned {
+				// Cursor's --trust trusts only the scratch repository doctor made.
+				if name == integrate.Cursor && a == "--trust" {
+					continue
+				}
 				if strings.Contains(a, bad) {
 					t.Fatalf("%s live args contain %s: %v", name, bad, args)
 				}

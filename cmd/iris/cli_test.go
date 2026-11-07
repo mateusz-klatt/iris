@@ -162,6 +162,9 @@ func TestIntegrateOneClientThenRemoveIt(t *testing.T) {
 }
 
 func TestDoctorLiveWithNoClientSpendsNothing(t *testing.T) {
+	// No client binary can be found, so nothing billable can start even with --yes.
+	// A client on the developer's PATH would otherwise run for real.
+	t.Setenv("PATH", t.TempDir())
 	out, errText := capture(t, func() {
 		if code := dispatch([]string{"doctor", "--live", "--yes", "--hub-url", "http://127.0.0.1:1"}); code != 1 {
 			t.Fatalf("code %d", code)

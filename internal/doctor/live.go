@@ -97,19 +97,29 @@ var liveClients = map[string]liveClient{
 	integrate.Codex: {model: "gpt-6.1-terra", guard: codexTrust, args: func(model, prompt string) []string {
 		return []string{"exec", "-m", model, "-c", `sandbox_mode="workspace-write"`, "-c", `approval_policy="never"`, "-c", `mcp_servers.iris.default_tools_approval_mode="approve"`, prompt}
 	}},
-	integrate.Copilot: {args: func(_, prompt string) []string { return []string{"-p", prompt} }},
+	integrate.Copilot: {model: "claude-haiku-4.5", args: func(model, prompt string) []string {
+		return []string{"-p", prompt, "--model", model}
+	}},
+	// --trust trusts only the scratch repository doctor itself created under
+	// the temporary directory, never one of the user's. Without it a headless
+	// cursor-agent prints "Workspace Trust Required" and exits 0 having run
+	// nothing (measured on holzera), so no hook could fire.
 	integrate.Cursor: {model: "auto", args: func(model, prompt string) []string {
-		return []string{"-p", "--model", model, prompt}
+		return []string{"-p", "--trust", "--model", model, prompt}
 	}},
 	integrate.Antigravity: {model: "gemini-3.8-flash-low", args: func(model, prompt string) []string {
 		return []string{"--print=" + prompt, "--model", model}
 	}},
 	// A headless Grok cannot ask for approval, so the tools the prompt needs
 	// are allowed by name. Measured on macOS by claude-laptop-iris.
-	integrate.Grok: {args: func(_, prompt string) []string {
-		return []string{"-p", prompt, "--allow", "iris__whoami", "--allow", "Edit", "--allow", "Write"}
+	integrate.Grok: {model: "grok-4.7-build-fast", args: func(model, prompt string) []string {
+		return []string{"-p", prompt, "-m", model, "--allow", "iris__whoami", "--allow", "Edit", "--allow", "Write"}
 	}},
-	integrate.Kimi: {args: func(_, prompt string) []string { return []string{"-p", prompt} }},
+	// Kimi model names are aliases from the user's config.toml; this one is in
+	// Kimi Code's own catalog, and an unknown alias fails before any spending.
+	integrate.Kimi: {model: "moonshot-ai/kimi-k2.7-code-highspeed", args: func(model, prompt string) []string {
+		return []string{"-p", prompt, "-m", model}
+	}},
 }
 
 // LivePlans lists the clients a live run would call: those whose hook passed
@@ -131,7 +141,9 @@ func LivePlans(layout integrate.Layout, rows []ClientReport, only string) (plans
 		case row.Status == StatusNeedsHuman:
 			skipped = append(skipped, row.Client+": "+row.Detail)
 			continue
-		case row.Status != StatusOK:
+		case row.Status != StatusOK && row.Status != StatusSilent:
+			// A silent row may come from an old failure in the log, and a live
+			// run is how to prove the client works now, so silent ones run too.
 			continue
 		}
 		bin, err := layout.Binary(row.Client)
@@ -139,11 +151,7 @@ func LivePlans(layout integrate.Layout, rows []ClientReport, only string) (plans
 			skipped = append(skipped, row.Client+": client binary not found")
 			continue
 		}
-		model := liveClients[row.Client].model
-		if model == "" {
-			model = "client default"
-		}
-		plans = append(plans, LivePlan{Client: row.Client, Binary: bin, Model: model, Requires: requires})
+		plans = append(plans, LivePlan{Client: row.Client, Binary: bin, Model: liveClients[row.Client].model, Requires: requires})
 	}
 	return plans, skipped
 }
