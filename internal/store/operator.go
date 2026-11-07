@@ -168,6 +168,7 @@ func (t *transaction) overview() (map[string]any, error) {
 	err = t.row(`SELECT COUNT(*) FROM Delivery d JOIN Agent a ON a.id=d.recipient_agent_id WHERE a.client='human' AND d.id NOT IN (SELECT delivery_id FROM Ack)`).Scan(&unread)
 	return map[string]any{"repositories": repos, "agents": agents, "claims": claims, "human_unread": unread}, err
 }
+
 // visibleIn is the condition for a message, under alias, to show in repository repo
 // (ADR 004): its sender's repository is repo, or one of its recipients is in repo.
 // After A→B and then B→C, C's view shows B→C only. With no repository, every
