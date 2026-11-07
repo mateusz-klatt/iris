@@ -83,6 +83,17 @@ func (c *Coalescer) Flush(now time.Time) error {
 	return nil
 }
 
+// holding reports whether a counted line is waiting for its window. Until it is
+// printed, the cursor must not move past the frames it counts.
+func (c *Coalescer) holding() bool {
+	for _, p := range c.kinds {
+		if p.count > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // outputError is a failure to print. Reconnecting cannot fix it, so Run stops on it.
 type outputError struct{ error }
 
@@ -122,6 +133,12 @@ type Runner struct {
 	// opened is when the current stream opened. A drop after a stream that stayed up for
 	// at least the cap starts the backoff again; one that closes at once keeps backing off.
 	opened time.Time
+	// acked and ackedStream are the cursor last saved at the hub. received, when set,
+	// sees each frame once it is counted and any save it allowed is done; tests use it
+	// to know what the monitor holds.
+	acked       int64
+	ackedStream string
+	received    func(Frame)
 }
 
 func (r *Runner) wait(d time.Duration) <-chan time.Time {
@@ -289,6 +306,9 @@ func (r *Runner) connect(ctx context.Context, b binding.Bound, cursor *int64, st
 			if err = c.Flush(r.now()); err != nil {
 				return err
 			}
+			if err = r.checkpoint(ctx, b, *cursor, *stream, c); err != nil {
+				return err
+			}
 		case f := <-frames:
 			if f.Kind == "reset" {
 				var snapshot struct {
@@ -312,6 +332,9 @@ func (r *Runner) connect(ctx context.Context, b binding.Bound, cursor *int64, st
 				if err = c.Add(r.now(), "inbox_changed", waiting); err != nil {
 					return err
 				}
+				if err = r.checkpoint(ctx, b, *cursor, *stream, c); err != nil {
+					return err
+				}
 				continue
 			}
 			if *stream == f.Stream && f.Cursor <= *cursor {
@@ -322,13 +345,33 @@ func (r *Runner) connect(ctx context.Context, b binding.Bound, cursor *int64, st
 			if err = c.Add(r.now(), f.Kind, 1); err != nil {
 				return err
 			}
-			// Persist only a cursor consumed here, never a socket writer's high-water mark.
-			ackCtx, ackCancel := context.WithTimeout(ctx, 5*time.Second)
-			err = h.Do(ackCtx, "GET", "/v1/events?execution_id="+url.QueryEscape(b.ExecutionID)+"&consumer_id=iris-watch&limit=1&after="+fmt.Sprint(*cursor), nil, nil)
-			ackCancel()
-			if err != nil {
+			if err = r.checkpoint(ctx, b, *cursor, *stream, c); err != nil {
 				return err
+			}
+			if r.received != nil {
+				r.received(f)
 			}
 		}
 	}
+}
+
+// checkpoint saves cursor at the hub once nothing counted up to it is still held.
+// A line waiting for its window has not been printed, so saving the cursor then would
+// let a monitor that dies, or is replaced, skip that attention for good. Saving it
+// only after the print means a restart replays the held frames instead. Under steady
+// traffic the saved cursor therefore lags, and a restart replays frames the coalescer
+// then folds into one line: a repeated wake is the intended price of never losing one.
+// The hub keeps the larger of the saved and the sent cursor, and only a cursor this
+// monitor consumed is ever sent, never a socket writer's high-water mark.
+func (r *Runner) checkpoint(ctx context.Context, b binding.Bound, cursor int64, stream string, c *Coalescer) error {
+	if c.holding() || (cursor <= r.acked && stream == r.ackedStream) {
+		return nil
+	}
+	ackCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if err := r.Resolver.Hub.Do(ackCtx, "GET", "/v1/events?execution_id="+url.QueryEscape(b.ExecutionID)+"&consumer_id=iris-watch&limit=1&after="+fmt.Sprint(cursor), nil, nil); err != nil {
+		return err
+	}
+	r.acked, r.ackedStream = cursor, stream
+	return nil
 }
