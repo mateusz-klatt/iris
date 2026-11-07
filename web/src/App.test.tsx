@@ -414,6 +414,73 @@ describe("Iris operator console", () => {
     expect(await screen.findByText("3 unread")).toBeVisible();
   });
 
+  it("reloads the overview after a read, a send, a revoke and a refresh without reconnecting", async () => {
+    const user = userEvent.setup({ delay: null });
+    let connects = 0;
+    let stops = 0;
+    let overviews = 0;
+    server.events.on("request:start", ({ request }) => {
+      if (new URL(request.url).pathname === "/v1/ui/overview") {
+        overviews++;
+      }
+    });
+    const connect = (_frame: (value: WatchFrame) => void, status?: (value: WatchStatus) => void) => {
+      connects++;
+      status?.("live");
+      return () => {
+        stops++;
+      };
+    };
+    render(<App connect={connect} />);
+    expect(await screen.findByText("Live updates connected")).toBeVisible();
+    const reloaded = (after: number) => waitFor(() => expect(overviews).toBeGreaterThan(after));
+
+    let before = overviews;
+    await user.click(await screen.findByRole("button", { name: /Rollout check/ }));
+    await reloaded(before);
+    before = overviews;
+    await user.click(screen.getByRole("button", { name: "Back to threads" }));
+    await fillCompose(user, "Status?");
+    await user.click(screen.getByRole("button", { name: "Send" }));
+    expect(await screen.findByText("Sent.")).toBeVisible();
+    await reloaded(before);
+    before = overviews;
+    await user.click(screen.getByRole("button", { name: "Revoke" }));
+    await reloaded(before);
+    before = overviews;
+    await user.click(screen.getByRole("button", { name: "Refresh the doctor report" }));
+    await reloaded(before);
+    server.events.removeAllListeners();
+    expect(connects).toBe(1);
+    expect(stops).toBe(0);
+  }, 40000);
+
+  // The hub's socket sends a frame as soon as it opens. When a read reconnected it, that frame
+  // reloaded the open thread, which read it again: about 75 reconnects a second in production.
+  it("stays bounded with a thread open when the watch speaks on connect", async () => {
+    const user = userEvent.setup({ delay: null });
+    let connects = 0;
+    let reads = 0;
+    server.use(
+      http.post("*/v1/ui/threads/:id/read", () => {
+        reads++;
+        return new HttpResponse(null, { status: 204 });
+      }),
+    );
+    const connect = (frame: (value: WatchFrame) => void, status?: (value: WatchStatus) => void) => {
+      connects++;
+      status?.("live");
+      queueMicrotask(() => frame({ cursor: connects, kind: "changed" }));
+      return () => undefined;
+    };
+    render(<App connect={connect} />);
+    await user.click(await screen.findByRole("button", { name: /Rollout check/ }));
+    await waitFor(() => expect(reads).toBeGreaterThan(0));
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(connects).toBe(1);
+    expect(reads).toBeLessThanOrEqual(2);
+  }, 40000);
+
   it("renders the hub's real empty report and claims with no expiry", async () => {
     server.use(
       http.get("*/v1/ui/doctor", () => HttpResponse.json({ checked_at: null, clients: [] })),
