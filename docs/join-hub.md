@@ -94,10 +94,11 @@ that exits, so a job can stay loaded and be inactive.
 
 The hub writes to `~/Library/Logs/iris/hub.log`. When `iris service install` or `iris service start`
 finds that file at 10 MiB or more, it moves it to `hub.log.1`, replacing the previous one. Nothing
-limits the log between those commands, because launchd has no rotation and keeps the file open. The
-hub writes one line, about 120 bytes, for every authenticated request, so a busy hub reaches 10 MiB in
-days, not months. A hub that keeps failing also adds lines at each restart, which launchd spaces about
-10 seconds apart. `iris service uninstall` leaves the logs in place.
+limits the log between those commands, because launchd has no rotation and keeps the file open. By
+default the hub logs a failed authentication, and each token's first use since it started, so the log
+grows slowly. `iris serve --access-log` would add a line per request, about 120 bytes each, and the
+LaunchAgent does not pass it. A hub that keeps failing adds lines at each restart, which launchd spaces
+about 10 seconds apart. `iris service uninstall` leaves the logs in place.
 
 ## Windows
 
