@@ -38,7 +38,7 @@ func TestShellContextEveryClient(t *testing.T) {
 		t.Run(string(client), func(t *testing.T) {
 			r := Runner{Find: func(string) (gitinfo.Repo, error) { return gitinfo.Repo{Worktree: "/repo"}, nil }, Hub: reconcileHub{}, Status: func(context.Context, string) (map[string]string, error) { return map[string]string{"path": "??"}, nil }, ShellDeadline: time.Hour}
 			ev := Event{Client: client, Kind: KindPostTool, ToolClass: ClassShell, SessionID: "shell", CWD: "/repo"}
-			out := r.reconcile(context.Background(), ev)
+			out := r.reconcile(context.Background(), ev, &runState{})
 			if out.Exit != 0 || !strings.Contains(string(out.Stdout), "cannot undo") {
 				t.Fatalf("missing context: %#v", out)
 			}
