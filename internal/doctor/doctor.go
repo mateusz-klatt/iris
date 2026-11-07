@@ -122,7 +122,7 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 	}
 	res.Guard = guardLine(ctx, opt.Dir)
 	if probe.up && probe.tokenOK {
-		if err := putReport(ctx, hubURL, token, published(res.Report), opt.HTTP); err != nil {
+		if err := storeReport(ctx, hubURL, token, res.Report, opt.HTTP); err != nil {
 			res.StoreError = err.Error()
 		} else {
 			res.Stored = true
@@ -339,8 +339,8 @@ func joinDetail(detail, note string) string {
 	return detail + "; " + note
 }
 
-// published is the report as today's hub accepts it: a hub that does not know "slow" refuses
-// the whole report, so a slow row goes as silent with its grade in the detail.
+// published is the report as a hub from before "slow" accepts it: such a hub refuses the whole
+// report, so a slow row goes as silent with its grade in the detail.
 func published(r Report) Report {
 	out := r
 	out.Clients = make([]ClientReport, len(r.Clients))
@@ -353,6 +353,28 @@ func published(r Report) Report {
 	}
 	return out
 }
+
+// storeReport sends the report as graded. A hub from before "slow" refuses the whole report,
+// so it then gets slow as silent, with the grade in the detail.
+func storeReport(ctx context.Context, base, token string, report Report, hc *http.Client) error {
+	err := putReport(ctx, base, token, report, hc)
+	if errors.Is(err, errReportRefused) && hasSlow(report) {
+		err = putReport(ctx, base, token, published(report), hc)
+	}
+	return err
+}
+
+func hasSlow(r Report) bool {
+	for _, c := range r.Clients {
+		if c.Status == StatusSlow {
+			return true
+		}
+	}
+	return false
+}
+
+// errReportRefused is a hub's 400 for a report it does not accept.
+var errReportRefused = errors.New("the hub refused the report")
 
 func validHook(client string, stdout []byte, exit int) error {
 	if exit != 0 {
@@ -465,6 +487,9 @@ func putReport(ctx context.Context, base, token string, report Report, hc *http.
 	}
 	defer func() { _ = res.Body.Close() }()
 	_, _ = io.Copy(io.Discard, res.Body)
+	if res.StatusCode == http.StatusBadRequest {
+		return fmt.Errorf("PUT /v1/ui/doctor: %s: %w", res.Status, errReportRefused)
+	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		return fmt.Errorf("PUT /v1/ui/doctor: %s", res.Status)
 	}

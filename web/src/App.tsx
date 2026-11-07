@@ -77,7 +77,7 @@ function repositoryName(overview: Overview, id: string): string {
   return overview.repositories.find((repository) => repository.id === id)?.name ?? id;
 }
 
-function statusKey(status: DoctorStatus): `operator.${"statusOk" | "statusNotConfigured" | "statusNeedsHuman" | "statusSilent"}` {
+function statusKey(status: DoctorStatus): `operator.${"statusOk" | "statusNotConfigured" | "statusNeedsHuman" | "statusSilent" | "statusSlow"}` {
   switch (status) {
     case "ok":
       return "operator.statusOk";
@@ -87,6 +87,8 @@ function statusKey(status: DoctorStatus): `operator.${"statusOk" | "statusNotCon
       return "operator.statusNeedsHuman";
     case "silent":
       return "operator.statusSilent";
+    case "slow":
+      return "operator.statusSlow";
   }
 }
 
@@ -420,7 +422,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                         </div>
                         <span className="status">{t(statusKey(client.status))}</span>
                         <p>
-                          {client.status === "silent" ? <span>{t("operator.cause")}: </span> : null}
+                          {client.status === "silent" || client.status === "slow" ? <span>{t("operator.cause")}: </span> : null}
                           {client.detail}
                         </p>
                       </article>
