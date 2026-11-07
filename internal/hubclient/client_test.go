@@ -3,6 +3,8 @@ package hubclient
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -116,3 +118,13 @@ type staticConfig struct {
 
 func (s staticConfig) HubURL() string         { return s.url }
 func (s staticConfig) Token() (string, error) { return s.token, nil }
+
+func TestIsCodeLooksThroughWrapping(t *testing.T) {
+	lost := &Error{Code: "lost", Message: "recovery requires the prior session generation"}
+	if !IsCode(lost, "lost") || !IsCode(fmt.Errorf("register: %w", lost), "lost") {
+		t.Fatal("a hub error was not recognised")
+	}
+	if IsCode(lost, "conflict") || IsCode(errors.New("lost"), "lost") || IsCode(nil, "lost") {
+		t.Fatal("only a hub error with that code matches")
+	}
+}

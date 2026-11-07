@@ -37,6 +37,9 @@ type Runner struct {
 	Ancestor   func() (proc.Ancestor, error)
 	Host       func() string
 	Deadline   time.Duration
+	// Memory keeps each session's generation between hook processes. Nil means a file
+	// beside the token.
+	Memory Memory
 	// after starts the deadline. Tests replace it so a deadline fires at a known
 	// stage rather than whenever a slow machine gets there.
 	after func(time.Duration) <-chan time.Time
@@ -135,14 +138,14 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 	switch ev.Kind {
 	case KindSessionStart, KindSubagentStart:
 		state.at("session")
-		sess, err := r.Hub.RegisterSession(ctx, r.sessionReq(ev, repo))
+		sess, err := r.register(ctx, ev, repo)
 		if err != nil {
 			return state.fail(err, allow)
 		}
 		return r.finish(ev, Encode(ev, Decision{Action: ActionAllow, Context: SessionText(sess)}))
 	case KindSessionEnd:
 		state.at("session")
-		sess, err := r.Hub.RegisterSession(ctx, r.sessionReq(ev, repo))
+		sess, err := r.register(ctx, ev, repo)
 		if err != nil {
 			return state.fail(err, allow)
 		}
@@ -150,6 +153,9 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		state.at("end")
 		if err := r.Hub.EndExecution(ctx, sess.ExecutionID, sess.Generation); err != nil {
 			return state.fail(err, allow)
+		}
+		if m := r.memory(); m != nil {
+			m.Forget(string(ev.Client), ev.SessionID)
 		}
 		return r.finish(ev, Encode(ev, Decision{Action: ActionAllow}))
 	default: // needsNetwork leaves only an edit that is about to run.
@@ -164,7 +170,12 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		// Touch needs an execution id. The hook only has the client session id,
 		// so it reattaches through POST /v1/sessions, which is defined as idempotent.
 		state.at("session")
-		sess, err := r.Hub.RegisterSession(ctx, r.sessionReq(ev, repo))
+		sess, err := r.register(ctx, ev, repo)
+		if hubclient.IsCode(err, "lost") {
+			// Only a recovering Execution refuses a request that carries no generation. Its
+			// claims still block others, so allowing the edit would leave it unclaimed.
+			return r.finish(ev, Encode(ev, Decision{Action: ActionDeny, Reason: recovering}))
+		}
 		if err != nil {
 			return state.fail(err, allow)
 		}
@@ -187,6 +198,35 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		}
 		return r.finish(ev, Encode(ev, decisionFromTouch(touch)))
 	}
+}
+
+// recovering is the refusal while a session cannot yet prove itself after a hub restart.
+const recovering = "Iris: the hub restarted and this session cannot prove it is the same one yet, so the edit is refused rather than left unclaimed. Retry shortly: the session reattaches when Iris hears from it with proof, or starts afresh within two minutes of the restart."
+
+// register attaches a hook to its Execution. A remembered generation is the proof a
+// recovering Execution asks for. A stale one is dropped and the call made once without it,
+// which is what the hook sent before it had a memory.
+func (r Runner) register(ctx context.Context, ev Event, repo gitinfo.Repo) (hubclient.SessionResponse, error) {
+	m := r.memory()
+	req := r.sessionReq(ev, repo)
+	if m != nil {
+		req.Generation = m.Recall(string(ev.Client), ev.SessionID)
+	}
+	sess, err := r.Hub.RegisterSession(ctx, req)
+	if req.Generation != 0 && hubclient.IsCode(err, "lost") {
+		m.Forget(string(ev.Client), ev.SessionID)
+		req.Generation = 0
+		sess, err = r.Hub.RegisterSession(ctx, req)
+	}
+	if err == nil && m != nil {
+		m.Remember(string(ev.Client), ev.SessionID, sess.Generation)
+		if ev.Kind == KindSessionStart {
+			if f, ok := m.(fileMemory); ok {
+				f.prune()
+			}
+		}
+	}
+	return sess, err
 }
 
 func needsNetwork(ev Event) bool {

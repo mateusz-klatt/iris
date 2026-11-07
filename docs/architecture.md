@@ -257,6 +257,17 @@ Changes from the reference schema:
    from `iris mcp` or `iris watch` carries that proof, so idle sessions reattach too. At the
    deadline it is lost. Repeated restarts cannot extend the window, because an existing deadline
    is never moved, and an expired generation is never revived.
+
+   A hook is a new process for every tool call, so it keeps the last generation for its session
+   in a file beside the token and sends it as that proof. Without proof, a recovering session's
+   edit is refused instead of allowed: its claims still block others, and an allowed edit would
+   be unclaimed. Anyone who can read that file can read the token, so this proves no more than
+   the token already does. Measured with a real Claude Code client before this change, a
+   session's edits went through unclaimed for up to the full 120 s, and its claims were then
+   lost. With a heartbeating `iris mcp` that was one edit. An `iris mcp` binds on its first tool
+   call, and only a bound one heartbeats. After the change, with and without `iris mcp`, all 16
+   edits stayed claimed by the same Execution across the restart. With the file removed, the edit
+   was refused and nothing went through unclaimed.
 3. A claim has `origin` (`explicit` or `auto`) and an optional expiry instead of a mandatory
    renewed deadline.
 

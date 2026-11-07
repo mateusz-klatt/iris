@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -251,4 +252,10 @@ func (c *Client) Reconcile(ctx context.Context, req ReconcileRequest) (CheckResp
 	var out CheckResponse
 	err := c.post(ctx, "/v1/shell/reconcile", req, &out)
 	return out, err
+}
+
+// IsCode reports whether err is a hub error with this code.
+func IsCode(err error, code string) bool {
+	var e *Error
+	return errors.As(err, &e) && e.Code == code
 }
