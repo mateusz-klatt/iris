@@ -55,7 +55,7 @@ func TestMCPStdio(t *testing.T) {
 		t.Fatal("binding was not lazy")
 	}
 	tools, err := session.ListTools(ctx, nil)
-	if err != nil || len(tools.Tools) != 9 {
+	if err != nil || len(tools.Tools) != 10 {
 		t.Fatalf("tools=%v err=%v", tools, err)
 	}
 	call := func(name string, args map[string]any) map[string]any {

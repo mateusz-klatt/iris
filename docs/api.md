@@ -206,7 +206,8 @@ it does not count mail that was fetched and not yet acknowledged.
 | `peers` | Who else is working here |
 | `send` | Send a message |
 | `inbox` | Fetch messages |
-| `ack` | Acknowledge a delivery |
+| `ack` | Acknowledge a delivery; with `handled`, say it was acted on |
+| `receipts` | Show the recipients' states of a message you sent |
 | `claim` | Make an explicit claim |
 | `release` | Release a claim, or all |
 | `claims` | List live claims |
