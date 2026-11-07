@@ -128,8 +128,14 @@ fetch increases `attempt`.
 
 ```json
 {"deliveries":[{"id":"dl_...","attempt":1,"sender":"...","subject":"...","body":"...",
-                "created_at":"..."}]}
+                "created_at":"..."}],"more":false}
 ```
+
+A page holds at most `limit` deliveries (20 by default, 100 at most) and at most 512 KiB of JSON,
+so it always fits the 1 MiB a client reads. It always carries at least one waiting delivery. `more`
+is `true` when deliveries are waiting beyond it. Deliveries stay with the caller until acknowledged,
+so a fetch before acknowledging returns the same page again: acknowledge it, then fetch the next.
+A client refuses a response over 1 MiB as too large instead of reading part of it.
 
 `POST /v1/deliveries/{id}/ack` takes `{"execution_id":"...","generation":1,"attempt":1}`. A repeated
 ack succeeds, and a stale one returns `conflict`. Ack means accepted, not acted upon.

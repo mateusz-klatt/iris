@@ -179,9 +179,14 @@ func (c *Client) Do(ctx context.Context, method, path string, body, dest any) er
 		return err
 	}
 	defer func() { _ = res.Body.Close() }()
-	slurp, err := io.ReadAll(io.LimitReader(res.Body, 1<<20))
+	// One byte past the limit is read, so a response that does not fit is told apart from one
+	// that only ends exactly there.
+	slurp, err := io.ReadAll(io.LimitReader(res.Body, responseLimit+1))
 	if err != nil {
 		return err
+	}
+	if len(slurp) > responseLimit {
+		return fmt.Errorf("hub %s: %w", path, ErrResponseTooLarge)
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		var envelope struct {
@@ -200,6 +205,13 @@ func (c *Client) Do(ctx context.Context, method, path string, body, dest any) er
 	}
 	return nil
 }
+
+// responseLimit is the most of a hub response a client reads. The hub keeps its pages under it.
+const responseLimit = 1 << 20
+
+// ErrResponseTooLarge is a hub response longer than responseLimit. It is refused whole: a
+// response cut short would only fail later as broken JSON, without saying why.
+var ErrResponseTooLarge = errors.New("the hub's response is larger than the 1 MiB a client reads")
 
 // ErrRedirect is a hub answer that tried to send the request elsewhere.
 var ErrRedirect = errors.New("the hub answered with a redirect, which Iris does not follow: set the hub URL to the final address")

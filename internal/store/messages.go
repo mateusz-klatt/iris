@@ -2,8 +2,14 @@ package store
 
 import (
 	"database/sql"
+	"encoding/json"
 	"time"
 )
+
+// inboxBudget bounds an inbox page's encoded size. A client reads at most 1 MiB of a response,
+// and a page of 100 maximal bodies of characters JSON escapes six-fold would be about 10 MiB.
+// The largest single delivery is about 100 KiB, so a page always has room for at least one.
+const inboxBudget = 512 << 10
 
 func (t *transaction) send(r Request) (map[string]any, error) {
 	var e execution
@@ -114,12 +120,21 @@ func (t *transaction) inbox(r Request) (map[string]any, error) {
 		return nil, err
 	}
 	out := []map[string]any{}
+	// size counts the page as encoded: the envelope, then each delivery and its comma. A
+	// delivery that would pass the budget waits for the next page, unless the page is empty.
+	size := len(`{"deliveries":[],"more":false}`)
 	for rows.Next() {
 		var delivery, sender, subject, body, message, thread, fromRepo, fromName string
 		var attempt, created int64
 		rows.Scan(&delivery, &attempt, &sender, &subject, &body, &created, &message, &thread, &fromRepo, &fromName)
-		out = append(out, map[string]any{"id": delivery, "message_id": message, "thread_id": thread, "attempt": attempt + 1, "sender": sender, "subject": subject, "body": body, "created_at": time.UnixMilli(created).UTC().Format(time.RFC3339Nano),
-			"from_repository": fromName, "from_repository_id": fromRepo, "cross_repository": fromRepo != e.Repo})
+		item := map[string]any{"id": delivery, "message_id": message, "thread_id": thread, "attempt": attempt + 1, "sender": sender, "subject": subject, "body": body, "created_at": time.UnixMilli(created).UTC().Format(time.RFC3339Nano),
+			"from_repository": fromName, "from_repository_id": fromRepo, "cross_repository": fromRepo != e.Repo}
+		raw, _ := json.Marshal(item) // strings, numbers and a bool always encode
+		if len(out) > 0 && size+len(raw)+1 > inboxBudget {
+			break
+		}
+		size += len(raw) + 1
+		out = append(out, item)
 	}
 	err = rows.Err()
 	_ = rows.Close()
@@ -131,7 +146,13 @@ func (t *transaction) inbox(r Request) (map[string]any, error) {
 			return nil, err
 		}
 	}
-	return map[string]any{"deliveries": out}, nil
+	// more says mail is waiting beyond this page. The page stays the caller's until it is
+	// acknowledged, so the next page comes from fetching again after the acknowledgements.
+	var waiting int
+	if err = t.row(`SELECT COUNT(*) FROM Delivery WHERE recipient_agent_id=? AND id NOT IN (SELECT delivery_id FROM Ack) AND (execution_id IS NULL OR execution_id=?)`, e.AgentID, e.ID).Scan(&waiting); err != nil {
+		return nil, err
+	}
+	return map[string]any{"deliveries": out, "more": waiting > len(out)}, nil
 }
 func (t *transaction) ack(r Request, delivery string) (map[string]any, error) {
 	e, err := t.live(r.ExecutionID, r.Generation)
