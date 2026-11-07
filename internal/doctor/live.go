@@ -91,7 +91,10 @@ var liveClients = map[string]liveClient{
 	// workspace-write lets the model edit only inside the scratch repository,
 	// and approval_policy never keeps it from waiting for a person. The Iris
 	// tools act only on the hub, so they are approved for this run.
-	integrate.Codex: {model: "gpt-6-luna", guard: codexTrust, args: func(model, prompt string) []string {
+	// Not the cheapest model: gpt-6-luna wrote the file through Code Mode's js
+	// tool, which no pre-edit hook sees, in every measured run. gpt-6.1-terra
+	// used apply_patch in 8 of 8 runs (measured on macOS by claude-laptop-iris).
+	integrate.Codex: {model: "gpt-6.1-terra", guard: codexTrust, args: func(model, prompt string) []string {
 		return []string{"exec", "-m", model, "-c", `sandbox_mode="workspace-write"`, "-c", `approval_policy="never"`, "-c", `mcp_servers.iris.default_tools_approval_mode="approve"`, prompt}
 	}},
 	integrate.Copilot: {args: func(_, prompt string) []string { return []string{"-p", prompt} }},
@@ -234,8 +237,8 @@ func RunLive(ctx context.Context, opt LiveOptions, plan LivePlan) (res LiveResul
 func livePrompt(nonce string) string {
 	return "This is an Iris doctor check in a scratch repository. Do exactly two things and nothing else. " +
 		"First, call the Iris MCP tool named whoami and copy the execution_id value it returns into your reply. " +
-		"Second, append one line containing exactly " + nonce + " to the end of the file " + scratchFile + " in the current directory, keeping what is there. " +
-		"Do not run shell commands. End your reply with the execution_id."
+		"Second, using your file editing tool, append one line containing exactly " + nonce + " to the end of the file " + scratchFile + " in the current directory, keeping what is there. " +
+		"Do not run shell commands or code to write the file. End your reply with the execution_id."
 }
 
 // inherited are dropped from the client's environment. The hub variables are

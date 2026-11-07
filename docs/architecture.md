@@ -429,7 +429,11 @@ removed with the table:
 
 `iris doctor` runs offline by default: hub reachable, token valid, client version, configuration
 present, trust state, unknown tools seen, last hook received, and a synthetic canary through the
-configured hook command. `iris doctor --live` runs the real client on its cheapest model. It is
+configured hook command. `iris doctor --live` runs the real client, on its cheapest model where
+that model edits through the client's file editing tool. Codex uses `gpt-6.1-terra`, which used
+`apply_patch` in 8 of 8 runs. `gpt-6-luna` wrote the scratch file through Code Mode's `js` tool
+in every measured run, and no pre-edit hook sees that, so the check would fail for a reason
+unrelated to Iris. It is
 billable, so it is opt-in: it names each client, binary and model first and asks, unless `--yes`
 is given. A client that still needs a person, such as Codex before its hooks are reviewed in
 `/hooks`, is skipped with that reason: no trust is bypassed, and a run whose hook cannot fire
