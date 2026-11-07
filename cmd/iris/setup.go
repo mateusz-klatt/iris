@@ -141,7 +141,7 @@ func setup(args []string, env setupEnv) int {
 	if override := strings.TrimSpace(env.getenv("IRIS_HUB_URL")); override != "" && !sameHub(override, hubURL) {
 		fmt.Fprintf(env.out, "IRIS_HUB_URL is set to %s and overrides this hub for every command that sees it. Unset it to use %s.\n", override, hubURL)
 	}
-	if !local {
+	if !local && tokenMissing(tokenFile) {
 		fmt.Fprintf(env.out, "Place the hub bearer token in %s (setup cannot fetch it).\n", tokenFile)
 	}
 	if !*yes {
@@ -248,4 +248,10 @@ func loopbackListen(raw string) (string, bool) {
 		return "[::1]:" + port, true
 	}
 	return host + ":" + port, true
+}
+
+// tokenMissing is true when there is no usable token yet, so setup asks for one only then.
+func tokenMissing(path string) bool {
+	raw, err := os.ReadFile(path)
+	return err != nil || strings.TrimSpace(string(raw)) == ""
 }
