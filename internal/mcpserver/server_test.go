@@ -327,6 +327,16 @@ func TestToolErrorHidesNothingButWrapsPlainErrors(t *testing.T) {
 	}
 }
 
+// Only handled may go without an attempt; a plain ack without one is told what is missing.
+func TestAPlainAckWithoutAnAttemptIsRefused(t *testing.T) {
+	f := &fakeHub{}
+	out, failed := use(t, connect(t, f), "ack", map[string]any{"delivery_id": "d"})
+	e, _ := out["error"].(map[string]any)
+	if !failed || e["code"] != "bad_request" || !strings.Contains(e["message"].(string), "attempt") || len(f.calls) != 0 {
+		t.Fatal(out, f.calls)
+	}
+}
+
 // Without a message id the status route would not exist, so it is refused before the hub.
 func TestReceiptsWithoutAMessageIDIsRefused(t *testing.T) {
 	f := &fakeHub{}

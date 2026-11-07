@@ -177,6 +177,11 @@ func call(ctx context.Context, h *hubclient.Client, b binding.Bound, name string
 		if strings.TrimSpace(in.Delivery) == "" {
 			return nil, &hubclient.Error{Code: "bad_request", Message: "delivery_id is required: pass the id of a delivery from inbox, with its attempt"}
 		}
+		// Only marking handled can go without an attempt. A plain ack without one would reach
+		// the hub as a stale acknowledgement, which does not say what is missing.
+		if in.Attempt <= 0 && !in.Handled {
+			return nil, &hubclient.Error{Code: "bad_request", Message: "attempt is required to accept a delivery: pass the attempt inbox returned with it"}
+		}
 		path = "/v1/deliveries/" + url.PathEscape(in.Delivery) + "/ack"
 		body["attempt"] = in.Attempt
 		body["handled"] = in.Handled
