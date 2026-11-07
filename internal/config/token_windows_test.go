@@ -67,7 +67,7 @@ func TestRestrictToChangesNothingWithoutAnOwner(t *testing.T) {
 }
 
 func TestOwnerDACLRefusesAnInvalidSID(t *testing.T) {
-	if _, err := ownerDACL("not-a-sid"); err == nil {
+	if _, err := ownerDACL("", "not-a-sid"); err == nil {
 		t.Fatal("no error")
 	}
 }
@@ -84,12 +84,53 @@ func TestRestrictToRefusesAnInvalidOwner(t *testing.T) {
 	}
 }
 
+func currentUserSID(t *testing.T) string {
+	t.Helper()
+	user, err := windows.GetCurrentProcessToken().GetTokenUser()
+	if err != nil {
+		t.Fatal(err)
+	}
+	return user.User.Sid.String()
+}
+
+// entries is the DACL's ACE list written the way SDDL writes these flags and this SID.
+func entries(t *testing.T, sddl string) string {
+	t.Helper()
+	sd, err := windows.SecurityDescriptorFromString(sddl)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s := sd.String()
+	return s[strings.Index(s, "("):]
+}
+
 func TestOwnerOnlyAppliesTheTokenDACL(t *testing.T) {
+	sid := currentUserSID(t)
 	dir := t.TempDir()
 	if err := OwnerOnly(dir); err != nil {
 		t.Fatal(err)
 	}
-	if got := dacl(t, dir); !strings.HasPrefix(got, "D:P") || strings.Count(got, "(") != 1 {
-		t.Fatalf("not owner-only and protected: %s", got)
+	got := dacl(t, dir)
+	if want := entries(t, "D:P(A;OICI;FA;;;"+sid+")"); !strings.HasPrefix(got, "D:P") || got[strings.Index(got, "("):] != want {
+		t.Fatalf("directory: %s, want %s", got, want)
+	}
+	// A file created inside, before any call on it, already has only the owner's entry.
+	file := filepath.Join(dir, "new")
+	if err := os.WriteFile(file, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	got = dacl(t, file)
+	if want := entries(t, "D:(A;ID;FA;;;"+sid+")"); got[strings.Index(got, "("):] != want {
+		t.Fatalf("a new file inherited more than the owner: %s, want %s", got, want)
+	}
+	if err := OwnerOnly(file); err != nil {
+		t.Fatal(err)
+	}
+	got = dacl(t, file)
+	if want := entries(t, "D:P(A;;FA;;;"+sid+")"); !strings.HasPrefix(got, "D:P") || got[strings.Index(got, "("):] != want {
+		t.Fatalf("file: %s, want %s", got, want)
+	}
+	if err := OwnerOnly(filepath.Join(dir, "missing")); err == nil {
+		t.Fatal("a missing path was protected")
 	}
 }

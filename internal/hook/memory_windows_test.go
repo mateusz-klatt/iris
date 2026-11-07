@@ -1,6 +1,7 @@
 package hook
 
 import (
+	"os"
 	"strings"
 	"testing"
 
@@ -34,4 +35,23 @@ func TestFileMemoryIsOwnerOnlyOnWindows(t *testing.T) {
 	if m.Recall("claude", "s") != 1 {
 		t.Fatal("the owner lost access")
 	}
+	// The window holzera asked about: a temporary file is owner-only before its own call.
+	tmp, err := os.CreateTemp(m.dir, ".tmp-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	tmp.Close()
+	sd, err := windows.GetNamedSecurityInfo(tmp.Name(), windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := sd.String(); strings.Count(got, "(") != 1 || !strings.Contains(got, user.User.Sid.String()) && !strings.Contains(got, ";;;LA)") {
+		t.Fatalf("a file was readable by others before it was protected: %s", got)
+	}
+	// Pruning and SessionEnd removal still work under the protected DACL.
+	m.Forget("claude", "s")
+	if m.Recall("claude", "s") != 0 {
+		t.Fatal("forget failed")
+	}
+	m.prune()
 }
