@@ -148,10 +148,32 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - uses: docker/setup-buildx-action@8d2750c68a42422c14e847fe6c8ac0403b4cbd6f # v3
+      - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+      # Keyless signing needs a release's OIDC identity, so only the SBOM is exercised here.
       - uses: goreleaser/goreleaser-action@e435ccd777264be153ace6237001ef4d979d3a7a # v6
         with:
           version: v2.20.0
-          args: release --snapshot --clean --skip=sign,sbom
+          args: release --snapshot --clean --skip=sign
+      - name: The snapshot made an SBOM for every archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          archives=$(ls dist/*.tar.gz dist/*.zip | wc -l)
+          sboms=$(ls dist/*.sbom.json | wc -l)
+          echo "archives=$archives sboms=$sboms"
+          test "$archives" -gt 0
+          test "$archives" = "$sboms"
+      - name: The release workflow runs only for a version tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import yaml
+          on = yaml.safe_load(open(".github/workflows/release.yml"))[True]
+          assert list(on) == ["push"], on
+          assert list(on["push"]) == ["tags"], on
+          print("release.yml triggers:", on)
+          PY
       - name: Run the image as non-root on a fresh named volume
         shell: bash
         run: |
