@@ -233,6 +233,8 @@ func writeError(w http.ResponseWriter, err error) {
 	switch domain.Code {
 	case "unauthorized":
 		status = http.StatusUnauthorized
+	case "forbidden":
+		status = http.StatusForbidden
 	case "not_found":
 		status = http.StatusNotFound
 	case "conflict", "key_reused", "lost", "ambiguous", "unbound":

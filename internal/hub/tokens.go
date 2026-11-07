@@ -9,9 +9,26 @@ import (
 	"strings"
 
 	"github.com/coder/websocket"
+	"github.com/mateusz-klatt/iris/internal/store"
 )
 
 type principal struct{ name, digest string }
+
+// ownerName is the principal for the hub's own token file, the owner credential. Logs
+// have always called it this, so the name stays.
+const ownerName = "(legacy)"
+
+// ownerOnly refuses every principal but the owner. A host token that could manage
+// tokens could mint itself more or lock other hosts out, which is what per-host
+// tokens exist to prevent.
+func (h *Hub) ownerOnly(w http.ResponseWriter, r *http.Request) bool {
+	if requestPrincipal(r).name == ownerName {
+		return true
+	}
+	writeError(w, &store.Error{Code: "forbidden", Message: "only the hub's own token may do this"})
+	return false
+}
+
 type principalKey struct{}
 
 func tokenDigest(token string) string {
@@ -26,7 +43,7 @@ func (h *Hub) authenticate(r *http.Request) principal {
 	token := strings.TrimPrefix(header, "Bearer ")
 	got, want := sha256.Sum256([]byte(token)), sha256.Sum256([]byte(h.token))
 	if h.token != "" && subtle.ConstantTimeCompare(got[:], want[:]) == 1 {
-		return principal{"(legacy)", tokenDigest(token)}
+		return principal{ownerName, tokenDigest(token)}
 	}
 	name, err := h.store.AuthenticateToken(r.Context(), token)
 	if err != nil {
@@ -36,6 +53,9 @@ func (h *Hub) authenticate(r *http.Request) principal {
 }
 func (h *Hub) tokenRoutes() {
 	h.mux.HandleFunc("GET /v1/tokens", func(w http.ResponseWriter, r *http.Request) {
+		if !h.ownerOnly(w, r) {
+			return
+		}
 		tokens, err := h.store.ListTokens(r.Context())
 		if err != nil {
 			writeError(w, err)
@@ -44,6 +64,9 @@ func (h *Hub) tokenRoutes() {
 		writeJSON(w, map[string]any{"tokens": tokens})
 	})
 	h.mux.HandleFunc("POST /v1/tokens", func(w http.ResponseWriter, r *http.Request) {
+		if !h.ownerOnly(w, r) {
+			return
+		}
 		req, err := decode(w, r)
 		if err != nil {
 			writeError(w, err)
@@ -57,6 +80,9 @@ func (h *Hub) tokenRoutes() {
 		writeJSON(w, map[string]any{"name": req.Host, "token": token})
 	})
 	h.mux.HandleFunc("DELETE /v1/tokens/{name}", func(w http.ResponseWriter, r *http.Request) {
+		if !h.ownerOnly(w, r) {
+			return
+		}
 		h.mu.Lock()
 		digest, err := h.store.RevokeToken(r.Context(), r.PathValue("name"))
 		if err == nil {
@@ -82,7 +108,7 @@ func (h *Hub) tokenRoutes() {
 // rejects a replaced token if its former name has already been reused.
 func (h *Hub) trackSocket(r *http.Request, conn *websocket.Conn, p principal) bool {
 	h.mu.Lock()
-	if p.name != "" && p.name != "(legacy)" && !h.store.TokenActive(r.Context(), p.digest) {
+	if p.name != "" && p.name != ownerName && !h.store.TokenActive(r.Context(), p.digest) {
 		h.mu.Unlock()
 		_ = conn.Close(websocket.StatusPolicyViolation, "bearer token revoked")
 		return false

@@ -330,6 +330,9 @@ relies on leases, delimited bodies and text-free wake frames.
 
 - **Credentials.** The token is in a user-only file: mode 0600, and an owner-only DACL on Windows.
   Never in hook environments.
+- **Owner token.** The hub's own token file is the owner credential. Only it may create, list or
+  revoke host tokens, or remove records with `iris admin forget`; a host token gets `forbidden`.
+  Otherwise a host could mint itself more tokens or lock other hosts out.
 - **Network.** Bind to loopback by default, and see D1 for remote hubs. Check `Host` and `Origin`
   on every route, against DNS rebinding and cross-site requests from browsers. No CORS. The web
   UI signs in by one-time link and uses an `HttpOnly`, `SameSite=Strict` cookie, on loopback only.
