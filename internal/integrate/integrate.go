@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"runtime"
 	"strings"
 )
@@ -61,6 +62,8 @@ type Layout struct {
 	Getenv   func(string) string
 	LookPath func(string) (string, error)
 	GOOS     string
+	// drift, when set, makes update record what it would change instead of writing.
+	drift *[]string
 }
 
 // ShellKind identifies the shell used by the client for its command text.
@@ -373,6 +376,12 @@ func (l Layout) update(client, path string, render func(existing []byte) ([]byte
 	if !absent && string(existing) == string(next) {
 		return nil
 	}
+	if l.drift != nil {
+		if absent || !sameContent(existing, next) {
+			*l.drift = append(*l.drift, path)
+		}
+		return nil
+	}
 	if err := l.remember(client, path, existing, absent); err != nil {
 		return err
 	}
@@ -530,3 +539,33 @@ func eventTimeout(client, event string) int {
 // Iris's own 1.5 s deadline, so a slow hook gives up and allows before Antigravity kills it.
 // Measured: with 10, a hook that took 5 s was waited for, and one that slept 15 s was killed.
 const antigravityTimeout = 10
+
+// Drift lists the files whose content differs from what Install would write for c, without
+// writing anything: no file, no manifest and no plugin command. An empty list means the
+// configuration is complete as Iris installs it. It says nothing about whether the client
+// loads that configuration, or whether a hook it runs reaches Iris.
+func (l Layout) Drift(c Client) ([]string, error) {
+	var paths []string
+	l.drift = &paths
+	if err := c.Install(l, dryPlugins{}); err != nil {
+		return nil, err
+	}
+	return paths, nil
+}
+
+// dryPlugins stands in for the plugin CLI during Drift, which must change nothing. Install
+// only adds; the removing calls are left to the nil Plugins, so one would panic, not run.
+type dryPlugins struct{ Plugins }
+
+func (dryPlugins) MarketplaceAdd(string) error { return nil }
+func (dryPlugins) Install(string) error        { return nil }
+
+// sameContent compares two renderings of a file. JSON is compared by value, so a client
+// that rewrites its own file with other spacing or key order has not drifted.
+func sameContent(existing, next []byte) bool {
+	var a, b any
+	if json.Unmarshal(existing, &a) == nil && json.Unmarshal(next, &b) == nil {
+		return reflect.DeepEqual(a, b)
+	}
+	return false
+}

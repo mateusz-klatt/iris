@@ -157,6 +157,14 @@ fixes that for this window only. To run `iris` in later windows, add the directo
 a running one does not load the plugin. Ask it to call the Iris `whoami` and `peers` tools, then to send
 a message to a peer. An interactive session reports it at once, with no prompt.
 
+`ok` also means the whole configuration is what `iris integrate` installs: every hook event and the
+MCP entry, with the current `iris` path. Doctor renders that configuration without writing anything
+and compares it with the files, so your own hooks beside Iris's and a client's own reformatting do
+not count. When something differs, such as a hook removed by hand, a hook timeout from an older
+Iris, or an `iris` binary that has moved, the row is `needs_human` and names the files: run
+`iris integrate <client>` again. This checks configuration only. It cannot show that the
+client loads it; `iris doctor --live` does that.
+
 `claude ok` can change later. A hook that failed open in the last 24 hours turns the row into `silent`,
 and `iris doctor` exits 1. The row names the failure, and `hook-failures.log` beside the token file
 keeps it. The row clears once the entry is more than 24 hours old.

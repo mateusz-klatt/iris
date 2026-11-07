@@ -252,6 +252,19 @@ func checkClient(ctx context.Context, opt Options, c integrate.Client) ClientRep
 		row.Detail = err.Error()
 		return row
 	}
+	// The canary ran one hook. The rest of the configuration, every other hook event and the
+	// MCP entry, is checked against what iris integrate would write (gap review C3).
+	drift, err := opt.Layout.Drift(c)
+	if err != nil {
+		row.Status = StatusSilent
+		row.Detail = err.Error()
+		return row
+	}
+	if len(drift) > 0 {
+		row.Status = StatusNeedsHuman
+		row.Detail = "configuration differs from what iris integrate installs (" + strings.Join(homeRelative(opt.Layout, drift), ", ") + "): run iris integrate " + c.Name()
+		return row
+	}
 	step, note := c.Human(), ""
 	if r, ok := c.(integrate.Reviewer); ok {
 		step, note = r.Review(opt.Layout)
@@ -539,3 +552,17 @@ func defaultTokenFile(l integrate.Layout) string {
 }
 
 func closedStdin() io.Reader { return bytes.NewReader(nil) }
+
+// homeRelative shortens paths under home to ~/..., so a report on the hub does not carry the
+// user's home directory.
+func homeRelative(l integrate.Layout, paths []string) []string {
+	home, _ := l.HomeDir() // without a home, Rel below fails and the paths stay whole
+	out := make([]string, len(paths))
+	for i, p := range paths {
+		if rel, err := filepath.Rel(home, p); err == nil && !strings.HasPrefix(rel, "..") {
+			p = filepath.Join("~", rel)
+		}
+		out[i] = p
+	}
+	return out
+}
