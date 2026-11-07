@@ -399,8 +399,29 @@ generated from files embedded in the binary.
 `iris doctor` runs offline by default: hub reachable, token valid, client version, configuration
 present, trust state, unknown tools seen, last hook received, and a synthetic canary through the
 configured hook command. `iris doctor --live` runs the real client on its cheapest model. It is
-billable, so it is opt-in. Output is per client binary, not per vendor, because the Cursor IDE and
+billable, so it is opt-in: it names each client, binary and model first and asks, unless `--yes`
+is given. A client that still needs a person, such as Codex before its hooks are reviewed in
+`/hooks`, is skipped with that reason: no trust is bypassed, and a run whose hook cannot fire
+spends money to prove nothing. Output is per client binary, not per vendor, because the Cursor IDE and
 `cursor-agent` differ.
+
+Each live run happens in a scratch repository under the temporary directory, with no commit and
+an origin of `https://example.invalid/iris-doctor-live/<random>.git`, never in one of the user's
+repositories. The client talks to a hub that doctor starts in-process on loopback with its own
+database and token, through `IRIS_HUB_URL` and `IRIS_TOKEN_FILE`, which take precedence over any
+`client.json`. Both are deleted afterwards, so a client that passes its environment to its hook
+and its MCP server leaves no records on the configured hub, and nothing needs `forget`. Codex's
+MCP server does not inherit these variables until its integration names them with `env_vars`
+(measured on macOS), so until then its `whoami` reaches the configured hub. The prompt asks the model to call `whoami` and to rewrite one file. The run reports
+four facts: the hook registered the scratch session, the pre-edit hook was granted the claim,
+the reply carries the execution id that only `whoami` returns, and the file holds the requested
+line. Only sessions that the named client's own hook registered count, because Grok also loads
+other clients' hooks (D5). If the scratch hub sees nothing from that hook, either the client
+stopped before running it, which Cursor does with exit 0 in an untrusted workspace, or a client
+that hides its environment from its hook reached the configured hub instead. Doctor then prints
+the client's output and the marker origin, so the hub's owner can find that repository and
+remove it with `iris admin forget`. The run is limited per
+client, three minutes by default.
 
 ### D15. Distribution
 

@@ -89,7 +89,9 @@ Against the production hub, over TLS:
   Anyway", and a Mac or PC whose policy forbids unsigned code.
 - **Production hook latency on Windows since #39.**
 - **Services:** loading the LaunchAgent at login, and `systemd --user` running for real.
-- **`iris doctor --live`.**
+- **`iris doctor --live` on clients other than Claude Code.** It ran for real for Claude Code
+  2.1.319 on WSL and on macOS against its scratch hub. Grok's allow flags were measured on macOS.
+  The other clients' invocations are not measured yet.
 - **Translations** of the newer console strings, and layout polish.
 - **Legal review** of the clean-room record.
 

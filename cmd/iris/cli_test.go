@@ -161,15 +161,14 @@ func TestIntegrateOneClientThenRemoveIt(t *testing.T) {
 	}
 }
 
-func TestDoctorPrintsAReportAndWarnsBeforeALiveRun(t *testing.T) {
-	_, errText := capture(t, func() {
-		code := dispatch([]string{"doctor", "--live", "--hub-url", "http://127.0.0.1:1"})
-		if code != 1 && code != 0 {
+func TestDoctorLiveWithNoClientSpendsNothing(t *testing.T) {
+	out, errText := capture(t, func() {
+		if code := dispatch([]string{"doctor", "--live", "--yes", "--hub-url", "http://127.0.0.1:1"}); code != 1 {
 			t.Fatalf("code %d", code)
 		}
 	})
-	if !strings.Contains(errText, "may incur a charge") {
-		t.Fatal(errText)
+	if !strings.Contains(out, "hub: unreachable") || !strings.Contains(errText, "no client is ready for a live run") {
+		t.Fatalf("out %q err %q", out, errText)
 	}
 }
 

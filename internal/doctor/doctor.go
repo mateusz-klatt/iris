@@ -59,14 +59,12 @@ type Result struct {
 	StoreError       string
 }
 
-// Options configures one doctor run. Live is opt-in because it calls a model.
+// Options configures one offline doctor run. RunLive is separate because it calls a model.
 type Options struct {
 	Layout    integrate.Layout
 	HubURL    string
 	TokenFile string
 	HTTP      *http.Client
-	Live      bool
-	LiveRun   func(ctx context.Context, name string, args []string) error
 	Now       func() time.Time
 	// VersionTimeout limits one client --version call. Zero means the default.
 	VersionTimeout time.Duration
@@ -222,13 +220,6 @@ func checkClient(ctx context.Context, opt Options, c integrate.Client) ClientRep
 		row.Status = StatusSilent
 		row.Detail = err.Error()
 		return row
-	}
-	if opt.Live {
-		if err := runLive(ctx, opt, c.Name()); err != nil {
-			row.Status = StatusSilent
-			row.Detail = "live run failed: " + err.Error()
-			return row
-		}
 	}
 	if step := c.Human(); step != "" {
 		row.Status = StatusNeedsHuman
