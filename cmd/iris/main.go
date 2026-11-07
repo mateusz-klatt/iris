@@ -88,6 +88,7 @@ func run(args []string) error {
 	flags.StringVar(&cfg.TLSCert, "tls-cert", "", "TLS certificate file")
 	flags.StringVar(&cfg.TLSKey, "tls-key", "", "TLS private key file")
 	publicURL := flags.String("public-url", "", "public https origin behind a trusted loopback TLS proxy")
+	accessLog := flags.Bool("access-log", false, "log every authenticated request, not only each token's first use")
 	limits := hub.RateLimitFlags(flags)
 	var hosts string
 	flags.StringVar(&hosts, "allowed-hosts", "", "additional allowed Host authorities, including ports")
@@ -126,6 +127,7 @@ func run(args []string) error {
 	}
 	handler := hub.New(s, token, allowed)
 	handler.Limits = *limits
+	handler.AccessLog = *accessLog
 	if *publicURL != "" {
 		// The same origin was accepted before the store was opened.
 		handler.SetPublicURL(*publicURL)

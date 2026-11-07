@@ -104,6 +104,10 @@ service, restore the previous vhost file, run `apachectl configtest`, and reload
 operational procedure. Keep the Iris volume; do not delete credentials or database as
 part of rollback. Before later re-enabling Iris, inspect its state and backup.
 
+The hub logs every failed authentication, and the first use of each token since it started,
+by name and peer, never the secret. `serve --access-log` adds one line, about 120 bytes, for every
+authenticated request. It is off by default, because at that rate a busy hub fills its log in days.
+
 Remaining operational limits: no per-user authorization, per-IP rate limit, global
 session/socket quota, token revocation API or automatic database retention. Failed-auth
 logs may be flooded; use edge limits and bounded log retention. Backups, credential

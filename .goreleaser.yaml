@@ -25,7 +25,17 @@ archives:
     format_overrides:
       - goos: windows
         formats: [zip]
-    files: [LICENSE, docs/guard.md]
+    # Record no builder: a fixed owner and group, and the commit time, on every entry.
+    builds_info:
+      owner: root
+      group: root
+      mode: 0755
+      mtime: '{{ .CommitDate }}'
+    files:
+      - src: LICENSE
+        info: &fixed {owner: root, group: root, mode: 0644, mtime: '{{ .CommitDate }}'}
+      - src: docs/guard.md
+        info: *fixed
 # D15, prepared and inert. Without MACOS_SIGN_P12 this step is skipped and the darwin
 # binaries ship as Go builds them: amd64 unsigned, arm64 ad-hoc signed by the linker.
 # With the certificate alone they would be signed, and with the notary key too, notarized.

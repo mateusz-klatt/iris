@@ -148,8 +148,23 @@ func requestPrincipal(r *http.Request) principal {
 	p, _ := r.Context().Value(principalKey{}).(principal)
 	return p
 }
-func logPrincipal(r *http.Request, p principal) {
-	if p.name != "" {
+
+// logPrincipal records who used the hub. A line per request filled a launchd or
+// container log within days, so by default each token is named once per start.
+// It has its own lock because one caller already holds h.mu.
+func (h *Hub) logPrincipal(r *http.Request, p principal) {
+	if p.name == "" {
+		return
+	}
+	if h.AccessLog {
 		log.Printf("authenticated request: token=%q method=%q path=%q peer=%q", p.name, r.Method, r.URL.Path, r.RemoteAddr)
+		return
+	}
+	h.usedMu.Lock()
+	first := !h.used[p.name]
+	h.used[p.name] = true
+	h.usedMu.Unlock()
+	if first {
+		log.Printf("token first used since start: token=%q peer=%q", p.name, r.RemoteAddr)
 	}
 }

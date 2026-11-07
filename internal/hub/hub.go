@@ -43,18 +43,23 @@ type Hub struct {
 	PingInterval time.Duration
 	// MaxRequestBytes bounds every HTTP body; zero uses 64 KiB.
 	MaxRequestBytes int64
-	publicURL       *url.URL
-	monitors        map[string]bool
-	ui              http.Handler
-	links           map[string]loginGrant
-	cookies         map[string]loginGrant
-	store           *store.Store
-	token           string
-	hosts           map[string]bool
-	mux             *http.ServeMux
-	mu              sync.Mutex
-	tickets         map[string]ticket
-	now             func() time.Time
+	// AccessLog logs every authenticated request. Off, only a token's first use since
+	// start is logged; authentication failures are logged either way.
+	AccessLog bool
+	usedMu    sync.Mutex
+	used      map[string]bool
+	publicURL *url.URL
+	monitors  map[string]bool
+	ui        http.Handler
+	links     map[string]loginGrant
+	cookies   map[string]loginGrant
+	store     *store.Store
+	token     string
+	hosts     map[string]bool
+	mux       *http.ServeMux
+	mu        sync.Mutex
+	tickets   map[string]ticket
+	now       func() time.Time
 }
 
 func New(s *store.Store, token string, allowedHosts []string) *Hub {
@@ -62,7 +67,7 @@ func New(s *store.Store, token string, allowedHosts []string) *Hub {
 		writeSocket: func(ctx context.Context, c *websocket.Conn, raw []byte) error {
 			return c.Write(ctx, websocket.MessageText, raw)
 		},
-		pingSocket: func(ctx context.Context, c *websocket.Conn) error { return c.Ping(ctx) }, rates: map[string]window{}, socketCounts: map[string]int{}, sockets: map[string]map[*websocket.Conn]bool{}, monitors: map[string]bool{}, links: map[string]loginGrant{}, cookies: map[string]loginGrant{}, store: s, token: token, hosts: map[string]bool{}, mux: http.NewServeMux(), tickets: map[string]ticket{}, now: time.Now}
+		pingSocket: func(ctx context.Context, c *websocket.Conn) error { return c.Ping(ctx) }, rates: map[string]window{}, socketCounts: map[string]int{}, sockets: map[string]map[*websocket.Conn]bool{}, monitors: map[string]bool{}, links: map[string]loginGrant{}, cookies: map[string]loginGrant{}, store: s, token: token, hosts: map[string]bool{}, mux: http.NewServeMux(), tickets: map[string]ticket{}, used: map[string]bool{}, now: time.Now}
 	for _, host := range allowedHosts {
 		h.hosts[strings.ToLower(host)] = true
 	}
@@ -98,7 +103,7 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	p := h.authenticate(r)
-	logPrincipal(r, p)
+	h.logPrincipal(r, p)
 	if p.name == "" {
 		if !h.anonymousRate(w) {
 			return
@@ -326,7 +331,7 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 			for _, offeredTicket := range protocols {
 				if t, ok := h.tickets[offeredTicket]; ok && !t.used && t.execution == req.ExecutionID && t.expires.After(h.now()) {
 					p = t.principal
-					logPrincipal(r, p)
+					h.logPrincipal(r, p)
 					req.Generation = t.generation
 					t.used = true
 					h.tickets[offeredTicket] = t

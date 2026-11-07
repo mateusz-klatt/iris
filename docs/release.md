@@ -99,7 +99,9 @@ snapshot was built from `ed7e334` with `--skip=publish,sign,sbom,docker`.
   file, and the hub recorded the agent and an automatic claim. Claude Code's login belongs to the user's
   real home, so this session ran there with `--plugin-dir` pointing at the generated plugin, and with the
   installed Iris plugin turned off.
-- The archives record the builder's user name as the owner of each file. In CI it is the runner's.
+- Every archive entry is owned by `root:root` (uid and gid 0), with mode 0644 or 0755 and the commit
+  time, so an archive records nothing about who built it. Two snapshots of one commit gave identical
+  archive checksums.
 
 ### Gatekeeper and an unnotarized binary
 
