@@ -28,10 +28,10 @@ func TestCoalescerSkipsEmptyCountsAndReportsAWriteFailure(t *testing.T) {
 	if err := c.Add(now, "inbox_changed", 0); err != nil || out.Len() != 0 {
 		t.Fatal(err, out.String())
 	}
-	if err := c.Add(now, "claim_released", 2); err != nil {
+	if err := c.Add(now, "claim_available", 2); err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "2 claims released") {
+	if !strings.Contains(out.String(), "2 paths you were refused are free now") {
 		t.Fatal(out.String())
 	}
 	if err := c.Flush(now.Add(time.Minute)); err != nil || strings.Count(out.String(), "\n") != 1 {
@@ -93,7 +93,9 @@ func TestConnectAcksACursorAndStopsOnAResetFailure(t *testing.T) {
 		ctx := r.Context()
 		_ = conn.Write(ctx, websocket.MessageText, []byte(`{"stream":"s","cursor":4,"kind":"inbox_changed"}`))
 		_ = conn.Write(ctx, websocket.MessageText, []byte(`{"stream":"s","cursor":4,"kind":"inbox_changed"}`))
+		// A release everyone sees is not a wake; the addressed one is.
 		_ = conn.Write(ctx, websocket.MessageText, []byte(`{"stream":"s","cursor":5,"kind":"claim_released"}`))
+		_ = conn.Write(ctx, websocket.MessageText, []byte(`{"stream":"s","cursor":6,"kind":"claim_available"}`))
 		_ = conn.Write(ctx, websocket.MessageText, []byte(`{"kind":"reset"}`))
 		<-ctx.Done()
 	}))
@@ -105,10 +107,10 @@ func TestConnectAcksACursorAndStopsOnAResetFailure(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "502") {
 		t.Fatal(err)
 	}
-	if !strings.Contains(out.String(), "1 new message") || !strings.Contains(out.String(), "1 claim released") {
+	if !strings.Contains(out.String(), "1 new message") || !strings.Contains(out.String(), "a path you were refused is free now") || strings.Contains(out.String(), "released") {
 		t.Fatal(out.String())
 	}
-	if cursor != 5 || stream != "s" {
+	if cursor != 6 || stream != "s" {
 		t.Fatalf("cursor %d stream %s", cursor, stream)
 	}
 }

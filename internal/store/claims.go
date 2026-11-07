@@ -233,6 +233,10 @@ func (t *transaction) touch(r Request) (map[string]any, error) {
 			}
 			v["path"] = p
 			conflicts = append(conflicts, v)
+			// The holder's release of this path is what this session waits for.
+			if err = t.wait(e, pathKey(p, policy), "exact", c); err != nil {
+				return nil, err
+			}
 		}
 	}
 	out := map[string]any{"action": "allow", "granted": []string{}, "ignored": ignored, "conflicts": conflicts, "message": ""}
@@ -265,6 +269,11 @@ func (t *transaction) touch(r Request) (map[string]any, error) {
 				continue
 			}
 			if _, err = t.exec("INSERT INTO Claim(execution_id,repository_id,kind,path,path_key,origin,boot_epoch,expires_ms) VALUES(?,?,'exact',?,?,'auto',?,?)", e.ID, e.Repo, p, pathKey(p, policy), t.s.epoch, t.s.clock.Now().Add(10*time.Minute).UnixMilli()); err != nil {
+				return nil, err
+			}
+		}
+		for _, p := range normalized {
+			if err = t.took(e, pathKey(p, policy)); err != nil {
 				return nil, err
 			}
 		}
@@ -362,10 +371,18 @@ func (t *transaction) explicit(r Request) (map[string]any, error) {
 			}
 			v["path"] = p
 			conflicts = append(conflicts, v)
+			if err = t.wait(e, key, r.Kind, c); err != nil {
+				return nil, err
+			}
 		}
 	}
 	if len(conflicts) > 0 {
-		return nil, &Error{"conflict", "claim overlaps another Execution", map[string]any{"conflicts": conflicts}}
+		// The refusal is returned after the commit, so the waiter it leaves is kept.
+		t.refused = &Error{"conflict", "claim overlaps another Execution", map[string]any{"conflicts": conflicts}}
+		return nil, nil
+	}
+	if err = t.took(e, key); err != nil {
+		return nil, err
 	}
 	expiry := sql.NullInt64{}
 	if r.TTLS > 0 {
@@ -426,7 +443,16 @@ func (t *transaction) release(r Request) (map[string]any, error) {
 	}
 	n, _ := res.RowsAffected() // SQLite always reports affected rows
 	if n > 0 {
-		err = t.repoEvent(e.Repo, "claim_released", e.ID)
+		err = t.released(e.Repo, e.ID)
 	}
 	return map[string]any{}, err
+}
+
+// released records a release for every agent in repo, which the console and
+// the claims tool show, and wakes only the sessions that were waiting for it.
+func (t *transaction) released(repo, object string) error {
+	if err := t.repoEvent(repo, "claim_released", object); err != nil {
+		return err
+	}
+	return t.wakeWaiters(repo)
 }

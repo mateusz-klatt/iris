@@ -11,6 +11,7 @@ import (
 // BEGIN IMMEDIATE snapshot; only a successful commit becomes visible to readers.
 func (s *Store) Call(ctx context.Context, operation string, r Request) (map[string]any, error) {
 	var out map[string]any
+	var refused *Error
 	err := s.transact(ctx, func(t *transaction) error {
 		if err := t.expire(); err != nil {
 			return err
@@ -94,8 +95,12 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 				err = t.event("", "", "changed", "")
 			}
 		}
+		refused = t.refused
 		return err
 	})
+	if err == nil && refused != nil {
+		return nil, refused
+	}
 	return out, err
 }
 

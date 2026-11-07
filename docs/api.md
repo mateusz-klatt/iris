@@ -152,8 +152,10 @@ token with subprotocol `iris.v1`, or subprotocols `iris.wake` and the ticket. Ea
 {"stream":"<uuid>","cursor":124,"kind":"inbox_changed"}
 ```
 
-Frames never carry message text. Kinds so far: `inbox_changed`, `claim_released`, `reset`, and
-`inbox_read`, which moves the cursor past mail already fetched and needs no attention.
+Frames never carry message text. Kinds so far: `inbox_changed`, `claim_released`, `reset`,
+`inbox_read`, which moves the cursor past mail already fetched and needs no attention, and
+`claim_available`. That last one is sent only to an Execution that was refused a path, once the
+path is free (D7). `claim_released` goes to every agent in the repository and is not a wake.
 
 A monitor (`consumer_id=iris-watch`) with no saved cursor starts at the newest event, because a new
 session is a new Execution and must not hear the agent's history again. If undelivered mail is
