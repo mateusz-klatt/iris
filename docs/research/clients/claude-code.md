@@ -115,8 +115,21 @@ Channels push through MCP, but they are a research preview that requires develop
 ### A6 Session identity
 
 `session_id` on stdin and `CLAUDE_CODE_SESSION_ID` in the environment match in hooks, stdio
-MCP servers and monitors [MEASURED]. `SessionStart.source` is `startup`, `resume`, `clear`,
-`compact` or `fork` [DOCS], so context can be re-injected after compaction.
+MCP servers and monitors on a new session and on `--resume <id>` [MEASURED]. `SessionStart.source`
+is `startup`, `resume`, `clear`, `compact` or `fork` [DOCS], so context can be re-injected after
+compaction.
+
+**They differ on `--continue`.** The MCP server is started with a fresh `CLAUDE_CODE_SESSION_ID`
+before the session to continue has been chosen, and the hooks then get the continued session's
+id [MEASURED, 2.1.319, macOS, `claude -p --continue` with a probe MCP server and a SessionStart
+hook: MCP `3d150e72-...`, hook `58ff154c-...` with `source: resume`]. Both have the same parent
+process, the Claude Code CLI. The same split was seen in interactive sessions restarted after a
+power loss on two hosts: the hub held each MCP's Execution under a session id no hook ever sent
+(2026-11-08). So the session id cannot tie an MCP server to its hooks; the client process can,
+and Claude hosts one top-level session per process, its subagents registering under a parent
+(D6). On every start measured, new, `--resume` and `--continue`, the MCP server started before
+the SessionStart hook ran, so a binding at the MCP's first call can come before the hook has
+registered the session.
 
 ## B. Minimal Iris integration
 
