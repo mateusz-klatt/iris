@@ -45,7 +45,7 @@ func (t *transaction) resolve(e execution, address string) (recipient, error) {
 	}
 	var a recipient
 	if err := t.row("SELECT id,name,repository_id FROM Agent WHERE (name=? OR id=?) AND client<>'human'", address, address).Scan(&a.id, &a.name, &a.repo); err != nil {
-		return recipient{}, fail("not_found", "no agent on this hub is called "+address)
+		return recipient{}, missing(err, "no agent on this hub is called "+address)
 	}
 	return a, nil
 }
@@ -98,7 +98,7 @@ func (t *transaction) reachable(agent string) (bool, error) {
 func (t *transaction) contact(r Request) (map[string]any, error) {
 	var repo string
 	if err := t.row("SELECT id FROM Repository WHERE id=?", r.RepositoryID).Scan(&repo); err != nil {
-		return nil, fail("not_found", "unknown repository")
+		return nil, missing(err, "unknown repository")
 	}
 	var agent any
 	if r.Agent != "" {

@@ -74,7 +74,7 @@ func (t *transaction) send(r Request) (map[string]any, error) {
 			args = append([]any{r.ReplyTo}, more...)
 		}
 		if err = t.row(`SELECT m.thread_id FROM Message m WHERE m.id=? AND `+eligible, args...).Scan(&thread); err != nil {
-			return nil, fail("not_found", "you can reply only to a message you sent or received")
+			return nil, missing(err, "you can reply only to a message you sent or received")
 		}
 	}
 	if _, err = t.exec("INSERT INTO Message(id,sender_execution_id,subject,body,created_ms,repository_id,thread_id,reply_to) VALUES(?,?,?,?,?,?,?,NULLIF(?,''))", message, e.ID, r.Subject, r.Body, t.s.clock.Now().UnixMilli(), e.Repo, thread, r.ReplyTo); err != nil {
@@ -194,7 +194,7 @@ func (t *transaction) ack(r Request, delivery string) (map[string]any, error) {
 	var attempt int64
 	var acked bool
 	if err = t.row("SELECT recipient_agent_id,execution_id,attempt,EXISTS(SELECT 1 FROM Ack WHERE delivery_id=Delivery.id) FROM Delivery WHERE id=?", delivery).Scan(&recipient, &assigned, &attempt, &acked); err != nil {
-		return nil, fail("not_found", "unknown delivery")
+		return nil, missing(err, "unknown delivery")
 	}
 	if acked && r.Handled {
 		// Handled is said once the work is done, often from a later Execution of the same
@@ -231,7 +231,10 @@ func (t *transaction) receipts(r Request, message string) (map[string]any, error
 		return nil, err
 	}
 	var sender string
-	if err = t.row("SELECT x.agent_id FROM Message m JOIN Execution x ON x.id=m.sender_execution_id WHERE m.id=?", message).Scan(&sender); err != nil || sender != e.AgentID {
+	if err = t.row("SELECT x.agent_id FROM Message m JOIN Execution x ON x.id=m.sender_execution_id WHERE m.id=?", message).Scan(&sender); err != nil {
+		return nil, missing(err, "unknown message")
+	}
+	if sender != e.AgentID {
 		return nil, fail("not_found", "unknown message")
 	}
 	rows, err := t.rows(`SELECT CASE WHEN a.client='human' THEN 'human' ELSE a.name END,a.repository_id,d.state,COALESCE(d.handled_ms,d.acked_ms) FROM DeliveryState d JOIN Agent a ON a.id=d.recipient_agent_id WHERE d.message_id=? ORDER BY a.name`, message)
