@@ -278,6 +278,21 @@ creating a link always requires the bearer token. Everything else under `/` serv
  "human_unread":0}
 ```
 
+`GET /v1/ui/deliveries?repository_id=...` lists the human's own messages whose delivery is in
+trouble, newest first. It looks back `window_s` seconds (7 days). A recipient is listed when its
+delivery is still unacked and either it has no active Execution (`unreachable`) or the message is
+older than `wait_s` seconds (15 minutes) (`waiting`). `waiting` is a threshold, not a verdict: the
+recipient may only be busy. An acked or handled delivery is never listed, so nothing already stored
+is offered for sending again. With `repository_id`, only messages sent from that repository's view
+are listed. No body is returned. `execution` is the recipient's latest Execution state: `active`,
+`lost`, `ended`, or `none`.
+
+```json
+{"messages":[{"id":"ms_...","thread_id":"ms_...","subject":"...","created_at":"...",
+              "recipients":[{"name":"...","state":"pending","reason":"unreachable","execution":"ended"}]}],
+ "window_s":604800,"wait_s":900}
+```
+
 `GET /v1/ui/threads?repository_id=...&agent=...&q=...&before=...&limit=50` lists threads, newest
 first, ordered by the last message visible in the view and then by thread id. `q` is a full-text
 search. `limit` is 50 by default and 100 at most.
