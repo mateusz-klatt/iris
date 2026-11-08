@@ -3,7 +3,10 @@
 // such a database: its first retention sweep deleted 17,153 events at once, needed temporary
 // storage, and the image, which has no temporary directory, crash-looped.
 //
-// Usage: go run ./.github/oldhub <database path>
+// It builds the schema from the store's own migrations 001 to 012, so a migration added later
+// runs against it as it would against that production database.
+//
+// Usage, from the repository root: go run ./.github/oldhub <database path>
 package main
 
 import (
@@ -11,25 +14,23 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
 
-	"github.com/mateusz-klatt/iris/internal/store"
 	_ "modernc.org/sqlite"
 )
+
+// version is the last migration before retention (013).
+const version = 12
 
 // events is a backlog larger than the one production had.
 const events = 20000
 
-// downgrade turns a new database into one of version 12 with a backlog: the old events first,
-// then the schema before retention (013) and per-host reports (014), so the hub runs both
-// migrations and then its first sweep.
-var downgrade = []string{
-	fmt.Sprintf(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<%d)
-INSERT INTO Event(kind,agent_id,execution_id,object_id,created_ms) SELECT 'changed',NULL,NULL,'old-'||i,0 FROM n`, events),
-	"ALTER TABLE Operation DROP COLUMN created_ms",
-	"DROP TABLE HostReport",
-	"CREATE TABLE DoctorReport(id INTEGER PRIMARY KEY CHECK(id=1),report TEXT NOT NULL)",
-	"PRAGMA user_version=12",
-}
+// migrations is where the store keeps its migrations, from the repository root.
+var migrations = filepath.Join("internal", "store", "migrations")
+
+// backlog is the old events, inserted once the schema is at version 12.
+var backlog = fmt.Sprintf(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i<%d)
+INSERT INTO Event(kind,agent_id,execution_id,object_id,created_ms) SELECT 'changed',NULL,NULL,'old-'||i,0 FROM n`, events)
 
 func main() { os.Exit(run(os.Args[1:], os.Stderr)) }
 
@@ -49,16 +50,20 @@ func write(path string) error {
 	if _, err := os.Stat(path); err == nil {
 		return fmt.Errorf("%s exists; oldhub writes only a new database", path)
 	}
-	s, err := store.Open(path, nil)
-	if err != nil {
-		return err
+	var steps []string
+	for n := 1; n <= version; n++ {
+		name := filepath.Join(migrations, fmt.Sprintf("%03d.sql", n))
+		q, err := os.ReadFile(name)
+		if err != nil {
+			return err
+		}
+		steps = append(steps, string(q))
 	}
-	_ = s.Close()                     // a store that opened closes; a failure would show in the next open
 	db, _ := sql.Open("sqlite", path) // the driver only records the name; Exec reports errors
 	defer func() { _ = db.Close() }()
-	for _, q := range downgrade {
+	for i, q := range append(steps, backlog) {
 		if _, err := db.Exec(q); err != nil {
-			return fmt.Errorf("downgrade: %w", err)
+			return fmt.Errorf("step %d: %w", i+1, err)
 		}
 	}
 	return nil
