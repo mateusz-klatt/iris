@@ -15,6 +15,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -371,8 +372,14 @@ func applyFailures(res *Result, tokenFile string, now time.Time) error {
 	if err != nil {
 		return err
 	}
+	seen, err := hook.ReadRecentObservations(tokenFile, failureRead)
+	if err != nil {
+		return err
+	}
+	entries = append(entries, seen...)
 	broken := map[string][]string{}
 	degraded := map[string]int{}
+	observed := map[string]map[string]int{}
 	for _, entry := range entries {
 		name := integrate.Canonical(entry.Client)
 		if name == "" || now.Sub(entry.Time) > failureWindow {
@@ -380,6 +387,14 @@ func applyFailures(res *Result, tokenFile string, now time.Time) error {
 		}
 		if entry.Degraded() {
 			degraded[name]++
+			continue
+		}
+		if entry.Observed() {
+			// Not a failure: the hook worked, but saw something doctor should say (C4).
+			if observed[name] == nil {
+				observed[name] = map[string]int{}
+			}
+			observed[name][entry.Error]++
 			continue
 		}
 		broken[name] = append(broken[name], entry.Event+" "+entry.Stage+": "+entry.Error)
@@ -396,6 +411,9 @@ func applyFailures(res *Result, tokenFile string, now time.Time) error {
 			row.Detail = fmt.Sprintf("%d shell reconciliations ran past their budget (%s, or %s for a hub on this machine) in 24 h, so those commands' changes went unclaimed; git status or the hub is slow here, as on a big or cold worktree, a loaded machine or a slow network", n, hook.RemoteReconcileDeadline, hook.ReconcileDeadline)
 		case n > 0:
 			row.Detail = joinDetail(row.Detail, fmt.Sprintf("degraded: %d shell reconciliation(s) ran past their budget in 24 h", n))
+		}
+		if seen := observed[row.Client]; len(seen) > 0 {
+			row.Detail = joinDetail(row.Detail, "observed in 24 h: "+observedText(seen))
 		}
 	}
 	return nil
@@ -690,4 +708,17 @@ func caseLine(ctx context.Context, base, token, host, dir string, hc *http.Clien
 		return ""
 	}
 	return "this repository is case-sensitive at the hub, but this checkout folds case (core.ignorecase), so a claim on a.go does not stop an edit of A.GO here"
+}
+
+// observedText lists observations with their counts, in a stable order.
+func observedText(seen map[string]int) string {
+	texts := make([]string, 0, len(seen))
+	for text := range seen {
+		texts = append(texts, text)
+	}
+	sort.Strings(texts)
+	for i, text := range texts {
+		texts[i] = fmt.Sprintf("%s (%d)", text, seen[text])
+	}
+	return strings.Join(texts, "; ")
 }
