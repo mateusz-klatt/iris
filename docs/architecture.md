@@ -402,15 +402,33 @@ silently weakened to an allow.
 ### D11. Repository identity and paths
 
 The hub assigns a repository id. Aliases point to it: normalised remote URL, root commit, and
-host plus path. A remote joins an existing repository automatically only when it means the same
-thing everywhere: a fully qualified host with no contradiction in the root commit, whatever the
-spelling. `git@host:owner/repo.git`, `ssh://` and `https://` are one remote. That covers the normal case across machines. Spellings that depend on one machine,
+host plus path. A known root qualifies an alias (ADR 012): a unique repository with
+that remote and root can join automatically even when the remote also names older
+histories. Distinct repositories with the same remote and root remain ambiguous;
+registration never chooses one by row order. Local and shared-git-directory aliases
+are considered together, preferring a unique exact root. A request with no root
+cannot distinguish histories and requires unambiguous continuity. An unknown-root
+candidate can learn a known root only when no known root contradicts it.
+`git@host:owner/repo.git`, `ssh://` and `https://` are one remote. That covers the normal case across machines. Spellings that depend on one machine,
 such as SSH aliases, `insteadOf` rewrites and relative remotes, stay scoped to that host and
-path. A match on root commit alone, which is what forks look like, and any contradiction are
-only suggestions for a human. Without a remote the identity is local to the path.
+path. A match on root commit alone, which is what forks look like, and unresolved
+contradictions are only suggestions for a human. Without a remote the identity is
+local to the path. Repeated registration learns aliases but preserves its active
+Execution, mailbox and claims. A changed known root requires operator repair.
+
+`iris admin merge --from <id> --into <id> [--dry-run]` explicitly repairs an existing
+split, using the owner token and one transaction. It preserves mail, history,
+Execution identities and all alias spellings. Mailboxes stay distinct and retain
+their names; colliding mailbox slots receive deterministic free slots. Live
+overlapping claims between unrelated Executions, incompatible repository policies
+and distinct nonempty contacts refuse the merge. The destination's identity wins;
+a source-only contact transfers. Dry run reports the move without expiring leases
+or changing any record. It is a snapshot, so applying checks again.
 
 Hooks work out the worktree root and remote by reading `.git` files directly, because spawning
-`git` on each hook is too slow, particularly on Windows. Paths are stored repository-relative
+`git` on each hook is too slow, particularly on Windows. Root discovery follows at
+most 128 loose first-parent commits; packed, long or unreadable histories report
+an unknown root. It cannot distinguish a history rewrite in that case. Paths are stored repository-relative
 with forward slashes, with a per-repository case policy, and `..` escapes are rejected.
 Antigravity runs hooks in `.agents/`, so its adapter takes the root from `workspacePaths`.
 
@@ -445,7 +463,8 @@ relies on leases, delimited bodies and text-free wake frames.
 - **Credentials.** The token is in a user-only file: mode 0600, and an owner-only DACL on Windows.
   Never in hook environments.
 - **Owner token.** The hub's own token file is the owner credential. Only it may create, list or
-  revoke host tokens, or remove records with `iris admin forget`; a host token gets `forbidden`.
+  revoke host tokens, merge repositories, or remove records with `iris admin forget`;
+  a host token gets `forbidden`.
   Otherwise a host could mint itself more tokens or lock other hosts out.
 - **Network.** Bind to loopback by default, and see D1 for remote hubs. Check `Host` and `Origin`
   on every route, against DNS rebinding and cross-site requests from browsers. No CORS. The web

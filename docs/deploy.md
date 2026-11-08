@@ -78,6 +78,91 @@ non-zero. To restore for real, stop the hub, put the backup in place of `iris.db
 `-wal` and `-shm` files), and start it: every session then reattaches with proof, or registers
 afresh.
 
+### Repairing a repository identity split (ADR 012)
+
+History rewrites can leave one origin attached to historical roots and several
+repository ids for the current root. Upgrading registration prevents further
+unambiguous splits; it does not combine existing repositories. Only an operator
+holding the hub's owner token can merge them. `iris admin forget` deletes mail and
+history and must never be used as a substitute.
+
+1. Identify the source and destination ids from the console's overview or the
+   authenticated `GET /v1/ui/overview` response. Compare origin aliases, roots,
+   hosts, agents and mail. The destination keeps its id, root, name and policies.
+   Choose it deliberately; a common root alone also describes forks. The merge
+   accepts explicitly selected differing roots, because that decision belongs to
+   the operator. Merge one source at a time.
+
+2. Take a new database backup using `iris admin backup` as above, and separately
+   secure the owner token. Run `iris admin restore-check` on the backup with a new
+   empty scratch directory. Require a passing check before proceeding. Keep this
+   backup unchanged for rollback; rehearse using another copy.
+
+3. In a private scratch directory, copy the backup to `rehearsal.db` and start the
+   new binary on an unused loopback port, with a new scratch token:
+
+   ```sh
+   umask 077
+   cp /path/to/backup.db /path/to/private-scratch/rehearsal.db
+   IRIS_HUB_URL=http://127.0.0.1:17878 IRIS_TOKEN_FILE=/path/to/private-scratch/hub.token \
+     iris serve --listen 127.0.0.1:17878 --db /path/to/private-scratch/rehearsal.db \
+       --token-file /path/to/private-scratch/hub.token
+   ```
+
+   Keep this process in its own terminal. In another terminal, explicitly select
+   that scratch hub and token, then plan and rehearse the merge:
+
+   ```sh
+   export IRIS_HUB_URL=http://127.0.0.1:17878
+   export IRIS_TOKEN_FILE=/path/to/private-scratch/hub.token
+   iris admin merge --from <source-id> --into <destination-id> --dry-run
+   iris admin merge --from <source-id> --into <destination-id>
+   ```
+
+   Inspect the reported moved row counts, source and destination identities, alias
+   spellings and coalescing, contact and mailbox slot changes. Verify mail and bindings in
+   the copy after applying. The hub's ordinary restart recovery and retention
+   apply to this copy; its running clients cannot reattach to a scratch token.
+
+4. Resolve any refusal before the real run. Overlapping live claims between
+   unrelated Executions refuse the entire operation, including case-folded and
+   prefix overlaps. Ask the holders to finish or release, or deliberately revoke
+   the claims through the console. Ended, expired or revoked claims remain history
+   and move unchanged. Different case or conflict policies also refuse. Distinct
+   nonempty repository contacts refuse: explicitly clear or choose a contact
+   using `iris admin contact` first. A source-only contact transfers; an existing
+   destination contact remains. These choices are never made by the merge.
+
+5. On the operator's machine, explicitly set `IRIS_HUB_URL` and `IRIS_TOKEN_FILE`
+   to the intended hub and its owner token. Review a fresh dry run there, then run
+   the same command without `--dry-run`. Each call uses one transaction; a refusal
+   or storage failure rolls back every change. A dry run reserves nothing and
+   does not expire leases. New claims or contact changes between calls can cause
+   the real run to refuse safely.
+
+6. Check that every host's peers and claims share the destination repository,
+   bindings retain their Execution ids and generations, and historical mail is
+   still accessible. The source id ceases to exist; update any saved repository
+   ids. Existing Execution handles continue to work. Agent names and mailbox ids
+   never change, even if two mailboxes have the same host/client/worktree slot:
+   the source receives the first free slot and its mail stays separate. No mail
+   is combined or acknowledged by the merge. Retried old operations still return
+   their saved results, which can contain the retired repository id.
+
+Rollback requires stopping the hub and restoring the complete pre-merge backup
+using the restore procedure above. It also rolls back any later mail and other
+writes, so stop clients and preserve a fresh backup before choosing that recovery.
+There is no automatic inverse merge.
+
+Root discovery remains bounded to 128 loose first-parent commits. Packed or longer
+histories report an unknown root; an unknown host cannot select among contradictory
+remote histories. The operator merge can restore host-local continuity but cannot
+infer the right history for a new host that supplies no root. Active registration
+with a changed known root is refused rather than moving its claims implicitly;
+repair the identities or end the session and register afresh after reviewing it.
+Hooks still fail open on coordination failure, and neither hooks nor the guard
+can enforce claims on edits they do not mediate.
+
 Use `deploy/apache-iris.conf` as the complete HTTP and HTTPS vhosts, after enabling
 ssl, headers, rewrite, proxy and proxy_http on Apache 2.4.47 or later. Provision the
 certificate at /etc/letsencrypt/live/iris.klatt.ie/ first, with the ACME webroot at
