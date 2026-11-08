@@ -214,7 +214,11 @@ func (t *transaction) ack(r Request, delivery string) (map[string]any, error) {
 	}
 	now := t.s.clock.Now().UnixMilli()
 	handled := sql.NullInt64{Int64: now, Valid: r.Handled}
-	_, err = t.exec("INSERT INTO Ack(delivery_id,execution_id,attempt,acked_ms,handled_ms) VALUES(?,?,?,?,?)", delivery, e.ID, r.Attempt, now, handled)
+	if _, err = t.exec("INSERT INTO Ack(delivery_id,execution_id,attempt,acked_ms,handled_ms) VALUES(?,?,?,?,?)", delivery, e.ID, r.Attempt, now, handled); err != nil {
+		return nil, err
+	}
+	// An ack settles the delivery, so its fetch receipt is no longer awaited (ADR 010).
+	_, err = t.exec("UPDATE Delivery SET receipt_due_ms=NULL WHERE id=?", delivery)
 	return map[string]any{}, err
 }
 
