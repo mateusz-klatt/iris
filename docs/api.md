@@ -72,7 +72,11 @@ It returns `{"execution_id":"...","generation":1,"agent":{...}}`, or `unbound`, 
 `POST /v1/executions/{id}/heartbeat` takes `{"generation":1,"source":"shim"}`, where `source` is
 `shim`, `watch` or `hook`. It returns `{"lease_ms":60000}`, or `lost`.
 
-`POST /v1/executions/{id}/end` is a best-effort end of session. It takes `{"generation":1}`.
+`POST /v1/executions/{id}/end` is a best-effort end of session. It takes `{"generation":1}`. With
+`"hand_over":"ex_..."` it first moves the Execution's agent's unacknowledged deliveries to the agent
+of that live Execution, of the same host and client, and wakes it; otherwise it is refused as
+`bad_request`. An MCP server uses it when it gives up an Execution it had to register for the
+session's hook's (D6), so mail sent to the stray mailbox is not stranded. Ending again moves nothing.
 
 ## Claims
 

@@ -39,7 +39,10 @@ type Request struct {
 	Execution        string            `json:"execution"`
 	// Exclude names an Execution a bind must skip: an MCP that had to register its own asks
 	// past it for the session's hook's.
-	Exclude      string   `json:"exclude"`
+	Exclude string `json:"exclude"`
+	// HandOver names the Execution that ending this one hands its unacknowledged mail to: the
+	// session's hook's, when an MCP ends the Execution it had to register itself.
+	HandOver     string   `json:"hand_over"`
 	ExecutionID  string   `json:"execution_id"`
 	Generation   int64    `json:"generation"`
 	Key          string   `json:"key"`
@@ -487,13 +490,54 @@ func (t *transaction) end(r Request) (map[string]any, error) {
 	if state == "ended" {
 		return map[string]any{}, nil
 	}
-	if _, err := t.live(r.ExecutionID, r.Generation); err != nil {
+	e, err := t.live(r.ExecutionID, r.Generation)
+	if err != nil {
 		return nil, err
+	}
+	if r.HandOver != "" {
+		if err = t.handOver(e, r.HandOver); err != nil {
+			return nil, err
+		}
 	}
 	if _, err := t.exec("UPDATE Execution SET state='ended' WHERE id=?", r.ExecutionID); err != nil {
 		return nil, err
 	}
 	return map[string]any{}, t.expire()
+}
+
+// handOver moves from's agent's unacknowledged mail to the agent of the live Execution to,
+// of the same host and client, and wakes it. An MCP that had to register an Execution of its
+// own does this when it moves to the session's hook's, so mail sent to the stray mailbox in
+// the meantime is not stranded (D6).
+func (t *transaction) handOver(from execution, to string) error {
+	dst, err := t.live(to, 0)
+	if err != nil || dst.Host != from.Host || dst.Client != from.Client {
+		return fail("bad_request", "mail can be handed only to a live Execution of the same host and client")
+	}
+	rows, err := t.rows("SELECT id FROM Delivery WHERE recipient_agent_id=? AND id NOT IN (SELECT delivery_id FROM Ack)", from.AgentID)
+	if err != nil {
+		return err
+	}
+	var ids []string
+	for rows.Next() {
+		var id string
+		rows.Scan(&id)
+		ids = append(ids, id)
+	}
+	err = rows.Err()
+	_ = rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, id := range ids {
+		if _, err = t.exec("UPDATE Delivery SET recipient_agent_id=?,execution_id=NULL WHERE id=?", dst.AgentID, id); err != nil {
+			return err
+		}
+		if err = t.event(dst.AgentID, "", "inbox_changed", id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 func (t *transaction) agents(repo string) ([]map[string]any, error) {
 	rows, err := t.rows(`SELECT a.id,a.name,a.client,a.worktree,COALESCE(e.branch,''),COALESCE(e.state,'offline') FROM Agent a LEFT JOIN Execution e ON e.id=(SELECT id FROM Execution WHERE agent_id=a.id ORDER BY rowid DESC LIMIT 1) WHERE a.repository_id=? ORDER BY a.name`, repo)

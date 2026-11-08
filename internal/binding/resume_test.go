@@ -106,8 +106,16 @@ func TestOneSessionIsOneExecutionWhateverComesFirst(t *testing.T) {
 		if err != nil || !r.own || h.active(t) != 1 {
 			t.Fatalf("with no hook: %+v %v own %v", mine, err, r.own)
 		}
-		// A hook slower than the grace period: the heartbeat moves to its Execution and ends
-		// this process's own, so the session is not left split.
+		// Mail reaches the stray mailbox before the hook registers.
+		sender, err := h.s.Call(ctx, "sessions", store.Request{Client: "codex", Host: "host", SessionID: "peer", Cwd: "/repo", Source: "hook"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = h.s.Call(ctx, "messages", store.Request{ExecutionID: sender["execution_id"].(string), Generation: sender["generation"].(int64), Key: "k", To: []string{mine.Agent.Name}, Subject: "while stray", Body: "b"}); err != nil {
+			t.Fatal(err)
+		}
+		// A hook slower than the grace period: the heartbeat moves to its Execution, ends this
+		// process's own, and hands it the stray mail, so the session is not left split.
 		hook := h.registerHook(t)
 		runCtx, stop := context.WithCancel(ctx)
 		defer stop()
@@ -120,8 +128,12 @@ func TestOneSessionIsOneExecutionWhateverComesFirst(t *testing.T) {
 				t.Fatal("never moved to the hook's Execution")
 			}
 		}
-		if r.own || h.active(t) != 1 {
-			t.Fatalf("own %v; %d active, want only the hook's", r.own, h.active(t))
+		if r.own || h.active(t) != 2 { // the hook's and the sender's
+			t.Fatalf("own %v; %d active, want the hook's and the sender's", r.own, h.active(t))
+		}
+		inbox, err := h.s.Call(ctx, "inbox", store.Request{ExecutionID: hook})
+		if got := inbox["deliveries"].([]map[string]any); err != nil || len(got) != 1 || got[0]["subject"] != "while stray" {
+			t.Fatalf("the hook's inbox after the move: %v %v", inbox, err)
 		}
 	})
 }
