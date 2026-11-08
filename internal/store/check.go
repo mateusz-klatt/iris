@@ -53,5 +53,7 @@ func (t *transaction) checkPaths(repo, host, worktree string, paths []string) (m
 		c := conflicts[0]
 		message = fmt.Sprintf("Iris: %s until %v (%s claim). Message them with the send tool, or work on something else. Ask the human if you need help resolving this conflict.", heldBy(c), c["expires_at"], c["origin"])
 	}
-	return map[string]any{"message": message, "conflicts": conflicts}, nil
+	// case_policy lets iris doctor warn when this repository is case-sensitive while a host
+	// that folds case works in it (ADR 003).
+	return map[string]any{"message": message, "conflicts": conflicts, "case_policy": policy}, nil
 }

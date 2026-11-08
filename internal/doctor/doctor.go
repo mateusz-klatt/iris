@@ -67,6 +67,9 @@ type Result struct {
 	StoreError       string
 	// Guard is the pre-commit guard line for the repository doctor ran in.
 	Guard string
+	// Case warns when the repository doctor ran in is case-sensitive at the hub while this
+	// checkout folds case. Empty means there is nothing to warn about, or nothing known.
+	Case string
 }
 
 // Options configures one offline doctor run. RunLive is separate because it calls a model.
@@ -152,6 +155,7 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 	}
 	res.Guard = guardLine(ctx, opt.Dir)
 	if probe.up && probe.tokenOK {
+		res.Case = caseLine(ctx, hubURL, token, opt.host(), opt.Dir, opt.HTTP)
 		seen := lastHooks(ctx, hubURL, token, opt.host(), opt.HTTP)
 		for i := range res.Report.Clients {
 			res.Report.Clients[i].LastHookAt = seen[res.Report.Clients[i].Client]
@@ -234,6 +238,9 @@ func (r Result) Format() string {
 			fmt.Fprintf(&b, "\tlast hook %s", c.LastHookAt)
 		}
 		b.WriteByte('\n')
+	}
+	if r.Case != "" {
+		fmt.Fprintf(&b, "case policy: %s\n", r.Case)
 	}
 	if r.Guard != "" {
 		fmt.Fprintf(&b, "pre-commit guard: %s\n", r.Guard)
@@ -654,4 +661,33 @@ func lastHooks(ctx context.Context, base, token, host string, hc *http.Client) m
 		return nil
 	}
 	return out.Clients
+}
+
+// caseLine is ADR 003's warning. Claims fold case in every repository unless it opts out as
+// sensitive. A checkout where git sets core.ignorecase, as on a default macOS or Windows
+// volume, cannot hold two paths that differ only by case, so in a sensitive repository a claim
+// on a.go would not stop an edit of A.GO from here. Asking the hub uses the guard's check,
+// which, like a commit, may register a repository the hub has not seen.
+func caseLine(ctx context.Context, base, token, host, dir string, hc *http.Client) string {
+	if dir == "" {
+		dir = "."
+	}
+	repo, err := gitinfo.Find(dir)
+	if err != nil {
+		return ""
+	}
+	if folds, _ := repo.ConfigValue("core", "ignorecase"); !strings.EqualFold(folds, "true") {
+		return ""
+	}
+	body, _ := json.Marshal(hubclient.CheckRequest{CommonDir: repo.CommonDir, Host: host, Worktree: repo.Worktree, RemoteURL: repo.RemoteURL, RootCommit: repo.RootCommit, Paths: []string{}})
+	res, err := hubRequest(ctx, http.MethodPost, strings.TrimRight(base, "/")+"/v1/guard/check", token, bytes.NewReader(body), hc)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = res.Body.Close() }()
+	var out hubclient.CheckResponse
+	if res.StatusCode != http.StatusOK || json.NewDecoder(res.Body).Decode(&out) != nil || out.CasePolicy != "sensitive" {
+		return ""
+	}
+	return "this repository is case-sensitive at the hub, but this checkout folds case (core.ignorecase), so a claim on a.go does not stop an edit of A.GO here"
 }
