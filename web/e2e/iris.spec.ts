@@ -16,7 +16,7 @@ async function serve(page: Page, overview: object, clients: object[], messages: 
   );
   await page.route("**/v1/ui/threads**", (route) => route.fulfill({ json: { threads: [] } }));
   await page.route("**/v1/ui/deliveries**", (route) =>
-    route.fulfill({ json: { messages, window_s: 604800, wait_s: 900 } }),
+    route.fulfill({ json: { messages, more: false, window_s: 604800, wait_s: 900 } }),
   );
 }
 
@@ -177,6 +177,7 @@ test("a busy hub fits the screen", async ({ page }) => {
   await page.route("**/v1/ui/deliveries**", (route) => route.fulfill({ json: {
     window_s: 604800,
     wait_s: 900,
+    more: false,
     messages: [{
       id: "ms_delivery",
       thread_id: "ms_delivery",

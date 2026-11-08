@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"testing"
 	"time"
 )
@@ -40,7 +41,7 @@ func TestDeliveryProblemsNameOnlyTheHumansMailInTrouble(t *testing.T) {
 
 	list := func(repository string) []map[string]any {
 		got := call(t, s, "ui_deliveries", Request{RepositoryID: repository})
-		if got["window_s"] != int64(deliveryWindow/time.Second) || got["wait_s"] != int64(deliveryWait/time.Second) {
+		if got["window_s"] != int64(deliveryWindow/time.Second) || got["wait_s"] != int64(deliveryWait/time.Second) || got["more"] != false {
 			t.Fatalf("thresholds %v", got)
 		}
 		return got["messages"].([]map[string]any)
@@ -70,11 +71,66 @@ func TestDeliveryProblemsNameOnlyTheHumansMailInTrouble(t *testing.T) {
 	if r := recipients(got[0]); len(got) != 1 || len(r) != 2 || r[busyName] != "waiting/pending/active" || r[readerName] != "" {
 		t.Fatalf("after the wait %v", r)
 	}
+	// Fetching now does not restart the wait: it is measured from message creation.
+	call(t, s, "inbox", busy)
+	if r := recipients(list(repo)[0]); r[busyName] != "waiting/inflight/active" {
+		t.Fatalf("after a recent fetch %v", r)
+	}
 	// The whole-hub view adds the other repository's mail; its own view shows only that.
 	if all := list(""); len(all) != 2 {
 		t.Fatalf("whole hub %v", all)
 	}
 	if mine := list(other["repository_id"].(string)); len(mine) != 1 || mine[0]["subject"] != "elsewhere" {
 		t.Fatalf("other repository %v", mine)
+	}
+}
+
+func TestDeliveryProblemsCapCountsFilteredMessagesAndKeepsRecipients(t *testing.T) {
+	for _, count := range []int{deliveryMessageLimit, deliveryMessageLimit + 1} {
+		t.Run(fmt.Sprint(count), func(t *testing.T) {
+			s, clock, _ := testStore(t)
+			gone, out := session(t, s, 1)
+			repo := out["repository_id"].(string)
+			goneName := out["agent"].(map[string]any)["name"].(string)
+			alsoGone, out := session(t, s, 3)
+			alsoGoneName := out["agent"].(map[string]any)["name"].(string)
+			_, out = session(t, s, 2)
+			busyName := out["agent"].(map[string]any)["name"].(string)
+			call(t, s, "end", gone)
+			call(t, s, "end", alsoGone)
+			send := func(key string, to ...string) string {
+				clock.advance(time.Millisecond)
+				return call(t, s, "ui_messages", Request{Key: key, RepositoryID: repo, To: to, Subject: key, Body: "b"})["message_id"].(string)
+			}
+			// Fresh mail to a reachable recipient never consumes a slot, including
+			// rows after the cap-th eligible message when more must remain false.
+			send("oldest-busy", busyName)
+			ids := make([]string, count)
+			for i := range ids {
+				ids[i] = send(fmt.Sprintf("trouble-%d", i), goneName, alsoGoneName, busyName)
+				send(fmt.Sprintf("busy-%d", i), busyName)
+			}
+			got := call(t, s, "ui_deliveries", Request{RepositoryID: repo})
+			messages := got["messages"].([]map[string]any)
+			if len(messages) != deliveryMessageLimit || got["more"] != (count > deliveryMessageLimit) {
+				t.Fatalf("count %d: listed %d, more %v", count, len(messages), got["more"])
+			}
+			for i, message := range messages {
+				if message["id"] != ids[count-1-i] {
+					t.Fatalf("message %d: got %v, wanted newest id %s", i, message["id"], ids[count-1-i])
+				}
+				recipients := message["recipients"].([]map[string]any)
+				if len(recipients) != 2 {
+					t.Fatalf("message %d recipients: %v", i, recipients)
+				}
+				byName := map[string]bool{}
+				for _, recipient := range recipients {
+					byName[recipient["name"].(string)] = recipient["reason"] == "unreachable" && recipient["execution"] == "ended"
+				}
+				if !byName[goneName] || !byName[alsoGoneName] {
+					t.Fatalf("message %d did not keep both recipients in trouble: %v", i, recipients)
+				}
+			}
+		})
 	}
 }

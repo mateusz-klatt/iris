@@ -199,7 +199,7 @@ describe("operator watch", () => {
 describe("delivery problems", () => {
   it("asks for one repository's view, or the whole hub's", async () => {
     const seen: string[] = [];
-    const body = { messages: [], window_s: 604800, wait_s: 900 };
+    const body = { messages: [], more: false, window_s: 604800, wait_s: 900 };
     server.use(
       http.get("*/v1/ui/deliveries", ({ request }) => {
         seen.push(new URL(request.url).search);

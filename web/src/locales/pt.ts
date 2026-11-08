@@ -389,6 +389,7 @@ const translation = {
     sent: "Enviado.",
     sendUncertain: "O Iris não conseguiu saber se esta mensagem foi enviada. Enviá-la de novo até um dia após a primeira tentativa é seguro: o hub guarda uma cópia por rascunho.",
     deliveryTitle: "Problemas de entrega",
+    deliveryTruncated: "Só são mostradas as {{shown}} mensagens mais recentes; existem mais.",
     deliveryHint: "As suas mensagens enviadas há, no máximo, {{days}} d que um destinatário não aceitou: o destinatário não tem uma sessão ativa, ou decorreu um período de {{minutes}} min. O Iris mantém cada uma em fila para o seu destinatário e não a envia de novo.",
     deliveryUnreachable: "{{name}}: sem sessão ativa ({{session}})",
     deliveryWaiting: "{{name}}: não aceite após {{minutes}} min",

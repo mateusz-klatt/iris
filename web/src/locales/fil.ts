@@ -389,6 +389,7 @@ const translation = {
     sent: "Naipadala.",
     sendUncertain: "Hindi matiyak ng Iris kung naipadala ang mensaheng ito. Ligtas itong ipadala muli sa loob ng isang araw mula sa unang pagsubok: isang kopya bawat draft ang itinatabi ng hub.",
     deliveryTitle: "Mga problema sa paghahatid",
+    deliveryTruncated: "Ang pinakabagong {{shown}} mensahe lang ang ipinapakita; may iba pa.",
     deliveryHint: "Ang iyong mga mensahe sa nakaraang {{days}} araw na hindi pa tinatanggap ng isang tatanggap: walang aktibong session ang tatanggap, o lumipas na ang {{minutes}} minuto. Pinananatili ng Iris ang bawat isa sa pila para sa tatanggap nito at hindi na ito muling ipinapadala.",
     deliveryUnreachable: "{{name}}: walang aktibong session ({{session}})",
     deliveryWaiting: "{{name}}: hindi pa tinatanggap pagkalipas ng {{minutes}} minuto",

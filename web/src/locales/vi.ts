@@ -380,6 +380,7 @@ const translation = {
     sent: "Đã gửi.",
     sendUncertain: "Iris không thể xác định tin nhắn này đã được gửi hay chưa. Gửi lại trong vòng một ngày kể từ lần thử đầu tiên là an toàn: hub giữ một bản cho mỗi bản nháp.",
     deliveryTitle: "Sự cố chuyển phát",
+    deliveryTruncated: "Chỉ hiển thị {{shown}} tin nhắn mới nhất; vẫn còn tin nhắn khác.",
     deliveryHint: "Các tin nhắn của bạn trong {{days}} ngày qua mà người nhận chưa chấp nhận: người nhận không có phiên đang hoạt động, hoặc đã qua {{minutes}} phút. Iris giữ từng tin trong hàng đợi cho người nhận và không gửi lại.",
     deliveryUnreachable: "{{name}}: không có phiên đang hoạt động ({{session}})",
     deliveryWaiting: "{{name}}: chưa được chấp nhận sau {{minutes}} phút",

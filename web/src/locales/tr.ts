@@ -380,6 +380,7 @@ const translation = {
     sent: "Gönderildi.",
     sendUncertain: "Iris bu iletinin gönderilip gönderilmediğini anlayamadı. İlk denemeden sonraki bir gün içinde yeniden göndermek güvenlidir: merkez her taslak için bir kopya tutar.",
     deliveryTitle: "Teslim sorunları",
+    deliveryTruncated: "Yalnızca en yeni {{shown}} ileti gösteriliyor; daha fazlası var.",
     deliveryHint: "Son {{days}} gün içinde gönderdiğiniz ve bir alıcının kabul etmediği iletileriniz: alıcının etkin oturumu yok veya {{minutes}} dakika geçti. Iris her birini alıcısı için kuyrukta tutar ve yeniden göndermez.",
     deliveryUnreachable: "{{name}}: etkin oturum yok ({{session}})",
     deliveryWaiting: "{{name}}: {{minutes}} dakika geçmesine rağmen kabul edilmedi",

@@ -389,6 +389,7 @@ const translation = {
     sent: "Sendt.",
     sendUncertain: "Iris kunne ikke se, om denne besked blev sendt. Det er sikkert at sende den igen inden for et døgn efter første forsøg: hubben gemmer én kopi pr. kladde.",
     deliveryTitle: "Leveringsproblemer",
+    deliveryTruncated: "Kun de nyeste {{shown}} beskeder vises; der er flere.",
     deliveryHint: "Dine beskeder, som er højst {{days}} døgn gamle, og som en modtager ikke har accepteret: modtageren har ingen aktiv session, eller der er gået {{minutes}} min. Iris holder hver besked i kø til modtageren og sender den ikke igen.",
     deliveryUnreachable: "{{name}}: ingen aktiv session ({{session}})",
     deliveryWaiting: "{{name}}: ikke accepteret efter {{minutes}} min.",

@@ -90,6 +90,7 @@ export function DeliveryProblems({ repositoryId, revision, onOpenThread, onUnaut
         ))}
       </ul>
       </details>
+      {problems.more && <p>{t("operator.deliveryTruncated", { shown: problems.messages.length })}</p>}
     </section>
   );
 }

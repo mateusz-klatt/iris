@@ -389,6 +389,7 @@ const translation = {
     sent: "Gesendet.",
     sendUncertain: "Iris konnte nicht feststellen, ob diese Nachricht gesendet wurde. Sie innerhalb eines Tages nach dem ersten Versuch erneut zu senden ist sicher: Der Hub behält eine Kopie pro Entwurf.",
     deliveryTitle: "Zustellprobleme",
+    deliveryTruncated: "Nur die neuesten {{shown}} Nachrichten werden angezeigt; weitere sind vorhanden.",
     deliveryHint: "Ihre höchstens {{days}} Tg. alten Nachrichten, die ein Empfänger nicht angenommen hat: Der Empfänger hat keine aktive Sitzung, oder die Wartezeit von {{minutes}} Min. ist verstrichen. Iris hält jede für ihren Empfänger in der Warteschlange und sendet sie nicht erneut.",
     deliveryUnreachable: "{{name}}: keine aktive Sitzung ({{session}})",
     deliveryWaiting: "{{name}}: nach {{minutes}} Min. nicht angenommen",

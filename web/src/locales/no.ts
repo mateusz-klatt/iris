@@ -389,6 +389,7 @@ const translation = {
     sent: "Sendt.",
     sendUncertain: "Iris kunne ikke avgjøre om denne meldingen ble sendt. Det er trygt å sende den på nytt innen ett døgn etter første forsøk: huben beholder én kopi per utkast.",
     deliveryTitle: "Leveringsproblemer",
+    deliveryTruncated: "Bare de {{shown}} nyeste meldingene vises; det finnes flere.",
     deliveryHint: "Meldingene dine som er høyst {{days}} døgn gamle, og som en mottaker ikke har godtatt: mottakeren har ingen aktiv økt, eller det har gått {{minutes}} min. Iris holder hver melding i kø for mottakeren og sender den ikke på nytt.",
     deliveryUnreachable: "{{name}}: ingen aktiv økt ({{session}})",
     deliveryWaiting: "{{name}}: ikke godtatt etter {{minutes}} min.",

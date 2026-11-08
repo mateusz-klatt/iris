@@ -389,6 +389,7 @@ const translation = {
     sent: "Nosūtīts.",
     sendUncertain: "Iris nevarēja noteikt, vai šis ziņojums tika nosūtīts. To ir droši nosūtīt vēlreiz dienas laikā kopš pirmā mēģinājuma: centrmezgls glabā vienu kopiju katram melnrakstam.",
     deliveryTitle: "Piegādes problēmas",
+    deliveryTruncated: "Parādīti tikai jaunākie ziņojumi (skaits: {{shown}}); ir vēl citi.",
     deliveryHint: "Jūsu ziņojumi no pēdējā laikposma (dienu skaits: {{days}}), kurus saņēmējs nav pieņēmis: saņēmējam nav aktīvas sesijas vai gaidīšanas ilgums ir vismaz {{minutes}} min. Iris katru tur rindā tā saņēmējam un nesūta to vēlreiz.",
     deliveryUnreachable: "{{name}}: nav aktīvas sesijas ({{session}})",
     deliveryWaiting: "{{name}}: nav pieņemts pēc {{minutes}} min.",

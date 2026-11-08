@@ -10,6 +10,7 @@ import { server } from "./test/server";
 const problems: DeliveryProblems = {
   window_s: 7 * 86400,
   wait_s: 15 * 60,
+  more: false,
   messages: [
     {
       id: "ms_1",
@@ -39,6 +40,7 @@ describe("delivery problems", () => {
     render(<App connect={() => () => {}} />);
     const panel = await screen.findByRole("region", { name: "Delivery problems" });
     expect(within(panel).getByRole("heading", { name: "Delivery problems" })).toBeVisible();
+    expect(within(panel).queryByText(/Only the newest/)).toBeNull();
     await user.click(within(panel).getByRole("heading", { name: "Delivery problems" }));
     expect(panel).toHaveTextContent("the last 7 days");
     expect(panel).toHaveTextContent("15 minutes have passed");
@@ -57,6 +59,25 @@ describe("delivery problems", () => {
     expect(row).toHaveFocus();
     expect(seen[0]).toBe("");
   }, 20000);
+
+  it("shows when older messages are omitted, even while the list is collapsed", async () => {
+    const user = userEvent.setup({ delay: null });
+    const messages = Array.from({ length: 200 }, (_, index) => ({
+      ...problems.messages[0]!,
+      id: `ms_${index}`,
+    }));
+    server.use(
+      http.get("*/v1/ui/deliveries", () => HttpResponse.json({ ...problems, messages, more: true })),
+    );
+    render(<App connect={() => () => {}} />);
+    const panel = await screen.findByRole("region", { name: "Delivery problems" });
+    expect(within(panel).getByText("Only the newest 200 messages are shown; more exist.")).toBeVisible();
+    expect(panel.querySelector("details")).not.toHaveAttribute("open");
+    expect(within(panel).getAllByRole("button", { name: /Review the guard/ })[0]).not.toBeVisible();
+    await user.click(within(panel).getByRole("heading", { name: "Delivery problems" }));
+    expect(within(panel).getAllByRole("button", { name: /Review the guard/ })).toHaveLength(200);
+    expect(within(panel).getByText("Only the newest 200 messages are shown; more exist.")).toBeVisible();
+  });
 
   it("shows nothing when no delivery is in trouble", async () => {
     render(<App connect={() => () => {}} />);
