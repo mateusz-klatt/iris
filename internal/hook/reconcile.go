@@ -95,7 +95,7 @@ func (r Runner) reconcile(ctx context.Context, ev Event, state *runState) Output
 		// Keep the same fail-open guarantee as the main hook, including dependency panics.
 		defer func() {
 			if recover() != nil {
-				done <- settle(hookFailure("panic during shell reconciliation"), allow)
+				done <- settle(failPanicShell, allow)
 			}
 		}()
 		state.at("shell repository")

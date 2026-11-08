@@ -1,11 +1,14 @@
 package doctor
 
 import (
+	"fmt"
 	"runtime"
+	"slices"
 	"sort"
 	"strings"
 	"time"
 
+	"github.com/mateusz-klatt/iris/internal/guard"
 	"github.com/mateusz-klatt/iris/internal/hook"
 	"github.com/mateusz-klatt/iris/internal/integrate"
 )
@@ -65,20 +68,25 @@ type BundleCount struct {
 func NewBundle(res Result, version string, now time.Time) Bundle {
 	b := Bundle{
 		Iris:         BundleIris{Version: version, OS: runtime.GOOS, Arch: runtime.GOARCH, Go: runtime.Version()},
-		Hub:          BundleHub{Source: word(res.HubSource), Up: res.HubUp, TokenOK: res.TokenOK, TokenUnchecked: res.TokenUnchecked, TokenUnavailable: res.TokenUnavailable, Stored: res.Stored, DatabaseBytes: res.DatabaseBytes},
+		Hub:          BundleHub{Source: oneOf(word(res.HubSource), "command line", "default", "file", "environment"), Up: res.HubUp, TokenOK: res.TokenOK, TokenUnchecked: res.TokenUnchecked, TokenUnavailable: res.TokenUnavailable, Stored: res.Stored, DatabaseBytes: res.DatabaseBytes},
 		Clients:      []BundleClient{},
-		Guard:        word(res.Guard),
+		Guard:        oneOf(word(res.Guard), guard.StateInstalled, guard.StateMissing, guard.StateOther, "not in a git repository", "unknown"),
 		CaseWarning:  res.Case != "",
 		Failures:     []BundleCount{},
 		Observations: []BundleCount{},
 	}
 	for _, c := range res.Report.Clients {
-		b.Clients = append(b.Clients, BundleClient{Client: c.Client, Status: c.Status, Version: c.Version})
+		client := integrate.Canonical(c.Client)
+		if client == "" {
+			continue
+		}
+		status := oneOf(c.Status, StatusOK, StatusNotConfigured, StatusNeedsHuman, StatusSilent, StatusSlow)
+		b.Clients = append(b.Clients, BundleClient{Client: client, Status: status, Version: bareVersion(c.Version)})
 	}
 	// A log that cannot be read leaves its counts empty; doctor's own report says why.
 	failures, _ := hook.ReadRecentFailures(res.tokenFile, failureRead)
 	observations, _ := hook.ReadRecentObservations(res.tokenFile, failureRead)
-	b.Failures = counts(failures, now, func(f hook.Failure) string { return f.Error })
+	b.Failures = counts(failures, now, func(f hook.Failure) string { return hook.FailureCategory(f.Error) })
 	b.Observations = counts(observations, now, func(f hook.Failure) string { return observationKind(f.Error) })
 	return b
 }
@@ -88,6 +96,25 @@ func NewBundle(res Result, version string, now time.Time) Bundle {
 func word(line string) string {
 	state, _, _ := strings.Cut(line, " (")
 	return strings.TrimSpace(state)
+}
+
+// oneOf is value when it is one of the known values, and "other" when it is not, so a line
+// some other code formats differently later cannot carry a path or a name into a bundle.
+func oneOf(value string, known ...string) string {
+	if slices.Contains(known, value) {
+		return value
+	}
+	return "other"
+}
+
+// bareVersion is the first x.y.z in a client's version output, and nothing when there is
+// none: the rest of that output is the client's to choose.
+func bareVersion(text string) string {
+	v, ok := parsedVersion(text)
+	if !ok {
+		return ""
+	}
+	return fmt.Sprintf("%d.%d.%d", v[0], v[1], v[2])
 }
 
 // observationKind keeps an observation's kind and drops what follows it, a tool name or a
@@ -101,8 +128,9 @@ func observationKind(text string) string {
 	return "other"
 }
 
-// counts groups the last 24 hours' entries of known clients by client, stage and category. A
-// failure's text is already a fixed category with no payload in it (hook.failureText).
+// counts groups the last 24 hours' entries of known clients by client, stage and category.
+// The stage and the category are each mapped onto a fixed set, never copied: the log is a
+// file any older iris or other writer may have added to.
 func counts(entries []hook.Failure, now time.Time, category func(hook.Failure) string) []BundleCount {
 	by := map[BundleCount]int{}
 	for _, e := range entries {
@@ -110,7 +138,7 @@ func counts(entries []hook.Failure, now time.Time, category func(hook.Failure) s
 		if client == "" || now.Sub(e.Time) > failureWindow {
 			continue
 		}
-		by[BundleCount{Client: client, Stage: e.Stage, Category: category(e)}]++
+		by[BundleCount{Client: client, Stage: hook.FailureStage(e.Stage), Category: category(e)}]++
 	}
 	out := []BundleCount{}
 	for k, n := range by {
