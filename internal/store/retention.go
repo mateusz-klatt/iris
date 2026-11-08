@@ -32,6 +32,7 @@ func (s *Store) Sweep(ctx context.Context) (map[string]int64, error) {
 		}{
 			{"events", `DELETE FROM Event WHERE created_ms<? OR (created_ms<? AND seq<=(SELECT MIN(c.seq) FROM Cursor c JOIN Execution e ON e.id=c.execution_id WHERE e.state='active'))`, []any{ms(eventHorizon), ms(eventSettled)}},
 			{"operations", `DELETE FROM Operation WHERE created_ms<?`, []any{ms(operationHorizon)}},
+			{"operations", `DELETE FROM ConsoleOperation WHERE created_ms<?`, []any{ms(operationHorizon)}},
 			{"claims", `DELETE FROM Claim WHERE COALESCE(revoked_ms,expires_ms)<?`, []any{ms(finishedHorizon)}},
 		}
 		for _, step := range steps {
@@ -39,7 +40,8 @@ func (s *Store) Sweep(ctx context.Context) (map[string]int64, error) {
 			if err != nil {
 				return err
 			}
-			removed[step.name], _ = res.RowsAffected() // modernc's sqlite always reports it
+			n, _ := res.RowsAffected() // modernc's sqlite always reports it
+			removed[step.name] += n
 		}
 		// An Execution is history while mail or another Execution names it, so it stays.
 		const gone = `SELECT id FROM Execution x WHERE x.state<>'active' AND x.last_seen_ms<?

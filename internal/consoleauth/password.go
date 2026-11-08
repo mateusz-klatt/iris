@@ -1,0 +1,180 @@
+// Package consoleauth defines the bounded credential formats for the staged
+// account console. It does not authenticate HTTP requests or enable account routes.
+package consoleauth
+
+import (
+	"crypto/rand"
+	"crypto/subtle"
+	"encoding/base64"
+	"errors"
+	"strconv"
+	"strings"
+	"unicode/utf8"
+
+	"golang.org/x/crypto/argon2"
+	"golang.org/x/crypto/scrypt"
+)
+
+const (
+	MaxPasswordBytes = 1024
+	MaxHashBytes     = 256
+	MaxConcurrentKDF = 2
+	argonPrefix      = "$argon2id$v=19$m=65536,t=3,p=1$"
+)
+
+var (
+	ErrInvalidPassword = errors.New("invalid password")
+	ErrInvalidHash     = errors.New("unusable password record")
+	ErrBusy            = errors.New("password work capacity reached")
+	// One admission limit covers creation and both verification profiles. Admission
+	// never waits or starts a goroutine, so callers cannot build an unbounded queue.
+	kdfSlots = make(chan struct{}, MaxConcurrentKDF)
+)
+
+type passwordRecord struct {
+	scrypt bool
+	salt   [16]byte
+	key    [32]byte
+}
+
+// ValidateNewPassword checks the policy for newly created or changed passwords.
+// Imported passwords retain their original minimum length; verification applies
+// only the UTF-8 and byte bounds. Neither path transforms the submitted password.
+func ValidateNewPassword(password string) error {
+	if !validPasswordInput(password) || utf8.RuneCountInString(password) < 15 {
+		return ErrInvalidPassword
+	}
+	return nil
+}
+
+func validPasswordInput(password string) bool {
+	return len(password) <= MaxPasswordBytes && utf8.ValidString(password)
+}
+
+// ValidateHash validates a record without doing password work or exposing its
+// contents. Imported records can be stored byte-for-byte after this validation.
+func ValidateHash(encoded string) error {
+	_, err := parseHash(encoded)
+	return err
+}
+
+func parseHash(encoded string) (passwordRecord, error) {
+	var record passwordRecord
+	if len(encoded) > MaxHashBytes {
+		return record, ErrInvalidHash
+	}
+	fields := strings.Split(encoded, "$")
+	if len(fields) != 6 {
+		return record, ErrInvalidHash
+	}
+	encoding := base64.RawStdEncoding.Strict()
+	if fields[0] == "scrypt" {
+		n, nok := decimal(fields[1])
+		r, rok := decimal(fields[2])
+		p, pok := decimal(fields[3])
+		// Division before multiplication bounds both products without overflow.
+		// Only the supplied profile is admitted. Its additional scrypt buffers
+		// (256*r + 128*r*p bytes) are bounded to 3072 bytes as well.
+		if !nok || !rok || !pok || n <= 1 || n&(n-1) != 0 || r == 0 || p == 0 ||
+			!productWithin(16<<20, 128, n, r) || !productWithin(131072, n, r, p) ||
+			n != 16384 || r != 8 || p != 1 {
+			return record, ErrInvalidHash
+		}
+		record.scrypt = true
+		encoding = base64.RawURLEncoding.Strict()
+	} else if fields[0] != "" || fields[1] != "argon2id" || fields[2] != "v=19" || fields[3] != "m=65536,t=3,p=1" {
+		return record, ErrInvalidHash
+	}
+	if !decodeFixed(encoding, fields[4], record.salt[:]) || !decodeFixed(encoding, fields[5], record.key[:]) {
+		return passwordRecord{}, ErrInvalidHash
+	}
+	return record, nil
+}
+
+func decimal(value string) (uint64, bool) {
+	if value == "" {
+		return 0, false
+	}
+	for _, c := range value {
+		if c < '0' || c > '9' {
+			return 0, false
+		}
+	}
+	n, err := strconv.ParseUint(value, 10, 64)
+	return n, err == nil
+}
+
+func productWithin(limit uint64, factors ...uint64) bool {
+	product := uint64(1)
+	for _, factor := range factors {
+		if factor > limit/product {
+			return false
+		}
+		product *= factor
+	}
+	return true
+}
+
+func decodeFixed(encoding *base64.Encoding, value string, dst []byte) bool {
+	decoded, err := encoding.DecodeString(value)
+	if err != nil || len(decoded) != len(dst) || encoding.EncodeToString(decoded) != value {
+		return false
+	}
+	copy(dst, decoded)
+	return true
+}
+
+func admitKDF() bool {
+	select {
+	case kdfSlots <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+// CreatePassword creates the single approved Argon2id profile with a fresh random
+// salt. Call it before acquiring the store transaction lock.
+func CreatePassword(password string) (string, error) {
+	if err := ValidateNewPassword(password); err != nil {
+		return "", err
+	}
+	if !admitKDF() {
+		return "", ErrBusy
+	}
+	defer func() { <-kdfSlots }()
+	var record passwordRecord
+	_, _ = rand.Read(record.salt[:]) // crypto/rand.Read never returns an error.
+	key := derive(password, record)
+	return argonPrefix + base64.RawStdEncoding.EncodeToString(record.salt[:]) + "$" + base64.RawStdEncoding.EncodeToString(key[:]), nil
+}
+
+// VerifyPassword verifies either approved format. A mismatch is false without an
+// error; malformed records and overlong inputs never invoke a KDF. The caller must
+// recheck account state/version transactionally before issuing a session.
+func VerifyPassword(password, encoded string) (bool, error) {
+	if !validPasswordInput(password) {
+		return false, ErrInvalidPassword
+	}
+	record, err := parseHash(encoded)
+	if err != nil {
+		return false, err
+	}
+	if !admitKDF() {
+		return false, ErrBusy
+	}
+	defer func() { <-kdfSlots }()
+	key := derive(password, record)
+	// Both arrays are exactly 32 bytes, including for an incorrect password.
+	return subtle.ConstantTimeCompare(key[:], record.key[:]) == 1, nil
+}
+
+func derive(password string, record passwordRecord) [32]byte {
+	if record.scrypt {
+		// ADR 014 requires this exact imported verification profile; changing its
+		// cost changes the key. New passwords always use Argon2id, never scrypt.
+		key, _ := scrypt.Key([]byte(password), record.salt[:], 16384, 8, 1, 32) // NOSONAR: go:S5344; ADR 014's legacy verification-only profile.
+		return [32]byte(key)
+	}
+	return [32]byte(argon2.IDKey([]byte(password), record.salt[:], 3, 65536, 1, 32))
+}
