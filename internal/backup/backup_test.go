@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
@@ -45,12 +46,18 @@ func live(t *testing.T) string {
 func TestABackupOfARunningHub(t *testing.T) {
 	src := live(t)
 	before, _ := os.ReadFile(src)
+	var version int
+	live, _ := sql.Open("sqlite", readOnly(src))
+	if err := live.QueryRow("PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	_ = live.Close()
 	dest := filepath.Join(t.TempDir(), "backup #%20.db") // characters an SQLite URI would misread, and Windows allows
 	var out bytes.Buffer
 	if err := Run(context.Background(), src, dest, &out); err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{"integrity ok", "schema 14", "1 messages", "iris admin restore-check " + dest} {
+	for _, want := range []string{"integrity ok", fmt.Sprintf("schema %d,", version), "1 messages", "iris admin restore-check " + dest} {
 		if !strings.Contains(out.String(), want) {
 			t.Fatalf("no %q in\n%s", want, out.String())
 		}
