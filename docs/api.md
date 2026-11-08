@@ -72,7 +72,15 @@ It returns `{"execution_id":"...","generation":1,"agent":{...}}`, or `unbound`, 
 `POST /v1/executions/{id}/heartbeat` takes `{"generation":1,"source":"shim"}`, where `source` is
 `shim`, `watch` or `hook`. It returns `{"lease_ms":60000}`, or `lost`.
 
-`POST /v1/executions/{id}/end` is a best-effort end of session. It takes `{"generation":1}`.
+`POST /v1/executions/{id}/end` is a best-effort end of session. It takes `{"generation":1}`. With
+`"hand_over":"ex_..."` it first moves the Execution's agent's unacknowledged deliveries to the agent
+of that live Execution and wakes it, each moved delivery asking for attention again. A message the
+destination already has, sent to both mailboxes, is settled in the stray mailbox instead, so it
+arrives once. Only an Execution an MCP registered may hand over, and only to the one the client
+process rung finds for it: top-level, of the same host, client, process id and start time; anything
+else is refused as `bad_request`. An MCP server uses it when it gives up an Execution it had to
+register for the session's hook's (D6), so mail sent to the stray mailbox is not stranded. Ending
+again moves nothing.
 
 ## Claims
 
@@ -147,6 +155,16 @@ On a delivery already accepted, any live Execution of the recipient agent may ma
 with any or no `attempt`, because the work often ends in a later session. Another agent gets
 `not_found`. A repeat keeps the first time, and nothing takes handled back.
 
+`GET /v1/deliveries/{id}/body?execution_id=...&after=<offset>&limit=<bytes>` returns part of one
+delivery's body, at most `limit` bytes as encoded in JSON (32 KiB at most and by default), cut on a
+character boundary:
+`{"delivery_id":"dl_...","sender":"...","body":"...","body_bytes":14400,"offset":0,"next_offset":4000}`.
+`next_offset` is present while more remains. Only the recipient may read it, and reading changes no
+attempt and settles nothing: only an ack does (ADR 008). The MCP `inbox` gives a call's bodies a
+budget of 32 KiB together, counted as encoded in JSON, which is what a client's limit applies to. A body past it carries `body_truncated: true` beside `body_bytes`, a
+`read_offset`, and a `body_note` of Iris's own saying the body is not the whole message, and the
+`read` tool returns the rest.
+
 `GET /v1/messages/{id}/status?execution_id=...` shows the sender what became of its message:
 
 ```json
@@ -220,6 +238,7 @@ it does not count mail that was fetched and not yet acknowledged.
 | `inbox` | Fetch messages |
 | `ack` | Acknowledge a delivery; with `handled`, say it was acted on |
 | `receipts` | Show the recipients' states of a message you sent |
+| `read` | Read the rest of a delivery's body that `inbox` cut |
 | `claim` | Make an explicit claim |
 | `release` | Release a claim, or all |
 | `claims` | List live claims |
@@ -289,19 +308,24 @@ and sends as `human`.
 
 `POST /v1/ui/claims/{fence}/revoke` revokes any claim.
 
-`GET /v1/ui/doctor` returns the last report that `iris doctor` stored with `PUT /v1/ui/doctor`:
+`GET /v1/ui/doctor` returns each host's last report, which `iris doctor` stored with `PUT /v1/ui/doctor`
+(ADR 007):
 
 ```json
-{"checked_at":"...","clients":[{"client":"codex","version":"...",
-  "status":"needs_human","detail":"Review hooks once in /hooks","last_hook_at":"..."}]}
+{"hosts":[{"host":"mac","checked_at":"...","clients":[{"client":"codex","version":"...",
+  "status":"needs_human","detail":"Review hooks once in /hooks","last_hook_at":"..."}]}]}
 ```
+
+A `PUT` carries `host`, the machine's name as its hooks give it, and replaces that host's report
+only. One from a doctor too old to send `host` is kept under `unknown`, so it never replaces a real
+host's. A host that never reported is absent. The console greys a report checked more than 24 hours
+ago.
 
 `status` is `ok`, `not_configured`, `needs_human`, `silent` or `slow`. `slow` means the hooks run,
 but shell reconciliation passed its budget more than ten times in 24 hours, so those commands'
 changes went unclaimed. A doctor sends it as `silent`, with `slow: ` in the detail, to a hub that
 refuses it. `last_hook_at` is when that client's hooks on the doctor's host last reached the hub,
-and empty when they never did or the hub cannot say. Before the first report, `checked_at` is
-null and `clients` is empty. `expires_at` on a claim is null when it has no expiry.
+and empty when they never did or the hub cannot say. Before the first report, `hosts` is empty. `expires_at` on a claim is null when it has no expiry.
 
 `GET /v1/ui/watch` upgrades to a WebSocket, with frames `{"cursor":124,"kind":"changed"}`. The UI
 refetches on a frame. Frames carry no content.

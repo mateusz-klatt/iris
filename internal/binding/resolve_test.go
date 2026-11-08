@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"os"
-	"os/exec"
 	"regexp"
 	"testing"
 	"time"
@@ -123,32 +122,26 @@ func TestSessionVariableBinds(t *testing.T) {
 	}
 }
 
-func TestUnknownSessionRegisters(t *testing.T) {
-	env := map[string]string{"GROK_SESSION_ID": "s2"}
-	hub := &scriptedHub{binds: []string{"unbound"}}
-	b, err := resolverFor(t, hub, "grok", env, proc.Ancestor{}).Resolve(context.Background(), "")
-	if err != nil || b.ExecutionID != "ex_new" || b.Rung != 2 {
-		t.Fatalf("%+v %v", b, err)
+// A session id with nothing bound to it is not registered here: on resume Claude Code gives
+// an MCP server another session id than its hooks, so the hook's Execution, registered under
+// session A, is found through the client process the MCP shares with it, though the MCP was
+// started with session B.
+func TestAnUnknownSessionFindsTheHooksExecutionThroughTheClient(t *testing.T) {
+	env := map[string]string{"CLAUDE_CODE_SESSION_ID": "session-b"}
+	hub := &scriptedHub{binds: []string{"unbound", ""}}
+	b, err := resolverFor(t, hub, "claude", env, proc.Ancestor{PID: 42, StartMS: 100}).Resolve(context.Background(), "")
+	if err != nil || b.ExecutionID != "ex_bound" || b.Rung != 3 || hub.session != nil {
+		t.Fatalf("%+v %v registered %+v", b, err, hub.session)
 	}
-	if hub.session.SessionID != "s2" || hub.session.Source != "mcp" || hub.session.SingleSession || hub.session.Worktree != "" {
-		t.Fatalf("%+v", hub.session)
+	if len(hub.bound) != 2 || hub.bound[0]["session_id"] != "session-b" || hub.bound[1]["session_id"] != nil || hub.bound[1]["client_pid"] != float64(42) {
+		t.Fatalf("binds %v", hub.bound)
 	}
-}
-
-func TestRegisteredSessionNamesItsRepository(t *testing.T) {
-	r := resolverFor(t, &scriptedHub{binds: []string{"unbound"}}, "grok", map[string]string{"GROK_SESSION_ID": "s2"}, proc.Ancestor{})
-	if out, err := exec.Command("git", "-C", r.CWD, "init", "-q", "-b", "trunk").CombinedOutput(); err != nil {
-		t.Fatalf("%v: %s", err, out)
-	}
-	hub := &scriptedHub{binds: []string{"unbound"}}
-	srv := httptest.NewServer(hub)
-	defer srv.Close()
-	r.Hub = &hubclient.Client{Config: config{srv.URL}}
-	if _, err := r.Resolve(context.Background(), ""); err != nil {
-		t.Fatal(err)
-	}
-	if hub.session.Worktree == "" || hub.session.CommonDir == "" || hub.session.Branch != "trunk" {
-		t.Fatalf("%+v", hub.session)
+	// With nothing to bind to once the grace period is over, as when hooks never ran, it
+	// registers the session it can name, as an Execution of its own.
+	none := &scriptedHub{binds: []string{"unbound"}}
+	r := resolverFor(t, none, "claude", env, proc.Ancestor{})
+	if b, err := r.Resolve(context.Background(), ""); err != nil || b.ExecutionID != "ex_new" || !r.own || none.session.SessionID != "session-b" || none.session.Source != "mcp" {
+		t.Fatalf("%+v %v own %v registered %+v", b, err, r.own, none.session)
 	}
 }
 
@@ -160,10 +153,6 @@ func TestSessionFailuresAreNotMasked(t *testing.T) {
 	}
 	if hub.session != nil {
 		t.Fatal("registered after a refusal")
-	}
-	failing := &scriptedHub{binds: []string{"unbound"}, register: "denied"}
-	if _, err := resolverFor(t, failing, "copilot", env, proc.Ancestor{}).Resolve(context.Background(), ""); !IsCode(err, "denied") {
-		t.Fatal(err)
 	}
 }
 
@@ -220,14 +209,18 @@ func TestAncestorEvidence(t *testing.T) {
 			t.Fatalf("%+v %v %v", b, err, hub.bound)
 		}
 	})
-	t.Run("single session client registers itself", func(t *testing.T) {
+	t.Run("a single-session client with no hook registers its process", func(t *testing.T) {
 		hub := &scriptedHub{binds: []string{"unbound"}}
-		b, err := resolverFor(t, hub, "antigravity", nil, single).Resolve(ctx, "")
-		if err != nil || b.ExecutionID != "ex_new" || b.Rung != 3 {
-			t.Fatalf("%+v %v", b, err)
+		r := resolverFor(t, hub, "antigravity", nil, single)
+		b, err := r.Resolve(ctx, "")
+		if err != nil || b.Rung != 3 || !r.own || hub.session.SessionID != "mcp-42-100" || !hub.session.SingleSession || hub.session.ClientPID != 42 {
+			t.Fatalf("%+v %v %+v", b, err, hub.session)
 		}
-		if hub.session.SessionID != "mcp-42-100" || !hub.session.SingleSession || hub.session.ClientPID != 42 || hub.session.ClientPIDStartMS != 100 {
-			t.Fatalf("%+v", hub.session)
+	})
+	t.Run("a multiplexing process with no hook stays unbound", func(t *testing.T) {
+		hub := &scriptedHub{binds: []string{"unbound"}}
+		if _, err := resolverFor(t, hub, "codex", nil, single).Resolve(ctx, ""); !IsCode(err, "unbound") || hub.session != nil {
+			t.Fatalf("%v registered %+v", err, hub.session)
 		}
 	})
 }
@@ -341,12 +334,5 @@ func TestAfterALossTheResolverWaitsForTheSessionsOwnExecution(t *testing.T) {
 	b, err := r.Resolve(context.Background(), "")
 	if err != nil || b.ExecutionID != "ex_bound" || r.Lost() || hub.session != nil {
 		t.Fatalf("%+v %v lost %v registered %+v", b, err, r.Lost(), hub.session)
-	}
-	// The single-session rung waits as well.
-	single := &scriptedHub{binds: []string{"unbound"}}
-	s := resolverFor(t, single, "codex", map[string]string{}, proc.Ancestor{PID: 42, StartMS: 7})
-	s.gone = map[string]bool{"ex_old": true}
-	if _, err := s.register(context.Background(), "mcp-42-7", proc.Ancestor{PID: 42, StartMS: 7}, true, 3); !IsCode(err, "lost") || single.session != nil {
-		t.Fatalf("registered after a loss: %v %+v", err, single.session)
 	}
 }

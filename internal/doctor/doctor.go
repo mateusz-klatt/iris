@@ -38,6 +38,9 @@ const (
 
 // Report is the body stored with PUT /v1/ui/doctor.
 type Report struct {
+	// Host is this machine's name as its hooks give it, so the hub keeps this report beside
+	// other hosts' instead of over them (ADR 007).
+	Host      string         `json:"host"`
 	CheckedAt time.Time      `json:"checked_at"`
 	Clients   []ClientReport `json:"clients"`
 }
@@ -147,6 +150,7 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 	probe := probeHub(ctx, hubURL, token, tokenReadErr, opt.HTTP)
 	res := Result{HubURL: hubURL, HubSource: source, HubUp: probe.up, TokenOK: probe.tokenOK, TokenUnchecked: probe.unchecked, TokenUnavailable: probe.unavailable, TokenDetail: probe.tokenDetail, HubDetail: probe.detail, DatabaseBytes: probe.databaseBytes}
 	res.Report.CheckedAt = opt.Now().UTC()
+	res.Report.Host = opt.host()
 	for _, c := range integrate.All() {
 		res.Report.Clients = append(res.Report.Clients, checkClient(ctx, opt, c))
 	}

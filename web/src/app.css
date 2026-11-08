@@ -2403,3 +2403,11 @@ html[data-flag-polyfill="true"] select {
 .reservation-state[data-state="orphaned"] {
   color: var(--iris-violet);
 }
+
+/* An old doctor report says little about a client now (ADR 007). */
+.host-report[data-stale="yes"] {
+  opacity: 0.6;
+}
+.host-report .stale-note {
+  font-style: italic;
+}

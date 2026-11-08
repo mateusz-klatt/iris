@@ -181,16 +181,28 @@ Hooks always receive a session id. The problem is the stdio MCP process, which o
    non-shell ancestor at `SessionStart`, and the shim looks up its own parent. The walk stops
    at the first client process; walking further bound the wrong session in a measurement. This
    rung applies only where a process is positively known to host a single session: Cursor Agent,
-   Antigravity, Kimi and `codex exec`. It is skipped for Codex app-server and anything else that
-   multiplexes sessions, because a second thread that has not registered yet would bind to the
-   first one.
+   Antigravity, Kimi and `codex exec`; or one top-level session, as Claude does, whose subagents
+   register under a parent and are not matched. Two live top-level sessions of one process are
+   ambiguous. It is skipped for Codex app-server and anything else that multiplexes sessions,
+   because a second thread that has not registered yet would bind to the first one. For Claude
+   this rung is what ties an MCP server to its hooks: on `--continue` Claude Code starts the MCP
+   server with another session id than its hooks get (`docs/research/clients/claude-code.md`).
 4. An explicit handle. The `SessionStart` context gives the model its handle, and every Iris
    tool accepts an optional `execution` argument.
 5. Otherwise the tool returns a typed `unbound` error that says how to proceed. Iris never guesses.
 
 None of this is authority. Across a host the boundary is the OS user (D12), so binding gives
-correct attribution, not a security property. If hooks never ran, for example in an untrusted
-folder, the shim registers an MCP-only Execution so that messaging still works.
+correct attribution, not a security property.
+
+The session's hook is its registrar: one session is one Execution and one mailbox. An MCP server
+usually starts before the `SessionStart` hook has run, so when no rung finds the session its
+first bind keeps looking, with backoff, for 15 s. Only then, if hooks never ran, for example in
+an untrusted folder, does the shim register an MCP-only Execution so that messaging still works,
+and only where it can name the session: by its session id, or as a single-session process. If
+the hook registers later after all, the shim's heartbeat finds the hook's Execution for the same
+client process, moves to it and ends its own, handing over the mail its stray mailbox received
+meanwhile, so a slow hook cannot leave the session split either. A first tool call that ends
+while the grace period runs is told Iris is still binding the session and to retry. After a loss the shim never registers; it waits for the hook to reattach (D9).
 
 ### D7. Attention: instant where possible, honest everywhere
 

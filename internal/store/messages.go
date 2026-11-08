@@ -3,7 +3,10 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"github.com/mateusz-klatt/iris/internal/budget"
 	"time"
+	"unicode/utf8"
 )
 
 // inboxBudget bounds an inbox page's encoded size. A client reads at most 1 MiB of a response,
@@ -213,4 +216,41 @@ func (t *transaction) receipts(r Request, message string) (map[string]any, error
 		recipients = append(recipients, map[string]any{"recipient": name, "repository_id": repo, "state": state, "at": timestamp(at)})
 	}
 	return map[string]any{"message_id": message, "recipients": recipients}, rows.Err()
+}
+
+// readBody returns part of one delivery's body, from byte offset r.After, at most r.Limit bytes
+// cut at a UTF-8 boundary, for a model whose client limits what a tool result may hold (ADR 008).
+// Only the recipient may read it, and reading changes no attempt and settles nothing: only an
+// ack does. next_offset is set while more remains.
+func (t *transaction) readBody(r Request, delivery string) (map[string]any, error) {
+	e, err := t.live(r.ExecutionID, 0)
+	if err != nil {
+		return nil, err
+	}
+	var recipient, sender, body string
+	err = t.row(`SELECT d.recipient_agent_id,CASE WHEN a.client='human' THEN 'human' ELSE a.name END,m.body FROM Delivery d JOIN Message m ON m.id=d.message_id JOIN Execution x ON x.id=m.sender_execution_id JOIN Agent a ON a.id=x.agent_id WHERE d.id=?`, delivery).Scan(&recipient, &sender, &body)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && recipient != e.AgentID) {
+		return nil, fail("not_found", "unknown delivery")
+	}
+	if err != nil {
+		return nil, err
+	}
+	if r.After < 0 || r.After > int64(len(body)) {
+		return nil, fail("bad_request", "offset is outside the body")
+	}
+	start := runeStart(body, int(r.After))
+	part := budget.Cut(body[start:], boundedLimit(r.Limit, budget.Bodies, budget.Bodies))
+	out := map[string]any{"delivery_id": delivery, "sender": sender, "body": part, "body_bytes": len(body), "offset": start}
+	if end := start + len(part); end < len(body) {
+		out["next_offset"] = end
+	}
+	return out, nil
+}
+
+// runeStart moves i back to the start of the character it falls in.
+func runeStart(s string, i int) int {
+	for i > 0 && i < len(s) && !utf8.RuneStart(s[i]) {
+		i--
+	}
+	return i
 }

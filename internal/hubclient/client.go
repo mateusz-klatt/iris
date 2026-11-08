@@ -96,8 +96,9 @@ type TouchResponse struct {
 	Attention Attention `json:"attention"`
 }
 
-// Client calls the hub. A non-nil HTTP client is used as-is; otherwise
-// http.DefaultClient is used and the request context carries the deadline.
+// Client calls the hub. A non-nil HTTP client is used as-is; otherwise defaultClient, whose
+// transport drops dead pooled connections, is used and the request context carries the
+// deadline.
 type Client struct {
 	Config Config
 	HTTP   *http.Client
@@ -134,6 +135,13 @@ func (c *Client) EndExecution(ctx context.Context, id string, generation int) er
 	}
 	path := "/v1/executions/" + url.PathEscape(id) + "/end"
 	return c.post(ctx, path, map[string]int{"generation": generation}, nil)
+}
+
+// HandOverExecution ends id and hands its unacknowledged mail to the live Execution to, of the
+// same host and client: the session's hook's, when an MCP gives up one it had to register.
+func (c *Client) HandOverExecution(ctx context.Context, id string, generation int, to string) error {
+	path := "/v1/executions/" + url.PathEscape(id) + "/end"
+	return c.post(ctx, path, map[string]any{"generation": generation, "hand_over": to}, nil)
 }
 
 func (c *Client) post(ctx context.Context, path string, body, dest any) error {
@@ -223,7 +231,7 @@ var ErrRedirect = errors.New("the hub answered with a redirect, which Iris does 
 // call, so refusing all of them costs nothing.
 func NoRedirects(hc *http.Client) *http.Client {
 	if hc == nil {
-		hc = http.DefaultClient
+		hc = defaultClient
 	}
 	refusing := *hc
 	refusing.CheckRedirect = func(*http.Request, []*http.Request) error { return ErrRedirect }
