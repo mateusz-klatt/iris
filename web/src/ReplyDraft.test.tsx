@@ -11,6 +11,7 @@ import type {
   WatchStatus,
 } from "./api";
 import i18n from "./i18n";
+import { reviewAndSend } from "./test/send";
 import { server, threadDetail } from "./test/server";
 
 beforeEach(async () => {
@@ -124,7 +125,7 @@ describe("console reply draft", () => {
       detail.getByRole("textbox", { name: "Message" }),
       "Thanks.",
     );
-    await user.click(detail.getByRole("button", { name: "Reply" }));
+    await reviewAndSend(user, detail, "Reply");
     await waitFor(() => expect(bodies).toHaveLength(1));
     expect(bodies[0]).toMatchObject({
       to: ["claude-host"],
@@ -140,7 +141,7 @@ describe("console reply draft", () => {
     feed.send?.({ cursor: 201, kind: "changed" });
     await screen.findByText("ms_third");
     await user.type(detail.getByRole("textbox", { name: "Message" }), "Again.");
-    await user.click(detail.getByRole("button", { name: "Reply" }));
+    await reviewAndSend(user, detail, "Reply");
     await waitFor(() => expect(bodies).toHaveLength(2));
     expect(bodies[1]).toMatchObject({
       to: ["claude-host"],
@@ -196,7 +197,7 @@ describe("console reply draft", () => {
     feed.send?.({ cursor: 301, kind: "changed" });
     await waitFor(() => expect(thread.loads).toBeGreaterThan(2));
     expect(detail.getByRole("textbox", { name: "Message" })).toHaveValue("Kept.");
-    await user.click(detail.getByRole("button", { name: "Reply" }));
+    await reviewAndSend(user, detail, "Reply");
     await waitFor(() => expect(bodies).toHaveLength(1));
     expect(bodies[0]).toMatchObject({ to: ["claude-host"], body: "Kept.", reply_to: "ms_next" });
   });

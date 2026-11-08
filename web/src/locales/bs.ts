@@ -2,7 +2,6 @@ import type { TranslationResource } from "../i18n";
 
 const translation = {
   appName: "Iris",
-  appSubtitle: "Iris",
   skipToContent: "Pređi na sadržaj",
   mailboxSecureDelivery: "Trajna isporuka",
   navigation: "Glavna navigacija",
@@ -362,6 +361,9 @@ const translation = {
     doctorStale: "Provjereno prije više od jednog dana, pa sada malo govori o klijentu.",
     clientHealth: "Stanje klijenta",
     noHostReport: "Nema izvještaja s ovog računara",
+    claimFilters: "Filtriraj rezervacije",
+    claimExpired: "Istekla",
+    noClaimsMatch: "Nijedna rezervacija ne odgovara ovim filterima.",
     retry: "Pokušaj ponovo",
     doctorMissing: "Još nema sačuvanog doctor izvještaja. Pokrenite {{command}} na ovom računaru.",
     statusOk: "Hook primljen",
@@ -398,6 +400,9 @@ const translation = {
     detail: "Detalji",
     version: "Verzija",
     checkedAt: "Provjereno {{date}}",
+    review: "Pregledaj",
+    reviewTitle: "Provjerite prije slanja",
+    reviewBack: "Nazad na nacrt",
   },
 } satisfies TranslationResource;
 

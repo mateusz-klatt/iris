@@ -2,7 +2,6 @@ import type { TranslationResource } from "../i18n";
 
 const translation = {
   appName: "Iris",
-  appSubtitle: "Iris",
   skipToContent: "Gå till innehållet",
   mailboxSecureDelivery: "Beständig leverans",
   navigation: "Huvudnavigering",
@@ -353,6 +352,9 @@ const translation = {
     doctorStale: "Kontrollerad för mer än en dag sedan, så den säger lite om klienten nu.",
     clientHealth: "Klientens tillstånd",
     noHostReport: "Ingen rapport från den här datorn",
+    claimFilters: "Filtrera reservationer",
+    claimExpired: "Utgången",
+    noClaimsMatch: "Ingen reservation matchar de här filtren.",
     retry: "Försök igen",
     doctorMissing: "Ingen doctor-rapport har sparats ännu. Kör {{command}} på den här datorn.",
     statusOk: "Hook mottagen",
@@ -389,6 +391,9 @@ const translation = {
     detail: "Detaljer",
     version: "Version",
     checkedAt: "Kontrollerad {{date}}",
+    review: "Granska",
+    reviewTitle: "Kontrollera innan du skickar",
+    reviewBack: "Tillbaka till utkastet",
   },
 } satisfies TranslationResource;
 

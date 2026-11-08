@@ -42,6 +42,10 @@ export default defineConfig({
         isMobile: true,
       },
     },
+    {
+      name: "webkit-1440",
+      use: { viewport: { width: 1440, height: 900 } },
+    },
   ],
   webServer: {
     command: `npm run build && npm run preview -- --host ${host} --port ${port} --strictPort`,

@@ -2,7 +2,6 @@ import type { TranslationResource } from "../i18n";
 
 const translation = {
   appName: "Iris",
-  appSubtitle: "Iris",
   skipToContent: "Ugrás a tartalomra",
   mailboxSecureDelivery: "Tartós kézbesítés",
   navigation: "Elsődleges navigáció",
@@ -362,6 +361,9 @@ const translation = {
     doctorStale: "Több mint egy napja ellenőrizve, így most keveset mond a kliensről.",
     clientHealth: "Kliens állapota",
     noHostReport: "Erről a gépről nincs jelentés",
+    claimFilters: "Foglalások szűrése",
+    claimExpired: "Lejárt",
+    noClaimsMatch: "Egyetlen foglalás sem felel meg ezeknek a szűrőknek.",
     retry: "Újrapróbálás",
     doctorMissing: "Még nincs mentett doctor-jelentés. Futtassa a(z) {{command}} parancsot ezen a számítógépen.",
     statusOk: "Hook megérkezett",
@@ -398,6 +400,9 @@ const translation = {
     detail: "Részletek",
     version: "Verzió",
     checkedAt: "Ellenőrizve: {{date}}",
+    review: "Ellenőrzés",
+    reviewTitle: "Ellenőrizze küldés előtt",
+    reviewBack: "Vissza a piszkozathoz",
   },
 } satisfies TranslationResource;
 

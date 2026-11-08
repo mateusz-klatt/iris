@@ -388,7 +388,7 @@ func applyFailures(res *Result, tokenFile string, now time.Time) error {
 		return err
 	}
 	entries = append(entries, seen...)
-	broken := map[string][]string{}
+	broken := map[string][]hook.Failure{}
 	degraded := map[string]int{}
 	observed := map[string]map[string]int{}
 	for _, entry := range entries {
@@ -408,7 +408,7 @@ func applyFailures(res *Result, tokenFile string, now time.Time) error {
 			observed[name][entry.Error]++
 			continue
 		}
-		broken[name] = append(broken[name], entry.Event+" "+entry.Stage+": "+entry.Error)
+		broken[name] = append(broken[name], entry)
 	}
 	for i := range res.Report.Clients {
 		row := &res.Report.Clients[i]
@@ -416,7 +416,7 @@ func applyFailures(res *Result, tokenFile string, now time.Time) error {
 		switch {
 		case len(broken[row.Client]) > 0:
 			row.Status = StatusSilent
-			row.Detail = "recent hook failure: " + strings.Join(broken[row.Client], "; ")
+			row.Detail = "recent hook failure: " + brokenText(broken[row.Client])
 		case n > slowLimit:
 			row.Status = StatusSlow
 			row.Detail = fmt.Sprintf("%d shell reconciliations ran past their budget (%s, or %s for a hub on this machine) in 24 h, so those commands' changes went unclaimed; git status or the hub is slow here, as on a big or cold worktree, a loaded machine or a slow network", n, hook.RemoteReconcileDeadline, hook.ReconcileDeadline)
@@ -428,6 +428,50 @@ func applyFailures(res *Result, tokenFile string, now time.Time) error {
 		}
 	}
 	return nil
+}
+
+// failureGroups is how many kinds of failure one doctor line names before it says how many more.
+const failureGroups = 5
+
+// brokenText names each kind of failure once: its event, stage and text, how often it
+// happened, and when it last did, newest first. A crash loop that logged one failure a
+// hundred times reads as one entry with its count, not a hundred.
+func brokenText(entries []hook.Failure) string {
+	type group struct {
+		text  string
+		count int
+		last  time.Time
+	}
+	by := map[string]*group{}
+	var groups []*group
+	for _, e := range entries {
+		text := e.Event + " " + e.Stage + ": " + e.Error
+		g := by[text]
+		if g == nil {
+			g = &group{text: text}
+			by[text] = g
+			groups = append(groups, g)
+		}
+		g.count++
+		if e.Time.After(g.last) {
+			g.last = e.Time
+		}
+	}
+	sort.SliceStable(groups, func(i, j int) bool { return groups[i].last.After(groups[j].last) })
+	parts := []string{}
+	for i, g := range groups {
+		if i == failureGroups {
+			parts = append(parts, fmt.Sprintf("and %d more", len(groups)-i))
+			break
+		}
+		at := g.last.UTC().Format("15:04") + " UTC"
+		if g.count == 1 {
+			parts = append(parts, g.text+", at "+at)
+			continue
+		}
+		parts = append(parts, fmt.Sprintf("%s ×%d, last at %s", g.text, g.count, at))
+	}
+	return strings.Join(parts, "; ")
 }
 
 // failureRead is how many log entries doctor reads: enough to count past slowLimit for every

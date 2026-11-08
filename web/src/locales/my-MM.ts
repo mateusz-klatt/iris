@@ -2,7 +2,6 @@ import type { TranslationResource } from "../i18n";
 
 const translation = {
   appName: "Iris",
-  appSubtitle: "Iris",
   skipToContent: "အကြောင်းအရာသို့ ကျော်သွားရန်",
   mailboxSecureDelivery: "တည်တံ့သော ပေးပို့မှု",
   navigation: "အဓိက လမ်းညွှန်",
@@ -362,6 +361,9 @@ const translation = {
     doctorStale: "စစ်ဆေးခဲ့သည်မှာ တစ်ရက်ကျော်ပြီဖြစ်သဖြင့် client ၏ လက်ရှိအခြေအနေကို သိပ်မဖော်ပြနိုင်တော့ပါ။",
     clientHealth: "Client အခြေအနေ",
     noHostReport: "ဤကွန်ပျူတာမှ အစီရင်ခံစာ မရှိပါ",
+    claimFilters: "ကြိုတင်ယူမှုများကို စစ်ထုတ်ရန်",
+    claimExpired: "သက်တမ်းကုန်ပြီ",
+    noClaimsMatch: "ဤစစ်ထုတ်မှုများနှင့် ကိုက်ညီသော ကြိုတင်ယူမှု မရှိပါ။",
     retry: "ထပ်စမ်းကြည့်ရန်",
     doctorMissing: "doctor အစီရင်ခံစာ မသိမ်းရသေးပါ။ ဤကွန်ပျူတာတွင် {{command}} ကို လုပ်ဆောင်ပါ။",
     statusOk: "Hook လက်ခံရရှိပြီး",
@@ -398,6 +400,9 @@ const translation = {
     detail: "အသေးစိတ်",
     version: "ဗားရှင်း",
     checkedAt: "{{date}} တွင် စစ်ဆေးခဲ့သည်",
+    review: "စစ်ဆေးရန်",
+    reviewTitle: "မပို့မီ စစ်ဆေးပါ",
+    reviewBack: "မူကြမ်းသို့ ပြန်သွားရန်",
   },
 } satisfies TranslationResource;
 

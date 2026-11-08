@@ -43,6 +43,8 @@ func dispatch(args []string) int {
 			return runDoctor(args[1:])
 		case "service":
 			return runService(args[1:])
+		case "status":
+			return runStatus(args[1:])
 		}
 	}
 	if err := run(args); err != nil {
@@ -75,7 +77,7 @@ func run(args []string) error {
 		return nil
 	}
 	if len(args) == 0 || args[0] != "serve" {
-		return errors.New("usage: iris serve [--listen address] [--db path] [--token-file path] [--tls-cert path --tls-key path] [--allowed-hosts host:port,...] | setup | doctor | service | ui | token | admin | guard | hook | mcp | watch | integrate | version")
+		return errors.New("usage: iris serve [--listen address] [--db path] [--token-file path] [--tls-cert path --tls-key path] [--allowed-hosts host:port,...] | setup | doctor | status | service | ui | token | admin | guard | hook | mcp | watch | integrate | version")
 	}
 	cfg, err := config.Default()
 	if err != nil {

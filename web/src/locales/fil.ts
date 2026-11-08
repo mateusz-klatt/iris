@@ -2,7 +2,6 @@ import type { TranslationResource } from "../i18n";
 
 const translation = {
   appName: "Iris",
-  appSubtitle: "Iris",
   skipToContent: "Lumaktaw papunta sa nilalaman",
   mailboxSecureDelivery: "Matatag na paghahatid",
   navigation: "Pangunahing nabigasyon",
@@ -362,6 +361,9 @@ const translation = {
     doctorStale: "Sinuri mahigit isang araw na ang nakalipas, kaya kaunti lang ang sinasabi nito tungkol sa client ngayon.",
     clientHealth: "Kalagayan ng client",
     noHostReport: "Walang ulat mula sa computer na ito",
+    claimFilters: "I-filter ang mga reserbasyon",
+    claimExpired: "Expired na",
+    noClaimsMatch: "Walang reserbasyong tumutugma sa mga filter na ito.",
     retry: "Subukang muli",
     doctorMissing: "Wala pang naka-save na ulat ng doctor. Patakbuhin ang {{command}} sa computer na ito.",
     statusOk: "Natanggap ang hook",
@@ -398,6 +400,9 @@ const translation = {
     detail: "Detalye",
     version: "Bersyon",
     checkedAt: "Nasuri noong {{date}}",
+    review: "Suriin",
+    reviewTitle: "Suriin bago ipadala",
+    reviewBack: "Bumalik sa draft",
   },
 } satisfies TranslationResource;
 
