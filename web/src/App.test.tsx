@@ -200,6 +200,25 @@ describe("console send retries", () => {
 });
 
 describe("Iris operator console", () => {
+  // The watch learns of a refused session only by asking over HTTP; it then stops, and the
+  // console shows how to sign in again rather than a live badge that never comes back.
+  it("shows how to sign in when the watch says the session was refused", async () => {
+    let report: ((status: WatchStatus) => void) | undefined;
+    render(
+      <App
+        connect={(_, onStatus) => {
+          report = onStatus;
+          return () => {};
+        }}
+      />,
+    );
+    await screen.findByRole("heading", { name: "Clients" });
+    act(() => report?.("live"));
+    expect(screen.getByText("Live updates connected")).toBeVisible();
+    act(() => report?.("unauthorized"));
+    expect(await screen.findByText(/run iris ui and open the link/)).toBeVisible();
+  });
+
   it("shows repositories, agents, and claims from the overview", async () => {
     await showSession();
     expect(screen.getByRole("rowheader", { name: "iris" })).toBeVisible();

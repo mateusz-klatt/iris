@@ -300,7 +300,14 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
       }
       void reload();
       setThreadRevision((value) => value + 1);
-    }, setStream);
+    }, (status) => {
+      // A refused session ends the watch; the operator is shown how to sign in again.
+      if (status === "unauthorized") {
+        setPhase("unauthorized");
+        return;
+      }
+      setStream(status);
+    });
     return () => {
       // A load still in flight lands on a closed view, so it is dropped.
       requests.current++;
