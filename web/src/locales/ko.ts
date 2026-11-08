@@ -369,7 +369,7 @@ const translation = {
     statusOk: "Hook 수신됨",
     statusNotConfigured: "구성되지 않음",
     statusNeedsHuman: "사람의 조치 필요",
-    statusSilent: "응답 없음",
+    statusSilent: "응답 없음",
     statusSlow: "느림",
     cause: "원인",
     repositories: "저장소",

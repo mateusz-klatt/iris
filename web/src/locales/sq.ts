@@ -360,7 +360,7 @@ const translation = {
     statusOk: "Hook u mor",
     statusNotConfigured: "I pakonfiguruar",
     statusNeedsHuman: "Kërkon ndërhyrje njerëzore",
-    statusSilent: "Nuk përgjigjet",
+    statusSilent: "Nuk përgjigjet",
     statusSlow: "I ngadaltë",
     cause: "Shkaku",
     repositories: "Depot",

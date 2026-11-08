@@ -369,7 +369,7 @@ const translation = {
     statusOk: "تم استلام الـ hook",
     statusNotConfigured: "غير مُعدّ",
     statusNeedsHuman: "يتطلب تدخلًا بشريًا",
-    statusSilent: "لا يستجيب",
+    statusSilent: "لا يستجيب",
     statusSlow: "بطيء",
     cause: "السبب",
     repositories: "المستودعات",

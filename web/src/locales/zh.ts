@@ -360,7 +360,7 @@ const translation = {
     statusOk: "已收到 hook",
     statusNotConfigured: "未配置",
     statusNeedsHuman: "需要人工操作",
-    statusSilent: "无响应",
+    statusSilent: "无响应",
     statusSlow: "缓慢",
     cause: "原因",
     repositories: "仓库",

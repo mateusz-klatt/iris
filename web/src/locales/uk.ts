@@ -360,7 +360,7 @@ const translation = {
     statusOk: "Hook отримано",
     statusNotConfigured: "Не налаштовано",
     statusNeedsHuman: "Потрібна дія людини",
-    statusSilent: "Не відповідає",
+    statusSilent: "Не відповідає",
     statusSlow: "Повільно",
     cause: "Причина",
     repositories: "Репозиторії",

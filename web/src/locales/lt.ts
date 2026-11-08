@@ -369,7 +369,7 @@ const translation = {
     statusOk: "Hook gautas",
     statusNotConfigured: "Nesukonfigūruota",
     statusNeedsHuman: "Reikia naudotojo veiksmų",
-    statusSilent: "Neatsako",
+    statusSilent: "Neatsako",
     statusSlow: "Lėtas",
     cause: "Priežastis",
     repositories: "Saugyklos",

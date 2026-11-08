@@ -369,7 +369,7 @@ const translation = {
     statusOk: "Hook přijat",
     statusNotConfigured: "Nenakonfigurováno",
     statusNeedsHuman: "Vyžaduje zásah člověka",
-    statusSilent: "Bez odezvy",
+    statusSilent: "Bez odezvy",
     statusSlow: "Pomalé",
     cause: "Příčina",
     repositories: "Repozitáře",

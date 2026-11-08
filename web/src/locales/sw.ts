@@ -360,7 +360,7 @@ const translation = {
     statusOk: "Hook imepokelewa",
     statusNotConfigured: "Haijasanidiwa",
     statusNeedsHuman: "Inahitaji mtumiaji kuchukua hatua",
-    statusSilent: "Haijibu",
+    statusSilent: "Haijibu",
     statusSlow: "Polepole",
     cause: "Sababu",
     repositories: "Hazina",

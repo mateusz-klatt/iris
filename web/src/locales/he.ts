@@ -369,7 +369,7 @@ const translation = {
     statusOk: "ה-hook התקבל",
     statusNotConfigured: "לא מוגדר",
     statusNeedsHuman: "נדרשת פעולה מצד המשתמש",
-    statusSilent: "לא מגיב",
+    statusSilent: "לא מגיב",
     statusSlow: "איטי",
     cause: "סיבה",
     repositories: "מאגרים",

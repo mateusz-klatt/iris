@@ -369,7 +369,7 @@ const translation = {
     statusOk: "Hook megérkezett",
     statusNotConfigured: "Nincs beállítva",
     statusNeedsHuman: "Emberi beavatkozást igényel",
-    statusSilent: "Nem válaszol",
+    statusSilent: "Nem válaszol",
     statusSlow: "Lassú",
     cause: "Ok",
     repositories: "Tárolók",

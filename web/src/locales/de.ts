@@ -369,7 +369,7 @@ const translation = {
     statusOk: "Hook empfangen",
     statusNotConfigured: "Nicht konfiguriert",
     statusNeedsHuman: "Menschliches Eingreifen erforderlich",
-    statusSilent: "Keine Rückmeldung",
+    statusSilent: "Keine Rückmeldung",
     statusSlow: "Langsam",
     cause: "Ursache",
     repositories: "Repositorys",
