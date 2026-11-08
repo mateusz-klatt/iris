@@ -24,6 +24,7 @@ import {
   type WatchFrame,
   type WatchStatus,
 } from "./api";
+import { DeliveryProblems } from "./DeliveryProblems";
 import { ClaimsPanel } from "./ClaimsPanel";
 import { DraftBody, DraftReview } from "./DraftReview";
 import { useReview } from "./review";
@@ -220,6 +221,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
   const [doctor, setDoctor] = useState<DoctorReports | null>(null);
   const [revision, setRevision] = useState(0);
   const [threadRevision, setThreadRevision] = useState(0);
+  const onUnauthorized = useCallback(() => setPhase("unauthorized"), []);
   const [stream, setStream] = useState<WatchStatus>("connecting");
   const [repositoryId, setRepositoryId] = useState("");
   const [agent, setAgent] = useState("");
@@ -466,7 +468,11 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
         setPhase("unauthorized");
         return;
       }
-      setFormError(t("operator.loadError"));
+      // A network failure or a 5xx may have come after the hub stored the message. The draft keeps
+      // its key, so sending again cannot make a second copy, and the person is told so. A 4xx is
+      // a refusal, and nothing was stored.
+      const uncertain = !(error instanceof ApiError) || error.status >= 500;
+      setFormError(t(uncertain ? "operator.sendUncertain" : "operator.loadError"));
     } finally {
       inFlight.current = false;
       setSending(false);
@@ -628,6 +634,13 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                 onRevoke={(claim) => void onRevoke(claim)}
               />
             </section>
+
+            <DeliveryProblems
+              repositoryId={repositoryId}
+              revision={threadRevision}
+              onOpenThread={setSelectedId}
+              onUnauthorized={onUnauthorized}
+            />
 
             <section id="threads" className="panel" aria-labelledby="threads-title">
               <div className="panel-heading">

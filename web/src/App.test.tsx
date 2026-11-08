@@ -120,11 +120,25 @@ describe("console send retries", () => {
     await showSession();
     const view = await fillCompose(user, "Are you there?");
     await reviewAndSend(user, view, "Send");
-    expect(await screen.findByRole("alert")).toBeVisible();
+    // The response was lost, so the message may be stored: the person is told a retry is safe.
+    expect(await screen.findByRole("alert")).toHaveTextContent("Sending again is safe");
     await reviewAndSend(user, view, "Send");
     expect(await screen.findByText("Sent.")).toBeVisible();
     expect(keys).toHaveLength(2);
     expect(keys[1]).toBe(keys[0]);
+  }, 20000);
+
+  it("says a retry is safe after a 5xx, and not after a refusal", async () => {
+    const user = userEvent.setup({ delay: null });
+    let status = 502;
+    server.use(http.post("*/v1/ui/messages", () => new HttpResponse(null, { status })));
+    await showSession();
+    const view = await fillCompose(user, "Anyone?");
+    await reviewAndSend(user, view, "Send");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Iris could not tell whether this message was sent.");
+    status = 400;
+    await reviewAndSend(user, view, "Send");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Iris could not load this view.");
   }, 20000);
 
   it("sends once when Send is clicked again while the first is pending", async () => {
@@ -1013,7 +1027,8 @@ describe("Iris operator console", () => {
     const failed = render(<App connect={() => () => {}} />);
     await screen.findByRole("heading", { name: "Clients" });
     const failedView = await compose();
-    expect(await screen.findByRole("alert")).toHaveTextContent("Iris could not load this view.");
+    // A 5xx may have come after the hub stored the message, so a retry is offered as safe.
+    expect(await screen.findByRole("alert")).toHaveTextContent("Iris could not tell whether this message was sent.");
     expect(failedView.getByRole("textbox", { name: "Message" })).toHaveValue("Are you there?");
     failed.unmount();
 

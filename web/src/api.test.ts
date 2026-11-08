@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, getDoctor, listThreads, revokeClaim, watchUi, type WatchFrame } from "./api";
+import { ApiError, getDeliveryProblems, getDoctor, listThreads, revokeClaim, watchUi, type WatchFrame } from "./api";
 import { server } from "./test/server";
 import { http, HttpResponse } from "msw";
 
@@ -193,5 +193,21 @@ describe("operator watch", () => {
     await revokeClaim(12);
     await expect(getDoctor()).resolves.toBeNull();
     expect(fence).toBe("12");
+  });
+});
+
+describe("delivery problems", () => {
+  it("asks for one repository's view, or the whole hub's", async () => {
+    const seen: string[] = [];
+    const body = { messages: [], window_s: 604800, wait_s: 900 };
+    server.use(
+      http.get("*/v1/ui/deliveries", ({ request }) => {
+        seen.push(new URL(request.url).search);
+        return HttpResponse.json(body);
+      }),
+    );
+    await expect(getDeliveryProblems("rp a")).resolves.toEqual(body);
+    await expect(getDeliveryProblems()).resolves.toEqual(body);
+    expect(seen).toEqual(["?repository_id=rp%20a", ""]);
   });
 });

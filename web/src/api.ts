@@ -119,6 +119,32 @@ export interface ThreadQuery {
   limit?: number;
 }
 
+/** One recipient of the human's message whose delivery is in trouble. */
+export interface DeliveryRecipient {
+  name: string;
+  /** The delivery's state: pending or inflight. An acked one is never listed. */
+  state: string;
+  /** unreachable: the recipient has no active session. waiting: unacked past wait_s. */
+  reason: "unreachable" | "waiting";
+  /** The recipient's latest session state: active, lost, ended or none. */
+  execution: string;
+}
+
+export interface DeliveryProblem {
+  id: string;
+  thread_id: string;
+  subject: string;
+  created_at: string;
+  recipients: DeliveryRecipient[];
+}
+
+/** The human's messages in delivery trouble, and the thresholds the hub judged them by. */
+export interface DeliveryProblems {
+  messages: DeliveryProblem[];
+  window_s: number;
+  wait_s: number;
+}
+
 export interface WatchFrame {
   cursor: number;
   kind: string;
@@ -183,6 +209,12 @@ export function listThreads(query: ThreadQuery, signal?: AbortSignal): Promise<T
   }
   const suffix = params.size === 0 ? "" : `?${params.toString()}`;
   return getJson(`/v1/ui/threads${suffix}`, signal);
+}
+
+/** The human's mail in delivery trouble, sent from repositoryId's view or anywhere on the hub. */
+export function getDeliveryProblems(repositoryId = "", signal?: AbortSignal): Promise<DeliveryProblems> {
+  const suffix = repositoryId === "" ? "" : `?repository_id=${encodeURIComponent(repositoryId)}`;
+  return getJson(`/v1/ui/deliveries${suffix}`, signal);
 }
 
 /** A thread as seen from repositoryId, or from the whole hub when it is empty. */
