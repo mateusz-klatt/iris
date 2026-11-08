@@ -46,7 +46,7 @@ func TestAdminForgetReportsARefusal(t *testing.T) {
 }
 
 func TestAdminUsage(t *testing.T) {
-	for _, args := range [][]string{nil, {"nope"}, {"forget"}, {"forget", "--agent", "a", "--repository", "r"}, {"forget", "--bogus"}, {"forget", "--agent", "a", "extra"}, {"restore-check", "only-one"}} {
+	for _, args := range [][]string{nil, {"nope"}, {"forget"}, {"forget", "--agent", "a", "--repository", "r"}, {"forget", "--bogus"}, {"forget", "--agent", "a", "extra"}, {"restore-check", "only-one"}, {"backup", "only-one"}} {
 		if err := runAdmin(args); err == nil || err.Error() != adminUsage {
 			t.Errorf("%v: %v", args, err)
 		}
@@ -83,6 +83,26 @@ func TestAdminContactSetsAndClears(t *testing.T) {
 		if err := adminCommand(context.Background(), client, bad, &out); err == nil || err.Error() != adminUsage {
 			t.Errorf("%v: %v", bad, err)
 		}
+	}
+}
+
+// backup runs locally on the hub's database while the hub has it open, and the copy it writes
+// is one restore-check accepts.
+func TestAdminBackupFeedsRestoreCheck(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "hub.db")
+	s, err := store.Open(src, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	dest := filepath.Join(t.TempDir(), "backup.db")
+	var out bytes.Buffer
+	if err := adminCommand(context.Background(), nil, []string{"backup", src, dest}, &out); err != nil || !strings.Contains(out.String(), "integrity ok") {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	out.Reset()
+	if err := adminCommand(context.Background(), nil, []string{"restore-check", dest, filepath.Join(t.TempDir(), "scratch")}, &out); err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
 	}
 }
 
