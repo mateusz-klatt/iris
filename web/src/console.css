@@ -4,7 +4,7 @@
   --console-accent-soft: #efedfa;
   --console-border: #e1e3ed;
   --console-muted: #616579;
-  --console-header-height: 79px;
+  --console-header-height: 80px;
 }
 
 .operator-console [hidden] {
@@ -302,6 +302,8 @@
 }
 
 .operator-console .thread-row {
+  /* Keep the screen-reader label inside its row's scrolling container. */
+  position: relative;
   display: grid;
   width: 100%;
   min-width: 0;
@@ -651,10 +653,24 @@
 }
 
 @media (min-width: 1101px) {
+  .operator-console:has(.console-content[data-view="messages"]) {
+    display: grid;
+    height: 100dvh;
+    grid-template-rows: auto minmax(48rem, 1fr);
+  }
+
+  .operator-console:has(.console-content[data-view="messages"]) .console-workspace {
+    min-height: 0;
+  }
+
+  .operator-console:has(.console-content[data-view="messages"]) .console-sidebar {
+    min-height: 100%;
+  }
+
   .operator-console .console-content[data-view="messages"] {
     display: flex;
-    height: calc(100dvh - var(--console-header-height));
-    min-height: 48rem;
+    height: 100%;
+    min-height: 0;
     flex-direction: column;
   }
 

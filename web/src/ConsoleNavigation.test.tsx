@@ -1,8 +1,9 @@
-import { render, screen, waitFor, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { beforeEach, expect, it } from "vitest";
 import { App } from "./App";
+import type { WatchFrame } from "./api";
 import i18n from "./i18n";
 import { server, sessionOverview, threadDetail, threadsPage } from "./test/server";
 
@@ -84,4 +85,25 @@ it("keeps the conversation and edited reply when its selected row is opened agai
   expect(heading).toHaveFocus();
   expect(body).toHaveValue("Please keep these notes.");
   expect(screen.getByRole("button", { name: "Review" })).toBeEnabled();
+});
+
+it("keeps focus in an edited reply when a live refresh fails and recovers", async () => {
+  const user = userEvent.setup();
+  let fails = false;
+  let onFrame: ((frame: WatchFrame) => void) | undefined;
+  server.use(http.get("*/v1/ui/threads/:id", () => fails
+    ? new HttpResponse(null, { status: 500 }) : HttpResponse.json(threadDetail)));
+  render(<App connect={(frame) => { onFrame = frame; return () => {}; }} />);
+  await user.click(await screen.findByRole("button", { name: /Open thread: Rollout check/ }));
+  const body = await screen.findByRole("textbox", { name: "Message" });
+  await user.type(body, "Keep typing through live updates");
+  fails = true;
+  act(() => onFrame?.({ cursor: 2, kind: "changed" }));
+  expect(await screen.findByRole("alert")).toHaveTextContent("could not load");
+  expect(body).toHaveFocus();
+  fails = false;
+  act(() => onFrame?.({ cursor: 3, kind: "changed" }));
+  await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  expect(body).toHaveFocus();
+  expect(body).toHaveValue("Keep typing through live updates");
 });

@@ -50,8 +50,11 @@ describe("delivery problems", () => {
     expect(items).toContain("claude-busy: not accepted after 15 minutes");
     expect(within(panel).queryByRole("button", { name: /send/i })).toBeNull();
     // The message opens its thread.
-    await user.click(within(panel).getByRole("button", { name: /Review the guard/ }));
+    const row = within(panel).getByRole("button", { name: /Review the guard/ });
+    await user.click(row);
     expect(await screen.findByRole("heading", { name: "Rollout check" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Back to threads" }));
+    expect(row).toHaveFocus();
     expect(seen[0]).toBe("");
   }, 20000);
 

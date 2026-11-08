@@ -8,7 +8,7 @@ interface Props {
   repositoryId: string;
   /** Changes whenever the hub reports a change, so the list is read again. */
   revision: number;
-  onOpenThread: (id: string) => void;
+  onOpenThread: (id: string, trigger: HTMLButtonElement) => void;
   onUnauthorized: () => void;
 }
 
@@ -70,7 +70,7 @@ export function DeliveryProblems({ repositoryId, revision, onOpenThread, onUnaut
       <ul className="message-list">
         {problems.messages.map((message) => (
           <li key={message.id}>
-            <button type="button" className="message-row" onClick={() => onOpenThread(message.thread_id)}>
+            <button type="button" className="message-row" onClick={(event) => onOpenThread(message.thread_id, event.currentTarget)}>
               <strong>{message.subject}</strong>
               <small>
                 <time dateTime={message.created_at}>{when.format(new Date(message.created_at))}</time>

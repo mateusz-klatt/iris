@@ -83,6 +83,10 @@ test("delivery rows keep their subject and time inside the screen without button
     created_at: "2026-11-08T09:00:00Z",
     recipients: [{ name: "claude-home-iris-latency-20261107-224019", state: "pending", reason: "unreachable", execution: "lost" }],
   }]);
+  await page.route("**/v1/ui/threads/ms_delivery", (route) => route.fulfill({ json: {
+    id: "ms_delivery",
+    messages: [{ id: "ms_delivery", sender: "human", subject, body: "Delivery is still waiting.", created_at: "2026-11-08T09:00:00Z", recipients: [{ name: "claude-home-iris-latency-20261107-224019", state: "pending" }] }],
+  } }));
   await page.goto("/");
   await page.getByRole("navigation").getByRole("button", { name: /^My messages/ }).click();
   await page.getByRole("region", { name: "Delivery problems" }).locator("summary").click();
@@ -124,6 +128,10 @@ test("delivery rows keep their subject and time inside the screen without button
   await expect(row).toHaveCSS("outline-width", "3px");
   await expect(row).toHaveCSS("outline-color", "rgb(109, 40, 217)");
   await expect(row).toHaveCSS("outline-offset", "-5px");
+  await row.click();
+  await expect(page.getByRole("heading", { name: subject, exact: true })).toBeFocused();
+  await page.getByRole("button", { name: "Back to threads", exact: true }).click();
+  await expect(row).toBeFocused();
 });
 
 // A busy hub, with the long names, paths and causes production has, fits the screen: nothing
@@ -218,6 +226,7 @@ test("mailbox navigation opens the reader, returns focus, and separates team act
   const queries: URL[] = [];
   const myThread = { id: "ms_human", subject: "Ready for your review: src/application/portfolio/a_rather_long_module_name.py", participants: ["claude-laptop-iris-latency-20261107-224019", "human"], count: 1, last_at: "2026-11-08T10:00:00Z", unread: 1 };
   const teamThread = { id: "ms_team", subject: "Review handoff between agents", participants: ["claude-laptop", "codex-desk"], count: 3, last_at: "2026-11-08T09:00:00Z", unread: 0 };
+  const additionalThreads = Array.from({ length: 48 }, (_, index) => ({ ...teamThread, id: `ms_extra_${index}`, subject: `Additional conversation ${index}` }));
   await page.route("**/v1/ui/threads**", async (route) => {
     const url = new URL(route.request().url());
     if (url.pathname.endsWith("/read")) { await route.fulfill({ json: { read: 0 } }); return; }
@@ -226,7 +235,7 @@ test("mailbox navigation opens the reader, returns focus, and separates team act
       return;
     }
     queries.push(url);
-    await route.fulfill({ json: { threads: url.searchParams.get("agent") === "human" ? [myThread] : [myThread, teamThread] } });
+    await route.fulfill({ json: { threads: url.searchParams.get("agent") === "human" ? [myThread] : [myThread, teamThread, ...additionalThreads] } });
   });
   await page.goto("/");
   const navigation = page.getByRole("navigation");
@@ -266,6 +275,11 @@ test("mailbox navigation opens the reader, returns focus, and separates team act
   await expect(page.getByRole("button", { name: /Open thread: Review handoff/ })).toBeVisible();
   expect(queries.at(-1)?.searchParams.has("agent")).toBe(false);
   await expectLayoutToFit(page);
+  if (page.viewportSize()!.width >= 1101) {
+    // Long lists scroll inside the mailbox; offscreen accessibility labels must
+    // not leave thousands of pixels of empty page below it.
+    expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBeLessThanOrEqual(page.viewportSize()!.height);
+  }
   await mine.click();
   await expect(page.getByRole("button", { name: /Open thread: Review handoff/ })).toHaveCount(0);
   await expect(mine).toHaveAttribute("aria-current", "page");

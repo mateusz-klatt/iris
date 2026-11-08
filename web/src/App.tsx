@@ -448,7 +448,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
     } else {
       readerTitle.current?.focus();
     }
-  }, [activeView, selectedId, threadError]);
+  }, [activeView, selectedId]);
 
   const chooseLocale = (next: SupportedLocale) => {
     try {
@@ -545,7 +545,8 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
     setThread(null);
     setThreadError(false);
   };
-  const openThread = (id: string) => {
+  const openThread = (id: string, trigger: HTMLButtonElement) => {
+    lastThreadButton.current = trigger;
     setView("messages");
     if (id === selectedId) {
       readerTitle.current?.focus();
@@ -670,7 +671,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                       {threads.length === 0 ? <div className="thread-empty"><h3>{t(mailScope === "mine" && query === "" && repositoryId === "" ? "console.emptyInbox" : "operator.emptyThreads")}</h3><p>{t("console.emptyHint")}</p></div> : (
                         <ul className="message-list">
                           {threads.map((item) => <li key={item.id}>
-                            <button type="button" className="thread-row" aria-current={item.id === selectedId ? "true" : undefined} data-unread={item.unread > 0 ? "yes" : "no"} onClick={(event) => { lastThreadButton.current = event.currentTarget; openThread(item.id); }}>
+                            <button type="button" className="thread-row" aria-current={item.id === selectedId ? "true" : undefined} data-unread={item.unread > 0 ? "yes" : "no"} onClick={(event) => openThread(item.id, event.currentTarget)}>
                               <span className="thread-row-top"><strong>{item.subject}</strong><time dateTime={item.last_at}>{formatWhen(item.last_at)}</time></span>
                               <span className="thread-participants">{item.participants.join(", ")}</span>
                               <span className="thread-row-bottom"><span>{t("inbox.count", { count: item.count })}</span><span>{t("operator.unread", { count: item.unread })}</span></span>
@@ -691,7 +692,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                         <button type="button" className="back-link" onClick={clearThread}>{t("operator.back")}</button>
                         <h2 id="thread-title" tabIndex={-1} ref={readerTitle}>{thread === null ? t(threadError ? "operator.loadError" : "message.loading") : thread.messages[0]?.subject ?? thread.id}</h2>
                       </header>
-                      {threadError ? <div className="state-panel"><p role="alert">{t("operator.loadError")}</p><button type="button" onClick={() => { setThreadError(false); setThreadRevision((value) => value + 1); }}>{t("operator.retry")}</button></div> : null}
+                      {threadError ? <div className="state-panel"><p role="alert">{t("operator.loadError")}</p><button type="button" onClick={() => { readerTitle.current?.focus(); setThreadError(false); setThreadRevision((value) => value + 1); }}>{t("operator.retry")}</button></div> : null}
                       {thread !== null ? <>
                   {thread.messages.map((message) => (
                     <article key={message.id} className="thread-message">
