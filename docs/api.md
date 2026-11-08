@@ -148,11 +148,12 @@ with any or no `attempt`, because the work often ends in a later session. Anothe
 `not_found`. A repeat keeps the first time, and nothing takes handled back.
 
 `GET /v1/deliveries/{id}/body?execution_id=...&after=<offset>&limit=<bytes>` returns part of one
-delivery's body, at most `limit` bytes (32 KiB at most and by default), cut on a character boundary:
+delivery's body, at most `limit` bytes as encoded in JSON (32 KiB at most and by default), cut on a
+character boundary:
 `{"delivery_id":"dl_...","sender":"...","body":"...","body_bytes":14400,"offset":0,"next_offset":4000}`.
 `next_offset` is present while more remains. Only the recipient may read it, and reading changes no
 attempt and settles nothing: only an ack does (ADR 008). The MCP `inbox` gives a call's bodies a
-budget of 32 KiB together. A body past it carries `body_truncated: true` beside `body_bytes`, a
+budget of 32 KiB together, counted as encoded in JSON, which is what a client's limit applies to. A body past it carries `body_truncated: true` beside `body_bytes`, a
 `read_offset`, and a `body_note` of Iris's own saying the body is not the whole message, and the
 `read` tool returns the rest.
 

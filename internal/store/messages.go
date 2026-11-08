@@ -3,6 +3,8 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"github.com/mateusz-klatt/iris/internal/budget"
 	"time"
 	"unicode/utf8"
 )
@@ -226,31 +228,23 @@ func (t *transaction) readBody(r Request, delivery string) (map[string]any, erro
 		return nil, err
 	}
 	var recipient, sender, body string
-	if err = t.row(`SELECT d.recipient_agent_id,CASE WHEN a.client='human' THEN 'human' ELSE a.name END,m.body FROM Delivery d JOIN Message m ON m.id=d.message_id JOIN Execution x ON x.id=m.sender_execution_id JOIN Agent a ON a.id=x.agent_id WHERE d.id=?`, delivery).Scan(&recipient, &sender, &body); err != nil || recipient != e.AgentID {
+	err = t.row(`SELECT d.recipient_agent_id,CASE WHEN a.client='human' THEN 'human' ELSE a.name END,m.body FROM Delivery d JOIN Message m ON m.id=d.message_id JOIN Execution x ON x.id=m.sender_execution_id JOIN Agent a ON a.id=x.agent_id WHERE d.id=?`, delivery).Scan(&recipient, &sender, &body)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && recipient != e.AgentID) {
 		return nil, fail("not_found", "unknown delivery")
+	}
+	if err != nil {
+		return nil, err
 	}
 	if r.After < 0 || r.After > int64(len(body)) {
 		return nil, fail("bad_request", "offset is outside the body")
 	}
 	start := runeStart(body, int(r.After))
-	part := CutUTF8(body[start:], boundedLimit(r.Limit, BodyBudget, BodyBudget))
+	part := budget.Cut(body[start:], boundedLimit(r.Limit, budget.Bodies, budget.Bodies))
 	out := map[string]any{"delivery_id": delivery, "sender": sender, "body": part, "body_bytes": len(body), "offset": start}
 	if end := start + len(part); end < len(body) {
 		out["next_offset"] = end
 	}
 	return out, nil
-}
-
-// BodyBudget is how many bytes of message bodies one MCP result carries: under the 25,000
-// tokens Claude Code allows a tool result by default, with room for the rest (ADR 008).
-const BodyBudget = 32 << 10
-
-// CutUTF8 is the longest prefix of s within n bytes that ends on a character boundary.
-func CutUTF8(s string, n int) string {
-	if len(s) <= n {
-		return s
-	}
-	return s[:runeStart(s, n)]
 }
 
 // runeStart moves i back to the start of the character it falls in.

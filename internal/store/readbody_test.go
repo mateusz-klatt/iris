@@ -1,9 +1,13 @@
 package store
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
 	"unicode/utf8"
+
+	"github.com/mateusz-klatt/iris/internal/budget"
 )
 
 // ADR 008: a body too long for one tool result is read in parts. Each part ends on a character
@@ -27,7 +31,7 @@ func TestALongBodyIsReadInPartsByItsRecipientOnly(t *testing.T) {
 	for {
 		part := call(t, s, "read_body", read)
 		chunk := part["body"].(string)
-		if !utf8.ValidString(chunk) || len(chunk) > 4001 || part["body_bytes"] != len(body) {
+		if !utf8.ValidString(chunk) || budget.Encoded(chunk) > 4001 || part["body_bytes"] != len(body) {
 			t.Fatalf("part at %d: %d bytes, valid %v", read.After, len(chunk), utf8.ValidString(chunk))
 		}
 		got.WriteString(chunk)
@@ -73,9 +77,6 @@ func TestAnOffsetInsideACharacterStartsAtIt(t *testing.T) {
 	if part := call(t, s, "read_body", read); part["body"] != "ż" || part["offset"] != 1 {
 		t.Fatal(part)
 	}
-	if CutUTF8("aż", 2) != "a" || CutUTF8("aż", 3) != "aż" {
-		t.Fatal("CutUTF8 split a character")
-	}
 }
 
 // A session that is no longer live reads nothing.
@@ -85,4 +86,19 @@ func TestAnEndedSessionCannotReadABody(t *testing.T) {
 	call(t, s, "end", r)
 	r.Key = "dl_any"
 	expectError(t, s, "read_body", r, "lost")
+}
+
+// A storage failure is reported as one, not hidden as an unknown delivery.
+func TestAStorageFailureIsNotAnUnknownDelivery(t *testing.T) {
+	s, _, _ := testStore(t)
+	r, _ := session(t, s, 1)
+	if _, err := s.db.Exec("ALTER TABLE Message RENAME COLUMN body TO gone"); err != nil {
+		t.Fatal(err)
+	}
+	r.Key = "dl_any"
+	_, err := s.Call(context.Background(), "read_body", r)
+	var e *Error
+	if err == nil || (errors.As(err, &e) && e.Code == "not_found") {
+		t.Fatalf("a broken table read as %v", err)
+	}
 }

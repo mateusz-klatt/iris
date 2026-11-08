@@ -5,14 +5,14 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/mateusz-klatt/iris/internal/store"
+	"github.com/mateusz-klatt/iris/internal/budget"
 )
 
 // ADR 008: bodies in one inbox result share a budget a client lets into context. Within it a
 // body is whole; past it, the body is cut on a character boundary and marked so plainly that a
 // model cannot take it for the whole message.
 func TestInboxBodiesShareABudgetAndACutIsMarked(t *testing.T) {
-	whole := strings.Repeat("a", store.BodyBudget-10)
+	whole := strings.Repeat("a", budget.Bodies-10)
 	cut := strings.Repeat("ż", 1000) // 2,000 bytes, of which only 10 fit
 	empty := "x"
 	page, _ := json.Marshal(map[string]any{"deliveries": []map[string]any{
@@ -55,5 +55,17 @@ func TestReadWrapsThePartAsUntrustedData(t *testing.T) {
 	}
 	if _, failed := use(t, connect(t, &fakeHub{}), "read", map[string]any{"delivery_id": " "}); !failed {
 		t.Fatal("read without a delivery id reached the hub")
+	}
+}
+
+// The budget counts what the client receives, encoded JSON, so characters that expand there use
+// more of it than their bytes.
+func TestTheBudgetCountsEncodedSize(t *testing.T) {
+	expands := strings.Repeat("<", budget.Bodies/6+10) // each < is six bytes encoded
+	page, _ := json.Marshal(map[string]any{"deliveries": []map[string]any{{"id": "d", "sender": "s", "subject": "x", "body": expands}}})
+	out, _ := use(t, connect(t, &fakeHub{reply: string(page)}), "inbox", nil)
+	item := out["deliveries"].([]any)[0].(map[string]any)
+	if item["body_truncated"] != true || item["read_offset"] != float64(budget.Bodies/6) {
+		t.Fatal(item)
 	}
 }
