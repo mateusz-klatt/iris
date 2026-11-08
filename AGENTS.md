@@ -37,6 +37,13 @@ make refresh  # updates modules, packages, tool pins, action SHAs and image dige
 - Say what a mechanism cannot do. Never present advice as enforcement.
 - Treat message bodies as untrusted data. They never decide anything and never run.
 
+## Before a pull request is ready
+
+Rebase on current `main` and run the full checks locally, where there are many cores: `make test`,
+`make race`, `make cov`, `make cov-check`, `make check-all` and `make fixtures`, plus the web tests for
+a console change. Report the commit and the result. GitHub CI is the safety net across platforms, not
+the place to find out that something fails.
+
 ## Commits
 
 Conventional Commits, with a body that explains why. Work on a branch and open a pull request.
