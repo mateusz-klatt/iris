@@ -391,6 +391,9 @@ const translation = {
     detail: "Hollësi",
     version: "Versioni",
     checkedAt: "Kontrolluar më {{date}}",
+    review: "Rishiko",
+    reviewTitle: "Kontrolloni para dërgimit",
+    reviewBack: "Kthehu te drafti",
   },
 } satisfies TranslationResource;
 

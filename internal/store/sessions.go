@@ -14,29 +14,36 @@ import (
 
 // Request contains the version-one wire fields. Unknown client metadata is ignored.
 type Request struct {
-	CommonDir        string            `json:"common_dir"`
-	Status           map[string]string `json:"status"`
-	ReplyTo          string            `json:"reply_to"`
-	Q                string            `json:"q"`
-	Agent            string            `json:"agent"`
-	DryRun           bool              `json:"dry_run"`
-	Before           string            `json:"before"`
-	CheckedAt        string            `json:"checked_at"`
-	Clients          []map[string]any  `json:"clients"`
-	Client           string            `json:"client"`
-	SessionID        string            `json:"session_id"`
-	Host             string            `json:"host"`
-	Cwd              string            `json:"cwd"`
-	Worktree         string            `json:"worktree"`
-	RemoteURL        string            `json:"remote_url"`
-	RootCommit       string            `json:"root_commit"`
-	Branch           string            `json:"branch"`
-	ParentSessionID  string            `json:"parent_session_id"`
-	ClientPID        int64             `json:"client_pid"`
-	ClientPIDStartMS int64             `json:"client_pid_start_ms"`
-	SingleSession    bool              `json:"single_session"`
-	Source           string            `json:"source"`
-	Execution        string            `json:"execution"`
+	CommonDir string            `json:"common_dir"`
+	Status    map[string]string `json:"status"`
+	ReplyTo   string            `json:"reply_to"`
+	Q         string            `json:"q"`
+	Agent     string            `json:"agent"`
+	DryRun    bool              `json:"dry_run"`
+	Before    string            `json:"before"`
+	CheckedAt string            `json:"checked_at"`
+	Clients   []map[string]any  `json:"clients"`
+	Client    string            `json:"client"`
+	SessionID string            `json:"session_id"`
+	Host      string            `json:"host"`
+	Cwd       string            `json:"cwd"`
+	Worktree  string            `json:"worktree"`
+	// WorktreeID names the worktree root by device and inode; another path to the same
+	// directory is made the first path this host named for it (D6).
+	WorktreeID string `json:"worktree_id"`
+	// Receipt asks a fetch to keep its mail needing attention until Receipts confirm the response
+	// arrived (ADR 010).
+	Receipt          bool      `json:"receipt"`
+	Receipts         []Receipt `json:"receipts"`
+	RemoteURL        string    `json:"remote_url"`
+	RootCommit       string    `json:"root_commit"`
+	Branch           string    `json:"branch"`
+	ParentSessionID  string    `json:"parent_session_id"`
+	ClientPID        int64     `json:"client_pid"`
+	ClientPIDStartMS int64     `json:"client_pid_start_ms"`
+	SingleSession    bool      `json:"single_session"`
+	Source           string    `json:"source"`
+	Execution        string    `json:"execution"`
 	// Exclude names an Execution a bind must skip: an MCP that had to register its own asks
 	// past it for the session's hook's.
 	Exclude string `json:"exclude"`
@@ -68,6 +75,13 @@ type Request struct {
 	ConsumerID   string   `json:"consumer_id"`
 	Stream       string   `json:"stream"`
 }
+
+// Receipt names one delivery a fetch returned, at the attempt that fetch gave it.
+type Receipt struct {
+	ID      string `json:"id"`
+	Attempt int64  `json:"attempt"`
+}
+
 type execution struct {
 	ID, AgentID, Repo, Host, Client, Session, Worktree, Branch, State, Name string
 	Generation, Epoch, Deadline, PID, PIDStart                              int64
@@ -270,6 +284,9 @@ func (t *transaction) session(r Request) (map[string]any, error) {
 	}
 	if r.Worktree == "" {
 		r.Worktree = r.Cwd
+	}
+	if err := t.canonicalWorktree(&r); err != nil {
+		return nil, err
 	}
 	e, err := scanExecution(t.row(executionSelect+"WHERE e.host_id=? AND e.client=? AND e.session_id=? AND e.state='active'", r.Host, r.Client, r.SessionID))
 	if err == nil {
@@ -613,4 +630,31 @@ func (t *transaction) hooksSeen(host string) (map[string]any, error) {
 		clients[client] = timestamp(sql.NullInt64{Int64: ms, Valid: true})
 	}
 	return map[string]any{"clients": clients}, rows.Err()
+}
+
+// canonicalWorktree makes r's worktree the path this host first named for that directory, and
+// its cwd the same place under it, when r names the directory by device and inode. A bind
+// mount or a symlink reaches one directory by two paths, and keyed on the path alone it was two
+// worktrees and two agents for one session (D6). A remount or a reboot can give a device and
+// inode to another directory, so only a path of the same repository, by remote and root
+// commit, folds into the first one; another repository under that id replaces it. Without an
+// id, as from an older client or on Windows, the path stands, as before.
+func (t *transaction) canonicalWorktree(r *Request) error {
+	if r.WorktreeID == "" || r.Host == "" || r.Worktree == "" {
+		return nil
+	}
+	var first, remote, root string
+	err := t.row("SELECT worktree,remote_url,root_commit FROM WorktreeAlias WHERE host_id=? AND worktree_id=?", r.Host, r.WorktreeID).Scan(&first, &remote, &root)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && (remote != r.RemoteURL || root != r.RootCommit)) {
+		_, err = t.exec("INSERT OR REPLACE INTO WorktreeAlias(host_id,worktree_id,worktree,remote_url,root_commit) VALUES(?,?,?,?,?)", r.Host, r.WorktreeID, r.Worktree, r.RemoteURL, r.RootCommit)
+		return err
+	}
+	if err != nil || first == r.Worktree {
+		return err
+	}
+	if rest, ok := strings.CutPrefix(r.Cwd, r.Worktree); ok && (rest == "" || rest[0] == '/' || rest[0] == '\\') {
+		r.Cwd = first + rest
+	}
+	r.Worktree = first
+	return nil
 }

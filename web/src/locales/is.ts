@@ -400,6 +400,9 @@ const translation = {
     detail: "Nánar",
     version: "Útgáfa",
     checkedAt: "Athugað {{date}}",
+    review: "Yfirfara",
+    reviewTitle: "Athugaðu áður en þú sendir",
+    reviewBack: "Aftur í drögin",
   },
 } satisfies TranslationResource;
 

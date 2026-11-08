@@ -400,6 +400,9 @@ const translation = {
     detail: "Λεπτομέρειες",
     version: "Έκδοση",
     checkedAt: "Ελέγχθηκε {{date}}",
+    review: "Έλεγχος",
+    reviewTitle: "Ελέγξτε πριν από την αποστολή",
+    reviewBack: "Επιστροφή στο πρόχειρο",
   },
 } satisfies TranslationResource;
 

@@ -121,6 +121,9 @@ func TestDispatchHookIntegrateDoctorAndServiceUsage(t *testing.T) {
 		if code := dispatch([]string{"doctor", "--bogus"}); code != 2 {
 			t.Fatalf("doctor flag %d", code)
 		}
+		if code := dispatch([]string{"status", "extra"}); code != 2 {
+			t.Fatalf("status %d", code)
+		}
 		if code := dispatch([]string{"service"}); code != 2 {
 			t.Fatalf("service %d", code)
 		}

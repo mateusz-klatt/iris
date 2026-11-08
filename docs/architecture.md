@@ -204,6 +204,16 @@ client process, moves to it and ends its own, handing over the mail its stray ma
 meanwhile, so a slow hook cannot leave the session split either. A first tool call that ends
 while the grace period runs is told Iris is still binding the session and to retry. After a loss the shim never registers; it waits for the hook to reattach (D9).
 
+A worktree is one directory however it is reached. Hooks, the shim and the guard name the
+worktree root by device and inode as well as by path, and the hub keeps the first path a host
+named for that directory: a bind mount or a symlink that gives the same directory another path,
+as `/mnt/d/projects/iris` and `/home/klattm/projects/iris` on one host, is made that first path,
+so it is the same worktree, the same agent and the same claims. A remount or a reboot can give a
+device and inode to another directory, so a path folds only when its repository, by remote and
+root commit, is the one the first path was seen with. Windows sends no such id, so a
+junction or a mapped drive still counts as another worktree there; so does every path from an
+older client.
+
 ### D7. Attention: instant where possible, honest everywhere
 
 The hub exposes one stream per Execution: a WebSocket and `iris watch`, which prints the same
@@ -336,9 +346,10 @@ Changes from the reference schema:
    Execution keeps what it fetched, can acknowledge it after reattaching, and wakes no one for
    mail it already read. One that is lost at its deadline frees its deliveries then, and they
    are requeued as above. An acknowledgement made before a crash still cannot settle a fetch
-   made after it, because that fetch raised the attempt. Not covered: an `inbox` response lost
-   while its session stays alive. The session can fetch the same deliveries again, but nothing
-   wakes it. That needs a receipt step, which belongs with gap A12's acceptance semantics.
+   made after it, because that fetch raised the attempt. An `inbox` response lost while its
+   session stays alive is recovered by the fetch receipt (ADR 010): the MCP server confirms each
+   fetch it received, the mail keeps needing attention until then, and a receipt that never
+   comes wakes it once. A tool result the client itself drops after the receipt is not covered.
 
 ### D10. Claim semantics
 
@@ -356,6 +367,14 @@ over every path in the tool call, including both ends of a rename. It grants all
 or none. Paths the caller already holds are reused, and an `explicit` claim is never downgraded.
 An `auto` claim lasts 10 minutes from the last touch. A retried call, identified by its tool call
 id, does not extend it.
+
+An `auto` claim means "this session has uncommitted changes here". When a shell command takes a
+path out of the session's git status, by commit, stash or restore, the reconcile releases the
+session's own `auto` claim on that path in the same transaction, and wakes whoever waited for it.
+An `explicit` claim, and every other session's claim, stays. Committed but unmerged work is
+git's business, not a claim's. This happens only at the session's next shell reconcile: a commit
+made outside the session, or an edit-tool claim on a path no shell command ever saw dirty,
+keeps its claim until it expires.
 
 `claim.ignore` lists paths that never take an auto claim and only warn: by default lockfiles such
 as `go.sum`, `package-lock.json`, `pnpm-lock.yaml` and `Cargo.lock`, changelogs, and generated
@@ -394,7 +413,9 @@ Antigravity runs hooks in `.agents/`, so its adapter takes the root from `worksp
 
 A shell command is visible only as a string, so a pre-tool hook cannot tell what it will
 touch. After a shell tool, the hook compares `git status --porcelain -z` with the previous
-state under a time limit, and warns about paths claimed from another worktree. It detects, it
+state under a time limit, and warns about paths claimed from another worktree. Only paths
+still changed after the command count: one that left the status was committed, stashed or
+restored by git in this worktree, which changes nothing in another. It detects, it
 cannot undo. In a shared worktree attribution is impossible, so it stays silent there.
 
 `iris guard` is a pre-commit check, installed per repository on request. It refuses a commit
@@ -641,8 +662,22 @@ last checkpoint.
 - Whether `SessionStart` context on Grok and Kimi reaches the model at all.
 - The nearest-process rung has not been tried on a Codex TUI session or a Cursor IDE session.
 - The clean-room record has had no legal review.
-- A lost `inbox` response to a session that stays alive leaves its mail fetched and unwoken (D9,
-  change 4). It is fixed with gap review A12's receipt semantics, not separately.
+- A tool result the client drops after the MCP server confirmed the fetch leaves that mail quiet
+  until something else makes the model look (ADR 010). A response lost before the MCP server
+  holds it is recovered.
+- Shell reconciliation already claims only paths that still differ from HEAD or from the index
+  after a command, so a file git restored is never claimed. Two kinds of noise remain. A path that
+  left the status, because git restored it in this worktree, still draws a warning when someone
+  else holds it. And a path that differs only in the index, after `git reset --soft` or
+  `git cherry-pick -n`, is claimed although the working tree did not change. Claims hold across
+  checkouts of a repository by design (ADR 003, D10), so such noise reaches the other checkout.
+  claude-laptop-iris owns that work.
+- The guard's refusal names a claim's holder, but not the holder's branch or worktree, so the
+  person in another checkout cannot tell where to ask. Same owner as the item above.
+- Codex's built-in clock, collaboration and web tools, and Claude Code's Monitor, TaskStop and
+  ScheduleWakeup, are classified by the names iris hook logged as unknown on a real host. No
+  payload capture backs those names yet. Codex runs a new hook only after a person trusts it in
+  `/hooks`, so the capture waits for one.
 
 ## 5. Invariants the tests must prove
 

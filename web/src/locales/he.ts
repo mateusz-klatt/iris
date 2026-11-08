@@ -400,6 +400,9 @@ const translation = {
     detail: "פרטים",
     version: "גרסה",
     checkedAt: "נבדק ב-{{date}}",
+    review: "בדיקה",
+    reviewTitle: "בדקו לפני השליחה",
+    reviewBack: "חזרה לטיוטה",
   },
 } satisfies TranslationResource;
 

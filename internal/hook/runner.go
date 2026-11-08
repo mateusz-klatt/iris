@@ -397,6 +397,7 @@ func (r Runner) sessionReq(ev Event, repo gitinfo.Repo) hubclient.SessionRequest
 		Host:             host,
 		CWD:              ev.CWD,
 		Worktree:         repo.Worktree,
+		WorktreeID:       repo.WorktreeID,
 		RemoteURL:        repo.RemoteURL,
 		RootCommit:       repo.RootCommit,
 		Branch:           repo.Branch,

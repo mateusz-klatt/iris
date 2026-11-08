@@ -400,6 +400,9 @@ const translation = {
     detail: "বিস্তারিত",
     version: "সংস্করণ",
     checkedAt: "{{date}} তারিখে যাচাই করা হয়েছে",
+    review: "পর্যালোচনা করুন",
+    reviewTitle: "পাঠানোর আগে যাচাই করুন",
+    reviewBack: "খসড়ায় ফিরে যান",
   },
 } satisfies TranslationResource;
 

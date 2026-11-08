@@ -391,6 +391,9 @@ const translation = {
     detail: "Maelezo",
     version: "Toleo",
     checkedAt: "Imekaguliwa {{date}}",
+    review: "Kagua",
+    reviewTitle: "Kagua kabla ya kutuma",
+    reviewBack: "Rudi kwenye rasimu",
   },
 } satisfies TranslationResource;
 

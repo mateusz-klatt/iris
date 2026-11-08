@@ -391,6 +391,9 @@ const translation = {
     detail: "Podrobnosti",
     version: "Verzia",
     checkedAt: "Skontrolované {{date}}",
+    review: "Skontrolovať",
+    reviewTitle: "Skontrolujte pred odoslaním",
+    reviewBack: "Späť na koncept",
   },
 } satisfies TranslationResource;
 

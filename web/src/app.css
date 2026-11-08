@@ -2412,6 +2412,125 @@ html[data-flag-polyfill="true"] select {
   font-style: italic;
 }
 
+/* Draft body with an Edit and a Preview view, and the review shown before a send. */
+.draft-body {
+  display: grid;
+  min-width: 0;
+  gap: 0.5rem;
+}
+
+.draft-mode {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.draft-mode button {
+  border: 1px solid var(--control-line);
+  border-radius: 999px;
+  padding: 0.3rem 0.85rem;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+
+.draft-mode button[aria-pressed="true"] {
+  border-color: var(--pine);
+  background: var(--pine-soft);
+  font-weight: 700;
+}
+
+.draft-body small {
+  color: var(--muted);
+  font-size: 0.74rem;
+}
+
+.draft-preview,
+.draft-review {
+  min-width: 0;
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 0.75rem 1rem;
+  background: var(--panel-soft);
+  overflow-wrap: anywhere;
+}
+
+.draft-preview {
+  max-height: 24rem;
+  overflow: auto;
+}
+
+.draft-review {
+  display: grid;
+  gap: 0.75rem;
+}
+
+.draft-review h4 {
+  margin: 0;
+}
+
+.draft-review dl {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  gap: 0.35rem 0.75rem;
+  margin: 0;
+}
+
+.draft-review dt {
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.draft-review dd {
+  margin: 0;
+  min-width: 0;
+}
+
+.draft-review ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.draft-review li {
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  padding: 0.1rem 0.6rem;
+  background: var(--panel);
+}
+
+.draft-review-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+}
+
+.draft-review-actions button:not(.primary-button) {
+  border: 1px solid var(--control-line);
+  border-radius: 999px;
+  padding: 0.45rem 1rem;
+  background: var(--panel);
+  color: var(--ink);
+  font: inherit;
+  cursor: pointer;
+}
+
+@media (max-width: 40rem) {
+  .draft-review dl {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .draft-review-actions button {
+    flex: 1 1 100%;
+  }
+}
+
 /* The operator console, from a phone to a desktop. */
 
 /* The brand is a link home, not text to underline. */

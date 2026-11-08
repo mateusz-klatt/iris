@@ -400,6 +400,9 @@ const translation = {
     detail: "詳細",
     version: "バージョン",
     checkedAt: "{{date}} に確認",
+    review: "確認",
+    reviewTitle: "送信前に確認",
+    reviewBack: "下書きに戻る",
   },
 } satisfies TranslationResource;
 

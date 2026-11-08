@@ -400,6 +400,9 @@ const translation = {
     detail: "Detalji",
     version: "Verzija",
     checkedAt: "Provjereno {{date}}",
+    review: "Pregledaj",
+    reviewTitle: "Provjerite prije slanja",
+    reviewBack: "Nazad na nacrt",
   },
 } satisfies TranslationResource;
 
