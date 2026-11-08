@@ -166,7 +166,7 @@ func (r Runner) shell(ctx context.Context, hub shellHub, ev Event, repo gitinfo.
 		out, err = r.reconcileSession(ctx, combined, ev, repo, phase, taken)
 		// A lost answer may also be an older hub's to a request with no Execution, so the
 		// separate calls decide; they handle a real loss as an edit does.
-		if err == nil || !(hubclient.IsCode(err, "lost") || hubclient.IsCode(err, "bad_request") || hubclient.IsCode(err, "not_found")) {
+		if err == nil || (!hubclient.IsCode(err, "lost") && !hubclient.IsCode(err, "bad_request") && !hubclient.IsCode(err, "not_found")) {
 			return out, false, err
 		}
 	}
@@ -192,7 +192,7 @@ func (r Runner) reconcileSession(ctx context.Context, hub sessionShellHub, ev Ev
 	req := hubclient.ShellSessionRequest{SessionRequest: r.sessionReq(ev, repo), Kind: phase, Status: snapshot}
 	m := r.memory()
 	if m != nil {
-		req.SessionRequest.Generation = m.Recall(string(ev.Client), ev.SessionID)
+		req.Generation = m.Recall(string(ev.Client), ev.SessionID)
 	}
 	res, err := hub.ReconcileSession(ctx, req)
 	if err == nil && m != nil && res.Session.Generation > 0 {
