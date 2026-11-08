@@ -10,6 +10,10 @@ import (
 // the operating system to give up on TCP, which takes minutes. Every hub client therefore pings
 // an HTTP/2 connection that has been quiet, drops one that does not answer, and closes idle
 // connections soon, so the next call dials afresh.
+//
+// Pings exist only in HTTP/2, so only a TLS hub gets them. A plain-HTTP/1.1 path, such as a
+// loopback hub or a proxy without h2, relies on the idle timeout and the caller's deadline. The
+// watch socket is an HTTP/1.1 upgrade, kept alive by the hub's websocket pings, not by these.
 var (
 	// pingAfter is how long an HTTP/2 connection may receive nothing before it is pinged.
 	pingAfter = 15 * time.Second
