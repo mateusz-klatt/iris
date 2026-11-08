@@ -96,8 +96,9 @@ type TouchResponse struct {
 	Attention Attention `json:"attention"`
 }
 
-// Client calls the hub. A non-nil HTTP client is used as-is; otherwise
-// http.DefaultClient is used and the request context carries the deadline.
+// Client calls the hub. A non-nil HTTP client is used as-is; otherwise defaultClient, whose
+// transport drops dead pooled connections, is used and the request context carries the
+// deadline.
 type Client struct {
 	Config Config
 	HTTP   *http.Client
@@ -223,7 +224,7 @@ var ErrRedirect = errors.New("the hub answered with a redirect, which Iris does 
 // call, so refusing all of them costs nothing.
 func NoRedirects(hc *http.Client) *http.Client {
 	if hc == nil {
-		hc = http.DefaultClient
+		hc = defaultClient
 	}
 	refusing := *hc
 	refusing.CheckRedirect = func(*http.Request, []*http.Request) error { return ErrRedirect }
