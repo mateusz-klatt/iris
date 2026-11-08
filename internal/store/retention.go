@@ -74,9 +74,9 @@ func (s *Store) RunSweeps(ctx context.Context, every time.Duration, log io.Write
 		case ctx.Err() != nil:
 			// The hub is stopping; a sweep it cut short is not a failure to report.
 		case err != nil:
-			fmt.Fprintf(log, "iris: retention sweep failed: %v\n", err)
+			_, _ = fmt.Fprintf(log, "iris: retention sweep failed: %v\n", err)
 		case first || removed["events"]+removed["operations"]+removed["claims"]+removed["executions"] > 0:
-			fmt.Fprintf(log, "iris: retention sweep removed %d events, %d idempotency records, %d finished claims, %d Executions\n", removed["events"], removed["operations"], removed["claims"], removed["executions"])
+			_, _ = fmt.Fprintf(log, "iris: retention sweep removed %d events, %d idempotency records, %d finished claims, %d Executions\n", removed["events"], removed["operations"], removed["claims"], removed["executions"])
 		}
 	}
 	report(true)
