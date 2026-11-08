@@ -5,6 +5,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -44,7 +45,7 @@ func live(t *testing.T) string {
 func TestABackupOfARunningHub(t *testing.T) {
 	src := live(t)
 	before, _ := os.ReadFile(src)
-	dest := filepath.Join(t.TempDir(), "backup ?#.db") // characters an SQLite URI would misread
+	dest := filepath.Join(t.TempDir(), "backup #%20.db") // characters an SQLite URI would misread, and Windows allows
 	var out bytes.Buffer
 	if err := Run(context.Background(), src, dest, &out); err != nil {
 		t.Fatal(err)
@@ -87,14 +88,16 @@ func TestABackupRefuses(t *testing.T) {
 	for name, c := range map[string]struct{ source, dest, want string }{
 		"the live database":         {src, src, "never writes over"},
 		"a stopped backup":          {src, stale, "remove it first"},
-		"a missing database":        {filepath.Join(dir, "none.db"), filepath.Join(dir, "x.db"), "no such file"},
+		"a missing database":        {filepath.Join(dir, "none.db"), filepath.Join(dir, "x.db"), notExist},
 		"a directory":               {dir, filepath.Join(dir, "y.db"), "not a regular file"},
-		"a missing directory":       {src, filepath.Join(dir, "none", "z.db"), "no such file"},
+		"a missing directory":       {src, filepath.Join(dir, "none", "z.db"), notExist},
 		"a file that is not SQLite": {garbage, filepath.Join(dir, "v.db"), "copy:"},
 		"a file that is no hub":     {stale + ".partial", filepath.Join(dir, "w.db"), "read the copy"},
 	} {
 		var out bytes.Buffer
-		if err := Run(context.Background(), c.source, c.dest, &out); err == nil || !strings.Contains(err.Error(), c.want) {
+		err := Run(context.Background(), c.source, c.dest, &out)
+		// The operating system words a missing file its own way, so that case is matched by kind.
+		if err == nil || (c.want == notExist && !errors.Is(err, fs.ErrNotExist)) || (c.want != notExist && !strings.Contains(err.Error(), c.want)) {
 			t.Errorf("%s: %v", name, err)
 		}
 		if c.dest != src && c.dest != stale {
@@ -107,6 +110,9 @@ func TestABackupRefuses(t *testing.T) {
 		}
 	}
 }
+
+// notExist stands for an error that is fs.ErrNotExist.
+const notExist = "<not exist>"
 
 // A file that appears at the destination while the copy is checked is kept, and the backup
 // fails rather than replace it.
