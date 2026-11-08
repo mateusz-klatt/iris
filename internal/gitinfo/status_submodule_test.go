@@ -55,4 +55,9 @@ func TestStatusSkipsUntrackedFilesInSubmodulesOnly(t *testing.T) {
 	if got, err = Status(context.Background(), super); err != nil || got["lib"] != " M" || got["top"] != "??" {
 		t.Fatalf("with a tracked change in the submodule: %v, %v", got, err)
 	}
+	// A commit inside the submodule moves its HEAD, which the superproject still sees.
+	git(filepath.Join(super, "lib"), "commit", "-qam", "inside")
+	if got, err = Status(context.Background(), super); err != nil || got["lib"] != " M" {
+		t.Fatalf("after a commit inside the submodule: %v, %v", got, err)
+	}
 }
