@@ -94,7 +94,12 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 				}
 				counts[table] = n
 			}
-			out = map[string]any{"version": "dev", "stream": s.stream, "boot_epoch": s.epoch, "counts": counts}
+			// The database grows with mail, which nothing prunes (ADR 006), so its size is shown.
+			var bytes int64
+			if err = t.row("SELECT page_count*page_size FROM pragma_page_count(),pragma_page_size()").Scan(&bytes); err != nil {
+				return err
+			}
+			out = map[string]any{"version": "dev", "stream": s.stream, "boot_epoch": s.epoch, "counts": counts, "database_bytes": bytes}
 		default:
 			return fail("not_found", "unknown operation")
 		}

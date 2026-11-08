@@ -152,6 +152,8 @@ func run(args []string) error {
 		case <-done:
 		}
 	}()
+	// Retention (ADR 006): sweep at start, then hourly, until the hub stops.
+	go s.RunSweeps(ctx, time.Hour, os.Stderr)
 	fmt.Fprintf(os.Stderr, "Iris listening on %s\n", listener.Addr())
 	if cfg.TLSCert != "" {
 		err = server.ServeTLS(listener, cfg.TLSCert, cfg.TLSKey)
