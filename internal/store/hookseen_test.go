@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"testing"
 	"time"
 )
@@ -47,4 +48,21 @@ func TestOnlyHooksCountAsTheLastHook(t *testing.T) {
 		t.Fatal("another host's hooks were reported")
 	}
 	expectError(t, s, "hooks_seen", Request{}, "bad_request")
+}
+
+// The guard's check also says the repository's case policy, which doctor needs to warn of a
+// sensitive repository on a checkout that folds case (ADR 003).
+func TestTheCheckSaysTheCasePolicy(t *testing.T) {
+	s, _, _ := testStore(t)
+	_, out := session(t, s, 1)
+	check := Request{Host: "host", Cwd: "/repo/w1", Worktree: "/repo/w1", RemoteURL: "https://example.com/team/project.git", RootCommit: "root"}
+	if got := call(t, s, "check", check)["case_policy"]; got != "folded" {
+		t.Fatalf("policy %v", got)
+	}
+	if err := s.SetRepositoryPolicy(context.Background(), out["repository_id"].(string), "sensitive", "deny"); err != nil {
+		t.Fatal(err)
+	}
+	if got := call(t, s, "check", check)["case_policy"]; got != "sensitive" {
+		t.Fatalf("policy %v", got)
+	}
 }

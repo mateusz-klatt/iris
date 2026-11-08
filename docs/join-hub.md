@@ -178,6 +178,12 @@ hook and fires it in a real session; `iris doctor --live` does that.
 and `iris doctor` exits 1. The row names the failure, and `hook-failures.log` beside the token file
 keeps it. The row clears once the entry is more than 24 hours old.
 
+Doctor also prints a `case policy:` line when the repository you run it in is case-sensitive at the
+hub, which is only by an explicit opt-out (ADR 003), while this checkout folds case, as git records in
+`core.ignorecase` on a default macOS or Windows volume. There, a claim on `a.go` does not stop an edit
+of `A.GO`. Asking the hub uses the guard's check, which, as a commit does, registers a repository the
+hub has not seen yet.
+
 A shell command whose reconciliation ran past its budget is graded differently. The budget is 1 s,
 or 300 ms when the hub runs on the same machine. The hook still worked; that command's changes only
 went unclaimed, because `git status` or the hub was slow: a big or cold worktree, a loaded machine

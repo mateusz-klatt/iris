@@ -268,6 +268,8 @@ type CheckRequest struct {
 type CheckResponse struct {
 	Message   string  `json:"message"`
 	Conflicts []Claim `json:"conflicts"`
+	// CasePolicy is the repository's case policy, folded or sensitive (ADR 003).
+	CasePolicy string `json:"case_policy,omitempty"`
 }
 
 func (c *Client) CheckPaths(ctx context.Context, req CheckRequest) (CheckResponse, error) {
