@@ -23,6 +23,12 @@ it runs in, using the hooks path that Git itself resolves: installed, not instal
 pre-commit hook without Iris. A missing guard does not fail doctor.
 
 `iris guard check` reads staged paths, including both ends of renames and deletions.
+During a merge or a cherry-pick, it reads `MERGE_HEAD` (every head of an octopus merge) or
+`CHERRY_PICK_HEAD` from the worktree's git directory. It then checks only staged paths whose
+content differs from HEAD's and from every incoming commit's. A path that equals an incoming
+version is that side's content, staged only because the merge brought it in. A path resolved to
+new content, or changed on both sides and kept as this side has it, is checked. A revert is
+checked as an ordinary commit: reverting someone's commit changes their files.
 It refuses paths claimed by an Execution in another worktree, and names where the holder
 works, so the person refused knows which checkout to ask about:
 `Iris: web/src/App.tsx is held by claude-home-iris (branch feat/claims, worktree /home/a/iris on home-wsl) until …`.
