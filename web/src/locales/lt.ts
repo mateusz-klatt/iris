@@ -2,7 +2,6 @@ import type { TranslationResource } from "../i18n";
 
 const translation = {
   appName: "Iris",
-  appSubtitle: "Iris",
   skipToContent: "Pereiti prie turinio",
   mailboxSecureDelivery: "Patvarus pristatymas",
   navigation: "Pagrindinis naršymas",
@@ -362,6 +361,9 @@ const translation = {
     doctorStale: "Patikrinta daugiau nei prieš dieną, todėl dabar mažai ką sako apie klientą.",
     clientHealth: "Kliento būsena",
     noHostReport: "Iš šio kompiuterio ataskaitos nėra",
+    claimFilters: "Filtruoti rezervacijas",
+    claimExpired: "Pasibaigė",
+    noClaimsMatch: "Jokia rezervacija neatitinka šių filtrų.",
     retry: "Bandyti dar kartą",
     doctorMissing: "Dar neišsaugota jokia doctor ataskaita. Šiame kompiuteryje paleiskite {{command}}.",
     statusOk: "Hook gautas",
@@ -398,6 +400,9 @@ const translation = {
     detail: "Išsamiau",
     version: "Versija",
     checkedAt: "Patikrinta {{date}}",
+    review: "Peržiūrėti",
+    reviewTitle: "Patikrinkite prieš siųsdami",
+    reviewBack: "Grįžti prie juodraščio",
   },
 } satisfies TranslationResource;
 

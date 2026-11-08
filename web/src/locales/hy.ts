@@ -2,7 +2,6 @@ import type { TranslationResource } from "../i18n";
 
 const translation = {
   appName: "Iris",
-  appSubtitle: "Iris",
   skipToContent: "Անցնել բովանդակությանը",
   mailboxSecureDelivery: "Կայուն առաքում",
   navigation: "Հիմնական նավարկում",
@@ -362,6 +361,9 @@ const translation = {
     doctorStale: "Ստուգվել է ավելի քան մեկ օր առաջ, ուստի հիմա քիչ բան է ասում կլիենտի մասին։",
     clientHealth: "Կլիենտի վիճակը",
     noHostReport: "Այս համակարգչից հաշվետվություն չկա",
+    claimFilters: "Զտել ամրագրումները",
+    claimExpired: "Ժամկետն անցել է",
+    noClaimsMatch: "Ոչ մի ամրագրում չի համապատասխանում այս զտիչներին։",
     retry: "Կրկին փորձել",
     doctorMissing: "Դեռ doctor հաշվետվություն չի պահվել։ Այս համակարգչում գործարկեք {{command}}-ը։",
     statusOk: "Hook-ը ստացվել է",
@@ -398,6 +400,9 @@ const translation = {
     detail: "Մանրամասներ",
     version: "Տարբերակ",
     checkedAt: "Ստուգվել է՝ {{date}}",
+    review: "Վերանայել",
+    reviewTitle: "Ստուգեք ուղարկելուց առաջ",
+    reviewBack: "Վերադառնալ սևագրին",
   },
 } satisfies TranslationResource;
 

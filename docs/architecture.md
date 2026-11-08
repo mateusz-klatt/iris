@@ -210,9 +210,14 @@ named for that directory: a bind mount or a symlink that gives the same director
 as `/mnt/d/projects/iris` and `/home/klattm/projects/iris` on one host, is made that first path,
 so it is the same worktree, the same agent and the same claims. A remount or a reboot can give a
 device and inode to another directory, so a path folds only when its repository, by remote and
-root commit, is the one the first path was seen with. Windows sends no such id, so a
-junction or a mapped drive still counts as another worktree there; so does every path from an
-older client.
+root commit, is the one the first path was seen with. On Windows the id is the volume serial
+number and the 128-bit file id, so a junction, a mapped or subst drive, or a path spelt in another
+case is the same worktree too (measured on NTFS). The 128-bit id is unique on ReFS and Dev Drives
+as well, where the older 64-bit file index is not guaranteed to be. A file system without it, such
+as FAT or UDF (measured on a UDF disc), falls back to the serial and the 64-bit index. On a network
+drive either id is only as good as the server, so two directories there could in principle share
+one, which the repository check above limits to the same repository. ReFS itself was not measured.
+Every path from an older client is keyed on itself, as before.
 
 ### D7. Attention: instant where possible, honest everywhere
 
@@ -368,6 +373,14 @@ or none. Paths the caller already holds are reused, and an `explicit` claim is n
 An `auto` claim lasts 10 minutes from the last touch. A retried call, identified by its tool call
 id, does not extend it.
 
+An `auto` claim means "this session has uncommitted changes here". When a shell command takes a
+path out of the session's git status, by commit, stash or restore, the reconcile releases the
+session's own `auto` claim on that path in the same transaction, and wakes whoever waited for it.
+An `explicit` claim, and every other session's claim, stays. Committed but unmerged work is
+git's business, not a claim's. This happens only at the session's next shell reconcile: a commit
+made outside the session, or an edit-tool claim on a path no shell command ever saw dirty,
+keeps its claim until it expires.
+
 `claim.ignore` lists paths that never take an auto claim and only warn: by default lockfiles such
 as `go.sum`, `package-lock.json`, `pnpm-lock.yaml` and `Cargo.lock`, changelogs, and generated
 output. An `explicit` claim still applies to them.
@@ -405,8 +418,18 @@ Antigravity runs hooks in `.agents/`, so its adapter takes the root from `worksp
 
 A shell command is visible only as a string, so a pre-tool hook cannot tell what it will
 touch. After a shell tool, the hook compares `git status --porcelain -z` with the previous
-state under a time limit, and warns about paths claimed from another worktree. It detects, it
+state under a time limit, and warns about paths claimed from another worktree. Only paths
+still changed after the command count: one that left the status was committed, stashed or
+restored by git in this worktree, which changes nothing in another. It detects, it
 cannot undo. In a shared worktree attribution is impossible, so it stays silent there.
+
+Status compares each path's two-letter code, not its content. A second change to a path that
+was already dirty therefore goes unseen. A submodule is a single path in its superproject: it
+shows ` M` once its tracked content changes, and nothing finer. Files that are only untracked
+inside a submodule are left out (`--ignore-submodules=untracked`). Scanning large submodules
+for them took one measured repository from 20 ms to 5.5 s, far past the budget, and a
+reconcile past its budget detects nothing at all. A command run inside the submodule is
+reconciled against the submodule's own repository, untracked files included.
 
 `iris guard` is a pre-commit check, installed per repository on request. It refuses a commit
 of paths held by another Execution. It is the strongest check Iris has, and it is cooperative.
@@ -643,6 +666,11 @@ reported with a warning. It is not refused beforehand. This is detection, not pr
 into a path someone else holds is reported, not stopped, and the pre-commit guard remains the
 last checkpoint.
 
+Claude Code on Windows has a `PowerShell` tool beside `Bash` (measured on 2.1.319). It takes a
+command in `tool_input.command` and writes files as freely, as `Set-Content` does, so it takes the
+same shell path: a write is detected afterwards and reported, not refused beforehand. Until this
+was measured, the tool was unknown to Iris, so its writes went unreconciled and unreported.
+
 ## 4. Known gaps
 
 - The test suite passes on Windows and macOS in CI, but no real client has run there yet. Hook
@@ -655,6 +683,19 @@ last checkpoint.
 - A tool result the client drops after the MCP server confirmed the fetch leaves that mail quiet
   until something else makes the model look (ADR 010). A response lost before the MCP server
   holds it is recovered.
+- Shell reconciliation already claims only paths that still differ from HEAD or from the index
+  after a command, so a file git restored is never claimed. Two kinds of noise remain. A path that
+  left the status, because git restored it in this worktree, still draws a warning when someone
+  else holds it. And a path that differs only in the index, after `git reset --soft` or
+  `git cherry-pick -n`, is claimed although the working tree did not change. Claims hold across
+  checkouts of a repository by design (ADR 003, D10), so such noise reaches the other checkout.
+  claude-laptop-iris owns that work.
+- The guard's refusal names a claim's holder, but not the holder's branch or worktree, so the
+  person in another checkout cannot tell where to ask. Same owner as the item above.
+- Codex's built-in clock, collaboration and web tools, and Claude Code's Monitor, TaskStop and
+  ScheduleWakeup, are classified by the names iris hook logged as unknown on a real host. No
+  payload capture backs those names yet. Codex runs a new hook only after a person trusts it in
+  `/hooks`, so the capture waits for one.
 
 ## 5. Invariants the tests must prove
 

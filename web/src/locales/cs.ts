@@ -2,7 +2,6 @@ import type { TranslationResource } from "../i18n";
 
 const translation = {
   appName: "Iris",
-  appSubtitle: "Iris",
   skipToContent: "Přejít na obsah",
   mailboxSecureDelivery: "Trvalé doručování",
   navigation: "Hlavní navigace",
@@ -362,6 +361,9 @@ const translation = {
     doctorStale: "Kontrolováno před více než dnem, takže o klientovi teď mnoho neříká.",
     clientHealth: "Stav klienta",
     noHostReport: "Z tohoto počítače není žádná zpráva",
+    claimFilters: "Filtrovat rezervace",
+    claimExpired: "Vypršela",
+    noClaimsMatch: "Těmto filtrům neodpovídá žádná rezervace.",
     retry: "Zkusit znovu",
     doctorMissing: "Zatím není uložena žádná zpráva doctor. Spusťte {{command}} na tomto počítači.",
     statusOk: "Hook přijat",
@@ -398,6 +400,9 @@ const translation = {
     detail: "Podrobnosti",
     version: "Verze",
     checkedAt: "Zkontrolováno {{date}}",
+    review: "Zkontrolovat",
+    reviewTitle: "Zkontrolujte před odesláním",
+    reviewBack: "Zpět ke konceptu",
   },
 } satisfies TranslationResource;
 

@@ -2,7 +2,6 @@ import type { TranslationResource } from "../i18n";
 
 const translation = {
   appName: "Iris",
-  appSubtitle: "Iris",
   skipToContent: "Перейти к содержимому",
   mailboxSecureDelivery: "Надёжная доставка",
   navigation: "Основная навигация",
@@ -362,6 +361,9 @@ const translation = {
     doctorStale: "Проверено больше суток назад, поэтому сейчас это мало говорит о клиенте.",
     clientHealth: "Состояние клиента",
     noHostReport: "Нет отчёта с этого компьютера",
+    claimFilters: "Фильтр резервирований",
+    claimExpired: "Истекло",
+    noClaimsMatch: "Нет резервирований, подходящих под эти фильтры.",
     retry: "Повторить",
     doctorMissing: "Отчёт doctor ещё не сохранён. Запустите {{command}} на этом компьютере.",
     statusOk: "Hook получен",
@@ -398,6 +400,9 @@ const translation = {
     detail: "Подробности",
     version: "Версия",
     checkedAt: "Проверено {{date}}",
+    review: "Проверить",
+    reviewTitle: "Проверьте перед отправкой",
+    reviewBack: "Вернуться к черновику",
   },
 } satisfies TranslationResource;
 

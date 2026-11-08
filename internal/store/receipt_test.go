@@ -128,3 +128,31 @@ func TestAFetchWithoutAReceiptIsAsBefore(t *testing.T) {
 		t.Fatalf("an old fetch was woken: %d events after %d", after, before)
 	}
 }
+
+// An ack settles a delivery, so it ends the wait for its fetch receipt too: the acked row keeps
+// no receipt due time for the sweep to find.
+func TestAnAckClearsTheReceiptDueTime(t *testing.T) {
+	s, _, _ := testStore(t)
+	sender, _ := session(t, s, 1)
+	reader, out := session(t, s, 2)
+	mail := sender
+	mail.Key, mail.To, mail.Subject, mail.Body = "k", []string{out["agent"].(map[string]any)["name"].(string)}, "s", "b"
+	call(t, s, "messages", mail)
+	asked := reader
+	asked.Receipt = true
+	d := call(t, s, "inbox", asked)["deliveries"].([]map[string]any)[0]
+	due := func() bool {
+		var set bool
+		if err := s.db.QueryRow("SELECT receipt_due_ms IS NOT NULL FROM Delivery WHERE id=?", d["id"]).Scan(&set); err != nil {
+			t.Fatal(err)
+		}
+		return set
+	}
+	if !due() {
+		t.Fatal("a fetch awaiting its receipt has no due time")
+	}
+	call(t, s, "ack", Request{ExecutionID: reader.ExecutionID, Generation: reader.Generation, Attempt: d["attempt"].(int64), Key: d["id"].(string)})
+	if due() {
+		t.Fatal("an acked delivery still waits for its receipt")
+	}
+}

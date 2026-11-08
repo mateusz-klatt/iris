@@ -2,7 +2,6 @@ import type { TranslationResource } from "../i18n";
 
 const translation = {
   appName: "Iris",
-  appSubtitle: "Iris",
   skipToContent: "Kalo te përmbajtja",
   mailboxSecureDelivery: "Dorëzim i qëndrueshëm",
   navigation: "Navigimi kryesor",
@@ -353,6 +352,9 @@ const translation = {
     doctorStale: "Kontrolluar më shumë se një ditë më parë, ndaj tani thotë pak për klientin.",
     clientHealth: "Gjendja e klientit",
     noHostReport: "Nuk ka raport nga ky kompjuter",
+    claimFilters: "Filtro rezervimet",
+    claimExpired: "Ka skaduar",
+    noClaimsMatch: "Asnjë rezervim nuk përputhet me këta filtra.",
     retry: "Provo përsëri",
     doctorMissing: "Ende nuk është ruajtur asnjë raport doctor. Ekzekutoni {{command}} në këtë kompjuter.",
     statusOk: "Hook u mor",
@@ -389,6 +391,9 @@ const translation = {
     detail: "Hollësi",
     version: "Versioni",
     checkedAt: "Kontrolluar më {{date}}",
+    review: "Rishiko",
+    reviewTitle: "Kontrolloni para dërgimit",
+    reviewBack: "Kthehu te drafti",
   },
 } satisfies TranslationResource;
 

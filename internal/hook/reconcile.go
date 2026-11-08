@@ -91,14 +91,17 @@ func (r Runner) reconcile(ctx context.Context, ev Event, state *runState) Output
 		return state.fail(err, out)
 	}
 	done := make(chan Output, 1)
+	// The first stage is set before the goroutine starts. On a loaded machine the budget can run
+	// out before the goroutine first runs, and a budget spent at no stage would read as a broken
+	// hook instead of a slow one.
+	state.at("shell repository")
 	go func() {
 		// Keep the same fail-open guarantee as the main hook, including dependency panics.
 		defer func() {
 			if recover() != nil {
-				done <- settle(hookFailure("panic during shell reconciliation"), allow)
+				done <- settle(failPanicShell, allow)
 			}
 		}()
-		state.at("shell repository")
 		repo, err := r.repoFor(ev)
 		if errors.Is(err, gitinfo.ErrNotRepo) {
 			done <- allow // outside a worktree the hook does nothing (D3, rule 5)

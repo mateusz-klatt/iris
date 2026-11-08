@@ -2,7 +2,6 @@ import type { TranslationResource } from "../i18n";
 
 const translation = {
   appName: "Iris",
-  appSubtitle: "Iris",
   skipToContent: "Pāriet uz saturu",
   mailboxSecureDelivery: "Noturīga piegāde",
   navigation: "Galvenā navigācija",
@@ -362,6 +361,9 @@ const translation = {
     doctorStale: "Pārbaudīts vairāk nekā pirms dienas, tāpēc tagad maz ko pasaka par klientu.",
     clientHealth: "Klienta stāvoklis",
     noHostReport: "No šī datora nav pārskata",
+    claimFilters: "Filtrēt rezervācijas",
+    claimExpired: "Beigusies",
+    noClaimsMatch: "Neviena rezervācija neatbilst šiem filtriem.",
     retry: "Mēģināt vēlreiz",
     doctorMissing: "Vēl nav saglabāts neviens doctor pārskats. Šajā datorā palaidiet {{command}}.",
     statusOk: "Hook saņemts",
@@ -398,6 +400,9 @@ const translation = {
     detail: "Detaļas",
     version: "Versija",
     checkedAt: "Pārbaudīts {{date}}",
+    review: "Pārskatīt",
+    reviewTitle: "Pārbaudiet pirms sūtīšanas",
+    reviewBack: "Atpakaļ uz melnrakstu",
   },
 } satisfies TranslationResource;
 
