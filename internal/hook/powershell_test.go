@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"github.com/mateusz-klatt/iris/internal/hub"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
@@ -77,7 +78,18 @@ func TestCapturedPowerShellWriteIsReconciledLikeBash(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		return Runner{ClientName: string(ClientClaude), EventName: event, Stdin: bytes.NewReader(raw), Getenv: getenv, Hub: client, Host: func() string { return "testhost" }, Ancestor: func() (proc.Ancestor, error) { return proc.Ancestor{}, nil }, after: never, logAfter: never}.Run()
+		// This checks the captured tool's reconciliation, not the speed of git or the
+		// test hub. after: never disables the outer timer, but not the shell's own
+		// context deadline. Budget tests separately assert the production fail-open limit.
+		out := Runner{ClientName: string(ClientClaude), EventName: event, Stdin: bytes.NewReader(raw), Getenv: getenv, Hub: client, Host: func() string { return "testhost" }, Ancestor: func() (proc.Ancestor, error) { return proc.Ancestor{}, nil }, ShellDeadline: time.Hour, after: never, logAfter: never}.Run()
+		failures, err := ReadRecentFailures(token, 10)
+		if err != nil || len(failures) != 0 {
+			t.Fatalf("%s hook failed: failures=%+v log error=%v stdout=%s stderr=%s", event, failures, err, out.Stdout, out.Stderr)
+		}
+		if out.Exit != 0 {
+			t.Fatalf("%s exited %d: stdout=%s stderr=%s", event, out.Exit, out.Stdout, out.Stderr)
+		}
+		return out
 	}
 
 	before := run("PreToolUse", "PreToolUse-powershell.json")
