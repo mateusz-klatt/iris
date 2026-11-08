@@ -10,6 +10,7 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -19,6 +20,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -206,7 +208,11 @@ func (r *Report) actions(root string, src Sources) {
 				if found[1] == "" || found[1] == m[4] {
 					return use
 				}
-				if change := fmt.Sprintf("%s %s%s -> %s (%s)", filepath.Base(file), repo, m[3], found[0], found[1][:12]); !said[change] {
+				change := fmt.Sprintf("%s %s%s -> %s (%s)", filepath.Base(file), repo, m[3], found[0], found[1][:12])
+				if was := strings.TrimSpace(strings.TrimPrefix(strings.TrimSpace(m[5]), "#")); was != "" && major(was) != major(found[0]) {
+					change += ", major from " + was
+				}
+				if !said[change] {
 					said[change] = true
 					r.Changes = append(r.Changes, change)
 				}
@@ -216,18 +222,24 @@ func (r *Report) actions(root string, src Sources) {
 	}
 }
 
-// release is the newest release of repo and the commit its tag points at.
+// release is the newest release of repo and the commit its tag points at. A repository that
+// publishes tags but no GitHub releases answers releases/latest with 404; its highest version tag
+// is used instead.
 func (s Sources) release(repo string) (string, string, error) {
 	var rel struct {
 		Tag string `json:"tag_name"`
 	}
 	if err := s.getJSON(s.GitHub+"/repos/"+repo+"/releases/latest", true, &rel); err != nil {
-		return "", "", err
+		var status *statusError
+		if !errors.As(err, &status) || status.code != http.StatusNotFound {
+			return "", "", err
+		}
+		return s.newestTag(repo)
 	}
 	var ref struct {
 		Object struct{ Type, SHA string } `json:"object"`
 	}
-	if err := s.getJSON(s.GitHub+"/repos/"+repo+"/git/ref/tags/"+rel.Tag, true, &ref); err != nil {
+	if err := s.getJSON(s.GitHub+"/repos/"+repo+"/git/ref/tags/"+escapeTag(rel.Tag), true, &ref); err != nil {
 		return "", "", err
 	}
 	// An annotated tag points at a tag object, which points at the commit. A chain longer than a
@@ -244,10 +256,86 @@ func (s Sources) release(repo string) (string, string, error) {
 		}
 		ref.Object = tag.Object
 	}
-	if !regexp.MustCompile(`^[0-9a-f]{40}$`).MatchString(ref.Object.SHA) {
+	if !commitSHA.MatchString(ref.Object.SHA) {
 		return "", "", fmt.Errorf("tag %s names no commit", rel.Tag)
 	}
 	return rel.Tag, ref.Object.SHA, nil
+}
+
+// escapeTag escapes each part of a tag for a URL path. The slashes in a tag such as pkg/v1 are
+// kept, since GitHub's ref path takes them as written.
+func escapeTag(tag string) string {
+	parts := strings.Split(tag, "/")
+	for i, part := range parts {
+		parts[i] = neturl.PathEscape(part)
+	}
+	return strings.Join(parts, "/")
+}
+
+// newestTag is the highest version tag on the first page of repo's tags, and its commit. The
+// tags list names the commit directly, so no tag object is followed. Only plain versions count:
+// a prerelease such as v2.0.0-rc.1 is never chosen over a release.
+func (s Sources) newestTag(repo string) (string, string, error) {
+	var tags []struct {
+		Name   string `json:"name"`
+		Commit struct {
+			SHA string `json:"sha"`
+		} `json:"commit"`
+	}
+	if err := s.getJSON(s.GitHub+"/repos/"+repo+"/tags?per_page=100", true, &tags); err != nil {
+		return "", "", fmt.Errorf("no release, and the tags could not be listed: %w", err)
+	}
+	best, sha := "", ""
+	for _, tag := range tags {
+		if versionTag.MatchString(tag.Name) && (best == "" || newer(tag.Name, best)) {
+			best, sha = tag.Name, tag.Commit.SHA
+		}
+	}
+	if best == "" {
+		return "", "", fmt.Errorf("no release and no version tag")
+	}
+	if !commitSHA.MatchString(sha) {
+		return "", "", fmt.Errorf("tag %s names no commit", best)
+	}
+	return best, sha, nil
+}
+
+var (
+	versionTag = regexp.MustCompile(`^v?\d+(\.\d+)*$`)
+	commitSHA  = regexp.MustCompile(`^[0-9a-f]{40}$`)
+)
+
+// newer reports whether version tag a is higher than b, comparing each number in turn.
+func newer(a, b string) bool {
+	x, y := numbers(a), numbers(b)
+	for i := 0; i < len(x) || i < len(y); i++ {
+		var p, q int
+		if i < len(x) {
+			p = x[i]
+		}
+		if i < len(y) {
+			q = y[i]
+		}
+		if p != q {
+			return p > q
+		}
+	}
+	return false
+}
+
+func numbers(tag string) []int {
+	var out []int
+	for _, part := range strings.Split(strings.TrimPrefix(tag, "v"), ".") {
+		n, _ := strconv.Atoi(part) // a part that is not a number counts as 0
+		out = append(out, n)
+	}
+	return out
+}
+
+// major is a tag's first number, as written: v4.2.1 and v4 are both "4". A major change is
+// flagged in the summary, since only CI proves the action still takes the same inputs.
+func major(tag string) string {
+	return strings.SplitN(strings.TrimPrefix(tag, "v"), ".", 2)[0]
 }
 
 var fromLine = regexp.MustCompile(`(FROM\s+(?:--platform=\S+\s+)?)([a-z0-9./_-]+):([A-Za-z0-9._-]+)@(sha256:[0-9a-f]{64})`)
@@ -356,6 +444,14 @@ func (s Sources) registryToken(challenge string) (string, error) {
 	return out.Token, nil
 }
 
+// statusError is an answer other than 200, kept typed so a 404 can be told apart.
+type statusError struct {
+	url, status string
+	code        int
+}
+
+func (e *statusError) Error() string { return "GET " + e.url + ": " + e.status }
+
 // getJSON fetches url into dest. A GitHub call carries the token when there is one.
 func (s Sources) getJSON(url string, github bool, dest any) error {
 	req, err := http.NewRequest(http.MethodGet, url, nil)
@@ -374,7 +470,7 @@ func (s Sources) getJSON(url string, github bool, dest any) error {
 	}
 	defer func() { _ = res.Body.Close() }()
 	if res.StatusCode != http.StatusOK {
-		return fmt.Errorf("GET %s: %s", url, res.Status)
+		return &statusError{url: url, code: res.StatusCode, status: res.Status}
 	}
 	return json.NewDecoder(res.Body).Decode(dest)
 }

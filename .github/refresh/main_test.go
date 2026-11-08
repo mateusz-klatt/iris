@@ -165,7 +165,7 @@ func TestRefreshUpdatesEveryPinAndRunsTheChecks(t *testing.T) {
 	summary := strings.Join(report.Changes, "\n")
 	for _, line := range []string{
 		"Makefile GOLANGCI_LINT_VERSION v2.15.0 -> v2.16.0",
-		"ci.yml actions/checkout -> v7.0.1 (222222222222)",
+		"ci.yml actions/checkout -> v7.0.1 (222222222222), major from v4",
 		"Dockerfile busybox:1.38 sha256:aaaaaaaaaaaa -> sha256:bbbbbbbbbbbb",
 		"go.mod github.com/coder/websocket v1.8.13 -> v1.8.14",
 		"web react 19.0.0 -> 19.1.0",
@@ -328,6 +328,59 @@ func TestUnwritableFilesAreReported(t *testing.T) {
 	r.edit(locked, func(s string) string { return s + "x" })
 	if len(r.Problems) != 2 {
 		t.Fatalf("%v", r.Problems)
+	}
+}
+
+// A repository with tags but no GitHub releases is pinned to its highest version tag, never to a
+// prerelease, and a tag is escaped part by part in the ref path.
+func TestTagsStandInForMissingReleases(t *testing.T) {
+	mux := http.NewServeMux()
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+	tags := func(body string) http.HandlerFunc {
+		return func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(body)) }
+	}
+	mux.HandleFunc("/gh/repos/o/tagged/tags", tags(`[{"name":"v1.9","commit":{"sha":"`+oldSHA+`"}},{"name":"v2.0.0-rc.1","commit":{"sha":"`+oldSHA+`"}},`+
+		`{"name":"v1.10","commit":{"sha":"`+newSHA+`"}},{"name":"latest","commit":{"sha":"`+oldSHA+`"}},{"name":"v1.2.3","commit":{"sha":"`+oldSHA+`"}}]`))
+	mux.HandleFunc("/gh/repos/o/untagged/tags", tags(`[{"name":"nightly","commit":{"sha":"`+oldSHA+`"}}]`))
+	mux.HandleFunc("/gh/repos/o/shortsha/tags", tags(`[{"name":"v1","commit":{"sha":"short"}}]`))
+	mux.HandleFunc("/gh/repos/o/broken/releases/latest", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusBadGateway) })
+	// A nested tag keeps its slash, and a space in it is escaped.
+	mux.HandleFunc("/gh/repos/o/nested/releases/latest", tags(`{"tag_name":"pkg/v 1"}`))
+	mux.HandleFunc("/gh/repos/o/nested/git/ref/tags/", func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.EscapedPath() != "/gh/repos/o/nested/git/ref/tags/pkg/v%201" {
+			http.Error(w, r.URL.EscapedPath(), http.StatusBadRequest)
+			return
+		}
+		_, _ = w.Write([]byte(`{"object":{"type":"commit","sha":"` + newSHA + `"}}`))
+	})
+	src := Sources{GitHub: srv.URL + "/gh", HTTP: srv.Client()}
+	if tag, sha, err := src.release("o/tagged"); err != nil || tag != "v1.10" || sha != newSHA {
+		t.Errorf("tagged: %s %s %v", tag, sha, err)
+	}
+	if tag, sha, err := src.release("o/nested"); err != nil || tag != "pkg/v 1" || sha != newSHA {
+		t.Errorf("nested: %s %s %v", tag, sha, err)
+	}
+	for repo, want := range map[string]string{
+		"o/untagged": "no release and no version tag",
+		"o/shortsha": "tag v1 names no commit",
+		"o/missing":  "no release, and the tags could not be listed",
+		"o/broken":   "502",
+	} {
+		if _, _, err := src.release(repo); err == nil || !strings.Contains(err.Error(), want) {
+			t.Errorf("%s: %v", repo, err)
+		}
+	}
+	for _, c := range []struct {
+		a, b string
+		want bool
+	}{{"v1.10", "v1.9", true}, {"v1.9", "v1.10", false}, {"v2", "v1.99.99", true}, {"v1.0", "v1", false}, {"v1.0.1", "v1", true}} {
+		if got := newer(c.a, c.b); got != c.want {
+			t.Errorf("newer(%s, %s) = %v", c.a, c.b, got)
+		}
+	}
+	if major("v4.2.1") != "4" || major("v4") != "4" || major("7") != "7" {
+		t.Error("major")
 	}
 }
 
