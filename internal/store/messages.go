@@ -17,8 +17,9 @@ const inboxBudget = 512 << 10
 func (t *transaction) send(r Request) (map[string]any, error) {
 	var e execution
 	var err error
+	var repo string
 	if r.Source == "operator" {
-		e, err = t.humanSender(r)
+		repo, err = t.operatorRepository(r)
 	} else {
 		e, err = t.live(r.ExecutionID, r.Generation)
 	}
@@ -27,6 +28,16 @@ func (t *transaction) send(r Request) (map[string]any, error) {
 	}
 	if len([]byte(r.Body)) > 16384 || len(r.Subject) > 1024 {
 		return nil, fail("too_large", "body is limited to 16 KiB and subject to 1024 bytes")
+	}
+	if r.Source == "operator" {
+		out, found, err := t.operatorCached(repo, r)
+		if err != nil || found {
+			return out, err
+		}
+		e, err = t.operatorSender(repo)
+		if err != nil {
+			return nil, err
+		}
 	}
 	out, found, err := t.cached(e, r.Key, "message", r)
 	if err != nil || found {

@@ -107,7 +107,7 @@ func installFaultDriver(t *testing.T, s *Store, file string) *storageFault {
 }
 
 func TestStorageFailuresRollBackAndRetry(t *testing.T) {
-	for _, op := range []string{"sessions", "session-resume", "session-resume-learns-root", "session-remote-learns-root", "heartbeat-recovery", "session-new-slot", "session-learns-root", "touch-cached", "touch-conflict", "claim-conflict", "check-known", "policy", "bind", "heartbeat", "end", "end-handover", "touch", "claim", "claim-reuse", "claim-cached", "release", "claims", "messages", "message-repo", "contact", "message-cached", "inbox", "ack", "ack-handled", "inbox-receipt", "receipt-sweep", "receipts", "read_body", "agents", "agents-all", "hooks_seen", "events", "events-reset", "status", "validate", "monitor_cursor", "check", "check-alias", "session-alias", "reconcile", "reconcile-release", "reconcile-session", "ui_overview", "ui_deliveries", "ui_threads", "ui_thread", "ui_read", "ui_messages", "ui_messages-existing-human", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_events", "expire", "sweep", "forget", "forget-repository", "history", "thread", "read_message_body", "merge", "merge-dry-run"} {
+	for _, op := range []string{"sessions", "session-resume", "session-resume-learns-root", "session-remote-learns-root", "heartbeat-recovery", "session-new-slot", "session-learns-root", "touch-cached", "touch-conflict", "claim-conflict", "check-known", "policy", "bind", "heartbeat", "end", "end-handover", "touch", "claim", "claim-reuse", "claim-cached", "release", "claims", "messages", "message-repo", "contact", "message-cached", "inbox", "ack", "ack-handled", "inbox-receipt", "receipt-sweep", "receipts", "read_body", "agents", "agents-all", "hooks_seen", "events", "events-reset", "status", "validate", "monitor_cursor", "check", "check-alias", "session-alias", "reconcile", "reconcile-release", "reconcile-session", "ui_overview", "ui_deliveries", "ui_threads", "ui_thread", "ui_read", "ui_messages", "ui_messages-existing-human", "ui_messages-cached", "ui_messages-merged-cached", "ui_messages-retired-cached", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_events", "expire", "sweep", "forget", "forget-repository", "history", "thread", "read_message_body", "merge", "merge-dry-run"} {
 		t.Run(op, func(t *testing.T) {
 			s, clock, file := testStore(t)
 			a, ar := session(t, s, 1)
@@ -317,6 +317,22 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 				route = "ui_messages"
 				call(t, s, "ui_messages", Request{RepositoryID: repo, Key: "human-first", To: []string{name}, Body: "existing human mailbox"})
 				r = Request{RepositoryID: repo, Key: "human-next", To: []string{name}, Body: "operator reply"}
+			case "ui_messages-cached":
+				route = "ui_messages"
+				r = Request{Key: "saved-operator", To: []string{name}, Body: "accepted operator send"}
+				call(t, s, "ui_messages", r)
+			case "ui_messages-merged-cached", "ui_messages-retired-cached":
+				route = "ui_messages"
+				other := call(t, s, "sessions", Request{Client: "codex", Host: "operator-origin", SessionID: "operator-origin", Cwd: "/operator-origin", RemoteURL: "https://operator-origin.example/iris.git", RootCommit: "root"})
+				otherID := other["repository_id"].(string)
+				otherName := other["agent"].(map[string]any)["name"].(string)
+				r = Request{Key: "same-operator-key", To: []string{otherName}, Body: "source operator send with a lost response"}
+				if op == "ui_messages-retired-cached" {
+					r.RepositoryID = otherID
+				}
+				call(t, s, "ui_messages", r)
+				call(t, s, "ui_messages", Request{Key: r.Key, To: []string{name}, Body: "distinct destination operation under the same key"})
+				call(t, s, "merge", mergeRequest(otherID, repo, false))
 			case "ui_revoke":
 				r.Fence = number(existing["fence"])
 			case "inbox-receipt":
