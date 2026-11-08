@@ -408,6 +408,14 @@ touch. After a shell tool, the hook compares `git status --porcelain -z` with th
 state under a time limit, and warns about paths claimed from another worktree. It detects, it
 cannot undo. In a shared worktree attribution is impossible, so it stays silent there.
 
+Status compares each path's two-letter code, not its content. A second change to a path that
+was already dirty therefore goes unseen. A submodule is a single path in its superproject: it
+shows ` M` once its tracked content changes, and nothing finer. Files that are only untracked
+inside a submodule are left out (`--ignore-submodules=untracked`). Scanning large submodules
+for them took one measured repository from 20 ms to 5.5 s, far past the budget, and a
+reconcile past its budget detects nothing at all. A command run inside the submodule is
+reconciled against the submodule's own repository, untracked files included.
+
 `iris guard` is a pre-commit check, installed per repository on request. It refuses a commit
 of paths held by another Execution. It is the strongest check Iris has, and it is cooperative.
 
