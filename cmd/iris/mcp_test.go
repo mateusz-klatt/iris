@@ -124,3 +124,51 @@ func TestMCPStdinEOF(t *testing.T) {
 		t.Fatal("MCP did not stop on stdin EOF while its parent remained alive")
 	}
 }
+
+// A client gives an MCP server a short time to answer initialize, and Iris binds lazily, so no
+// hub call may come before the handshake. With the hub unreachable, initialize and the tool list
+// are still answered at once; only a tool call would wait for the hub.
+func TestMCPAnswersInitializeAtOnceWithTheHubUnreachable(t *testing.T) {
+	exe, _ := os.Executable()
+	cmd := exec.Command(exe, "-test.run=^TestMCPStdio$")
+	// Port 9 on loopback has no listener: every hub call there fails, after the dial.
+	cmd.Env = append(os.Environ(), "IRIS_TEST_MCP_CHILD=1", "IRIS_EXECUTION=", "IRIS_CHILD_HUB_URL=http://127.0.0.1:9", "IRIS_CHILD_TOKEN_FILE="+filepath.Join(t.TempDir(), "token"))
+	stdin, err := cmd.StdinPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = cmd.Process.Kill(); _ = cmd.Wait() }()
+	lines := json.NewDecoder(stdout)
+	ask := func(id int, method string, params any) time.Duration {
+		raw, _ := json.Marshal(map[string]any{"jsonrpc": "2.0", "id": id, "method": method, "params": params})
+		start := time.Now()
+		if _, err := stdin.Write(append(raw, '\n')); err != nil {
+			t.Fatal(err)
+		}
+		var answer struct {
+			ID     int             `json:"id"`
+			Result json.RawMessage `json:"result"`
+		}
+		if err := lines.Decode(&answer); err != nil || answer.ID != id || len(answer.Result) == 0 {
+			t.Fatalf("%s: %v %+v", method, err, answer)
+		}
+		return time.Since(start)
+	}
+	// The process starts first, so its start-up is not what is measured: the handshake is.
+	time.Sleep(300 * time.Millisecond)
+	initialize := ask(1, "initialize", map[string]any{"protocolVersion": "2025-06-18", "capabilities": map[string]any{}, "clientInfo": map[string]any{"name": "test", "version": "1"}})
+	if _, err = stdin.Write([]byte(`{"jsonrpc":"2.0","method":"notifications/initialized"}` + "\n")); err != nil {
+		t.Fatal(err)
+	}
+	list := ask(2, "tools/list", map[string]any{})
+	if initialize > 200*time.Millisecond || list > 200*time.Millisecond {
+		t.Fatalf("initialize took %s and tools/list %s with the hub unreachable", initialize, list)
+	}
+}

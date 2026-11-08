@@ -30,7 +30,11 @@ type Resolver struct {
 	Ancestor          func() (proc.Ancestor, error)
 	mu                sync.Mutex
 	bound             Bound
-	lost              bool
+	// lost is set when a heartbeat found the bound generation gone, until a fresh bind
+	// succeeds. gone holds every Execution found lost: none is ever bound again, so a
+	// rebind never speaks for a stale identity.
+	lost bool
+	gone map[string]bool
 }
 
 func New(h *hubclient.Client, client string) *Resolver {
@@ -44,9 +48,10 @@ func Key() string {
 	return hex.EncodeToString(b[:])
 }
 
-// Lost reports whether a heartbeat found this binding's generation gone at the hub. Only
-// that confirms it: a lost answer to any other call can be a session still recovering
-// after a hub restart, which its next heartbeat reattaches.
+// Lost reports whether a heartbeat found this binding's generation gone at the hub and no
+// fresh bind has replaced it yet. Only a heartbeat confirms a loss: a lost answer to any
+// other call can be a session still recovering after a hub restart, which its next
+// heartbeat reattaches.
 func (r *Resolver) Lost() bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -57,15 +62,36 @@ func IsCode(err error, code string) bool {
 	var e *hubclient.Error
 	return errors.As(err, &e) && e.Code == code
 }
+
+// errLost answers a call while the binding is lost and no fresh bind has succeeded.
+var errLost = &hubclient.Error{Code: "lost", Message: "This session's Execution is gone at the hub. Iris binds afresh once the session has reattached: send any prompt, then retry."}
+
+// Resolve returns the binding, making one when there is none. After a loss it binds afresh
+// through the usual rungs, but never to an Execution found lost, however that comes back:
+// IRIS_EXECUTION, a handle argument, or the hub's answer.
 func (r *Resolver) Resolve(ctx context.Context, handle string) (Bound, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.lost {
-		return Bound{}, &hubclient.Error{Code: "lost", Message: "Execution generation lost; restart the Iris MCP process after the session reattaches"}
-	}
 	if r.bound.ExecutionID != "" && (handle == "" || handle == r.bound.ExecutionID) {
 		return r.bound, nil
 	}
+	if r.gone[handle] {
+		handle = ""
+	}
+	b, err := r.resolve(ctx, handle)
+	if err == nil && r.gone[b.ExecutionID] {
+		r.bound, b, err = Bound{}, Bound{}, errLost
+	}
+	if err != nil && r.lost {
+		return Bound{}, errLost
+	}
+	if err == nil {
+		r.lost = false
+	}
+	return b, err
+}
+
+func (r *Resolver) resolve(ctx context.Context, handle string) (Bound, error) {
 	req := map[string]any{"client": r.Client, "host": r.Host, "cwd": r.CWD}
 	bind := func(rung int) (Bound, error) {
 		var b Bound
@@ -76,7 +102,7 @@ func (r *Resolver) Resolve(ctx context.Context, handle string) (Bound, error) {
 		}
 		return b, err
 	}
-	if ex := r.Getenv("IRIS_EXECUTION"); ex != "" {
+	if ex := r.Getenv("IRIS_EXECUTION"); ex != "" && !r.gone[ex] {
 		req["execution"] = ex
 		return bind(1)
 	}
@@ -143,7 +169,8 @@ func (r *Resolver) register(ctx context.Context, session string, a proc.Ancestor
 }
 
 // Maintain stops before any renewal after parent loss. The process owner also cancels
-// this context when the transport reaches EOF. A lost generation is never rebound.
+// this context when the transport reaches EOF. A generation the heartbeat finds lost is
+// dropped, never renewed, and the process keeps running: the next Resolve binds afresh.
 func (r *Resolver) Maintain(ctx context.Context, source string, interval time.Duration, parentAlive func() bool, onStop func()) {
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
@@ -159,11 +186,7 @@ func (r *Resolver) Maintain(ctx context.Context, source string, interval time.Du
 		}
 		r.mu.Lock()
 		b := r.bound
-		lost := r.lost
 		r.mu.Unlock()
-		if lost {
-			return
-		}
 		if b.ExecutionID == "" {
 			continue
 		}
@@ -172,10 +195,14 @@ func (r *Resolver) Maintain(ctx context.Context, source string, interval time.Du
 		cancel()
 		if IsCode(err, "lost") {
 			r.mu.Lock()
-			r.lost = true
+			if r.gone == nil {
+				r.gone = map[string]bool{}
+			}
+			r.gone[b.ExecutionID] = true
+			if r.bound.ExecutionID == b.ExecutionID {
+				r.bound, r.lost = Bound{}, true
+			}
 			r.mu.Unlock()
-			onStop()
-			return
 		}
 	}
 }
