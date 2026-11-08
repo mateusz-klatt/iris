@@ -167,6 +167,9 @@ func TestABudgetSpentBeforeTheReconcileRunsIsStillDegraded(t *testing.T) {
 	root := gitRepo(t)
 	for range 100 {
 		r, ev := shellRunner(scriptHub{}, root)
+		// git status honours its context, as the real one does: a spent budget kills it. A stub
+		// that ignored it could finish first and succeed, which records nothing, correctly.
+		r.Status = func(ctx context.Context, _ string) (map[string]string, error) { return nil, ctx.Err() }
 		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 		state := &runState{}
 		out := r.reconcile(ctx, ev, state)
