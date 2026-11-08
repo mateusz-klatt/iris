@@ -79,7 +79,7 @@ func New(s *store.Store, token string, allowedHosts []string) *Hub {
 		"POST /v1/sessions":        "sessions", "POST /v1/bind": "bind",
 		"POST /v1/executions/{id}/heartbeat": "heartbeat", "POST /v1/executions/{id}/end": "end",
 		"POST /v1/claims/touch": "touch", "POST /v1/claims": "claim", "POST /v1/claims/release": "release", "GET /v1/claims": "claims",
-		"POST /v1/messages": "messages", "GET /v1/inbox": "inbox", "POST /v1/deliveries/{id}/ack": "ack",
+		"POST /v1/messages": "messages", "GET /v1/inbox": "inbox", "POST /v1/inbox/receipt": "inbox_receipt", "POST /v1/deliveries/{id}/ack": "ack",
 		"GET /v1/messages/{id}/status": "receipts",
 		"GET /v1/agents":               "agents", "GET /v1/status": "status", "GET /v1/events": "events",
 		"GET /v1/hooks/seen":           "hooks_seen",
@@ -188,6 +188,7 @@ func decode(w http.ResponseWriter, r *http.Request) (store.Request, error) {
 		req.Stream = q.Get("stream")
 		req.ConsumerID = q.Get("consumer_id")
 		req.All = q.Get("all") == "1"
+		req.Receipt = q.Get("receipt") == "1" // ADR 010: keep attention until the receipt
 		req.Host = q.Get("host")
 		var err error
 		if q.Has("after") {

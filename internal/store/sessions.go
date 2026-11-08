@@ -30,16 +30,20 @@ type Request struct {
 	Worktree  string            `json:"worktree"`
 	// WorktreeID names the worktree root by device and inode; another path to the same
 	// directory is made the first path this host named for it (D6).
-	WorktreeID       string `json:"worktree_id"`
-	RemoteURL        string `json:"remote_url"`
-	RootCommit       string `json:"root_commit"`
-	Branch           string `json:"branch"`
-	ParentSessionID  string `json:"parent_session_id"`
-	ClientPID        int64  `json:"client_pid"`
-	ClientPIDStartMS int64  `json:"client_pid_start_ms"`
-	SingleSession    bool   `json:"single_session"`
-	Source           string `json:"source"`
-	Execution        string `json:"execution"`
+	WorktreeID string `json:"worktree_id"`
+	// Receipt asks a fetch to keep its mail needing attention until Receipts confirm the response
+	// arrived (ADR 010).
+	Receipt          bool      `json:"receipt"`
+	Receipts         []Receipt `json:"receipts"`
+	RemoteURL        string    `json:"remote_url"`
+	RootCommit       string    `json:"root_commit"`
+	Branch           string    `json:"branch"`
+	ParentSessionID  string    `json:"parent_session_id"`
+	ClientPID        int64     `json:"client_pid"`
+	ClientPIDStartMS int64     `json:"client_pid_start_ms"`
+	SingleSession    bool      `json:"single_session"`
+	Source           string    `json:"source"`
+	Execution        string    `json:"execution"`
 	// Exclude names an Execution a bind must skip: an MCP that had to register its own asks
 	// past it for the session's hook's.
 	Exclude      string   `json:"exclude"`
@@ -68,6 +72,13 @@ type Request struct {
 	ConsumerID   string   `json:"consumer_id"`
 	Stream       string   `json:"stream"`
 }
+
+// Receipt names one delivery a fetch returned, at the attempt that fetch gave it.
+type Receipt struct {
+	ID      string `json:"id"`
+	Attempt int64  `json:"attempt"`
+}
+
 type execution struct {
 	ID, AgentID, Repo, Host, Client, Session, Worktree, Branch, State, Name string
 	Generation, Epoch, Deadline, PID, PIDStart                              int64
