@@ -570,7 +570,9 @@ The owner's React frontend moves to `web/`, built by Node at release time and em
 `go:embed`. The API layer is rewritten for Iris. See `docs/PROVENANCE.md` for what is excluded.
 The first screen with no sessions shows a live wait for the first session, next to each client's
 status from the last doctor run (hook received, not configured, needs a human step), with a button
-to run the doctor. A silent client must show its cause, not an empty table.
+that reloads the last report. Doctor itself runs on each host, where the client configuration is,
+so the console cannot run it; it says to run `iris doctor` on that computer, and shows when the
+report was checked (gap review C4). A silent client must show its cause, not an empty table.
 
 ### D17. Removing records
 
