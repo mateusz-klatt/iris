@@ -107,7 +107,7 @@ func installFaultDriver(t *testing.T, s *Store, file string) *storageFault {
 }
 
 func TestStorageFailuresRollBackAndRetry(t *testing.T) {
-	for _, op := range []string{"sessions", "session-resume", "session-resume-learns-root", "session-remote-learns-root", "heartbeat-recovery", "session-new-slot", "session-learns-root", "touch-cached", "touch-conflict", "claim-conflict", "check-known", "policy", "bind", "heartbeat", "end", "end-handover", "touch", "claim", "claim-reuse", "claim-cached", "release", "claims", "messages", "message-repo", "contact", "message-cached", "inbox", "ack", "ack-handled", "inbox-receipt", "receipt-sweep", "receipts", "read_body", "agents", "agents-all", "hooks_seen", "events", "events-reset", "status", "validate", "monitor_cursor", "check", "check-alias", "session-alias", "reconcile", "reconcile-release", "reconcile-session", "ui_overview", "ui_deliveries", "ui_threads", "ui_thread", "ui_read", "ui_messages", "ui_messages-existing-human", "ui_messages-cached", "ui_messages-merged-cached", "ui_messages-retired-cached", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_events", "expire", "sweep", "forget", "forget-repository", "history", "thread", "read_message_body", "merge", "merge-dry-run"} {
+	for _, op := range []string{"sessions", "session-resume", "session-resume-learns-root", "session-remote-learns-root", "heartbeat-recovery", "session-new-slot", "session-learns-root", "touch-cached", "touch-conflict", "claim-conflict", "check-known", "policy", "bind", "heartbeat", "end", "end-handover", "touch", "claim", "claim-reuse", "claim-cached", "release", "claims", "messages", "message-repo", "contact", "message-cached", "inbox", "ack", "ack-handled", "inbox-receipt", "receipt-sweep", "receipts", "read_body", "agents", "agents-all", "hooks_seen", "events", "events-reset", "status", "validate", "monitor_cursor", "check", "check-alias", "session-alias", "reconcile", "reconcile-release", "reconcile-session", "ui_overview", "ui_deliveries", "ui_threads", "ui_threads-human", "ui_thread", "ui_read", "ui_messages", "ui_messages-existing-human", "ui_messages-cached", "ui_messages-merged-cached", "ui_messages-retired-cached", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_events", "expire", "sweep", "forget", "forget-repository", "history", "thread", "read_message_body", "merge", "merge-dry-run"} {
 		t.Run(op, func(t *testing.T) {
 			s, clock, file := testStore(t)
 			a, ar := session(t, s, 1)
@@ -299,6 +299,14 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 				r.Status = map[string]string{}
 			case "ui_threads":
 				r = Request{RepositoryID: repo, Agent: name, Q: "persisted", Before: "9999999999999"}
+			case "ui_threads-human":
+				// The operator filter must still report a storage failure as retryable,
+				// without settling the unread delivery or changing its search results.
+				human := mail
+				human.Key, human.To = "to-human", []string{"human"}
+				call(t, s, "messages", human)
+				route = "ui_threads"
+				r = Request{RepositoryID: repo, Agent: "human", Q: "persisted", Before: "9999999999999"}
 			case "ui_read":
 				// The operator reads a thread with human mail in it.
 				human := mail

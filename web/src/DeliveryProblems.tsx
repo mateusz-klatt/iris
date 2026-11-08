@@ -61,9 +61,11 @@ export function DeliveryProblems({ repositoryId, revision, onOpenThread, onUnaut
   const when = new Intl.DateTimeFormat(i18n.language, { dateStyle: "medium", timeStyle: "short" });
   return (
     <section id="delivery-problems" className="panel" aria-labelledby="delivery-problems-title">
-      <div className="panel-heading">
+      <details className="delivery-disclosure">
+      <summary className="panel-heading">
         <h2 id="delivery-problems-title">{t("operator.deliveryTitle")}</h2>
-      </div>
+        <span>{problems.messages.length}</span>
+      </summary>
       <p>{t("operator.deliveryHint", { days, minutes })}</p>
       <ul className="message-list">
         {problems.messages.map((message) => (
@@ -87,6 +89,7 @@ export function DeliveryProblems({ repositoryId, revision, onOpenThread, onUnaut
           </li>
         ))}
       </ul>
+      </details>
     </section>
   );
 }

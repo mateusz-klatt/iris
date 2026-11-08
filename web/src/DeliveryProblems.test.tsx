@@ -38,6 +38,8 @@ describe("delivery problems", () => {
     );
     render(<App connect={() => () => {}} />);
     const panel = await screen.findByRole("region", { name: "Delivery problems" });
+    expect(within(panel).getByRole("heading", { name: "Delivery problems" })).toBeVisible();
+    await user.click(within(panel).getByRole("heading", { name: "Delivery problems" }));
     expect(panel).toHaveTextContent("the last 7 days");
     expect(panel).toHaveTextContent("15 minutes have passed");
     expect(panel).toHaveTextContent("does not send it again");
@@ -55,7 +57,7 @@ describe("delivery problems", () => {
 
   it("shows nothing when no delivery is in trouble", async () => {
     render(<App connect={() => () => {}} />);
-    expect(await screen.findByRole("heading", { name: "Clients" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "My messages" })).toBeVisible();
     expect(screen.queryByRole("region", { name: "Delivery problems" })).toBeNull();
   });
 

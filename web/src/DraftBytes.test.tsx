@@ -5,7 +5,7 @@ import { App } from "./App";
 
 async function compose() {
   render(<App connect={() => () => {}} />);
-  await screen.findByRole("heading", { name: "Clients" });
+  await userEvent.setup().click(await screen.findByRole("button", { name: "+ New message" }));
   const form = document.getElementById("compose");
   if (form === null) {
     throw new Error("missing compose");
@@ -51,6 +51,7 @@ describe("draft size", () => {
     const view = await compose();
     await user.type(view.getByRole("textbox", { name: "Message" }), "{Control>}{Enter}{/Control}");
     expect(view.queryByRole("heading", { name: "Check before sending" })).toBeNull();
+    await user.click(screen.getByRole("button", { name: /^My messages/ }));
     await user.click(await screen.findByRole("button", { name: /Rollout check/ }));
     const detail = within(await screen.findByRole("article", { name: "Rollout check" }));
     await user.clear(detail.getByRole("textbox", { name: "Recipients" }));
