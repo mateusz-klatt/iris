@@ -130,7 +130,10 @@ func TestRealOrphanExits(t *testing.T) {
 	t.Fatal("orphan did not stop after actual parent exit")
 }
 
-func TestLostGenerationStopsHeartbeat(t *testing.T) {
+// A heartbeat that finds the generation gone drops the binding, and the process keeps
+// running: an MCP server or monitor that exits after a laptop sleep is not restarted by its
+// client, which then shows the server as failed, and the session goes deaf.
+func TestALostHeartbeatDropsTheBindingAndKeepsRunning(t *testing.T) {
 	var requests atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
@@ -146,20 +149,25 @@ func TestLostGenerationStopsHeartbeat(t *testing.T) {
 	}))
 	defer srv.Close()
 	resolver := &Resolver{Hub: &hubclient.Client{Config: config{srv.URL}}, bound: Bound{ExecutionID: "ex", Generation: 7}}
-	stopped := make(chan struct{})
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	go resolver.Maintain(ctx, "shim", time.Millisecond, func() bool { return true }, func() { close(stopped) })
+	done := make(chan struct{})
+	go func() {
+		resolver.Maintain(ctx, "shim", time.Millisecond, func() bool { return true }, func() { t.Error("a lost generation stopped the process") })
+		close(done)
+	}()
+	deadline := time.Now().Add(time.Second)
+	for !resolver.Lost() && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	time.Sleep(20 * time.Millisecond)
 	select {
-	case <-stopped:
-	case <-time.After(time.Second):
-		t.Fatal("lost heartbeat continued")
+	case <-done:
+		t.Fatal("Maintain ended on a lost generation")
+	default:
 	}
-	time.Sleep(10 * time.Millisecond)
-	if requests.Load() != 1 {
-		t.Fatal("lost generation renewed")
+	if !resolver.Lost() || requests.Load() != 1 {
+		t.Fatalf("lost %v after %d heartbeats: the lost generation must not be renewed", resolver.Lost(), requests.Load())
 	}
-	if _, err := resolver.Resolve(ctx, ""); !IsCode(err, "lost") {
-		t.Fatal(err)
-	}
+	cancel()
+	<-done
 }

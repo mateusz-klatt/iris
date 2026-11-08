@@ -167,15 +167,37 @@ func TestSessionFailuresAreNotMasked(t *testing.T) {
 	}
 }
 
-func TestLostResolverNeverRebinds(t *testing.T) {
+// After a loss, the next call binds afresh through the usual rungs, to the session's current
+// Execution, and is no longer lost.
+func TestAFreshBindReplacesALostOne(t *testing.T) {
 	hub := &scriptedHub{}
-	r := resolverFor(t, hub, "codex", map[string]string{"IRIS_EXECUTION": "ex"}, proc.Ancestor{})
-	r.lost = true
-	if _, err := r.Resolve(context.Background(), ""); !IsCode(err, "lost") {
-		t.Fatal(err)
+	r := resolverFor(t, hub, "claude", map[string]string{"CLAUDE_CODE_SESSION_ID": "s"}, proc.Ancestor{})
+	r.lost, r.gone = true, map[string]bool{"ex_old": true}
+	b, err := r.Resolve(context.Background(), "")
+	if err != nil || b.ExecutionID != "ex_bound" || r.Lost() {
+		t.Fatalf("%+v %v lost %v", b, err, r.Lost())
 	}
-	if len(hub.bound) != 0 {
-		t.Fatal("asked the hub")
+}
+
+// A lost Execution is never bound again, by whatever route it comes back: the environment, a
+// handle argument, or a hub answer naming it. Until another binds, calls answer lost.
+func TestALostExecutionIsNeverBoundAgain(t *testing.T) {
+	hub := &scriptedHub{binds: []string{"unbound"}}
+	r := resolverFor(t, hub, "codex", map[string]string{"IRIS_EXECUTION": "ex_old"}, proc.Ancestor{})
+	r.lost, r.gone = true, map[string]bool{"ex_old": true}
+	if _, err := r.Resolve(context.Background(), "ex_old"); !IsCode(err, "lost") {
+		t.Fatalf("a lost handle gave %v", err)
+	}
+	for _, req := range hub.bound {
+		if req["execution"] == "ex_old" {
+			t.Fatalf("asked the hub for the lost Execution: %v", req)
+		}
+	}
+	// The hub answers with an Execution already lost here: still lost, and nothing is bound.
+	again := resolverFor(t, &scriptedHub{}, "claude", map[string]string{"CLAUDE_CODE_SESSION_ID": "s"}, proc.Ancestor{})
+	again.lost, again.gone = true, map[string]bool{"ex_bound": true}
+	if _, err := again.Resolve(context.Background(), ""); !IsCode(err, "lost") || again.bound.ExecutionID != "" {
+		t.Fatalf("bound a lost Execution: %v %+v", err, again.bound)
 	}
 }
 
@@ -242,18 +264,12 @@ func TestMaintainStopsWithItsContext(t *testing.T) {
 	}
 }
 
-func TestMaintainEndsQuietlyOnceLost(t *testing.T) {
-	r := &Resolver{lost: true, bound: Bound{ExecutionID: "ex"}}
-	done := make(chan struct{})
-	go func() {
-		r.Maintain(context.Background(), "shim", time.Millisecond, func() bool { return true }, func() { t.Error("second stop") })
-		close(done)
-	}()
-	select {
-	case <-done:
-	case <-time.After(5 * time.Second):
-		t.Fatal("kept running")
-	}
+// Once lost, the binding is empty, so there is nothing to renew until a fresh bind.
+func TestMaintainRenewsNothingWhileLost(t *testing.T) {
+	r := &Resolver{lost: true}
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	defer cancel()
+	r.Maintain(ctx, "shim", time.Millisecond, func() bool { return true }, func() { t.Error("stopped") })
 }
 
 func TestMaintainSurvivesAnUnboundTickAndAHubFailure(t *testing.T) {
@@ -307,5 +323,30 @@ func TestLostReportsOnlyTheHeartbeatsVerdict(t *testing.T) {
 	}
 	if !(&Resolver{lost: true}).Lost() {
 		t.Fatal("a resolver the heartbeat found lost reads as live")
+	}
+}
+
+// After a loss the resolver never registers a session itself: right after a hub restart the
+// next tool call usually comes before the session's hook has registered again, and a
+// registration then would give this process an Execution of its own, beside the hook's. It
+// answers lost until a bind finds the session's Execution.
+func TestAfterALossTheResolverWaitsForTheSessionsOwnExecution(t *testing.T) {
+	hub := &scriptedHub{binds: []string{"unbound"}}
+	r := resolverFor(t, hub, "claude", map[string]string{"CLAUDE_CODE_SESSION_ID": "s"}, proc.Ancestor{})
+	r.lost, r.gone = true, map[string]bool{"ex_old": true}
+	if _, err := r.Resolve(context.Background(), ""); !IsCode(err, "lost") || hub.session != nil {
+		t.Fatalf("registered after a loss: %v %+v", err, hub.session)
+	}
+	// Once the hook has registered, the bind finds that Execution.
+	b, err := r.Resolve(context.Background(), "")
+	if err != nil || b.ExecutionID != "ex_bound" || r.Lost() || hub.session != nil {
+		t.Fatalf("%+v %v lost %v registered %+v", b, err, r.Lost(), hub.session)
+	}
+	// The single-session rung waits as well.
+	single := &scriptedHub{binds: []string{"unbound"}}
+	s := resolverFor(t, single, "codex", map[string]string{}, proc.Ancestor{PID: 42, StartMS: 7})
+	s.gone = map[string]bool{"ex_old": true}
+	if _, err := s.register(context.Background(), "mcp-42-7", proc.Ancestor{PID: 42, StartMS: 7}, true, 3); !IsCode(err, "lost") || single.session != nil {
+		t.Fatalf("registered after a loss: %v %+v", err, single.session)
 	}
 }

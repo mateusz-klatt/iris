@@ -364,8 +364,10 @@ func TestLostAnswersPastTheRecoveryWindowEndTheMonitor(t *testing.T) {
 	}
 }
 
-// Once a heartbeat confirms the generation is gone, the monitor says so in one line and ends.
-func TestAGenerationTheHeartbeatFindsGoneEndsWithALine(t *testing.T) {
+// Once a heartbeat confirms the generation is gone, the monitor says so in one line and keeps
+// trying a fresh bind; the hub here only ever offers the lost Execution, so none succeeds. When
+// its caller ends it, it reports the loss it never got past (D9).
+func TestAGenerationTheHeartbeatFindsGoneIsSaidOnceAndOutlived(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case r.URL.Path == "/v1/bind":
@@ -388,10 +390,24 @@ func TestAGenerationTheHeartbeatFindsGoneEndsWithALine(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	go resolver.Maintain(ctx, "watch", 20*time.Millisecond, func() bool { return true }, cancel)
+	go resolver.Maintain(ctx, "watch", 20*time.Millisecond, func() bool { return true }, func() { t.Error("a lost generation stopped the monitor") })
 	out := &lines{}
-	err := (&Runner{Resolver: resolver, Output: out, Backoff: time.Millisecond}).Run(ctx)
-	if !errors.Is(err, ErrLost) || strings.Count(out.String(), "Iris: notifications stopped: ") != 1 {
+	done := make(chan error, 1)
+	go func() { done <- (&Runner{Resolver: resolver, Output: out, Backoff: time.Millisecond}).Run(ctx) }()
+	for deadline := time.Now().Add(10 * time.Second); !strings.Contains(out.String(), "Iris: notifications stopped: "); {
+		if time.Now().After(deadline) {
+			t.Fatalf("never said it stopped: %q", out.String())
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	time.Sleep(100 * time.Millisecond) // many more retries, which must not say it again
+	select {
+	case err := <-done:
+		t.Fatalf("the monitor ended by itself: %v", err)
+	default:
+	}
+	cancel()
+	if err := <-done; !errors.Is(err, ErrLost) || strings.Count(out.String(), "Iris: notifications stopped: ") != 1 {
 		t.Fatalf("err %v, output %q", err, out.String())
 	}
 	// The line is the monitor's last word even when it cannot be printed.
