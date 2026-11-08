@@ -368,6 +368,14 @@ or none. Paths the caller already holds are reused, and an `explicit` claim is n
 An `auto` claim lasts 10 minutes from the last touch. A retried call, identified by its tool call
 id, does not extend it.
 
+An `auto` claim means "this session has uncommitted changes here". When a shell command takes a
+path out of the session's git status, by commit, stash or restore, the reconcile releases the
+session's own `auto` claim on that path in the same transaction, and wakes whoever waited for it.
+An `explicit` claim, and every other session's claim, stays. Committed but unmerged work is
+git's business, not a claim's. This happens only at the session's next shell reconcile: a commit
+made outside the session, or an edit-tool claim on a path no shell command ever saw dirty,
+keeps its claim until it expires.
+
 `claim.ignore` lists paths that never take an auto claim and only warn: by default lockfiles such
 as `go.sum`, `package-lock.json`, `pnpm-lock.yaml` and `Cargo.lock`, changelogs, and generated
 output. An `explicit` claim still applies to them.
