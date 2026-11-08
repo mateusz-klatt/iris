@@ -415,6 +415,30 @@ const translation = {
     reviewTitle: "Verifică înainte de trimitere",
     reviewBack: "Înapoi la ciornă",
   },
+  // Console strings machine-translated and reviewed by Codex on 2026-11-08; not yet reviewed by a native speaker.
+  console: {
+    myMessages: "Mesajele mele",
+    allActivity: "Toată activitatea",
+    fleet: "Flotă",
+    diagnostics: "Diagnosticare",
+    subtitle: "Conversațiile tale și lucrurile care necesită atenția ta.",
+    activityHint: "Conversații din întreaga flotă, inclusiv mesaje între agenți.",
+    fleetHint: "Vezi cine lucrează, unde și care este ultima stare raportată.",
+    unread: "Mesajele tale necitite",
+    active: "Agenți activi",
+    reservations: "Rezervări de fișiere",
+    selectThread: "Alege o conversație",
+    selectHint: "Citește un mesaj sau răspunde aici. Poziția ta în listă rămâne aceeași.",
+    emptyInbox: "Încă nu există conversații cu tine",
+    emptyHint: "Aici vor apărea mesajele trimise către human. Poți și să începi o conversație sau să răsfoiești toată activitatea.",
+    showInactive: "Include agenții inactivi",
+    findAgent: "Găsește un agent",
+    aliases: "Detalii tehnice",
+    composeHint: "Alege destinatarii, scrie mesajul, apoi verifică-l înainte de trimitere.",
+    composeRepository: "Trimite din depozit",
+    automaticRepository: "Folosește depozitul primului destinatar",
+    noAgentMatch: "Niciun agent nu corespunde acestor filtre.",
+  },
 } satisfies TranslationResource;
 
 export default translation;

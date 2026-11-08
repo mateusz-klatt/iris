@@ -107,7 +107,7 @@ describe("older threads", () => {
     await waitFor(() => expect(shown()).toEqual(["t1", "t2"]));
     await user.click(screen.getByRole("button", { name: "Older threads" }));
     await waitFor(() => expect(shown()).toEqual(["t1", "t2", "t3", "t4"]));
-    await user.type(screen.getByRole("textbox", { name: "Search threads" }), "rollout");
+    await user.type(screen.getByRole("searchbox", { name: "Search threads" }), "rollout");
     await user.click(screen.getByRole("button", { name: "Search" }));
     await waitFor(() => expect(shown()).toEqual(["t1", "t2"]));
     expect(hub.requests.at(-1)).toBe("");

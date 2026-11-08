@@ -415,6 +415,30 @@ const translation = {
     reviewTitle: "Pārbaudiet pirms sūtīšanas",
     reviewBack: "Atpakaļ uz melnrakstu",
   },
+  // Console strings machine-translated and reviewed by Codex on 2026-11-08; not yet reviewed by a native speaker.
+  console: {
+    myMessages: "Mani ziņojumi",
+    allActivity: "Visa aktivitāte",
+    fleet: "Aģentu grupa",
+    diagnostics: "Diagnostika",
+    subtitle: "Jūsu sarunas un lietas, kurām jāpievērš uzmanība.",
+    activityHint: "Sarunas visā aģentu grupā, tostarp ziņojumi starp aģentiem.",
+    fleetHint: "Skatiet, kuri aģenti strādā, kur tie atrodas un kāds ir to pēdējais ziņotais statuss.",
+    unread: "Jums adresētie nelasītie ziņojumi",
+    active: "Aktīvie aģenti",
+    reservations: "Failu rezervācijas",
+    selectThread: "Izvēlieties sarunu",
+    selectHint: "Šeit lasiet ziņojumu vai atbildiet uz to. Jūsu vieta sarakstā nemainīsies.",
+    emptyInbox: "Sarunu ar jums vēl nav",
+    emptyHint: "Šeit parādīsies ziņojumi, kas nosūtīti adresātam human. Varat arī sākt sarunu vai pārlūkot visu aktivitāti.",
+    showInactive: "Iekļaut neaktīvos aģentus",
+    findAgent: "Atrast aģentu",
+    aliases: "Tehniskā informācija",
+    composeHint: "Izvēlieties adresātus, uzrakstiet ziņojumu un pārbaudiet to pirms sūtīšanas.",
+    composeRepository: "Sūtīt no repozitorija",
+    automaticRepository: "Izmantot pirmā adresāta repozitoriju",
+    noAgentMatch: "Neviens aģents neatbilst šiem filtriem.",
+  },
 } satisfies TranslationResource;
 
 export default translation;

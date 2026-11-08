@@ -9,6 +9,7 @@ const silentCodex = {
 };
 
 async function serve(page: Page, overview: object, clients: object[], messages: object[] = []) {
+  await page.routeWebSocket("**/v1/ui/watch", () => {});
   await page.route("**/v1/ui/overview", (route) => route.fulfill({ json: overview }));
   await page.route("**/v1/ui/doctor", (route) =>
     route.fulfill({ json: { hosts: [{ host: "laptop", checked_at: new Date().toISOString(), clients }] } }),
@@ -17,6 +18,50 @@ async function serve(page: Page, overview: object, clients: object[], messages: 
   await page.route("**/v1/ui/deliveries**", (route) =>
     route.fulfill({ json: { messages, window_s: 604800, wait_s: 900 } }),
   );
+}
+
+async function expectLayoutToFit(page: Page) {
+  const layout = await page.evaluate(() => {
+    const visible = (element: HTMLElement) => element.getClientRects().length > 0;
+    const panels = [...document.querySelectorAll<HTMLElement>(".panel")].filter(visible);
+    // Tables may scroll inside a panel, but the panel and the page stay bounded.
+    const cut = panels.filter((panel) => {
+      const tables = [...panel.querySelectorAll<HTMLElement>(":scope > table")];
+      const scrolls = tables.every((table) => getComputedStyle(table).overflowX === "auto");
+      return panel.scrollWidth > panel.clientWidth + 1 && !(tables.length > 0 && scrolls);
+    });
+    const overlaps = [...document.querySelectorAll<HTMLElement>(".host-report .message-row")].filter(visible).filter((row) => {
+      const status = row.querySelector(".status")!.getBoundingClientRect();
+      const detail = row.querySelector("p")!.getBoundingClientRect();
+      return status.right > detail.left && status.left < detail.right && status.bottom > detail.top && status.top < detail.bottom;
+    });
+    return {
+      width: document.documentElement.clientWidth,
+      page: document.documentElement.scrollWidth,
+      cut: cut.map((panel) => panel.querySelector("h1, h2")?.textContent),
+      overlaps: overlaps.length,
+      clippedDeliveryRows: [...document.querySelectorAll<HTMLElement>("#delivery-problems .message-row")].filter(visible)
+        .filter((row) => {
+          const panel = row.closest(".panel")!.getBoundingClientRect();
+          const bounds = row.getBoundingClientRect();
+          return row.scrollWidth > row.clientWidth + 1 || bounds.right > panel.right + 1 || bounds.left < panel.left - 1;
+        }).length,
+      clippedDeliveryRecipients: [...document.querySelectorAll<HTMLElement>("#delivery-problems li li")].filter(visible)
+        .filter((recipient) => recipient.scrollWidth > recipient.clientWidth + 1).length,
+      clippedThreadRows: [...document.querySelectorAll<HTMLElement>(".thread-row")].filter(visible)
+        .filter((row) => {
+          const list = row.closest(".mailbox-list")!.getBoundingClientRect();
+          const bounds = row.getBoundingClientRect();
+          return row.scrollWidth > row.clientWidth + 1 || bounds.right > list.right + 1 || bounds.left < list.left - 1;
+        }).length,
+    };
+  });
+  expect(layout.page).toBeLessThanOrEqual(layout.width);
+  expect(layout.cut).toEqual([]);
+  expect(layout.overlaps).toBe(0);
+  expect(layout.clippedDeliveryRows).toBe(0);
+  expect(layout.clippedDeliveryRecipients).toBe(0);
+  expect(layout.clippedThreadRows).toBe(0);
 }
 
 test("waits for the first session beside a silent client", async ({ page }) => {
@@ -38,7 +83,13 @@ test("delivery rows keep their subject and time inside the screen without button
     created_at: "2026-11-08T09:00:00Z",
     recipients: [{ name: "claude-home-iris-latency-20261107-224019", state: "pending", reason: "unreachable", execution: "lost" }],
   }]);
+  await page.route("**/v1/ui/threads/ms_delivery", (route) => route.fulfill({ json: {
+    id: "ms_delivery",
+    messages: [{ id: "ms_delivery", sender: "human", subject, body: "Delivery is still waiting.", created_at: "2026-11-08T09:00:00Z", recipients: [{ name: "claude-home-iris-latency-20261107-224019", state: "pending" }] }],
+  } }));
   await page.goto("/");
+  await page.getByRole("navigation").getByRole("button", { name: /^My messages/ }).click();
+  await page.getByRole("region", { name: "Delivery problems" }).locator("summary").click();
   const row = page.getByRole("region", { name: "Delivery problems" }).getByRole("button");
   await expect(row).toBeVisible();
   await expect(row).toHaveAccessibleName(new RegExp(`Open thread: ${subject}$`));
@@ -77,6 +128,10 @@ test("delivery rows keep their subject and time inside the screen without button
   await expect(row).toHaveCSS("outline-width", "3px");
   await expect(row).toHaveCSS("outline-color", "rgb(109, 40, 217)");
   await expect(row).toHaveCSS("outline-offset", "-5px");
+  await row.click();
+  await expect(page.getByRole("heading", { name: subject, exact: true })).toBeFocused();
+  await page.getByRole("button", { name: "Back to threads", exact: true }).click();
+  await expect(row).toBeFocused();
 });
 
 // A busy hub, with the long names, paths and causes production has, fits the screen: nothing
@@ -135,49 +190,97 @@ test("a busy hub fits the screen", async ({ page }) => {
   } }));
 
   await page.goto("/");
-  await expect(page.getByText(claims[0]!.path)).toBeAttached();
+  await expect(page.getByRole("heading", { name: "My messages", exact: true })).toBeVisible();
   const deliveries = page.getByRole("region", { name: "Delivery problems" });
+  await deliveries.locator("summary").click();
   await expect(deliveries.getByRole("button").filter({ hasText: subject })).toBeVisible();
   await expect(deliveries).toContainText(`${long}: no live session (lost)`);
   await expect(deliveries).toContainText(`${long}-waiting: not accepted after 15 minutes`);
+  await expectLayoutToFit(page);
 
-  const layout = await page.evaluate(() => {
-    const width = document.documentElement.clientWidth;
-    const panels = [...document.querySelectorAll<HTMLElement>(".content-grid > .panel")];
-    // A panel may hold more than it shows only where a table scrolls.
-    const cut = [...document.querySelectorAll<HTMLElement>(".panel")].filter((panel) => {
-      const tables = [...panel.querySelectorAll<HTMLElement>(":scope > table")];
-      const scrolls = tables.every((table) => getComputedStyle(table).overflowX === "auto");
-      return panel.scrollWidth > panel.clientWidth + 1 && !(tables.length > 0 && scrolls);
-    });
-    const overlaps = [...document.querySelectorAll<HTMLElement>(".host-report .message-row")].filter((row) => {
-      const status = row.querySelector(".status")!.getBoundingClientRect();
-      const detail = row.querySelector("p")!.getBoundingClientRect();
-      return status.right > detail.left && status.left < detail.right && status.bottom > detail.top && status.top < detail.bottom;
-    });
-    return {
-      width,
-      page: document.documentElement.scrollWidth,
-      columns: new Set(panels.map((panel) => Math.round(panel.getBoundingClientRect().left))).size,
-      cut: cut.map((panel) => panel.querySelector("h1, h2")?.textContent),
-      overlaps: overlaps.length,
-      clippedDeliveryRows: [...document.querySelectorAll<HTMLElement>("#delivery-problems .message-row")]
-        .filter((row) => {
-          const panel = row.closest(".panel")!.getBoundingClientRect();
-          const bounds = row.getBoundingClientRect();
-          return row.scrollWidth > row.clientWidth + 1 || bounds.right > panel.right + 1 || bounds.left < panel.left - 1;
-        }).length,
-      clippedDeliveryRecipients: [...document.querySelectorAll<HTMLElement>("#delivery-problems li li")]
-        .filter((recipient) => recipient.scrollWidth > recipient.clientWidth + 1).length,
-    };
-  });
-
-  expect(layout.page).toBeLessThanOrEqual(layout.width);
-  expect(layout.cut).toEqual([]);
-  expect(layout.overlaps).toBe(0);
-  expect(layout.clippedDeliveryRows).toBe(0);
-  expect(layout.clippedDeliveryRecipients).toBe(0);
-  if (layout.width <= 900) {
-    expect(layout.columns).toBe(1);
+  const navigation = page.getByRole("navigation");
+  await navigation.getByRole("button", { name: /^Fleet/ }).click();
+  await expect(page.getByRole("heading", { name: "Fleet", exact: true })).toBeVisible();
+  await page.getByText("Technical details", { exact: true }).first().click();
+  await expect(page.getByText(repositories[0]!.aliases[0]!, { exact: true })).toBeVisible();
+  await expectLayoutToFit(page);
+  if ((page.viewportSize()?.width ?? 0) <= 900) {
+    const columns = await page.locator(".content-grid > .panel").evaluateAll((panels) =>
+      new Set(panels.map((panel) => Math.round(panel.getBoundingClientRect().left))).size,
+    );
+    expect(columns).toBe(1);
   }
+
+  await navigation.getByRole("button", { name: /^Claims/ }).click();
+  await expect(page.getByText(claims[0]!.path, { exact: true })).toBeVisible();
+  await expectLayoutToFit(page);
+
+  await navigation.getByRole("button", { name: "Diagnostics", exact: true }).click();
+  await expect(page.getByText(slow.detail)).toBeVisible();
+  await expectLayoutToFit(page);
+});
+
+test("mailbox navigation opens the reader, returns focus, and separates team activity", async ({ page }) => {
+  const agents = [{ id: "ag_claude", name: "claude-laptop", client: "claude", host: "laptop", repository_id: "rp_iris", worktree: "/work/iris", branch: "main", state: "active", last_seen: new Date().toISOString(), unread: 0 }];
+  await serve(page, { repositories: [{ id: "rp_iris", name: "iris", aliases: [] }], agents, claims: [], human_unread: 1 }, []);
+  const queries: URL[] = [];
+  const myThread = { id: "ms_human", subject: "Ready for your review: src/application/portfolio/a_rather_long_module_name.py", participants: ["claude-laptop-iris-latency-20261107-224019", "human"], count: 1, last_at: "2026-11-08T10:00:00Z", unread: 1 };
+  const teamThread = { id: "ms_team", subject: "Review handoff between agents", participants: ["claude-laptop", "codex-desk"], count: 3, last_at: "2026-11-08T09:00:00Z", unread: 0 };
+  const additionalThreads = Array.from({ length: 48 }, (_, index) => ({ ...teamThread, id: `ms_extra_${index}`, subject: `Additional conversation ${index}` }));
+  await page.route("**/v1/ui/threads**", async (route) => {
+    const url = new URL(route.request().url());
+    if (url.pathname.endsWith("/read")) { await route.fulfill({ json: { read: 0 } }); return; }
+    if (url.pathname === "/v1/ui/threads/ms_human") {
+      await route.fulfill({ json: { id: myThread.id, messages: [{ id: myThread.id, sender: "claude-laptop", repository_id: "rp_iris", recipients: [{ name: "human", state: "pending" }], subject: myThread.subject, body: "Please review the local inbox preview.\n\nThe details are ready for your feedback.", created_at: myThread.last_at }] } });
+      return;
+    }
+    queries.push(url);
+    await route.fulfill({ json: { threads: url.searchParams.get("agent") === "human" ? [myThread] : [myThread, teamThread, ...additionalThreads] } });
+  });
+  await page.goto("/");
+  const navigation = page.getByRole("navigation");
+  const mine = navigation.getByRole("button", { name: /^My messages/ });
+  await expect(mine).toHaveAttribute("aria-current", "page");
+  const row = page.getByRole("button", { name: /Open thread: Ready for your review/ });
+  await expect(row).toBeVisible();
+  await expectLayoutToFit(page);
+  expect(queries.at(-1)?.searchParams.get("agent")).toBe("human");
+  await expect(page.getByRole("button", { name: /Open thread: Review handoff/ })).toHaveCount(0);
+  await row.focus();
+  await page.keyboard.press("Enter");
+
+  const title = page.locator("#thread-title");
+  await expect(title).toHaveText(myThread.subject);
+  await expect(title).toBeFocused();
+  await expect(page.getByText("Please review the local inbox preview.", { exact: true })).toBeVisible();
+  if ((page.viewportSize()?.width ?? 0) < 700) {
+    await expect(page.locator(".mailbox-list")).toBeHidden();
+  } else {
+    await expect(page.locator(".mailbox-list")).toBeVisible();
+    await expect(row).toHaveAttribute("aria-current", "true");
+    const listBox = await page.locator(".mailbox-list").boundingBox();
+    const readerBox = await page.locator(".thread-reader").boundingBox();
+    expect(listBox).not.toBeNull();
+    expect(readerBox).not.toBeNull();
+    expect((listBox?.x ?? 0) + (listBox?.width ?? 0)).toBeLessThanOrEqual((readerBox?.x ?? 0) + 1);
+  }
+  await expectLayoutToFit(page);
+  await page.locator(".thread-reader").getByRole("button", { name: "Back to threads", exact: true }).click();
+  await expect(page.locator(".thread-reader")).toHaveCount(0);
+  await expect(row).toBeVisible();
+  await expect(row).toBeFocused();
+
+  await navigation.getByRole("button", { name: "All activity", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "All activity", exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Open thread: Review handoff/ })).toBeVisible();
+  expect(queries.at(-1)?.searchParams.has("agent")).toBe(false);
+  await expectLayoutToFit(page);
+  if (page.viewportSize()!.width >= 1101) {
+    // Long lists scroll inside the mailbox; offscreen accessibility labels must
+    // not leave thousands of pixels of empty page below it.
+    expect(await page.evaluate(() => document.documentElement.scrollHeight)).toBeLessThanOrEqual(page.viewportSize()!.height);
+  }
+  await mine.click();
+  await expect(page.getByRole("button", { name: /Open thread: Review handoff/ })).toHaveCount(0);
+  await expect(mine).toHaveAttribute("aria-current", "page");
 });

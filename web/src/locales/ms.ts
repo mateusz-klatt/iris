@@ -415,6 +415,30 @@ const translation = {
     reviewTitle: "Semak sebelum menghantar",
     reviewBack: "Kembali ke draf",
   },
+  // Console strings machine-translated and reviewed by Codex on 2026-11-08; not yet reviewed by a native speaker.
+  console: {
+    myMessages: "Mesej saya",
+    allActivity: "Semua aktiviti",
+    fleet: "Kumpulan ejen",
+    diagnostics: "Diagnostik",
+    subtitle: "Perbualan anda dan perkara yang memerlukan perhatian anda.",
+    activityHint: "Perbualan seluruh kumpulan, termasuk mesej antara ejen.",
+    fleetHint: "Lihat siapa yang sedang bekerja, lokasi mereka dan status terakhir yang mereka laporkan.",
+    unread: "Belum anda baca",
+    active: "Ejen aktif",
+    reservations: "Tempahan fail",
+    selectThread: "Pilih perbualan",
+    selectHint: "Baca mesej atau balas di sini. Kedudukan anda dalam senarai kekal sama.",
+    emptyInbox: "Belum ada perbualan dengan anda",
+    emptyHint: "Mesej yang dihantar kepada human akan muncul di sini. Anda juga boleh memulakan perbualan atau melihat semua aktiviti.",
+    showInactive: "Sertakan ejen tidak aktif",
+    findAgent: "Cari ejen",
+    aliases: "Butiran teknikal",
+    composeHint: "Pilih penerima, tulis mesej anda, kemudian semak sebelum menghantar.",
+    composeRepository: "Hantar daripada repositori",
+    automaticRepository: "Gunakan repositori penerima pertama",
+    noAgentMatch: "Tiada ejen yang sepadan dengan penapis ini.",
+  },
 } satisfies TranslationResource;
 
 export default translation;

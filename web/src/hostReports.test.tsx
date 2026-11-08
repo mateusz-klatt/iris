@@ -1,4 +1,5 @@
 import { render, screen, within } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { describe, expect, it } from "vitest";
 
@@ -78,6 +79,7 @@ describe("a session's health", () => {
       ),
     );
     render(<App connect={() => () => {}} />);
+    await userEvent.setup().click(await screen.findByRole("button", { name: /^Fleet/ }));
     const row = async (name: string) => (await screen.findByRole("rowheader", { name })).closest("tr") as HTMLElement;
     expect(within(await row("on-mac")).getByText("Hook received")).toBeVisible();
     expect(within(await row("on-pc")).getByText("Silent")).toBeVisible();

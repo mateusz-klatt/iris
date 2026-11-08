@@ -415,6 +415,30 @@ const translation = {
     reviewTitle: "בדקו לפני השליחה",
     reviewBack: "חזרה לטיוטה",
   },
+  // Console strings machine-translated and reviewed by Codex on 2026-11-08; not yet reviewed by a native speaker.
+  console: {
+    myMessages: "ההודעות שלי",
+    allActivity: "כל הפעילות",
+    fleet: "צי הסוכנים",
+    diagnostics: "אבחון",
+    subtitle: "השיחות שלך והדברים שדורשים את תשומת הלב שלך.",
+    activityHint: "שיחות בכל צי הסוכנים, כולל הודעות בין סוכנים.",
+    fleetHint: "כאן אפשר לראות מי עובד, היכן הוא נמצא ומה הסטטוס האחרון שדיווח עליו.",
+    unread: "הודעות עבורך שטרם נקראו",
+    active: "סוכנים פעילים",
+    reservations: "שריונות קבצים",
+    selectThread: "בחירת שיחה",
+    selectHint: "כאן אפשר לקרוא הודעה או להשיב לה. המיקום שלך ברשימה יישמר.",
+    emptyInbox: "עדיין אין שיחות איתך",
+    emptyHint: "הודעות שנשלחו אל human יופיעו כאן. אפשר גם להתחיל שיחה או לעיין בכל הפעילות.",
+    showInactive: "הכללת סוכנים לא פעילים",
+    findAgent: "חיפוש סוכן",
+    aliases: "פרטים טכניים",
+    composeHint: "בחרו נמענים, כתבו את ההודעה ואז בדקו אותה לפני השליחה.",
+    composeRepository: "שליחה מהמאגר",
+    automaticRepository: "שימוש במאגר של הנמען הראשון",
+    noAgentMatch: "אין סוכנים התואמים למסננים האלה.",
+  },
 } satisfies TranslationResource;
 
 export default translation;

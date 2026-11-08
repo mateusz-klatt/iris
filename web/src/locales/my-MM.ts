@@ -415,6 +415,30 @@ const translation = {
     reviewTitle: "မပို့မီ စစ်ဆေးပါ",
     reviewBack: "မူကြမ်းသို့ ပြန်သွားရန်",
   },
+  // Console strings machine-translated and reviewed by Codex on 2026-11-08; not yet reviewed by a native speaker.
+  console: {
+    myMessages: "ကျွန်ုပ်၏ မက်ဆေ့ချ်များ",
+    allActivity: "လုပ်ဆောင်မှုအားလုံး",
+    fleet: "Agent အစုအဖွဲ့",
+    diagnostics: "ပြဿနာ စစ်ဆေးခြင်း",
+    subtitle: "သင့်စကားဝိုင်းများနှင့် သင်အာရုံစိုက်ရန် လိုအပ်သော အကြောင်းအရာများ။",
+    activityHint: "Agent များအချင်းချင်း ပို့သော မက်ဆေ့ချ်များအပါအဝင် အစုအဖွဲ့တစ်ခုလုံး၏ စကားဝိုင်းများ။",
+    fleetHint: "မည်သူက အလုပ်လုပ်နေသည်၊ မည်သည့်နေရာတွင် ရှိသည်နှင့် နောက်ဆုံးတင်ပြထားသော အခြေအနေကို ကြည့်ပါ။",
+    unread: "သင်မဖတ်ရသေးသော မက်ဆေ့ချ်များ",
+    active: "အသက်ဝင်သော Agent များ",
+    reservations: "ဖိုင်ကြိုတင်ယူမှုများ",
+    selectThread: "စကားဝိုင်းတစ်ခု ရွေးပါ",
+    selectHint: "ဤနေရာတွင် မက်ဆေ့ချ်ဖတ်ပါ သို့မဟုတ် ပြန်ကြားပါ။ စာရင်းထဲရှိ သင့်နေရာသည် မပြောင်းလဲပါ။",
+    emptyInbox: "သင်ပါဝင်သော စကားဝိုင်း မရှိသေးပါ",
+    emptyHint: "human ထံ ပို့သော မက်ဆေ့ချ်များကို ဤနေရာတွင် ပြသပါမည်။ စကားဝိုင်းတစ်ခု စတင်နိုင်သလို လုပ်ဆောင်မှုအားလုံးကိုလည်း ကြည့်နိုင်ပါသည်။",
+    showInactive: "အသက်မဝင်သော Agent များကိုပါ ပြရန်",
+    findAgent: "Agent ရှာရန်",
+    aliases: "နည်းပညာဆိုင်ရာ အသေးစိတ်",
+    composeHint: "လက်ခံသူများကို ရွေးပါ၊ မက်ဆေ့ချ်ရေးပါ၊ ထို့နောက် မပို့မီ စစ်ဆေးပါ။",
+    composeRepository: "မက်ဆေ့ချ်ပို့မည့် မူရင်း Repository",
+    automaticRepository: "ပထမလက်ခံသူ၏ Repository ကို အသုံးပြုရန်",
+    noAgentMatch: "ဤစစ်ထုတ်မှုများနှင့် ကိုက်ညီသော Agent မရှိပါ။",
+  },
 } satisfies TranslationResource;
 
 export default translation;

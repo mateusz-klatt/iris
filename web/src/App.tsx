@@ -39,6 +39,9 @@ import {
 } from "./notificationSound";
 import { readUiLocale, writeUiLocale } from "./preferences";
 import "./app.css";
+import "./console.css";
+
+type ConsoleView = "messages" | "fleet" | "claims" | "diagnostics" | "compose";
 
 // The hub limits a message by its UTF-8 bytes, not by characters: a draft of 16 KiB of
 // characters outside ASCII can be several times that (gap review A11).
@@ -232,6 +235,17 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
   const [stream, setStream] = useState<WatchStatus>("connecting");
   const [repositoryId, setRepositoryId] = useState("");
   const [agent, setAgent] = useState("");
+  const [view, setView] = useState<ConsoleView | null>(null);
+  const [mailScope, setMailScope] = useState<"mine" | "all">("mine");
+  const [showInactive, setShowInactive] = useState(false);
+  const [agentSearch, setAgentSearch] = useState("");
+  const [threadError, setThreadError] = useState(false);
+  const readerTitle = useRef<HTMLHeadingElement>(null);
+  const lastThreadButton = useRef<HTMLButtonElement | null>(null);
+  const sessions = overview?.agents ?? [];
+  const waiting = phase === "ready" && sessions.length === 0;
+  const activeView = view ?? (waiting ? "diagnostics" : "messages");
+  const participant = mailScope === "mine" ? "human" : agent;
   const [query, setQuery] = useState("");
   const [searchDraft, setSearchDraft] = useState("");
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
@@ -338,12 +352,12 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
     // first page alone would let a new thread push one off it into a gap that no page shows,
     // and holding the old cursors would keep stale ones (gap review A15).
     const walk = async () => {
-      const filters = threadFilters(repositoryId, agent, query);
+      const filters = threadFilters(repositoryId, participant, query);
       const threadPages = openedPages.filters === filters ? openedPages.pages : 1;
       const all: ThreadSummary[] = [];
       let before: string | undefined;
       for (let page = 0; page < threadPages; page++) {
-        const next = await listThreads({ repository_id: repositoryId, agent, q: query, before, limit: 50 });
+        const next = await listThreads({ repository_id: repositoryId, agent: participant, q: query, before, limit: 50 });
         // A thread that got mail between two pages moves up and is listed again; keep it once.
         all.push(...next.threads.filter((item) => !all.some((seen) => seen.id === item.id)));
         before = next.next;
@@ -374,10 +388,10 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
     return () => {
       ignore = true;
     };
-  }, [agent, openedPages, phase, query, repositoryId, threadRevision]);
+  }, [participant, openedPages, phase, query, repositoryId, threadRevision]);
 
   useEffect(() => {
-    if (phase !== "ready" || selectedId === null) {
+    if (phase !== "ready" || activeView !== "messages" || selectedId === null) {
       return;
     }
     let ignore = false;
@@ -387,6 +401,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
           return;
         }
         setThread(detail);
+        setThreadError(false);
         // Opening a thread reads the operator's mail in it (A13); the overview's unread
         // counts then follow. A failure here leaves the mail unread, which is safe. Every
         // watch frame reloads the open thread, so a thread with nothing unread costs that
@@ -415,12 +430,25 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
           setPhase("unauthorized");
           return;
         }
-        setFormError(t("operator.loadError"));
+        setThreadError(true);
       });
     return () => {
       ignore = true;
     };
-  }, [phase, reload, repositoryId, selectedId, t, threadRevision]);
+  }, [activeView, phase, reload, repositoryId, selectedId, threadRevision]);
+
+  useEffect(() => {
+    if (activeView !== "messages") {
+      return;
+    }
+    // On phones the list is hidden while reading. Restore focus only after React
+    // has made it visible again, otherwise the browser drops the focus request.
+    if (selectedId === null) {
+      lastThreadButton.current?.focus();
+    } else {
+      readerTitle.current?.focus();
+    }
+  }, [activeView, selectedId]);
 
   const chooseLocale = (next: SupportedLocale) => {
     try {
@@ -507,18 +535,44 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
     }
   };
 
-  const sessions = overview?.agents ?? [];
   const composeRecipients = recipientsOf(compose.to);
   const composeSendable = sendable(compose) && composeRecipients.every((id) => id === "human" || sessions.some((agent) => agent.id === id));
-  const waiting = phase === "ready" && sessions.length === 0;
+  const activeAgents = sessions.filter((item) => item.state === "active");
+  const visibleAgents = sessions.filter((item) => (showInactive || item.state === "active") &&
+    `${item.name} ${item.host} ${item.client} ${item.branch} ${repositoryName(overview!, item.repository_id)}`.toLowerCase().includes(agentSearch.toLowerCase().trim()));
+  const clearThread = () => {
+    setSelectedId(null);
+    setThread(null);
+    setThreadError(false);
+  };
+  const openThread = (id: string, trigger: HTMLButtonElement) => {
+    lastThreadButton.current = trigger;
+    setView("messages");
+    if (id === selectedId) {
+      readerTitle.current?.focus();
+      return;
+    }
+    setThread(null);
+    setThreadError(false);
+    setSelectedId(id);
+  };
+  const openMailbox = (scope: "mine" | "all") => {
+    setView("messages");
+    setMailScope(scope);
+    clearThread();
+  };
+  const title = activeView === "messages" ? t(mailScope === "mine" ? "console.myMessages" : "console.allActivity")
+    : activeView === "fleet" ? t("console.fleet")
+    : activeView === "claims" ? t("console.reservations")
+    : activeView === "diagnostics" ? t("console.diagnostics") : t("operator.compose");
 
   return (
-    <div className="app-shell">
+    <div className="app-shell operator-console">
       <a className="skip-link" href="#content">
         {t("skipToContent")}
       </a>
       <header className="topbar">
-        <a className="brand" href="#overview">
+        <a className="brand" href="#content" onClick={() => openMailbox("mine")}>
           <span className="brand-mark" aria-hidden="true">
             I
           </span>
@@ -543,7 +597,22 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
           </button>
         </div>
       </header>
-      <main id="content" className="content">
+      <div className="console-workspace">
+        {phase === "ready" && overview !== null ? (
+          <aside className="console-sidebar">
+            <button type="button" className="primary-button compose-action" onClick={() => setView("compose")}>+ {t("operator.compose")}</button>
+            <nav className="console-nav" aria-label={t("navigation")}>
+              <button type="button" className="console-nav-item" aria-current={activeView === "messages" && mailScope === "mine" ? "page" : undefined} onClick={() => openMailbox("mine")}>
+                {t("console.myMessages")}<span className="nav-count">{overview.human_unread}</span>
+              </button>
+              <button type="button" className="console-nav-item" aria-current={activeView === "messages" && mailScope === "all" ? "page" : undefined} onClick={() => openMailbox("all")}>{t("console.allActivity")}</button>
+              <button type="button" className="console-nav-item" aria-current={activeView === "fleet" ? "page" : undefined} onClick={() => setView("fleet")}>{t("console.fleet")}<span className="nav-count">{activeAgents.length}</span></button>
+              <button type="button" className="console-nav-item" aria-current={activeView === "claims" ? "page" : undefined} onClick={() => setView("claims")}>{t("operator.claims")}<span className="nav-count">{overview.claims.length}</span></button>
+              <button type="button" className="console-nav-item" aria-current={activeView === "diagnostics" ? "page" : undefined} onClick={() => setView("diagnostics")}>{t("console.diagnostics")}</button>
+            </nav>
+          </aside>
+        ) : null}
+      <main id="content" className="content console-content" data-view={activeView}>
         {phase === "loading" ? <p className="state-panel">{t("inbox.loading")}</p> : null}
         {phase === "error" ? (
           <div className="state-panel state-error" role="alert">
@@ -561,182 +630,70 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
         ) : null}
         {phase === "ready" && overview !== null ? (
           <>
-            <section id="overview" className="panel" aria-labelledby="clients-title">
-              <div className="panel-heading">
-                <h1 id="clients-title">{t("operator.doctorTitle")}</h1>
-                <button type="button" className="primary-button" onClick={() => void reload()}>
-                  {t("operator.doctorReload")}
-                </button>
+            <header className="console-heading">
+              <div><p className="console-kicker">{t("appName")}</p><h1>{title}</h1>
+                <p>{activeView === "messages" ? t(mailScope === "mine" ? "console.subtitle" : "console.activityHint") : activeView === "fleet" ? t("console.fleetHint") : activeView === "compose" ? t("console.composeHint") : null}</p>
               </div>
-              <p>{t("operator.doctorHint", { command: "iris doctor" })}</p>
-              {doctor === null || doctor.hosts.length === 0 ? (
-                <p className="state-panel">{t("operator.doctorMissing", { command: "iris doctor" })}</p>
-              ) : (
-                doctor.hosts.map((report) => <HostReport key={report.host} report={report} />)
-              )}
-              {waiting ? (
-                <p className="state-panel" role="status">
-                  {t("operator.waiting")}
-                </p>
-              ) : null}
-            </section>
-
-            <section className="content-grid" aria-label={t("operator.repositories")}>
-              <article className="panel">
-                <div className="panel-heading">
-                  <h2>{t("operator.repositories")}</h2>
-                  <span>{t("operator.unread", { count: overview.human_unread })}</span>
-                </div>
-                {overview.repositories.length === 0 ? <p>{t("operator.none")}</p> : (
-                  <table className="stack-table">
-                    <caption className="sr-only">{t("operator.repositories")}</caption>
-                    <thead>
-                      <tr>
-                        <th scope="col">{t("operator.repository")}</th>
-                        <th scope="col">{t("operator.detail")}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {overview.repositories.map((repository) => (
-                        <tr key={repository.id}>
-                          <th scope="row">{repository.name}</th>
-                          <td>{repository.aliases.join(", ")}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </article>
-              <article className="panel">
-                <div className="panel-heading">
-                  <h2>{t("operator.agents")}</h2>
-                </div>
-                {sessions.length === 0 ? <p>{t("operator.waiting")}</p> : (
-                  <table className="stack-table">
-                    <caption className="sr-only">{t("operator.agents")}</caption>
-                    <thead>
-                      <tr>
-                        <th scope="col">{t("operator.agent")}</th>
-                        <th scope="col">{t("operator.detail")}</th>
-                        <th scope="col">{t("operator.repository")}</th>
-                        <th scope="col">{t("operator.clientHealth")}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {sessions.map((item: Agent) => {
-                        const health = healthOf(doctor, item);
-                        return (
-                          <tr key={item.id}>
-                            <th scope="row">{item.name}</th>
-                            <td>
-                              {item.client} · {item.state} · {item.branch}
-                            </td>
-                            <td>{repositoryName(overview, item.repository_id)}</td>
-                            <td data-health={health?.status ?? "none"}>{health === undefined ? t("operator.noHostReport") : t(statusKey(health.status))}</td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
-                )}
-              </article>
-              <ClaimsPanel
-                claims={overview.claims}
-                repositories={overview.repositories}
-                revoking={revoking}
-                onRevoke={(claim) => void onRevoke(claim)}
-              />
-            </section>
-
-            <DeliveryProblems
-              repositoryId={repositoryId}
-              revision={threadRevision}
-              onOpenThread={setSelectedId}
-              onUnauthorized={onUnauthorized}
-            />
-
-            <section id="threads" className="panel" aria-labelledby="threads-title">
-              <div className="panel-heading">
-                <h2 id="threads-title">{t("operator.threads")}</h2>
+            </header>
+            <div className="console-notices">
+              {notice.length > 0 ? <p role="status">{notice}</p> : null}
+              {formError.length > 0 ? <p role="alert">{formError}</p> : null}
+            </div>
+            <div hidden={activeView !== "messages"} className="console-view">
+              <div className="console-stats">
+                <button type="button" className="console-stat" onClick={() => openMailbox("mine")}><span>{t("console.unread")}</span><strong>{overview.human_unread}</strong></button>
+                <button type="button" className="console-stat" onClick={() => setView("fleet")}><span>{t("console.active")}</span><strong>{activeAgents.length}</strong></button>
+                <button type="button" className="console-stat" onClick={() => setView("claims")}><span>{t("console.reservations")}</span><strong>{overview.claims.length}</strong></button>
               </div>
-              <form
-                className="search-form"
-                onSubmit={(event) => {
-                  event.preventDefault();
-                  setQuery(searchDraft);
-                  setSelectedId(null);
-                  setThread(null);
-                }}
-              >
-                <label>
-                  {t("operator.search")}
-                  <input value={searchDraft} onChange={(event) => setSearchDraft(event.target.value)} />
-                </label>
-                <label>
-                  {t("operator.repository")}
-                  <select value={repositoryId} onChange={(event) => setRepositoryId(event.target.value)}>
-                    <option value="">{t("operator.all")}</option>
-                    {overview.repositories.map((repository) => (
-                      <option key={repository.id} value={repository.id}>
-                        {repository.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <label>
-                  {t("operator.agent")}
-                  <select value={agent} onChange={(event) => setAgent(event.target.value)}>
-                    <option value="">{t("operator.all")}</option>
-                    {sessions.map((item) => (
-                      <option key={item.id} value={item.name}>
-                        {item.name}
-                      </option>
-                    ))}
-                  </select>
-                </label>
-                <button type="submit" className="primary-button">
-                  {t("search.submit")}
-                </button>
-              </form>
-              {threadsError ? <p role="alert">{t("operator.loadError")}</p> : null}
-              {threads.length === 0 ? <p>{t("operator.emptyThreads")}</p> : (
-                <ul className="message-list">
-                  {threads.map((item) => (
-                    <li key={item.id}>
-                      <button
-                        type="button"
-                        className="message-row"
-                        onClick={() => setSelectedId(item.id)}
-                      >
-                        <strong>{item.subject}</strong>
-                        <small>
-                          {t("operator.participants")}: {item.participants.join(", ")} · {t("operator.unread", { count: item.unread })}
-                        </small>
-                        <span className="sr-only">{t("operator.openThread", { subject: item.subject })}</span>
-                      </button>
-                    </li>
-                  ))}
-                </ul>
-              )}
-              {olderCursor !== undefined ? (
-                <button
-                  type="button"
-                  onClick={() => {
-                    const filters = threadFilters(repositoryId, agent, query);
-                    setOpenedPages((opened) => ({ filters, pages: opened.filters === filters ? opened.pages + 1 : 2 }));
-                  }}
-                >
-                  {t("operator.olderThreads")}
-                </button>
-              ) : null}
-              {thread !== null ? (
-                <article className="message-detail" aria-labelledby="thread-title">
-                  <header className="page-heading">
-                    <button type="button" className="back-link" onClick={() => { setSelectedId(null); setThread(null); }}>
-                      {t("operator.back")}
-                    </button>
-                    <h2 id="thread-title">{thread.messages[0]?.subject ?? thread.id}</h2>
-                  </header>
+              <DeliveryProblems repositoryId={repositoryId} revision={threadRevision} onOpenThread={openThread} onUnauthorized={onUnauthorized} />
+              <section id="threads" aria-label={t("operator.threads")}>
+                <form className="search-form mail-filters" onSubmit={(event) => { event.preventDefault(); setQuery(searchDraft); clearThread(); }}>
+                  <label>{t("operator.search")}<input type="search" value={searchDraft} onChange={(event) => setSearchDraft(event.target.value)} /></label>
+                  <label>{t("operator.repository")}
+                    <select value={repositoryId} onChange={(event) => { setRepositoryId(event.target.value); clearThread(); }}>
+                      <option value="">{t("operator.all")}</option>
+                      {overview.repositories.map((repository) => <option key={repository.id} value={repository.id}>{repository.name} · {repository.id}</option>)}
+                    </select>
+                  </label>
+                  {mailScope === "all" ? <label>{t("operator.agent")}
+                    <select value={agent} onChange={(event) => { setAgent(event.target.value); clearThread(); }}>
+                      <option value="">{t("operator.all")}</option>
+                      {sessions.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}
+                    </select>
+                  </label> : null}
+                  <button type="submit" className="primary-button">{t("search.submit")}</button>
+                </form>
+                <div className="mailbox-layout" data-reading={selectedId !== null ? "yes" : "no"}>
+                  <div className="mailbox-list">
+                    <div className="panel-heading"><h2>{t("operator.threads")}</h2></div>
+                    {threadsError ? <p role="alert">{t("operator.loadError")}</p> : null}
+                    <div className="thread-list">
+                      {threads.length === 0 ? <div className="thread-empty"><h3>{t(mailScope === "mine" && query === "" && repositoryId === "" ? "console.emptyInbox" : "operator.emptyThreads")}</h3><p>{t("console.emptyHint")}</p></div> : (
+                        <ul className="message-list">
+                          {threads.map((item) => <li key={item.id}>
+                            <button type="button" className="thread-row" aria-current={item.id === selectedId ? "true" : undefined} data-unread={item.unread > 0 ? "yes" : "no"} onClick={(event) => openThread(item.id, event.currentTarget)}>
+                              <span className="thread-row-top"><strong>{item.subject}</strong><time dateTime={item.last_at}>{formatWhen(item.last_at)}</time></span>
+                              <span className="thread-participants">{item.participants.join(", ")}</span>
+                              <span className="thread-row-bottom"><span>{t("inbox.count", { count: item.count })}</span><span>{t("operator.unread", { count: item.unread })}</span></span>
+                              <span className="sr-only">{t("operator.openThread", { subject: item.subject })}</span>
+                            </button>
+                          </li>)}
+                        </ul>
+                      )}
+                      {olderCursor !== undefined ? <button type="button" className="back-link" onClick={() => {
+                        const filters = threadFilters(repositoryId, participant, query);
+                        setOpenedPages((opened) => ({ filters, pages: opened.filters === filters ? opened.pages + 1 : 2 }));
+                      }}>{t("operator.olderThreads")}</button> : null}
+                    </div>
+                  </div>
+                  {selectedId === null ? <div className="thread-empty"><h2>{t("console.selectThread")}</h2><p>{t("console.selectHint")}</p></div> : (
+                    <article className="message-detail thread-reader" aria-labelledby="thread-title" aria-busy={thread === null && !threadError}>
+                      <header className="page-heading">
+                        <button type="button" className="back-link" onClick={clearThread}>{t("operator.back")}</button>
+                        <h2 id="thread-title" tabIndex={-1} ref={readerTitle}>{thread === null ? t(threadError ? "operator.loadError" : "message.loading") : thread.messages[0]?.subject ?? thread.id}</h2>
+                      </header>
+                      {threadError ? <div className="state-panel"><p role="alert">{t("operator.loadError")}</p><button type="button" onClick={() => { readerTitle.current?.focus(); setThreadError(false); setThreadRevision((value) => value + 1); }}>{t("operator.retry")}</button></div> : null}
+                      {thread !== null ? <>
                   {thread.messages.map((message) => (
                     <article key={message.id} className="thread-message">
                       <header>
@@ -790,11 +747,110 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                       }
                     />
                   </form>
-                </article>
+                      </> : null}
+                    </article>
+                  )}
+                </div>
+              </section>
+            </div>
+            <div hidden={activeView !== "diagnostics"} className="console-view">
+            <section id="overview" className="panel" aria-labelledby="clients-title">
+              <div className="panel-heading">
+                <h2 id="clients-title">{t("operator.doctorTitle")}</h2>
+                <button type="button" className="primary-button" onClick={() => void reload()}>
+                  {t("operator.doctorReload")}
+                </button>
+              </div>
+              <p>{t("operator.doctorHint", { command: "iris doctor" })}</p>
+              {doctor === null || doctor.hosts.length === 0 ? (
+                <p className="state-panel">{t("operator.doctorMissing", { command: "iris doctor" })}</p>
+              ) : (
+                doctor.hosts.map((report) => <HostReport key={report.host} report={report} />)
+              )}
+              {waiting ? (
+                <p className="state-panel" role="status">
+                  {t("operator.waiting")}
+                </p>
               ) : null}
             </section>
+            </div>
+            <div hidden={activeView !== "fleet"} className="console-view">
+            <section className="content-grid" aria-label={t("operator.repositories")}>
+              <article className="panel">
+                <div className="panel-heading">
+                  <h2>{t("operator.repositories")}</h2>
+                  <span>{t("operator.unread", { count: overview.human_unread })}</span>
+                </div>
+                {overview.repositories.length === 0 ? <p>{t("operator.none")}</p> : (
+                  <table className="stack-table">
+                    <caption className="sr-only">{t("operator.repositories")}</caption>
+                    <thead>
+                      <tr>
+                        <th scope="col">{t("operator.repository")}</th>
+                        <th scope="col">{t("operator.detail")}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {overview.repositories.map((repository) => (
+                        <tr key={repository.id}>
+                          <th scope="row">{repository.name}</th>
+                          <td><details className="repository-details"><summary>{t("console.aliases")}</summary><code>{repository.id}</code><ul>{repository.aliases.map((alias) => <li key={alias}>{alias}</li>)}</ul></details></td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </article>
+              <article className="panel">
+                <div className="panel-heading">
+                  <h2>{t("operator.agents")}</h2>
+                </div>
+                <div className="fleet-toolbar">
+                  <label>{t("console.findAgent")}<input type="search" value={agentSearch} onChange={(event) => setAgentSearch(event.target.value)} /></label>
+                  <label><input type="checkbox" checked={showInactive} onChange={(event) => setShowInactive(event.target.checked)} />{t("console.showInactive")}</label>
+                </div>
+                {visibleAgents.length === 0 ? <p>{t("console.noAgentMatch")}</p> : (
+                  <table className="stack-table">
+                    <caption className="sr-only">{t("operator.agents")}</caption>
+                    <thead>
+                      <tr>
+                        <th scope="col">{t("operator.agent")}</th>
+                        <th scope="col">{t("operator.detail")}</th>
+                        <th scope="col">{t("operator.repository")}</th>
+                        <th scope="col">{t("operator.clientHealth")}</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {visibleAgents.map((item: Agent) => {
+                        const health = healthOf(doctor, item);
+                        return (
+                          <tr key={item.id}>
+                            <th scope="row">{item.name}</th>
+                            <td>
+                              {item.host} · {item.client} · {item.state}<br />{item.branch}
+                            </td>
+                            <td>{repositoryName(overview, item.repository_id)}</td>
+                            <td data-health={health?.status ?? "none"}>{health === undefined ? t("operator.noHostReport") : t(statusKey(health.status))}</td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+              </article>
 
-            <section id="compose" className="panel" aria-labelledby="compose-title">
+            </section>
+            </div>
+            <div hidden={activeView !== "claims"} className="console-view">
+              <ClaimsPanel
+                claims={overview.claims}
+                repositories={overview.repositories}
+                revoking={revoking}
+                onRevoke={(claim) => void onRevoke(claim)}
+              />
+
+            </div>
+            <section id="compose" hidden={activeView !== "compose"} className="panel console-view" aria-labelledby="compose-title">
               <div className="panel-heading">
                 <h2 id="compose-title">{t("operator.compose")}</h2>
               </div>
@@ -807,6 +863,12 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                   }
                 }}
               >
+                <label>{t("console.composeRepository")}
+                  <select value={repositoryId} onChange={(event) => { setRepositoryId(event.target.value); clearThread(); }}>
+                    <option value="">{t("console.automaticRepository")}</option>
+                    {overview.repositories.map((repository) => <option key={repository.id} value={repository.id}>{repository.name} · {repository.id}</option>)}
+                  </select>
+                </label>
                 <RecipientPicker agents={sessions} selected={composeRecipients} onChange={(ids) => setCompose(edited(compose, { to: ids.join(", ") }))} />
                 <label>
                   {t("operator.subject")}
@@ -829,12 +891,11 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                   onSend={() => void submit(compose, setCompose, () => setCompose(newDraft()))}
                 />
               </form>
-              {notice.length > 0 ? <p role="status">{notice}</p> : null}
-              {formError.length > 0 ? <p role="alert">{formError}</p> : null}
             </section>
           </>
         ) : null}
       </main>
+      </div>
     </div>
   );
 }

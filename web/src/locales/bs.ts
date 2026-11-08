@@ -415,6 +415,30 @@ const translation = {
     reviewTitle: "Provjerite prije slanja",
     reviewBack: "Nazad na nacrt",
   },
+  // Console strings machine-translated and reviewed by Codex on 2026-11-08; not yet reviewed by a native speaker.
+  console: {
+    myMessages: "Moje poruke",
+    allActivity: "Sve aktivnosti",
+    fleet: "Flota",
+    diagnostics: "Dijagnostika",
+    subtitle: "Vaši razgovori i stvari koje zahtijevaju vašu pažnju.",
+    activityHint: "Razgovori u cijeloj floti, uključujući poruke između agenata.",
+    fleetHint: "Pogledajte ko radi, gdje se nalazi i koji je status posljednji put prijavio.",
+    unread: "Vaše nepročitane poruke",
+    active: "Aktivni agenti",
+    reservations: "Rezervacije datoteka",
+    selectThread: "Odaberi razgovor",
+    selectHint: "Ovdje pročitajte poruku ili odgovorite. Vaše mjesto na listi ostaje isto.",
+    emptyInbox: "Još nema razgovora s vama",
+    emptyHint: "Ovdje će se pojaviti poruke poslane primaocu human. Možete i započeti razgovor ili pregledati sve aktivnosti.",
+    showInactive: "Uključi neaktivne agente",
+    findAgent: "Pronađi agenta",
+    aliases: "Tehnički detalji",
+    composeHint: "Odaberite primaoce, napišite poruku i provjerite je prije slanja.",
+    composeRepository: "Pošalji iz repozitorija",
+    automaticRepository: "Koristi repozitorij prvog primaoca",
+    noAgentMatch: "Nijedan agent ne odgovara ovim filterima.",
+  },
 } satisfies TranslationResource;
 
 export default translation;

@@ -415,6 +415,30 @@ const translation = {
     reviewTitle: "Tjek før afsendelse",
     reviewBack: "Tilbage til kladden",
   },
+  // Console strings machine-translated and reviewed by Codex on 2026-11-08; not yet reviewed by a native speaker.
+  console: {
+    myMessages: "Mine beskeder",
+    allActivity: "Al aktivitet",
+    fleet: "Agentflåde",
+    diagnostics: "Diagnostik",
+    subtitle: "Dine samtaler og det, der kræver din opmærksomhed.",
+    activityHint: "Samtaler på tværs af agentflåden, herunder beskeder mellem agenter.",
+    fleetHint: "Se, hvem der arbejder, hvor de er, og deres senest rapporterede status.",
+    unread: "Dine ulæste beskeder",
+    active: "Aktive agenter",
+    reservations: "Filreservationer",
+    selectThread: "Vælg en samtale",
+    selectHint: "Læs en besked eller svar her. Din placering i listen bevares.",
+    emptyInbox: "Ingen samtaler med dig endnu",
+    emptyHint: "Beskeder sendt til human vises her. Du kan også starte en samtale eller gennemse al aktivitet.",
+    showInactive: "Medtag inaktive agenter",
+    findAgent: "Find en agent",
+    aliases: "Tekniske detaljer",
+    composeHint: "Vælg modtagere, skriv din besked, og gennemgå den, før du sender.",
+    composeRepository: "Send fra repositorium",
+    automaticRepository: "Brug den første modtagers repositorium",
+    noAgentMatch: "Ingen agenter matcher disse filtre.",
+  },
 } satisfies TranslationResource;
 
 export default translation;

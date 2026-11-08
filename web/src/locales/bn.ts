@@ -415,6 +415,30 @@ const translation = {
     reviewTitle: "পাঠানোর আগে যাচাই করুন",
     reviewBack: "খসড়ায় ফিরে যান",
   },
+  // Console strings machine-translated and reviewed by Codex on 2026-11-08; not yet reviewed by a native speaker.
+  console: {
+    myMessages: "আমার বার্তা",
+    allActivity: "সব কার্যকলাপ",
+    fleet: "এজেন্ট দল",
+    diagnostics: "সমস্যা নির্ণয়",
+    subtitle: "আপনার কথোপকথন এবং যেসব বিষয়ে আপনার মনোযোগ প্রয়োজন।",
+    activityHint: "পুরো এজেন্ট দলের কথোপকথন, এজেন্টদের নিজেদের মধ্যে আদানপ্রদান করা বার্তাসহ।",
+    fleetHint: "দেখুন কে কাজ করছে, কোথায় আছে এবং সর্বশেষ কী অবস্থা জানিয়েছে।",
+    unread: "আপনার অপঠিত বার্তা",
+    active: "সক্রিয় এজেন্ট",
+    reservations: "ফাইল সংরক্ষণ",
+    selectThread: "একটি কথোপকথন বেছে নিন",
+    selectHint: "এখানে বার্তা পড়ুন বা উত্তর দিন। তালিকায় আপনার অবস্থান অপরিবর্তিত থাকবে।",
+    emptyInbox: "আপনার সঙ্গে এখনো কোনো কথোপকথন নেই",
+    emptyHint: "human-কে পাঠানো বার্তা এখানে দেখা যাবে। আপনি একটি কথোপকথন শুরু করতে পারেন বা সব কার্যকলাপ দেখতে পারেন।",
+    showInactive: "নিষ্ক্রিয় এজেন্টদেরও দেখান",
+    findAgent: "একজন এজেন্ট খুঁজুন",
+    aliases: "প্রযুক্তিগত বিবরণ",
+    composeHint: "প্রাপক বেছে নিন, বার্তা লিখুন, তারপর পাঠানোর আগে যাচাই করুন।",
+    composeRepository: "যে রিপোজিটরি থেকে পাঠাবেন",
+    automaticRepository: "প্রথম প্রাপকের রিপোজিটরি ব্যবহার করুন",
+    noAgentMatch: "এই ফিল্টারগুলোর সঙ্গে কোনো এজেন্ট মেলে না।",
+  },
 } satisfies TranslationResource;
 
 export default translation;

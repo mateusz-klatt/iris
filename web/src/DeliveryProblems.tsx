@@ -8,7 +8,7 @@ interface Props {
   repositoryId: string;
   /** Changes whenever the hub reports a change, so the list is read again. */
   revision: number;
-  onOpenThread: (id: string) => void;
+  onOpenThread: (id: string, trigger: HTMLButtonElement) => void;
   onUnauthorized: () => void;
 }
 
@@ -61,14 +61,16 @@ export function DeliveryProblems({ repositoryId, revision, onOpenThread, onUnaut
   const when = new Intl.DateTimeFormat(i18n.language, { dateStyle: "medium", timeStyle: "short" });
   return (
     <section id="delivery-problems" className="panel" aria-labelledby="delivery-problems-title">
-      <div className="panel-heading">
+      <details className="delivery-disclosure">
+      <summary className="panel-heading">
         <h2 id="delivery-problems-title">{t("operator.deliveryTitle")}</h2>
-      </div>
+        <span>{problems.messages.length}</span>
+      </summary>
       <p>{t("operator.deliveryHint", { days, minutes })}</p>
       <ul className="message-list">
         {problems.messages.map((message) => (
           <li key={message.id}>
-            <button type="button" className="message-row" onClick={() => onOpenThread(message.thread_id)}>
+            <button type="button" className="message-row" onClick={(event) => onOpenThread(message.thread_id, event.currentTarget)}>
               <strong>{message.subject}</strong>
               <small>
                 <time dateTime={message.created_at}>{when.format(new Date(message.created_at))}</time>
@@ -87,6 +89,7 @@ export function DeliveryProblems({ repositoryId, revision, onOpenThread, onUnaut
           </li>
         ))}
       </ul>
+      </details>
     </section>
   );
 }

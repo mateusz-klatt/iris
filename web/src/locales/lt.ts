@@ -415,6 +415,30 @@ const translation = {
     reviewTitle: "Patikrinkite prieš siųsdami",
     reviewBack: "Grįžti prie juodraščio",
   },
+  // Console strings machine-translated and reviewed by Codex on 2026-11-08; not yet reviewed by a native speaker.
+  console: {
+    myMessages: "Mano pranešimai",
+    allActivity: "Visa veikla",
+    fleet: "Agentų grupė",
+    diagnostics: "Diagnostika",
+    subtitle: "Jūsų pokalbiai ir dalykai, kuriems reikia jūsų dėmesio.",
+    activityHint: "Visos agentų grupės pokalbiai, įskaitant agentų tarpusavio pranešimus.",
+    fleetHint: "Pažiūrėkite, kas dirba, kur yra ir kokią būseną paskutinį kartą nurodė.",
+    unread: "Jums skirti neskaityti pranešimai",
+    active: "Aktyvūs agentai",
+    reservations: "Failų rezervacijos",
+    selectThread: "Pasirinkite pokalbį",
+    selectHint: "Čia skaitykite pranešimą arba atsakykite į jį. Jūsų vieta sąraše nepasikeis.",
+    emptyInbox: "Pokalbių su jumis dar nėra",
+    emptyHint: "Čia bus rodomi pranešimai, išsiųsti adresatui human. Taip pat galite pradėti pokalbį arba peržiūrėti visą veiklą.",
+    showInactive: "Įtraukti neaktyvius agentus",
+    findAgent: "Rasti agentą",
+    aliases: "Techninė informacija",
+    composeHint: "Pasirinkite gavėjus, parašykite pranešimą ir prieš siųsdami jį peržiūrėkite.",
+    composeRepository: "Siųsti iš saugyklos",
+    automaticRepository: "Naudoti pirmojo gavėjo saugyklą",
+    noAgentMatch: "Nė vienas agentas neatitinka šių filtrų.",
+  },
 } satisfies TranslationResource;
 
 export default translation;

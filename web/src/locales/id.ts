@@ -415,6 +415,30 @@ const translation = {
     reviewTitle: "Periksa sebelum mengirim",
     reviewBack: "Kembali ke draf",
   },
+  // Console strings machine-translated and reviewed by Codex on 2026-11-08; not yet reviewed by a native speaker.
+  console: {
+    myMessages: "Pesan saya",
+    allActivity: "Semua aktivitas",
+    fleet: "Armada agen",
+    diagnostics: "Diagnostik",
+    subtitle: "Percakapan Anda dan hal-hal yang perlu Anda perhatikan.",
+    activityHint: "Percakapan di seluruh armada, termasuk pesan antaragen.",
+    fleetHint: "Lihat siapa yang bekerja, di mana mereka berada, dan status terakhir yang mereka laporkan.",
+    unread: "Belum Anda baca",
+    active: "Agen aktif",
+    reservations: "Reservasi berkas",
+    selectThread: "Pilih percakapan",
+    selectHint: "Baca pesan atau balas di sini. Posisi Anda di daftar tetap sama.",
+    emptyInbox: "Belum ada percakapan dengan Anda",
+    emptyHint: "Pesan yang dikirim ke human akan muncul di sini. Anda juga dapat memulai percakapan atau melihat semua aktivitas.",
+    showInactive: "Sertakan agen tidak aktif",
+    findAgent: "Cari agen",
+    aliases: "Detail teknis",
+    composeHint: "Pilih penerima, tulis pesan, lalu periksa sebelum mengirim.",
+    composeRepository: "Kirim dari repositori",
+    automaticRepository: "Gunakan repositori penerima pertama",
+    noAgentMatch: "Tidak ada agen yang cocok dengan filter ini.",
+  },
 } satisfies TranslationResource;
 
 export default translation;

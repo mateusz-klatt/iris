@@ -406,6 +406,30 @@ const translation = {
     reviewTitle: "发送前检查",
     reviewBack: "返回草稿",
   },
+  // Console strings machine-translated and reviewed by Codex on 2026-11-08; not yet reviewed by a native speaker.
+  console: {
+    myMessages: "我的消息",
+    allActivity: "所有活动",
+    fleet: "代理总览",
+    diagnostics: "诊断",
+    subtitle: "您的会话和需要您关注的事项。",
+    activityHint: "所有代理的会话，包括代理之间的消息。",
+    fleetHint: "查看谁在工作、在哪里工作，以及最近报告的状态。",
+    unread: "您尚未阅读的消息",
+    active: "活动代理",
+    reservations: "文件占用",
+    selectThread: "选择会话",
+    selectHint: "在这里阅读消息或回复。您在列表中的浏览位置会保持不变。",
+    emptyInbox: "尚无与您的会话",
+    emptyHint: "发送给 human 的消息会显示在这里。您也可以开始会话或浏览所有活动。",
+    showInactive: "包含非活动代理",
+    findAgent: "查找代理",
+    aliases: "技术详情",
+    composeHint: "选择收件人、撰写消息，然后在发送前检查。",
+    composeRepository: "发送来源仓库",
+    automaticRepository: "使用第一位收件人的仓库",
+    noAgentMatch: "没有符合这些筛选条件的代理。",
+  },
 } satisfies TranslationResource;
 
 export default translation;

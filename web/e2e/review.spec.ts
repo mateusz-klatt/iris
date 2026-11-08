@@ -40,6 +40,8 @@ test("the review before a send fits a phone and sends only on Send", async ({ pa
     }),
   );
   await page.route("**/v1/ui/doctor", (route) => route.fulfill({ json: { hosts: [] } }));
+  await page.routeWebSocket("**/v1/ui/watch", () => {});
+  await page.route("**/v1/ui/deliveries**", (route) => route.fulfill({ json: { messages: [], window_s: 604800, wait_s: 900 } }));
   await page.route("**/v1/ui/threads**", (route) => route.fulfill({ json: { threads: [] } }));
   await page.route("**/v1/ui/messages", async (route) => {
     sent.push(route.request().postDataJSON());
@@ -47,6 +49,7 @@ test("the review before a send fits a phone and sends only on Send", async ({ pa
   });
 
   await page.goto("/");
+  await page.getByRole("button", { name: "+ New message", exact: true }).click();
   const compose = page.locator("#compose");
   const search = compose.getByRole("searchbox", { name: "Find recipients" });
   await search.fill("claude");

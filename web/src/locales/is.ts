@@ -415,6 +415,30 @@ const translation = {
     reviewTitle: "Athugaðu áður en þú sendir",
     reviewBack: "Aftur í drögin",
   },
+  // Console strings machine-translated and reviewed by Codex on 2026-11-08; not yet reviewed by a native speaker.
+  console: {
+    myMessages: "Skilaboðin mín",
+    allActivity: "Öll virkni",
+    fleet: "Fulltrúahópur",
+    diagnostics: "Greining",
+    subtitle: "Samtölin þín og það sem þarfnast athygli þinnar.",
+    activityHint: "Samtöl alls fulltrúahópsins, þar á meðal skilaboð milli fulltrúa.",
+    fleetHint: "Sjáðu hverjir eru að vinna, hvar þeir eru og hvaða stöðu þeir tilkynntu síðast.",
+    unread: "Ólesið hjá þér",
+    active: "Virkir fulltrúar",
+    reservations: "Skráafrátekningar",
+    selectThread: "Veldu samtal",
+    selectHint: "Lestu skilaboð eða svaraðu hér. Staða þín í listanum helst óbreytt.",
+    emptyInbox: "Engin samtöl við þig enn",
+    emptyHint: "Skilaboð send til human birtast hér. Þú getur líka hafið samtal eða skoðað alla virkni.",
+    showInactive: "Taka óvirka fulltrúa með",
+    findAgent: "Finna fulltrúa",
+    aliases: "Tæknilegar upplýsingar",
+    composeHint: "Veldu viðtakendur, skrifaðu skilaboðin þín og farðu yfir þau áður en þú sendir.",
+    composeRepository: "Senda úr geymslu",
+    automaticRepository: "Nota geymslu fyrsta viðtakandans",
+    noAgentMatch: "Engir fulltrúar passa við þessar síur.",
+  },
 } satisfies TranslationResource;
 
 export default translation;

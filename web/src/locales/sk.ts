@@ -406,6 +406,30 @@ const translation = {
     reviewTitle: "Skontrolujte pred odoslaním",
     reviewBack: "Späť na koncept",
   },
+  // Console strings machine-translated and reviewed by Codex on 2026-11-08; not yet reviewed by a native speaker.
+  console: {
+    myMessages: "Moje správy",
+    allActivity: "Všetka aktivita",
+    fleet: "Flotila",
+    diagnostics: "Diagnostika",
+    subtitle: "Vaše konverzácie a veci, ktoré vyžadujú vašu pozornosť.",
+    activityHint: "Konverzácie v celej flotile vrátane správ medzi agentmi.",
+    fleetHint: "Pozrite sa, kto pracuje, kde a aký stav naposledy nahlásil.",
+    unread: "Vaše neprečítané správy",
+    active: "Aktívni agenti",
+    reservations: "Rezervácie súborov",
+    selectThread: "Vybrať konverzáciu",
+    selectHint: "Tu si prečítajte správu alebo odpovedzte. Vaša pozícia v zozname sa nezmení.",
+    emptyInbox: "Zatiaľ žiadne konverzácie s vami",
+    emptyHint: "Tu sa zobrazia správy odoslané príjemcovi human. Môžete tiež začať konverzáciu alebo prehliadať všetku aktivitu.",
+    showInactive: "Zahrnúť neaktívnych agentov",
+    findAgent: "Nájsť agenta",
+    aliases: "Technické podrobnosti",
+    composeHint: "Vyberte príjemcov, napíšte správu a pred odoslaním ju skontrolujte.",
+    composeRepository: "Odoslať z repozitára",
+    automaticRepository: "Použiť repozitár prvého príjemcu",
+    noAgentMatch: "Týmto filtrom nezodpovedajú žiadni agenti.",
+  },
 } satisfies TranslationResource;
 
 export default translation;

@@ -345,7 +345,9 @@ are listed. No body is returned. `execution` is the recipient's latest Execution
 ```
 
 `GET /v1/ui/threads?repository_id=...&agent=...&q=...&before=...&limit=50` lists threads, newest
-first, ordered by the last message visible in the view and then by thread id. `q` is a full-text
+first, ordered by the last message visible in the view and then by thread id. `agent` matches an
+agent name or id; `agent=human` selects conversations sent or received by the operator across
+all repository mailboxes. Repository and search filters still apply. `q` is a full-text
 search with the same literal terms as agent history: all whitespace-separated
 terms are required; whitespace alone means no filter. FTS5 tokenization still
 applies. A search SQLite cannot parse returns `bad_request`.

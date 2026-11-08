@@ -406,6 +406,30 @@ const translation = {
     reviewTitle: "ตรวจสอบก่อนส่ง",
     reviewBack: "กลับไปที่ฉบับร่าง",
   },
+  // Console strings machine-translated and reviewed by Codex on 2026-11-08; not yet reviewed by a native speaker.
+  console: {
+    myMessages: "ข้อความของฉัน",
+    allActivity: "กิจกรรมทั้งหมด",
+    fleet: "กลุ่มเอเจนต์",
+    diagnostics: "การวินิจฉัย",
+    subtitle: "การสนทนาของคุณและสิ่งที่คุณต้องใส่ใจ",
+    activityHint: "การสนทนาทั่วทั้งกลุ่ม รวมถึงข้อความระหว่างเอเจนต์",
+    fleetHint: "ดูว่าใครกำลังทำงาน อยู่ที่ไหน และรายงานสถานะล่าสุดว่าอย่างไร",
+    unread: "ข้อความที่คุณยังไม่ได้อ่าน",
+    active: "เอเจนต์ที่ใช้งานอยู่",
+    reservations: "การจองไฟล์",
+    selectThread: "เลือกการสนทนา",
+    selectHint: "อ่านข้อความหรือตอบกลับได้ที่นี่ ตำแหน่งของคุณในรายการจะไม่เปลี่ยน",
+    emptyInbox: "ยังไม่มีการสนทนากับคุณ",
+    emptyHint: "ข้อความที่ส่งถึง human จะปรากฏที่นี่ คุณสามารถเริ่มการสนทนาหรือดูกิจกรรมทั้งหมดได้เช่นกัน",
+    showInactive: "รวมเอเจนต์ที่ไม่ได้ใช้งาน",
+    findAgent: "ค้นหาเอเจนต์",
+    aliases: "รายละเอียดทางเทคนิค",
+    composeHint: "เลือกผู้รับ เขียนข้อความ แล้วตรวจสอบก่อนส่ง",
+    composeRepository: "ส่งจากที่เก็บ",
+    automaticRepository: "ใช้ที่เก็บของผู้รับคนแรก",
+    noAgentMatch: "ไม่มีเอเจนต์ที่ตรงกับตัวกรองเหล่านี้",
+  },
 } satisfies TranslationResource;
 
 export default translation;

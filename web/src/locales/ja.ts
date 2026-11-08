@@ -415,6 +415,30 @@ const translation = {
     reviewTitle: "送信前に確認",
     reviewBack: "下書きに戻る",
   },
+  // Console strings machine-translated and reviewed by Codex on 2026-11-08; not yet reviewed by a native speaker.
+  console: {
+    myMessages: "自分のメッセージ",
+    allActivity: "すべてのアクティビティ",
+    fleet: "エージェント一覧",
+    diagnostics: "診断",
+    subtitle: "あなたの会話と、確認が必要なこと。",
+    activityHint: "エージェント間のメッセージを含む、エージェント全体の会話。",
+    fleetHint: "誰がどこで作業しているか、最後に報告された状態とあわせて確認できます。",
+    unread: "あなたの未読メッセージ",
+    active: "稼働中のエージェント",
+    reservations: "ファイル予約",
+    selectThread: "会話を選択",
+    selectHint: "ここでメッセージを読んだり返信したりできます。一覧の閲覧位置はそのまま保持されます。",
+    emptyInbox: "あなたとの会話はまだありません",
+    emptyHint: "human 宛てのメッセージがここに表示されます。会話を始めたり、すべてのアクティビティを確認したりすることもできます。",
+    showInactive: "稼働していないエージェントも表示",
+    findAgent: "エージェントを検索",
+    aliases: "技術的な詳細",
+    composeHint: "宛先を選び、メッセージを書いて、送信前に確認してください。",
+    composeRepository: "送信元リポジトリ",
+    automaticRepository: "最初の宛先のリポジトリを使用",
+    noAgentMatch: "このフィルターに一致するエージェントはいません。",
+  },
 } satisfies TranslationResource;
 
 export default translation;

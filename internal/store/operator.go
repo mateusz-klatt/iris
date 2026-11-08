@@ -290,8 +290,15 @@ func (t *transaction) threads(r Request) (map[string]any, error) {
 		args = append(args, match)
 	}
 	if r.Agent != "" {
-		q += ` AND m.thread_id IN (SELECT mm.thread_id FROM Message mm JOIN Execution e ON e.id=mm.sender_execution_id JOIN Agent a ON a.id=e.agent_id WHERE a.name=? OR a.id=? UNION SELECT mm.thread_id FROM Message mm JOIN Delivery d ON d.message_id=mm.id JOIN Agent a ON a.id=d.recipient_agent_id WHERE a.name=? OR a.id=?)`
-		args = append(args, r.Agent, r.Agent, r.Agent, r.Agent)
+		participant := "a.name=? OR a.id=?"
+		participantArgs := []any{r.Agent, r.Agent}
+		if r.Agent == "human" {
+			// Each repository has its own operator mailbox, but the console presents
+			// them as one human participant across sent and received conversations.
+			participant, participantArgs = "a.client='human'", nil
+		}
+		q += ` AND m.thread_id IN (SELECT mm.thread_id FROM Message mm JOIN Execution e ON e.id=mm.sender_execution_id JOIN Agent a ON a.id=e.agent_id WHERE ` + participant + ` UNION SELECT mm.thread_id FROM Message mm JOIN Delivery d ON d.message_id=mm.id JOIN Agent a ON a.id=d.recipient_agent_id WHERE ` + participant + `)`
+		args = append(append(args, participantArgs...), participantArgs...)
 	}
 	q += " GROUP BY m.thread_id"
 	if r.Before != "" {

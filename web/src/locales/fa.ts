@@ -415,6 +415,30 @@ const translation = {
     reviewTitle: "پیش از ارسال بررسی کنید",
     reviewBack: "بازگشت به پیش‌نویس",
   },
+  // Console strings machine-translated and reviewed by Codex on 2026-11-08; not yet reviewed by a native speaker.
+  console: {
+    myMessages: "پیام‌های من",
+    allActivity: "همهٔ فعالیت‌ها",
+    fleet: "مجموعهٔ عامل‌ها",
+    diagnostics: "عیب‌یابی",
+    subtitle: "گفتگوهای شما و مواردی که به توجه شما نیاز دارند.",
+    activityHint: "گفتگوهای همهٔ عامل‌ها، از جمله پیام‌های بین عامل‌ها.",
+    fleetHint: "ببینید چه کسی کار می‌کند، کجاست و آخرین وضعیتی که گزارش کرده چیست.",
+    unread: "پیام‌های خوانده‌نشدهٔ شما",
+    active: "عامل‌های فعال",
+    reservations: "رزرو فایل‌ها",
+    selectThread: "یک گفتگو انتخاب کنید",
+    selectHint: "اینجا پیام بخوانید یا پاسخ دهید. جای شما در فهرست حفظ می‌شود.",
+    emptyInbox: "هنوز گفتگویی با شما وجود ندارد",
+    emptyHint: "پیام‌های ارسال‌شده به human اینجا نمایش داده می‌شوند. همچنین می‌توانید گفتگویی را شروع کنید یا همهٔ فعالیت‌ها را ببینید.",
+    showInactive: "عامل‌های غیرفعال را هم نمایش دهید",
+    findAgent: "یافتن عامل",
+    aliases: "جزئیات فنی",
+    composeHint: "گیرندگان را انتخاب کنید، پیامتان را بنویسید و پیش از ارسال آن را بازبینی کنید.",
+    composeRepository: "ارسال از مخزن",
+    automaticRepository: "استفاده از مخزن نخستین گیرنده",
+    noAgentMatch: "هیچ عاملی با این پالایه‌ها مطابقت ندارد.",
+  },
 } satisfies TranslationResource;
 
 export default translation;

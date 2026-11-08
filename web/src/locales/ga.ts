@@ -415,6 +415,30 @@ const translation = {
     reviewTitle: "Seiceáil sula seolann tú",
     reviewBack: "Ar ais chuig an dréacht",
   },
+  // Console strings machine-translated and reviewed by Codex on 2026-11-08; not yet reviewed by a native speaker.
+  console: {
+    myMessages: "Mo theachtaireachtaí",
+    allActivity: "An ghníomhaíocht ar fad",
+    fleet: "Grúpa gníomhairí",
+    diagnostics: "Diagnóisic",
+    subtitle: "Do chomhráite agus na rudaí ar gá duit aird a thabhairt orthu.",
+    activityHint: "Comhráite ar fud an ghrúpa gníomhairí, lena n-áirítear teachtaireachtaí idir gníomhairí.",
+    fleetHint: "Féach cé atá ag obair, cá bhfuil siad agus an stádas deireanach a thuairiscigh siad.",
+    unread: "Gan léamh agat",
+    active: "Gníomhairí gníomhacha",
+    reservations: "Áirithintí comhad",
+    selectThread: "Roghnaigh comhrá",
+    selectHint: "Léigh teachtaireacht nó tabhair freagra anseo. Coinnítear d’áit sa liosta.",
+    emptyInbox: "Níl aon chomhrá leat fós",
+    emptyHint: "Beidh teachtaireachtaí a sheoltar chuig human le feiceáil anseo. Is féidir leat comhrá a thosú nó an ghníomhaíocht ar fad a bhrabhsáil freisin.",
+    showInactive: "Cuir gníomhairí neamhghníomhacha san áireamh",
+    findAgent: "Aimsigh gníomhaire",
+    aliases: "Sonraí teicniúla",
+    composeHint: "Roghnaigh faighteoirí, scríobh do theachtaireacht, ansin seiceáil í sula seolann tú í.",
+    composeRepository: "Seol ó stór",
+    automaticRepository: "Úsáid stór an chéad fhaighteora",
+    noAgentMatch: "Níl aon ghníomhaire ag teacht leis na scagairí seo.",
+  },
 } satisfies TranslationResource;
 
 export default translation;

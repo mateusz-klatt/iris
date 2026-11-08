@@ -19,7 +19,7 @@ it("requires a new selection when a reviewed recipient is recreated under the sa
   );
   const user = userEvent.setup();
   render(<App connect={(frame) => { onFrame = frame; return () => {}; }} />);
-  await screen.findByRole("heading", { name: "Clients" });
+  await user.click(await screen.findByRole("button", { name: "+ New message" }));
   const compose = within(document.getElementById("compose")!);
   await user.click(compose.getByRole("checkbox", { name: /claude-host/ }));
   await user.type(compose.getByRole("textbox", { name: "Subject" }), "Identity check");

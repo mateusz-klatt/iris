@@ -406,6 +406,30 @@ const translation = {
     reviewTitle: "Kontrolloni para dërgimit",
     reviewBack: "Kthehu te drafti",
   },
+  // Console strings machine-translated and reviewed by Codex on 2026-11-08; not yet reviewed by a native speaker.
+  console: {
+    myMessages: "Mesazhet e mia",
+    allActivity: "I gjithë aktiviteti",
+    fleet: "Flota",
+    diagnostics: "Diagnostikimi",
+    subtitle: "Bisedat tuaja dhe çështjet që kërkojnë vëmendjen tuaj.",
+    activityHint: "Biseda në të gjithë flotën, përfshirë mesazhet mes agjentëve.",
+    fleetHint: "Shihni kush po punon, ku ndodhet dhe gjendjen e fundit që ka raportuar.",
+    unread: "Të palexuara për ju",
+    active: "Agjentë aktivë",
+    reservations: "Rezervime skedarësh",
+    selectThread: "Zgjidh një bisedë",
+    selectHint: "Lexoni një mesazh ose përgjigjuni këtu. Pozicioni juaj në listë mbetet i njëjtë.",
+    emptyInbox: "Ende nuk ka biseda me ju",
+    emptyHint: "Këtu do të shfaqen mesazhet e dërguara te human. Mund edhe të nisni një bisedë ose të shfletoni të gjithë aktivitetin.",
+    showInactive: "Përfshi agjentët joaktivë",
+    findAgent: "Gjej një agjent",
+    aliases: "Hollësi teknike",
+    composeHint: "Zgjidhni marrësit, shkruani mesazhin dhe kontrollojeni para dërgimit.",
+    composeRepository: "Dërgo nga depoja",
+    automaticRepository: "Përdor depon e marrësit të parë",
+    noAgentMatch: "Asnjë agjent nuk përputhet me këta filtra.",
+  },
 } satisfies TranslationResource;
 
 export default translation;

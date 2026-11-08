@@ -415,6 +415,30 @@ const translation = {
     reviewTitle: "Suriin bago ipadala",
     reviewBack: "Bumalik sa draft",
   },
+  // Console strings machine-translated and reviewed by Codex on 2026-11-08; not yet reviewed by a native speaker.
+  console: {
+    myMessages: "Mga mensahe ko",
+    allActivity: "Lahat ng aktibidad",
+    fleet: "Pangkat ng mga ahente",
+    diagnostics: "Pagsusuri ng mga problema",
+    subtitle: "Mga pag-uusap mo at mga bagay na kailangan mong pansinin.",
+    activityHint: "Mga pag-uusap sa buong pangkat, kasama ang mga mensahe sa pagitan ng mga ahente.",
+    fleetHint: "Tingnan kung sino ang nagtatrabaho, kung nasaan sila, at ang huling katayuang iniulat nila.",
+    unread: "Hindi mo pa nababasa",
+    active: "Mga aktibong ahente",
+    reservations: "Mga reserbasyon ng file",
+    selectThread: "Pumili ng pag-uusap",
+    selectHint: "Magbasa ng mensahe o sumagot dito. Mananatili ang puwesto mo sa listahan.",
+    emptyInbox: "Wala ka pang mga pag-uusap",
+    emptyHint: "Lalabas dito ang mga mensaheng ipinadala sa human. Maaari ka ring magsimula ng pag-uusap o tingnan ang lahat ng aktibidad.",
+    showInactive: "Isama ang mga hindi aktibong ahente",
+    findAgent: "Maghanap ng ahente",
+    aliases: "Mga teknikal na detalye",
+    composeHint: "Pumili ng mga tatanggap, isulat ang mensahe mo, at suriin bago ipadala.",
+    composeRepository: "Repository na pagmumulan",
+    automaticRepository: "Gamitin ang repository ng unang tatanggap",
+    noAgentMatch: "Walang ahenteng tumutugma sa mga filter na ito.",
+  },
 } satisfies TranslationResource;
 
 export default translation;

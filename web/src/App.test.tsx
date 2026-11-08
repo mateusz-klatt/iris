@@ -86,10 +86,11 @@ afterEach(() => {
 
 async function showSession() {
   render(<App connect={() => () => {}} />);
-  expect(await screen.findByRole("heading", { name: "Clients" })).toBeVisible();
+  expect(await screen.findByRole("heading", { name: "My messages" })).toBeVisible();
 }
 
 async function fillCompose(user: ReturnType<typeof userEvent.setup>, body: string) {
+  await user.click(screen.getByRole("button", { name: "+ New message" }));
   const compose = document.getElementById("compose");
   if (compose === null) {
     throw new Error("missing compose");
@@ -245,7 +246,7 @@ describe("Iris operator console", () => {
         }}
       />,
     );
-    await screen.findByRole("heading", { name: "Clients" });
+    await screen.findByRole("heading", { name: "My messages" });
     act(() => report?.("live"));
     expect(screen.getByText("Live updates connected")).toBeVisible();
     act(() => report?.("unauthorized"));
@@ -253,10 +254,14 @@ describe("Iris operator console", () => {
   });
 
   it("shows repositories, agents, and claims from the overview", async () => {
+    const user = userEvent.setup();
     await showSession();
+    await user.click(screen.getByRole("button", { name: /^Fleet/ }));
     expect(screen.getByRole("rowheader", { name: "iris" })).toBeVisible();
     expect(screen.getByRole("rowheader", { name: "claude-host" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: /^Claims/ }));
     expect(screen.getByText("docs/api.md")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Diagnostics" }));
     expect(screen.getByText("Hook received.")).toBeVisible();
     expect(screen.getAllByText("1 unread").length).toBeGreaterThan(0);
   });
@@ -290,6 +295,7 @@ describe("Iris operator console", () => {
   it("revokes a claim and drops it from the next overview", async () => {
     const user = userEvent.setup();
     await showSession();
+    await user.click(screen.getByRole("button", { name: /^Claims/ }));
     await user.click(screen.getByRole("button", { name: "Revoke" }));
     await waitFor(() => {
       expect(screen.queryByText("docs/api.md")).toBeNull();
@@ -313,7 +319,7 @@ describe("Iris operator console", () => {
     expect(within(detail).getAllByText(/<script>alert\(1\)<\/script>/).length).toBeGreaterThan(0);
 
     await user.click(screen.getByRole("button", { name: "Back to threads" }));
-    await user.type(screen.getByRole("textbox", { name: "Search threads" }), "missing");
+    await user.type(screen.getByRole("searchbox", { name: "Search threads" }), "missing");
     await user.click(screen.getByRole("button", { name: "Search" }));
     expect(await screen.findByText("No threads in this view.")).toBeVisible();
   }, 20000);
@@ -369,6 +375,7 @@ describe("Iris operator console", () => {
       }),
     );
     await showSession();
+    await user.click(screen.getByRole("button", { name: "+ New message" }));
     const compose = document.getElementById("compose");
     if (compose === null) {
       throw new Error("missing compose");
@@ -379,7 +386,7 @@ describe("Iris operator console", () => {
     await user.type(view.getByRole("textbox", { name: "Message" }), "Status?");
     await reviewAndSend(user, view, "Send");
     await waitFor(() => expect(bodies).toHaveLength(1));
-    await user.selectOptions(within(screen.getByRole("region", { name: "Threads" })).getByRole("combobox", { name: "Repository" }), "rp_sample");
+    await user.selectOptions(view.getByRole("combobox", { name: "Send from repository" }), "rp_sample");
     await reviewAndSend(user, view, "Send");
     await waitFor(() => expect(bodies).toHaveLength(2));
     expect(bodies[1]?.repository_id).toBe("rp_sample");
@@ -431,6 +438,7 @@ describe("Iris operator console", () => {
     });
     expect(bodies[0]).toMatchObject({ key: expect.stringMatching(/^human:/) });
 
+    await user.click(screen.getByRole("button", { name: "+ New message" }));
     const compose = document.getElementById("compose");
     if (compose === null) {
       throw new Error("missing compose");
@@ -464,7 +472,7 @@ describe("Iris operator console", () => {
 
     setHumanUnread(3);
     onFrame?.({ cursor: 124, kind: "changed" });
-    expect(await screen.findByText("3 unread")).toBeVisible();
+    await waitFor(() => expect(screen.getByRole("button", { name: /^My messages/ })).toHaveTextContent(/^My messages\s*3$/));
   });
 
   it("reloads the overview after a read, a send, a revoke and a refresh without reconnecting", async () => {
@@ -497,9 +505,11 @@ describe("Iris operator console", () => {
     expect(await screen.findByText("Sent.")).toBeVisible();
     await reloaded(before);
     before = overviews;
+    await user.click(screen.getByRole("button", { name: /^Claims/ }));
     await user.click(screen.getByRole("button", { name: "Revoke" }));
     await reloaded(before);
     before = overviews;
+    await user.click(screen.getByRole("button", { name: "Diagnostics" }));
     await user.click(screen.getByRole("button", { name: "Reload the last doctor report" }));
     await reloaded(before);
     server.events.removeAllListeners();
@@ -608,15 +618,18 @@ describe("Iris operator console", () => {
         }),
       ),
     );
+    const user = userEvent.setup();
     render(<App connect={() => () => {}} />);
-    expect(await screen.findByText("docs/")).toBeVisible();
-    expect(screen.getByText(/No doctor report is stored yet. Run iris doctor/)).toBeVisible();
+    expect(await screen.findByText(/No doctor report is stored yet. Run iris doctor/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: /^Claims/ }));
+    expect(screen.getByText("docs/")).toBeVisible();
   });
 
   it("keeps the doctor hint when the report is missing", async () => {
     server.use(http.get("*/v1/ui/doctor", () => new HttpResponse(null, { status: 404 })));
     render(<App connect={() => () => {}} />);
-    expect(await screen.findByText(/No doctor report is stored yet. Run iris doctor/)).toBeVisible();
+    await userEvent.setup().click(await screen.findByRole("button", { name: "Diagnostics" }));
+    expect(screen.getByText(/No doctor report is stored yet. Run iris doctor/)).toBeVisible();
     expect(screen.getByText(/Run iris doctor on this computer to refresh it/)).toBeVisible();
   });
 
@@ -626,7 +639,7 @@ describe("Iris operator console", () => {
     vi.stubGlobal("localStorage", stored);
     vi.stubGlobal("AudioContext", undefined);
     render(<App connect={() => () => {}} />);
-    await screen.findByRole("heading", { name: "Clients" });
+    await screen.findByRole("heading", { name: "My messages" });
 
     await user.click(
       screen.getByRole("button", { name: "Notification sound off. Click to unmute." }),
@@ -654,16 +667,17 @@ describe("Iris operator console", () => {
   it("restores a saved language and still opens when storage is blocked", async () => {
     const stored = memoryStorage({ [uiLocalePreferenceKey]: "pl" });
     vi.stubGlobal("localStorage", stored);
-    render(<App connect={() => () => {}} />);
+    const saved = render(<App connect={() => () => {}} />);
     await waitFor(() => expect(document.documentElement.lang).toBe("pl"));
     expect(screen.getByRole("button", { name: /Polski/ })).toBeVisible();
+    saved.unmount();
     vi.unstubAllGlobals();
     await i18n.changeLanguage("en");
 
     const restore = blockLocalStorage();
     try {
       render(<App connect={() => () => {}} />);
-      expect(await screen.findByRole("heading", { name: "Clients" })).toBeVisible();
+      expect(await screen.findByRole("heading", { name: "My messages" })).toBeVisible();
       expect(
         screen.getAllByRole("button", { name: "Notification sound off. Click to unmute." }).at(-1),
       ).toHaveAttribute("aria-pressed", "false");
@@ -694,15 +708,19 @@ describe("Iris operator console", () => {
     );
     render(<App connect={() => () => {}} />);
 
-    expect(await screen.findByRole("rowheader", { name: "orphan-agent" })).toBeVisible();
+    await user.click(await screen.findByRole("button", { name: /^Fleet/ }));
+    expect(screen.getByRole("rowheader", { name: "orphan-agent" })).toBeVisible();
     expect(screen.getByRole("cell", { name: "rp_missing" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Diagnostics" }));
     expect(screen.getByText(/^Checked\s*$/)).toBeVisible();
+    await user.click(screen.getByRole("button", { name: /^Claims/ }));
     // A time the console cannot read is shown as given, never as a countdown or as expired.
     const raw = screen.getByText("raw-expiry").closest("li")!;
     expect(within(raw).getByText("soon")).toBeVisible();
     const blank = screen.getByText("empty-expiry").closest("li")!;
     expect(blank.querySelector(".claim-left")).toHaveTextContent(/^$/);
 
+    await user.click(screen.getByRole("button", { name: "Diagnostics" }));
     await user.click(screen.getByRole("button", { name: "Reload the last doctor report" }));
     expect(await screen.findByText("Checked soon")).toBeVisible();
   });
@@ -723,7 +741,7 @@ describe("Iris operator console", () => {
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Iris could not load this view.");
     await user.click(screen.getByRole("button", { name: "Try again" }));
-    expect(await screen.findByRole("heading", { name: "Clients" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "My messages" })).toBeVisible();
   });
 
   it("keeps the newer overview when an older request finishes afterwards", async () => {
@@ -754,7 +772,7 @@ describe("Iris operator console", () => {
     await act(async () => {
       first.resolve(HttpResponse.json(sessionOverview));
     });
-    expect(screen.queryByRole("rowheader", { name: "iris" })).toBeNull();
+    expect(screen.getByRole("status")).toHaveTextContent("Waiting for the first session.");
   });
 
   it("ignores an older overview failure once a newer request has succeeded", async () => {
@@ -781,11 +799,11 @@ describe("Iris operator console", () => {
 
     await waitFor(() => expect(calls).toBe(1));
     onFrame?.({ cursor: 2, kind: "changed" });
-    expect(await screen.findByRole("heading", { name: "Clients" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "My messages" })).toBeVisible();
     await act(async () => {
       first.resolve(new HttpResponse(null, { status: 500 }));
     });
-    expect(screen.getByRole("heading", { name: "Clients" })).toBeVisible();
+    expect(screen.getByRole("heading", { name: "My messages" })).toBeVisible();
     expect(screen.queryByRole("alert")).toBeNull();
   });
 
@@ -806,7 +824,7 @@ describe("Iris operator console", () => {
         }}
       />,
     );
-    expect(await screen.findByRole("heading", { name: "Clients" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "My messages" })).toBeVisible();
     const seen = calls;
     onFrame?.({ cursor: 1, kind: "" });
     await act(async () => {
@@ -864,17 +882,17 @@ describe("Iris operator console", () => {
     );
     const { unmount } = render(<App connect={() => () => {}} />);
     expect(await screen.findByRole("alert")).toHaveTextContent("Iris could not load this view.");
-    expect(screen.getByText("No threads in this view.")).toBeVisible();
+    expect(screen.getByText("No conversations with you yet")).toBeVisible();
     unmount();
 
     rejectFetch((url) => /\/v1\/ui\/threads\?/.test(url), abortError());
     render(<App connect={() => () => {}} />);
-    expect(await screen.findByRole("heading", { name: "Clients" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "My messages" })).toBeVisible();
     await act(async () => {
       await Promise.resolve();
     });
     expect(screen.queryByRole("alert")).toBeNull();
-    expect(screen.getByText("No threads in this view.")).toBeVisible();
+    expect(screen.getByText("No conversations with you yet")).toBeVisible();
   });
 
   it("ignores a thread list failure from a query the reader already replaced", async () => {
@@ -901,7 +919,7 @@ describe("Iris operator console", () => {
       }),
     );
     await showSession();
-    const search = screen.getByRole("textbox", { name: "Search threads" });
+    const search = screen.getByRole("searchbox", { name: "Search threads" });
     await user.type(search, "stale");
     await user.click(screen.getByRole("button", { name: "Search" }));
     await waitFor(() => expect(staleStarted).toBe(true));
@@ -934,6 +952,7 @@ describe("Iris operator console", () => {
     );
     await showSession();
     await user.selectOptions(within(screen.getByRole("region", { name: "Threads" })).getByRole("combobox", { name: "Repository" }), "rp_iris");
+    await user.click(screen.getByRole("button", { name: "All activity" }));
     await user.selectOptions(screen.getByRole("combobox", { name: "Agent" }), "claude-host");
     expect(await screen.findByRole("button", { name: /Filtered only/ })).toBeVisible();
   });
@@ -1035,6 +1054,7 @@ describe("Iris operator console", () => {
   it("keeps the draft when sending fails and signs out on an expired session", async () => {
     const user = userEvent.setup();
     const compose = async () => {
+      await user.click(screen.getByRole("button", { name: "+ New message" }));
       const view = within(document.getElementById("compose") as HTMLElement);
       await user.click(view.getByRole("checkbox", { name: /^human/ }));
       await user.type(view.getByRole("textbox", { name: "Subject" }), "Check in");
@@ -1045,7 +1065,7 @@ describe("Iris operator console", () => {
 
     server.use(http.post("*/v1/ui/messages", () => new HttpResponse(null, { status: 500 })));
     const failed = render(<App connect={() => () => {}} />);
-    await screen.findByRole("heading", { name: "Clients" });
+    await screen.findByRole("heading", { name: "My messages" });
     const failedView = await compose();
     // A 5xx may have come after the hub stored the message, so a retry is offered as safe.
     expect(await screen.findByRole("alert")).toHaveTextContent("Iris could not tell whether this message was sent.");
@@ -1054,7 +1074,7 @@ describe("Iris operator console", () => {
 
     server.use(http.post("*/v1/ui/messages", () => new HttpResponse(null, { status: 401 })));
     render(<App connect={() => () => {}} />);
-    await screen.findByRole("heading", { name: "Clients" });
+    await screen.findByRole("heading", { name: "My messages" });
     await compose();
     expect(await screen.findByText(/run iris ui and open the link/)).toBeVisible();
   }, 20000);
@@ -1063,7 +1083,8 @@ describe("Iris operator console", () => {
     const user = userEvent.setup();
     server.use(http.post("*/v1/ui/claims/:fence/revoke", () => new HttpResponse(null, { status: 500 })));
     const failed = render(<App connect={() => () => {}} />);
-    await user.click(await screen.findByRole("button", { name: "Revoke" }));
+    await user.click(await screen.findByRole("button", { name: /^Claims/ }));
+    await user.click(screen.getByRole("button", { name: "Revoke" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Iris could not load this view.");
     expect(screen.getByText("docs/api.md")).toBeVisible();
     expect(screen.getByRole("button", { name: "Revoke" })).toBeEnabled();
@@ -1071,7 +1092,8 @@ describe("Iris operator console", () => {
 
     server.use(http.post("*/v1/ui/claims/:fence/revoke", () => new HttpResponse(null, { status: 401 })));
     render(<App connect={() => () => {}} />);
-    await user.click(await screen.findByRole("button", { name: "Revoke" }));
+    await user.click(await screen.findByRole("button", { name: /^Claims/ }));
+    await user.click(screen.getByRole("button", { name: "Revoke" }));
     expect(await screen.findByText(/run iris ui and open the link/)).toBeVisible();
   });
 });

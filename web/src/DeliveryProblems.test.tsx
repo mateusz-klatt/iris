@@ -38,6 +38,8 @@ describe("delivery problems", () => {
     );
     render(<App connect={() => () => {}} />);
     const panel = await screen.findByRole("region", { name: "Delivery problems" });
+    expect(within(panel).getByRole("heading", { name: "Delivery problems" })).toBeVisible();
+    await user.click(within(panel).getByRole("heading", { name: "Delivery problems" }));
     expect(panel).toHaveTextContent("the last 7 days");
     expect(panel).toHaveTextContent("15 minutes have passed");
     expect(panel).toHaveTextContent("does not send it again");
@@ -48,14 +50,17 @@ describe("delivery problems", () => {
     expect(items).toContain("claude-busy: not accepted after 15 minutes");
     expect(within(panel).queryByRole("button", { name: /send/i })).toBeNull();
     // The message opens its thread.
-    await user.click(within(panel).getByRole("button", { name: /Review the guard/ }));
+    const row = within(panel).getByRole("button", { name: /Review the guard/ });
+    await user.click(row);
     expect(await screen.findByRole("heading", { name: "Rollout check" })).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "Back to threads" }));
+    expect(row).toHaveFocus();
     expect(seen[0]).toBe("");
   }, 20000);
 
   it("shows nothing when no delivery is in trouble", async () => {
     render(<App connect={() => () => {}} />);
-    expect(await screen.findByRole("heading", { name: "Clients" })).toBeVisible();
+    expect(await screen.findByRole("heading", { name: "My messages" })).toBeVisible();
     expect(screen.queryByRole("region", { name: "Delivery problems" })).toBeNull();
   });
 
