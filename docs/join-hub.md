@@ -20,6 +20,13 @@ iris doctor
 
 In WSL, keep the repository in the Linux filesystem, not under `/mnt/c`.
 
+A checkout that Windows git wrote, with `core.autocrlf=true`, holds CRLF files. Used from WSL, where
+git does not convert them, every such file reads as modified. A shell command's change to one then
+goes unseen, and `git status` re-reads them all: 2 s for Iris's own checkout under `/mnt/d`, past
+the reconcile's budget. `iris doctor` says so on a `line endings:` line. It checks only the checkout it runs in, so run it there. The
+advice it gives is to set `git config core.autocrlf true` in the checkout, or to use it only from
+Windows. Doctor changes nothing itself.
+
 ## macOS
 
 Iris keeps its configuration in `~/Library/Application Support/iris`, and it ignores `~/.config/iris`

@@ -76,6 +76,10 @@ type Result struct {
 	// Case warns when the repository doctor ran in is case-sensitive at the hub while this
 	// checkout folds case. Empty means there is nothing to warn about, or nothing known.
 	Case string
+	// LineEndings warns when the repository doctor ran in holds CRLF files that this git reads
+	// as modified, which keeps the shell reconcile past its budget. Empty means nothing to warn
+	// about, or nothing known.
+	LineEndings string
 	// tokenFile is where the hook logs beside the token are, for a Bundle. Never shown.
 	tokenFile string
 }
@@ -163,6 +167,7 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 		applyVersion(&res.Report.Clients[i])
 	}
 	res.Guard = guardLine(ctx, opt.Dir)
+	res.LineEndings = lineEndingsLine(ctx, opt.Dir)
 	if probe.up && probe.tokenOK {
 		res.Case = caseLine(ctx, hubURL, token, opt.host(), opt.Dir, opt.HTTP)
 		seen := lastHooks(ctx, hubURL, token, opt.host(), opt.HTTP)
@@ -256,6 +261,9 @@ func (r Result) Format() string {
 	}
 	if r.Guard != "" {
 		fmt.Fprintf(&b, "pre-commit guard: %s\n", r.Guard)
+	}
+	if r.LineEndings != "" {
+		fmt.Fprintf(&b, "line endings: %s\n", r.LineEndings)
 	}
 	if r.Stored {
 		b.WriteString("stored: yes\n")
@@ -770,6 +778,39 @@ func caseLine(ctx context.Context, base, token, host, dir string, hc *http.Clien
 	}
 	return "this repository is case-sensitive at the hub, but this checkout folds case (core.ignorecase), so a claim on a.go does not stop an edit of A.GO here"
 }
+
+// lineEndingsLine names a worktree where this git reads many tracked files as modified only
+// because they hold CRLF and git stores LF, as when a Windows checkout written with
+// core.autocrlf=true is used from WSL. Every git status there re-reads those files, so the
+// shell reconcile runs past its budget and fails open on every command. The fix is the
+// person's to choose; Iris does not change how git reads someone's checkout.
+func lineEndingsLine(ctx context.Context, dir string) string {
+	if dir == "" {
+		dir = "."
+	}
+	repo, err := gitinfo.Find(dir)
+	if err != nil {
+		return ""
+	}
+	// ls-files --eol reads every tracked file, which is slow on a 9p mount (1.4 s for 537 files).
+	ctx, cancel := context.WithTimeout(ctx, lineEndingsTimeout)
+	defer cancel()
+	crlf, text, err := gitinfo.LineEndings(ctx, repo.Worktree)
+	if err != nil || crlf < crlfFloor || crlf*2 < text {
+		return ""
+	}
+	return fmt.Sprintf("%d of %d tracked text files hold CRLF line endings that this git reads as changes (core.autocrlf is not true or input here). "+
+		"Each already reads as modified, so a shell command's change to one goes unseen, and git status re-reads them all, which can keep the reconcile past its budget, where it detects nothing. "+
+		"Advice, not something doctor changes: if this is a Windows checkout used from WSL, set `git config core.autocrlf true` in it, "+
+		"or use it only from the git that wrote it", crlf, text)
+}
+
+// lineEndingsTimeout bounds the check; past it doctor says nothing about line endings.
+const lineEndingsTimeout = 10 * time.Second
+
+// crlfFloor keeps a few CRLF files, which an editor can write in any repository, from being
+// reported as a misconfigured checkout.
+const crlfFloor = 20
 
 // observedText lists observations with their counts, in a stable order.
 func observedText(seen map[string]int) string {

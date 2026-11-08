@@ -46,8 +46,9 @@ func TestABundleCarriesNoSecretOnlyStatesAndCounts(t *testing.T) {
 		HubURL: "https://alice:hunter2@hub.private.example", HubSource: "file (/Users/alice/.config/iris/client.json)",
 		HubUp: true, TokenOK: true, TokenDetail: "token tok_SECRET_TOKEN was rejected", HubDetail: "failure log: open /Users/alice/x: denied",
 		DatabaseBytes: 4096, Stored: true, StoreError: "PUT https://hub.private.example: 500",
-		Guard: "installed (/Users/alice/repo/.git/hooks/pre-commit)",
-		Case:  "this repository is case-sensitive at the hub, but /Users/alice/repo folds case",
+		Guard:       "installed (/Users/alice/repo/.git/hooks/pre-commit)",
+		Case:        "this repository is case-sensitive at the hub, but /Users/alice/repo folds case",
+		LineEndings: "474 of 493 tracked text files in /Users/alice/repo hold CRLF line endings",
 		Report: Report{Clients: []ClientReport{
 			{Client: integrate.Claude, Status: StatusSilent, Version: "2.1.319 (Claude Code)", Detail: "recent hook failure: body was SECRET-MESSAGE-BODY in /Users/alice/repo", LastHookAt: "2026-11-08T11:00:00Z"},
 			{Client: integrate.Codex, Status: StatusOK, Version: "codex-cli 0.167.0"},
@@ -83,9 +84,10 @@ func TestABundleCarriesNoSecretOnlyStatesAndCounts(t *testing.T) {
 			{Client: integrate.Codex, Stage: "touch", Category: "hook deadline exceeded", Count: 1},
 			{Client: integrate.Codex, Stage: "touch", Category: "other", Count: 1},
 		},
-		Observations: []BundleCount{{Client: integrate.Copilot, Stage: "observed", Category: "cross-load", Count: 1}, {Client: integrate.Copilot, Stage: "observed", Category: "unknown tool", Count: 1}},
-		Guard:        "installed",
-		CaseWarning:  true,
+		Observations:       []BundleCount{{Client: integrate.Copilot, Stage: "observed", Category: "cross-load", Count: 1}, {Client: integrate.Copilot, Stage: "observed", Category: "unknown tool", Count: 1}},
+		Guard:              "installed",
+		CaseWarning:        true,
+		LineEndingsWarning: true,
 	}
 	if got.Iris.OS == "" || got.Iris.Go == "" || fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("bundle\n%+v\nwant\n%+v", got, want)
