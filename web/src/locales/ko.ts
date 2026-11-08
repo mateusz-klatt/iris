@@ -359,7 +359,7 @@ const translation = {
     doctorHint: "각 클라이언트의 상태는 마지막 doctor 보고서에서 가져옵니다. 새로 고치려면 이 컴퓨터에서 {{command}}을(를) 실행하세요.",
     doctorReload: "마지막 doctor 보고서 다시 불러오기",
     doctorUnknownHost: "기기 이름을 알리지 못하는 오래된 doctor",
-    doctorStale: "하루 이상 전에 확인되었으므로 지금 클라이언트에 대해 알려 주는 것이 거의 없습니다.",
+    doctorStale: "확인한 지 하루가 넘어 현재 클라이언트의 상태를 거의 알 수 없습니다.",
     retry: "다시 시도",
     doctorMissing: "저장된 doctor 보고서가 아직 없습니다. 이 컴퓨터에서 {{command}}을(를) 실행하세요.",
     statusOk: "Hook 수신됨",

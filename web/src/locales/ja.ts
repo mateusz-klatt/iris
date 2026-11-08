@@ -359,7 +359,7 @@ const translation = {
     doctorHint: "各クライアントの状態は最新の doctor レポートに基づきます。更新するには、このコンピューターで {{command}} を実行してください。",
     doctorReload: "最新の doctor レポートを再読み込み",
     doctorUnknownHost: "マシン名を送らない古い doctor",
-    doctorStale: "1 日以上前に確認されたため、現在のクライアントの状態はほとんどわかりません。",
+    doctorStale: "確認後 1 日を過ぎているため、現在のクライアントの状態はほとんどわかりません。",
     retry: "再試行",
     doctorMissing: "doctor レポートはまだ保存されていません。このコンピューターで {{command}} を実行してください。",
     statusOk: "Hook を受信しました",

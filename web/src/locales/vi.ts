@@ -350,7 +350,7 @@ const translation = {
     doctorHint: "Trạng thái của mỗi ứng dụng khách lấy từ báo cáo doctor gần nhất. Chạy {{command}} trên máy tính này để làm mới.",
     doctorReload: "Tải lại báo cáo doctor gần nhất",
     doctorUnknownHost: "Một doctor quá cũ để nêu tên máy của nó",
-    doctorStale: "Đã kiểm tra hơn một ngày trước nên giờ cho biết rất ít về client.",
+    doctorStale: "Đã kiểm tra hơn một ngày trước nên cho biết rất ít về trạng thái hiện tại của ứng dụng khách.",
     retry: "Thử lại",
     doctorMissing: "Chưa có báo cáo doctor nào được lưu. Chạy {{command}} trên máy tính này.",
     statusOk: "Đã nhận hook",

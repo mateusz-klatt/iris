@@ -358,7 +358,7 @@ const translation = {
     doctorTitle: "Clienți",
     doctorHint: "Starea fiecărui client provine din ultimul raport doctor. Rulați {{command}} pe acest computer pentru a-l actualiza.",
     doctorReload: "Reîncarcă ultimul raport doctor",
-    doctorUnknownHost: "Un doctor prea vechi pentru a-și numi mașina",
+    doctorUnknownHost: "Un doctor prea vechi pentru a indica numele computerului",
     doctorStale: "Verificat acum mai mult de o zi, deci spune puțin despre client acum.",
     retry: "Încearcă din nou",
     doctorMissing: "Nu este salvat încă niciun raport doctor. Rulați {{command}} pe acest computer.",

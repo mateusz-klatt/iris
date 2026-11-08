@@ -350,7 +350,7 @@ const translation = {
     doctorHint: "每个客户端的状态来自最近一次 doctor 报告。在这台电脑上运行 {{command}} 即可刷新。",
     doctorReload: "重新加载最新的 doctor 报告",
     doctorUnknownHost: "过旧、无法报出机器名称的 doctor",
-    doctorStale: "上次检查已超过一天，因此现在对该客户端说明有限。",
+    doctorStale: "距上次检查已超过一天，因此难以反映客户端的当前状态。",
     retry: "重试",
     doctorMissing: "尚未保存任何 doctor 报告。请在这台电脑上运行 {{command}}。",
     statusOk: "已收到 hook",
