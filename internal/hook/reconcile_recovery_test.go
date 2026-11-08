@@ -159,3 +159,21 @@ func TestShellReconciliationRecordsEveryFailOpen(t *testing.T) {
 		}
 	})
 }
+
+// A budget that runs out before the reconcile's own goroutine gets to run, as on a loaded machine,
+// still ends at a shell stage, so doctor grades it degraded and not as a broken hook. The context
+// here is spent before reconcile starts, which makes that ordering certain.
+func TestABudgetSpentBeforeTheReconcileRunsIsStillDegraded(t *testing.T) {
+	root := gitRepo(t)
+	for range 100 {
+		r, ev := shellRunner(scriptHub{}, root)
+		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
+		state := &runState{}
+		out := r.reconcile(ctx, ev, state)
+		cancel()
+		stage, err := state.snapshot()
+		if !isAllow(out) || !(Failure{Stage: stage, Error: failureText(err)}).Degraded() {
+			t.Fatalf("stage %q err %v: %s", stage, err, out.Stdout)
+		}
+	}
+}
