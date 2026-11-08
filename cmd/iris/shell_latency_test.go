@@ -211,6 +211,10 @@ func shellHooks(t *testing.T, binary, host string, delay time.Duration) {
 			gitSlow++
 		}
 	}
+	// A few slow git calls are noise; more would leave too few claims to prove anything.
+	if gitSlow > 2*calls/4 {
+		t.Fatalf("git status ran out of the budget in %d of %d shell hooks", gitSlow, 2*calls)
+	}
 	// And the changes reached the hub as claims, rather than the hook answering without it.
 	status, err := s.Call(context.Background(), "status", store.Request{})
 	if err != nil {
