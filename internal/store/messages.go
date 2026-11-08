@@ -144,8 +144,14 @@ func (t *transaction) inbox(r Request) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// A fetch that asks for a receipt leaves the mail needing attention until the receipt says
+	// the response arrived; one that does not, from a client before ADR 010, quiets it at once.
+	due := sql.NullInt64{}
+	if r.Receipt {
+		due = sql.NullInt64{Int64: t.s.clock.Now().Add(receiptWindow).UnixMilli(), Valid: true}
+	}
 	for _, d := range out {
-		if _, err = t.exec("UPDATE Delivery SET execution_id=?,attempt=?,attention=0 WHERE id=?", e.ID, d["attempt"], d["id"]); err != nil {
+		if _, err = t.exec("UPDATE Delivery SET execution_id=?,attempt=?,attention=CASE WHEN ? THEN attention ELSE 0 END,receipt_due_ms=? WHERE id=?", e.ID, d["attempt"], due.Valid, due, d["id"]); err != nil {
 			return nil, err
 		}
 	}
@@ -157,6 +163,27 @@ func (t *transaction) inbox(r Request) (map[string]any, error) {
 	}
 	return map[string]any{"deliveries": out, "more": waiting > len(out)}, nil
 }
+
+// receiptWindow is how long a fetch waits for its receipt before its mail is woken again.
+const receiptWindow = 60 * time.Second
+
+// inboxReceipt says the response to a fetch arrived: each named delivery still assigned to this
+// Execution at that attempt, and awaiting a receipt, stops needing attention. It is not an
+// acknowledgement; only ack settles. Anything else named, an older attempt, another Execution's
+// delivery or one already received, changes nothing (ADR 010).
+func (t *transaction) inboxReceipt(r Request) (map[string]any, error) {
+	e, err := t.live(r.ExecutionID, r.Generation)
+	if err != nil {
+		return nil, err
+	}
+	for _, d := range r.Receipts {
+		if _, err = t.exec("UPDATE Delivery SET attention=0,receipt_due_ms=NULL WHERE id=? AND execution_id=? AND attempt=? AND receipt_due_ms IS NOT NULL", d.ID, e.ID, d.Attempt); err != nil {
+			return nil, err
+		}
+	}
+	return map[string]any{}, nil
+}
+
 func (t *transaction) ack(r Request, delivery string) (map[string]any, error) {
 	e, err := t.live(r.ExecutionID, r.Generation)
 	if err != nil {

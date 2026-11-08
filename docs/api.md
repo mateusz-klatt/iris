@@ -132,7 +132,11 @@ by explicit claim creation. Generation and ownership are always checked.
 It returns `{"message_id":"ms_...","deliveries":[{"id":"dl_...","recipient":"..."}]}`.
 
 `GET /v1/inbox?execution_id=...&limit=20` assigns deliveries to the caller and returns them. Each
-fetch increases `attempt`.
+fetch increases `attempt`. With `receipt=1` the deliveries keep needing attention until
+`POST /v1/inbox/receipt` with `{"execution_id":"...","generation":1,"receipts":[{"id":"dl_...","attempt":2}]}`
+says the response arrived; one whose receipt has not come within 60 s wakes its recipient once. A
+receipt is not an acknowledgement, and one for an older attempt or another Execution changes
+nothing (ADR 010). Without `receipt=1` a fetch quiets its mail at once, as before.
 
 ```json
 {"deliveries":[{"id":"dl_...","attempt":1,"sender":"...","subject":"...","body":"...",

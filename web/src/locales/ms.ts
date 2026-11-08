@@ -398,6 +398,9 @@ const translation = {
     detail: "Butiran",
     version: "Versi",
     checkedAt: "Disemak {{date}}",
+    review: "Semak",
+    reviewTitle: "Semak sebelum menghantar",
+    reviewBack: "Kembali ke draf",
   },
 } satisfies TranslationResource;
 

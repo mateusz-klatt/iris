@@ -398,6 +398,9 @@ const translation = {
     detail: "Details",
     version: "Versie",
     checkedAt: "Gecontroleerd op {{date}}",
+    review: "Controleren",
+    reviewTitle: "Controleer voor verzenden",
+    reviewBack: "Terug naar het concept",
   },
 } satisfies TranslationResource;
 

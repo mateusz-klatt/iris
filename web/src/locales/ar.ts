@@ -398,6 +398,9 @@ const translation = {
     detail: "التفاصيل",
     version: "الإصدار",
     checkedAt: "تم الفحص في {{date}}",
+    review: "مراجعة",
+    reviewTitle: "تحقق قبل الإرسال",
+    reviewBack: "العودة إلى المسودة",
   },
 } satisfies TranslationResource;
 

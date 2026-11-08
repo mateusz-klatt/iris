@@ -18,7 +18,7 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 		}
 		var err error
 		switch operation {
-		case "touch", "claim", "release", "messages", "ack", "end", "heartbeat", "reconcile":
+		case "touch", "claim", "release", "messages", "ack", "end", "heartbeat", "reconcile", "inbox_receipt":
 			// A shell reconcile that names its session registers it first, and a first
 			// registration has no generation to give.
 			if r.Generation <= 0 && !shellSession(operation, r) {
@@ -59,6 +59,8 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 			out, err = t.send(r)
 		case "inbox":
 			out, err = t.inbox(r)
+		case "inbox_receipt":
+			out, err = t.inboxReceipt(r)
 		case "ack":
 			out, err = t.ack(r, r.Key)
 		case "receipts":

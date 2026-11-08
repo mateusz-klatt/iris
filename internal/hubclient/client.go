@@ -21,6 +21,7 @@ type SessionRequest struct {
 	Host             string `json:"host"`
 	CWD              string `json:"cwd"`
 	Worktree         string `json:"worktree"`
+	WorktreeID       string `json:"worktree_id"` // device and inode of the root; see gitinfo.Repo
 	RemoteURL        string `json:"remote_url"`
 	RootCommit       string `json:"root_commit"`
 	Branch           string `json:"branch"`
@@ -268,6 +269,7 @@ type CheckRequest struct {
 	CommonDir  string   `json:"common_dir"`
 	Host       string   `json:"host"`
 	Worktree   string   `json:"worktree"`
+	WorktreeID string   `json:"worktree_id"`
 	RemoteURL  string   `json:"remote_url"`
 	RootCommit string   `json:"root_commit"`
 	Paths      []string `json:"paths"`

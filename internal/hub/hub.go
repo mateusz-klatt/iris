@@ -79,7 +79,7 @@ func New(s *store.Store, token string, allowedHosts []string) *Hub {
 		"POST /v1/sessions":        "sessions", "POST /v1/bind": "bind",
 		"POST /v1/executions/{id}/heartbeat": "heartbeat", "POST /v1/executions/{id}/end": "end",
 		"POST /v1/claims/touch": "touch", "POST /v1/claims": "claim", "POST /v1/claims/release": "release", "GET /v1/claims": "claims",
-		"POST /v1/messages": "messages", "GET /v1/inbox": "inbox", "POST /v1/deliveries/{id}/ack": "ack",
+		"POST /v1/messages": "messages", "GET /v1/inbox": "inbox", "POST /v1/inbox/receipt": "inbox_receipt", "POST /v1/deliveries/{id}/ack": "ack",
 		"GET /v1/messages/{id}/status": "receipts",
 		"GET /v1/messages/history":     "history", "GET /v1/threads/{id}": "thread",
 		"GET /v1/messages/{id}/body": "read_message_body",
@@ -190,6 +190,7 @@ func decode(w http.ResponseWriter, r *http.Request) (store.Request, error) {
 		req.Stream = q.Get("stream")
 		req.ConsumerID = q.Get("consumer_id")
 		req.All = q.Get("all") == "1"
+		req.Receipt = q.Get("receipt") == "1" // ADR 010: keep attention until the receipt
 		req.Host = q.Get("host")
 		req.Q = q.Get("q")
 		req.Before = q.Get("before")

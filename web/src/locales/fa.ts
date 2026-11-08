@@ -398,6 +398,9 @@ const translation = {
     detail: "جزئیات",
     version: "نسخه",
     checkedAt: "بررسی‌شده در {{date}}",
+    review: "بازبینی",
+    reviewTitle: "پیش از ارسال بررسی کنید",
+    reviewBack: "بازگشت به پیش‌نویس",
   },
 } satisfies TranslationResource;
 

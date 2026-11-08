@@ -23,11 +23,25 @@ func classifyTool(name string, mcp bool) (ToolClass, bool) {
 	case "write", "edit", "multiedit", "notebookedit", "apply_patch", "write_file", "edit_file",
 		"search_replace", "hashline_edit", "delete", "delete_file", "move_file", "strreplace", "str_replace":
 		return ClassEdit, false
-	case "bash", "shell", "run_terminal_command", "run_command":
+	// Claude Code's Monitor runs a shell command in the background, as Bash does with
+	// run_in_background, so it is reconciled like one. Reconciling it catches only what is
+	// written before PostToolUse arrives, which for a background command is usually nothing.
+	// A later write is not caught by it; the pre-commit guard remains the checkpoint.
+	case "bash", "shell", "run_terminal_command", "run_command", "monitor":
 		return ClassShell, false
 	case "read", "view", "grep", "glob", "ls":
 		return ClassRead, false
 	case "toolsearch", "spawn_subagent", "task", "todowrite", "webfetch", "websearch", "skill":
+		return ClassOther, false
+	// Built-in tools that write no file. Codex names a namespaced tool by its namespace and name
+	// run together: its rollouts record {"namespace":"clock","name":"sleep"}, and the hook sees
+	// "clocksleep". The names are those iris hook logged as unknown on a real host
+	// (hook-observed.log, Codex 0.167.0 and Claude Code 2.1.319); no payload capture backs them
+	// yet. A collaboration tool starts or messages a subagent, whose own tool calls pass through
+	// its own hooks.
+	case "clockcurr_time", "clocksleep", "webrun", "collaborationspawn_agent", "collaborationsend_message",
+		"collaborationfollowup_task", "collaborationlist_agents", "collaborationwait_agent",
+		"taskstop", "schedulewakeup":
 		return ClassOther, false
 	case "":
 		return "", false
