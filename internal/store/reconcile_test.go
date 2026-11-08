@@ -116,3 +116,21 @@ func TestReconciliationRespectsTheClaimLimit(t *testing.T) {
 		t.Fatalf("%d claimed, message %q", len(claimed), out["message"])
 	}
 }
+
+// A path that left the status was committed, stashed or restored by git in this worktree only.
+// Nothing changed in the holder's worktree, so it is no shell edit to warn about; only paths
+// still changed after the command are checked.
+func TestReconciliationWarnsOnlyAboutPathsStillChanged(t *testing.T) {
+	s, _, _ := testStore(t)
+	holder, _ := session(t, s, 1)
+	shell, _ := session(t, s, 2)
+	call(t, s, "claim", claimRequest(holder, "held", "theirs.txt", "exact"))
+	shell.Kind = "before"
+	shell.Status = map[string]string{"theirs.txt": " M"}
+	call(t, s, "reconcile", shell)
+	shell.Kind = "after"
+	shell.Status = map[string]string{}
+	if out := call(t, s, "reconcile", shell); out["message"] != "" || len(out["conflicts"].([]map[string]any)) != 0 {
+		t.Fatalf("a path git restored warned: %v", out)
+	}
+}

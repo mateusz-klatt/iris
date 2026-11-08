@@ -405,7 +405,9 @@ Antigravity runs hooks in `.agents/`, so its adapter takes the root from `worksp
 
 A shell command is visible only as a string, so a pre-tool hook cannot tell what it will
 touch. After a shell tool, the hook compares `git status --porcelain -z` with the previous
-state under a time limit, and warns about paths claimed from another worktree. It detects, it
+state under a time limit, and warns about paths claimed from another worktree. Only paths
+still changed after the command count: one that left the status was committed, stashed or
+restored by git in this worktree, which changes nothing in another. It detects, it
 cannot undo. In a shared worktree attribution is impossible, so it stays silent there.
 
 `iris guard` is a pre-commit check, installed per repository on request. It refuses a commit

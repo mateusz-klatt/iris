@@ -78,32 +78,23 @@ func (t *transaction) reconcile(r Request) (map[string]any, error) {
 	if r.Kind == "before" || !found {
 		return empty, nil
 	}
-	paths := []string{}
+	// Only paths still changed after the command count. One that left the status was committed,
+	// stashed or restored by git in this worktree, which changes nothing in a holder's worktree,
+	// so it is neither warned about nor claimed.
+	changed := []string{}
 	for p, status := range r.Status {
 		if previous[p] != status {
-			paths = append(paths, p)
+			changed = append(changed, p)
 		}
 	}
-	for p := range previous {
-		if _, exists := r.Status[p]; !exists {
-			paths = append(paths, p)
-		}
-	}
-	sort.Strings(paths)
-	out, err := t.checkPaths(e.Repo, e.Host, e.Worktree, paths)
+	sort.Strings(changed)
+	out, err := t.checkPaths(e.Repo, e.Host, e.Worktree, changed)
 	if err != nil {
 		return nil, err
 	}
 	// A write a shell or Codex's js tool made is claimed for this session afterwards, as an edit
-	// tool's would have been before (gap review C7). Only paths still changed are claimed: one
-	// that left the status was committed or reverted. A path someone else holds stays theirs, and
+	// tool's would have been before (gap review C7). A path someone else holds stays theirs, and
 	// the message above reports it.
-	var changed []string
-	for _, p := range paths {
-		if _, still := r.Status[p]; still {
-			changed = append(changed, p)
-		}
-	}
 	claimed, skipped, err := t.autoClaim(e, changed)
 	if err != nil {
 		return nil, err
