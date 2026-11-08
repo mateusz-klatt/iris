@@ -42,3 +42,11 @@ show cost on this host, not latency guarantees or results for other architecture
 Repeat on each supported deployment platform before enabling account mode. The
 admission bound does not replace the login attempt quotas and revocation checks
 scheduled for later ADR steps.
+
+Sonar rule `go:S5344` recommends stronger scrypt parameters. ADR 014 accepts this
+profile only to verify existing hashes: raising the cost changes the derived key
+and breaks compatibility. The single legacy verification call therefore carries
+a documented `NOSONAR` exception; creation always uses Argon2id. Sonar's
+[line suppression](https://docs.sonarsource.com/sonarqube-cloud/managing-your-projects/issues/editing)
+affects every finding on that one line, so changes to that call require review.
+No file, project or coverage exclusion is added.

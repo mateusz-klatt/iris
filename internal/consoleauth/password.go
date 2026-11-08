@@ -171,9 +171,9 @@ func VerifyPassword(password, encoded string) (bool, error) {
 
 func derive(password string, record passwordRecord) [32]byte {
 	if record.scrypt {
-		// These fixed, validated parameters satisfy every scrypt.Key precondition;
-		// no caller-controlled cost or output length reaches the implementation.
-		key, _ := scrypt.Key([]byte(password), record.salt[:], 16384, 8, 1, 32)
+		// ADR 014 requires this exact imported verification profile; changing its
+		// cost changes the key. New passwords always use Argon2id, never scrypt.
+		key, _ := scrypt.Key([]byte(password), record.salt[:], 16384, 8, 1, 32) // NOSONAR: go:S5344; ADR 014's legacy verification-only profile.
 		return [32]byte(key)
 	}
 	return [32]byte(argon2.IDKey([]byte(password), record.salt[:], 3, 65536, 1, 32))
