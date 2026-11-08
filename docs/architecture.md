@@ -211,10 +211,12 @@ as `/mnt/d/projects/iris` and `/home/klattm/projects/iris` on one host, is made 
 so it is the same worktree, the same agent and the same claims. A remount or a reboot can give a
 device and inode to another directory, so a path folds only when its repository, by remote and
 root commit, is the one the first path was seen with. On Windows the id is the volume serial
-number and file index, so a junction, a mapped or subst drive, or a path spelt in another case is
-the same worktree too. That index is unique on NTFS; on ReFS, Dev Drives included, it is not
-guaranteed, and on a network drive it is only as good as the server, so two directories there
-could in principle share an id, which the repository check above limits to the same repository.
+number and the 128-bit file id, so a junction, a mapped or subst drive, or a path spelt in another
+case is the same worktree too (measured on NTFS). The 128-bit id is unique on ReFS and Dev Drives
+as well, where the older 64-bit file index is not guaranteed to be. A file system without it, such
+as FAT or UDF (measured on a UDF disc), falls back to the serial and the 64-bit index. On a network
+drive either id is only as good as the server, so two directories there could in principle share
+one, which the repository check above limits to the same repository. ReFS itself was not measured.
 Every path from an older client is keyed on itself, as before.
 
 ### D7. Attention: instant where possible, honest everywhere
