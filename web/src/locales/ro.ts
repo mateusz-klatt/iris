@@ -2,7 +2,6 @@ import type { TranslationResource } from "../i18n";
 
 const translation = {
   appName: "Iris",
-  appSubtitle: "Iris",
   skipToContent: "Sari la conținut",
   mailboxSecureDelivery: "Livrare durabilă",
   navigation: "Navigare principală",
@@ -362,6 +361,9 @@ const translation = {
     doctorStale: "Verificat acum mai mult de o zi, deci spune puțin despre client acum.",
     clientHealth: "Starea clientului",
     noHostReport: "Niciun raport de la acest computer",
+    claimFilters: "Filtrează rezervările",
+    claimExpired: "Expirată",
+    noClaimsMatch: "Nicio rezervare nu corespunde acestor filtre.",
     retry: "Încearcă din nou",
     doctorMissing: "Nu este salvat încă niciun raport doctor. Rulați {{command}} pe acest computer.",
     statusOk: "Hook primit",

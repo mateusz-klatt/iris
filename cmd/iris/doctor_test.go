@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"strings"
 	"testing"
 	"time"
@@ -61,5 +62,29 @@ func TestDoctorWithoutLiveNeverOffersToSpend(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "hub: unreachable") || strings.Contains(errOut.String(), "charge") {
 		t.Fatalf("out %q err %q", out.String(), errOut.String())
+	}
+}
+
+// --bundle prints the bundle as JSON instead of the report, keeps the report's exit status,
+// names no hub, and cannot be combined with --live, which spends.
+func TestDoctorBundlePrintsJSONAndNoHub(t *testing.T) {
+	never := func(context.Context, doctor.LiveOptions, doctor.LivePlan) doctor.LiveResult {
+		t.Fatal("live ran")
+		return doctor.LiveResult{}
+	}
+	var out, errOut bytes.Buffer
+	if code := runDoctorIO(context.Background(), []string{"--bundle", "--hub-url", "http://127.0.0.1:1"}, strings.NewReader(""), &out, &errOut, never); code != 1 {
+		t.Fatalf("an unreachable hub must still fail: %d", code)
+	}
+	var got doctor.Bundle
+	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
+		t.Fatalf("not a bundle: %v\n%s", err, out.String())
+	}
+	if got.Hub.Source != "command line" || got.Hub.Up || got.Iris.Version == "" || strings.Contains(out.String(), "127.0.0.1") {
+		t.Fatalf("%s", out.String())
+	}
+	out.Reset()
+	if code := runDoctorIO(context.Background(), []string{"--bundle", "--live"}, strings.NewReader(""), &out, &errOut, never); code != 2 {
+		t.Fatalf("--bundle with --live: %d", code)
 	}
 }

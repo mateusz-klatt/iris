@@ -2,7 +2,6 @@ import type { TranslationResource } from "../i18n";
 
 const translation = {
   appName: "Iris",
-  appSubtitle: "Iris",
   skipToContent: "Fara í efni",
   mailboxSecureDelivery: "Varanleg afhending",
   navigation: "Aðalleiðsögn",
@@ -362,6 +361,9 @@ const translation = {
     doctorStale: "Athugað fyrir meira en degi, svo það segir lítið um biðlarann núna.",
     clientHealth: "Staða biðlara",
     noHostReport: "Engin skýrsla frá þessari vél",
+    claimFilters: "Sía frátekningar",
+    claimExpired: "Útrunnin",
+    noClaimsMatch: "Engin frátekning passar við þessar síur.",
     retry: "Reyna aftur",
     doctorMissing: "Engin doctor-skýrsla hefur verið vistuð enn. Keyrðu {{command}} á þessari tölvu.",
     statusOk: "Hook móttekinn",

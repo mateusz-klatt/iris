@@ -210,9 +210,14 @@ named for that directory: a bind mount or a symlink that gives the same director
 as `/mnt/d/projects/iris` and `/home/klattm/projects/iris` on one host, is made that first path,
 so it is the same worktree, the same agent and the same claims. A remount or a reboot can give a
 device and inode to another directory, so a path folds only when its repository, by remote and
-root commit, is the one the first path was seen with. Windows sends no such id, so a
-junction or a mapped drive still counts as another worktree there; so does every path from an
-older client.
+root commit, is the one the first path was seen with. On Windows the id is the volume serial
+number and the 128-bit file id, so a junction, a mapped or subst drive, or a path spelt in another
+case is the same worktree too (measured on NTFS). The 128-bit id is unique on ReFS and Dev Drives
+as well, where the older 64-bit file index is not guaranteed to be. A file system without it, such
+as FAT or UDF (measured on a UDF disc), falls back to the serial and the 64-bit index. On a network
+drive either id is only as good as the server, so two directories there could in principle share
+one, which the repository check above limits to the same repository. ReFS itself was not measured.
+Every path from an older client is keyed on itself, as before.
 
 ### D7. Attention: instant where possible, honest everywhere
 
@@ -417,6 +422,14 @@ state under a time limit, and warns about paths claimed from another worktree. O
 still changed after the command count: one that left the status was committed, stashed or
 restored by git in this worktree, which changes nothing in another. It detects, it
 cannot undo. In a shared worktree attribution is impossible, so it stays silent there.
+
+Status compares each path's two-letter code, not its content. A second change to a path that
+was already dirty therefore goes unseen. A submodule is a single path in its superproject: it
+shows ` M` once its tracked content changes, and nothing finer. Files that are only untracked
+inside a submodule are left out (`--ignore-submodules=untracked`). Scanning large submodules
+for them took one measured repository from 20 ms to 5.5 s, far past the budget, and a
+reconcile past its budget detects nothing at all. A command run inside the submodule is
+reconciled against the submodule's own repository, untracked files included.
 
 `iris guard` is a pre-commit check, installed per repository on request. It refuses a commit
 of paths held by another Execution. It is the strongest check Iris has, and it is cooperative.
@@ -652,6 +665,11 @@ the tool is reconciled like a shell: a write is detected afterwards, claimed aut
 reported with a warning. It is not refused beforehand. This is detection, not prevention. A write
 into a path someone else holds is reported, not stopped, and the pre-commit guard remains the
 last checkpoint.
+
+Claude Code on Windows has a `PowerShell` tool beside `Bash` (measured on 2.1.319). It takes a
+command in `tool_input.command` and writes files as freely, as `Set-Content` does, so it takes the
+same shell path: a write is detected afterwards and reported, not refused beforehand. Until this
+was measured, the tool was unknown to Iris, so its writes went unreconciled and unreported.
 
 ## 4. Known gaps
 

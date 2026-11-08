@@ -2,7 +2,6 @@ import type { TranslationResource } from "../i18n";
 
 const translation = {
   appName: "Iris",
-  appSubtitle: "Iris",
   skipToContent: "Gå til indhold",
   mailboxSecureDelivery: "Varig levering",
   navigation: "Primær navigation",
@@ -362,6 +361,9 @@ const translation = {
     doctorStale: "Tjekket for mere end en dag siden, så den siger ikke meget om klienten nu.",
     clientHealth: "Klientens tilstand",
     noHostReport: "Ingen rapport fra denne maskine",
+    claimFilters: "Filtrér reservationer",
+    claimExpired: "Udløbet",
+    noClaimsMatch: "Ingen reservation matcher disse filtre.",
     retry: "Prøv igen",
     doctorMissing: "Der er endnu ingen gemt doctor-rapport. Kør {{command}} på denne computer.",
     statusOk: "Hook modtaget",

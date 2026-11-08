@@ -2,7 +2,6 @@ import type { TranslationResource } from "../i18n";
 
 const translation = {
   appName: "Iris",
-  appSubtitle: "Iris",
   skipToContent: "コンテンツへスキップ",
   mailboxSecureDelivery: "永続的な配信",
   navigation: "メインナビゲーション",
@@ -362,6 +361,9 @@ const translation = {
     doctorStale: "確認後 1 日を過ぎているため、現在のクライアントの状態はほとんどわかりません。",
     clientHealth: "クライアントの状態",
     noHostReport: "このマシンからのレポートはありません",
+    claimFilters: "予約を絞り込む",
+    claimExpired: "期限切れ",
+    noClaimsMatch: "この条件に一致する予約はありません。",
     retry: "再試行",
     doctorMissing: "doctor レポートはまだ保存されていません。このコンピューターで {{command}} を実行してください。",
     statusOk: "Hook を受信しました",

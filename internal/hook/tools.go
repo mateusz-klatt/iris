@@ -23,11 +23,13 @@ func classifyTool(name string, mcp bool) (ToolClass, bool) {
 	case "write", "edit", "multiedit", "notebookedit", "apply_patch", "write_file", "edit_file",
 		"search_replace", "hashline_edit", "delete", "delete_file", "move_file", "strreplace", "str_replace":
 		return ClassEdit, false
+	// Claude Code on Windows has a PowerShell tool beside Bash (measured on 2.1.319), and it
+	// writes files as freely, so it is reconciled the same way: detected, not prevented.
 	// Claude Code's Monitor runs a shell command in the background, as Bash does with
 	// run_in_background, so it is reconciled like one. Reconciling it catches only what is
 	// written before PostToolUse arrives, which for a background command is usually nothing.
 	// A later write is not caught by it; the pre-commit guard remains the checkpoint.
-	case "bash", "shell", "run_terminal_command", "run_command", "monitor":
+	case "bash", "powershell", "shell", "run_terminal_command", "run_command", "monitor":
 		return ClassShell, false
 	case "read", "view", "grep", "glob", "ls":
 		return ClassRead, false

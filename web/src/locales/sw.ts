@@ -2,7 +2,6 @@ import type { TranslationResource } from "../i18n";
 
 const translation = {
   appName: "Iris",
-  appSubtitle: "Iris",
   skipToContent: "Ruka hadi maudhui",
   mailboxSecureDelivery: "Uwasilishaji wa kudumu",
   navigation: "Urambazaji mkuu",
@@ -353,6 +352,9 @@ const translation = {
     doctorStale: "Iliangaliwa zaidi ya siku moja iliyopita, kwa hiyo sasa inasema kidogo kuhusu mteja.",
     clientHealth: "Hali ya mteja",
     noHostReport: "Hakuna ripoti kutoka kompyuta hii",
+    claimFilters: "Chuja nafasi",
+    claimExpired: "Imeisha muda",
+    noClaimsMatch: "Hakuna nafasi inayolingana na vichujio hivi.",
     retry: "Jaribu tena",
     doctorMissing: "Bado hakuna ripoti ya doctor iliyohifadhiwa. Endesha {{command}} kwenye kompyuta hii.",
     statusOk: "Hook imepokelewa",

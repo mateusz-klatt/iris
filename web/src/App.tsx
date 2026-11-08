@@ -24,6 +24,7 @@ import {
   type WatchFrame,
   type WatchStatus,
 } from "./api";
+import { ClaimsPanel } from "./ClaimsPanel";
 import { DraftBody, DraftReview } from "./DraftReview";
 import { useReview } from "./review";
 import { loadLocale, type SupportedLocale } from "./i18n";
@@ -504,7 +505,6 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
           </span>
           <span>
             <strong>{t("appName")}</strong>
-            <small>{t("appSubtitle")}</small>
           </span>
         </a>
         <div className="topbar-controls">
@@ -569,7 +569,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                   <span>{t("operator.unread", { count: overview.human_unread })}</span>
                 </div>
                 {overview.repositories.length === 0 ? <p>{t("operator.none")}</p> : (
-                  <table>
+                  <table className="stack-table">
                     <caption className="sr-only">{t("operator.repositories")}</caption>
                     <thead>
                       <tr>
@@ -593,7 +593,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                   <h2>{t("operator.agents")}</h2>
                 </div>
                 {sessions.length === 0 ? <p>{t("operator.waiting")}</p> : (
-                  <table>
+                  <table className="stack-table">
                     <caption className="sr-only">{t("operator.agents")}</caption>
                     <thead>
                       <tr>
@@ -621,45 +621,12 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                   </table>
                 )}
               </article>
-              <article className="panel">
-                <div className="panel-heading">
-                  <h2>{t("operator.claims")}</h2>
-                </div>
-                {overview.claims.length === 0 ? <p>{t("operator.none")}</p> : (
-                  <table>
-                    <caption className="sr-only">{t("operator.claims")}</caption>
-                    <thead>
-                      <tr>
-                        <th scope="col">{t("reservations.path")}</th>
-                        <th scope="col">{t("reservations.holder")}</th>
-                        <th scope="col">{t("reservations.expires")}</th>
-                        <th scope="col">{t("operator.revoke")}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {overview.claims.map((claim) => (
-                        <tr key={claim.fence}>
-                          <th scope="row">{claim.path}</th>
-                          <td>
-                            {claim.holder} · {claim.kind}
-                          </td>
-                          <td>{claim.expires_at === null ? t("operator.none") : formatWhen(claim.expires_at)}</td>
-                          <td>
-                            <button
-                              type="button"
-                              className="primary-button"
-                              disabled={revoking === claim.fence}
-                              onClick={() => void onRevoke(claim)}
-                            >
-                              {revoking === claim.fence ? t("operator.revoking") : t("operator.revoke")}
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </article>
+              <ClaimsPanel
+                claims={overview.claims}
+                repositories={overview.repositories}
+                revoking={revoking}
+                onRevoke={(claim) => void onRevoke(claim)}
+              />
             </section>
 
             <section id="threads" className="panel" aria-labelledby="threads-title">

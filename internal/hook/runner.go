@@ -81,7 +81,7 @@ func (r Runner) Run() Output {
 	go func() {
 		defer func() {
 			if recover() != nil {
-				state.fail(hookFailure("panic during hook execution"), allow)
+				state.fail(failPanic, allow)
 				ch <- allow
 			}
 		}()
@@ -112,7 +112,7 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 	}
 	if client == "" {
 		state.at("client")
-		return state.fail(hookFailure("unknown hook client"), allow)
+		return state.fail(failUnknownClient, allow)
 	}
 	state.at("decode")
 	ev, err := Decode(client, r.EventName, payload)
@@ -150,7 +150,7 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 	}
 	if r.Hub == nil {
 		state.at("hub")
-		return state.fail(hookFailure("hub client is not configured"), allow)
+		return state.fail(failNoHub, allow)
 	}
 	switch ev.Kind {
 	case KindSessionStart, KindSubagentStart:
@@ -193,7 +193,7 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 	default: // needsNetwork leaves only an edit that is about to run.
 		state.at("paths")
 		if len(ev.Paths) == 0 {
-			return state.fail(hookFailure("edit tool has no usable paths"), allow)
+			return state.fail(failNoPaths, allow)
 		}
 		paths, from, to := r.claimPaths(repo, ev)
 		if len(paths) == 0 {
@@ -226,7 +226,7 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		switch strings.ToLower(touch.Action) {
 		case "allow", "deny", "ask", "warn":
 		default:
-			return state.fail(hookFailure("hub returned an invalid touch action"), allow)
+			return state.fail(failBadTouch, allow)
 		}
 		d := decisionFromTouch(touch)
 		if d.Action == ActionAllow && carriesToolContext(ev.Client) {
