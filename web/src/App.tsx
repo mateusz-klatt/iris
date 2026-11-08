@@ -27,6 +27,7 @@ import {
 import { DeliveryProblems } from "./DeliveryProblems";
 import { ClaimsPanel } from "./ClaimsPanel";
 import { DraftBody, DraftReview } from "./DraftReview";
+import { RecipientPicker } from "./RecipientPicker";
 import { useReview } from "./review";
 import { loadLocale, type SupportedLocale } from "./i18n";
 import LocalePicker from "./LocalePicker";
@@ -507,6 +508,8 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
   };
 
   const sessions = overview?.agents ?? [];
+  const composeRecipients = recipientsOf(compose.to);
+  const composeSendable = sendable(compose) && composeRecipients.every((id) => id === "human" || sessions.some((agent) => agent.id === id));
   const waiting = phase === "ready" && sessions.length === 0;
 
   return (
@@ -799,15 +802,12 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                 className="search-form"
                 onSubmit={(event) => {
                   event.preventDefault();
-                  if (sendable(compose)) {
+                  if (composeSendable) {
                     composeReview.start();
                   }
                 }}
               >
-                <label>
-                  {t("operator.recipients")}
-                  <input value={compose.to} onChange={(event) => setCompose(edited(compose, { to: event.target.value }))} />
-                </label>
+                <RecipientPicker agents={sessions} selected={composeRecipients} onChange={(ids) => setCompose(edited(compose, { to: ids.join(", ") }))} />
                 <label>
                   {t("operator.subject")}
                   <input value={compose.subject} onChange={(event) => setCompose(edited(compose, { subject: event.target.value }))} />
@@ -817,10 +817,13 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                 <p>{t("markdown.byteCount", { count: byteLength(compose.body), maximum: maximumBodyBytes })}</p>
                 <DraftReview
                   review={composeReview}
-                  recipients={recipientsOf(compose.to)}
+                  recipients={composeRecipients.map((id) => {
+                    const agent = sessions.find((entry) => entry.id === id);
+                    return agent ? `${agent.name} (${id})` : id;
+                  })}
                   subject={compose.subject}
                   body={compose.body}
-                  sendable={sendable(compose)}
+                  sendable={composeSendable}
                   sending={sending}
                   sendLabel={t("operator.send")}
                   onSend={() => void submit(compose, setCompose, () => setCompose(newDraft()))}

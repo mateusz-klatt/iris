@@ -621,6 +621,12 @@ upgrades, and the binary never replaces itself.
 
 ### D16. Web UI
 
+The new-message recipient picker stores Agent IDs, not display names, and sends those IDs
+through the existing address resolver. If a selected ID disappears from the directory, review
+and send are disabled until the operator clears and selects again. An agent recreated under
+the same name is a different recipient. Search changes visibility without changing selection.
+Thread replies retain their explicit address field.
+
 The owner's React frontend moves to `web/`, built by Node at release time and embedded with
 `go:embed`. The API layer is rewritten for Iris. See `docs/PROVENANCE.md` for what is excluded.
 The first screen with no sessions shows a live wait for the first session, next to each client's
