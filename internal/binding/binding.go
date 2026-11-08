@@ -78,14 +78,21 @@ var errBinding = &hubclient.Error{Code: "unbound", Message: "Iris is still bindi
 // errLost answers a call while the binding is lost and no fresh bind has succeeded.
 var errLost = &hubclient.Error{Code: "lost", Message: "This session's Execution is gone at the hub. Iris binds afresh once the session has reattached: send any prompt, then retry."}
 
-// Resolve returns the binding, making one when there is none. After a loss it binds afresh
+// Resolve refreshes an existing binding from its preserved Execution, making one when
+// there is none. Repository merges can change its repository without changing the
+// Execution, generation or mailbox. After a loss it binds afresh
 // through the usual rungs, but never to an Execution found lost, however that comes back:
 // IRIS_EXECUTION, a handle argument, or the hub's answer.
 func (r *Resolver) Resolve(ctx context.Context, handle string) (Bound, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.bound.ExecutionID != "" && (handle == "" || handle == r.bound.ExecutionID) {
-		return r.bound, nil
+		b := r.bound
+		if err := r.Hub.Do(ctx, "POST", "/v1/bind", map[string]any{"execution": b.ExecutionID, "client": r.Client, "host": r.Host}, &b); err != nil {
+			return Bound{}, err
+		}
+		r.bound = b
+		return b, nil
 	}
 	if r.gone[handle] {
 		handle = ""
@@ -274,8 +281,19 @@ func (r *Resolver) Maintain(ctx context.Context, source string, interval time.Du
 			continue
 		}
 		call, cancel := context.WithTimeout(ctx, 5*time.Second)
-		err := r.Hub.Do(call, "POST", "/v1/executions/"+b.ExecutionID+"/heartbeat", map[string]any{"generation": b.Generation, "source": source}, nil)
+		// Decode over the previous binding: older hubs return only lease_ms on an
+		// ordinary heartbeat, and omit all binding fields, including its local rung.
+		fresh := b
+		err := r.Hub.Do(call, "POST", "/v1/executions/"+b.ExecutionID+"/heartbeat", map[string]any{"generation": b.Generation, "source": source}, &fresh)
 		cancel()
+		if err == nil {
+			r.mu.Lock()
+			// Resolve may have selected another explicit handle during this request.
+			if r.bound.ExecutionID == b.ExecutionID && r.bound.Generation == b.Generation {
+				r.bound = fresh
+			}
+			r.mu.Unlock()
+		}
 		if IsCode(err, "lost") {
 			r.mu.Lock()
 			if r.gone == nil {

@@ -135,9 +135,9 @@ const receiptDeadline = 2 * time.Second
 
 func call(ctx context.Context, h *hubclient.Client, b binding.Bound, name string, in Input) (map[string]any, error) {
 	if name == "whoami" {
-		// The binding is cached, so prove it to the hub: a revoked token or a lost generation
-		// must not look like a healthy session.
-		if err := h.Do(ctx, "POST", "/v1/executions/"+url.PathEscape(b.ExecutionID)+"/heartbeat", map[string]any{"generation": b.Generation, "source": "shim"}, nil); err != nil {
+		// Prove liveness and use the hub's current binding after a repository
+		// merge. Legacy lease-only replies leave the resolved binding intact.
+		if err := h.Do(ctx, "POST", "/v1/executions/"+url.PathEscape(b.ExecutionID)+"/heartbeat", map[string]any{"generation": b.Generation, "source": "shim"}, &b); err != nil {
 			return nil, err
 		}
 		raw, _ := json.Marshal(b)

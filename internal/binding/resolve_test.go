@@ -102,13 +102,18 @@ func TestBoundExecutionIsReused(t *testing.T) {
 			t.Fatalf("%+v %v", again, err)
 		}
 	}
-	if len(hub.bound) != 1 {
+	if len(hub.bound) != 3 {
 		t.Fatalf("asked the hub %d times", len(hub.bound))
+	}
+	for _, request := range hub.bound[1:] {
+		if request["execution"] != b.ExecutionID || request["session_id"] != nil || request["client_pid"] != nil {
+			t.Fatalf("refresh repeated inference instead of checking the bound Execution: %v", request)
+		}
 	}
 	if _, err := r.Resolve(ctx, "ex_other"); err != nil {
 		t.Fatal(err)
 	}
-	if len(hub.bound) != 2 {
+	if len(hub.bound) != 4 {
 		t.Fatal("another handle must be asked about")
 	}
 }

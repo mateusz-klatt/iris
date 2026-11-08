@@ -510,7 +510,9 @@ func (t *transaction) heartbeat(r Request) (map[string]any, error) {
 		// The session's monitor is alive, so its hooks need not repeat what it says (A4).
 		err = t.watchSeen(e.ID)
 	}
-	return map[string]any{"lease_ms": lease}, err
+	out := bound(e)
+	out["lease_ms"] = lease
+	return out, err
 }
 func (t *transaction) end(r Request) (map[string]any, error) {
 	var generation int64

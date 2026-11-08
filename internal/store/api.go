@@ -22,6 +22,15 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 				return err
 			}
 		}
+		// Long-lived clients may still carry a repository id retired by an
+		// operator merge. Their stable Execution determines local read scope.
+		if (operation == "claims" || (operation == "agents" && !r.All)) && r.ExecutionID != "" {
+			e, err := t.live(r.ExecutionID, r.Generation)
+			if err != nil {
+				return err
+			}
+			r.RepositoryID = e.Repo
+		}
 		var err error
 		switch operation {
 		case "touch", "claim", "release", "messages", "ack", "end", "heartbeat", "reconcile", "inbox_receipt":
