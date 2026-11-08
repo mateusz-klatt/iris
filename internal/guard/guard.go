@@ -175,17 +175,22 @@ func Check(ctx context.Context, dir string, hub *hubclient.Client) (string, erro
 	if err != nil {
 		return "", err
 	}
-	cmd := exec.CommandContext(ctx, "git", "diff", "--cached", "--name-only", "--no-renames", "-z", "--")
-	cmd.Dir = repo.Worktree
-	out, err := cmd.Output()
+	paths, err := staged(ctx, repo.Worktree)
 	if err != nil {
 		return "", err
 	}
-	paths := []string{}
-	for _, p := range bytes.Split(out, []byte{0}) {
-		if len(p) > 0 {
-			paths = append(paths, string(p))
+	heads, err := incoming(repo.GitDir)
+	if err != nil {
+		return "", err
+	}
+	for _, head := range heads {
+		// A staged path equal to an incoming commit's version is that commit's content, not
+		// this side's change: only paths that differ from every side are checked.
+		differs, err := staged(ctx, repo.Worktree, head)
+		if err != nil {
+			return "", err
 		}
+		paths = intersect(paths, differs)
 	}
 	if len(paths) == 0 {
 		return "", nil
@@ -199,4 +204,55 @@ func Check(ctx context.Context, dir string, hub *hubclient.Client) (string, erro
 		return "", err
 	}
 	return result.Message, nil
+}
+
+// staged lists the paths whose staged content differs from HEAD's, or from the commit given,
+// both ends of a rename included. Without a commit it also works before the first commit.
+func staged(ctx context.Context, worktree string, commit ...string) ([]string, error) {
+	args := append(append([]string{"diff", "--cached", "--name-only", "--no-renames", "-z"}, commit...), "--")
+	cmd := exec.CommandContext(ctx, "git", args...)
+	cmd.Dir = worktree
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	paths := []string{}
+	for _, p := range bytes.Split(out, []byte{0}) {
+		if len(p) > 0 {
+			paths = append(paths, string(p))
+		}
+	}
+	return paths, nil
+}
+
+// incoming lists the commits a merge or a cherry-pick in progress brings in: every MERGE_HEAD of
+// an octopus merge, or the CHERRY_PICK_HEAD, read from this worktree's own git directory. A
+// revert is not among them: reverting a commit is this side's change to its files.
+func incoming(gitDir string) ([]string, error) {
+	var heads []string
+	for _, name := range []string{"MERGE_HEAD", "CHERRY_PICK_HEAD"} {
+		data, err := os.ReadFile(filepath.Join(gitDir, name))
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		heads = append(heads, strings.Fields(string(data))...)
+	}
+	return heads, nil
+}
+
+func intersect(a, b []string) []string {
+	in := map[string]bool{}
+	for _, p := range b {
+		in[p] = true
+	}
+	out := []string{}
+	for _, p := range a {
+		if in[p] {
+			out = append(out, p)
+		}
+	}
+	return out
 }
