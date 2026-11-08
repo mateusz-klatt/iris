@@ -182,15 +182,19 @@ select {
   width: 42px;
   height: 42px;
   place-items: center;
-  border: 1px solid rgb(255 255 255 / 28%);
-  border-radius: 14px 14px 14px 5px;
-  color: #fff;
-  background: var(--spectrum);
-  box-shadow: inset 0 0 0 1px rgb(14 12 48 / 24%);
-  font-family: "Apple Color Emoji", "Segoe UI Emoji", "Noto Color Emoji", sans-serif;
-  font-size: 1.4rem;
-  font-weight: 700;
-  line-height: 1;
+  border: 1px solid rgb(255 255 255 / 20%);
+  border-radius: 50%;
+  overflow: hidden;
+  background: #0c111d;
+  box-shadow: 0 0 12px rgb(139 92 246 / 20%), inset 0 0 0 1px rgb(255 255 255 / 10%);
+}
+
+.brand-logo {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border-radius: 50%;
 }
 
 .brand > span:last-child {

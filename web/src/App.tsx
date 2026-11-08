@@ -520,7 +520,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
       <header className="topbar">
         <a className="brand" href="#overview">
           <span className="brand-mark" aria-hidden="true">
-            I
+            <img src="/iris-rainbow.svg" alt="" className="brand-logo" width="34" height="34" />
           </span>
           <span>
             <strong>{t("appName")}</strong>
