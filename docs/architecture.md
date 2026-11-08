@@ -664,10 +664,10 @@ last checkpoint.
   claude-laptop-iris owns that work.
 - The guard's refusal names a claim's holder, but not the holder's branch or worktree, so the
   person in another checkout cannot tell where to ask. Same owner as the item above.
-- Codex's built-in clock, collaboration and web tools, and Claude Code's Monitor, TaskStop and
-  ScheduleWakeup, are classified by the names iris hook logged as unknown on a real host. No
-  payload capture backs those names yet. Codex runs a new hook only after a person trusts it in
-  `/hooks`, so the capture waits for one.
+- Codex's built-in clock, collaboration and web tools are classified by the names iris hook
+  logged as unknown on a real host. No payload capture backs those names yet. Codex runs a new
+  hook only after a person trusts it in `/hooks`, so the capture waits for one. Claude Code's
+  Monitor, TaskStop and ScheduleWakeup are backed by captures from 2.1.319 on Windows.
 
 ## 5. Invariants the tests must prove
 

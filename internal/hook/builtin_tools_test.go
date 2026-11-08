@@ -9,8 +9,9 @@ import (
 // 2026-11-08: Codex 0.167.0 and Claude Code 2.1.319) are known now. The names are exactly as
 // logged. Codex joins a tool's namespace and name: its rollouts record
 // {"namespace":"collaboration","name":"spawn_agent"}, which the hook sees as
-// "collaborationspawn_agent". No payload capture backs these names yet; captures go in
-// testdata once a person has trusted a capture hook.
+// "collaborationspawn_agent". Claude Code's names are backed by captures in testdata/claude,
+// which the golden test decodes. Codex's are not yet: Codex runs a new hook only after a person
+// has trusted it.
 func TestBuiltinToolsAreKnown(t *testing.T) {
 	for name, want := range map[string]ToolClass{
 		// Codex

@@ -254,6 +254,10 @@ const (
 	agySession    = "4d437c2d-a30c-4479-bc04-0c09ca6ebdc5"
 	cursorSession = "<SESSION_OR_TOOL_ID>"
 	proj          = "/workspace/project"
+	// Captured from Claude Code 2.1.319 on Windows 11 for its built-in Monitor, TaskStop and
+	// ScheduleWakeup tools.
+	claudeToolsSession  = "76d28899-a30f-4b4f-9598-1fce6bc60152"
+	claudeWakeupSession = "af647fc5-1139-4ada-b6da-902ec2615848"
 )
 
 var fixtureWant = map[string]decoded{
@@ -274,6 +278,12 @@ var fixtureWant = map[string]decoded{
 	"claude/PreToolUse-read.json":                    {kind: KindPreTool, session: claudeSession, cwd: proj, tool: "Read", class: ClassRead, paths: []string{"/workspace/project/fixtures/denied-target.txt"}, call: "toolu_01RPA5VWZ24nnjpDeyBs5xBZ"},
 	"claude/PreToolUse-toolsearch.json":              {kind: KindPreTool, session: claudeSession, cwd: proj, tool: "ToolSearch", class: ClassOther, call: "toolu_013NVHcqMWYvDzyw35RYC4o1"},
 	"claude/PreToolUse-write.json":                   {kind: KindPreTool, session: claudeSession, cwd: proj, tool: "Write", class: ClassEdit, paths: []string{"/workspace/project/allowed.txt"}, call: "toolu_01C7qtJco6B2Sdj5LxibnJBp"},
+	"claude/PostToolUse-monitor.json":                {kind: KindPostTool, session: claudeToolsSession, cwd: `C:\workspace\project`, tool: "Monitor", class: ClassShell, command: "sleep 120", call: "toolu_01F9im1LV2oGvR4nQHP6cvTD"},
+	"claude/PreToolUse-monitor.json":                 {kind: KindPreTool, session: claudeToolsSession, cwd: `C:\workspace\project`, tool: "Monitor", class: ClassShell, command: "sleep 120", call: "toolu_01F9im1LV2oGvR4nQHP6cvTD"},
+	"claude/PostToolUse-taskstop.json":               {kind: KindPostTool, session: claudeToolsSession, cwd: `C:\workspace\project`, tool: "TaskStop", class: ClassOther, call: "toolu_01ML52guJBoybuMwGLdoWYyV"},
+	"claude/PreToolUse-taskstop.json":                {kind: KindPreTool, session: claudeToolsSession, cwd: `C:\workspace\project`, tool: "TaskStop", class: ClassOther, call: "toolu_01ML52guJBoybuMwGLdoWYyV"},
+	"claude/PostToolUse-schedulewakeup.json":         {kind: KindPostTool, session: claudeWakeupSession, cwd: `C:\workspace\project`, tool: "ScheduleWakeup", class: ClassOther, call: "toolu_01Hdf8TP1aVtHQ33idivgnvE"},
+	"claude/PreToolUse-schedulewakeup.json":          {kind: KindPreTool, session: claudeWakeupSession, cwd: `C:\workspace\project`, tool: "ScheduleWakeup", class: ClassOther, call: "toolu_01Hdf8TP1aVtHQ33idivgnvE"},
 	"claude/SessionEnd.json":                         {kind: KindSessionEnd, session: claudeSession, cwd: proj},
 	"claude/SessionStart.json":                       {kind: KindSessionStart, session: claudeSession, cwd: proj},
 	"claude/Stop.json":                               {kind: KindStop, session: claudeSession, cwd: proj},

@@ -1,0 +1,24 @@
+{
+  "session_id": "76d28899-a30f-4b4f-9598-1fce6bc60152",
+  "transcript_path": "C:\\Users\\user\\.claude\\projects\\C--workspace-project\\76d28899-a30f-4b4f-9598-1fce6bc60152.jsonl",
+  "cwd": "C:\\workspace\\project",
+  "prompt_id": "fa8a2292-02a2-4bcd-b3e2-8acb65ebbe84",
+  "permission_mode": "bypassPermissions",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Monitor",
+  "tool_input": {
+    "description": "long capture",
+    "timeout_ms": 300000,
+    "command": "sleep 120"
+  },
+  "tool_response": {
+    "taskId": "bguedr6th",
+    "timeoutMs": 300000,
+    "persistent": false
+  },
+  "tool_use_id": "toolu_01F9im1LV2oGvR4nQHP6cvTD",
+  "duration_ms": 590
+}
