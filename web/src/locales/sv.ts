@@ -2,7 +2,6 @@ import type { TranslationResource } from "../i18n";
 
 const translation = {
   appName: "Iris",
-  appSubtitle: "Iris",
   skipToContent: "Gå till innehållet",
   mailboxSecureDelivery: "Beständig leverans",
   navigation: "Huvudnavigering",

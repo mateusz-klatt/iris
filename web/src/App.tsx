@@ -493,7 +493,6 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
           </span>
           <span>
             <strong>{t("appName")}</strong>
-            <small>{t("appSubtitle")}</small>
           </span>
         </a>
         <div className="topbar-controls">
