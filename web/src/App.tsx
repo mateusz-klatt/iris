@@ -40,7 +40,6 @@ import {
 import { readUiLocale, writeUiLocale } from "./preferences";
 import "./app.css";
 import "./console.css";
-import "./consoleI18n";
 
 type ConsoleView = "messages" | "fleet" | "claims" | "diagnostics" | "compose";
 
@@ -561,10 +560,10 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
     setMailScope(scope);
     clearThread();
   };
-  const title = activeView === "messages" ? t(mailScope === "mine" ? "console:myMessages" : "console:allActivity")
-    : activeView === "fleet" ? t("console:fleet")
-    : activeView === "claims" ? t("console:reservations")
-    : activeView === "diagnostics" ? t("console:diagnostics") : t("operator.compose");
+  const title = activeView === "messages" ? t(mailScope === "mine" ? "console.myMessages" : "console.allActivity")
+    : activeView === "fleet" ? t("console.fleet")
+    : activeView === "claims" ? t("console.reservations")
+    : activeView === "diagnostics" ? t("console.diagnostics") : t("operator.compose");
 
   return (
     <div className="app-shell operator-console">
@@ -603,16 +602,16 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
             <button type="button" className="primary-button compose-action" onClick={() => setView("compose")}>+ {t("operator.compose")}</button>
             <nav className="console-nav" aria-label={t("navigation")}>
               <button type="button" className="console-nav-item" aria-current={activeView === "messages" && mailScope === "mine" ? "page" : undefined} onClick={() => openMailbox("mine")}>
-                {t("console:myMessages")}<span className="nav-count">{overview.human_unread}</span>
+                {t("console.myMessages")}<span className="nav-count">{overview.human_unread}</span>
               </button>
-              <button type="button" className="console-nav-item" aria-current={activeView === "messages" && mailScope === "all" ? "page" : undefined} onClick={() => openMailbox("all")}>{t("console:allActivity")}</button>
-              <button type="button" className="console-nav-item" aria-current={activeView === "fleet" ? "page" : undefined} onClick={() => setView("fleet")}>{t("console:fleet")}<span className="nav-count">{activeAgents.length}</span></button>
+              <button type="button" className="console-nav-item" aria-current={activeView === "messages" && mailScope === "all" ? "page" : undefined} onClick={() => openMailbox("all")}>{t("console.allActivity")}</button>
+              <button type="button" className="console-nav-item" aria-current={activeView === "fleet" ? "page" : undefined} onClick={() => setView("fleet")}>{t("console.fleet")}<span className="nav-count">{activeAgents.length}</span></button>
               <button type="button" className="console-nav-item" aria-current={activeView === "claims" ? "page" : undefined} onClick={() => setView("claims")}>{t("operator.claims")}<span className="nav-count">{overview.claims.length}</span></button>
-              <button type="button" className="console-nav-item" aria-current={activeView === "diagnostics" ? "page" : undefined} onClick={() => setView("diagnostics")}>{t("console:diagnostics")}</button>
+              <button type="button" className="console-nav-item" aria-current={activeView === "diagnostics" ? "page" : undefined} onClick={() => setView("diagnostics")}>{t("console.diagnostics")}</button>
             </nav>
           </aside>
         ) : null}
-      <main id="content" className="content console-content">
+      <main id="content" className="content console-content" data-view={activeView}>
         {phase === "loading" ? <p className="state-panel">{t("inbox.loading")}</p> : null}
         {phase === "error" ? (
           <div className="state-panel state-error" role="alert">
@@ -632,7 +631,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
           <>
             <header className="console-heading">
               <div><p className="console-kicker">{t("appName")}</p><h1>{title}</h1>
-                <p>{activeView === "messages" ? t(mailScope === "mine" ? "console:subtitle" : "console:activityHint") : activeView === "fleet" ? t("console:fleetHint") : activeView === "compose" ? t("console:composeHint") : null}</p>
+                <p>{activeView === "messages" ? t(mailScope === "mine" ? "console.subtitle" : "console.activityHint") : activeView === "fleet" ? t("console.fleetHint") : activeView === "compose" ? t("console.composeHint") : null}</p>
               </div>
             </header>
             <div className="console-notices">
@@ -641,9 +640,9 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
             </div>
             <div hidden={activeView !== "messages"} className="console-view">
               <div className="console-stats">
-                <button type="button" className="console-stat" onClick={() => openMailbox("mine")}><span>{t("console:unread")}</span><strong>{overview.human_unread}</strong></button>
-                <button type="button" className="console-stat" onClick={() => setView("fleet")}><span>{t("console:active")}</span><strong>{activeAgents.length}</strong></button>
-                <button type="button" className="console-stat" onClick={() => setView("claims")}><span>{t("console:reservations")}</span><strong>{overview.claims.length}</strong></button>
+                <button type="button" className="console-stat" onClick={() => openMailbox("mine")}><span>{t("console.unread")}</span><strong>{overview.human_unread}</strong></button>
+                <button type="button" className="console-stat" onClick={() => setView("fleet")}><span>{t("console.active")}</span><strong>{activeAgents.length}</strong></button>
+                <button type="button" className="console-stat" onClick={() => setView("claims")}><span>{t("console.reservations")}</span><strong>{overview.claims.length}</strong></button>
               </div>
               <DeliveryProblems repositoryId={repositoryId} revision={threadRevision} onOpenThread={openThread} onUnauthorized={onUnauthorized} />
               <section id="threads" aria-label={t("operator.threads")}>
@@ -668,7 +667,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                     <div className="panel-heading"><h2>{t("operator.threads")}</h2></div>
                     {threadsError ? <p role="alert">{t("operator.loadError")}</p> : null}
                     <div className="thread-list">
-                      {threads.length === 0 ? <div className="thread-empty"><h3>{t(mailScope === "mine" && query === "" && repositoryId === "" ? "console:emptyInbox" : "operator.emptyThreads")}</h3><p>{t("console:emptyHint")}</p></div> : (
+                      {threads.length === 0 ? <div className="thread-empty"><h3>{t(mailScope === "mine" && query === "" && repositoryId === "" ? "console.emptyInbox" : "operator.emptyThreads")}</h3><p>{t("console.emptyHint")}</p></div> : (
                         <ul className="message-list">
                           {threads.map((item) => <li key={item.id}>
                             <button type="button" className="thread-row" aria-current={item.id === selectedId ? "true" : undefined} data-unread={item.unread > 0 ? "yes" : "no"} onClick={(event) => { lastThreadButton.current = event.currentTarget; openThread(item.id); }}>
@@ -686,7 +685,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                       }}>{t("operator.olderThreads")}</button> : null}
                     </div>
                   </div>
-                  {selectedId === null ? <div className="thread-empty"><h2>{t("console:selectThread")}</h2><p>{t("console:selectHint")}</p></div> : (
+                  {selectedId === null ? <div className="thread-empty"><h2>{t("console.selectThread")}</h2><p>{t("console.selectHint")}</p></div> : (
                     <article className="message-detail thread-reader" aria-labelledby="thread-title" aria-busy={thread === null && !threadError}>
                       <header className="page-heading">
                         <button type="button" className="back-link" onClick={clearThread}>{t("operator.back")}</button>
@@ -794,7 +793,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                       {overview.repositories.map((repository) => (
                         <tr key={repository.id}>
                           <th scope="row">{repository.name}</th>
-                          <td><details className="repository-details"><summary>{t("console:aliases")}</summary><code>{repository.id}</code><ul>{repository.aliases.map((alias) => <li key={alias}>{alias}</li>)}</ul></details></td>
+                          <td><details className="repository-details"><summary>{t("console.aliases")}</summary><code>{repository.id}</code><ul>{repository.aliases.map((alias) => <li key={alias}>{alias}</li>)}</ul></details></td>
                         </tr>
                       ))}
                     </tbody>
@@ -806,10 +805,10 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                   <h2>{t("operator.agents")}</h2>
                 </div>
                 <div className="fleet-toolbar">
-                  <label>{t("console:findAgent")}<input type="search" value={agentSearch} onChange={(event) => setAgentSearch(event.target.value)} /></label>
-                  <label><input type="checkbox" checked={showInactive} onChange={(event) => setShowInactive(event.target.checked)} />{t("console:showInactive")}</label>
+                  <label>{t("console.findAgent")}<input type="search" value={agentSearch} onChange={(event) => setAgentSearch(event.target.value)} /></label>
+                  <label><input type="checkbox" checked={showInactive} onChange={(event) => setShowInactive(event.target.checked)} />{t("console.showInactive")}</label>
                 </div>
-                {visibleAgents.length === 0 ? <p>{t("console:noAgentMatch")}</p> : (
+                {visibleAgents.length === 0 ? <p>{t("console.noAgentMatch")}</p> : (
                   <table className="stack-table">
                     <caption className="sr-only">{t("operator.agents")}</caption>
                     <thead>
@@ -863,9 +862,9 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                   }
                 }}
               >
-                <label>{t("console:composeRepository")}
+                <label>{t("console.composeRepository")}
                   <select value={repositoryId} onChange={(event) => { setRepositoryId(event.target.value); clearThread(); }}>
-                    <option value="">{t("console:automaticRepository")}</option>
+                    <option value="">{t("console.automaticRepository")}</option>
                     {overview.repositories.map((repository) => <option key={repository.id} value={repository.id}>{repository.name} · {repository.id}</option>)}
                   </select>
                 </label>

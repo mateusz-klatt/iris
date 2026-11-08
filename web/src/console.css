@@ -650,6 +650,35 @@
   }
 }
 
+@media (min-width: 1101px) {
+  .operator-console .console-content[data-view="messages"] {
+    display: flex;
+    height: calc(100dvh - var(--console-header-height));
+    min-height: 48rem;
+    flex-direction: column;
+  }
+
+  .operator-console .console-content[data-view="messages"] > .console-view:not([hidden]),
+  .operator-console #threads {
+    display: flex;
+    min-height: 0;
+    flex: 1 1 auto;
+    flex-direction: column;
+  }
+
+  .operator-console .console-stats,
+  .operator-console #delivery-problems,
+  .operator-console .mail-filters {
+    flex-shrink: 0;
+  }
+
+  .operator-console .mailbox-layout {
+    height: auto;
+    min-height: 20rem;
+    flex: 1 1 auto;
+  }
+}
+
 @media (max-width: 700px) {
   .operator-console .topbar {
     position: static;
@@ -731,6 +760,16 @@
 
   .operator-console .console-stat > strong {
     font-size: 1.45rem;
+  }
+
+  .operator-console .mail-filters,
+  .operator-console .mail-filters:has(label:nth-of-type(3)) {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .operator-console .mail-filters label:first-child,
+  .operator-console .mail-filters:has(label:nth-of-type(3)) > button {
+    grid-column: 1 / -1;
   }
 
   .operator-console .mailbox-layout {

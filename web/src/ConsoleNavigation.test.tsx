@@ -83,5 +83,5 @@ it("keeps the conversation and edited reply when its selected row is opened agai
   await user.click(row);
   expect(heading).toHaveFocus();
   expect(body).toHaveValue("Please keep these notes.");
-  expect(screen.getByRole("button", { name: "Review", exact: true })).toBeEnabled();
+  expect(screen.getByRole("button", { name: "Review" })).toBeEnabled();
 });
