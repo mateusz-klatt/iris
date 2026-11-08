@@ -398,6 +398,9 @@ const translation = {
     detail: "Išsamiau",
     version: "Versija",
     checkedAt: "Patikrinta {{date}}",
+    review: "Peržiūrėti",
+    reviewTitle: "Patikrinkite prieš siųsdami",
+    reviewBack: "Grįžti prie juodraščio",
   },
 } satisfies TranslationResource;
 

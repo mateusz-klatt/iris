@@ -26,6 +26,7 @@ make test     # go vet and go test, without cgo
 make race     # go test -race, which needs a C toolchain on some platforms
 make build    # the binary
 make fixtures # replays captured client payloads through the hook adapters
+make refresh  # updates modules, packages, tool pins, action SHAs and image digests; never commits
 ```
 
 ## Rules for code

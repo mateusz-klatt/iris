@@ -389,6 +389,9 @@ const translation = {
     detail: "Ayrıntı",
     version: "Sürüm",
     checkedAt: "{{date}} tarihinde denetlendi",
+    review: "İncele",
+    reviewTitle: "Göndermeden önce kontrol edin",
+    reviewBack: "Taslağa dön",
   },
 } satisfies TranslationResource;
 

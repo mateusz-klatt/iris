@@ -124,7 +124,7 @@ export interface WatchFrame {
   kind: string;
 }
 
-export type WatchStatus = "connecting" | "live" | "reconnecting";
+export type WatchStatus = "connecting" | "live" | "reconnecting" | "unauthorized";
 
 async function request(
   path: string,
@@ -212,20 +212,46 @@ export function revokeClaim(fence: number, signal?: AbortSignal): Promise<void> 
   return postJson(`/v1/ui/claims/${fence}/revoke`, {}, signal);
 }
 
+// A socket that closes is opened again after a delay that starts at a second and doubles up to
+// thirty, and a socket that opens resets it. Each delay is half its step plus a random share of
+// the other half, so consoles that lost the hub together do not return together.
+const firstWatchDelay = 1000;
+const lastWatchDelay = 30_000;
+
+export interface WatchOptions {
+  /**
+   * Asks over HTTP whether the session still holds. A browser never sees why a WebSocket
+   * handshake failed, so a 401 there looks like any other closed socket.
+   */
+  check?: () => Promise<unknown>;
+  random?: () => number;
+}
+
 export function watchUi(
   onFrame: (frame: WatchFrame) => void,
   onStatus?: (status: WatchStatus) => void,
+  { check = getOverview, random = Math.random }: WatchOptions = {},
 ): () => void {
   let closed = false;
   let socket: WebSocket | null = null;
   let timer = 0;
+  let failures = 0;
+
+  const retry = () => {
+    const step = Math.min(lastWatchDelay, firstWatchDelay * 2 ** failures);
+    failures++;
+    timer = window.setTimeout(() => open(true), step / 2 + random() * (step / 2));
+  };
 
   const open = (reconnect: boolean) => {
     onStatus?.(reconnect ? "reconnecting" : "connecting");
     const url = new URL("/v1/ui/watch", window.location.href);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
+    let opened = false;
     socket = new WebSocket(url.toString());
     socket.onopen = () => {
+      opened = true;
+      failures = 0;
       onStatus?.("live");
     };
     socket.onmessage = (event) => {
@@ -242,9 +268,33 @@ export function watchUi(
       }
     };
     socket.onclose = () => {
-      if (!closed) {
-        timer = window.setTimeout(() => open(true), 1000);
+      if (closed) {
+        return;
       }
+      if (opened) {
+        retry();
+        return;
+      }
+      // Never opened: the hub may be down, or it may have refused the session. Only an HTTP
+      // request can tell, and a refused session ends the watch rather than knocking forever.
+      check().then(
+        () => {
+          if (!closed) {
+            retry();
+          }
+        },
+        (error: unknown) => {
+          if (closed) {
+            return;
+          }
+          if (error instanceof ApiError && error.status === 401) {
+            closed = true;
+            onStatus?.("unauthorized");
+            return;
+          }
+          retry();
+        },
+      );
     };
   };
 

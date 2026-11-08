@@ -389,6 +389,9 @@ const translation = {
     detail: "Detaljer",
     version: "Version",
     checkedAt: "Kontrollerad {{date}}",
+    review: "Granska",
+    reviewTitle: "Kontrollera innan du skickar",
+    reviewBack: "Tillbaka till utkastet",
   },
 } satisfies TranslationResource;
 
