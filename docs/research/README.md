@@ -19,6 +19,9 @@ Reports are kept as written, apart from anonymised paths and a correction note a
 a later measurement overruled a claim. Captured payloads are in `internal/hook/testdata/`.
 `reference-schema.sql` is Codex's proposed model, on which `docs/architecture.md` D9 is based.
 
+The [shared-worktree experiment](shared-worktree.md) measures Claude and Codex running
+concurrently in one checkout, including edit contention, shell attribution and the shared index.
+
 ## Review of the architecture
 
 The synthesis then went back to the clients as a plan review. Antigravity was left out of this
