@@ -387,7 +387,7 @@ const translation = {
     reply: "답장",
     send: "보내기",
     sent: "보냈습니다.",
-    sendUncertain: "Iris가 이 메시지가 전송되었는지 확인할 수 없었습니다. 다시 보내도 안전합니다. 허브는 최대 한 개의 사본만 보관합니다.",
+    sendUncertain: "Iris가 이 메시지가 전송되었는지 확인할 수 없었습니다. 첫 시도 후 하루 이내에 다시 보내면 안전합니다. 허브는 초안마다 사본 하나를 보관합니다.",
     deliveryTitle: "전달 문제",
     deliveryHint: "최근 {{days}}일 동안 보낸 메시지 중 수신자가 수락하지 않은 메시지: 수신자에게 활성 세션이 없거나 {{minutes}}분이 지났습니다. Iris는 각 메시지를 수신자를 위해 대기열에 보관하며 다시 보내지 않습니다.",
     deliveryUnreachable: "{{name}}: 활성 세션 없음 ({{session}})",

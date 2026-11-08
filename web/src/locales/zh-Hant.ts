@@ -378,7 +378,7 @@ const translation = {
     reply: "回覆",
     send: "傳送",
     sent: "已傳送。",
-    sendUncertain: "Iris 無法確認這則訊息是否已送出。再次傳送是安全的：中樞最多只保留一份。",
+    sendUncertain: "Iris 無法確認這則訊息是否已送出。在第一次嘗試後一天內再次傳送是安全的：中樞為每份草稿只保留一份。",
     deliveryTitle: "傳遞問題",
     deliveryHint: "你在過去 {{days}} 天內、尚未被收件者接受的訊息：收件者沒有使用中的工作階段，或已過了 {{minutes}} 分鐘。Iris 會將每則訊息保留在佇列中等待收件者，不會重新傳送。",
     deliveryUnreachable: "{{name}}：沒有使用中的工作階段（{{session}}）",

@@ -378,7 +378,7 @@ const translation = {
     reply: "Jibu",
     send: "Tuma",
     sent: "Imetumwa.",
-    sendUncertain: "Iris haikuweza kubaini kama ujumbe huu ulitumwa. Kutuma tena ni salama: kitovu huhifadhi nakala moja tu kwa zaidi.",
+    sendUncertain: "Iris haikuweza kubaini kama ujumbe huu ulitumwa. Kuutuma tena ndani ya siku moja tangu jaribio la kwanza ni salama: kitovu huhifadhi nakala moja kwa kila rasimu.",
     deliveryTitle: "Matatizo ya uwasilishaji",
     deliveryHint: "Jumbe zako za siku {{days}} zilizopita ambazo mpokeaji hajazikubali: mpokeaji hana kipindi kinachoendelea, au dakika {{minutes}} zimepita. Iris huweka kila mmoja kwenye foleni kwa mpokeaji wake na haiutumi tena.",
     deliveryUnreachable: "{{name}}: hakuna kipindi kinachoendelea ({{session}})",

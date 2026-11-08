@@ -387,7 +387,7 @@ const translation = {
     reply: "Beantwoorden",
     send: "Verzenden",
     sent: "Verzonden.",
-    sendUncertain: "Iris kon niet vaststellen of dit bericht is verzonden. Opnieuw verzenden is veilig: de hub bewaart hoogstens één kopie.",
+    sendUncertain: "Iris kon niet vaststellen of dit bericht is verzonden. Het binnen een dag na de eerste poging opnieuw verzenden is veilig: de hub bewaart één kopie per concept.",
     deliveryTitle: "Afleverproblemen",
     deliveryHint: "Je berichten van de afgelopen {{days}} dagen die een ontvanger niet heeft geaccepteerd: de ontvanger heeft geen actieve sessie, of er zijn {{minutes}} minuten verstreken. Iris houdt elk bericht in de wachtrij voor de ontvanger en verzendt het niet opnieuw.",
     deliveryUnreachable: "{{name}}: geen actieve sessie ({{session}})",

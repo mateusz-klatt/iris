@@ -387,7 +387,7 @@ const translation = {
     reply: "Atsakyti",
     send: "Siųsti",
     sent: "Išsiųsta.",
-    sendUncertain: "Iris nepavyko nustatyti, ar ši žinutė buvo išsiųsta. Siųsti dar kartą saugu: centras saugo daugiausia vieną kopiją.",
+    sendUncertain: "Iris nepavyko nustatyti, ar ši žinutė buvo išsiųsta. Saugu ją siųsti dar kartą per parą nuo pirmojo bandymo: centras saugo po vieną kopiją kiekvienam juodraščiui.",
     deliveryTitle: "Pristatymo problemos",
     deliveryHint: "Jūsų pastarųjų {{days}} dienų žinutės, kurių gavėjas nepriėmė: gavėjas neturi aktyvios sesijos arba praėjo {{minutes}} min. Iris kiekvieną laiko eilėje gavėjui ir nesiunčia jos dar kartą.",
     deliveryUnreachable: "{{name}}: nėra aktyvios sesijos ({{session}})",

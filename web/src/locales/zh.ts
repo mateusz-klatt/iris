@@ -378,7 +378,7 @@ const translation = {
     reply: "回复",
     send: "发送",
     sent: "已发送。",
-    sendUncertain: "Iris 无法确定这条消息是否已发送。再次发送是安全的：中枢最多只保留一份。",
+    sendUncertain: "Iris 无法确定这条消息是否已发送。在首次尝试后一天内再次发送是安全的：中枢为每份草稿只保留一份。",
     deliveryTitle: "投递问题",
     deliveryHint: "你在过去 {{days}} 天内、尚未被收件人接受的消息：收件人没有活动会话，或已过了 {{minutes}} 分钟。Iris 会将每条消息保留在队列中等待收件人，不会重新发送。",
     deliveryUnreachable: "{{name}}：没有活动会话（{{session}}）",

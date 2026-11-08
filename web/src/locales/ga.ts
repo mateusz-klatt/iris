@@ -387,7 +387,7 @@ const translation = {
     reply: "Freagair",
     send: "Seol",
     sent: "Seolta.",
-    sendUncertain: "Níorbh fhéidir le Iris a dhéanamh amach ar seoladh an teachtaireacht seo. Tá sé sábháilte í a sheoladh arís: ní choinníonn an mol ach cóip amháin ar a mhéad.",
+    sendUncertain: "Níorbh fhéidir le Iris a dhéanamh amach ar seoladh an teachtaireacht seo. Tá sé sábháilte í a sheoladh arís laistigh de lá ón gcéad iarracht: coinníonn an mol cóip amháin in aghaidh an dréachta.",
     deliveryTitle: "Fadhbanna seachadta",
     deliveryHint: "Do theachtaireachtaí ó na {{days}} lá deiridh nár ghlac faighteoir leo: níl seisiún beo ag an bhfaighteoir, nó tá {{minutes}} nóiméad caite. Coinníonn Iris gach ceann sa scuaine dá fhaighteoir agus ní sheolann sé arís é.",
     deliveryUnreachable: "{{name}}: gan seisiún beo ({{session}})",

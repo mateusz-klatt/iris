@@ -378,7 +378,7 @@ const translation = {
     reply: "Përgjigju",
     send: "Dërgo",
     sent: "U dërgua.",
-    sendUncertain: "Iris nuk mundi të përcaktonte nëse ky mesazh u dërgua. Ridërgimi është i sigurt: qendra mban më së shumti një kopje.",
+    sendUncertain: "Iris nuk mundi të përcaktonte nëse ky mesazh u dërgua. Ridërgimi i tij brenda një dite nga përpjekja e parë është i sigurt: qendra mban një kopje për çdo draft.",
     deliveryTitle: "Probleme me dorëzimin",
     deliveryHint: "Mesazhet e tua nga {{days}} ditët e fundit që një marrës nuk i ka pranuar: marrësi nuk ka sesion aktiv, ose kanë kaluar {{minutes}} minuta. Iris e mban secilin në radhë për marrësin e tij dhe nuk e dërgon përsëri.",
     deliveryUnreachable: "{{name}}: asnjë sesion aktiv ({{session}})",

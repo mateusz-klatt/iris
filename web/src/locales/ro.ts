@@ -387,7 +387,7 @@ const translation = {
     reply: "Răspunde",
     send: "Trimite",
     sent: "Trimis.",
-    sendUncertain: "Iris nu a putut afla dacă acest mesaj a fost trimis. Retrimiterea este sigură: hubul păstrează cel mult o copie.",
+    sendUncertain: "Iris nu a putut afla dacă acest mesaj a fost trimis. Retrimiterea lui în decurs de o zi de la prima încercare este sigură: hubul păstrează o copie per ciornă.",
     deliveryTitle: "Probleme de livrare",
     deliveryHint: "Mesajele tale din ultimele {{days}} zile pe care un destinatar nu le-a acceptat: destinatarul nu are o sesiune activă sau au trecut {{minutes}} minute. Iris păstrează fiecare mesaj la coadă pentru destinatarul său și nu îl retrimite.",
     deliveryUnreachable: "{{name}}: nicio sesiune activă ({{session}})",

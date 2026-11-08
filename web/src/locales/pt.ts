@@ -387,7 +387,7 @@ const translation = {
     reply: "Responder",
     send: "Enviar",
     sent: "Enviado.",
-    sendUncertain: "O Iris não conseguiu saber se esta mensagem foi enviada. Enviar de novo é seguro: o hub guarda no máximo uma cópia.",
+    sendUncertain: "O Iris não conseguiu saber se esta mensagem foi enviada. Enviá-la de novo até um dia após a primeira tentativa é seguro: o hub guarda uma cópia por rascunho.",
     deliveryTitle: "Problemas de entrega",
     deliveryHint: "As suas mensagens dos últimos {{days}} dias que um destinatário não aceitou: o destinatário não tem uma sessão ativa, ou passaram {{minutes}} minutos. O Iris mantém cada uma em fila para o seu destinatário e não a envia de novo.",
     deliveryUnreachable: "{{name}}: sem sessão ativa ({{session}})",

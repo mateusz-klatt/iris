@@ -498,7 +498,7 @@ const resources = {
         reply: "Reply",
         send: "Send",
         sent: "Sent.",
-        sendUncertain: "Iris could not tell whether this message was sent. Sending again is safe: the hub keeps at most one copy.",
+        sendUncertain: "Iris could not tell whether this message was sent. Sending it again within a day of the first attempt is safe: the hub keeps one copy per draft.",
         deliveryTitle: "Delivery problems",
         deliveryHint: "Your messages from the last {{days}} days that a recipient has not accepted: the recipient has no live session, or {{minutes}} minutes have passed. Iris keeps each one queued for its recipient and does not send it again.",
         deliveryUnreachable: "{{name}}: no live session ({{session}})",

@@ -378,7 +378,7 @@ const translation = {
     reply: "Одговори",
     send: "Пошаљи",
     sent: "Послато.",
-    sendUncertain: "Iris nije mogao da utvrdi da li je ova poruka poslata. Ponovno slanje je bezbedno: čvorište čuva najviše jednu kopiju.",
+    sendUncertain: "Iris nije mogao da utvrdi da li je ova poruka poslata. Ponovno slanje u roku od jednog dana od prvog pokušaja je bezbedno: čvorište čuva jednu kopiju po nacrtu.",
     deliveryTitle: "Problemi sa isporukom",
     deliveryHint: "Vaše poruke iz poslednjih {{days}} dana koje primalac nije prihvatio: primalac nema aktivnu sesiju ili je prošlo {{minutes}} minuta. Iris svaku drži u redu za primaoca i ne šalje je ponovo.",
     deliveryUnreachable: "{{name}}: nema aktivne sesije ({{session}})",

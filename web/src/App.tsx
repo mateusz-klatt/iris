@@ -73,6 +73,8 @@ interface Draft {
   key: string;
   /** The repository the key was first sent from. A send from another view is another send. */
   sentFrom?: string;
+  /** When this key was first sent, in milliseconds. The hub's one-copy promise runs from then. */
+  firstTried?: number;
   /** The thread a reply draft is for. */
   thread?: string;
   /**
@@ -85,6 +87,10 @@ interface Draft {
 function newDraft(fields: Partial<Draft> = {}): Draft {
   return { to: "", subject: "", body: "", replyTo: "", ...fields, key: humanKey() };
 }
+
+// retryWindow is how long the hub remembers a send's key, ADR 006's 24 hours for Operation
+// records. The console promises a safe retry only within it.
+const retryWindow = 24 * 60 * 60 * 1000;
 
 // operatorName is the sender name the hub gives the console's own messages.
 const operatorName = "human";
@@ -115,7 +121,7 @@ function unreadForOperator(detail: ThreadDetail): boolean {
 }
 
 function edited(draft: Draft, change: Partial<Draft>): Draft {
-  return { ...draft, ...change, key: humanKey(), offered: false };
+  return { ...draft, ...change, key: humanKey(), firstTried: undefined, offered: false };
 }
 
 // threadFilters names the filters a thread list was opened under.
@@ -444,7 +450,8 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
     // The message belongs to the repository being read (ADR 004), and the hub refuses a key
     // reused for another repository. A retry from another view therefore gets a new key, and
     // the draft keeps it for its own retries.
-    const draft = start.sentFrom === undefined || start.sentFrom === repositoryId ? { ...start, sentFrom: repositoryId } : { ...start, key: humanKey(), sentFrom: repositoryId };
+    const keyed = start.sentFrom === undefined || start.sentFrom === repositoryId ? { ...start, sentFrom: repositoryId } : { ...start, key: humanKey(), firstTried: undefined, sentFrom: repositoryId };
+    const draft = { ...keyed, firstTried: keyed.firstTried ?? Date.now() };
     keep(draft);
     inFlight.current = true;
     setSending(true);
@@ -469,9 +476,12 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
         return;
       }
       // A network failure or a 5xx may have come after the hub stored the message. The draft keeps
-      // its key, so sending again cannot make a second copy, and the person is told so. A 4xx is
-      // a refusal, and nothing was stored.
-      const uncertain = !(error instanceof ApiError) || error.status >= 500;
+      // its key, and the hub keeps one copy per key for retryWindow from when it stored the first
+      // (ADR 006), so within that window the person is told a retry is safe. Past it the hub has
+      // forgotten the key, and the plain error promises nothing. A 4xx is a refusal: nothing was
+      // stored.
+      const ambiguous = !(error instanceof ApiError) || error.status >= 500;
+      const uncertain = ambiguous && Date.now() - draft.firstTried < retryWindow;
       setFormError(t(uncertain ? "operator.sendUncertain" : "operator.loadError"));
     } finally {
       inFlight.current = false;

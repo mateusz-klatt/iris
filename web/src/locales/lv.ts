@@ -387,7 +387,7 @@ const translation = {
     reply: "Atbildēt",
     send: "Sūtīt",
     sent: "Nosūtīts.",
-    sendUncertain: "Iris nevarēja noteikt, vai šī ziņa tika nosūtīta. Nosūtīt vēlreiz ir droši: centrmezgls glabā ne vairāk kā vienu kopiju.",
+    sendUncertain: "Iris nevarēja noteikt, vai šī ziņa tika nosūtīta. To ir droši nosūtīt vēlreiz dienas laikā kopš pirmā mēģinājuma: centrmezgls glabā vienu kopiju katram melnrakstam.",
     deliveryTitle: "Piegādes problēmas",
     deliveryHint: "Jūsu pēdējo {{days}} dienu ziņas, kuras saņēmējs nav pieņēmis: saņēmējam nav aktīvas sesijas, vai pagājušas {{minutes}} minūtes. Iris katru tur rindā tās saņēmējam un nesūta to vēlreiz.",
     deliveryUnreachable: "{{name}}: nav aktīvas sesijas ({{session}})",

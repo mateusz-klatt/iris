@@ -387,7 +387,7 @@ const translation = {
     reply: "Válasz",
     send: "Küldés",
     sent: "Elküldve.",
-    sendUncertain: "Az Iris nem tudta megállapítani, hogy elküldte-e ezt az üzenetet. Az újraküldés biztonságos: a hub legfeljebb egy példányt őriz meg.",
+    sendUncertain: "Az Iris nem tudta megállapítani, hogy elküldte-e ezt az üzenetet. Az első kísérlettől számított egy napon belül biztonságos újraküldeni: a hub piszkozatonként egy példányt őriz meg.",
     deliveryTitle: "Kézbesítési problémák",
     deliveryHint: "Az elmúlt {{days}} nap azon üzenetei, amelyeket egy címzett nem fogadott el: a címzettnek nincs aktív munkamenete, vagy eltelt {{minutes}} perc. Az Iris mindegyiket sorban tartja a címzettje számára, és nem küldi el újra.",
     deliveryUnreachable: "{{name}}: nincs aktív munkamenet ({{session}})",

@@ -378,7 +378,7 @@ const translation = {
     reply: "Svara",
     send: "Skicka",
     sent: "Skickat.",
-    sendUncertain: "Iris kunde inte avgöra om meddelandet skickades. Det är säkert att skicka igen: hubben sparar högst en kopia.",
+    sendUncertain: "Iris kunde inte avgöra om meddelandet skickades. Det är säkert att skicka det igen inom ett dygn från första försöket: hubben sparar en kopia per utkast.",
     deliveryTitle: "Leveransproblem",
     deliveryHint: "Dina meddelanden från de senaste {{days}} dagarna som en mottagare inte har tagit emot: mottagaren har ingen aktiv session, eller så har {{minutes}} minuter gått. Iris håller varje meddelande i kö för mottagaren och skickar det inte igen.",
     deliveryUnreachable: "{{name}}: ingen aktiv session ({{session}})",

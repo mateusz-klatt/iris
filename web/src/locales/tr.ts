@@ -378,7 +378,7 @@ const translation = {
     reply: "Yanıtla",
     send: "Gönder",
     sent: "Gönderildi.",
-    sendUncertain: "Iris bu mesajın gönderilip gönderilmediğini anlayamadı. Yeniden göndermek güvenlidir: merkez en fazla bir kopya tutar.",
+    sendUncertain: "Iris bu mesajın gönderilip gönderilmediğini anlayamadı. İlk denemeden sonraki bir gün içinde yeniden göndermek güvenlidir: merkez her taslak için bir kopya tutar.",
     deliveryTitle: "Teslim sorunları",
     deliveryHint: "Son {{days}} gündeki, bir alıcının kabul etmediği mesajlarınız: alıcının etkin oturumu yok veya {{minutes}} dakika geçti. Iris her birini alıcısı için kuyrukta tutar ve yeniden göndermez.",
     deliveryUnreachable: "{{name}}: etkin oturum yok ({{session}})",

@@ -387,7 +387,7 @@ const translation = {
     reply: "Répondre",
     send: "Envoyer",
     sent: "Envoyé.",
-    sendUncertain: "Iris n'a pas pu savoir si ce message a été envoyé. Le renvoyer est sans risque : le hub en garde au plus une copie.",
+    sendUncertain: "Iris n'a pas pu savoir si ce message a été envoyé. Le renvoyer dans la journée qui suit la première tentative est sans risque : le hub garde une copie par brouillon.",
     deliveryTitle: "Problèmes de distribution",
     deliveryHint: "Vos messages des {{days}} derniers jours qu'un destinataire n'a pas acceptés : le destinataire n'a pas de session active, ou {{minutes}} minutes se sont écoulées. Iris garde chacun en file d'attente pour son destinataire et ne le renvoie pas.",
     deliveryUnreachable: "{{name}} : aucune session active ({{session}})",

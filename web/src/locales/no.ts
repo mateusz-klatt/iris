@@ -387,7 +387,7 @@ const translation = {
     reply: "Svar",
     send: "Send",
     sent: "Sendt.",
-    sendUncertain: "Iris kunne ikke avgjøre om denne meldingen ble sendt. Det er trygt å sende på nytt: huben beholder høyst én kopi.",
+    sendUncertain: "Iris kunne ikke avgjøre om denne meldingen ble sendt. Det er trygt å sende den på nytt innen ett døgn etter første forsøk: huben beholder én kopi per utkast.",
     deliveryTitle: "Leveringsproblemer",
     deliveryHint: "Meldingene dine fra de siste {{days}} dagene som en mottaker ikke har godtatt: mottakeren har ingen aktiv økt, eller det har gått {{minutes}} minutter. Iris holder hver melding i kø for mottakeren og sender den ikke på nytt.",
     deliveryUnreachable: "{{name}}: ingen aktiv økt ({{session}})",

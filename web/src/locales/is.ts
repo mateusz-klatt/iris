@@ -387,7 +387,7 @@ const translation = {
     reply: "Svara",
     send: "Senda",
     sent: "Sent.",
-    sendUncertain: "Iris gat ekki séð hvort þessi skilaboð voru send. Óhætt er að senda aftur: miðstöðin geymir í mesta lagi eitt eintak.",
+    sendUncertain: "Iris gat ekki séð hvort þessi skilaboð voru send. Óhætt er að senda þau aftur innan sólarhrings frá fyrstu tilraun: miðstöðin geymir eitt eintak fyrir hvert drög.",
     deliveryTitle: "Afhendingarvandamál",
     deliveryHint: "Skilaboðin þín frá síðustu {{days}} dögum sem viðtakandi hefur ekki tekið við: viðtakandinn er ekki með virka lotu, eða {{minutes}} mínútur eru liðnar. Iris heldur hverjum skilaboðum í biðröð fyrir viðtakanda sinn og sendir þau ekki aftur.",
     deliveryUnreachable: "{{name}}: engin virk lota ({{session}})",
