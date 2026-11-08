@@ -398,6 +398,9 @@ const translation = {
     detail: "Mionsonra",
     version: "Leagan",
     checkedAt: "Seiceáilte {{date}}",
+    review: "Athbhreithnigh",
+    reviewTitle: "Seiceáil sula seolann tú",
+    reviewBack: "Ar ais chuig an dréacht",
   },
 } satisfies TranslationResource;
 

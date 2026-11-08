@@ -389,6 +389,9 @@ const translation = {
     detail: "詳細資料",
     version: "版本",
     checkedAt: "檢查於 {{date}}",
+    review: "檢閱",
+    reviewTitle: "傳送前檢查",
+    reviewBack: "返回草稿",
   },
 } satisfies TranslationResource;
 

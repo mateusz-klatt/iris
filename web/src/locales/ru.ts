@@ -398,6 +398,9 @@ const translation = {
     detail: "Подробности",
     version: "Версия",
     checkedAt: "Проверено {{date}}",
+    review: "Проверить",
+    reviewTitle: "Проверьте перед отправкой",
+    reviewBack: "Вернуться к черновику",
   },
 } satisfies TranslationResource;
 

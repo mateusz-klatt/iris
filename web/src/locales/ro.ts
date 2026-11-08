@@ -398,6 +398,9 @@ const translation = {
     detail: "Detaliu",
     version: "Versiune",
     checkedAt: "Verificat la {{date}}",
+    review: "Verifică",
+    reviewTitle: "Verifică înainte de trimitere",
+    reviewBack: "Înapoi la ciornă",
   },
 } satisfies TranslationResource;
 

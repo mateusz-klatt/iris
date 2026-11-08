@@ -398,6 +398,9 @@ const translation = {
     detail: "Մանրամասներ",
     version: "Տարբերակ",
     checkedAt: "Ստուգվել է՝ {{date}}",
+    review: "Վերանայել",
+    reviewTitle: "Ստուգեք ուղարկելուց առաջ",
+    reviewBack: "Վերադառնալ սևագրին",
   },
 } satisfies TranslationResource;
 

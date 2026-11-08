@@ -398,6 +398,9 @@ const translation = {
     detail: "အသေးစိတ်",
     version: "ဗားရှင်း",
     checkedAt: "{{date}} တွင် စစ်ဆေးခဲ့သည်",
+    review: "စစ်ဆေးရန်",
+    reviewTitle: "မပို့မီ စစ်ဆေးပါ",
+    reviewBack: "မူကြမ်းသို့ ပြန်သွားရန်",
   },
 } satisfies TranslationResource;
 
