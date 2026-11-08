@@ -3,6 +3,7 @@ package binding
 import (
 	"context"
 	"os/exec"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,15 +30,16 @@ func TestAnOwnExecutionNamesItsRepositoryAndAHubRefusalIsSaid(t *testing.T) {
 	}
 }
 
-// The grace period ends with the call that waits in it: a caller that gives up gets the
-// unbound answer it had, and nothing is registered.
+// The grace period ends with the call that waits in it: a caller that gives up is told Iris is
+// still binding and to retry, and nothing is registered.
 func TestTheGracePeriodEndsWithItsCaller(t *testing.T) {
 	hub := &scriptedHub{binds: []string{"unbound", "unbound", "unbound", "unbound", "unbound"}}
 	r := resolverFor(t, hub, "claude", map[string]string{"CLAUDE_CODE_SESSION_ID": "s"}, proc.Ancestor{})
 	r.Grace = time.Minute
 	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
 	defer cancel()
-	if _, err := r.Resolve(ctx, ""); !IsCode(err, "unbound") || hub.session != nil {
+	_, err := r.Resolve(ctx, "")
+	if !IsCode(err, "unbound") || !strings.Contains(err.Error(), "still binding this session; retry in a few seconds") || hub.session != nil {
 		t.Fatalf("%v registered %+v", err, hub.session)
 	}
 }

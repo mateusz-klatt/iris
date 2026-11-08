@@ -200,8 +200,9 @@ first bind keeps looking, with backoff, for 15 s. Only then, if hooks never ran,
 an untrusted folder, does the shim register an MCP-only Execution so that messaging still works,
 and only where it can name the session: by its session id, or as a single-session process. If
 the hook registers later after all, the shim's heartbeat finds the hook's Execution for the same
-client process, moves to it and ends its own, so a slow hook cannot leave the session split
-either. After a loss the shim never registers; it waits for the hook to reattach (D9).
+client process, moves to it and ends its own, handing over the mail its stray mailbox received
+meanwhile, so a slow hook cannot leave the session split either. A first tool call that ends
+while the grace period runs is told Iris is still binding the session and to retry. After a loss the shim never registers; it waits for the hook to reattach (D9).
 
 ### D7. Attention: instant where possible, honest everywhere
 
