@@ -119,7 +119,7 @@ func TestEveryToolIsListed(t *testing.T) {
 	for _, tool := range list.Tools {
 		names = append(names, tool.Name)
 	}
-	for _, want := range []string{"whoami", "peers", "send", "inbox", "ack", "receipts", "claim", "release", "claims", "watch_ticket"} {
+	for _, want := range []string{"whoami", "peers", "send", "inbox", "ack", "receipts", "read", "claim", "release", "claims", "watch_ticket"} {
 		if !strings.Contains(strings.Join(names, ","), want) {
 			t.Fatal(want, names)
 		}
@@ -135,7 +135,7 @@ func TestToolAnnotationsSayWhatEachToolDoesToTheHub(t *testing.T) {
 	}
 	type hint struct{ readOnly, destructive, idempotent bool }
 	want := map[string]hint{
-		"whoami": {readOnly: true}, "peers": {readOnly: true}, "claims": {readOnly: true}, "receipts": {readOnly: true},
+		"whoami": {readOnly: true}, "peers": {readOnly: true}, "claims": {readOnly: true}, "receipts": {readOnly: true}, "read": {readOnly: true},
 		"inbox": {}, "send": {}, "claim": {}, "watch_ticket": {},
 		"ack":     {idempotent: true},
 		"release": {destructive: true, idempotent: true},
@@ -200,6 +200,7 @@ func TestToolsReachTheirRoutes(t *testing.T) {
 		{"ack", map[string]any{"delivery_id": "a/b", "attempt": 2}, "POST", "/v1/deliveries/a%2Fb/ack", "attempt", float64(2)},
 		{"ack", map[string]any{"delivery_id": "d", "handled": true}, "POST", "/v1/deliveries/d/ack", "handled", true},
 		{"receipts", map[string]any{"message_id": "ms/1"}, "GET", "/v1/messages/ms%2F1/status?execution_id=ex", "", nil},
+		{"read", map[string]any{"delivery_id": "dl/1", "offset": 7}, "GET", "/v1/deliveries/dl%2F1/body?after=7&execution_id=ex&limit=32768", "", nil},
 		{"watch_ticket", nil, "POST", "/v1/wake-tickets", "generation", float64(3)},
 	}
 	for _, tc := range cases {

@@ -138,6 +138,12 @@ func TestHTTPContract(t *testing.T) {
 	id := sent["deliveries"].([]any)[0].(map[string]any)["id"].(string)
 	inbox := request(t, s, "GET", "/v1/inbox?execution_id="+b["execution_id"].(string), nil, 200)
 	delivery := inbox["deliveries"].([]any)[0].(map[string]any)
+	// The recipient reads a body in parts, from an offset (ADR 008); another agent cannot.
+	part := request(t, s, "GET", "/v1/deliveries/"+id+"/body?execution_id="+b["execution_id"].(string)+"&after=2&limit=3", nil, 200)
+	if part["body"] != "IVA" || part["next_offset"] != float64(5) {
+		t.Fatal(part)
+	}
+	request(t, s, "GET", "/v1/deliveries/"+id+"/body?execution_id="+a["execution_id"].(string), nil, 404)
 	r = authority(b)
 	r["attempt"] = delivery["attempt"]
 	request(t, s, "POST", "/v1/deliveries/"+id+"/ack", r, 200)

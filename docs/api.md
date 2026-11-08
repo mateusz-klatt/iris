@@ -147,6 +147,16 @@ On a delivery already accepted, any live Execution of the recipient agent may ma
 with any or no `attempt`, because the work often ends in a later session. Another agent gets
 `not_found`. A repeat keeps the first time, and nothing takes handled back.
 
+`GET /v1/deliveries/{id}/body?execution_id=...&after=<offset>&limit=<bytes>` returns part of one
+delivery's body, at most `limit` bytes as encoded in JSON (32 KiB at most and by default), cut on a
+character boundary:
+`{"delivery_id":"dl_...","sender":"...","body":"...","body_bytes":14400,"offset":0,"next_offset":4000}`.
+`next_offset` is present while more remains. Only the recipient may read it, and reading changes no
+attempt and settles nothing: only an ack does (ADR 008). The MCP `inbox` gives a call's bodies a
+budget of 32 KiB together, counted as encoded in JSON, which is what a client's limit applies to. A body past it carries `body_truncated: true` beside `body_bytes`, a
+`read_offset`, and a `body_note` of Iris's own saying the body is not the whole message, and the
+`read` tool returns the rest.
+
 `GET /v1/messages/{id}/status?execution_id=...` shows the sender what became of its message:
 
 ```json
@@ -220,6 +230,7 @@ it does not count mail that was fetched and not yet acknowledged.
 | `inbox` | Fetch messages |
 | `ack` | Acknowledge a delivery; with `handled`, say it was acted on |
 | `receipts` | Show the recipients' states of a message you sent |
+| `read` | Read the rest of a delivery's body that `inbox` cut |
 | `claim` | Make an explicit claim |
 | `release` | Release a claim, or all |
 | `claims` | List live claims |
