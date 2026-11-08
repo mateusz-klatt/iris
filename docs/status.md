@@ -97,6 +97,9 @@ Against the production hub, over TLS:
 
 - **Other clients on real hosts.** Codex, Cursor, Antigravity, Grok and Kimi are covered only by
   captured payloads and tests. Copilot has run live on Linux only.
+- **Remote execution targets are unprotected.** A client whose tools run on a remote host, in a
+  container or in a cloud sandbox changes files Iris neither claims nor checks: the hook sees only the
+  machine it runs on (ADR 009). Detection waits for a captured remote payload.
 - **No release.** No package channel is published. Windows signing is chosen (#35) but not set up. macOS
   notarization is wired and inert until the owner's Developer ID exists (#57). Real signing and
   notarization have not run.
