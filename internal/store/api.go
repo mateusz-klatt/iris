@@ -15,8 +15,12 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 	var out map[string]any
 	var refused *Error
 	err := s.transact(ctx, func(t *transaction) error {
-		if err := t.expire(); err != nil {
-			return err
+		// A merge plan and a refused merge must leave even expired leases and
+		// delivery attempts untouched. The merge checks liveness without expiring.
+		if operation != "merge" {
+			if err := t.expire(); err != nil {
+				return err
+			}
 		}
 		var err error
 		switch operation {
@@ -95,6 +99,8 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 			out, err = t.hooksSeen(r.Host)
 		case "forget":
 			out, err = t.forget(r)
+		case "merge":
+			out, err = t.mergeRepositories(r)
 		case "monitor_cursor":
 			out, err = t.monitorCursor(r)
 		case "validate":

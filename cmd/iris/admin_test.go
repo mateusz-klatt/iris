@@ -46,10 +46,42 @@ func TestAdminForgetReportsARefusal(t *testing.T) {
 }
 
 func TestAdminUsage(t *testing.T) {
-	for _, args := range [][]string{nil, {"nope"}, {"forget"}, {"forget", "--agent", "a", "--repository", "r"}, {"forget", "--bogus"}, {"forget", "--agent", "a", "extra"}, {"restore-check", "only-one"}, {"backup", "only-one"}} {
+	for _, args := range [][]string{nil, {"nope"}, {"forget"}, {"forget", "--agent", "a", "--repository", "r"}, {"forget", "--bogus"}, {"forget", "--agent", "a", "extra"}, {"restore-check", "only-one"}, {"backup", "only-one"}, {"merge"}, {"merge", "--from", "a"}, {"merge", "--into", "b"}, {"merge", "--from", "a", "--into", "a"}, {"merge", "--bogus"}, {"merge", "--from", "a", "--into", "b", "extra"}} {
 		if err := runAdmin(args); err == nil || err.Error() != adminUsage {
 			t.Errorf("%v: %v", args, err)
 		}
+	}
+}
+
+func TestAdminMergeSendsThePlanAndApplyRequests(t *testing.T) {
+	var got []map[string]any
+	client := tokenClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/admin/merge" || r.Method != "POST" {
+			t.Errorf("%s %s", r.Method, r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		got = append(got, body)
+		_ = json.NewEncoder(w).Encode(map[string]any{"dry_run": body["dry_run"], "counts": map[string]int{"Message": 3}})
+	})
+	for _, dry := range []bool{true, false} {
+		args := []string{"merge", "--from", "rp_split", "--into", "rp_canonical"}
+		if dry {
+			args = append(args, "--dry-run")
+		}
+		var out bytes.Buffer
+		if err := adminCommand(context.Background(), client, args, &out); err != nil {
+			t.Fatal(err)
+		}
+		var report map[string]any
+		if err := json.Unmarshal(out.Bytes(), &report); err != nil || report["dry_run"] != dry || report["counts"].(map[string]any)["Message"] != float64(3) {
+			t.Fatalf("%v: %s", err, out.String())
+		}
+	}
+	if len(got) != 2 || got[0]["from_repository_id"] != "rp_split" || got[0]["into_repository_id"] != "rp_canonical" || got[0]["dry_run"] != true || got[1]["dry_run"] != false {
+		t.Fatal(got)
 	}
 }
 

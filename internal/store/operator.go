@@ -3,12 +3,24 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 )
 
 // The operator has a mailbox per repository, but never a live session or lease.
 func (t *transaction) human(repo string) (string, error) {
-	agent := "human_" + repo
-	_, err := t.exec("INSERT OR IGNORE INTO Agent VALUES(?,?,?,?,?,?,1)", agent, agent, repo, "operator", "human", "")
+	// A merge preserves the source's mailbox id and may leave it as the only
+	// human mailbox here. The first slot remains the destination's address when
+	// both repositories already had human mail.
+	var agent string
+	err := t.row("SELECT id FROM Agent WHERE repository_id=? AND host='operator' AND client='human' AND worktree='' ORDER BY slot,id LIMIT 1", repo).Scan(&agent)
+	if err == nil {
+		return agent, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", err
+	}
+	agent = "human_" + repo
+	_, err = t.exec("INSERT OR IGNORE INTO Agent VALUES(?,?,?,?,?,?,1)", agent, agent, repo, "operator", "human", "")
 	return agent, err
 }
 func (t *transaction) humanSender(r Request) (execution, error) {

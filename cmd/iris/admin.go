@@ -14,7 +14,7 @@ import (
 	"github.com/mateusz-klatt/iris/internal/restorecheck"
 )
 
-const adminUsage = "usage: iris admin forget (--repository <id> | --agent <name>) [--dry-run]\n       iris admin contact --repository <id> (<agent> | --clear)\n       iris admin backup <hub database> <new backup file>\n       iris admin restore-check <backup file> <empty scratch directory>"
+const adminUsage = "usage: iris admin forget (--repository <id> | --agent <name>) [--dry-run]\n       iris admin merge --from <id> --into <id> [--dry-run]\n       iris admin contact --repository <id> (<agent> | --clear)\n       iris admin backup <hub database> <new backup file>\n       iris admin restore-check <backup file> <empty scratch directory>"
 
 func runAdmin(args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -32,6 +32,16 @@ func adminCommand(ctx context.Context, client *hubclient.Client, args []string, 
 	var route string
 	var body map[string]any
 	switch args[0] {
+	case "merge":
+		fs := flag.NewFlagSet("admin merge", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		from := fs.String("from", "", "source repository id")
+		into := fs.String("into", "", "destination repository id")
+		dryRun := fs.Bool("dry-run", false, "report what would move and change nothing")
+		if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 0 || *from == "" || *into == "" || *from == *into {
+			return errors.New(adminUsage)
+		}
+		route, body = "/v1/admin/merge", map[string]any{"from_repository_id": *from, "into_repository_id": *into, "dry_run": *dryRun}
 	case "backup":
 		// Local too: it reads the database file the hub serves, on the hub's machine, while
 		// the hub runs.
