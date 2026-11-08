@@ -127,10 +127,8 @@ func (t *transaction) reconcile(r Request) (map[string]any, error) {
 // maxClaims is claimLimit's bound on the live claims of one Execution.
 const maxClaims = 500
 
-// autoClaim gives e an automatic claim on each path no other Execution holds, as touch does,
-// and renews e's own automatic claims, up to the claim limit. It returns the paths e now holds
-// and how many it could not claim.
-// releaseLeft releases e's own auto claims on paths that left its status.
+// releaseLeft releases e's own auto claims on paths that left its status. Both ends of a staged
+// rename stay in the status, so neither is released before the rename is committed.
 func (t *transaction) releaseLeft(e execution, paths []string) error {
 	if len(paths) == 0 {
 		return nil
@@ -163,6 +161,9 @@ func (t *transaction) releaseLeft(e execution, paths []string) error {
 	return t.released(e.Repo, e.ID)
 }
 
+// autoClaim gives e an automatic claim on each path no other Execution holds, as touch does,
+// and renews e's own automatic claims, up to the claim limit. It returns the paths e now holds
+// and how many it could not claim.
 func (t *transaction) autoClaim(e execution, paths []string) ([]string, int, error) {
 	policy, _, err := t.policy(e.Repo)
 	if err != nil {
