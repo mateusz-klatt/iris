@@ -357,7 +357,7 @@ const translation = {
     waiting: "पहले सत्र की प्रतीक्षा हो रही है।",
     doctorTitle: "क्लाइंट",
     doctorHint: "हर क्लाइंट की स्थिति पिछली doctor रिपोर्ट से आती है। इसे ताज़ा करने के लिए इस कंप्यूटर पर {{command}} चलाएँ।",
-    doctorReload: "अंतिम doctor रिपोर्ट फिर से लोड करें",
+    doctorReload: "नवीनतम doctor रिपोर्ट फिर से लोड करें",
     retry: "फिर से कोशिश करें",
     doctorMissing: "अभी तक कोई doctor रिपोर्ट सहेजी नहीं गई है। इस कंप्यूटर पर {{command}} चलाएँ।",
     statusOk: "Hook प्राप्त हुआ",
