@@ -505,35 +505,56 @@ func (t *transaction) end(r Request) (map[string]any, error) {
 	return map[string]any{}, t.expire()
 }
 
-// handOver moves from's agent's unacknowledged mail to the agent of the live Execution to,
-// of the same host and client, and wakes it. An MCP that had to register an Execution of its
-// own does this when it moves to the session's hook's, so mail sent to the stray mailbox in
-// the meantime is not stranded (D6).
+// handOver moves from's agent's unacknowledged mail to the agent of the live Execution to, and
+// wakes it. Only an Execution an MCP registered may hand over, and only to the one the client
+// process rung finds for it: top-level, of the same host, client, process id and start time.
+// An MCP that had to register its own does this when it moves to the session's hook's, so mail
+// sent to the stray mailbox in the meantime is not stranded (D6).
 func (t *transaction) handOver(from execution, to string) error {
 	dst, err := t.live(to, 0)
-	if err != nil || dst.Host != from.Host || dst.Client != from.Client {
-		return fail("bad_request", "mail can be handed only to a live Execution of the same host and client")
+	if err != nil || !from.Heartbeat || from.PID <= 0 || dst.Host != from.Host || dst.Client != from.Client ||
+		dst.PID != from.PID || dst.PIDStart != from.PIDStart || dst.Parent.Valid {
+		return fail("bad_request", "mail can be handed only from an MCP's own Execution to its client process's session")
 	}
-	rows, err := t.rows("SELECT id FROM Delivery WHERE recipient_agent_id=? AND id NOT IN (SELECT delivery_id FROM Ack)", from.AgentID)
+	// A message sent to both mailboxes is already the destination's: the stray copy is settled
+	// rather than moved onto it, which the one-delivery-per-recipient rule forbids.
+	rows, err := t.rows("SELECT id,attempt,EXISTS(SELECT 1 FROM Delivery o WHERE o.message_id=d.message_id AND o.recipient_agent_id=?) FROM Delivery d WHERE recipient_agent_id=? AND id NOT IN (SELECT delivery_id FROM Ack)", dst.AgentID, from.AgentID)
 	if err != nil {
 		return err
 	}
-	var ids []string
+	type stray struct {
+		id      string
+		attempt int64
+		dup     bool
+	}
+	var all []stray
 	for rows.Next() {
-		var id string
-		rows.Scan(&id)
-		ids = append(ids, id)
+		var d stray
+		rows.Scan(&d.id, &d.attempt, &d.dup)
+		all = append(all, d)
 	}
 	err = rows.Err()
 	_ = rows.Close()
 	if err != nil {
 		return err
 	}
-	for _, id := range ids {
-		if _, err = t.exec("UPDATE Delivery SET recipient_agent_id=?,execution_id=NULL WHERE id=?", dst.AgentID, id); err != nil {
+	now := t.s.clock.Now().UnixMilli()
+	for _, d := range all {
+		if d.dup {
+			// An acknowledgement names an attempt above zero; settling counts as one.
+			attempt := max(d.attempt, 1)
+			if _, err = t.exec("UPDATE Delivery SET execution_id=?,attempt=?,attention=0 WHERE id=?", from.ID, attempt, d.id); err != nil {
+				return err
+			}
+			if _, err = t.exec("INSERT INTO Ack(delivery_id,execution_id,attempt,acked_ms) VALUES(?,?,?,?)", d.id, from.ID, attempt, now); err != nil {
+				return err
+			}
+			continue
+		}
+		if _, err = t.exec("UPDATE Delivery SET recipient_agent_id=?,execution_id=NULL,attention=1 WHERE id=?", dst.AgentID, d.id); err != nil {
 			return err
 		}
-		if err = t.event(dst.AgentID, "", "inbox_changed", id); err != nil {
+		if err = t.event(dst.AgentID, "", "inbox_changed", d.id); err != nil {
 			return err
 		}
 	}

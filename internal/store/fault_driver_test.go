@@ -168,10 +168,22 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 				route = "claim"
 				r = claimRequest(b, "conflicting-claim", "held", "exact")
 			case "end-handover":
-				// b holds unacknowledged mail; ending it hands that to a, of the same host and client.
+				// An MCP's stray Execution with mail ends, handing it to its process's hook's.
 				route = "end"
-				r = b
-				r.HandOver = a.ExecutionID
+				same := Request{Client: "codex", Host: "host", Cwd: "/repo/w1", Worktree: "/repo/w1", ClientPID: 6, ClientPIDStartMS: 6}
+				hookReq, strayReq := same, same
+				hookReq.SessionID, hookReq.Source = "handover-hook", "hook"
+				strayReq.SessionID, strayReq.Source = "handover-stray", "mcp"
+				hook := call(t, s, "sessions", hookReq)
+				stray := call(t, s, "sessions", strayReq)
+				note := a
+				note.Key, note.To, note.Body = "handover", []string{stray["agent"].(map[string]any)["name"].(string)}, "stray mail"
+				call(t, s, "messages", note)
+				// One to both mailboxes, whose stray copy is settled rather than moved.
+				both := a
+				both.Key, both.To, both.Body = "handover-both", []string{stray["agent"].(map[string]any)["name"].(string), hook["agent"].(map[string]any)["name"].(string)}, "to both"
+				call(t, s, "messages", both)
+				r = Request{ExecutionID: stray["execution_id"].(string), Generation: stray["generation"].(int64), HandOver: hook["execution_id"].(string)}
 			case "reconcile-session":
 				// The combined form: the session registers and reconciles in one transaction.
 				route = "reconcile"

@@ -74,9 +74,13 @@ It returns `{"execution_id":"...","generation":1,"agent":{...}}`, or `unbound`, 
 
 `POST /v1/executions/{id}/end` is a best-effort end of session. It takes `{"generation":1}`. With
 `"hand_over":"ex_..."` it first moves the Execution's agent's unacknowledged deliveries to the agent
-of that live Execution, of the same host and client, and wakes it; otherwise it is refused as
-`bad_request`. An MCP server uses it when it gives up an Execution it had to register for the
-session's hook's (D6), so mail sent to the stray mailbox is not stranded. Ending again moves nothing.
+of that live Execution and wakes it, each moved delivery asking for attention again. A message the
+destination already has, sent to both mailboxes, is settled in the stray mailbox instead, so it
+arrives once. Only an Execution an MCP registered may hand over, and only to the one the client
+process rung finds for it: top-level, of the same host, client, process id and start time; anything
+else is refused as `bad_request`. An MCP server uses it when it gives up an Execution it had to
+register for the session's hook's (D6), so mail sent to the stray mailbox is not stranded. Ending
+again moves nothing.
 
 ## Claims
 
