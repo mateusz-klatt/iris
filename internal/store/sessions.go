@@ -364,7 +364,7 @@ func (t *transaction) session(r Request) (map[string]any, error) {
 	if r.ParentSessionID != "" {
 		var parentID string
 		if err = t.row("SELECT id FROM Execution WHERE host_id=? AND client=? AND session_id=? AND repository_id=? AND state='active'", r.Host, r.Client, r.ParentSessionID, repo).Scan(&parentID); err != nil {
-			return nil, fail("bad_request", "parent session is not active in this repository")
+			return nil, absent(err, "bad_request", "parent session is not active in this repository")
 		}
 		parent = parentID
 	}
@@ -499,7 +499,7 @@ func (t *transaction) end(r Request) (map[string]any, error) {
 	var generation int64
 	var state string
 	if err := t.row("SELECT generation,state FROM Execution WHERE id=?", r.ExecutionID).Scan(&generation, &state); err != nil {
-		return nil, fail("lost", "unknown Execution")
+		return nil, absent(err, "lost", "unknown Execution")
 	}
 	if generation != r.Generation {
 		return nil, fail("lost", "wrong generation")
@@ -529,6 +529,12 @@ func (t *transaction) end(r Request) (map[string]any, error) {
 // sent to the stray mailbox in the meantime is not stranded (D6).
 func (t *transaction) handOver(from execution, to string) error {
 	dst, err := t.live(to, 0)
+	if err != nil {
+		var domain *Error
+		if !errors.As(err, &domain) {
+			return err
+		}
+	}
 	if err != nil || !from.Heartbeat || from.PID <= 0 || dst.Host != from.Host || dst.Client != from.Client ||
 		dst.PID != from.PID || dst.PIDStart != from.PIDStart || dst.Parent.Valid {
 		return fail("bad_request", "mail can be handed only from an MCP's own Execution to its client process's session")

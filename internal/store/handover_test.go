@@ -28,7 +28,7 @@ func TestEndingAStrayExecutionHandsItsMailToTheHooks(t *testing.T) {
 	// its own mail away.
 	other := call(t, s, "sessions", Request{Client: "claude", Host: "host", SessionID: "other", Cwd: "/repo/w", Worktree: "/repo/w", RemoteURL: "https://example.com/team/project.git", RootCommit: "root", Source: "hook", ClientPID: 5151, ClientPIDStartMS: 99})
 	sub := call(t, s, "sessions", Request{Client: "claude", Host: "host", SessionID: "sub", ParentSessionID: "session-a", Cwd: "/repo/w", Worktree: "/repo/w", RemoteURL: "https://example.com/team/project.git", RootCommit: "root", Source: "hook", ClientPID: 4242, ClientPIDStartMS: 77})
-	for _, to := range []any{other["execution_id"], sub["execution_id"]} {
+	for _, to := range []any{"missing-execution", other["execution_id"], sub["execution_id"]} {
 		refused := strayReq
 		refused.HandOver = to.(string)
 		expectError(t, s, "end", refused, "bad_request")

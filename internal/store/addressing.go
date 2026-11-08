@@ -104,7 +104,7 @@ func (t *transaction) contact(r Request) (map[string]any, error) {
 	if r.Agent != "" {
 		var id string
 		if err := t.row("SELECT id FROM Agent WHERE (name=? OR id=?) AND repository_id=? AND client<>'human'", r.Agent, r.Agent, repo).Scan(&id); err != nil {
-			return nil, fail("bad_request", "the contact must be an agent of this repository")
+			return nil, absent(err, "bad_request", "the contact must be an agent of this repository")
 		}
 		agent = id
 	}
