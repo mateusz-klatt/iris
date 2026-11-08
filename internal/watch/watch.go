@@ -157,6 +157,10 @@ type Runner struct {
 	acked       int64
 	ackedStream string
 	received    func(Frame)
+	// checkpointed, when set, sees each cursor once its save has finished on this side. A test
+	// that watches the hub instead sees the save before the client has its answer, and must
+	// not stop the client then.
+	checkpointed func(int64)
 }
 
 func (r *Runner) wait(d time.Duration) <-chan time.Time {
@@ -419,5 +423,8 @@ func (r *Runner) checkpoint(ctx context.Context, b binding.Bound, cursor int64, 
 		return err
 	}
 	r.acked, r.ackedStream = cursor, stream
+	if r.checkpointed != nil {
+		r.checkpointed(cursor)
+	}
 	return nil
 }

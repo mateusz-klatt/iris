@@ -31,6 +31,9 @@ func TestHeldFramesAreSavedOnlyAfterTheirLineIsPrinted(t *testing.T) {
 				mu.Lock()
 				saved = append(saved, n)
 				mu.Unlock()
+				// The hub has recorded the save but the client does not have its answer yet, which
+				// is where a test that watches the hub would stop the client too early.
+				time.Sleep(50 * time.Millisecond)
 			}
 			_, _ = w.Write([]byte(`{"pending":1}`))
 			return
@@ -52,9 +55,10 @@ func TestHeldFramesAreSavedOnlyAfterTheirLineIsPrinted(t *testing.T) {
 
 	clock := &testClock{at: time.Unix(1_800_000_000, 0)}
 	counted := make(chan int64, 2)
+	checkpoints := make(chan int64, 2)
 	output := &lines{}
 	r := &Runner{Resolver: &binding.Resolver{Hub: &hubclient.Client{Config: testConfig{url: srv.URL}}}, Now: clock.Now,
-		received: func(f Frame) { counted <- f.Cursor }}
+		received: func(f Frame) { counted <- f.Cursor }, checkpointed: func(c int64) { checkpoints <- c }}
 	done := make(chan error, 1)
 	cursor, stream := int64(0), ""
 	go func() {
@@ -76,12 +80,21 @@ func TestHeldFramesAreSavedOnlyAfterTheirLineIsPrinted(t *testing.T) {
 		t.Fatalf("saved %v while frame 4 was held, want [3]", got)
 	}
 	clock.Add(2 * time.Minute)
-	for !slices.Equal(snapshot(), []int64{3, 4}) {
+	// Wait for the client to finish both saves, not for the hub to see them: the hub records a
+	// save before the client has its answer, and stopping the client then fails that save
+	// (seen once on macOS under the full suite).
+	for _, want := range []int64{3, 4} {
 		select {
+		case got := <-checkpoints:
+			if got != want {
+				t.Fatalf("checkpointed %d, want %d", got, want)
+			}
 		case <-ctx.Done():
 			t.Fatalf("saved %v after the held line was printed, want [3 4]; output %q", snapshot(), output.String())
-		case <-time.After(10 * time.Millisecond):
 		}
+	}
+	if got := snapshot(); !slices.Equal(got, []int64{3, 4}) {
+		t.Fatalf("saved %v, want [3 4]", got)
 	}
 	if want := "Iris: 1 new message. Use the inbox tool.\nIris: 1 new message. Use the inbox tool.\n"; output.String() != want {
 		t.Fatalf("output %q", output.String())
