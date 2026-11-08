@@ -241,6 +241,8 @@ reached the hub is absent. `iris doctor` puts it in each row's `last_hook_at`.
 
 `GET /v1/status` returns only `{"status":"ok"}` without a valid bearer token. With a valid
 bearer token it returns version, stream id, boot epoch and counts.
+The version includes the build label, full commit and dirty state, exactly as `iris version`
+on the hub. Missing build metadata is reported as unknown.
 
 ## Events
 

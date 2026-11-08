@@ -13,6 +13,7 @@ import (
 	"testing"
 
 	"github.com/mateusz-klatt/iris/internal/binding"
+	"github.com/mateusz-klatt/iris/internal/buildinfo"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -66,6 +67,14 @@ func (f *fakeHub) last(t *testing.T) seen {
 func connect(t *testing.T, f *fakeHub) *mcp.ClientSession {
 	t.Helper()
 	return connectHandler(t, f)
+}
+
+func TestInitializationReportsTheBuildIdentity(t *testing.T) {
+	session := connect(t, &fakeHub{})
+	info := session.InitializeResult().ServerInfo
+	if info.Name != "iris" || info.Version != buildinfo.String() {
+		t.Fatalf("server identity: %+v", info)
+	}
 }
 
 // connectHandler is connect for a hub that does more than a fakeHub.

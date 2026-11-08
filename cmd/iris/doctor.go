@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
+	"github.com/mateusz-klatt/iris/internal/buildinfo"
 	"io"
 	"os"
 	"os/signal"
@@ -48,7 +49,7 @@ func runDoctorIO(ctx context.Context, args []string, stdin io.Reader, stdout, st
 		return 1
 	}
 	if *bundle {
-		raw, _ := json.MarshalIndent(doctor.NewBundle(res, version, time.Now()), "", "  ") // plain fields always encode
+		raw, _ := json.MarshalIndent(doctor.NewBundle(res, buildinfo.String(), time.Now()), "", "  ") // plain fields always encode
 		_, _ = fmt.Fprintln(stdout, string(raw))
 		return res.ExitCode()
 	}

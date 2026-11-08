@@ -30,7 +30,14 @@ notarization. Replace `brews` before GoReleaser v3.
 
 The before hook runs `make web`, requiring the Node version in `web/package.json`
 and npm. Release builds embed the rebuilt console, use `CGO_ENABLED=0`, `-trimpath`,
-and set `main.version` through ldflags. Outputs cover Linux, macOS and Windows on
+and stamp the release version, full commit and source dirty state through ldflags, using
+GoReleaser's Git metadata captured before the console build. `iris version`, the doctor bundle,
+MCP server identity and authenticated hub status use the same value, such as
+`1.2.3 (commit <full hash>; clean)`. Plain `go build` and `make build` use Go's embedded VCS
+metadata; a source archive or `-buildvcs=false` without explicit linker metadata reports unknown
+identity rather than claiming a clean checkout. `make build VERSION=...` overrides the version
+label. These fields identify a build; they do not attest to its provenance.
+Outputs cover Linux, macOS and Windows on
 amd64 and arm64: four tar.gz archives, two Windows zip archives, checksums, and
 Linux deb/rpm packages named `iris`. Package-manager manifests remain local. Their explicit download URL templates refer to
 future GitHub assets; private snapshot assets are not public install channels.
