@@ -398,6 +398,9 @@ const translation = {
     detail: "Részletek",
     version: "Verzió",
     checkedAt: "Ellenőrizve: {{date}}",
+    review: "Ellenőrzés",
+    reviewTitle: "Ellenőrizze küldés előtt",
+    reviewBack: "Vissza a piszkozathoz",
   },
 } satisfies TranslationResource;
 

@@ -398,6 +398,9 @@ const translation = {
     detail: "विवरण",
     version: "संस्करण",
     checkedAt: "{{date}} को जाँचा गया",
+    review: "समीक्षा करें",
+    reviewTitle: "भेजने से पहले जाँचें",
+    reviewBack: "ड्राफ़्ट पर वापस जाएँ",
   },
 } satisfies TranslationResource;
 

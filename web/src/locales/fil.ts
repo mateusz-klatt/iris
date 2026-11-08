@@ -398,6 +398,9 @@ const translation = {
     detail: "Detalye",
     version: "Bersyon",
     checkedAt: "Nasuri noong {{date}}",
+    review: "Suriin",
+    reviewTitle: "Suriin bago ipadala",
+    reviewBack: "Bumalik sa draft",
   },
 } satisfies TranslationResource;
 

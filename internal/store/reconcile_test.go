@@ -116,3 +116,83 @@ func TestReconciliationRespectsTheClaimLimit(t *testing.T) {
 		t.Fatalf("%d claimed, message %q", len(claimed), out["message"])
 	}
 }
+
+// A path that left the status was committed, stashed or restored by git in this worktree only.
+// Nothing changed in the holder's worktree, so it is no shell edit to warn about; only paths
+// still changed after the command are checked.
+func TestReconciliationWarnsOnlyAboutPathsStillChanged(t *testing.T) {
+	s, _, _ := testStore(t)
+	holder, _ := session(t, s, 1)
+	shell, _ := session(t, s, 2)
+	call(t, s, "claim", claimRequest(holder, "held", "theirs.txt", "exact"))
+	shell.Kind = "before"
+	shell.Status = map[string]string{"theirs.txt": " M"}
+	call(t, s, "reconcile", shell)
+	shell.Kind = "after"
+	shell.Status = map[string]string{}
+	if out := call(t, s, "reconcile", shell); out["message"] != "" || len(out["conflicts"].([]map[string]any)) != 0 {
+		t.Fatalf("a path git restored warned: %v", out)
+	}
+}
+
+// An auto claim means "this session has uncommitted changes here" (D10). When a shell command
+// takes a path out of the status, by commit or by stash, the session's own auto claim on it is
+// released and whoever waited for the path is woken. An explicit claim stays, and so does any
+// claim of another session.
+func TestAPathThatLeavesTheStatusReleasesItsAutoClaim(t *testing.T) {
+	s, _, _ := testStore(t)
+	shell, joined := session(t, s, 1)
+	other, _ := session(t, s, 2)
+	repo := Request{RepositoryID: joined["repository_id"].(string)}
+	call(t, s, "claim", claimRequest(shell, "explicit", "explicit.txt", "exact"))
+	call(t, s, "claim", claimRequest(other, "theirs", "theirs.txt", "exact"))
+	shell.Kind = "before"
+	shell.Status = map[string]string{}
+	call(t, s, "reconcile", shell)
+	shell.Kind = "after"
+	shell.Status = map[string]string{"committed.txt": "??", "stashed.txt": " M", "explicit.txt": " M", "theirs.txt": " M"}
+	call(t, s, "reconcile", shell)
+	// The other session waits for committed.txt, which the shell session now holds.
+	if got := call(t, s, "touch", touchRequest(other, "wait", "committed.txt")); got["action"] != "deny" {
+		t.Fatalf("committed.txt was not claimed: %v", got)
+	}
+	held := func() map[string]string {
+		by := map[string]string{}
+		for _, c := range call(t, s, "claims", repo)["claims"].([]map[string]any) {
+			by[c["path"].(string)] = c["origin"].(string)
+		}
+		return by
+	}
+	if h := held(); h["committed.txt"] != "auto" || h["stashed.txt"] != "auto" {
+		t.Fatalf("before the commit: %v", h)
+	}
+	available := func() int {
+		n := 0
+		for _, e := range call(t, s, "events", Request{ExecutionID: other.ExecutionID, After: 0})["events"].([]map[string]any) {
+			if e["kind"] == "claim_available" {
+				n++
+			}
+		}
+		return n
+	}
+	before := available()
+	// git commit and git stash: every path leaves the status.
+	shell.Kind = "before"
+	call(t, s, "reconcile", shell)
+	shell.Kind = "after"
+	shell.Status = map[string]string{}
+	call(t, s, "reconcile", shell)
+	h := held()
+	if _, ok := h["committed.txt"]; ok {
+		t.Fatalf("a committed path kept its auto claim: %v", h)
+	}
+	if _, ok := h["stashed.txt"]; ok {
+		t.Fatalf("a stashed path kept its auto claim: %v", h)
+	}
+	if h["explicit.txt"] != "explicit" || h["theirs.txt"] != "explicit" {
+		t.Fatalf("an explicit claim or another session's was released: %v", h)
+	}
+	if available() != before+1 {
+		t.Fatal("the session waiting for committed.txt was not woken")
+	}
+}

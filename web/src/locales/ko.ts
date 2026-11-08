@@ -398,6 +398,9 @@ const translation = {
     detail: "세부 정보",
     version: "버전",
     checkedAt: "{{date}}에 확인함",
+    review: "검토",
+    reviewTitle: "보내기 전에 확인",
+    reviewBack: "초안으로 돌아가기",
   },
 } satisfies TranslationResource;
 
