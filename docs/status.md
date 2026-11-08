@@ -106,8 +106,10 @@ Against the production hub, over TLS:
 - **Not measured:** Defender, the SmartScreen window, Apple silicon, Gatekeeper's dialog and "Open
   Anyway", and a Mac or PC whose policy forbids unsigned code.
 - **An internal/integrate test that fails under load.** One run of four failed on Windows with every
-  CPU busy. It has not reproduced since, and its name was not captured. Pending a -v loop under load
-  when the PC is free.
+  CPU busy. It has not reproduced since, and its name was not captured. On 2026-11-08 about 470 runs
+  of `go test -v ./internal/integrate/` under load on all 16 cores of WSL on the same PC passed, with
+  48,902 test passes and none failing, so it did not reproduce on Linux. A -v loop under load on
+  Windows itself is still pending.
 - **Services:** loading the LaunchAgent at login, the `systemd --user` unit starting at boot from
   linger alone, without a login session (it needs the Codex desktop app closed first), and the
   service exit codes on Windows.
