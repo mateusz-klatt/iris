@@ -1,0 +1,16 @@
+{
+  "session_id": "76d28899-a30f-4b4f-9598-1fce6bc60152",
+  "transcript_path": "C:\\Users\\user\\.claude\\projects\\C--workspace-project\\76d28899-a30f-4b4f-9598-1fce6bc60152.jsonl",
+  "cwd": "C:\\workspace\\project",
+  "prompt_id": "fa8a2292-02a2-4bcd-b3e2-8acb65ebbe84",
+  "permission_mode": "bypassPermissions",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PreToolUse",
+  "tool_name": "TaskStop",
+  "tool_input": {
+    "task_id": "bguedr6th"
+  },
+  "tool_use_id": "toolu_01ML52guJBoybuMwGLdoWYyV"
+}

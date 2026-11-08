@@ -1,0 +1,28 @@
+{
+  "hookEventName": "pre_tool_use",
+  "sessionId": "01a1add0-deb3-7f23-969a-06a73e70b876",
+  "cwd": "/workspace/project",
+  "workspaceRoot": "/workspace/project",
+  "timestamp": "2026-11-05T22:25:15.752292382+00:00",
+  "transcriptPath": "/workspace/project/.exp/home/.grok/sessions//workspace/project_ENC/01a1add0-deb3-7f23-969a-06a73e70b876/updates.jsonl",
+  "permissionMode": "bypassPermissions",
+  "toolName": "spawn_subagent",
+  "toolUseId": "call-6bd1f14a-2df0-49c1-a6e9-8700e29d3b86-0",
+  "toolInput": {
+    "description": "printf sub-ok reply",
+    "prompt": "Your only task: run this exact shell command: printf 'sub-ok\\n'\n\nThen reply with exactly: sub-ok\n\nDo not edit any files. Do not do anything else.",
+    "background": false
+  },
+  "toolInputTruncated": false,
+  "hook_event_name": "PreToolUse",
+  "session_id": "01a1add0-deb3-7f23-969a-06a73e70b876",
+  "transcript_path": "/workspace/project/.exp/home/.grok/sessions//workspace/project_ENC/01a1add0-deb3-7f23-969a-06a73e70b876/updates.jsonl",
+  "permission_mode": "bypassPermissions",
+  "tool_name": "spawn_subagent",
+  "tool_input": {
+    "description": "printf sub-ok reply",
+    "prompt": "Your only task: run this exact shell command: printf 'sub-ok\\n'\n\nThen reply with exactly: sub-ok\n\nDo not edit any files. Do not do anything else.",
+    "background": false
+  },
+  "tool_use_id": "call-6bd1f14a-2df0-49c1-a6e9-8700e29d3b86-0"
+}

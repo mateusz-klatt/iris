@@ -1,0 +1,13 @@
+{
+  "hook_event_name": "UserPromptSubmit",
+  "session_id": "session_114df8a5-1263-4744-bd4a-17c39274ffd6",
+  "cwd": "/workspace/project/hooklab",
+  "client_type": "kimi_code_cli",
+  "prompt": [
+    {
+      "type": "text",
+      "text": "Create a file named deny-me.txt containing the word hello, then run the shell command pwd. Reply with one word."
+    }
+  ],
+  "is_steer": false
+}

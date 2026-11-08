@@ -1,0 +1,21 @@
+{
+  "hookEventName": "stop",
+  "sessionId": "01a1add1-712e-7e22-a2a9-97ad1e9005b9",
+  "cwd": "/workspace/project",
+  "workspaceRoot": "/workspace/project",
+  "timestamp": "2026-11-05T22:25:54.559311801+00:00",
+  "transcriptPath": "/workspace/project/.exp/home/.grok/sessions//workspace/project_ENC/01a1add1-712e-7e22-a2a9-97ad1e9005b9/updates.jsonl",
+  "promptId": "335c3f69-cdf1-4929-a84c-771df8da5107",
+  "permissionMode": "bypassPermissions",
+  "reason": "end_turn",
+  "stopHookActive": false,
+  "lastAssistantMessage": "Wrote `note.txt` with the exact contents `hello`.",
+  "backgroundTasks": [],
+  "sessionCrons": [],
+  "hook_event_name": "Stop",
+  "session_id": "01a1add1-712e-7e22-a2a9-97ad1e9005b9",
+  "transcript_path": "/workspace/project/.exp/home/.grok/sessions//workspace/project_ENC/01a1add1-712e-7e22-a2a9-97ad1e9005b9/updates.jsonl",
+  "permission_mode": "bypassPermissions",
+  "stop_hook_active": false,
+  "last_assistant_message": "Wrote `note.txt` with the exact contents `hello`."
+}

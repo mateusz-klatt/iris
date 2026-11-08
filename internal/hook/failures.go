@@ -1,0 +1,485 @@
+package hook
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/url"
+	"os"
+	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
+	"sync"
+	"syscall"
+	"time"
+
+	"github.com/mateusz-klatt/iris/internal/hubclient"
+)
+
+const failureLogLimit = 64 << 10
+const failureLogBudget = 5 * time.Millisecond
+
+// Failure is a payload-free diagnostic for doctor. Time is in UTC.
+type Failure struct {
+	Time   time.Time `json:"time"`
+	Client string    `json:"client"`
+	Event  string    `json:"event"`
+	Stage  string    `json:"stage"`
+	Error  string    `json:"error"`
+	// Shape is set only when a payload could not be decoded, so the next such line says which
+	// tool and fields the client sent. It holds names, never values, and stays in this local
+	// log: a doctor bundle, which is built field by field, carries none of it.
+	Shape *PayloadShape `json:"shape,omitempty"`
+}
+
+// PayloadShape is the tool a payload named and its top-level field names, each bounded.
+type PayloadShape struct {
+	Tool string   `json:"tool,omitempty"`
+	Keys []string `json:"keys,omitempty"`
+}
+
+// shapeKeys bounds how many field names a shape keeps.
+const shapeKeys = 32
+
+// payloadShape reads the shape of a payload that is a JSON object, and nil for any other.
+func payloadShape(payload []byte) *PayloadShape {
+	var top map[string]json.RawMessage
+	if json.Unmarshal(payload, &top) != nil || top == nil {
+		return nil
+	}
+	shape := &PayloadShape{}
+	for key, raw := range top {
+		shape.Keys = append(shape.Keys, boundedLabel(key))
+		var name string
+		if shape.Tool == "" && slices.Contains([]string{"tool_name", "toolName", "tool"}, key) && json.Unmarshal(raw, &name) == nil {
+			shape.Tool = boundedLabel(name)
+		}
+	}
+	slices.Sort(shape.Keys)
+	if len(shape.Keys) > shapeKeys {
+		shape.Keys = shape.Keys[:shapeKeys]
+	}
+	return shape
+}
+
+// Degraded reports whether f shows only a shell reconcile that ran past its budget, as a big
+// or cold worktree or a loaded machine makes git status do. The hook still answered and the
+// command still ran; only that one reconciliation was skipped. Any other failure shows the
+// hook itself is broken.
+func (f Failure) Degraded() bool {
+	return strings.HasPrefix(f.Stage, "shell ") && f.Error == shellOverBudget
+}
+
+// stageObserved marks an entry that is not a failure: something doctor should report, such
+// as an unknown tool or a cross-load, while the hook still did its work (gap review C4).
+const stageObserved = "observed"
+
+// Observed reports whether f is such an observation rather than a failure.
+func (f Failure) Observed() bool { return f.Stage == stageObserved }
+
+// shellOverBudget is what a shell reconcile records when it runs past ReconcileDeadline.
+const shellOverBudget = "shell reconciliation passed its deadline"
+
+type hookFailure string
+
+func (e hookFailure) Error() string { return string(e) }
+
+// The hook's own failures. Each is a fixed text with nothing from a payload in it.
+const (
+	failPanic         hookFailure = "panic during hook execution"
+	failPanicShell    hookFailure = "panic during shell reconciliation"
+	failUnknownClient hookFailure = "unknown hook client"
+	failNoHub         hookFailure = "hub client is not configured"
+	failNoPaths       hookFailure = "edit tool has no usable paths"
+	failBadTouch      hookFailure = "hub returned an invalid touch action"
+)
+
+// hubCodes are the hub error codes a failure may name; any other code is left out.
+var hubCodes = []string{"unauthorized", "bad_request", "not_found", "conflict", "key_reused", "unbound", "ambiguous", "lost", "too_large"}
+
+// fixedFailures are the failure texts that carry no variable part.
+var fixedFailures = []string{
+	string(failPanic), string(failPanicShell), string(failUnknownClient), string(failNoHub),
+	string(failNoPaths), string(failBadTouch), shellOverBudget, errNoSession.Error(),
+	"hook deadline exceeded", "hook operation canceled", "incomplete hook input or hub response",
+	"hub request failed", failHubRedirect, failHubTooLarge, failHubNoExecution, failHubNoAction,
+}
+
+// The hub client's own failures that carry no hub error envelope, each logged as a fixed text.
+const (
+	failHubRedirect    = "hub answered with a redirect"
+	failHubTooLarge    = "hub response too large"
+	failHubNoExecution = "hub returned no execution id"
+	failHubNoAction    = "hub returned no action"
+	// failHubStatus prefixes the status code of an answer without an envelope, from the hub or
+	// from a proxy in front of it, as during a deploy.
+	failHubStatus = "hub answered HTTP "
+)
+
+// stages are the stages a run records a failure or an observation at.
+var stages = []string{
+	"client", "decode", "repository", "hub", "session", "end", "paths", "touch",
+	"shell repository", "shell status", "shell session", "shell reconcile", stageObserved,
+}
+
+// FailureCategory maps a logged failure's text onto a fixed set of categories, with
+// "other" for anything else. The log is a file on disk: an older iris, another process or
+// a person may have written lines failureText would never produce, so a reader that shows
+// them to someone else trusts only this mapping, never the text.
+func FailureCategory(text string) string {
+	if slices.Contains(fixedFailures, text) {
+		return text
+	}
+	if code, ok := strings.CutPrefix(text, "hub request failed: "); ok && slices.Contains(hubCodes, code) {
+		return text
+	}
+	if code, ok := strings.CutPrefix(text, failHubStatus); ok && httpCode(code) {
+		return text
+	}
+	for _, prefix := range []string{"invalid JSON field type", "invalid JSON", "dependency failure"} {
+		if strings.HasPrefix(text, prefix+" ") {
+			return prefix
+		}
+	}
+	if slices.Contains(errnoTexts(), text) {
+		return text
+	}
+	return "other"
+}
+
+// FailureStage maps a logged stage onto the stages a run records, with "other" for
+// anything else, for the reason FailureCategory gives.
+func FailureStage(stage string) string {
+	if slices.Contains(stages, stage) {
+		return stage
+	}
+	return "other"
+}
+
+// httpCode reports whether s is a three-digit HTTP status code, as failureText writes it.
+func httpCode(s string) bool {
+	n, err := strconv.Atoi(s)
+	return err == nil && len(s) == 3 && n >= 100 && n <= 599
+}
+
+// errnoTexts are this platform's texts for the low system error numbers, which failureText
+// records as they are.
+var errnoTexts = sync.OnceValue(func() []string {
+	texts := make([]string, 0, 255)
+	for n := syscall.Errno(1); n < 256; n++ {
+		texts = append(texts, n.Error())
+	}
+	return texts
+})
+
+type runState struct {
+	mu    sync.Mutex
+	stage string
+	err   error
+	// receipt is the doctor canary's proof that Iris ran, for stderr; see canaryReceipt.
+	receipt []byte
+	// observed is what this run saw for doctor without failing; see Failure.Observed.
+	observed string
+	// shape is the payload's shape when it could not be decoded; see Failure.Shape.
+	shape *PayloadShape
+}
+
+func (s *runState) shaped(shape *PayloadShape) { s.mu.Lock(); s.shape = shape; s.mu.Unlock() }
+func (s *runState) payloadShape() *PayloadShape {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.shape
+}
+
+func (s *runState) observe(text string) { s.mu.Lock(); s.observed = text; s.mu.Unlock() }
+func (s *runState) observation() string { s.mu.Lock(); defer s.mu.Unlock(); return s.observed }
+
+func (s *runState) received(b []byte) { s.mu.Lock(); s.receipt = b; s.mu.Unlock() }
+
+func (s *runState) at(stage string) { s.mu.Lock(); s.stage = stage; s.mu.Unlock() }
+func (s *runState) fail(err error, out Output) Output {
+	s.mu.Lock()
+	s.err = err
+	s.mu.Unlock()
+	return out
+}
+func (s *runState) snapshot() (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.stage, s.err
+}
+func (s *runState) receiptLine() []byte { s.mu.Lock(); defer s.mu.Unlock(); return s.receipt }
+
+// failureText deliberately excludes dependency-provided messages: JSON errors,
+// filesystem paths, hub replies and panic values may contain untrusted payload data.
+func failureText(err error) string {
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "hook deadline exceeded"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "hook operation canceled"
+	}
+	if errors.Is(err, errNoSession) {
+		return errNoSession.Error()
+	}
+	var own hookFailure
+	if errors.As(err, &own) {
+		return own.Error()
+	}
+	var syntax *json.SyntaxError
+	if errors.As(err, &syntax) {
+		return fmt.Sprintf("invalid JSON at byte %d", syntax.Offset)
+	}
+	var mismatch *json.UnmarshalTypeError
+	if errors.As(err, &mismatch) {
+		return fmt.Sprintf("invalid JSON field type at byte %d", mismatch.Offset)
+	}
+	var hub *hubclient.Error
+	if errors.As(err, &hub) {
+		if slices.Contains(hubCodes, hub.Code) {
+			return "hub request failed: " + hub.Code
+		}
+		return "hub request failed"
+	}
+	var status *hubclient.StatusError
+	if errors.As(err, &status) {
+		return failHubStatus + strconv.Itoa(status.Code)
+	}
+	for _, known := range []struct {
+		err  error
+		text string
+	}{
+		{hubclient.ErrRedirect, failHubRedirect},
+		{hubclient.ErrResponseTooLarge, failHubTooLarge},
+		{hubclient.ErrNoExecution, failHubNoExecution},
+		{hubclient.ErrNoAction, failHubNoAction},
+	} {
+		if errors.Is(err, known.err) {
+			return known.text
+		}
+	}
+	var pathErr *os.PathError
+	if errors.As(err, &pathErr) {
+		return failureText(pathErr.Err)
+	}
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		return failureText(urlErr.Err)
+	}
+	var netErr *net.OpError
+	if errors.As(err, &netErr) {
+		return failureText(netErr.Err)
+	}
+	var errno syscall.Errno
+	if errors.As(err, &errno) {
+		return errno.Error()
+	}
+	if errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF) {
+		return "incomplete hook input or hub response"
+	}
+	return fmt.Sprintf("dependency failure (%T)", err)
+}
+func (r Runner) recordFailure(stage string, err error, shape *PayloadShape) {
+	r.record(stage, failureText(err), shape)
+}
+
+// record appends one entry to the log doctor reads, within the log's small budget.
+func (r Runner) record(stage, text string, shape *PayloadShape) {
+	// Logging is best effort. A slow disk, permissions failure or competing writer
+	// must not delay the allow response beyond this small, fixed budget.
+	done := make(chan struct{})
+	go func() {
+		if r.logged != nil {
+			defer r.logged()
+		}
+		defer close(done)
+		defer func() { _ = recover() }()
+		token, errPath := (hubclient.EnvConfig{Getenv: r.Getenv}).TokenPath()
+		if errPath != nil {
+			return
+		}
+		client := string(Canonical(r.ClientName))
+		if client == "" {
+			client = "unknown"
+		}
+		entry := Failure{Time: time.Now().UTC(), Client: client, Event: boundedLabel(r.EventName), Stage: stage, Error: text, Shape: shape}
+		_ = appendFailure(token, entry)
+	}()
+	after := r.logAfter
+	if after == nil {
+		after = time.After
+	}
+	select {
+	case <-done:
+	case <-after(failureLogBudget):
+	}
+}
+func boundedLabel(label string) string {
+	if len(label) > 128 {
+		return label[:128]
+	}
+	return label
+}
+
+// logFile is what the failure log needs from a file. Once a file is open its calls
+// cannot be made to fail from outside, and the log must still fail safely when they do.
+type logFile interface {
+	io.Reader
+	io.Writer
+	io.Seeker
+	io.ReaderAt
+	io.WriterAt
+	io.Closer
+	Stat() (os.FileInfo, error)
+	Truncate(int64) error
+	Fd() uintptr
+}
+
+var openFailureLog = func(path string, flag int, perm os.FileMode) (logFile, error) {
+	return os.OpenFile(path, flag, perm)
+}
+
+func failurePath(tokenFile string) string {
+	return filepath.Join(filepath.Dir(tokenFile), "hook-failures.log")
+}
+
+// observedPath is a log of its own, so that frequent observations, such as a tool the client
+// calls all the time, cannot push real failures out of the bounded failure log.
+func observedPath(tokenFile string) string {
+	return filepath.Join(filepath.Dir(tokenFile), "hook-observed.log")
+}
+
+func appendFailure(tokenFile string, entry Failure) error {
+	path := failurePath(tokenFile)
+	if entry.Observed() {
+		path = observedPath(tokenFile)
+	}
+	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
+		return err
+	}
+	if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
+		return errors.New("failure log is not a regular file")
+	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
+	f, err := openFailureLog(path, os.O_CREATE|os.O_RDWR, 0600)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	if err = lockFailureLog(f); err != nil {
+		return err
+	}
+	defer unlockFailureLog(f)
+	info, err := f.Stat()
+	if err != nil {
+		return err
+	}
+	if !info.Mode().IsRegular() {
+		return errors.New("failure log is not regular")
+	}
+	line, err := json.Marshal(entry)
+	if err != nil {
+		return err
+	}
+	line = append(line, '\n')
+	if len(line) > failureLogLimit/2 {
+		return errors.New("failure entry is too large")
+	}
+	if info.Size()+int64(len(line)) > failureLogLimit {
+		size := min(info.Size(), int64(failureLogLimit/2))
+		tail := make([]byte, size)
+		if _, err = f.ReadAt(tail, info.Size()-size); err != nil {
+			return err
+		}
+		// Keep complete JSON lines from the newest half, then append the new entry.
+		if start := bytes.IndexByte(tail, '\n'); start >= 0 {
+			tail = tail[start+1:]
+		} else {
+			tail = nil
+		}
+		if err = f.Truncate(0); err != nil {
+			return err
+		}
+		if _, err = f.WriteAt(tail, 0); err != nil {
+			return err
+		}
+	}
+	if _, err = f.Seek(0, io.SeekEnd); err != nil {
+		return err
+	}
+	_, err = f.Write(line)
+	return err
+}
+
+// ReadRecentFailures reads up to limit newest entries beside tokenFile, oldest
+// first. Missing logs are normal; at most 64 KiB is read even from oversized files.
+func ReadRecentFailures(tokenFile string, limit int) ([]Failure, error) {
+	return readLog(failurePath(tokenFile), limit)
+}
+
+// ReadRecentObservations reads the observation log beside tokenFile as ReadRecentFailures
+// reads the failure log.
+func ReadRecentObservations(tokenFile string, limit int) ([]Failure, error) {
+	return readLog(observedPath(tokenFile), limit)
+}
+
+func readLog(path string, limit int) ([]Failure, error) {
+	out := []Failure{}
+	if limit <= 0 {
+		return out, nil
+	}
+	info, err := os.Lstat(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return out, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	if !info.Mode().IsRegular() {
+		return nil, errors.New("failure log is not regular")
+	}
+	f, err := openFailureLog(path, os.O_RDONLY, 0)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	if err = lockFailureLogShared(f); err != nil {
+		return nil, err
+	}
+	defer unlockFailureLog(f)
+	// Size again under the lock: a writer may have grown or cut the file meanwhile.
+	if info, err = f.Stat(); err != nil {
+		return nil, err
+	}
+	offset := max(int64(0), info.Size()-failureLogLimit)
+	if _, err = f.Seek(offset, io.SeekStart); err != nil {
+		return nil, err
+	}
+	raw, err := io.ReadAll(io.LimitReader(f, failureLogLimit))
+	if err != nil {
+		return nil, err
+	}
+	if offset > 0 {
+		if i := bytes.IndexByte(raw, '\n'); i >= 0 {
+			raw = raw[i+1:]
+		} else {
+			return out, nil
+		}
+	}
+	for _, line := range bytes.Split(raw, []byte{'\n'}) {
+		var entry Failure
+		if json.Unmarshal(line, &entry) == nil {
+			out = append(out, entry)
+		}
+	}
+	if len(out) > limit {
+		out = out[len(out)-limit:]
+	}
+	return out, nil
+}

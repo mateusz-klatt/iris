@@ -1,0 +1,18 @@
+{
+  "conversation_id": "<SESSION_OR_TOOL_ID>",
+  "generation_id": "<SESSION_OR_TOOL_ID>",
+  "model": "default",
+  "tool_name": "iris_probe",
+  "tool_input": "{}",
+  "tool_use_id": "<SESSION_OR_TOOL_ID>",
+  "mcp_server_name": "iris-probe",
+  "command": "python3 .cursor/hooks/mcp_probe.py",
+  "session_id": "<SESSION_OR_TOOL_ID>",
+  "hook_event_name": "beforeMCPExecution",
+  "cursor_version": "2026.11.05-86047df",
+  "workspace_roots": [
+    "/workspace/project"
+  ],
+  "user_email": "<REDACTED_EMAIL>",
+  "transcript_path": "<REDACTED_TRANSCRIPT_PATH>"
+}

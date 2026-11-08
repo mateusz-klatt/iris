@@ -1,0 +1,22 @@
+version: 2
+# Weekly, so updates arrive in small batches. Workflow actions are pinned to commits,
+# and Dependabot keeps the pin and its version comment together. Tools run by `go run`
+# in the Makefile are pinned there and are not covered.
+updates:
+  - package-ecosystem: gomod
+    directory: /
+    schedule:
+      interval: weekly
+  - package-ecosystem: npm
+    directory: /web
+    schedule:
+      interval: weekly
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+  # The base images are pinned by digest, so only this keeps them current.
+  - package-ecosystem: docker
+    directories: [/, /deploy]
+    schedule:
+      interval: weekly

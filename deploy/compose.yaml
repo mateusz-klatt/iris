@@ -1,0 +1,30 @@
+name: iris
+services:
+  iris:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile
+    container_name: iris
+    network_mode: host
+    restart: unless-stopped
+    # Docker keeps json-file logs without limit by default.
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"
+    volumes:
+      - iris-data:/data
+    command:
+      - serve
+      - --listen
+      - 127.0.0.1:7878
+      - --db
+      - /data/iris.db
+      - --token-file
+      - /data/hub.token
+      - --public-url
+      - https://iris.klatt.ie
+
+volumes:
+  iris-data:

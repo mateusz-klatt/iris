@@ -1,0 +1,313 @@
+name: ci
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  sonar:
+    # The gate reads the profile each OS job uploaded, so it waits for them, and
+    # still runs when one failed so the scan is not lost.
+    needs: test
+    # Pull requests from forks get no secrets, so the scanner could not authenticate.
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          pattern: coverage-*
+          path: profiles
+          merge-multiple: true
+      - name: Merge Go coverage from every OS
+        run: |
+          go test ./.github/covermerge
+          go run ./.github/covermerge profiles/*.out > coverage.out
+      - run: npm ci --ignore-scripts --prefix web
+      - name: Web coverage
+        id: web_coverage
+        # The 100% gate is enforced after the scan, so Sonar always gets the data.
+        continue-on-error: true
+        run: npm run coverage --prefix web
+      # Runs that Dependabot triggers get no repository secrets, so the scanner cannot
+      # authenticate and fails whatever the change. Those runs skip the analysis and say so.
+      # main's own run after the merge has the token, so the gate on main still decides.
+      # The coverage gate below runs either way.
+      - name: Is the Sonar token available?
+        id: sonar_token
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+        run: |
+          if [ -n "$SONAR_TOKEN" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          elif [ "$GITHUB_EVENT_NAME" = push ]; then
+            echo "::error title=Sonar token missing::main's run must have SONAR_TOKEN; the analysis cannot be skipped here."
+            exit 1
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "::notice title=Sonar skipped::SONAR_TOKEN is not available to this run (Dependabot gets no repository secrets), so the SonarCloud analysis was skipped. main's analysis after the merge still runs."
+          fi
+      - name: SonarCloud Scan
+        if: ${{ steps.sonar_token.outputs.present == 'true' }}
+        uses: SonarSource/sonarqube-scan-action@e805d875275f728fac1885b413934be6d7c63f65 # v8.4.1
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      - name: SonarCloud Quality Gate
+        if: ${{ steps.sonar_token.outputs.present == 'true' }}
+        uses: SonarSource/sonarqube-quality-gate-action@7a5fffe8e523c40e0c740b6bc2712ab503e52efa
+        timeout-minutes: 5
+        env:
+          SONAR_TOKEN: ${{ secrets.SONAR_TOKEN }}
+      - name: Coverage must be 100%
+        if: ${{ !cancelled() }}
+        env:
+          WEB_COVERAGE: ${{ steps.web_coverage.outcome }}
+        run: |
+          test "$WEB_COVERAGE" = success
+          make cov-check
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - run: npm ci --ignore-scripts --prefix web
+      - run: npm run build --prefix web
+      - run: npm test --prefix web
+      - run: npm audit --audit-level=moderate --prefix web
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+      - name: Build identity distinguishes clean, dirty and unavailable metadata
+        shell: bash
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          binary="$RUNNER_TEMP/iris-version.exe"
+          go build -trimpath -o "$binary" ./cmd/iris
+          test "$("$binary" version)" = "dev (commit $GITHUB_SHA; clean)"
+          trap 'rm -f .iris-build-identity-probe' EXIT
+          echo dirty > .iris-build-identity-probe
+          go build -trimpath -o "$binary" ./cmd/iris
+          test "$("$binary" --version)" = "dev (commit $GITHUB_SHA; dirty)"
+          rm .iris-build-identity-probe
+          go build -buildvcs=false -trimpath -o "$binary" ./cmd/iris
+          test "$("$binary" version)" = "dev (commit unknown; modified unknown)"
+      - run: go vet ./...
+      - run: go test -coverprofile=coverage-${{ matrix.os }}.out ./...
+        # PowerShell would split the flag at the dot in its value.
+        shell: bash
+        env:
+          CGO_ENABLED: "0"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ !cancelled() }}
+        with:
+          name: coverage-${{ matrix.os }}
+          path: coverage-${{ matrix.os }}.out
+          retention-days: 1
+      - run: go test -race ./...
+        if: runner.os != 'Windows'
+        env:
+          CGO_ENABLED: "1"
+  build:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target:
+          - { goos: linux, goarch: amd64 }
+          - { goos: linux, goarch: arm64 }
+          - { goos: darwin, goarch: amd64 }
+          - { goos: darwin, goarch: arm64 }
+          - { goos: windows, goarch: amd64 }
+          - { goos: windows, goarch: arm64 }
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+      - run: go build -trimpath ./cmd/iris
+        env:
+          CGO_ENABLED: "0"
+          GOOS: ${{ matrix.target.goos }}
+          GOARCH: ${{ matrix.target.goarch }}
+
+  hook-latency:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+      - name: Measure 100 real pre-edit hooks (report only, no latency threshold)
+        run: go test ./cmd/iris -run '^TestHookLatency$' -count=1 -v
+        env:
+          CGO_ENABLED: "0"
+          IRIS_MEASURE_LATENCY: "1"
+      # Fails if a shell reconcile against a hub 80 ms away runs out of its budget (D3).
+      - name: Run real shell hooks against a delayed remote hub and a loopback one
+        run: go test ./cmd/iris -run '^TestShellReconcileLatency$' -count=1 -v
+        env:
+          CGO_ENABLED: "0"
+          IRIS_MEASURE_LATENCY: "1"
+  release-image:
+    # The image has no shell, so only a real run shows the hub can write to /data.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 26
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
+      # The release workflow builds the console in a job of its own and hands it over as
+      # WEB_DIST. Build it the local way here, then give the snapshot the same hand-over,
+      # so both branches of `make web` run before the first tag.
+      - name: Build the console as the release web job does
+        shell: bash
+        run: |
+          set -euo pipefail
+          make web
+          mkdir -p "$RUNNER_TEMP/webui-dist"
+          cp -a internal/webui/dist/. "$RUNNER_TEMP/webui-dist/"
+          # Vite's output is deterministic, so mark the copy: only the copy branch of
+          # `make web` can then produce what the last step compares.
+          printf '\n<!-- handed over by CI -->\n' >> "$RUNNER_TEMP/webui-dist/index.html"
+          # GoReleaser refuses a dirty tree, so put the placeholder back.
+          git checkout -- internal/webui/dist
+          test -z "$(git status --porcelain --untracked-files=no)"
+      # Keyless signing needs a release's OIDC identity, so only the SBOM is exercised here.
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          version: v2.20.0
+          args: release --snapshot --clean --skip=sign
+        env:
+          WEB_DIST: ${{ runner.temp }}/webui-dist
+      - name: The snapshot embedded the handed-over console
+        shell: bash
+        run: |
+          set -euo pipefail
+          cmp internal/webui/dist/index.html "$RUNNER_TEMP/webui-dist/index.html"
+          grep -q 'handed over by CI' internal/webui/dist/index.html
+      - name: The snapshot made an SBOM for every archive
+        shell: bash
+        run: |
+          set -euo pipefail
+          archives=$(ls dist/*.tar.gz dist/*.zip | wc -l)
+          sboms=$(ls dist/*.sbom.json | wc -l)
+          echo "archives=$archives sboms=$sboms"
+          test "$archives" -gt 0
+          test "$archives" = "$sboms"
+      - name: The release workflow runs only for a version tag
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import yaml
+          on = yaml.safe_load(open(".github/workflows/release.yml"))[True]
+          assert list(on) == ["push"], on
+          assert list(on["push"]) == ["tags"], on
+          print("release.yml triggers:", on)
+          PY
+      - name: Run the image as non-root on a fresh named volume
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker images
+          # The runner is amd64, and both platforms are loaded in no fixed order.
+          image=$(docker images --format '{{.Repository}}:{{.Tag}}' ghcr.io/mateusz-klatt/iris | grep -- '-amd64$')
+          test -n "$image"
+          identity=$(docker run --rm "$image" version)
+          echo "$identity"
+          test "${identity#* (commit }" = "$GITHUB_SHA; clean)"
+          test "$(docker image inspect --format '{{.Config.User}}' "$image")" = "65532:65532"
+          docker volume create iris-image-check
+          docker run -d --name iris-image-check -v iris-image-check:/data "$image"
+          inspect() { docker run --rm -v iris-image-check:/data busybox:1.37 "$@"; }
+          for _ in $(seq 1 30); do
+            if inspect test -s /data/hub.token && inspect test -s /data/iris.db; then
+              break
+            fi
+            sleep 1
+          done
+          docker logs iris-image-check
+          test "$(docker inspect --format '{{.State.Running}}' iris-image-check)" = true
+          inspect ls -ln /data
+          inspect stat -c '%u:%g' /data /data/hub.token /data/iris.db | sort -u | tee owners
+          test "$(cat owners)" = "65532:65532"
+      - name: The deployment image carries the source checkout identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          tree=clean
+          if test -n "$(git status --porcelain --untracked-files=normal)"; then tree=dirty; fi
+          make image
+          test "$(docker run --rm iris-iris version)" = "dev (commit $GITHUB_SHA; $tree)"
+  check-all:
+    # Lint, known vulnerabilities, secrets in history, and pinned actions. Run the same
+    # locally with `make check-all`; each tool's version is pinned in the Makefile.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0 # gitleaks reads the whole history
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+      # The CI tools under .github are outside ./..., and a pattern skips dot directories,
+      # so each is named.
+      - run: go test -cover ./.github/covermerge ./.github/pincheck
+      - run: make check-all
+  goreleaser-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
+        with:
+          version: v2.20.0
+          install-only: true
+      - name: Validate stage 0 release configuration
+        shell: bash
+        run: |
+          # v2.20 returns 2 for valid configurations using deprecated brews (D15).
+          # Keep that visible, while invalid configurations (exit 1) fail CI.
+          set +e
+          goreleaser check
+          result=$?
+          set -e
+          if [ "$result" -eq 2 ]; then
+            echo "::warning::Valid configuration uses deprecated brews until notarization is available."
+          else
+            exit "$result"
+          fi

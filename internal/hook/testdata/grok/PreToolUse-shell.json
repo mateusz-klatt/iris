@@ -1,0 +1,26 @@
+{
+  "hookEventName": "pre_tool_use",
+  "sessionId": "01a1add0-8fa6-7132-9db2-85ef40676904",
+  "cwd": "/workspace/project",
+  "workspaceRoot": "/workspace/project",
+  "timestamp": "2026-11-05T22:24:55.582202974+00:00",
+  "transcriptPath": "/workspace/project/.exp/home/.grok/sessions//workspace/project_ENC/01a1add0-8fa6-7132-9db2-85ef40676904/updates.jsonl",
+  "permissionMode": "bypassPermissions",
+  "toolName": "run_terminal_command",
+  "toolUseId": "call-cb61fada-d57a-4dba-a5b2-ce48672c998c-1",
+  "toolInput": {
+    "command": "printf 'shell-ok\\n'",
+    "description": "Print shell-ok to stdout"
+  },
+  "toolInputTruncated": false,
+  "hook_event_name": "PreToolUse",
+  "session_id": "01a1add0-8fa6-7132-9db2-85ef40676904",
+  "transcript_path": "/workspace/project/.exp/home/.grok/sessions//workspace/project_ENC/01a1add0-8fa6-7132-9db2-85ef40676904/updates.jsonl",
+  "permission_mode": "bypassPermissions",
+  "tool_name": "run_terminal_command",
+  "tool_input": {
+    "command": "printf 'shell-ok\\n'",
+    "description": "Print shell-ok to stdout"
+  },
+  "tool_use_id": "call-cb61fada-d57a-4dba-a5b2-ce48672c998c-1"
+}

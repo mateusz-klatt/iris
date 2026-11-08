@@ -1,0 +1,28 @@
+# Iris is LF everywhere, on every system. Git converts any text file it detects; the source
+# types are named so that a stray CR cannot make one look binary and escape the rule, as the
+# locale files did after cfc1bf6.
+* text=auto eol=lf
+*.go text eol=lf
+*.mod text eol=lf
+*.sum text eol=lf
+*.ts text eol=lf
+*.tsx text eol=lf
+*.js text eol=lf
+*.cjs text eol=lf
+*.mjs text eol=lf
+*.json text eol=lf
+*.md text eol=lf
+*.css text eol=lf
+*.html text eol=lf
+*.yml text eol=lf
+*.yaml text eol=lf
+*.sql text eol=lf
+*.toml text eol=lf
+Makefile text eol=lf
+
+# Payloads captured from real clients are kept byte for byte, as captured.
+internal/hook/testdata/** -text
+
+*.woff2 binary
+*.png binary
+*.ico binary

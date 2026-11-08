@@ -1,0 +1,11 @@
+.git
+node_modules
+web/node_modules
+web/dist
+internal/webui/dist
+coverage.out
+*.db
+*.db-wal
+*.db-shm
+iris
+iris.exe

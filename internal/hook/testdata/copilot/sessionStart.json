@@ -1,0 +1,7 @@
+{
+  "sessionId": "05a1f795-918d-4cfb-aeb2-f17be274e1b8",
+  "timestamp": 1793917883996,
+  "cwd": "/workspace/project",
+  "source": "new",
+  "initialPrompt": "Do exactly these steps and nothing else: 1) create file allowed.txt containing hello; 2) change the file fixtures/denied-target.txt so it contains changed (if that is refused, do not try another way); 3) run the shell command: printf shell_ok; 4) call the probe tool of the iris-probe MCP server if it is available. Then reply with one short line."
+}

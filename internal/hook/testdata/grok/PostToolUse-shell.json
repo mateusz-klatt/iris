@@ -1,0 +1,80 @@
+{
+  "hookEventName": "post_tool_use",
+  "sessionId": "01a1add0-8fa6-7132-9db2-85ef40676904",
+  "cwd": "/workspace/project",
+  "workspaceRoot": "/workspace/project",
+  "timestamp": "2026-11-05T22:24:55.696244418+00:00",
+  "transcriptPath": "/workspace/project/.exp/home/.grok/sessions//workspace/project_ENC/01a1add0-8fa6-7132-9db2-85ef40676904/updates.jsonl",
+  "permissionMode": "bypassPermissions",
+  "toolName": "run_terminal_command",
+  "toolUseId": "call-cb61fada-d57a-4dba-a5b2-ce48672c998c-1",
+  "toolInput": {
+    "command": "printf 'shell-ok\\n'",
+    "description": "Print shell-ok to stdout"
+  },
+  "toolResult": {
+    "type": "Bash",
+    "output": [
+      115,
+      104,
+      101,
+      108,
+      108,
+      45,
+      111,
+      107,
+      10
+    ],
+    "output_for_prompt": "exit: 0\nshell-ok\n",
+    "exit_code": 0,
+    "command": "printf 'shell-ok\\n'",
+    "truncated": false,
+    "signal": null,
+    "timed_out": false,
+    "description": "Print shell-ok to stdout",
+    "current_dir": "/workspace/project",
+    "output_file": "/workspace/project/.exp/home/.grok/sessions//workspace/project_ENC/01a1add0-8fa6-7132-9db2-85ef40676904/terminal/call-cb61fada-d57a-4dba-a5b2-ce48672c998c-1.log",
+    "total_bytes": 9,
+    "was_bare_echo": true
+  },
+  "toolInputTruncated": false,
+  "toolResultTruncated": false,
+  "durationMs": 20,
+  "isBackgrounded": false,
+  "hook_event_name": "PostToolUse",
+  "session_id": "01a1add0-8fa6-7132-9db2-85ef40676904",
+  "transcript_path": "/workspace/project/.exp/home/.grok/sessions//workspace/project_ENC/01a1add0-8fa6-7132-9db2-85ef40676904/updates.jsonl",
+  "permission_mode": "bypassPermissions",
+  "tool_name": "run_terminal_command",
+  "tool_input": {
+    "command": "printf 'shell-ok\\n'",
+    "description": "Print shell-ok to stdout"
+  },
+  "tool_response": {
+    "type": "Bash",
+    "output": [
+      115,
+      104,
+      101,
+      108,
+      108,
+      45,
+      111,
+      107,
+      10
+    ],
+    "output_for_prompt": "exit: 0\nshell-ok\n",
+    "exit_code": 0,
+    "command": "printf 'shell-ok\\n'",
+    "truncated": false,
+    "signal": null,
+    "timed_out": false,
+    "description": "Print shell-ok to stdout",
+    "current_dir": "/workspace/project",
+    "output_file": "/workspace/project/.exp/home/.grok/sessions//workspace/project_ENC/01a1add0-8fa6-7132-9db2-85ef40676904/terminal/call-cb61fada-d57a-4dba-a5b2-ce48672c998c-1.log",
+    "total_bytes": 9,
+    "was_bare_echo": true
+  },
+  "tool_use_id": "call-cb61fada-d57a-4dba-a5b2-ce48672c998c-1",
+  "duration_ms": 20
+}

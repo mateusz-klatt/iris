@@ -1,0 +1,248 @@
+package watch
+
+import (
+	"context"
+	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/coder/websocket"
+	"github.com/mateusz-klatt/iris/internal/binding"
+	"github.com/mateusz-klatt/iris/internal/hub"
+	"github.com/mateusz-klatt/iris/internal/hubclient"
+	"github.com/mateusz-klatt/iris/internal/proc"
+	"github.com/mateusz-klatt/iris/internal/store"
+)
+
+type testConfig struct{ url string }
+
+func (c testConfig) HubURL() string         { return c.url }
+func (c testConfig) Token() (string, error) { return "token", nil }
+
+type lines struct {
+	mu   sync.Mutex
+	text string
+}
+
+func (b *lines) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.text += string(p)
+	return len(p), nil
+}
+func (b *lines) String() string { b.mu.Lock(); defer b.mu.Unlock(); return b.text }
+func TestBurstReconnectNoDuplicateLine(t *testing.T) {
+	// This only bounds a hang. No assertion below depends on it, so it is generous: a fully
+	// loaded Windows runner once needed more than 12 s just to attach the monitor.
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	s, err := store.Open(filepath.Join(t.TempDir(), "hub.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	register := func(id string) map[string]any {
+		out, err := s.Call(ctx, "sessions", store.Request{Client: "claude", Host: "host", SessionID: id, Cwd: "/repo"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+	a, b := register("a"), register("b")
+	var sockets atomic.Int32
+	// The window is measured on a clock this test moves. The monitor reports each frame it
+	// counts, and a reset makes a snapshot request, so the test moves the clock only once
+	// the monitor has counted all three messages. Held frames are not acknowledged: the
+	// cursor is saved only after their line is printed.
+	clock := &testClock{at: time.Unix(1_800_000_000, 0)}
+	var resumed atomic.Bool
+	var acks, resets, counted, firstSaved atomic.Int32
+	cut := make(chan struct{})
+	resume := make(chan struct{})
+	attached := make(chan struct{})
+	var attach sync.Once
+	server := httptest.NewUnstartedServer(nil)
+	real := hub.New(s, "token", []string{server.Listener.Addr().String()})
+	real.PingInterval = 20 * time.Millisecond
+	server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/watch" {
+			if r.URL.Path == "/v1/events" && !resumed.Load() && r.URL.Query().Get("consumer_id") == "iris-watch" {
+				firstSaved.Add(1)
+			}
+			if r.URL.Path == "/v1/events" && resumed.Load() {
+				switch q := r.URL.Query(); {
+				case q.Get("consumer_id") == "iris-watch":
+					acks.Add(1)
+				case q.Has("stream"):
+					resets.Add(1)
+				}
+			}
+			real.ServeHTTP(w, r)
+			return
+		}
+		n := sockets.Add(1)
+		if n > 1 {
+			select {
+			case <-resume:
+			case <-r.Context().Done():
+				return
+			}
+		}
+		// Relay a real hub socket, dropping the first transport after its first frame.
+		upstreamURL := "ws" + strings.TrimPrefix(server.URL, "http") + "/relay" + "?" + r.URL.RawQuery
+		upstream, _, err := websocket.Dial(r.Context(), upstreamURL, &websocket.DialOptions{HTTPHeader: http.Header{"Authorization": {"Bearer token"}}, Subprotocols: []string{"iris.v1"}})
+		if err != nil {
+			http.Error(w, "retry", http.StatusServiceUnavailable)
+			return
+		}
+		defer func() { _ = upstream.CloseNow() }()
+		// The hub has placed this monitor at the newest event, so anything sent from
+		// here on arrives as a frame and not as mail already waiting.
+		attach.Do(func() { close(attached) })
+		downstream, err := websocket.Accept(w, r, &websocket.AcceptOptions{Subprotocols: []string{"iris.v1"}})
+		if err != nil {
+			return
+		}
+		defer func() { _ = downstream.CloseNow() }()
+		relayCtx := downstream.CloseRead(r.Context())
+		for {
+			_, raw, err := upstream.Read(relayCtx)
+			if err != nil {
+				return
+			}
+			if downstream.Write(r.Context(), websocket.MessageText, raw) != nil {
+				return
+			}
+			if n == 1 {
+				close(cut)
+				return
+			}
+		}
+	})
+	// /relay enters the hub watch route without recursively traversing the proxy.
+	proxyHandler := server.Config.Handler
+	server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/relay" {
+			r.URL.Path = "/v1/watch"
+			real.ServeHTTP(w, r)
+			return
+		}
+		proxyHandler.ServeHTTP(w, r)
+	})
+	server.Start()
+	defer server.Close()
+	resolver := &binding.Resolver{Hub: &hubclient.Client{Config: testConfig{server.URL}}, Client: "claude", Host: "host", CWD: "/repo", Getenv: func(k string) string {
+		if k == "IRIS_EXECUTION" {
+			return b["execution_id"].(string)
+		}
+		return ""
+	}, Ancestor: func() (proc.Ancestor, error) { return proc.Ancestor{}, nil }}
+	output := &lines{}
+	done := make(chan error, 1)
+	go func() {
+		done <- (&Runner{Resolver: resolver, Output: output, Window: 2 * time.Second, Backoff: 10 * time.Millisecond, Now: clock.Now, received: func(f Frame) {
+			if resumed.Load() && f.Kind == "inbox_changed" {
+				counted.Add(1)
+			}
+		}}).Run(ctx)
+	}()
+	send := func(key string) {
+		_, err := s.Call(ctx, "messages", store.Request{ExecutionID: a["execution_id"].(string), Generation: 1, Key: key, To: []string{b["agent"].(map[string]any)["name"].(string)}, Body: "DO NOT OUTPUT THIS"})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	select {
+	case <-attached:
+	case <-ctx.Done():
+		t.Fatal("monitor never attached")
+	}
+	send("first")
+	select {
+	case <-cut:
+	case <-ctx.Done():
+		t.Fatal("no first frame")
+	}
+	// The first line was printed, so its cursor is saved, but that save can still be on its
+	// way. Counting starts once it has arrived: otherwise it reads as a held frame acknowledged
+	// early (seen once on macOS).
+	for firstSaved.Load() == 0 {
+		select {
+		case <-ctx.Done():
+			t.Fatal("the first frame's cursor was never saved")
+		case <-time.After(5 * time.Millisecond):
+		}
+	}
+	for i := 0; i < 3; i++ {
+		send(fmt.Sprint(i))
+	}
+	resumed.Store(true)
+	close(resume)
+	for counted.Load() < 3 && resets.Load() == 0 {
+		select {
+		case <-ctx.Done():
+			t.Fatalf("the monitor did not consume the burst: %d counted, %q", counted.Load(), output.String())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	if got := output.String(); got != "Iris: 1 new message. Use the inbox tool.\n" {
+		t.Fatalf("a held line came out before its window: %q", got)
+	}
+	if n := acks.Load(); n != 0 {
+		t.Fatalf("%d held frames were acknowledged before their line was printed", n)
+	}
+	clock.Add(3 * time.Second)
+	want := "Iris: 1 new message. Use the inbox tool.\nIris: 3 new messages. Use the inbox tool.\n"
+	deadline := time.Now().Add(6 * time.Second)
+	for time.Now().Before(deadline) {
+		if output.String() == want {
+			break
+		}
+		select {
+		case <-ctx.Done():
+			t.Fatal(output.String())
+		case <-time.After(10 * time.Millisecond):
+		}
+	}
+	time.Sleep(250 * time.Millisecond)
+	cancel()
+	if err = <-done; err != nil {
+		t.Fatal(err)
+	}
+	if output.String() != want {
+		t.Fatalf("lines: %q", output.String())
+	}
+	inbox, err := s.Call(context.Background(), "inbox", store.Request{ExecutionID: b["execution_id"].(string)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(inbox)
+	if len(inbox["deliveries"].([]map[string]any)) != 4 {
+		t.Fatal(string(raw))
+	}
+}
+
+// testClock is a clock that moves only when a test says so.
+type testClock struct {
+	mu sync.Mutex
+	at time.Time
+}
+
+func (c *testClock) Now() time.Time {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.at
+}
+
+func (c *testClock) Add(d time.Duration) {
+	c.mu.Lock()
+	c.at = c.at.Add(d)
+	c.mu.Unlock()
+}

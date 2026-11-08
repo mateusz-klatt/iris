@@ -1,0 +1,124 @@
+package integrate
+
+import (
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+// agy denies every Iris call in a headless run unless the user's settings allow the Iris
+// server. Install adds exactly that rule, keeps the user's settings, and remove restores them.
+func TestAntigravityAllowsOnlyTheIrisServerAndRemovesExactlyThat(t *testing.T) {
+	l := testLayout(t)
+	agy, _ := ByName(Antigravity)
+	files, _ := agy.Files(l)
+	settings := files[2]
+	if err := os.MkdirAll(filepath.Dir(settings), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mine := "{\n  \"permissions\": {\n    \"allow\": [\n      \"write_file(/work/*)\"\n    ]\n  },\n  \"trustedWorkspaces\": [\n    \"/work\"\n  ]\n}\n"
+	if err := os.WriteFile(settings, []byte(mine), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	for range 2 { // idempotent
+		if err := agy.Install(l, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got := string(mustRead(t, settings))
+	if strings.Count(got, AgyAllowRule) != 1 || !strings.Contains(got, "write_file(/work/*)") || !strings.Contains(got, "trustedWorkspaces") {
+		t.Fatalf("settings after install\n%s", got)
+	}
+	if err := agy.Remove(l, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(mustRead(t, settings)); got != mine {
+		t.Fatalf("remove did not restore the user's settings\n got %q\nwant %q", got, mine)
+	}
+}
+
+func TestAntigravitySettingsCreatedByIrisGoAway(t *testing.T) {
+	l := testLayout(t)
+	agy, _ := ByName(Antigravity)
+	files, _ := agy.Files(l)
+	if err := agy.Install(l, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(mustRead(t, files[2])); !strings.Contains(got, AgyAllowRule) {
+		t.Fatal(got)
+	}
+	if err := agy.Remove(l, nil); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(files[2]); !os.IsNotExist(err) {
+		t.Fatalf("created settings left behind: %v", err)
+	}
+}
+
+func TestAllowRulesKeepOtherRulesAndRefuseWrongTypes(t *testing.T) {
+	doc := map[string]any{"permissions": map[string]any{"allow": []any{"a", AgyAllowRule}, "deny": []any{"b"}}}
+	first := RemoveAllowRule(doc, AgyAllowRule)
+	second := RemoveAllowRule(doc, AgyAllowRule)
+	if !first || second {
+		t.Fatalf("remove reported %v then %v, want true then false", first, second)
+	}
+	perms := doc["permissions"].(map[string]any)
+	if len(perms["allow"].([]any)) != 1 || perms["deny"] == nil {
+		t.Fatal(doc)
+	}
+	only := map[string]any{"permissions": map[string]any{"allow": []any{AgyAllowRule}}}
+	if !RemoveAllowRule(only, AgyAllowRule) || len(only) != 0 {
+		t.Fatalf("empty containers left: %v", only)
+	}
+	twice := map[string]any{}
+	for range 2 {
+		if err := AddAllowRule(twice, "r"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if len(twice["permissions"].(map[string]any)["allow"].([]any)) != 1 {
+		t.Fatalf("a rule added twice: %v", twice)
+	}
+	for _, bad := range []map[string]any{{"permissions": "x"}, {"permissions": map[string]any{"allow": "x"}}} {
+		if err := AddAllowRule(bad, AgyAllowRule); !errors.Is(err, ErrBroken) {
+			t.Fatalf("%v: %v", bad, err)
+		}
+	}
+}
+
+// A user who already allows the Iris server keeps that rule after remove: install changed
+// nothing in that file, so it is not in the manifest and remove does not touch it.
+func TestAUserAllowRuleForIrisSurvivesRemove(t *testing.T) {
+	l := testLayout(t)
+	agy, _ := ByName(Antigravity)
+	files, _ := agy.Files(l)
+	if err := os.MkdirAll(filepath.Dir(files[2]), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	// Four-space indentation and a key Iris would sort differently: a rewrite would differ.
+	mine := "{\n    \"trustedWorkspaces\": [],\n    \"permissions\": {\n        \"allow\": [\n            \"" + AgyAllowRule + "\"\n        ]\n    }\n}\n"
+	if err := os.WriteFile(files[2], []byte(mine), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := agy.Install(l, nil); err != nil {
+		t.Fatal(err)
+	}
+	if err := agy.Remove(l, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(mustRead(t, files[2])); got != mine {
+		t.Fatalf("the user's own rule was removed\n got %q\nwant %q", got, mine)
+	}
+}
+
+func TestAgySettingsNeedsAHome(t *testing.T) {
+	if _, err := AgySettings(homeless(t)); err == nil {
+		t.Fatal("settings path without a home")
+	}
+	got, err := AgySettings(testLayout(t))
+	if err != nil || !strings.HasSuffix(got, filepath.Join(".gemini", "antigravity-cli", "settings.json")) {
+		t.Fatalf("%q %v", got, err)
+	}
+}

@@ -1,0 +1,2 @@
+ALTER TABLE Execution ADD COLUMN watch_seen_ms INTEGER NOT NULL DEFAULT 0;
+PRAGMA user_version=10;

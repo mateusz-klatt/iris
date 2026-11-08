@@ -1,0 +1,12 @@
+{
+  "hook_event_name": "PreToolUse",
+  "session_id": "session_114df8a5-1263-4744-bd4a-17c39274ffd6",
+  "cwd": "/workspace/project/hooklab",
+  "client_type": "kimi_code_cli",
+  "tool_name": "Write",
+  "tool_input": {
+    "path": "deny-me.txt",
+    "content": "hello"
+  },
+  "tool_call_id": "Write_0_a89dd82f"
+}

@@ -1,0 +1,15 @@
+{
+  "session_id": "01a1adf0-8c32-7dd1-915f-250ba6059254",
+  "turn_id": "01a1adf0-8f1b-7231-88a8-12969bc5f98e",
+  "transcript_path": "/home/user/.codex/sessions/2026/11/05/rollout-2026-11-05T23-59-45-01a1adf0-8c32-7dd1-915f-250ba6059254.jsonl",
+  "cwd": "/workspace/project",
+  "hook_event_name": "PostToolUse",
+  "model": "gpt-6-luna",
+  "permission_mode": "bypassPermissions",
+  "tool_name": "apply_patch",
+  "tool_input": {
+    "command": "*** Begin Patch\n*** Add File: allowed.txt\n+ok\n*** End Patch"
+  },
+  "tool_response": "Exit code: 0\nWall time: 0.1 seconds\nOutput:\nSuccess. Updated the following files:\nA allowed.txt\n",
+  "tool_use_id": "exec-9935dec0-9319-4b3f-a7d9-2dd761d9377b"
+}

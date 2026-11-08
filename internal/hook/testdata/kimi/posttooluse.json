@@ -1,0 +1,12 @@
+{
+  "hook_event_name": "PostToolUse",
+  "session_id": "session_114df8a5-1263-4744-bd4a-17c39274ffd6",
+  "cwd": "/workspace/project/hooklab",
+  "client_type": "kimi_code_cli",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "pwd"
+  },
+  "tool_call_id": "Bash_1_8163a792",
+  "tool_output": "/workspace/project/hooklab\n"
+}

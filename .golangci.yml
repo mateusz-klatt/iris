@@ -1,0 +1,25 @@
+# Run with `make lint`. The set is small and explicit on purpose: each linter here
+# finds real defects in this code base, and none is disabled wholesale. A finding
+# that does not apply is marked where it occurs, with the reason.
+version: "2"
+linters:
+  default: none
+  # bodyclose is left out: in this code nearly all of its findings are websocket.Dial,
+  # whose response the library owns, and RoundTrip implementations that return the
+  # body to their caller.
+  enable:
+    - errcheck
+    - govet
+    - ineffassign
+    - misspell
+    - staticcheck
+    - unused
+# gofmt formatting is checked too: two pull requests that were each formatted could merge
+# into a file that is not, and nothing else would notice.
+formatters:
+  enable:
+    - gofmt
+issues:
+  # Show every finding; the defaults stop at 50 per linter and hide repeats.
+  max-issues-per-linter: 0
+  max-same-issues: 0

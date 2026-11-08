@@ -1,0 +1,14 @@
+{
+  "artifactDirectoryPath": "/home/user/.gemini/antigravity-cli/brain/4d437c2d-a30c-4479-bc04-0c09ca6ebdc5",
+  "conversationId": "4d437c2d-a30c-4479-bc04-0c09ca6ebdc5",
+  "error": "",
+  "executionNum": 0,
+  "fullyIdle": true,
+  "lastUserInput": "Create a file named test_edit.txt with content 'hello world', and run the command 'ls -l test_edit.txt'.",
+  "modelName": "gemini-3.8-flash-low",
+  "terminationReason": "NO_TOOL_CALL",
+  "transcriptPath": "/home/user/.gemini/antigravity-cli/brain/4d437c2d-a30c-4479-bc04-0c09ca6ebdc5/.system_generated/logs/transcript_full.jsonl",
+  "workspacePaths": [
+    "/workspace/project"
+  ]
+}

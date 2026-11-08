@@ -1,0 +1,9 @@
+{
+  "session_id": "b9f244d4-4326-45bf-8c3d-1d249f8f21b2",
+  "transcript_path": "/home/user/.claude/projects/-tmp-claude-1000--mnt-d-projects-iris-924a44a9-3f6d-455c-b21f-f96a8c99ee03-scratchpad-consult-claude/b9f244d4-4326-45bf-8c3d-1d249f8f21b2.jsonl",
+  "cwd": "/workspace/project",
+  "prompt_id": "5dbecb0f-3845-4117-b0ee-3152632609f9",
+  "permission_mode": "bypassPermissions",
+  "hook_event_name": "UserPromptSubmit",
+  "prompt": "Do these steps and nothing else: 1) create allowed.txt containing hello with the Write tool; 2) use the Edit tool to change fixtures/denied-target.txt to say changed; if refused do not retry and do not use the shell; 3) run the shell command: printf shell_ok; 4) call the probe tool of the iris-probe MCP server. Reply with one line, and state the value of any IRIS marker you were given."
+}

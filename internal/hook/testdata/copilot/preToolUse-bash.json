@@ -1,0 +1,10 @@
+{
+  "sessionId": "05a1f795-918d-4cfb-aeb2-f17be274e1b8",
+  "timestamp": 1793917887311,
+  "cwd": "/workspace/project",
+  "toolName": "bash",
+  "toolArgs": {
+    "command": "pwd && git status --short && ls -la fixtures",
+    "description": "Inspect worktree and fixture file"
+  }
+}

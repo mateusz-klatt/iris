@@ -1,0 +1,76 @@
+{
+  "hookEventName": "post_tool_use",
+  "sessionId": "01a1add1-712e-7e22-a2a9-97ad1e9005b9",
+  "cwd": "/workspace/project",
+  "workspaceRoot": "/workspace/project",
+  "timestamp": "2026-11-05T22:25:52.808701463+00:00",
+  "transcriptPath": "/workspace/project/.exp/home/.grok/sessions//workspace/project_ENC/01a1add1-712e-7e22-a2a9-97ad1e9005b9/updates.jsonl",
+  "permissionMode": "bypassPermissions",
+  "toolName": "write",
+  "toolUseId": "call-1117010f-8145-4391-bd2d-ff25f95b0cc1-0",
+  "toolInput": {
+    "file_path": "/workspace/project/note.txt",
+    "content": "hello"
+  },
+  "toolResult": {
+    "type": "SearchReplace",
+    "EditsApplied": {
+      "old_string": "",
+      "new_string": "hello",
+      "tool_output_for_prompt": "The file /workspace/project/note.txt has been created.",
+      "tool_output_for_prompt_concise": "The file /workspace/project/note.txt has been created.",
+      "absolute_path": "/workspace/project/note.txt",
+      "edits": {
+        "details": [
+          {
+            "old_string": "",
+            "old_line": 1,
+            "new_string": "hello",
+            "new_line": 1,
+            "context_before": "",
+            "context_after": "",
+            "line_prefix": ""
+          }
+        ]
+      }
+    }
+  },
+  "toolInputTruncated": false,
+  "toolResultTruncated": false,
+  "durationMs": 2,
+  "isBackgrounded": false,
+  "hook_event_name": "PostToolUse",
+  "session_id": "01a1add1-712e-7e22-a2a9-97ad1e9005b9",
+  "transcript_path": "/workspace/project/.exp/home/.grok/sessions//workspace/project_ENC/01a1add1-712e-7e22-a2a9-97ad1e9005b9/updates.jsonl",
+  "permission_mode": "bypassPermissions",
+  "tool_name": "write",
+  "tool_input": {
+    "file_path": "/workspace/project/note.txt",
+    "content": "hello"
+  },
+  "tool_response": {
+    "type": "SearchReplace",
+    "EditsApplied": {
+      "old_string": "",
+      "new_string": "hello",
+      "tool_output_for_prompt": "The file /workspace/project/note.txt has been created.",
+      "tool_output_for_prompt_concise": "The file /workspace/project/note.txt has been created.",
+      "absolute_path": "/workspace/project/note.txt",
+      "edits": {
+        "details": [
+          {
+            "old_string": "",
+            "old_line": 1,
+            "new_string": "hello",
+            "new_line": 1,
+            "context_before": "",
+            "context_after": "",
+            "line_prefix": ""
+          }
+        ]
+      }
+    }
+  },
+  "tool_use_id": "call-1117010f-8145-4391-bd2d-ff25f95b0cc1-0",
+  "duration_ms": 2
+}
