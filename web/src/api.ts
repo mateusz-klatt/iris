@@ -80,12 +80,13 @@ export interface ThreadDetail {
 // slow: hooks run, but shell reconciliation often passes its budget, so changes go unclaimed.
 export type DoctorStatus = "ok" | "not_configured" | "needs_human" | "silent" | "slow";
 
+// The hub omits version, detail and last_hook_at when they are empty.
 export interface DoctorClient {
   client: string;
-  version: string;
+  version?: string;
   status: DoctorStatus;
-  detail: string;
-  last_hook_at: string;
+  detail?: string;
+  last_hook_at?: string;
 }
 
 /** One host's last doctor report (ADR 007). A doctor too old to name its host reports as "unknown". */

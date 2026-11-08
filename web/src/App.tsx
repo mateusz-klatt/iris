@@ -185,7 +185,7 @@ function HostReport({ report }: { report: DoctorReport }) {
               <div>
                 <strong>{client.client}</strong>
                 <small>
-                  {t("operator.version")}: {client.version.length > 0 ? client.version : t("operator.none")}
+                  {t("operator.version")}: {client.version ? client.version : t("operator.none")}
                 </small>
               </div>
               <span className="status">{t(statusKey(client.status))}</span>
