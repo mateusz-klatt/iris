@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { WatchFrame, WatchStatus } from "./api";
 import i18n from "./i18n";
+import { reviewAndSend } from "./test/send";
 import { soundPreferenceKey } from "./notificationSound";
 import { uiLocalePreferenceKey } from "./preferences";
 import {
@@ -118,9 +119,9 @@ describe("console send retries", () => {
     );
     await showSession();
     const view = await fillCompose(user, "Are you there?");
-    await user.click(view.getByRole("button", { name: "Send" }));
+    await reviewAndSend(user, view, "Send");
     expect(await screen.findByRole("alert")).toBeVisible();
-    await user.click(view.getByRole("button", { name: "Send" }));
+    await reviewAndSend(user, view, "Send");
     expect(await screen.findByText("Sent.")).toBeVisible();
     expect(keys).toHaveLength(2);
     expect(keys[1]).toBe(keys[0]);
@@ -138,6 +139,7 @@ describe("console send retries", () => {
     );
     await showSession();
     const view = await fillCompose(user, "Once only");
+    await user.click(view.getByRole("button", { name: "Review" }));
     const send = view.getByRole("button", { name: "Send" });
     await user.click(send);
     await waitFor(() => expect(send).toBeDisabled());
@@ -148,7 +150,7 @@ describe("console send retries", () => {
     expect(calls).toBe(1);
   }, 20000);
 
-  it("sends once when the form is submitted twice before React re-renders", async () => {
+  it("sends once when Send is clicked twice before React re-renders", async () => {
     const user = userEvent.setup({ delay: null });
     const pending = deferred<Response>();
     let calls = 0;
@@ -160,13 +162,11 @@ describe("console send retries", () => {
     );
     await showSession();
     const view = await fillCompose(user, "Twice in one tick");
-    const form = view.getByRole("button", { name: "Send" }).closest("form");
-    if (form === null) {
-      throw new Error("missing form");
-    }
+    await user.click(view.getByRole("button", { name: "Review" }));
+    const send = view.getByRole("button", { name: "Send" });
     act(() => {
-      form.requestSubmit();
-      form.requestSubmit();
+      send.click();
+      send.click();
     });
     await waitFor(() => expect(calls).toBe(1));
     pending.resolve(new HttpResponse(null, { status: 204 }));
@@ -186,14 +186,14 @@ describe("console send retries", () => {
     );
     await showSession();
     let view = await fillCompose(user, "ping");
-    await user.click(view.getByRole("button", { name: "Send" }));
+    await reviewAndSend(user, view, "Send");
     expect(await screen.findByText("Sent.")).toBeVisible();
     view = await fillCompose(user, "ping");
     fail = true;
-    await user.click(view.getByRole("button", { name: "Send" }));
+    await reviewAndSend(user, view, "Send");
     expect(await screen.findByRole("alert")).toBeVisible();
     await user.type(view.getByRole("textbox", { name: "Message" }), "!");
-    await user.click(view.getByRole("button", { name: "Send" }));
+    await reviewAndSend(user, view, "Send");
     await waitFor(() => expect(keys).toHaveLength(3));
     expect(new Set(keys).size).toBe(3);
   }, 30000);
@@ -315,7 +315,7 @@ describe("Iris operator console", () => {
     expect(within(detail).getByText("snapper")).toBeVisible();
     expect(threadURLs.at(-1)).toContain("repository_id=rp_iris");
     await user.type(within(detail).getByRole("textbox", { name: "Message" }), "Seen.");
-    await user.click(screen.getByRole("button", { name: "Reply" }));
+    await reviewAndSend(user, within(detail), "Reply");
     await waitFor(() => expect(bodies).toHaveLength(1));
     expect(bodies[0]).toMatchObject({ repository_id: "rp_iris", reply_to: "ms_root" });
   }, 40000);
@@ -344,10 +344,10 @@ describe("Iris operator console", () => {
     await user.type(view.getByRole("textbox", { name: "Recipients" }), "claude-host");
     await user.type(view.getByRole("textbox", { name: "Subject" }), "Status");
     await user.type(view.getByRole("textbox", { name: "Message" }), "Status?");
-    await user.click(view.getByRole("button", { name: "Send" }));
+    await reviewAndSend(user, view, "Send");
     await waitFor(() => expect(bodies).toHaveLength(1));
     await user.selectOptions(screen.getByRole("combobox", { name: "Repository" }), "rp_snapper");
-    await user.click(view.getByRole("button", { name: "Send" }));
+    await reviewAndSend(user, view, "Send");
     await waitFor(() => expect(bodies).toHaveLength(2));
     expect(bodies[1]?.repository_id).toBe("rp_snapper");
     expect(bodies[1]?.key).not.toBe(bodies[0]?.key);
@@ -388,7 +388,7 @@ describe("Iris operator console", () => {
     const detail = await screen.findByRole("article", { name: "Rollout check" });
     const replyBody = within(detail).getByRole("textbox", { name: "Message" });
     await user.type(replyBody, "Noted.");
-    await user.click(screen.getByRole("button", { name: "Reply" }));
+    await reviewAndSend(user, within(detail), "Reply");
     await waitFor(() => expect(bodies).toHaveLength(1));
     expect(bodies[0]).toMatchObject({
       to: ["claude-host"],
@@ -406,7 +406,7 @@ describe("Iris operator console", () => {
     await user.type(view.getByRole("textbox", { name: "Recipients" }), "claude-host, human");
     await user.type(view.getByRole("textbox", { name: "Subject" }), "Check in");
     await user.type(view.getByRole("textbox", { name: "Message" }), "Are you there?");
-    await user.click(view.getByRole("button", { name: "Send" }));
+    await reviewAndSend(user, view, "Send");
     await waitFor(() => expect(bodies).toHaveLength(2));
     expect(bodies[1]).toMatchObject({
       to: ["claude-host", "human"],
@@ -459,8 +459,7 @@ describe("Iris operator console", () => {
     await reloaded(before);
     before = overviews;
     await user.click(screen.getByRole("button", { name: "Back to threads" }));
-    await fillCompose(user, "Status?");
-    await user.click(screen.getByRole("button", { name: "Send" }));
+    await reviewAndSend(user, await fillCompose(user, "Status?"), "Send");
     expect(await screen.findByText("Sent.")).toBeVisible();
     await reloaded(before);
     before = overviews;
@@ -964,7 +963,7 @@ describe("Iris operator console", () => {
     await user.click(await screen.findByRole("button", { name: /Rollout check/ }));
     const detail = await screen.findByRole("article", { name: "ms_root" });
     expect(within(detail).getByRole("textbox", { name: "Recipients" })).toHaveValue("");
-    expect(within(detail).getByRole("button", { name: "Reply" })).toBeDisabled();
+    expect(within(detail).getByRole("button", { name: "Review" })).toBeDisabled();
   });
 
   it("keeps a subject that already starts with Re: and sends the edited reply", async () => {
@@ -993,7 +992,7 @@ describe("Iris operator console", () => {
     await user.clear(subject);
     await user.type(subject, "Re: Noted");
     await user.type(within(detail).getByRole("textbox", { name: "Message" }), "Ok.");
-    await user.click(within(detail).getByRole("button", { name: "Reply" }));
+    await reviewAndSend(user, within(detail), "Reply");
     await waitFor(() => expect(bodies).toHaveLength(1));
     expect(bodies[0]).toMatchObject({ to: ["human"], subject: "Re: Noted", body: "Ok.", reply_to: "ms_root" });
   }, 20000);
@@ -1005,7 +1004,7 @@ describe("Iris operator console", () => {
       await user.type(view.getByRole("textbox", { name: "Recipients" }), "human");
       await user.type(view.getByRole("textbox", { name: "Subject" }), "Check in");
       await user.type(view.getByRole("textbox", { name: "Message" }), "Are you there?");
-      await user.click(view.getByRole("button", { name: "Send" }));
+      await reviewAndSend(user, view, "Send");
       return view;
     };
 

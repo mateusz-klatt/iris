@@ -389,6 +389,9 @@ const translation = {
     detail: "Подробиці",
     version: "Версія",
     checkedAt: "Перевірено {{date}}",
+    review: "Перевірити",
+    reviewTitle: "Перевірте перед надсиланням",
+    reviewBack: "Повернутися до чернетки",
   },
 } satisfies TranslationResource;
 
