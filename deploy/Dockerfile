@@ -1,4 +1,4 @@
-# Build from the repository root: docker build -f deploy/Dockerfile .
+# Build from the repository root with source metadata: make image
 FROM node:26-bookworm-slim@sha256:add5c17c14752c54d2f3d519ec46a3815684d41c33f198bcb09fb998f7dcbf68 AS console
 WORKDIR /src/web
 COPY web/package.json web/package-lock.json ./
@@ -7,12 +7,16 @@ COPY web/ ./
 RUN npm run build
 
 FROM golang:1.27.3-bookworm@sha256:dc0963f32053e4bc451d24d87e3892d42d01021b61f093e98eb95c0352bb84b0 AS binary
+ARG VERSION=dev
+ARG COMMIT
+ARG MODIFIED
 WORKDIR /src
 COPY go.mod go.sum ./
 RUN go mod download
 COPY . .
 COPY --from=console /src/web/dist/ ./internal/webui/dist/
-RUN CGO_ENABLED=0 go build -trimpath -ldflags="-s -w" -o /out/iris ./cmd/iris
+# Use make image to pass the source checkout's identity; .git is intentionally not copied.
+RUN test -n "$COMMIT" && test -n "$MODIFIED" && CGO_ENABLED=0 go build -buildvcs=false -trimpath -ldflags="-s -w -X github.com/mateusz-klatt/iris/internal/buildinfo.Version=$VERSION -X github.com/mateusz-klatt/iris/internal/buildinfo.Commit=$COMMIT -X github.com/mateusz-klatt/iris/internal/buildinfo.Modified=$MODIFIED" -o /out/iris ./cmd/iris
 RUN mkdir -p /data && chown 65532:65532 /data
 
 FROM scratch

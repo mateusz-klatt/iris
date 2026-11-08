@@ -14,14 +14,12 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mateusz-klatt/iris/internal/buildinfo"
 	"github.com/mateusz-klatt/iris/internal/config"
 	"github.com/mateusz-klatt/iris/internal/hub"
 	"github.com/mateusz-klatt/iris/internal/store"
 	"github.com/mateusz-klatt/iris/internal/webui"
 )
-
-// version is set at release time with -ldflags.
-var version = "dev"
 
 // exitProcess is the process boundary. Tests replace it so main can be called.
 var exitProcess = os.Exit
@@ -73,7 +71,7 @@ func run(args []string) error {
 		return runMCP(args[1:])
 	}
 	if len(args) == 1 && (args[0] == "version" || args[0] == "--version") {
-		fmt.Println(version)
+		fmt.Println(buildinfo.String())
 		return nil
 	}
 	if len(args) == 0 || args[0] != "serve" {

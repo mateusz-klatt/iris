@@ -1,8 +1,9 @@
 # Release builds never use cgo. The race detector needs it on some platforms, so tests enable it
 # only for themselves. Nothing in Iris links C code.
 GO ?= go
+VERSION ?= dev
 
-.PHONY: test race fixtures build web cov cov-check check-all lint vuln secrets pins refresh
+.PHONY: test race fixtures build image web cov cov-check check-all lint vuln secrets pins refresh
 
 test:
 	$(GO) vet ./...
@@ -15,7 +16,12 @@ fixtures:
 	CGO_ENABLED=0 $(GO) test ./internal/hook/...
 
 build:
-	CGO_ENABLED=0 $(GO) build -trimpath -o iris ./cmd/iris
+	CGO_ENABLED=0 $(GO) build -trimpath -ldflags="-X github.com/mateusz-klatt/iris/internal/buildinfo.Version=$(VERSION)" -o iris ./cmd/iris
+
+# The Docker context excludes .git. Capture source identity here, before Node generates assets.
+# A failed status check must not claim that the checkout is clean.
+image:
+	docker compose -f deploy/compose.yaml build --build-arg VERSION="$(VERSION)" --build-arg COMMIT="$(shell git rev-parse --verify HEAD)" --build-arg MODIFIED="$(if $(shell git status --porcelain --untracked-files=normal || echo unknown),true,false)"
 
 # Rebuild the embedded console. The placeholder in internal/webui/dist is what
 # `go build` uses when Node has not run; this target replaces that tree.

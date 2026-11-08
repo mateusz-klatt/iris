@@ -16,6 +16,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mateusz-klatt/iris/internal/buildinfo"
 	"github.com/mateusz-klatt/iris/internal/integrate"
 	"github.com/mateusz-klatt/iris/internal/proc"
 	"github.com/mateusz-klatt/iris/internal/service"
@@ -61,7 +62,7 @@ func TestMainReportsTheVersionAndRejectsAnUnknownCommand(t *testing.T) {
 		}()
 		main()
 	})
-	if !strings.Contains(out, "dev") {
+	if strings.TrimSpace(out) != buildinfo.String() {
 		t.Fatal(out)
 	}
 
@@ -83,7 +84,7 @@ func TestMainReportsTheVersionAndRejectsAnUnknownCommand(t *testing.T) {
 			t.Fatalf("code %d", code)
 		}
 	})
-	if strings.TrimSpace(out) != version {
+	if strings.TrimSpace(out) != buildinfo.String() {
 		t.Fatalf("--version printed %q", out)
 	}
 	if code := dispatch([]string{"nope"}); code != 1 {

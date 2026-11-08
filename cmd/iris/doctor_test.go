@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mateusz-klatt/iris/internal/buildinfo"
 	"github.com/mateusz-klatt/iris/internal/doctor"
 )
 
@@ -80,7 +81,7 @@ func TestDoctorBundlePrintsJSONAndNoHub(t *testing.T) {
 	if err := json.Unmarshal(out.Bytes(), &got); err != nil {
 		t.Fatalf("not a bundle: %v\n%s", err, out.String())
 	}
-	if got.Hub.Source != "command line" || got.Hub.Up || got.Iris.Version == "" || strings.Contains(out.String(), "127.0.0.1") {
+	if got.Hub.Source != "command line" || got.Hub.Up || got.Iris.Version != buildinfo.String() || strings.Contains(out.String(), "127.0.0.1") {
 		t.Fatalf("%s", out.String())
 	}
 	out.Reset()

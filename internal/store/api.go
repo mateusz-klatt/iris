@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+
+	"github.com/mateusz-klatt/iris/internal/buildinfo"
 )
 
 // Call dispatches a domain operation. All observations and changes share a single
@@ -113,7 +115,7 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 			if err = t.row("SELECT page_count*page_size FROM pragma_page_count(),pragma_page_size()").Scan(&bytes); err != nil {
 				return err
 			}
-			out = map[string]any{"version": "dev", "stream": s.stream, "boot_epoch": s.epoch, "counts": counts, "database_bytes": bytes}
+			out = map[string]any{"version": buildinfo.String(), "stream": s.stream, "boot_epoch": s.epoch, "counts": counts, "database_bytes": bytes}
 		default:
 			return fail("not_found", "unknown operation")
 		}

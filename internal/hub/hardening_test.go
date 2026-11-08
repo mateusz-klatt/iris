@@ -2,10 +2,13 @@ package hub
 
 import (
 	"bytes"
+	"encoding/json"
 	"log"
 	"net/http/httptest"
 	"strings"
 	"testing"
+
+	"github.com/mateusz-klatt/iris/internal/buildinfo"
 )
 
 func TestStatusAndBodyLimits(t *testing.T) {
@@ -25,6 +28,12 @@ func TestStatusAndBodyLimits(t *testing.T) {
 		}
 		if token == "test-secret" && !strings.Contains(w.Body.String(), "counts") {
 			t.Fatal(w.Body.String())
+		}
+		if token == "test-secret" {
+			var status map[string]any
+			if err := json.Unmarshal(w.Body.Bytes(), &status); err != nil || status["version"] != buildinfo.String() {
+				t.Fatalf("authenticated build identity: %s (%v)", w.Body.String(), err)
+			}
 		}
 		if w.Header().Get("Cache-Control") != "no-store" {
 			t.Fatal(w.Header())

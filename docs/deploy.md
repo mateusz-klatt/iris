@@ -19,11 +19,16 @@ and the token private. A bind-mounted replacement must be writable by uid 65532.
 For an operator performing deployment, from the repository root:
 
 ```sh
-docker compose -f deploy/compose.yaml build
+make image
 docker compose -f deploy/compose.yaml up -d
 ```
 
 These commands start the sole container named `iris`, with restart unless-stopped.
+`make image` stamps the full commit and source checkout's dirty state before building the console;
+`VERSION` optionally names the build. Direct Docker builds must pass `COMMIT` and `MODIFIED`
+(`true`, `false`, or `unknown`) as build arguments. The context excludes `.git`, so the image
+cannot discover that identity by itself. `iris version` inside the container and authenticated
+hub status report the same identity; unauthenticated status remains only `{"status":"ok"}`.
 The hub creates /data/hub.token once. Retrieve it through an administrator-controlled
 channel and distribute it privately; do not paste it into chat, URLs or shell history.
 Setup cannot fetch or provision this credential. Back up the database with

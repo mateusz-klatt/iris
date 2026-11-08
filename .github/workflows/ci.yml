@@ -100,6 +100,22 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
+      - name: Build identity distinguishes clean, dirty and unavailable metadata
+        shell: bash
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          set -euo pipefail
+          binary="$RUNNER_TEMP/iris-version.exe"
+          go build -trimpath -o "$binary" ./cmd/iris
+          test "$("$binary" version)" = "dev (commit $GITHUB_SHA; clean)"
+          trap 'rm -f .iris-build-identity-probe' EXIT
+          echo dirty > .iris-build-identity-probe
+          go build -trimpath -o "$binary" ./cmd/iris
+          test "$("$binary" --version)" = "dev (commit $GITHUB_SHA; dirty)"
+          rm .iris-build-identity-probe
+          go build -buildvcs=false -trimpath -o "$binary" ./cmd/iris
+          test "$("$binary" version)" = "dev (commit unknown; modified unknown)"
       - run: go vet ./...
       - run: go test -coverprofile=coverage-${{ matrix.os }}.out ./...
         # PowerShell would split the flag at the dot in its value.
@@ -232,6 +248,9 @@ jobs:
           # The runner is amd64, and both platforms are loaded in no fixed order.
           image=$(docker images --format '{{.Repository}}:{{.Tag}}' ghcr.io/mateusz-klatt/iris | grep -- '-amd64$')
           test -n "$image"
+          identity=$(docker run --rm "$image" version)
+          echo "$identity"
+          test "${identity#* (commit }" = "$GITHUB_SHA; clean)"
           test "$(docker image inspect --format '{{.Config.User}}' "$image")" = "65532:65532"
           docker volume create iris-image-check
           docker run -d --name iris-image-check -v iris-image-check:/data "$image"
@@ -247,6 +266,14 @@ jobs:
           inspect ls -ln /data
           inspect stat -c '%u:%g' /data /data/hub.token /data/iris.db | sort -u | tee owners
           test "$(cat owners)" = "65532:65532"
+      - name: The deployment image carries the source checkout identity
+        shell: bash
+        run: |
+          set -euo pipefail
+          tree=clean
+          if test -n "$(git status --porcelain --untracked-files=normal)"; then tree=dirty; fi
+          make image
+          test "$(docker run --rm iris-iris version)" = "dev (commit $GITHUB_SHA; $tree)"
   check-all:
     # Lint, known vulnerabilities, secrets in history, and pinned actions. Run the same
     # locally with `make check-all`; each tool's version is pinned in the Makefile.
