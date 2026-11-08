@@ -1,12 +1,15 @@
 # Status
 
-Last updated 2026-11-07, from `main` at `8132fbb`. Nothing is released.
+Last updated 2026-11-08, from `main` at `efe0af6`. Nothing is released.
 
 The hub runs at https://iris.klatt.ie behind Apache and Cloudflare (`docs/deploy.md`). It was last
-deployed from `8132fbb` on 2026-11-07, and the sessions active before the deploy reattached. Agents on
-three hosts use it every day: macOS, Linux under WSL, and Windows 11. Each claim below was measured
-and links to its pull request or document. Anything not measured is listed under "Not done or not
-measured".
+deployed from `8ffbd36` on 2026-11-08 (#206), according to the Holzera operator's deployment report:
+the database integrity check passed, the public status endpoint answered, the container had no
+restarts, and all eight fleet sessions reattached. This status refresh did not independently inspect
+the container. Later changes through `efe0af6` are tests and research documentation (#207, #208),
+not a later deployment. Agents on macOS, Linux under WSL, and Windows 11 use the hub every day.
+Evidence and its limits are identified below. Anything not measured is listed under "Not done or
+not measured".
 
 ## First milestone
 
@@ -50,6 +53,15 @@ Against the production hub, over TLS:
 
 ## Measured behaviour
 
+- **Claude and Codex in one worktree.** Actual concurrent clients on macOS and WSL preserved edits
+  to separate files and refused native Edit/apply_patch attempts against the other session's claim
+  (#208, [measurement record](research/shared-worktree.md)). WSL also demonstrated silent shell
+  overwrites and commits containing both sessions' changes. In a linked-worktree control, the shell
+  warned and the commit guard refused the conflicting commit. A shared worktree therefore needs one
+  owner for Git operations and agreed file ownership; that is coordination, not Iris enforcement.
+  Separate worktrees isolate working files, HEAD and index. These bounded runs do not establish
+  freedom from Git races. The Windows observations lack captured refusal text and include a
+  confounded attempt, so they are not native-contention proof in that record.
 - **Recovery across hub restarts.** A heartbeat reattaches `iris mcp` and `iris watch` within the
   recovery window (#28). A hook keeps its session's generation and reattaches with that proof. A
   hook without it refuses an edit rather than allowing it unclaimed (#55). With a real Claude Code
@@ -95,8 +107,10 @@ Against the production hub, over TLS:
 
 ## Not done or not measured
 
-- **Other clients on real hosts.** Codex, Cursor, Antigravity, Grok and Kimi are covered only by
-  captured payloads and tests. Copilot has run live on Linux only.
+- **Other clients on real hosts.** Codex has run with Claude in the bounded macOS and WSL
+  shared-worktree experiments above; that does not validate every integration path. Cursor,
+  Antigravity, Grok and Kimi do not have equivalent end-to-end evidence in this status record.
+  Copilot has run live on Linux only.
 - **Remote execution targets are unprotected.** A client whose tools run on a remote host, in a
   container or in a cloud sandbox changes files Iris neither claims nor checks: the hook sees only the
   machine it runs on (ADR 009). Detection waits for a captured remote payload.
@@ -109,7 +123,11 @@ Against the production hub, over TLS:
   CPU busy. It has not reproduced since, and its name was not captured. On 2026-11-08 about 470 runs
   of `go test -v ./internal/integrate/` under load on all 16 cores of WSL on the same PC passed, with
   48,902 test passes and none failing, so it did not reproduce on Linux. A -v loop under load on
-  Windows itself is still pending.
+  Windows itself is still pending. On native Windows at `993e545`, three uncached repetitions of
+  `go test -p 1 -count=3 -timeout=3m -v ./internal/integrate/...` passed in 22.746 s with
+  `CGO_ENABLED=0` and `GOMAXPROCS=2`. The local diagnostic log is
+  `iris-windows-integrate-993e545.log`. This bounded validation used no artificial CPU stress and
+  does not reproduce or resolve the original full-load failure.
 - **Services:** loading the LaunchAgent at login, the `systemd --user` unit starting at boot from
   linger alone, without a login session (it needs the Codex desktop app closed first), and the
   service exit codes on Windows.
