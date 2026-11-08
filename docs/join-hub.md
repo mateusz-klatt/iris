@@ -153,6 +153,10 @@ fixes that for this window only. To run `iris` in later windows, add the directo
 
 ## Checking it
 
+Iris protects edits made on the machine where the client's hooks run. When a client runs its tools
+somewhere else, such as on a remote host, in a container or in a cloud sandbox, those edits are
+**unprotected**: Iris neither claims nor checks them (ADR 009).
+
 `iris doctor` must show `hub: ok`, `token: ok` and `claude ok`. Start a new Claude Code session, because
 a running one does not load the plugin. Ask it to call the Iris `whoami` and `peers` tools, then to send
 a message to a peer. An interactive session reports it at once, with no prompt.
@@ -177,6 +181,18 @@ hook and fires it in a real session; `iris doctor --live` does that.
 `claude ok` can change later. A hook that failed open in the last 24 hours turns the row into `silent`,
 and `iris doctor` exits 1. The row names the failure, and `hook-failures.log` beside the token file
 keeps it. The row clears once the entry is more than 24 hours old.
+
+Doctor also prints a `case policy:` line when the repository you run it in is case-sensitive at the
+hub, which is only by an explicit opt-out (ADR 003), while this checkout folds case, as git records in
+`core.ignorecase` on a default macOS or Windows volume. There, a claim on `a.go` does not stop an edit
+of `A.GO`. Asking the hub uses the guard's check, which, as a commit does, registers a repository the
+hub has not seen yet.
+
+Some things are worth knowing without being failures. A tool name Iris does not recognise, and a
+cross-load, where this client's hook ran inside another client's session, are kept in
+`hook-observed.log` beside it, a separate file so they cannot crowd out failures. The row keeps its
+status and adds "observed in 24 h: …" with a count for each. A tool name is reduced to letters,
+digits and `_-.:/` there, because it comes from the client.
 
 A shell command whose reconciliation ran past its budget is graded differently. The budget is 1 s,
 or 300 ms when the hub runs on the same machine. The hook still worked; that command's changes only

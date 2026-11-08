@@ -11,9 +11,11 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -66,6 +68,9 @@ type Result struct {
 	StoreError       string
 	// Guard is the pre-commit guard line for the repository doctor ran in.
 	Guard string
+	// Case warns when the repository doctor ran in is case-sensitive at the hub while this
+	// checkout folds case. Empty means there is nothing to warn about, or nothing known.
+	Case string
 }
 
 // Options configures one offline doctor run. RunLive is separate because it calls a model.
@@ -81,6 +86,8 @@ type Options struct {
 	Dir string
 	// Self is this doctor's own binary. Empty means the running executable.
 	Self string
+	// Host is this machine's name as its hooks give it to the hub. Empty means os.Hostname.
+	Host string
 }
 
 func (o Options) self() string {
@@ -96,6 +103,14 @@ func sameFile(a, b string) bool {
 	ia, errA := os.Stat(a)
 	ib, errB := os.Stat(b)
 	return errA == nil && errB == nil && os.SameFile(ia, ib)
+}
+
+func (o Options) host() string {
+	if o.Host != "" {
+		return o.Host
+	}
+	host, _ := os.Hostname() // what iris hook sends; an error leaves "", and the hub then says nothing
+	return host
 }
 
 // versionTimeout is long enough for a normal client and short enough to keep doctor usable.
@@ -141,6 +156,11 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 	}
 	res.Guard = guardLine(ctx, opt.Dir)
 	if probe.up && probe.tokenOK {
+		res.Case = caseLine(ctx, hubURL, token, opt.host(), opt.Dir, opt.HTTP)
+		seen := lastHooks(ctx, hubURL, token, opt.host(), opt.HTTP)
+		for i := range res.Report.Clients {
+			res.Report.Clients[i].LastHookAt = seen[res.Report.Clients[i].Client]
+		}
 		if err := storeReport(ctx, hubURL, token, res.Report, opt.HTTP); err != nil {
 			res.StoreError = err.Error()
 		} else {
@@ -215,7 +235,13 @@ func (r Result) Format() string {
 		if c.Detail != "" {
 			fmt.Fprintf(&b, "\t%s", c.Detail)
 		}
+		if c.LastHookAt != "" {
+			fmt.Fprintf(&b, "\tlast hook %s", c.LastHookAt)
+		}
 		b.WriteByte('\n')
+	}
+	if r.Case != "" {
+		fmt.Fprintf(&b, "case policy: %s\n", r.Case)
 	}
 	if r.Guard != "" {
 		fmt.Fprintf(&b, "pre-commit guard: %s\n", r.Guard)
@@ -346,8 +372,14 @@ func applyFailures(res *Result, tokenFile string, now time.Time) error {
 	if err != nil {
 		return err
 	}
+	seen, err := hook.ReadRecentObservations(tokenFile, failureRead)
+	if err != nil {
+		return err
+	}
+	entries = append(entries, seen...)
 	broken := map[string][]string{}
 	degraded := map[string]int{}
+	observed := map[string]map[string]int{}
 	for _, entry := range entries {
 		name := integrate.Canonical(entry.Client)
 		if name == "" || now.Sub(entry.Time) > failureWindow {
@@ -355,6 +387,14 @@ func applyFailures(res *Result, tokenFile string, now time.Time) error {
 		}
 		if entry.Degraded() {
 			degraded[name]++
+			continue
+		}
+		if entry.Observed() {
+			// Not a failure: the hook worked, but saw something doctor should say (C4).
+			if observed[name] == nil {
+				observed[name] = map[string]int{}
+			}
+			observed[name][entry.Error]++
 			continue
 		}
 		broken[name] = append(broken[name], entry.Event+" "+entry.Stage+": "+entry.Error)
@@ -371,6 +411,9 @@ func applyFailures(res *Result, tokenFile string, now time.Time) error {
 			row.Detail = fmt.Sprintf("%d shell reconciliations ran past their budget (%s, or %s for a hub on this machine) in 24 h, so those commands' changes went unclaimed; git status or the hub is slow here, as on a big or cold worktree, a loaded machine or a slow network", n, hook.RemoteReconcileDeadline, hook.ReconcileDeadline)
 		case n > 0:
 			row.Detail = joinDetail(row.Detail, fmt.Sprintf("degraded: %d shell reconciliation(s) ran past their budget in 24 h", n))
+		}
+		if seen := observed[row.Client]; len(seen) > 0 {
+			row.Detail = joinDetail(row.Detail, "observed in 24 h: "+observedText(seen))
 		}
 	}
 	return nil
@@ -618,4 +661,64 @@ func describeVersion(version string, err error) string {
 		return "version check failed: " + err.Error()
 	}
 	return "version " + version
+}
+
+// lastHooks asks the hub when each client's hooks on host last reached it: a session a hook
+// registered, an automatic claim or a shell reconcile, never a heartbeat (gap review C4). A
+// hub that cannot say, being older, unreachable or refusing, leaves every client unknown.
+func lastHooks(ctx context.Context, base, token, host string, hc *http.Client) map[string]string {
+	res, err := hubRequest(ctx, http.MethodGet, strings.TrimRight(base, "/")+"/v1/hooks/seen?"+url.Values{"host": {host}}.Encode(), token, nil, hc)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = res.Body.Close() }()
+	var out struct {
+		Clients map[string]string `json:"clients"`
+	}
+	if res.StatusCode != http.StatusOK || json.NewDecoder(res.Body).Decode(&out) != nil {
+		return nil
+	}
+	return out.Clients
+}
+
+// caseLine is ADR 003's warning. Claims fold case in every repository unless it opts out as
+// sensitive. A checkout where git sets core.ignorecase, as on a default macOS or Windows
+// volume, cannot hold two paths that differ only by case, so in a sensitive repository a claim
+// on a.go would not stop an edit of A.GO from here. Asking the hub uses the guard's check,
+// which, like a commit, may register a repository the hub has not seen.
+func caseLine(ctx context.Context, base, token, host, dir string, hc *http.Client) string {
+	if dir == "" {
+		dir = "."
+	}
+	repo, err := gitinfo.Find(dir)
+	if err != nil {
+		return ""
+	}
+	if folds, _ := repo.ConfigValue("core", "ignorecase"); !strings.EqualFold(folds, "true") {
+		return ""
+	}
+	body, _ := json.Marshal(hubclient.CheckRequest{CommonDir: repo.CommonDir, Host: host, Worktree: repo.Worktree, RemoteURL: repo.RemoteURL, RootCommit: repo.RootCommit, Paths: []string{}})
+	res, err := hubRequest(ctx, http.MethodPost, strings.TrimRight(base, "/")+"/v1/guard/check", token, bytes.NewReader(body), hc)
+	if err != nil {
+		return ""
+	}
+	defer func() { _ = res.Body.Close() }()
+	var out hubclient.CheckResponse
+	if res.StatusCode != http.StatusOK || json.NewDecoder(res.Body).Decode(&out) != nil || out.CasePolicy != "sensitive" {
+		return ""
+	}
+	return "this repository is case-sensitive at the hub, but this checkout folds case (core.ignorecase), so a claim on a.go does not stop an edit of A.GO here"
+}
+
+// observedText lists observations with their counts, in a stable order.
+func observedText(seen map[string]int) string {
+	texts := make([]string, 0, len(seen))
+	for text := range seen {
+		texts = append(texts, text)
+	}
+	sort.Strings(texts)
+	for i, text := range texts {
+		texts[i] = fmt.Sprintf("%s (%d)", text, seen[text])
+	}
+	return strings.Join(texts, "; ")
 }

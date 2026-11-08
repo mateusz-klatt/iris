@@ -93,6 +93,8 @@ Hard rules for `iris hook`, because failure semantics differ between clients:
 6. Every fallback to allow caused by a failure is recorded in `hook-failures.log`, without payload
    content, and `iris doctor` reports it. A silent fail-open once hid a real bypass: Copilot sends
    no tool call id, the hub refused the request, and the edit went through a live claim.
+   Unknown tools and cross-loads are not failures, but doctor reports them too, from
+   `hook-observed.log` (gap review C4).
 7. A client that provides no tool call id gets one derived from a hash of the raw payload.
 
 A hook is a new process, so every call starts with DNS, TCP and TLS. Against the public hub a lost
@@ -570,7 +572,9 @@ The owner's React frontend moves to `web/`, built by Node at release time and em
 `go:embed`. The API layer is rewritten for Iris. See `docs/PROVENANCE.md` for what is excluded.
 The first screen with no sessions shows a live wait for the first session, next to each client's
 status from the last doctor run (hook received, not configured, needs a human step), with a button
-to run the doctor. A silent client must show its cause, not an empty table.
+that reloads the last report. Doctor itself runs on each host, where the client configuration is,
+so the console cannot run it; it says to run `iris doctor` on that computer, and shows when the
+report was checked (gap review C4). A silent client must show its cause, not an empty table.
 
 ### D17. Removing records
 

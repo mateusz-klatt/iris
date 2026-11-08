@@ -198,3 +198,48 @@ func TestWakeUpgradeHonorsIssuerQuota(t *testing.T) {
 		t.Fatal(resp, err)
 	}
 }
+
+// Gap review B2: a monitor's first connection can fail on the very frame that tells it about
+// waiting mail. Its cursor is not saved, so the next connection, with nothing else happening
+// on the hub, must be told again.
+func TestAFailedWaitingFrameIsSentAgainOnReconnect(t *testing.T) {
+	h, s := setup(t)
+	a, b := register(t, s, 1), register(t, s, 2)
+	send(t, s, a, b, "waiting")
+	var failed atomic.Bool
+	real := h.writeSocket
+	h.writeSocket = func(ctx context.Context, conn *websocket.Conn, raw []byte) error {
+		if failed.CompareAndSwap(false, true) {
+			return io.ErrClosedPipe
+		}
+		return real(ctx, conn, raw)
+	}
+	path := "ws" + strings.TrimPrefix(s.URL, "http") + "/v1/watch?execution_id=" + b["execution_id"].(string) + "&consumer_id=iris-watch"
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	options := &websocket.DialOptions{HTTPHeader: http.Header{"Authorization": {"Bearer test-secret"}}, Subprotocols: []string{"iris.v1"}}
+	first, _, err := websocket.Dial(ctx, path, options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := first.Read(ctx); err == nil {
+		t.Fatal("the failed frame arrived")
+	}
+	_ = first.CloseNow()
+	// The hub may still be releasing the first monitor, which refuses a second as busy.
+	var second *websocket.Conn
+	for second == nil {
+		if second, _, err = websocket.Dial(ctx, path, options); err != nil {
+			select {
+			case <-ctx.Done():
+				t.Fatal(err)
+			case <-time.After(20 * time.Millisecond):
+			}
+		}
+	}
+	defer func() { _ = second.CloseNow() }()
+	_, raw, err := second.Read(ctx)
+	if err != nil || !strings.Contains(string(raw), `"kind":"reset"`) || !failed.Load() {
+		t.Fatalf("the reconnected monitor got %s, %v", raw, err)
+	}
+}

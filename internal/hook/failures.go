@@ -39,6 +39,13 @@ func (f Failure) Degraded() bool {
 	return strings.HasPrefix(f.Stage, "shell ") && f.Error == shellOverBudget
 }
 
+// stageObserved marks an entry that is not a failure: something doctor should report, such
+// as an unknown tool or a cross-load, while the hook still did its work (gap review C4).
+const stageObserved = "observed"
+
+// Observed reports whether f is such an observation rather than a failure.
+func (f Failure) Observed() bool { return f.Stage == stageObserved }
+
 // shellOverBudget is what a shell reconcile records when it runs past ReconcileDeadline.
 const shellOverBudget = "shell reconciliation passed its deadline"
 
@@ -52,7 +59,12 @@ type runState struct {
 	err   error
 	// receipt is the doctor canary's proof that Iris ran, for stderr; see canaryReceipt.
 	receipt []byte
+	// observed is what this run saw for doctor without failing; see Failure.Observed.
+	observed string
 }
+
+func (s *runState) observe(text string) { s.mu.Lock(); s.observed = text; s.mu.Unlock() }
+func (s *runState) observation() string { s.mu.Lock(); defer s.mu.Unlock(); return s.observed }
 
 func (s *runState) received(b []byte) { s.mu.Lock(); s.receipt = b; s.mu.Unlock() }
 
@@ -123,7 +135,10 @@ func failureText(err error) string {
 	}
 	return fmt.Sprintf("dependency failure (%T)", err)
 }
-func (r Runner) recordFailure(stage string, err error) {
+func (r Runner) recordFailure(stage string, err error) { r.record(stage, failureText(err)) }
+
+// record appends one entry to the log doctor reads, within the log's small budget.
+func (r Runner) record(stage, text string) {
 	// Logging is best effort. A slow disk, permissions failure or competing writer
 	// must not delay the allow response beyond this small, fixed budget.
 	done := make(chan struct{})
@@ -141,7 +156,7 @@ func (r Runner) recordFailure(stage string, err error) {
 		if client == "" {
 			client = "unknown"
 		}
-		entry := Failure{Time: time.Now().UTC(), Client: client, Event: boundedLabel(r.EventName), Stage: stage, Error: failureText(err)}
+		entry := Failure{Time: time.Now().UTC(), Client: client, Event: boundedLabel(r.EventName), Stage: stage, Error: text}
 		_ = appendFailure(token, entry)
 	}()
 	after := r.logAfter
@@ -181,8 +196,18 @@ var openFailureLog = func(path string, flag int, perm os.FileMode) (logFile, err
 func failurePath(tokenFile string) string {
 	return filepath.Join(filepath.Dir(tokenFile), "hook-failures.log")
 }
+
+// observedPath is a log of its own, so that frequent observations, such as a tool the client
+// calls all the time, cannot push real failures out of the bounded failure log.
+func observedPath(tokenFile string) string {
+	return filepath.Join(filepath.Dir(tokenFile), "hook-observed.log")
+}
+
 func appendFailure(tokenFile string, entry Failure) error {
 	path := failurePath(tokenFile)
+	if entry.Observed() {
+		path = observedPath(tokenFile)
+	}
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
@@ -244,11 +269,20 @@ func appendFailure(tokenFile string, entry Failure) error {
 // ReadRecentFailures reads up to limit newest entries beside tokenFile, oldest
 // first. Missing logs are normal; at most 64 KiB is read even from oversized files.
 func ReadRecentFailures(tokenFile string, limit int) ([]Failure, error) {
+	return readLog(failurePath(tokenFile), limit)
+}
+
+// ReadRecentObservations reads the observation log beside tokenFile as ReadRecentFailures
+// reads the failure log.
+func ReadRecentObservations(tokenFile string, limit int) ([]Failure, error) {
+	return readLog(observedPath(tokenFile), limit)
+}
+
+func readLog(path string, limit int) ([]Failure, error) {
 	out := []Failure{}
 	if limit <= 0 {
 		return out, nil
 	}
-	path := failurePath(tokenFile)
 	info, err := os.Lstat(path)
 	if errors.Is(err, os.ErrNotExist) {
 		return out, nil

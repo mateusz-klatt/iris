@@ -518,3 +518,24 @@ func (t *transaction) priorAgent(r Request, repo string) (id, name string, err e
 	}
 	return id, name, err
 }
+
+// hooksSeen is, for each client on host, when its hooks last reached the hub, or nothing for a
+// client whose hooks never did. iris doctor shows it as the client's last hook.
+func (t *transaction) hooksSeen(host string) (map[string]any, error) {
+	if host == "" {
+		return nil, fail("bad_request", "host is required")
+	}
+	rows, err := t.rows("SELECT client,MAX(hook_seen_ms) FROM Execution WHERE host_id=? AND hook_seen_ms>0 GROUP BY client", host)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	clients := map[string]any{}
+	for rows.Next() {
+		var client string
+		var ms int64
+		rows.Scan(&client, &ms)
+		clients[client] = timestamp(sql.NullInt64{Int64: ms, Valid: true})
+	}
+	return map[string]any{"clients": clients}, rows.Err()
+}

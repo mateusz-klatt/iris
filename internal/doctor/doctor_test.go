@@ -271,3 +271,49 @@ func TestFailuresCountOnlyWhenRecent(t *testing.T) {
 		}
 	}
 }
+
+// An observation is not a failure (gap review C4): the row keeps its status, and the note
+// says what was seen in the last 24 hours and how often.
+func TestObservationsAreNotedNotFailed(t *testing.T) {
+	now := time.Date(2026, 11, 6, 12, 0, 0, 0, time.UTC)
+	token := filepath.Join(t.TempDir(), "hub.token")
+	log := filepath.Join(filepath.Dir(token), "hook-observed.log")
+	line := func(client, text string, at time.Time) string {
+		return fmt.Sprintf(`{"time":%q,"client":%q,"event":"preToolUse","stage":"observed","error":%q}`+"\n", at.Format(time.RFC3339), client, text)
+	}
+	body := line(integrate.Copilot, "unknown tool view", now.Add(-time.Hour)) +
+		line(integrate.Copilot, "unknown tool view", now.Add(-2*time.Hour)) +
+		line(integrate.Copilot, "cross-load: ran in a session of antigravity", now.Add(-time.Hour)) +
+		line(integrate.Codex, "unknown tool old", now.Add(-48*time.Hour))
+	if err := os.WriteFile(log, []byte(body), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res := Result{}
+	res.Report.Clients = []ClientReport{
+		{Client: integrate.Copilot, Status: StatusOK},
+		{Client: integrate.Codex, Status: StatusOK},
+	}
+	if err := applyFailures(&res, token, now); err != nil {
+		t.Fatal(err)
+	}
+	copilot, codex := res.Report.Clients[0], res.Report.Clients[1]
+	if copilot.Status != StatusOK || copilot.Detail != "observed in 24 h: cross-load: ran in a session of antigravity (1); unknown tool view (2)" {
+		t.Fatalf("%+v", copilot)
+	}
+	if codex.Status != StatusOK || codex.Detail != "" {
+		t.Fatalf("an old observation counted: %+v", codex)
+	}
+}
+
+// An observation log doctor cannot read is said, as an unreadable failure log is.
+func TestAnUnreadableObservationLogIsReported(t *testing.T) {
+	token := filepath.Join(t.TempDir(), "hub.token")
+	if err := os.Mkdir(filepath.Join(filepath.Dir(token), "hook-observed.log"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	res := Result{}
+	res.Report.Clients = []ClientReport{{Client: integrate.Copilot, Status: StatusOK}}
+	if err := applyFailures(&res, token, time.Now()); err == nil {
+		t.Fatal("a directory in place of the observation log was read as empty")
+	}
+}
