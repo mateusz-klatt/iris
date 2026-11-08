@@ -792,6 +792,9 @@ func lineEndingsLine(ctx context.Context, dir string) string {
 	if err != nil {
 		return ""
 	}
+	// ls-files --eol reads every tracked file, which is slow on a 9p mount (1.4 s for 537 files).
+	ctx, cancel := context.WithTimeout(ctx, lineEndingsTimeout)
+	defer cancel()
 	crlf, text, err := gitinfo.LineEndings(ctx, repo.Worktree)
 	if err != nil || crlf < crlfFloor || crlf*2 < text {
 		return ""
@@ -801,6 +804,9 @@ func lineEndingsLine(ctx context.Context, dir string) string {
 		"Advice, not something doctor changes: if this is a Windows checkout used from WSL, set `git config core.autocrlf true` in it, "+
 		"or use it only from the git that wrote it", crlf, text)
 }
+
+// lineEndingsTimeout bounds the check; past it doctor says nothing about line endings.
+const lineEndingsTimeout = 10 * time.Second
 
 // crlfFloor keeps a few CRLF files, which an editor can write in any repository, from being
 // reported as a misconfigured checkout.
