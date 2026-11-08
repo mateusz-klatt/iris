@@ -268,8 +268,14 @@ A wake-up never acknowledges a message.
 `iris watch` authenticates with the normal token. The `Monitor` tool cannot send headers, and its
 URL and subprotocols end up in the transcript, so it uses a **wake ticket** instead: a fixed
 `iris.wake` subprotocol plus a random base64url ticket, never a query string. A ticket comes from
-an MCP tool, reads one Execution's stream only, lives for minutes, serves one socket, rotates on
-every arming and dies with the Execution. Notifications and digests carry the `kind` only.
+an MCP tool, reads one Execution's stream only, must be used within two minutes, and serves one
+socket. Ticket expiry applies only to the handshake; an established socket keeps delivering frames
+until a newer ticket for that Execution rotates it, the Execution is lost or ends, or the issuing
+host token is revoked. Disconnects and hub restarts also end the socket. Arming another Execution
+does not revoke it. A stolen ticket used before expiry can therefore keep its already-open socket
+for the remaining life of the Execution, indefinitely while that Execution stays live and neither
+rotation nor revocation occurs; the two-minute limit cannot bound that connection's lifetime.
+Notifications and digests carry the `kind` only.
 
 ### D8. Liveness comes from the MCP process
 

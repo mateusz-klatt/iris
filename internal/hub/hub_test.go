@@ -327,12 +327,61 @@ func TestConnectedWakeTicketRevocation(t *testing.T) {
 	rotated := open()
 	request(t, s, "POST", "/v1/wake-tickets", authority(b), 200)
 	closed(rotated)
-	expired := open()
+	rotatedAfterExpiry := open()
 	seconds.Store(121)
-	closed(expired)
+	request(t, s, "POST", "/v1/wake-tickets", authority(b), 200)
+	closed(rotatedAfterExpiry)
 	ended := open()
 	request(t, s, "POST", "/v1/executions/"+b["execution_id"].(string)+"/end", map[string]any{"generation": 1}, 200)
 	closed(ended)
+}
+
+func TestConnectedWakeTicketSurvivesExpiry(t *testing.T) {
+	h, s := setup(t)
+	a, b := register(t, s, 1), register(t, s, 2)
+	base := time.Now()
+	var seconds atomic.Int64
+	h.now = func() time.Time { return base.Add(time.Duration(seconds.Load()) * time.Second) }
+	unused := request(t, s, "POST", "/v1/wake-tickets", authority(a), 200)
+	ticket := request(t, s, "POST", "/v1/wake-tickets", authority(b), 200)
+	protocols := func(ticket map[string]any) []string {
+		raw := ticket["protocols"].([]any)
+		return []string{raw[0].(string), raw[1].(string)}
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+	defer cancel()
+	conn, _, err := websocket.Dial(ctx, ticket["url"].(string), &websocket.DialOptions{Subprotocols: protocols(ticket)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.CloseNow() }()
+	send(t, s, a, b, "before-expiry")
+	before := frame(t, conn)
+	if before["kind"] != "inbox_changed" {
+		t.Fatal(before)
+	}
+	seconds.Store(121)
+	// Expiry still refuses a fresh handshake with a ticket that was never used.
+	rejected, resp, err := websocket.Dial(ctx, unused["url"].(string), &websocket.DialOptions{Subprotocols: protocols(unused)})
+	if err == nil {
+		_ = rejected.CloseNow()
+		t.Fatal("expired unused ticket accepted")
+	}
+	if resp == nil || resp.StatusCode != http.StatusUnauthorized {
+		t.Fatal(resp, err)
+	}
+	for _, key := range []string{"after-expiry", "after-unrelated-ticket", "still-after-unrelated-ticket"} {
+		if key == "after-unrelated-ticket" {
+			// Pruning another Execution's expired tickets must preserve this socket.
+			request(t, s, "POST", "/v1/wake-tickets", authority(a), 200)
+		}
+		send(t, s, a, b, key)
+		after := frame(t, conn)
+		if after["kind"] != "inbox_changed" || after["stream"] != before["stream"] || after["cursor"].(float64) <= before["cursor"].(float64) {
+			t.Fatal(before, after)
+		}
+		before = after
+	}
 }
 
 func monitor(t *testing.T, s *httptest.Server, ex any, after int64) *websocket.Conn {

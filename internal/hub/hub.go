@@ -306,7 +306,9 @@ func (h *Hub) wakeTicket(w http.ResponseWriter, r *http.Request) {
 	expires := h.now().Add(2 * time.Minute)
 	h.mu.Lock()
 	for k, t := range h.tickets {
-		if t.execution == req.ExecutionID || !t.expires.After(h.now()) {
+		// A used ticket tracks its socket until disconnect or rotation. Its expiry
+		// limits the handshake only, so another Execution's arming must retain it.
+		if t.execution == req.ExecutionID || (!t.used && !t.expires.After(h.now())) {
 			delete(h.tickets, k)
 		}
 	}
@@ -376,6 +378,7 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 			h.reject(w, r, "valid single-use wake ticket required")
 			return
 		}
+		defer func() { h.mu.Lock(); delete(h.tickets, ticketKey); h.mu.Unlock() }()
 	}
 	if _, err = h.call(r.Context(), "validate", req); err != nil {
 		writeError(w, err)
@@ -429,11 +432,10 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 		changes := h.store.Changes()
 		if ticketKey != "" {
 			h.mu.Lock()
-			t, exists := h.tickets[ticketKey]
-			valid := exists && t.expires.After(h.now())
+			_, exists := h.tickets[ticketKey]
 			h.mu.Unlock()
-			if !valid {
-				_ = conn.Close(websocket.StatusPolicyViolation, "wake ticket expired or rotated")
+			if !exists {
+				_ = conn.Close(websocket.StatusPolicyViolation, "wake ticket rotated or revoked")
 				return
 			}
 		}

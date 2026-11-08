@@ -278,6 +278,13 @@ it does not count mail that was fetched and not yet acknowledged.
 
 `POST /v1/wake-tickets` takes `{"execution_id":"...","generation":1}`, and returns
 `{"url":"ws://...","protocols":["iris.wake","<ticket>"],"expires_at":"..."}`.
+The single-use ticket expires after two minutes for new handshakes. Its `expires_at` does not
+close an established socket. Issuing a newer ticket for the same Execution rotates and closes
+that socket; Execution loss or end and revocation of the issuing host token also close it.
+Another Execution's ticket does not affect it. Disconnects and hub restarts end the connection.
+A stolen ticket used before expiry can keep an already-open socket for the rest of the
+Execution's life, with no fixed time limit while it stays live and no rotation or revocation
+occurs. Ticket expiry cannot limit that socket's lifetime.
 
 ## MCP tools
 
