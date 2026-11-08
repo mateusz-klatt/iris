@@ -120,11 +120,44 @@ describe("console send retries", () => {
     await showSession();
     const view = await fillCompose(user, "Are you there?");
     await reviewAndSend(user, view, "Send");
-    expect(await screen.findByRole("alert")).toBeVisible();
+    // The response was lost, so the message may be stored: the person is told a retry is safe.
+    expect(await screen.findByRole("alert")).toHaveTextContent("within a day of the first attempt is safe");
     await reviewAndSend(user, view, "Send");
     expect(await screen.findByText("Sent.")).toBeVisible();
     expect(keys).toHaveLength(2);
     expect(keys[1]).toBe(keys[0]);
+  }, 20000);
+
+  it("promises a safe retry only within a day of the first attempt", async () => {
+    const user = userEvent.setup({ delay: null });
+    let now = Date.parse("2026-11-08T10:00:00Z");
+    const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
+    try {
+      server.use(http.post("*/v1/ui/messages", () => HttpResponse.error()));
+      await showSession();
+      const view = await fillCompose(user, "Still there?");
+      await reviewAndSend(user, view, "Send");
+      expect(await screen.findByRole("alert")).toHaveTextContent("within a day of the first attempt");
+      // The hub forgets a key a day after it stored it, so the same retry then promises nothing.
+      now += 24 * 60 * 60 * 1000 + 1;
+      await reviewAndSend(user, view, "Send");
+      expect(await screen.findByRole("alert")).toHaveTextContent("Iris could not load this view.");
+    } finally {
+      clock.mockRestore();
+    }
+  }, 20000);
+
+  it("says a retry is safe after a 5xx, and not after a refusal", async () => {
+    const user = userEvent.setup({ delay: null });
+    let status = 502;
+    server.use(http.post("*/v1/ui/messages", () => new HttpResponse(null, { status })));
+    await showSession();
+    const view = await fillCompose(user, "Anyone?");
+    await reviewAndSend(user, view, "Send");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Iris could not tell whether this message was sent.");
+    status = 400;
+    await reviewAndSend(user, view, "Send");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Iris could not load this view.");
   }, 20000);
 
   it("sends once when Send is clicked again while the first is pending", async () => {
@@ -1013,7 +1046,8 @@ describe("Iris operator console", () => {
     const failed = render(<App connect={() => () => {}} />);
     await screen.findByRole("heading", { name: "Clients" });
     const failedView = await compose();
-    expect(await screen.findByRole("alert")).toHaveTextContent("Iris could not load this view.");
+    // A 5xx may have come after the hub stored the message, so a retry is offered as safe.
+    expect(await screen.findByRole("alert")).toHaveTextContent("Iris could not tell whether this message was sent.");
     expect(failedView.getByRole("textbox", { name: "Message" })).toHaveValue("Are you there?");
     failed.unmount();
 
