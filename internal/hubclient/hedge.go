@@ -28,7 +28,9 @@ func HedgedClient() *http.Client {
 // concurrent callers, and the second request must not wait on the same lost packet.
 func hedgeTransport() *http.Transport {
 	dialer := &net.Dialer{Resolver: &net.Resolver{}}
-	return &http.Transport{Proxy: http.ProxyFromEnvironment, DialContext: dialer.DialContext, ForceAttemptHTTP2: true}
+	t := newTransport()
+	t.DialContext = dialer.DialContext
+	return t
 }
 
 type hedge struct {
