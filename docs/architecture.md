@@ -668,6 +668,10 @@ last checkpoint.
   logged as unknown on a real host. No payload capture backs those names yet. Codex runs a new
   hook only after a person trusts it in `/hooks`, so the capture waits for one. Claude Code's
   Monitor, TaskStop and ScheduleWakeup are backed by captures from 2.1.319 on Windows.
+- Claude Code's Monitor is reconciled like a shell, but its PostToolUse arrives at launch:
+  measured on 2.1.319, 590 ms after the call, carrying only the task id, while the command ran
+  on. A file its command writes later is not reconciled or claimed, and the same holds for Bash
+  with `run_in_background`. The pre-commit guard is the checkpoint for those writes.
 
 ## 5. Invariants the tests must prove
 
