@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"runtime"
 	"strings"
 	"testing"
@@ -52,6 +53,9 @@ func TestARestoredHubPassesEveryCheck(t *testing.T) {
 				if !strings.Contains(text, want) {
 					t.Fatalf("no %q in\n%s", want, text)
 				}
+			}
+			if !regexp.MustCompile(`answers status \(database [0-9]+ bytes\)`).MatchString(text) {
+				t.Fatalf("the size is not a whole number of bytes:\n%s", text)
 			}
 			if strings.Contains(text, "FAIL") {
 				t.Fatal(text)

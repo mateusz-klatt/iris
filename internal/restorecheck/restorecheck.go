@@ -62,8 +62,10 @@ func run(ctx context.Context, backup, scratch, listen string, out io.Writer) err
 	defer func() { _ = server.Close() }()
 	base := "http://" + listener.Addr().String()
 
-	var status map[string]any
-	c.check(call(ctx, base, token, "GET", "/v1/status", nil, &status) == nil, "the restored hub answers status (database %v bytes)", status["database_bytes"])
+	var status struct {
+		DatabaseBytes int64 `json:"database_bytes"`
+	}
+	c.check(call(ctx, base, token, "GET", "/v1/status", nil, &status) == nil, "the restored hub answers status (database %d bytes)", status.DatabaseBytes)
 
 	if sample != nil {
 		// A host that moved on since the backup presents a newer generation, which the copy has
