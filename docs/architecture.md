@@ -368,6 +368,14 @@ or none. Paths the caller already holds are reused, and an `explicit` claim is n
 An `auto` claim lasts 10 minutes from the last touch. A retried call, identified by its tool call
 id, does not extend it.
 
+An `auto` claim means "this session has uncommitted changes here". When a shell command takes a
+path out of the session's git status, by commit, stash or restore, the reconcile releases the
+session's own `auto` claim on that path in the same transaction, and wakes whoever waited for it.
+An `explicit` claim, and every other session's claim, stays. Committed but unmerged work is
+git's business, not a claim's. This happens only at the session's next shell reconcile: a commit
+made outside the session, or an edit-tool claim on a path no shell command ever saw dirty,
+keeps its claim until it expires.
+
 `claim.ignore` lists paths that never take an auto claim and only warn: by default lockfiles such
 as `go.sum`, `package-lock.json`, `pnpm-lock.yaml` and `Cargo.lock`, changelogs, and generated
 output. An `explicit` claim still applies to them.
@@ -405,7 +413,9 @@ Antigravity runs hooks in `.agents/`, so its adapter takes the root from `worksp
 
 A shell command is visible only as a string, so a pre-tool hook cannot tell what it will
 touch. After a shell tool, the hook compares `git status --porcelain -z` with the previous
-state under a time limit, and warns about paths claimed from another worktree. It detects, it
+state under a time limit, and warns about paths claimed from another worktree. Only paths
+still changed after the command count: one that left the status was committed, stashed or
+restored by git in this worktree, which changes nothing in another. It detects, it
 cannot undo. In a shared worktree attribution is impossible, so it stays silent there.
 
 `iris guard` is a pre-commit check, installed per repository on request. It refuses a commit
