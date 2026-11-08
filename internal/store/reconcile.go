@@ -99,6 +99,18 @@ func (t *transaction) reconcile(r Request) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// An auto claim means this session has uncommitted changes at its path (D10). One whose path
+	// left the status was committed, stashed or restored, so it is released, and its waiters are
+	// woken as by a release. Explicit claims, and every other session's, stay.
+	var left []string
+	for p := range previous {
+		if _, still := r.Status[p]; !still {
+			left = append(left, p)
+		}
+	}
+	if err = t.releaseLeft(e, left); err != nil {
+		return nil, err
+	}
 	out["claimed"] = claimed
 	if skipped > 0 {
 		// One command can change more paths than the claim limit allows. The warning about other
@@ -114,6 +126,40 @@ func (t *transaction) reconcile(r Request) (map[string]any, error) {
 
 // maxClaims is claimLimit's bound on the live claims of one Execution.
 const maxClaims = 500
+
+// releaseLeft releases e's own auto claims on paths that left its status. Both ends of a staged
+// rename stay in the status, so neither is released before the rename is committed.
+func (t *transaction) releaseLeft(e execution, paths []string) error {
+	if len(paths) == 0 {
+		return nil
+	}
+	policy, _, err := t.policy(e.Repo)
+	if err != nil {
+		return err
+	}
+	cs, err := t.claimRows(e.Repo)
+	if err != nil {
+		return err
+	}
+	now := t.s.clock.Now().UnixMilli()
+	released := false
+	for _, p := range paths {
+		key := pathKey(p, policy)
+		for _, c := range cs {
+			if c.Execution != e.ID || c.Origin != "auto" || c.Kind != "exact" || c.Key != key {
+				continue
+			}
+			if _, err = t.exec("UPDATE Claim SET revoked_ms=? WHERE fence=? AND revoked_ms IS NULL", now, c.Fence); err != nil {
+				return err
+			}
+			released = true
+		}
+	}
+	if !released {
+		return nil
+	}
+	return t.released(e.Repo, e.ID)
+}
 
 // autoClaim gives e an automatic claim on each path no other Execution holds, as touch does,
 // and renews e's own automatic claims, up to the claim limit. It returns the paths e now holds
