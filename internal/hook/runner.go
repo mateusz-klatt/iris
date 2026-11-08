@@ -91,6 +91,9 @@ func (r Runner) Run() Output {
 	case out := <-ch:
 		failureStage, failure = state.snapshot()
 		out.Stderr = append(out.Stderr, state.receiptLine()...)
+		if seen := state.observation(); seen != "" {
+			r.record(stageObserved, seen)
+		}
 		return out
 	case <-after(deadline):
 		cancel()
@@ -115,11 +118,13 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 	ev, err := Decode(client, r.EventName, payload)
 	if err != nil {
 		if runner, cross := r.crossLoad(peekSessionID(payload), client); cross {
+			state.observe(crossLoadText(runner))
 			return FallbackAllow(runner)
 		}
 		return state.fail(err, allow)
 	}
 	if runner, cross := r.crossLoad(ev.SessionID, client); cross {
+		state.observe(crossLoadText(runner))
 		return FallbackAllow(runner)
 	}
 	state.received(r.canaryReceipt(ev))
@@ -130,7 +135,7 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		ev.ToolCallID = "payload:" + hex.EncodeToString(hash[:])
 	}
 	if shellEvent(ev) {
-		return r.finish(ev, r.reconcile(ctx, ev, state))
+		return r.finish(state, ev, r.reconcile(ctx, ev, state))
 	}
 	state.at("repository")
 	repo, err := r.repoFor(ev)
@@ -138,10 +143,10 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		return state.fail(err, allow)
 	}
 	if err != nil {
-		return r.finish(ev, Encode(ev, Decision{Action: ActionAllow}))
+		return r.finish(state, ev, Encode(ev, Decision{Action: ActionAllow}))
 	}
 	if !needsNetwork(ev) {
-		return r.finish(ev, Encode(ev, Decision{Action: ActionAllow}))
+		return r.finish(state, ev, Encode(ev, Decision{Action: ActionAllow}))
 	}
 	if r.Hub == nil {
 		state.at("hub")
@@ -152,7 +157,7 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		state.at("session")
 		sess, err := r.register(ctx, ev, repo)
 		if err != nil {
-			return state.fail(err, r.failOpen(ev, err, allow))
+			return state.fail(err, r.failOpen(state, ev, err, allow))
 		}
 		var notes []string
 		// Once per session, not per subagent: the hint is about the repository.
@@ -161,15 +166,15 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		}
 		// The session context states the unread count, so those counts count as said.
 		r.attentionNote(ev, sess.Attention, true)
-		return r.finish(ev, Encode(ev, Decision{Action: ActionAllow, Context: SessionText(sess, notes...)}))
+		return r.finish(state, ev, Encode(ev, Decision{Action: ActionAllow, Context: SessionText(sess, notes...)}))
 	case KindPrompt, KindPreInvocation:
 		// One registration per user turn: idempotent, hedged, and within the deadline.
 		state.at("session")
 		sess, err := r.register(ctx, ev, repo)
 		if err != nil {
-			return state.fail(err, r.failOpen(ev, err, allow))
+			return state.fail(err, r.failOpen(state, ev, err, allow))
 		}
-		return r.finish(ev, Encode(ev, Decision{Action: ActionAllow, Context: r.attentionNote(ev, sess.Attention, false)}))
+		return r.finish(state, ev, Encode(ev, Decision{Action: ActionAllow, Context: r.attentionNote(ev, sess.Attention, false)}))
 	case KindSessionEnd:
 		state.at("session")
 		sess, err := r.register(ctx, ev, repo)
@@ -184,7 +189,7 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		if m := r.memory(); m != nil {
 			m.Forget(string(ev.Client), ev.SessionID)
 		}
-		return r.finish(ev, Encode(ev, Decision{Action: ActionAllow}))
+		return r.finish(state, ev, Encode(ev, Decision{Action: ActionAllow}))
 	default: // needsNetwork leaves only an edit that is about to run.
 		state.at("paths")
 		if len(ev.Paths) == 0 {
@@ -192,7 +197,7 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		}
 		paths, from, to := r.claimPaths(repo, ev)
 		if len(paths) == 0 {
-			return r.finish(ev, Encode(ev, Decision{Action: ActionAllow}))
+			return r.finish(state, ev, Encode(ev, Decision{Action: ActionAllow}))
 		}
 		// Touch needs an execution id. The hook only has the client session id,
 		// so it reattaches through POST /v1/sessions, which is defined as idempotent.
@@ -201,10 +206,10 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		if hubclient.IsCode(err, "lost") {
 			// Only a recovering Execution refuses a request that carries no generation. Its
 			// claims still block others, so allowing the edit would leave it unclaimed.
-			return r.finish(ev, Encode(ev, Decision{Action: ActionDeny, Reason: recovering}))
+			return r.finish(state, ev, Encode(ev, Decision{Action: ActionDeny, Reason: recovering}))
 		}
 		if err != nil {
-			return state.fail(err, r.failOpen(ev, err, allow))
+			return state.fail(err, r.failOpen(state, ev, err, allow))
 		}
 		state.at("touch")
 		touch, err := r.Hub.Touch(ctx, hubclient.TouchRequest{
@@ -216,7 +221,7 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 			RenameTo:    to,
 		})
 		if err != nil {
-			return state.fail(err, r.failOpen(ev, err, allow))
+			return state.fail(err, r.failOpen(state, ev, err, allow))
 		}
 		switch strings.ToLower(touch.Action) {
 		case "allow", "deny", "ask", "warn":
@@ -230,7 +235,7 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 				d.Context = strings.TrimSpace(d.Context + "\n" + note)
 			}
 		}
-		return r.finish(ev, Encode(ev, d))
+		return r.finish(state, ev, Encode(ev, d))
 	}
 }
 
@@ -240,9 +245,9 @@ const rejected = "Iris: the hub rejected this host's token, so this session's ed
 
 // failOpen is D3's allow. A rejected token also tells the model, because a silent allow
 // looks exactly like protection.
-func (r Runner) failOpen(ev Event, err error, allow Output) Output {
+func (r Runner) failOpen(state *runState, ev Event, err error, allow Output) Output {
 	if hubclient.IsCode(err, "unauthorized") {
-		return r.finish(ev, Encode(ev, Decision{Action: ActionAllow, Context: rejected}))
+		return r.finish(state, ev, Encode(ev, Decision{Action: ActionAllow, Context: rejected}))
 	}
 	return allow
 }
@@ -305,10 +310,12 @@ func decisionFromTouch(t hubclient.TouchResponse) Decision {
 	}
 }
 
-func (r Runner) finish(ev Event, out Output) Output {
+func (r Runner) finish(state *runState, ev Event, out Output) Output {
 	if ev.UnknownTool && ev.ToolName != "" {
 		name := strings.ReplaceAll(strings.ReplaceAll(ev.ToolName, "\n", " "), "\r", " ")
 		out.Stderr = append(out.Stderr, []byte("iris: unknown tool "+name+"\n")...)
+		// stderr reaches nobody who keeps it, so doctor gets it from the log too (C4).
+		state.observe("unknown tool " + toolLabel(ev.ToolName))
 	}
 	return out
 }
@@ -506,4 +513,29 @@ func (r Runner) canaryReceipt(ev Event) []byte {
 		return nil
 	}
 	return []byte("iris: canary " + nonce + "\n")
+}
+
+// crossLoadText is the observation for a hook of this client that ran in another client's
+// session, which loaded this client's configuration (D5). The hook answered as that client.
+func crossLoadText(runner Client) string {
+	return "cross-load: ran in a session of " + string(runner)
+}
+
+// toolLabel keeps a tool name to what is safe in a log line doctor shows: a client's tool
+// name is payload data, so anything outside a plain identifier becomes ?, within 64 bytes.
+func toolLabel(name string) string {
+	b := []byte(name)
+	if len(b) > 64 {
+		b = b[:64]
+	}
+	for i, c := range b {
+		if !labelByte(c) {
+			b[i] = '?'
+		}
+	}
+	return string(b)
+}
+
+func labelByte(c byte) bool {
+	return c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || strings.IndexByte("_-.:/", c) >= 0
 }

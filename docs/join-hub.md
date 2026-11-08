@@ -184,6 +184,12 @@ hub, which is only by an explicit opt-out (ADR 003), while this checkout folds c
 of `A.GO`. Asking the hub uses the guard's check, which, as a commit does, registers a repository the
 hub has not seen yet.
 
+Some things are worth knowing without being failures. A tool name Iris does not recognise, and a
+cross-load, where this client's hook ran inside another client's session, are kept in
+`hook-observed.log` beside it, a separate file so they cannot crowd out failures. The row keeps its
+status and adds "observed in 24 h: …" with a count for each. A tool name is reduced to letters,
+digits and `_-.:/` there, because it comes from the client.
+
 A shell command whose reconciliation ran past its budget is graded differently. The budget is 1 s,
 or 300 ms when the hub runs on the same machine. The hook still worked; that command's changes only
 went unclaimed, because `git status` or the hub was slow: a big or cold worktree, a loaded machine
