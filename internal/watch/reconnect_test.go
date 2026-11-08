@@ -63,7 +63,7 @@ func TestBurstReconnectNoDuplicateLine(t *testing.T) {
 	// cursor is saved only after their line is printed.
 	clock := &testClock{at: time.Unix(1_800_000_000, 0)}
 	var resumed atomic.Bool
-	var acks, resets, counted atomic.Int32
+	var acks, resets, counted, firstSaved atomic.Int32
 	cut := make(chan struct{})
 	resume := make(chan struct{})
 	attached := make(chan struct{})
@@ -73,6 +73,9 @@ func TestBurstReconnectNoDuplicateLine(t *testing.T) {
 	real.PingInterval = 20 * time.Millisecond
 	server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v1/watch" {
+			if r.URL.Path == "/v1/events" && !resumed.Load() && r.URL.Query().Get("consumer_id") == "iris-watch" {
+				firstSaved.Add(1)
+			}
 			if r.URL.Path == "/v1/events" && resumed.Load() {
 				switch q := r.URL.Query(); {
 				case q.Get("consumer_id") == "iris-watch":
@@ -166,6 +169,16 @@ func TestBurstReconnectNoDuplicateLine(t *testing.T) {
 	case <-cut:
 	case <-ctx.Done():
 		t.Fatal("no first frame")
+	}
+	// The first line was printed, so its cursor is saved, but that save can still be on its
+	// way. Counting starts once it has arrived: otherwise it reads as a held frame acknowledged
+	// early (seen once on macOS).
+	for firstSaved.Load() == 0 {
+		select {
+		case <-ctx.Done():
+			t.Fatal("the first frame's cursor was never saved")
+		case <-time.After(5 * time.Millisecond):
+		}
 	}
 	for i := 0; i < 3; i++ {
 		send(fmt.Sprint(i))
