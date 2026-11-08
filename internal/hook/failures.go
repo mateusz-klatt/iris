@@ -12,6 +12,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -30,6 +31,40 @@ type Failure struct {
 	Event  string    `json:"event"`
 	Stage  string    `json:"stage"`
 	Error  string    `json:"error"`
+	// Shape is set only when a payload could not be decoded, so the next such line says which
+	// tool and fields the client sent. It holds names, never values, and stays in this local
+	// log: a doctor bundle, which is built field by field, carries none of it.
+	Shape *PayloadShape `json:"shape,omitempty"`
+}
+
+// PayloadShape is the tool a payload named and its top-level field names, each bounded.
+type PayloadShape struct {
+	Tool string   `json:"tool,omitempty"`
+	Keys []string `json:"keys,omitempty"`
+}
+
+// shapeKeys bounds how many field names a shape keeps.
+const shapeKeys = 32
+
+// payloadShape reads the shape of a payload that is a JSON object, and nil for any other.
+func payloadShape(payload []byte) *PayloadShape {
+	var top map[string]json.RawMessage
+	if json.Unmarshal(payload, &top) != nil || top == nil {
+		return nil
+	}
+	shape := &PayloadShape{}
+	for key, raw := range top {
+		shape.Keys = append(shape.Keys, boundedLabel(key))
+		var name string
+		if shape.Tool == "" && slices.Contains([]string{"tool_name", "toolName", "tool"}, key) && json.Unmarshal(raw, &name) == nil {
+			shape.Tool = boundedLabel(name)
+		}
+	}
+	slices.Sort(shape.Keys)
+	if len(shape.Keys) > shapeKeys {
+		shape.Keys = shape.Keys[:shapeKeys]
+	}
+	return shape
 }
 
 // Degraded reports whether f shows only a shell reconcile that ran past its budget, as a big
@@ -72,8 +107,19 @@ var fixedFailures = []string{
 	string(failPanic), string(failPanicShell), string(failUnknownClient), string(failNoHub),
 	string(failNoPaths), string(failBadTouch), shellOverBudget, errNoSession.Error(),
 	"hook deadline exceeded", "hook operation canceled", "incomplete hook input or hub response",
-	"hub request failed",
+	"hub request failed", failHubRedirect, failHubTooLarge, failHubNoExecution, failHubNoAction,
 }
+
+// The hub client's own failures that carry no hub error envelope, each logged as a fixed text.
+const (
+	failHubRedirect    = "hub answered with a redirect"
+	failHubTooLarge    = "hub response too large"
+	failHubNoExecution = "hub returned no execution id"
+	failHubNoAction    = "hub returned no action"
+	// failHubStatus prefixes the status code of an answer without an envelope, from the hub or
+	// from a proxy in front of it, as during a deploy.
+	failHubStatus = "hub answered HTTP "
+)
 
 // stages are the stages a run records a failure or an observation at.
 var stages = []string{
@@ -90,6 +136,9 @@ func FailureCategory(text string) string {
 		return text
 	}
 	if code, ok := strings.CutPrefix(text, "hub request failed: "); ok && slices.Contains(hubCodes, code) {
+		return text
+	}
+	if code, ok := strings.CutPrefix(text, failHubStatus); ok && httpCode(code) {
 		return text
 	}
 	for _, prefix := range []string{"invalid JSON field type", "invalid JSON", "dependency failure"} {
@@ -112,6 +161,12 @@ func FailureStage(stage string) string {
 	return "other"
 }
 
+// httpCode reports whether s is a three-digit HTTP status code, as failureText writes it.
+func httpCode(s string) bool {
+	n, err := strconv.Atoi(s)
+	return err == nil && len(s) == 3 && n >= 100 && n <= 599
+}
+
 // errnoTexts are this platform's texts for the low system error numbers, which failureText
 // records as they are.
 var errnoTexts = sync.OnceValue(func() []string {
@@ -130,6 +185,15 @@ type runState struct {
 	receipt []byte
 	// observed is what this run saw for doctor without failing; see Failure.Observed.
 	observed string
+	// shape is the payload's shape when it could not be decoded; see Failure.Shape.
+	shape *PayloadShape
+}
+
+func (s *runState) shaped(shape *PayloadShape) { s.mu.Lock(); s.shape = shape; s.mu.Unlock() }
+func (s *runState) payloadShape() *PayloadShape {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.shape
 }
 
 func (s *runState) observe(text string) { s.mu.Lock(); s.observed = text; s.mu.Unlock() }
@@ -182,6 +246,23 @@ func failureText(err error) string {
 		}
 		return "hub request failed"
 	}
+	var status *hubclient.StatusError
+	if errors.As(err, &status) {
+		return failHubStatus + strconv.Itoa(status.Code)
+	}
+	for _, known := range []struct {
+		err  error
+		text string
+	}{
+		{hubclient.ErrRedirect, failHubRedirect},
+		{hubclient.ErrResponseTooLarge, failHubTooLarge},
+		{hubclient.ErrNoExecution, failHubNoExecution},
+		{hubclient.ErrNoAction, failHubNoAction},
+	} {
+		if errors.Is(err, known.err) {
+			return known.text
+		}
+	}
 	var pathErr *os.PathError
 	if errors.As(err, &pathErr) {
 		return failureText(pathErr.Err)
@@ -203,10 +284,12 @@ func failureText(err error) string {
 	}
 	return fmt.Sprintf("dependency failure (%T)", err)
 }
-func (r Runner) recordFailure(stage string, err error) { r.record(stage, failureText(err)) }
+func (r Runner) recordFailure(stage string, err error, shape *PayloadShape) {
+	r.record(stage, failureText(err), shape)
+}
 
 // record appends one entry to the log doctor reads, within the log's small budget.
-func (r Runner) record(stage, text string) {
+func (r Runner) record(stage, text string, shape *PayloadShape) {
 	// Logging is best effort. A slow disk, permissions failure or competing writer
 	// must not delay the allow response beyond this small, fixed budget.
 	done := make(chan struct{})
@@ -224,7 +307,7 @@ func (r Runner) record(stage, text string) {
 		if client == "" {
 			client = "unknown"
 		}
-		entry := Failure{Time: time.Now().UTC(), Client: client, Event: boundedLabel(r.EventName), Stage: stage, Error: text}
+		entry := Failure{Time: time.Now().UTC(), Client: client, Event: boundedLabel(r.EventName), Stage: stage, Error: text, Shape: shape}
 		_ = appendFailure(token, entry)
 	}()
 	after := r.logAfter
