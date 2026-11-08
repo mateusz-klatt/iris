@@ -344,7 +344,9 @@ func (t *transaction) explicit(r Request) (map[string]any, error) {
 			return nil, fail("lost", "cached claim is no longer live")
 		}
 		var epoch int64
-		_ = t.row("SELECT boot_epoch FROM Claim WHERE fence=?", out["fence"]).Scan(&epoch)
+		if err = t.row("SELECT boot_epoch FROM Claim WHERE fence=?", out["fence"]).Scan(&epoch); err != nil {
+			return nil, err
+		}
 		expected := fmt.Sprintf("%s:%d:%v:%s", t.s.stream, epoch, out["fence"], e.ID)
 		if out["token"] != expected {
 			return nil, fail("lost", "cached fence belongs to an old boot epoch")
@@ -448,7 +450,7 @@ func (t *transaction) release(r Request) (map[string]any, error) {
 		var owner string
 		var epoch int64
 		if err = t.row("SELECT execution_id,boot_epoch FROM Claim WHERE fence=?", r.Fence).Scan(&owner, &epoch); err != nil {
-			return nil, fail("conflict", "unknown fence")
+			return nil, absent(err, "conflict", "unknown fence")
 		}
 		if owner != e.ID || epoch != t.s.epoch {
 			return nil, fail("conflict", "fence owner or epoch does not match")

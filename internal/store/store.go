@@ -92,8 +92,12 @@ func fail(code, message string) error { return &Error{code, message, map[string]
 // error as it is. A storage failure is not an unknown id: it must fail the transaction, so the
 // client retries, instead of reaching the client as a final not_found.
 func missing(err error, message string) error {
+	return absent(err, "not_found", message)
+}
+
+func absent(err error, code, message string) error {
 	if errors.Is(err, sql.ErrNoRows) {
-		return fail("not_found", message)
+		return fail(code, message)
 	}
 	return err
 }
