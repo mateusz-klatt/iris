@@ -17,12 +17,12 @@ func (t *transaction) humanSender(r Request) (execution, error) {
 	repo := r.RepositoryID
 	if repo == "" && r.ReplyTo != "" {
 		if err := t.row("SELECT repository_id FROM Message WHERE id=?", r.ReplyTo).Scan(&repo); err != nil {
-			return execution{}, fail("not_found", "unknown reply")
+			return execution{}, missing(err, "unknown reply")
 		}
 	}
 	if repo == "" && len(r.To) > 0 {
 		if err := t.row("SELECT repository_id FROM Agent WHERE name=? OR id=?", r.To[0], r.To[0]).Scan(&repo); err != nil {
-			return execution{}, fail("not_found", "unknown recipient")
+			return execution{}, missing(err, "unknown recipient")
 		}
 	}
 	if repo == "" {
@@ -60,7 +60,7 @@ func (t *transaction) operator(op string, r Request) (map[string]any, error) {
 	case "ui_revoke":
 		var repo string
 		if err := t.row("SELECT repository_id FROM Claim WHERE fence=?", r.Fence).Scan(&repo); err != nil {
-			return nil, fail("not_found", "unknown claim")
+			return nil, missing(err, "unknown claim")
 		}
 		if _, err := t.exec("UPDATE Claim SET revoked_ms=? WHERE fence=? AND revoked_ms IS NULL", t.s.clock.Now().UnixMilli(), r.Fence); err != nil {
 			return nil, err

@@ -364,9 +364,10 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 				_, err := invoke()
 				f.at = 0
 				if !errors.Is(err, errStorageFault) {
-					// Some domain lookups deliberately map storage errors to a typed failure.
+					// Some domain lookups deliberately map storage errors to a typed failure, but
+					// never to not_found: a client takes that as final and does not retry.
 					var domain *Error
-					if !errors.As(err, &domain) {
+					if !errors.As(err, &domain) || domain.Code == "not_found" {
 						t.Fatalf("fault %d (%s) was not reported: %v", i+1, label, err)
 					}
 				}

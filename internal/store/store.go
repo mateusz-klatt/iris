@@ -88,6 +88,16 @@ type Error struct {
 func (e *Error) Error() string        { return e.Message }
 func fail(code, message string) error { return &Error{code, message, map[string]any{}} }
 
+// missing is a lookup's answer when it finds nothing: not_found for sql.ErrNoRows, and any other
+// error as it is. A storage failure is not an unknown id: it must fail the transaction, so the
+// client retries, instead of reaching the client as a final not_found.
+func missing(err error, message string) error {
+	if errors.Is(err, sql.ErrNoRows) {
+		return fail("not_found", message)
+	}
+	return err
+}
+
 type Store struct {
 	mu      sync.Mutex
 	db      *sql.DB
