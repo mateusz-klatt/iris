@@ -33,6 +33,13 @@ func TestTwoPathsToOneDirectoryAreOneWorktree(t *testing.T) {
 	if out := call(t, s, "check", check); out["message"] != "" {
 		t.Fatalf("a commit in the same worktree was warned: %v", out)
 	}
+	// A remount or a reboot can give the id to another directory: another repository under it
+	// is not folded into the first path, and from then on it is that repository's.
+	reused := at("four", "/mnt/e/other", "64768:4242")
+	reused.RemoteURL = "https://example.com/team/other.git"
+	if out := call(t, s, "sessions", reused); out["agent"].(map[string]any)["name"] == first["agent"].(map[string]any)["name"] {
+		t.Fatalf("a reused id folded another repository into the first path: %v", out["agent"])
+	}
 	// Without an id, as from an older client or on Windows, a path is keyed on itself, as
 	// before; and the same id on another host is another directory.
 	old := call(t, s, "sessions", at("two", "/elsewhere/iris", ""))

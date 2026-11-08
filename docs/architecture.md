@@ -207,7 +207,9 @@ A worktree is one directory however it is reached. Hooks, the shim and the guard
 worktree root by device and inode as well as by path, and the hub keeps the first path a host
 named for that directory: a bind mount or a symlink that gives the same directory another path,
 as `/mnt/d/projects/iris` and `/home/klattm/projects/iris` on one host, is made that first path,
-so it is the same worktree, the same agent and the same claims. Windows sends no such id, so a
+so it is the same worktree, the same agent and the same claims. A remount or a reboot can give a
+device and inode to another directory, so a path folds only when its repository, by remote and
+root commit, is the one the first path was seen with. Windows sends no such id, so a
 junction or a mapped drive still counts as another worktree there; so does every path from an
 older client.
 

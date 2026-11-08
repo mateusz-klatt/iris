@@ -559,16 +559,18 @@ func (t *transaction) hooksSeen(host string) (map[string]any, error) {
 // canonicalWorktree makes r's worktree the path this host first named for that directory, and
 // its cwd the same place under it, when r names the directory by device and inode. A bind
 // mount or a symlink reaches one directory by two paths, and keyed on the path alone it was two
-// worktrees and two agents for one session (D6). Without an id, as from an older client or on
-// Windows, the path stands, as before.
+// worktrees and two agents for one session (D6). A remount or a reboot can give a device and
+// inode to another directory, so only a path of the same repository, by remote and root
+// commit, folds into the first one; another repository under that id replaces it. Without an
+// id, as from an older client or on Windows, the path stands, as before.
 func (t *transaction) canonicalWorktree(r *Request) error {
 	if r.WorktreeID == "" || r.Host == "" || r.Worktree == "" {
 		return nil
 	}
-	var first string
-	err := t.row("SELECT worktree FROM WorktreeAlias WHERE host_id=? AND worktree_id=?", r.Host, r.WorktreeID).Scan(&first)
-	if errors.Is(err, sql.ErrNoRows) {
-		_, err = t.exec("INSERT INTO WorktreeAlias(host_id,worktree_id,worktree) VALUES(?,?,?)", r.Host, r.WorktreeID, r.Worktree)
+	var first, remote, root string
+	err := t.row("SELECT worktree,remote_url,root_commit FROM WorktreeAlias WHERE host_id=? AND worktree_id=?", r.Host, r.WorktreeID).Scan(&first, &remote, &root)
+	if errors.Is(err, sql.ErrNoRows) || (err == nil && (remote != r.RemoteURL || root != r.RootCommit)) {
+		_, err = t.exec("INSERT OR REPLACE INTO WorktreeAlias(host_id,worktree_id,worktree,remote_url,root_commit) VALUES(?,?,?,?,?)", r.Host, r.WorktreeID, r.Worktree, r.RemoteURL, r.RootCommit)
 		return err
 	}
 	if err != nil || first == r.Worktree {
