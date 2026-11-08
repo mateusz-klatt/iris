@@ -1,6 +1,6 @@
 # 014: Named operator accounts for the console
 
-Status: proposed.
+Status: accepted.
 
 ## Problem and scope
 
@@ -12,52 +12,77 @@ can currently create links; revoking a token does not revoke its earlier links o
 cookies. D13 and ADR 002 describe this deliberately broad trust model.
 
 The owner wants named console accounts, logout, profile, password changes and
-permissions. This proposal extends D13's browser authentication and D16's console;
+permissions. This decision extends D13's browser authentication and D16's console;
 it keeps D1's single Go hub, D9's transactional store, R8's hook guarantees and all
 section 5 invariants. It does not introduce multi-tenant hosting or change machine
-token authority. Acceptance and implementation require later PRs.
+token authority. The owner accepted the four decision groups, with the member
+model amended to explicit per-repository `ro`/`rw` grants. Implementation requires
+later PRs; this ADR implements no feature.
 
 The UI transfer source is the owner's exported React/TypeScript/Vite code in
 `~/iris-ui-import/ui`, inspected only inside that directory. The destination is
 `web/`. Adapt selected views and styles to Iris's contracts. The supplied account
 table and hash format are an import contract, not a database inspected for this
-proposal. No source database, source server code or production system was opened.
+decision. No source database, source server code or production system was opened.
 
 ## Verified starting points
 
 Checked against commit `72308ccfa3aa574e207208c5409757864ce538ff`:
 
-| Code | Consequence for this proposal |
+| Code | Consequence for this decision |
 |---|---|
 | [`internal/hub/operator.go`](../../internal/hub/operator.go), `uiLink`, `uiLogin`, `cookieAuthorized` | Random link/cookie secrets live in maps. Cookies use HttpOnly, SameSite=Strict and Secure for TLS/public mode. Cookie authorization returns a boolean, without an account principal. |
 | [`internal/hub/hub.go`](../../internal/hub/hub.go), `ServeHTTP`; [`internal/hub/tokens.go`](../../internal/hub/tokens.go), `ownerOnly` | Host/Origin checks, CSP, no-store and body bounds already exist. Any valid bearer can reach link creation. Token administration and repository contact/merge/forget require the owner token. |
 | [`internal/hub/limits.go`](../../internal/hub/limits.go) | Cookies share the aggregate anonymous quota. Existing bearer/request limits are not password-attempt limits. |
 | [`internal/store/operator.go`](../../internal/store/operator.go), `human`, `operatorSender`, `readThread` | Human mailboxes are shared per repository, including preserved mailboxes after repair. Reading through the POST read action acknowledges human deliveries. Accounts must not be confused with agent Executions. |
 | Same file, `overview`, `visibleIn`, `threads`, `thread`, `ui_events` | Overview and refresh cursors are global; an empty repository filter means all messages. Search can match another message in a thread, and thread detail returns all recipients. These paths need authorization-aware queries, not frontend filtering. |
+| [`internal/store/messages.go`](../../internal/store/messages.go), [`internal/store/history.go`](../../internal/store/history.go), [`internal/store/addressing.go`](../../internal/store/addressing.go) | Agent projections reduce human senders to `human`; addresses resolve across repositories. Account authorship needs message metadata and projection changes, and member sends need explicit origin/recipient authorization. |
+| `operatorCached` in `internal/store/operator.go`; [`internal/store/merge.go`](../../internal/store/merge.go), [`internal/store/operator_retry_merge_test.go`](../../internal/store/operator_retry_merge_test.go) | Retries are currently shared-mailbox scoped and checked before recipient resolution. Repair moves messages/agents while preserving mailbox IDs, so new account-scoped retries must survive repair without bypassing current permissions. |
 | [`internal/store/store.go`](../../internal/store/store.go); [`internal/store/api.go`](../../internal/store/api.go) | The store serializes one connection and `BEGIN IMMEDIATE` transactions using `modernc.org/sqlite`; migration version is 16. Ordinary `Store.Call` expires coordination records before dispatch, so it is unsuitable for a no-write import dry-run. |
 | [`web/src/App.tsx`](../../web/src/App.tsx), [`web/src/api.ts`](../../web/src/api.ts), [`web/src/preferences.ts`](../../web/src/preferences.ts) | Existing navigation, ID-based recipients, reviewed/idempotent sends and WebSocket refresh must survive adaptation. UI locale currently lives in browser storage. |
 
-## Proposed decisions
+## Decisions
 
 ### 1. Accounts are separate from machine credentials and human mailboxes
 
 Add Iris-owned `ConsoleAccount`, `ConsoleRepositoryAccess`, `ConsoleSession` and
-`ConsoleImport` records through the store's migration mechanism. These names are
-proposed, not existing tables. Accounts have fresh Iris IDs, username and unique
-login key, password hash, role, disabled flag, display name, two locale preferences,
-created/last-login times, an authentication version and an edit revision. A grant
-relates an account to an existing Iris Repository ID and grants read access only.
+`ConsoleImport` records, plus `ConsoleOperation` for account-scoped send retries,
+through the store's migration mechanism. These are intended, not existing tables.
+Accounts have fresh Iris IDs, username and unique login key, password hash, role,
+disabled flag, display name, two locale preferences, created/last-login times,
+an authentication version and an edit revision. A grant
+relates an account to an existing Iris Repository ID with exactly one mode, `ro`
+or `rw`; absence grants nothing. `rw` includes `ro` and message send/reply only.
 The import ledger relates a caller-selected stable source identifier and source
 row ID to the Iris account. Source numeric IDs are never Iris identities.
 
 Human mail remains a shared operational inbox. Named accounts do not create private
-mailboxes, new agent Executions or personal unread state. Operators send as the
-existing human mailbox and acknowledge shared deliveries. Record the authenticated
-account ID with new sends, reads and claim revocations, and security/account
-changes, in transactional console action records. Old actions remain unattributed;
-display names never change sender IDs or grant authority. Preserve retry keys and
-the existing repository-repair semantics. “My messages” must explain that it is
+mailboxes, active agent Executions or personal unread state. Both operators and
+members send through the existing human Agent and ended synthetic operator
+Execution of the selected sending repository. Only operators acknowledge shared
+deliveries. This transport identity does not identify the author by itself.
+
+Persist immutable `sender_account_id` plus at-send username/display-name snapshots
+on every new account-authenticated console message, taken from the server principal,
+never request fields. Show the person alongside the shared human transport sender
+in console threads/participants, send results, delivery/receipt views and the agent
+inbox/history/body projections and MCP wrappers. Receipts still describe the actual
+recipient delivery and ACK/handled state; a member sending a reply does not set any
+ACK or handled receipt. The current projection of every human sender as `human`
+must not hide the new account authorship. Do not expose role, locale or other
+profile fields as sender metadata. Old messages remain unattributed shared human
+mail. Keep account IDs and at-send attribution after profile edits, disabling,
+demotion or repository repair; display names never determine authority.
+
+Record the authenticated account ID with reads, claim revocations and security/
+account changes in transactional console action records as well. Action logs alone
+are insufficient for message attribution. “My messages” must explain that it is
 shared operator mail; members see “Messages”, without a personal-inbox claim.
+Authorship does not make a shared message private or grant lasting access to it.
+Console send accepts an account session only, including for operators; a machine
+bearer cannot stand in for a person or supply account attribution. Machine sends
+continue through the existing agent APIs with their existing authority and retry
+namespaces, without asserting a named console author.
 
 Use a deterministic login key: Unicode NFC, Unicode case folding, then NFC again,
 with the chosen Unicode behavior fixed by Iris's pinned Go dependencies. Preserve
@@ -68,12 +93,12 @@ renames; never select the first matching account. Username changes are outside t
 first console release. Display names are bounded to 128 code points and rendered
 as text. Role/permission data never comes from profile updates.
 
-### 2. Two useful roles, with explicit read scope and default denial
+### 2. Two useful roles, with per-repository ro/rw and default denial
 
 | Source/global role | Iris role and console authority |
 |---|---|
-| `admin` | `operator`: all repositories; read, send/reply, acknowledge human mail, revoke claims, view host diagnostics and manage console account roles/disabled state/read grants. This does not confer owner-token powers. |
-| `member` | `member`: read repository names, aliases, agents, sessions, claims, message lists/details and delivery state only in explicitly granted repositories. No grants means no coordination data. May edit its own profile/password and log out. |
+| `admin` | `operator`: all repositories; read, send/reply, acknowledge human mail, revoke claims, view host diagnostics and manage console account roles/disabled state/`ro`/`rw` grants. This does not confer owner-token powers. |
+| `member` | `member`: no repository access by default. `ro` grants the read scope below; `rw` adds send/reply under the checks below. May edit its own profile/password and log out, including with no grants. |
 | Anything else | `none`, forced disabled, no login or protected access. Import reports the quarantined row; later explicit operator review is required to enable a recognized role. No fallback to member or operator. |
 
 Disabled always wins over a role or grant. Unknown stored roles and malformed
@@ -82,14 +107,14 @@ last enabled operator cannot be disabled or demoted through the console. Use an
 edit revision to refuse stale access updates. Account creation and password
 recovery are owner-authenticated CLI operations in the first release, without
 passwords in argv, logs or URLs. No public registration, email reset or invitation
-workflow is proposed. Recovery creates/resets a named operator, never an anonymous
+workflow is included. Recovery creates/resets a named operator, never an anonymous
 browser session, and invalidates that account's sessions.
 
 The supplied account table contains no project assignments. Imported members start
-with zero repository grants. If a later transfer supplies assignments, every source
+with no `ro` or `rw` grants. If a later transfer supplies assignments, every source
 project must have an owner-reviewed mapping to one existing Iris Repository ID;
 never infer it from a name, slug, remote, path or numeric ID. A source `viewer`
-assignment may become a read grant for a member through that explicit mapping.
+assignment may become an `ro` grant for a member through that explicit mapping.
 A source project `operator` assignment is refused: it must not promote a member
 to global Iris operator or silently lose its write meaning. Unknown assignment
 roles, unmapped/ambiguous projects and assignments that purport to restrict a
@@ -97,10 +122,33 @@ global operator are refused. Removing or downgrading such assignments requires a
 explicitly revised manifest before apply. An account-only import does not claim
 to have transferred project permissions.
 
-Members never send, reply, acknowledge, mark read or revoke. Opening a thread uses
-GET only: the existing POST read action is a mutation even if the UI calls it
-automatically. Host doctor reports are deployment-wide and can contain paths, so
-members cannot read them. Members cannot list other accounts or their profiles.
+Adding Iris `rw` does not reinterpret source project `operator` as equivalent:
+its source capabilities include unsupported functions. Keep that import refusal;
+an Iris operator can grant `rw` explicitly after account import and review.
+
+`ro` reads repository names, aliases, agents, sessions, claims, message lists/
+details, receipts and delivery state in that repository. `rw` includes exactly
+those reads and the ability to send messages and reply to agents. Neither mode
+permits acknowledging/marking shared mail read, creating/releasing/revoking claims,
+managing accounts or grants, changing repository contacts, merging/forgetting
+repositories, token management, hub administration or uploading diagnostics.
+Opening a thread uses GET only: the existing POST read action is a mutation even
+if the UI calls it automatically. Host doctor reports are deployment-wide and can
+contain paths, so members cannot read them. Members cannot list other accounts or
+their profiles; visible message authorship is message metadata, not profile access.
+
+Every member send supplies an explicit sending `repository_id` with current `rw`;
+do not infer it from a reply or the first recipient as the operator path does today.
+Recipients must be explicit immutable non-human Agent IDs. Resolve their current
+repositories and require `rw` on every one in the same transaction as the send.
+Reject human/repository shorthand addresses for member sends; no contact fallback,
+group expansion or name reuse may bypass those checks. A mixed-recipient batch
+fails atomically if any recipient is unknown, inaccessible or has only `ro`.
+Cross-repository sends are allowed only with `rw` on the sending repository and
+every recipient repository. A readable `ro` destination is still not writable.
+A reply parent must be readable in the selected sending repository, not merely
+share a thread ID. Keep existing message/body/recipient bounds, reviewed sends,
+idempotency and bounded send quotas; use account identity for console quotas.
 
 For members, apply the grant predicate before search, grouping, pagination and
 counts. An omitted repository means the union of allowed repositories, never the
@@ -112,6 +160,48 @@ name as the received message envelope, but omit outside-repository recipient
 names/states and outside repository IDs, aliases and session metadata. Replies in
 other repositories do not make an entire thread visible. Hidden messages cannot
 match a search, supply a title/participant, contribute counts, or affect pagination.
+
+Agent replies remain addressed to the sending repository's shared human mailbox,
+not to a private account. Supply an explicit `reply_address` such as
+`human:<repository id>` in the agent envelope; bare `human` would name the agent's
+own repository during a cross-repository exchange. The reply's sender is the agent,
+and its parent/thread link preserves the account-authored message. Recipients stay
+explicit: neither `reply_to` nor `reply_address` implicitly delivers a message or
+compels an agent to reply. All current `ro`/`rw` readers of the sending or receiving
+repository see only the messages
+visible there, regardless of which person sent the original. For example, a member
+with `rw` on A and B can send from A to an agent in B; a reply from B delivered to
+A is readable with `ro` on A, with outside metadata redacted as above. Later replies
+in C are not visible unless their own sender or delivery reaches an allowed
+repository. Losing all relevant grants hides even one's own earlier messages and
+receipts. Thread linkage and original authorship never create a continuing grant.
+
+All named console sends, including operator sends, use `ConsoleOperation` keyed by
+`(account ID, retry key)` across the hub, independent of cookie/session, shared
+human Agent and repository ID. Its fingerprint covers the operation and original
+request, including a member's explicit sending repository, recipient IDs and reply
+parent. Preserve the accepted resolved origin as well when an operator's request
+uses the existing origin inference. The same key used by two accounts is
+independent; a different operation/request
+under one account's key returns `key_reused` (409). Store the accepted message/
+delivery IDs, resolved recipient IDs and result atomically with the message and
+authorship. Do not use the shared-mailbox `Operation` cache to answer named-account
+retries or attribute its historical entries to a person. Machine retries retain
+their existing namespaces.
+
+Authenticate and check current permissions before returning any cached send result.
+For an exact replay, authorize the persisted message's current sending repository
+and each persisted recipient's current repository, including the member's
+non-human-recipient restriction, then return the accepted result without
+re-resolving addresses or creating another message. Missing/forgotten
+objects fail closed; retain a retry tombstone if message/recipient deletion removes
+the accepted result. Keep console operations/tombstones for 24 hours from creation,
+following ADR 006, and keep client retry keys for at most ten minutes. Within that
+window deletion cannot make an accepted key a fresh send. A reply parent originally
+authorized at commit does not need to exist forever to replay that result, but its
+absence cannot authorize a new reply. A member now having only `ro` cannot replay
+a send result through the mutation endpoint; it may use the scoped read/receipt
+API. Other accounts never retrieve that person's cached result through their key.
 
 Every protected HTTP request gets a typed account or machine principal. Recheck
 session, disabled state, current authentication version, role, operation and object
@@ -130,9 +220,16 @@ version change. Serialize authorization and frame admission with revocation; a
 frame admitted before revocation may already be in transit. Account access changes
 also wake that account's sockets to close them when no repository event occurs.
 
-Repository merge refuses while either repository has member grants: the owner must
-review and remove/reassign those grants before repair, then grant the merged
+Repository merge refuses while either repository has any member `ro` or `rw` grants:
+the owner must review and remove those grants before repair, then grant the merged
 repository explicitly. Never silently union permissions and expose another history.
+Preserve account authorship, message/delivery IDs and account retry namespaces
+when moving shared mailboxes and messages; never coalesce people or retry keys.
+Exact retries after repair may locate a saved operation via its original request,
+including a retired repository ID, but authorization uses the moved message and
+recipients' current repositories and, for members, explicit post-merge `rw` grants.
+A retired ID cannot originate a new send. Reply addresses on refreshed messages reflect the
+current repository; an old retired address requires refresh, not implicit regrant.
 Forget removes affected grants and increments affected accounts' authentication
 versions in the same transaction. The existing all-or-nothing repair/forget dry-run
 and delivery guarantees remain requirements.
@@ -162,7 +259,13 @@ For an active session it requires the session's CSRF token. A same-origin retry
 with an already absent/expired/revoked session succeeds by clearing the stale
 cookie only, returning no account data and changing no server state.
 Password change/reset, role/grant changes and disabling atomically increment the
-account authentication version and delete all its sessions, including the caller's.
+account authentication version and delete all its sessions, including the caller's
+when that account is the target. Changing `rw` to `ro` is a permission change:
+after its transaction commits, the next request on the old session is
+`unauthorized`, including an already prepared send/reply or cached retry. After
+signing in again, `ro` reads work but sends/replies return `forbidden`. Check grants
+inside the write transaction, so a write serialized before downgrade may commit,
+but none serialized after downgrade can use old `rw` or a cached capability.
 The next action requires login; close its established sockets as above. Cosmetic
 profile/locale edits do not revoke sessions. Password verification/derivation runs
 outside the serialized store lock; commit rechecks the password/authentication
@@ -202,13 +305,13 @@ and [constant-time comparison contract](https://pkg.go.dev/crypto/subtle#Constan
 
 New and changed passwords use Argon2id version 19 in PHC encoding:
 `$argon2id$v=19$m=65536,t=3,p=1$<salt>$<hash>`, with a fresh 16-byte random salt,
-32-byte key and standard unpadded base64. This is Iris's proposed initial profile,
+32-byte key and standard unpadded base64. This is Iris's initial profile,
 not an imported scrypt default. Use `golang.org/x/crypto/argon2.IDKey`; its
 [Go documentation](https://pkg.go.dev/golang.org/x/crypto/argon2#IDKey) describes
 the memory/time/parallelism inputs. Accept only recognized, bounded profiles.
 Pin/review the pure-Go crypto dependency in its implementation PR and verify it
 with `CGO_ENABLED=0`; no C library, source backend or new runtime service is needed.
-Benchmark the 64 MiB profile on the supported hub platforms before acceptance.
+Benchmark the 64 MiB profile on the supported hub platforms before enablement.
 
 Retain imported scrypt hashes byte-for-byte until a successful login can upgrade
 one using the submitted password. Perform that replacement with an authentication
@@ -231,8 +334,8 @@ goes in a URL or browser persistent storage. Before login, a short-lived, bounde
 single-use server challenge and HttpOnly pre-login cookie bind an equivalent token
 to that browser. Consume it on a login attempt; the UI obtains another for retry.
 GET does not sign in, acknowledge mail, send or revoke on the user's behalf;
-existing hub expiry bookkeeping remains independent of those actions. SameSite and Origin are
-additional defenses, not replacements for CSRF validation. WebSocket upgrades
+existing hub expiry bookkeeping remains independent of those actions. SameSite and
+Origin are additional defenses, not replacements for CSRF validation. WebSocket upgrades
 require exact origin plus a valid account session.
 
 Add password-attempt limits before any KDF: initially five attempts per normalized
@@ -240,7 +343,7 @@ login key per fifteen minutes, thirty aggregate attempts per minute, and at most
 two concurrent KDF jobs across login/change/reset/upgrade, without an unbounded
 queue. Use bounded expiring buckets, keyed by digests rather than raw attempted
 names. Unknown names consume the same quotas. Return `rate_limited` with
-Retry-After. These are proposed tunable defaults; they can deny legitimate users
+Retry-After. These are initial tunable defaults; they can deny legitimate users
 under attack and reset on restart. Do not derive identity from untrusted forwarded
 addresses or put expensive KDF work on the hook/API coordination lock.
 
@@ -253,16 +356,18 @@ reach the browser. Account/session/security logs contain actor/target IDs, actio
 time and outcome, never passwords, hashes, salts, session/CSRF values, request bodies
 or login URL queries. This also applies to import reports and tracing.
 
-Proposed Iris routes, separate from the exported wire contract:
+Intended Iris routes, separate from the exported wire contract:
 
 | Route | Authority |
 |---|---|
 | `GET /v1/ui/login`, `POST /v1/ui/login` | Pre-login challenge; then bounded credentials + CSRF verification. |
 | `GET /v1/ui/session`, `POST /v1/ui/logout` | Current account/session; logout requires CSRF. |
 | `PATCH /v1/ui/profile`, `POST /v1/ui/password` | Enabled account, self only; revision/current password as applicable. |
-| `GET /v1/ui/accounts`, `PUT /v1/ui/accounts/{id}/access` | Operator only; access update requires expected edit revision and CSRF. |
-| Existing overview/threads/deliveries/watch | Operator globally, member under the read policy above. |
-| Existing messages/read/revoke | Operator only, with CSRF and object checks. |
+| `GET /v1/ui/accounts`, `PUT /v1/ui/accounts/{id}/access` | Operator only; mode is no grant, `ro` or `rw`; update requires expected edit revision and CSRF and revokes target sessions. |
+| Existing overview/threads/deliveries/watch; `GET /v1/ui/messages/{id}/status` | Operator globally, member under current `ro`/`rw` read policy; receipts include account attribution and scoped recipient state. |
+| `POST /v1/ui/messages` | Account session only: operator globally; member with current `rw` on explicit sending repository and every recipient repository, and a readable reply parent there; CSRF, account authorship and per-account retries. Machine bearers cannot call this route. |
+| Existing thread read/claim revoke | Operator only, with CSRF and object checks; denied to both member modes. |
+| Agent, token and admin APIs | No console-cookie authority, including with `rw`; existing machine/owner checks remain. |
 | Existing doctor GET / PUT | Operator for GET; machine bearer for PUT. |
 
 Server responses expose current capabilities so the UI can hide unusable controls,
@@ -311,14 +416,18 @@ Report unknown roles as disabled `none` accounts; malformed hashes/rows, unresol
 login collisions and unsupported assignments refuse the entire apply. Locale values
 must map to the existing supported Iris catalog or explicitly to unset; never
 silently reinterpret unsupported data. Import locale preferences as data, not
-instructions to agents. Missing assignment data grants nothing.
+instructions to agents. The account-table import always creates members with no
+`ro` or `rw` grants, including disabled members; importing `member` never implies
+repository access. Any later assignment transfer is separate and follows section
+2's explicit viewer-to-`ro` mapping/refusal policy, not an inferred `rw` conversion.
 
 Dry-run follows a dedicated no-write validation path, without `Store.Call`'s expiry
 bookkeeping, session creation, timestamp updates or ledger writes. It reports safe
 row IDs, counts, collisions, quarantined roles and proposed mappings, never hashes
 or hash-containing payloads. It is a snapshot; apply repeats all validation and
-collision checks inside one `BEGIN IMMEDIATE` transaction. Accounts, grants and
-import-ledger entries commit together, or none do. Database uniqueness constraints
+collision checks inside one `BEGIN IMMEDIATE` transaction. Accounts and import-ledger
+entries commit together, or none do; a separately authorized assignment transfer
+must likewise commit its explicit grants and ledger atomically. Database uniqueness constraints
 remain the final race check. See [SQLite transaction semantics](https://www.sqlite.org/lang_transaction.html).
 
 Never overwrite an existing Iris account, password, profile, role or grant. The
@@ -337,15 +446,17 @@ of accounts that may already have been used.
 
 ## Alternatives and consequences
 
-| Alternative | Why this proposal chooses otherwise |
+| Alternative | Why this decision chooses otherwise |
 |---|---|
 | Keep the single login link, adding profile controls | It cannot attribute people, persist logout/revocation or give members a distinct scope. Retaining it as a bypass defeats permissions. |
 | Give every member hub-wide read access | Simpler queries, but exposes every team's bodies, paths and diagnostics. Explicit repository grants are more work and deny by default. |
+| Give members repository administration with write access | `rw` is narrowly message send/reply. Shared ACKs, claims, grants and administration retain their separate operator/owner authority. |
+| Give all shared-human sends the same retry namespace and author | Two people can collide or receive another person's cached result. Immutable account authorship and per-account retry records distinguish people while retaining shared replies. |
 | Reuse source project roles and server contracts | Project `operator` means writes there, and projects have identities/lifecycle Iris does not have. Explicit viewer mapping and refusal avoid accidental promotion. |
 | Signed role cookies/JWTs or an in-memory session cache as authority | They complicate immediate permission/password revocation or lose sessions on restart. Database sessions fit the existing single writer. |
 | Retain scrypt for all new passwords, or force resets at import | A single format is simpler, but bounded compatibility plus Argon2id separates preservation from new-password policy without requiring every imported user to reset first. |
 | External identity service/SSO | Useful later, but adds deployment/runtime scope beyond the single-binary small-team requirements. |
-| Per-account personal mailboxes | Useful for private conversations, but changes addresses, delivery/ACK semantics and repository repair. Shared mail with actor attribution meets this proposal without pretending to provide privacy between operators. |
+| Per-account personal mailboxes | Useful for private conversations, but changes addresses, delivery/ACK semantics and repository repair. Shared mail with immutable message authorship meets this decision without pretending to provide private correspondence. |
 
 This work adds credential-bearing database records, a new protected key file,
 scope-aware queries and revocation races to maintain. Hashing can consume scarce
@@ -355,36 +466,57 @@ are reasons to stage verification before moving the exported UI.
 
 ## Ordered PR and transfer plan
 
-Each PR depends on its predecessors. None is implemented by this ADR. Acceptance
-updates D13, D16 and the API/deployment documentation in the implementing PRs;
+Each PR depends on its predecessors. None is implemented by this ADR. Implementing
+PRs update D13, D16 and the API/deployment documentation to this accepted decision;
 until then the verified starting behavior above remains authoritative.
 
-1. **Storage, roles and password contracts.** Add account/grant/session/import
-   migrations using the next schema number available then; add version/revision
-   handling and bounded hash parsers/verification/creation. Keep routes inactive.
+1. **Storage, roles and password contracts.** Add account/grant/session/import/
+   console-operation migrations and immutable message-authorship fields using the
+   next schema number available then; add strict unique `ro`/`rw` grants,
+   version/revision handling and bounded hash parsers/verification/creation.
+   Keep routes inactive. Bind console retry keys to accounts, with 24-hour
+   retention/tombstones and no attribution of legacy shared-cache entries.
    Prove scrypt compatibility with synthetic vectors for the exact supplied format,
    malformed/overflow/over-cost/base64 cases, fixed-length comparisons, role default
-   denial, uniqueness, transaction rollback and pure-Go builds. Benchmark KDF cost
-   outside the store lock and set the final bounded profiles/concurrency.
+   denial, default no-grant access, malformed grant modes, uniqueness,
+   transaction rollback and pure-Go builds. Benchmark KDF cost outside the store
+   lock and set the final bounded profiles/concurrency.
 2. **Authorization and lifecycle.** Add typed principals, the operation matrix and
    transactional repository predicates. Cover cross-repository envelopes, hidden
    search matches/titles/counts/participants/pagination, missing filters, guessed
-   IDs, read-only ACK prevention, mixed credentials and owner/host boundaries.
-   Add shared-mail actor attribution without changing idempotency. Define safe
-   merge/forget handling and scoped live revisions; prove no hidden activity leaks.
+   IDs, both member modes' ACK/admin/claim denial, mixed credentials and owner/host
+   boundaries. Add send/reply with explicit origin `rw`, all-recipient `rw` checks,
+   visible reply parents and atomic batch refusal. Test origin/recipient grants
+   absent or `ro`, a cross-repository target lacking `rw`, hidden parents and
+   shorthand-address/forged-author bypass attempts. Expose immutable person
+   attribution in every console/agent/MCP message and receipt projection while
+   retaining shared human reply routing. Test two accounts using the same retry
+   key, one account changing its request, restart/relogin retries, per-account
+   send quotas and no duplicate deliveries. Verify reply visibility under changing
+   grants and no author-only access exemption. Cover profile changes, demotion,
+   disable and merge retaining authorship; bearer-only console-send rejection;
+   merge refusal for either grant mode, lost-response retries after removal/merge/
+   regrant, changed recipients, deletion
+   tombstones, and retired IDs never enabling a new send. Add scoped live revisions
+   and prove no hidden activity leaks. Keep existing machine retry semantics.
 3. **Sessions and authentication defenses.** Add persistent hashed sessions, fresh
    key handling, challenge/CSRF, password-attempt limits, logout and password change,
    plus owner provisioning/recovery. Keep account-mode routes gated until the full
    authorization path is ready. Prove restart persistence/absolute expiry, disabled
    refusal, generic login failure, key rotation, all-session revocation including
    live sockets, KDF admission and reset/login/write/frame races with real SQLite
-   concurrency. Cover literal-loopback and ADR 002 proxy-origin paths.
+   concurrency. Include `rw` to `ro` or no-grant downgrade versus send/reply/cached
+   retries: old sessions fail on the next request, reauthenticated `ro` accounts
+   can read but not send, and no post-downgrade write uses earlier authority.
+   Cover literal-loopback and ADR 002 proxy-origin paths.
 4. **Importer.** Add the read-only source adapter, dedicated hub apply/dry-run and
    reviewed mapping manifest. Test synthetic SQLite inputs, never a production
    source: collision after dry-run, duplicate source IDs, unknown roles, malformed
    hashes, unsupported assignments/locales/times, rollback at each persistence
    boundary, exact and changed re-runs, changed target passwords, concurrent apply,
-   and absence of sensitive values in logs. Prove dry-run changes no Iris record,
+   zero grants for imported members, viewer-to-`ro` mapping only in a separate
+   reviewed transfer, source project operator refusal despite Iris `rw`, and
+   absence of sensitive values in logs. Prove dry-run changes no Iris record,
    including coordination expiry state. Publish backup/apply/recovery instructions.
 5. **Login, logout and account UI transfer into `web/`.** Add an Iris login view
    from the requirements: no login implementation exists inside the permitted
@@ -394,13 +526,18 @@ until then the verified starting behavior above remains authoritative.
    specified code-point minimum and UTF-8-byte maximum; test multibyte and non-BMP
    characters as well as ASCII.
    Preserve the existing console shell, recipient IDs, drafts, review, retry keys,
-   safe Markdown, accessibility and responsive behavior. Member navigation omits
-   compose/revoke/diagnostics/admin controls and never calls the read/ACK action.
+   safe Markdown, accessibility and responsive behavior. Member compose/reply
+   appears only for selected `rw` repositories; recipients are restricted to
+   current `rw` repositories and the reply parent must be visible in the chosen
+   origin. Show the authenticated person on shared messages and explain shared
+   replies. Both member modes omit revoke/diagnostics/admin controls and never
+   call the read/ACK action. Test `ro`-only navigation, mixed `ro`/`rw` compose,
+   cross-repository replies and permission changes while a draft is open.
    A 401 or revocation closes streams and clears prior-account data, drafts and
    cached locale; another account on the same browser sees none of them.
 6. **Access UI transfer and cutover.** Adapt the account-list/conflict presentation
-   to Iris operator/member/none roles, disabled state and repository read grants;
-   implement the missing controls against the tested backend, including revision
+   to Iris operator/member/none roles, disabled state and repository no-grant/`ro`/
+   `rw` controls; implement the missing controls against the tested backend, including revision
    conflicts and last-operator protection. Test two-account browsers, keyboard
    flows and mobile/desktop views. Provision and verify an operator, switch the
    console to accounts, retire login links and update `iris ui`. Rehearse the switch
@@ -426,7 +563,7 @@ export, not target API names. Transfer code deliberately and retain its provenan
 | `src/App.tsx`, `renderAccount` (line 3492), display-name handling (1585) | Username/role facts, display-name form, loading/error/status and conflict feedback. Adapt to Iris edit revisions. |
 | Same file, password handling (1680), password form (3624) | Current/new/confirmation fields, autocomplete, validation and rate-limit feedback. Rewrite the text that says the current session remains signed in: all sessions must end after an explicit password change. |
 | Same file, topbar logout (3925) | Visible sign-out control using an Iris fetch mutation with CSRF; the exported native form and action do not fit the existing CSP. |
-| Same file, `renderAdmin` (3703) | Account list, selected/disabled states and stale-permission feedback. Replace the project assignment editor with Iris repository read grants. The export does not supply create/disable/global-role controls. |
+| Same file, `renderAdmin` (3703) | Account list, selected/disabled states and stale-permission feedback. Replace the project assignment editor with Iris repository no-grant/`ro`/`rw` controls. The export does not supply create/disable/global-role controls. |
 | `src/LocalePicker.tsx`, `src/preferences.ts`, `src/i18n.ts` | Account language interaction patterns, retaining Iris's existing locale catalog/picker. Signed-in account UI locale wins; browser preference is for signed-out use only. Preserve correspondence locale in storage but hide its editor until Iris has a defined use; no translation or injected instruction is implied. |
 | `src/app.css`, account/settings/list rules (1535, 1562, 1993) | Extract selected responsive styles into existing Iris styles without replacing the console shell. |
 | `src/App.test.tsx`, account/access cases (6133 onward); `e2e/hermes.spec.ts`, account/access cases (904 onward) | Adapt same-origin, loading/authorization failure, revision conflict, keyboard and mobile scenarios to Iris contracts; do not import obsolete API mocks wholesale. |
@@ -445,10 +582,12 @@ account nor a message body can order an agent to prioritize or execute anything.
 Do not follow export test references to login templates or server files outside
 `ui/`; they were not inspected and are outside this transfer's scope.
 
-## Owner confirmations before implementation
+## Owner decisions accepted
 
-- Operators have global console/access-management authority; members get explicit
-  repository read grants only. Human mail stays shared, with new actor attribution.
+- Operators have global console/access-management authority; members default to
+  no repository access and receive explicit `ro`/`rw` grants. `rw` adds send/reply
+  only, with `rw` on the origin and every recipient repository. Human mail stays
+  shared, with immutable person attribution, shared replies and account retry keys.
 - Import `admin` as operator, `member` without inferred grants, unknown roles as
   disabled `none`; map viewers explicitly and refuse source project operators.
 - Use Argon2id for new passwords, bounded scrypt compatibility/upgrade, twelve-hour
