@@ -8,6 +8,13 @@ Scoop and winget are `skip_upload: true`. Docker builds are enabled only for sna
 push. Do not enable publishing until D15's later stages are approved.
 The GoReleaser dependency is not part of the application module.
 
+The web tooling pins Vitest and its coverage provider together. The `minimatch` override
+in `web/package.json` selects 11.0.1 for GHSA-g3hv-75wg-m249 while ESLint and
+typescript-eslint still request affected 10.x versions. Remove the override when those
+upstream ranges accept a fixed version, after running audit, lint, build and coverage.
+Vitest 4.1.12 fixes GHSA-qxg6-89mg-rqv8 and GHSA-xp26-3454-mjgp. These are build/test
+dependencies; the final scratch server image contains the Go binary, not node_modules.
+
 Use GoReleaser **v2.20.0** (the official binary, Docker image, or `go run github.com/goreleaser/goreleaser/v2@v2.20.0`) from the repository root:
 
 ```
