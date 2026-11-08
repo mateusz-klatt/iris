@@ -14,6 +14,9 @@ async function serve(page: Page, overview: object, clients: object[]) {
     route.fulfill({ json: { hosts: [{ host: "laptop", checked_at: new Date().toISOString(), clients }] } }),
   );
   await page.route("**/v1/ui/threads**", (route) => route.fulfill({ json: { threads: [] } }));
+  await page.route("**/v1/ui/deliveries**", (route) =>
+    route.fulfill({ json: { messages: [], window_s: 604800, wait_s: 900 } }),
+  );
 }
 
 test("waits for the first session beside a silent client", async ({ page }) => {
@@ -65,9 +68,28 @@ test("a busy hub fits the screen", async ({ page }) => {
     last_hook_at: "",
   };
   await serve(page, { repositories, agents, claims, human_unread: 0 }, [slow, silentCodex]);
+  const subject = `Review delivery to ${long}: src/application/portfolio/a_rather_long_module_name.py`;
+  await page.route("**/v1/ui/deliveries**", (route) => route.fulfill({ json: {
+    window_s: 604800,
+    wait_s: 900,
+    messages: [{
+      id: "ms_delivery",
+      thread_id: "ms_delivery",
+      subject,
+      created_at: "2026-11-08T09:00:00Z",
+      recipients: [
+        { name: long, state: "pending", reason: "unreachable", execution: "lost" },
+        { name: `${long}-waiting`, state: "pending", reason: "waiting", execution: "active" },
+      ],
+    }],
+  } }));
 
   await page.goto("/");
   await expect(page.getByText(claims[0]!.path)).toBeAttached();
+  const deliveries = page.getByRole("region", { name: "Delivery problems" });
+  await expect(deliveries.getByRole("button").filter({ hasText: subject })).toBeVisible();
+  await expect(deliveries).toContainText(`${long}: no live session (lost)`);
+  await expect(deliveries).toContainText(`${long}-waiting: not accepted after 15 minutes`);
 
   const layout = await page.evaluate(() => {
     const width = document.documentElement.clientWidth;
@@ -89,12 +111,22 @@ test("a busy hub fits the screen", async ({ page }) => {
       columns: new Set(panels.map((panel) => Math.round(panel.getBoundingClientRect().left))).size,
       cut: cut.map((panel) => panel.querySelector("h1, h2")?.textContent),
       overlaps: overlaps.length,
+      clippedDeliveryRows: [...document.querySelectorAll<HTMLElement>("#delivery-problems .message-row")]
+        .filter((row) => {
+          const panel = row.closest(".panel")!.getBoundingClientRect();
+          const bounds = row.getBoundingClientRect();
+          return row.scrollWidth > row.clientWidth + 1 || bounds.right > panel.right + 1 || bounds.left < panel.left - 1;
+        }).length,
+      clippedDeliveryRecipients: [...document.querySelectorAll<HTMLElement>("#delivery-problems li li")]
+        .filter((recipient) => recipient.scrollWidth > recipient.clientWidth + 1).length,
     };
   });
 
   expect(layout.page).toBeLessThanOrEqual(layout.width);
   expect(layout.cut).toEqual([]);
   expect(layout.overlaps).toBe(0);
+  expect(layout.clippedDeliveryRows).toBe(0);
+  expect(layout.clippedDeliveryRecipients).toBe(0);
   if (layout.width <= 900) {
     expect(layout.columns).toBe(1);
   }
