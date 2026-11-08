@@ -1,0 +1,25 @@
+{
+  "session_id": "af647fc5-1139-4ada-b6da-902ec2615848",
+  "transcript_path": "C:\\Users\\user\\.claude\\projects\\C--workspace-project\\af647fc5-1139-4ada-b6da-902ec2615848.jsonl",
+  "cwd": "C:\\workspace\\project",
+  "prompt_id": "2a03df53-5be1-43cd-ab82-634352f172a9",
+  "permission_mode": "bypassPermissions",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "tool_name": "ScheduleWakeup",
+  "tool_input": {
+    "delaySeconds": 60,
+    "reason": "capture test",
+    "prompt": "capture",
+    "noop": true
+  },
+  "tool_response": {
+    "scheduledFor": 1794133560000,
+    "clampedDelaySeconds": 60,
+    "wasClamped": false
+  },
+  "tool_use_id": "toolu_01Hdf8TP1aVtHQ33idivgnvE",
+  "duration_ms": 3
+}
