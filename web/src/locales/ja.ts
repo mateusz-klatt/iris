@@ -389,6 +389,7 @@ const translation = {
     sent: "送信しました。",
     sendUncertain: "Iris はこのメッセージが送信されたかどうかを確認できませんでした。最初の試行から 1 日以内であれば再送しても安全です。ハブは下書きごとに 1 件のコピーを保持します。",
     deliveryTitle: "配信の問題",
+    deliveryTruncated: "最新の {{shown}} 件のメッセージのみを表示しています。他にもメッセージがあります。",
     deliveryHint: "過去 {{days}} 日間のメッセージのうち、受信者がまだ受け取っていないもの: 受信者にアクティブなセッションがないか、{{minutes}} 分が経過しています。Iris は各メッセージを受信者のためにキューに保持し、再送しません。",
     deliveryUnreachable: "{{name}}: アクティブなセッションなし ({{session}})",
     deliveryWaiting: "{{name}}: {{minutes}} 分経っても未受領",

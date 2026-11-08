@@ -389,6 +389,7 @@ const translation = {
     sent: "Seolta.",
     sendUncertain: "Níorbh fhéidir le Iris a dhéanamh amach ar seoladh an teachtaireacht seo. Tá sé sábháilte í a sheoladh arís laistigh de lá ón gcéad iarracht: coinníonn an mol cóip amháin in aghaidh an dréachta.",
     deliveryTitle: "Fadhbanna seachadta",
+    deliveryTruncated: "Ní thaispeántar ach na teachtaireachtaí is déanaí (líon: {{shown}}); tá tuilleadh ann.",
     deliveryHint: "Do theachtaireachtaí le déanaí (líon laethanta: {{days}}) nár ghlac faighteoir leo: níl seisiún beo ag an bhfaighteoir, nó tá {{minutes}} nóiméad caite. Coinníonn Iris gach ceann sa scuaine dá fhaighteoir agus ní sheolann sé arís é.",
     deliveryUnreachable: "{{name}}: gan seisiún beo ({{session}})",
     deliveryWaiting: "{{name}}: gan glacadh leis tar éis {{minutes}} nóiméad",

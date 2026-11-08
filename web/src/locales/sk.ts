@@ -380,6 +380,7 @@ const translation = {
     sent: "Odoslané.",
     sendUncertain: "Iris nedokázal zistiť, či bola táto správa odoslaná. Odoslať ju znova do jedného dňa od prvého pokusu je bezpečné: hub uchová jednu kópiu na koncept.",
     deliveryTitle: "Problémy s doručením",
+    deliveryTruncated: "Zobrazené sú iba najnovšie správy (počet: {{shown}}); existujú ďalšie.",
     deliveryHint: "Vaše správy z posledného obdobia (počet dní: {{days}}), ktoré príjemca neprijal: príjemca nemá aktívnu reláciu alebo čakanie trvá už {{minutes}} min. Iris každú drží vo fronte pre príjemcu a znova ju neodosiela.",
     deliveryUnreachable: "{{name}}: žiadna aktívna relácia ({{session}})",
     deliveryWaiting: "{{name}}: neprijaté ani po {{minutes}} min.",

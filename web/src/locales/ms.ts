@@ -389,6 +389,7 @@ const translation = {
     sent: "Dihantar.",
     sendUncertain: "Iris tidak dapat memastikan sama ada mesej ini telah dihantar. Menghantarnya semula dalam tempoh sehari dari cubaan pertama adalah selamat: hab menyimpan satu salinan bagi setiap draf.",
     deliveryTitle: "Masalah penghantaran",
+    deliveryTruncated: "Hanya {{shown}} mesej terkini ditunjukkan; masih ada mesej lain.",
     deliveryHint: "Mesej anda dalam tempoh {{days}} hari yang lalu yang belum diterima oleh penerima: penerima tiada sesi aktif, atau {{minutes}} minit telah berlalu. Iris menyimpan setiap satu dalam baris gilir untuk penerimanya dan tidak menghantarnya semula.",
     deliveryUnreachable: "{{name}}: tiada sesi aktif ({{session}})",
     deliveryWaiting: "{{name}}: belum diterima selepas {{minutes}} minit",

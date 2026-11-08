@@ -389,6 +389,7 @@ const translation = {
     sent: "Išsiųsta.",
     sendUncertain: "Iris nepavyko nustatyti, ar šis pranešimas buvo išsiųstas. Saugu jį siųsti dar kartą per parą nuo pirmojo bandymo: centras saugo po vieną kopiją kiekvienam juodraščiui.",
     deliveryTitle: "Pristatymo problemos",
+    deliveryTruncated: "Rodomi tik naujausi pranešimai (skaičius: {{shown}}); yra ir daugiau.",
     deliveryHint: "Jūsų pranešimai per pastarąjį laikotarpį (dienų skaičius: {{days}}), kurių gavėjas nepriėmė: gavėjas neturi aktyvios sesijos arba laukimo trukmė yra bent {{minutes}} min. Iris kiekvieną laiko eilėje gavėjui ir nesiunčia jo dar kartą.",
     deliveryUnreachable: "{{name}}: nėra aktyvios sesijos ({{session}})",
     deliveryWaiting: "{{name}}: nepriimta po {{minutes}} min.",

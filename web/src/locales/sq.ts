@@ -380,6 +380,7 @@ const translation = {
     sent: "U dërgua.",
     sendUncertain: "Iris nuk mundi të përcaktonte nëse ky mesazh u dërgua. Ridërgimi i tij brenda një dite nga përpjekja e parë është i sigurt: qendra mban një kopje për çdo draft.",
     deliveryTitle: "Probleme me dorëzimin",
+    deliveryTruncated: "Shfaqen vetëm {{shown}} mesazhet më të reja; ka edhe të tjera.",
     deliveryHint: "Mesazhet tuaja nga periudha e fundit (numri i ditëve: {{days}}) që një marrës nuk i ka pranuar: marrësi nuk ka seancë aktive ose pritja ka zgjatur {{minutes}} min. Iris e mban secilin në radhë për marrësin e tij dhe nuk e dërgon përsëri.",
     deliveryUnreachable: "{{name}}: asnjë seancë aktive ({{session}})",
     deliveryWaiting: "{{name}}: i papranuar pas {{minutes}} min.",

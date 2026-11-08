@@ -501,6 +501,7 @@ const resources = {
         sendUncertain: "Iris could not tell whether this message was sent. Sending it again within a day of the first attempt is safe: the hub keeps one copy per draft.",
         deliveryTitle: "Delivery problems",
         deliveryHint: "Your messages from the last {{days}} days that a recipient has not accepted: the recipient has no live session, or {{minutes}} minutes have passed. Iris keeps each one queued for its recipient and does not send it again.",
+        deliveryTruncated: "Only the newest {{shown}} messages are shown; more exist.",
         deliveryUnreachable: "{{name}}: no live session ({{session}})",
         deliveryWaiting: "{{name}}: not accepted after {{minutes}} minutes",
         deliverySession: {

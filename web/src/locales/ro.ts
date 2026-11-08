@@ -389,6 +389,7 @@ const translation = {
     sent: "Trimis.",
     sendUncertain: "Iris nu a putut afla dacă acest mesaj a fost trimis. Retrimiterea lui în decurs de o zi de la prima încercare este sigură: hubul păstrează o copie per ciornă.",
     deliveryTitle: "Probleme de livrare",
+    deliveryTruncated: "Sunt afișate doar cele mai noi mesaje (număr: {{shown}}); există și altele.",
     deliveryHint: "Mesajele tale cu o vechime de cel mult {{days}} z., pe care un destinatar nu le-a acceptat: destinatarul nu are o sesiune activă sau a trecut un interval de {{minutes}} min. Iris păstrează fiecare mesaj la coadă pentru destinatarul său și nu îl retrimite.",
     deliveryUnreachable: "{{name}}: nicio sesiune activă ({{session}})",
     deliveryWaiting: "{{name}}: neacceptat după {{minutes}} min.",

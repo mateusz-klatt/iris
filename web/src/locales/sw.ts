@@ -380,6 +380,7 @@ const translation = {
     sent: "Imetumwa.",
     sendUncertain: "Iris haikuweza kubaini kama ujumbe huu ulitumwa. Kuutuma tena ndani ya siku moja tangu jaribio la kwanza ni salama: kitovu huhifadhi nakala moja kwa kila rasimu.",
     deliveryTitle: "Matatizo ya uwasilishaji",
+    deliveryTruncated: "Jumbe {{shown}} mpya zaidi pekee ndizo zinazoonyeshwa; kuna nyingine.",
     deliveryHint: "Jumbe zako za kipindi cha hivi karibuni (idadi ya siku: {{days}}) ambazo mpokeaji hajazikubali: mpokeaji hana kipindi kinachoendelea, au muda wa dakika {{minutes}} umepita. Iris huweka kila ujumbe kwenye foleni kwa mpokeaji wake na haiutumi tena.",
     deliveryUnreachable: "{{name}}: hakuna kipindi kinachoendelea ({{session}})",
     deliveryWaiting: "{{name}}: haujakubaliwa baada ya dakika {{minutes}}",

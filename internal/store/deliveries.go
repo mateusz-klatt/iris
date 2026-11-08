@@ -8,15 +8,18 @@ import (
 // deliveryWindow is how far back the delivery-problems list looks at the human's own mail.
 const deliveryWindow = 7 * 24 * time.Hour
 
-// deliveryWait is how long an unacked delivery to a reachable recipient may wait before the list
-// names it. It is a threshold, not a verdict: the recipient may simply be busy.
+// deliveryWait is the age from message creation after which an unacked delivery to a reachable
+// recipient appears in the list. It is a threshold, not a verdict: the recipient may be busy.
 const deliveryWait = 15 * time.Minute
 
+// deliveryMessageLimit bounds the newest messages with at least one recipient in trouble.
+const deliveryMessageLimit = 200
+
 // deliveries lists the human's messages of the last deliveryWindow with a delivery in trouble:
-// unacked, to a recipient with no active Execution ("unreachable"), or unacked for longer than
-// deliveryWait ("waiting"). An acked or handled delivery is never listed, so nothing stored is
-// offered again just because nobody has said it was handled. With a repository, only messages
-// the human sent from that repository's view are listed. No body is returned.
+// unacked, to a recipient with no active Execution ("unreachable"), or from a message created
+// longer than deliveryWait ago ("waiting"). An acked or handled delivery is never listed, so
+// nothing stored is offered again just because nobody has said it was handled. With a repository,
+// only messages the human sent from that repository's view are listed. No body is returned.
 func (t *transaction) deliveries(r Request) (map[string]any, error) {
 	now := t.s.clock.Now()
 	rows, err := t.rows(`SELECT m.id,m.thread_id,m.subject,m.created_ms,a.name,d.state,
@@ -32,6 +35,7 @@ func (t *transaction) deliveries(r Request) (map[string]any, error) {
 	}
 	messages := []map[string]any{}
 	byID := map[string]map[string]any{}
+	more := false
 	for rows.Next() {
 		var id, thread, subject, name, state, latest string
 		var created int64
@@ -46,6 +50,12 @@ func (t *transaction) deliveries(r Request) (map[string]any, error) {
 		}
 		m := byID[id]
 		if m == nil {
+			// Rows are grouped by message. Only an additional message with a recipient
+			// in trouble proves truncation; every listed message keeps all its recipients.
+			if len(messages) == deliveryMessageLimit {
+				more = true
+				break
+			}
 			m = map[string]any{"id": id, "thread_id": thread, "subject": subject, "created_at": timestamp(sql.NullInt64{Int64: created, Valid: true}), "recipients": []map[string]any{}}
 			byID[id] = m
 			messages = append(messages, m)
@@ -58,5 +68,5 @@ func (t *transaction) deliveries(r Request) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"messages": messages, "window_s": int64(deliveryWindow / time.Second), "wait_s": int64(deliveryWait / time.Second)}, nil
+	return map[string]any{"messages": messages, "more": more, "window_s": int64(deliveryWindow / time.Second), "wait_s": int64(deliveryWait / time.Second)}, nil
 }

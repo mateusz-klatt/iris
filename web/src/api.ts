@@ -124,7 +124,7 @@ export interface DeliveryRecipient {
   name: string;
   /** The delivery's state: pending or inflight. An acked one is never listed. */
   state: string;
-  /** unreachable: the recipient has no active session. waiting: unacked past wait_s. */
+  /** unreachable: no active session. waiting: unacked message older than wait_s. */
   reason: "unreachable" | "waiting";
   /** The recipient's latest session state: active, lost, ended or none. */
   execution: string;
@@ -141,6 +141,8 @@ export interface DeliveryProblem {
 /** The human's messages in delivery trouble, and the thresholds the hub judged them by. */
 export interface DeliveryProblems {
   messages: DeliveryProblem[];
+  /** More qualifying messages exist beyond the newest messages returned. */
+  more: boolean;
   window_s: number;
   wait_s: number;
 }
