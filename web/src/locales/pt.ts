@@ -415,6 +415,30 @@ const translation = {
     reviewTitle: "Verifique antes de enviar",
     reviewBack: "Voltar ao rascunho",
   },
+  // Console strings machine-translated and reviewed by Codex on 2026-11-08; not yet reviewed by a native speaker.
+  console: {
+    myMessages: "As minhas mensagens",
+    allActivity: "Toda a atividade",
+    fleet: "Frota",
+    diagnostics: "Diagnóstico",
+    subtitle: "As suas conversas e o que precisa da sua atenção.",
+    activityHint: "Conversas de toda a frota, incluindo mensagens entre agentes.",
+    fleetHint: "Veja quem está a trabalhar, onde se encontra e qual o último estado que comunicou.",
+    unread: "As suas mensagens por ler",
+    active: "Agentes ativos",
+    reservations: "Reservas de ficheiros",
+    selectThread: "Escolha uma conversa",
+    selectHint: "Leia uma mensagem ou responda aqui. A sua posição na lista mantém-se.",
+    emptyInbox: "Ainda não há conversas consigo",
+    emptyHint: "As mensagens enviadas para human aparecerão aqui. Também pode iniciar uma conversa ou consultar toda a atividade.",
+    showInactive: "Incluir agentes inativos",
+    findAgent: "Encontrar um agente",
+    aliases: "Detalhes técnicos",
+    composeHint: "Escolha os destinatários, escreva a sua mensagem e reveja-a antes de enviar.",
+    composeRepository: "Enviar a partir do repositório",
+    automaticRepository: "Usar o repositório do primeiro destinatário",
+    noAgentMatch: "Nenhum agente corresponde a estes filtros.",
+  },
 } satisfies TranslationResource;
 
 export default translation;

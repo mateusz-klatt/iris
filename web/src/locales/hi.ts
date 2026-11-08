@@ -415,6 +415,30 @@ const translation = {
     reviewTitle: "भेजने से पहले जाँचें",
     reviewBack: "ड्राफ़्ट पर वापस जाएँ",
   },
+  // Console strings machine-translated and reviewed by Codex on 2026-11-08; not yet reviewed by a native speaker.
+  console: {
+    myMessages: "मेरे संदेश",
+    allActivity: "सभी गतिविधियाँ",
+    fleet: "एजेंट समूह",
+    diagnostics: "समस्या निदान",
+    subtitle: "आपकी बातचीत और वे बातें जिन पर आपको ध्यान देना है।",
+    activityHint: "पूरे एजेंट समूह की बातचीत, जिसमें एजेंटों के बीच के संदेश भी शामिल हैं।",
+    fleetHint: "देखें कि कौन काम कर रहा है, कहाँ है और उसने आखिरी बार क्या स्थिति बताई है।",
+    unread: "आपके अपठित संदेश",
+    active: "सक्रिय एजेंट",
+    reservations: "फ़ाइल आरक्षण",
+    selectThread: "कोई बातचीत चुनें",
+    selectHint: "यहाँ संदेश पढ़ें या उत्तर दें। सूची में आपकी जगह बनी रहेगी।",
+    emptyInbox: "आपके साथ अभी कोई बातचीत नहीं हुई है",
+    emptyHint: "human को भेजे गए संदेश यहाँ दिखाई देंगे। आप बातचीत शुरू भी कर सकते हैं या सभी गतिविधियाँ देख सकते हैं।",
+    showInactive: "निष्क्रिय एजेंट भी दिखाएँ",
+    findAgent: "एजेंट खोजें",
+    aliases: "तकनीकी विवरण",
+    composeHint: "प्राप्तकर्ता चुनें, संदेश लिखें और फिर भेजने से पहले जाँचें।",
+    composeRepository: "भेजने के लिए स्रोत रिपॉज़िटरी",
+    automaticRepository: "पहले प्राप्तकर्ता की रिपॉज़िटरी का उपयोग करें",
+    noAgentMatch: "इन फ़िल्टरों से कोई एजेंट मेल नहीं खाता।",
+  },
 } satisfies TranslationResource;
 
 export default translation;

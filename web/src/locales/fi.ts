@@ -415,6 +415,30 @@ const translation = {
     reviewTitle: "Tarkista ennen lähettämistä",
     reviewBack: "Takaisin luonnokseen",
   },
+  // Console strings machine-translated and reviewed by Codex on 2026-11-08; not yet reviewed by a native speaker.
+  console: {
+    myMessages: "Omat viestit",
+    allActivity: "Kaikki toiminta",
+    fleet: "Agenttijoukko",
+    diagnostics: "Diagnostiikka",
+    subtitle: "Keskustelusi ja huomiotasi vaativat asiat.",
+    activityHint: "Koko agenttijoukon keskustelut, myös agenttien väliset viestit.",
+    fleetHint: "Katso, ketkä työskentelevät, missä he ovat ja minkä tilan he ovat viimeksi ilmoittaneet.",
+    unread: "Sinulta lukematta",
+    active: "Aktiiviset agentit",
+    reservations: "Tiedostovaraukset",
+    selectThread: "Valitse keskustelu",
+    selectHint: "Lue viesti tai vastaa siihen tässä. Paikkasi luettelossa säilyy.",
+    emptyInbox: "Ei vielä keskusteluja kanssasi",
+    emptyHint: "Vastaanottajalle human lähetetyt viestit näkyvät tässä. Voit myös aloittaa keskustelun tai selata kaikkea toimintaa.",
+    showInactive: "Sisällytä ei-aktiiviset agentit",
+    findAgent: "Etsi agentti",
+    aliases: "Tekniset tiedot",
+    composeHint: "Valitse vastaanottajat, kirjoita viestisi ja tarkista se ennen lähettämistä.",
+    composeRepository: "Lähetä tietovarastosta",
+    automaticRepository: "Käytä ensimmäisen vastaanottajan tietovarastoa",
+    noAgentMatch: "Yksikään agentti ei vastaa näitä suodattimia.",
+  },
 } satisfies TranslationResource;
 
 export default translation;

@@ -406,6 +406,30 @@ const translation = {
     reviewTitle: "Kiểm tra trước khi gửi",
     reviewBack: "Quay lại bản nháp",
   },
+  // Console strings machine-translated and reviewed by Codex on 2026-11-08; not yet reviewed by a native speaker.
+  console: {
+    myMessages: "Tin nhắn của tôi",
+    allActivity: "Mọi hoạt động",
+    fleet: "Nhóm tác nhân",
+    diagnostics: "Chẩn đoán",
+    subtitle: "Các cuộc trò chuyện của bạn và những việc cần bạn chú ý.",
+    activityHint: "Các cuộc trò chuyện trong toàn bộ nhóm, bao gồm tin nhắn giữa các tác nhân.",
+    fleetHint: "Xem ai đang làm việc, ở đâu và trạng thái gần nhất họ đã báo cáo.",
+    unread: "Tin nhắn bạn chưa đọc",
+    active: "Tác nhân đang hoạt động",
+    reservations: "Đặt giữ tệp",
+    selectThread: "Chọn cuộc trò chuyện",
+    selectHint: "Đọc tin nhắn hoặc trả lời tại đây. Vị trí của bạn trong danh sách vẫn giữ nguyên.",
+    emptyInbox: "Chưa có cuộc trò chuyện nào với bạn",
+    emptyHint: "Tin nhắn gửi đến human sẽ xuất hiện tại đây. Bạn cũng có thể bắt đầu cuộc trò chuyện hoặc xem mọi hoạt động.",
+    showInactive: "Bao gồm tác nhân không hoạt động",
+    findAgent: "Tìm tác nhân",
+    aliases: "Chi tiết kỹ thuật",
+    composeHint: "Chọn người nhận, viết tin nhắn rồi kiểm tra trước khi gửi.",
+    composeRepository: "Gửi từ kho mã",
+    automaticRepository: "Dùng kho mã của người nhận đầu tiên",
+    noAgentMatch: "Không có tác nhân nào khớp với các bộ lọc này.",
+  },
 } satisfies TranslationResource;
 
 export default translation;

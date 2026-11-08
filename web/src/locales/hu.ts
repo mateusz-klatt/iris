@@ -415,6 +415,30 @@ const translation = {
     reviewTitle: "Ellenőrizze küldés előtt",
     reviewBack: "Vissza a piszkozathoz",
   },
+  // Console strings machine-translated and reviewed by Codex on 2026-11-08; not yet reviewed by a native speaker.
+  console: {
+    myMessages: "Saját üzenetek",
+    allActivity: "Összes tevékenység",
+    fleet: "Flotta",
+    diagnostics: "Diagnosztika",
+    subtitle: "Az Ön beszélgetései és a figyelmét igénylő ügyek.",
+    activityHint: "Beszélgetések a teljes flottában, az ügynökök közötti üzenetekkel együtt.",
+    fleetHint: "Tekintse meg, ki dolgozik, hol, és milyen állapotot jelentett legutóbb.",
+    unread: "Az Ön olvasatlan üzenetei",
+    active: "Aktív ügynökök",
+    reservations: "Fájlfoglalások",
+    selectThread: "Beszélgetés kiválasztása",
+    selectHint: "Itt elolvashat egy üzenetet vagy válaszolhat rá. A listában elfoglalt helye nem változik.",
+    emptyInbox: "Még nincs olyan beszélgetés, amelyben Ön is részt vesz",
+    emptyHint: "Itt jelennek meg a human címzettnek küldött üzenetek. Beszélgetést is indíthat, vagy böngészheti az összes tevékenységet.",
+    showInactive: "Inaktív ügynökök megjelenítése",
+    findAgent: "Ügynök keresése",
+    aliases: "Technikai részletek",
+    composeHint: "Válassza ki a címzetteket, írja meg az üzenetet, majd ellenőrizze küldés előtt.",
+    composeRepository: "Küldés ebből a tárolóból",
+    automaticRepository: "Az első címzett tárolójának használata",
+    noAgentMatch: "Egyetlen ügynök sem felel meg ezeknek a szűrőknek.",
+  },
 } satisfies TranslationResource;
 
 export default translation;

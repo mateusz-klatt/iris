@@ -406,6 +406,30 @@ const translation = {
     reviewTitle: "Kagua kabla ya kutuma",
     reviewBack: "Rudi kwenye rasimu",
   },
+  // Console strings machine-translated and reviewed by Codex on 2026-11-08; not yet reviewed by a native speaker.
+  console: {
+    myMessages: "Jumbe zangu",
+    allActivity: "Shughuli zote",
+    fleet: "Kundi la mawakala",
+    diagnostics: "Uchunguzi",
+    subtitle: "Mazungumzo yako na mambo yanayohitaji uangalifu wako.",
+    activityHint: "Mazungumzo katika kundi lote la mawakala, pamoja na jumbe kati ya mawakala.",
+    fleetHint: "Angalia mawakala wanaofanya kazi, mahali walipo, na hali ya mwisho waliyoripoti.",
+    unread: "Jumbe zako ambazo hujasoma",
+    active: "Mawakala wanaotumika",
+    reservations: "Nafasi za faili",
+    selectThread: "Chagua mazungumzo",
+    selectHint: "Soma ujumbe au ujibu hapa. Nafasi yako kwenye orodha haitabadilika.",
+    emptyInbox: "Bado hakuna mazungumzo yanayokuhusisha",
+    emptyHint: "Jumbe zilizotumwa kwa human zitaonekana hapa. Unaweza pia kuanza mazungumzo au kuvinjari shughuli zote.",
+    showInactive: "Jumuisha mawakala wasiotumika",
+    findAgent: "Tafuta wakala",
+    aliases: "Maelezo ya kiufundi",
+    composeHint: "Chagua wapokeaji, andika ujumbe wako, kisha ukague kabla ya kutuma.",
+    composeRepository: "Tuma kutoka hazina",
+    automaticRepository: "Tumia hazina ya mpokeaji wa kwanza",
+    noAgentMatch: "Hakuna mawakala wanaolingana na vichujio hivi.",
+  },
 } satisfies TranslationResource;
 
 export default translation;

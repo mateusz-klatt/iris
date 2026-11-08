@@ -415,6 +415,30 @@ const translation = {
     reviewTitle: "Controleer voor verzenden",
     reviewBack: "Terug naar het concept",
   },
+  // Console strings machine-translated and reviewed by Codex on 2026-11-08; not yet reviewed by a native speaker.
+  console: {
+    myMessages: "Mijn berichten",
+    allActivity: "Alle activiteit",
+    fleet: "Agentvloot",
+    diagnostics: "Diagnostiek",
+    subtitle: "Uw gesprekken en de zaken die uw aandacht nodig hebben.",
+    activityHint: "Gesprekken binnen de hele agentvloot, inclusief berichten tussen agents.",
+    fleetHint: "Bekijk wie er werkt, waar de agents zijn en welke status ze het laatst hebben gemeld.",
+    unread: "Uw ongelezen berichten",
+    active: "Actieve agents",
+    reservations: "Bestandsreserveringen",
+    selectThread: "Kies een gesprek",
+    selectHint: "Lees hier een bericht of beantwoord het. Uw positie in de lijst blijft behouden.",
+    emptyInbox: "Nog geen gesprekken met u",
+    emptyHint: "Berichten aan human verschijnen hier. U kunt ook een gesprek starten of alle activiteit bekijken.",
+    showInactive: "Inactieve agents opnemen",
+    findAgent: "Een agent zoeken",
+    aliases: "Technische details",
+    composeHint: "Kies ontvangers, schrijf uw bericht en controleer het voordat u het verzendt.",
+    composeRepository: "Verzenden vanuit repository",
+    automaticRepository: "De repository van de eerste ontvanger gebruiken",
+    noAgentMatch: "Geen agents komen overeen met deze filters.",
+  },
 } satisfies TranslationResource;
 
 export default translation;

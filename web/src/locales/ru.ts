@@ -415,6 +415,30 @@ const translation = {
     reviewTitle: "Проверьте перед отправкой",
     reviewBack: "Вернуться к черновику",
   },
+  // Console strings machine-translated and reviewed by Codex on 2026-11-08; not yet reviewed by a native speaker.
+  console: {
+    myMessages: "Мои сообщения",
+    allActivity: "Вся активность",
+    fleet: "Флот",
+    diagnostics: "Диагностика",
+    subtitle: "Ваши беседы и всё, что требует вашего внимания.",
+    activityHint: "Беседы по всему флоту, включая сообщения между агентами.",
+    fleetHint: "Узнайте, кто работает, где и какой статус сообщил в последний раз.",
+    unread: "Ваши непрочитанные сообщения",
+    active: "Активные агенты",
+    reservations: "Резервирование файлов",
+    selectThread: "Выбрать беседу",
+    selectHint: "Здесь можно прочитать сообщение или ответить. Ваша позиция в списке сохранится.",
+    emptyInbox: "Бесед с вами пока нет",
+    emptyHint: "Здесь появятся сообщения, отправленные получателю human. Вы также можете начать беседу или просмотреть всю активность.",
+    showInactive: "Включить неактивных агентов",
+    findAgent: "Найти агента",
+    aliases: "Технические подробности",
+    composeHint: "Выберите получателей, напишите сообщение и проверьте его перед отправкой.",
+    composeRepository: "Отправить из репозитория",
+    automaticRepository: "Использовать репозиторий первого получателя",
+    noAgentMatch: "Нет агентов, подходящих под эти фильтры.",
+  },
 } satisfies TranslationResource;
 
 export default translation;

@@ -415,6 +415,30 @@ const translation = {
     reviewTitle: "보내기 전에 확인",
     reviewBack: "초안으로 돌아가기",
   },
+  // Console strings machine-translated and reviewed by Codex on 2026-11-08; not yet reviewed by a native speaker.
+  console: {
+    myMessages: "내 메시지",
+    allActivity: "모든 활동",
+    fleet: "에이전트 현황",
+    diagnostics: "진단",
+    subtitle: "내 대화와 확인이 필요한 사항입니다.",
+    activityHint: "에이전트 간 메시지를 포함한 전체 에이전트의 대화입니다.",
+    fleetHint: "누가 어디에서 작업 중인지, 마지막으로 보고한 상태는 무엇인지 확인하세요.",
+    unread: "내가 읽지 않은 메시지",
+    active: "활성 에이전트",
+    reservations: "파일 예약",
+    selectThread: "대화 선택",
+    selectHint: "여기에서 메시지를 읽거나 답장하세요. 목록에서 보던 위치는 그대로 유지됩니다.",
+    emptyInbox: "아직 나와 나눈 대화가 없습니다",
+    emptyHint: "human에게 보낸 메시지가 여기에 표시됩니다. 대화를 시작하거나 모든 활동을 살펴볼 수도 있습니다.",
+    showInactive: "비활성 에이전트 포함",
+    findAgent: "에이전트 찾기",
+    aliases: "기술 세부 정보",
+    composeHint: "받는 사람을 선택하고 메시지를 작성한 다음 보내기 전에 확인하세요.",
+    composeRepository: "보낼 때 사용할 저장소",
+    automaticRepository: "첫 번째 받는 사람의 저장소 사용",
+    noAgentMatch: "이 필터와 일치하는 에이전트가 없습니다.",
+  },
 } satisfies TranslationResource;
 
 export default translation;

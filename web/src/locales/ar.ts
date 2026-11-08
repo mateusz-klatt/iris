@@ -415,6 +415,30 @@ const translation = {
     reviewTitle: "تحقق قبل الإرسال",
     reviewBack: "العودة إلى المسودة",
   },
+  // Console strings machine-translated and reviewed by Codex on 2026-11-08; not yet reviewed by a native speaker.
+  console: {
+    myMessages: "رسائلي",
+    allActivity: "كل النشاط",
+    fleet: "أسطول الوكلاء",
+    diagnostics: "التشخيص",
+    subtitle: "محادثاتك والأمور التي تحتاج إلى انتباهك.",
+    activityHint: "محادثات أسطول الوكلاء، بما فيها الرسائل بين الوكلاء.",
+    fleetHint: "اطّلع على من يعمل، وأين يعمل، وآخر حالة أبلغ عنها.",
+    unread: "رسائلك غير المقروءة",
+    active: "الوكلاء النشطون",
+    reservations: "حجوزات الملفات",
+    selectThread: "اختر محادثة",
+    selectHint: "اقرأ رسالة أو ردّ عليها هنا. سيبقى موضعك في القائمة كما هو.",
+    emptyInbox: "لا توجد محادثات معك بعد",
+    emptyHint: "ستظهر هنا الرسائل المرسلة إلى human. يمكنك أيضًا بدء محادثة أو تصفح كل النشاط.",
+    showInactive: "تضمين الوكلاء غير النشطين",
+    findAgent: "ابحث عن وكيل",
+    aliases: "التفاصيل التقنية",
+    composeHint: "اختر المستلمين، واكتب رسالتك، ثم راجعها قبل الإرسال.",
+    composeRepository: "الإرسال من المستودع",
+    automaticRepository: "استخدم مستودع المستلم الأول",
+    noAgentMatch: "لا يطابق أي وكيل عوامل التصفية هذه.",
+  },
 } satisfies TranslationResource;
 
 export default translation;

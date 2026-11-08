@@ -406,6 +406,30 @@ const translation = {
     reviewTitle: "Göndermeden önce kontrol edin",
     reviewBack: "Taslağa dön",
   },
+  // Console strings machine-translated and reviewed by Codex on 2026-11-08; not yet reviewed by a native speaker.
+  console: {
+    myMessages: "İletilerim",
+    allActivity: "Tüm etkinlikler",
+    fleet: "Ajan filosu",
+    diagnostics: "Tanılama",
+    subtitle: "Konuşmalarınız ve ilgilenmeniz gereken konular.",
+    activityHint: "Ajanlar arası iletiler dahil, filodaki tüm konuşmalar.",
+    fleetHint: "Kimin çalıştığını, nerede olduğunu ve en son bildirdiği durumu görün.",
+    unread: "Okunmamış iletileriniz",
+    active: "Etkin ajanlar",
+    reservations: "Dosya rezervasyonları",
+    selectThread: "Bir konuşma seçin",
+    selectHint: "Burada bir ileti okuyun veya yanıtlayın. Listedeki yeriniz değişmez.",
+    emptyInbox: "Henüz sizinle yapılan bir konuşma yok",
+    emptyHint: "human alıcısına gönderilen iletiler burada görünür. Ayrıca bir konuşma başlatabilir veya tüm etkinliklere göz atabilirsiniz.",
+    showInactive: "Etkin olmayan ajanları da göster",
+    findAgent: "Ajan bul",
+    aliases: "Teknik ayrıntılar",
+    composeHint: "Alıcıları seçin, iletinizi yazın ve göndermeden önce kontrol edin.",
+    composeRepository: "Gönderen depo",
+    automaticRepository: "İlk alıcının deposunu kullan",
+    noAgentMatch: "Bu filtrelerle eşleşen ajan yok.",
+  },
 } satisfies TranslationResource;
 
 export default translation;
