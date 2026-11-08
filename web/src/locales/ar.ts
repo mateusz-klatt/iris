@@ -2,7 +2,6 @@ import type { TranslationResource } from "../i18n";
 
 const translation = {
   appName: "Iris",
-  appSubtitle: "Iris",
   skipToContent: "انتقل إلى المحتوى",
   mailboxSecureDelivery: "تسليم دائم",
   navigation: "التنقل الرئيسي",
@@ -362,6 +361,9 @@ const translation = {
     doctorStale: "فُحص قبل أكثر من يوم، لذا لا يقول الكثير عن العميل الآن.",
     clientHealth: "حالة العميل",
     noHostReport: "لا تقرير من هذا الجهاز",
+    claimFilters: "تصفية الحجوزات",
+    claimExpired: "منتهٍ",
+    noClaimsMatch: "لا يطابق أي حجز عوامل التصفية هذه.",
     retry: "حاول مرة أخرى",
     doctorMissing: "لم يُحفظ أي تقرير doctor بعد. شغّل {{command}} على هذا الحاسوب.",
     statusOk: "تم استلام الـ hook",

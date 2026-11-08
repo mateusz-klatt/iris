@@ -2530,3 +2530,209 @@ html[data-flag-polyfill="true"] select {
     flex: 1 1 100%;
   }
 }
+
+/* The operator console, from a phone to a desktop. */
+
+/* The brand is a link home, not text to underline. */
+.brand {
+  color: inherit;
+  text-decoration: none;
+}
+
+/* Panel headings in the same face as the page's h1. */
+.panel-heading h2 {
+  font-family: inherit;
+  font-weight: 800;
+}
+
+/* A heading's count badge holds a label such as "0 unread", not only a number, so it is a pill
+   as wide as its text rather than a 28px circle. */
+.panel-heading > span {
+  width: auto;
+  min-width: 28px;
+  border-radius: 999px;
+  padding: 0 0.6rem;
+  white-space: nowrap;
+}
+
+/* Text directly in a panel lines up with its heading. */
+.panel > p,
+.host-report > h2,
+.host-report > p {
+  margin-inline: 0;
+  padding-inline: 1.2rem;
+}
+
+/* A table wider than its panel scrolls inside it, instead of being cut off by the panel's
+   rounded corners, which clipped the claims' Revoke buttons. */
+.panel > table {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
+}
+
+/* A doctor row has three parts: the client, its status and the detail. The message-row grid
+   gave the status the flexible column and the detail an auto one, so a long detail ran over
+   the status. Fixed columns also line the statuses up from row to row. */
+.host-report .message-row {
+  grid-template-columns: minmax(9rem, 14rem) minmax(7rem, 10rem) minmax(0, 1fr);
+}
+
+/* A select is as wide as its longest option unless its grid item may shrink; a long agent
+   name pushed the thread search past a phone's edge. */
+.search-form > * {
+  min-width: 0;
+}
+
+.search-form select {
+  width: 100%;
+}
+
+@media (max-width: 900px) {
+  /* Repositories, agents and claims side by side left each about 170px on a phone. */
+  .content-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+@media (max-width: 640px) {
+  .host-report .message-row {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 0.4rem;
+  }
+}
+
+/* The brand in the page's face, like the headings. */
+.brand strong {
+  font-family: inherit;
+  font-weight: 800;
+}
+
+/* Table cells keep off the panel's edge and read from the start, not the middle. */
+.panel > table th,
+.panel > table td {
+  padding: 0.5rem 0.75rem;
+  text-align: start;
+  vertical-align: top;
+}
+
+/* On a phone a row of a stacked table is a card: each cell on its own line, in the order of the
+   columns, so a long name or branch is not broken over five lines in a narrow column. The
+   column headings stay for screen readers. */
+@media (max-width: 640px) {
+  .stack-table,
+  .stack-table tbody,
+  .stack-table tr,
+  .stack-table th,
+  .stack-table td {
+    display: block;
+  }
+
+  .stack-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .stack-table tr {
+    border-bottom: 1px solid var(--line);
+    padding: 0.6rem 0.45rem;
+  }
+
+  .stack-table tr:last-child {
+    border-bottom: 0;
+  }
+
+  .stack-table th,
+  .stack-table td {
+    padding-block: 0.1rem;
+    overflow-wrap: anywhere;
+  }
+}
+
+/* Claims (item 10): filters, then one row per claim with the time left and Revoke. */
+.claims-panel {
+  grid-column: 1 / -1;
+}
+
+.claim-filters {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--line);
+  padding: 1rem 1.2rem;
+}
+
+.claim-filters label {
+  display: grid;
+  min-width: 0;
+  gap: 0.35rem;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.claim-filters select {
+  width: 100%;
+}
+
+.claim-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.claim-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  border-bottom: 1px solid var(--line);
+  padding: 0.75rem 1.2rem;
+}
+
+.claim-row:last-child {
+  border-bottom: 0;
+}
+
+.claim-row div {
+  display: grid;
+  min-width: 0;
+  gap: 0.25rem;
+}
+
+.claim-row strong,
+.claim-row small {
+  overflow-wrap: anywhere;
+}
+
+.claim-row small {
+  color: var(--muted);
+}
+
+.claim-left {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.claim-left[data-expired="yes"] {
+  color: var(--muted);
+  font-style: italic;
+}
+
+@media (max-width: 640px) {
+  .claim-filters {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .claim-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .claim-row div {
+    grid-column: 1 / -1;
+  }
+}

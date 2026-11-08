@@ -2,7 +2,6 @@ import type { TranslationResource } from "../i18n";
 
 const translation = {
   appName: "Iris",
-  appSubtitle: "Iris",
   skipToContent: "Chuyển đến nội dung",
   mailboxSecureDelivery: "Chuyển phát bền vững",
   navigation: "Điều hướng chính",
@@ -353,6 +352,9 @@ const translation = {
     doctorStale: "Đã kiểm tra hơn một ngày trước nên cho biết rất ít về trạng thái hiện tại của ứng dụng khách.",
     clientHealth: "Trạng thái ứng dụng khách",
     noHostReport: "Không có báo cáo từ máy này",
+    claimFilters: "Lọc đặt giữ",
+    claimExpired: "Đã hết hạn",
+    noClaimsMatch: "Không có đặt giữ nào khớp với các bộ lọc này.",
     retry: "Thử lại",
     doctorMissing: "Chưa có báo cáo doctor nào được lưu. Chạy {{command}} trên máy tính này.",
     statusOk: "Đã nhận hook",

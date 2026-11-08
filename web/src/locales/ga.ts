@@ -2,7 +2,6 @@ import type { TranslationResource } from "../i18n";
 
 const translation = {
   appName: "Iris",
-  appSubtitle: "Iris",
   skipToContent: "Téigh chuig an ábhar",
   mailboxSecureDelivery: "Seachadadh marthanach",
   navigation: "Príomh-nascleanúint",
@@ -362,6 +361,9 @@ const translation = {
     doctorStale: "Seiceáladh níos mó ná lá ó shin, mar sin is beag a insíonn sé faoin gcliant anois.",
     clientHealth: "Staid an chliaint",
     noHostReport: "Níl tuarascáil ón ríomhaire seo",
+    claimFilters: "Scag áirithintí",
+    claimExpired: "Imithe in éag",
+    noClaimsMatch: "Níl aon áirithint ag teacht leis na scagairí seo.",
     retry: "Bain triail eile as",
     doctorMissing: "Níl aon tuarascáil doctor stóráilte fós. Rith {{command}} ar an ríomhaire seo.",
     statusOk: "Fuarthas an hook",

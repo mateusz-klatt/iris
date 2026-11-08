@@ -2,7 +2,6 @@ import type { TranslationResource } from "../i18n";
 
 const translation = {
   appName: "Iris",
-  appSubtitle: "Iris",
   skipToContent: "İçeriğe geç",
   mailboxSecureDelivery: "Kalıcı teslimat",
   navigation: "Ana gezinme",
@@ -353,6 +352,9 @@ const translation = {
     doctorStale: "Bir günden uzun süre önce denetlendi, bu yüzden şu an istemci hakkında pek bir şey söylemiyor.",
     clientHealth: "İstemci durumu",
     noHostReport: "Bu makineden rapor yok",
+    claimFilters: "Rezervasyonları filtrele",
+    claimExpired: "Süresi doldu",
+    noClaimsMatch: "Bu filtrelerle eşleşen rezervasyon yok.",
     retry: "Yeniden dene",
     doctorMissing: "Henüz kayıtlı bir doctor raporu yok. Bu bilgisayarda {{command}} komutunu çalıştırın.",
     statusOk: "Hook alındı",

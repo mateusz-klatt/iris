@@ -114,7 +114,6 @@ const resources = {
   en: {
     translation: {
       appName: "Iris",
-      appSubtitle: "Iris",
       skipToContent: "Skip to content",
       mailboxSecureDelivery: "Durable delivery",
       navigation: "Primary navigation",
@@ -473,6 +472,9 @@ const resources = {
         doctorStale: "Checked more than a day ago, so this says little about the client now.",
         clientHealth: "Client health",
         noHostReport: "No report from this host",
+        claimFilters: "Filter claims",
+        claimExpired: "Expired",
+        noClaimsMatch: "No claim matches these filters.",
         retry: "Try again",
         doctorMissing: "No doctor report is stored yet. Run {{command}} on this computer.",
         statusOk: "Hook received",

@@ -2,7 +2,6 @@ import type { TranslationResource } from "../i18n";
 
 const translation = {
   appName: "Iris",
-  appSubtitle: "Iris",
   skipToContent: "Siirry sisältöön",
   mailboxSecureDelivery: "Kestävä toimitus",
   navigation: "Ensisijainen navigointi",
@@ -362,6 +361,9 @@ const translation = {
     doctorStale: "Tarkistettu yli päivä sitten, joten se kertoo nyt vähän asiakasohjelmasta.",
     clientHealth: "Asiakasohjelman tila",
     noHostReport: "Tältä koneelta ei ole raporttia",
+    claimFilters: "Suodata varauksia",
+    claimExpired: "Vanhentunut",
+    noClaimsMatch: "Mikään varaus ei vastaa näitä suodattimia.",
     retry: "Yritä uudelleen",
     doctorMissing: "Yhtään doctor-raporttia ei ole vielä tallennettu. Suorita {{command}} tällä tietokoneella.",
     statusOk: "Hook vastaanotettu",
