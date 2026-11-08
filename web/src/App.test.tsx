@@ -95,7 +95,7 @@ async function fillCompose(user: ReturnType<typeof userEvent.setup>, body: strin
     throw new Error("missing compose");
   }
   const view = within(compose);
-  await user.type(view.getByRole("textbox", { name: "Recipients" }), "claude-host");
+  await user.click(view.getByRole("checkbox", { name: /claude-host/ }));
   await user.type(view.getByRole("textbox", { name: "Subject" }), "Check in");
   await user.type(view.getByRole("textbox", { name: "Message" }), body);
   return view;
@@ -374,7 +374,7 @@ describe("Iris operator console", () => {
       throw new Error("missing compose");
     }
     const view = within(compose);
-    await user.type(view.getByRole("textbox", { name: "Recipients" }), "claude-host");
+    await user.click(view.getByRole("checkbox", { name: /claude-host/ }));
     await user.type(view.getByRole("textbox", { name: "Subject" }), "Status");
     await user.type(view.getByRole("textbox", { name: "Message" }), "Status?");
     await reviewAndSend(user, view, "Send");
@@ -436,13 +436,14 @@ describe("Iris operator console", () => {
       throw new Error("missing compose");
     }
     const view = within(compose);
-    await user.type(view.getByRole("textbox", { name: "Recipients" }), "claude-host, human");
+    await user.click(view.getByRole("checkbox", { name: /claude-host/ }));
+    await user.click(view.getByRole("checkbox", { name: /^human/ }));
     await user.type(view.getByRole("textbox", { name: "Subject" }), "Check in");
     await user.type(view.getByRole("textbox", { name: "Message" }), "Are you there?");
     await reviewAndSend(user, view, "Send");
     await waitFor(() => expect(bodies).toHaveLength(2));
     expect(bodies[1]).toMatchObject({
-      to: ["claude-host", "human"],
+      to: ["ag_claude", "human"],
       subject: "Check in",
       body: "Are you there?",
       reply_to: "",
@@ -1035,7 +1036,7 @@ describe("Iris operator console", () => {
     const user = userEvent.setup();
     const compose = async () => {
       const view = within(document.getElementById("compose") as HTMLElement);
-      await user.type(view.getByRole("textbox", { name: "Recipients" }), "human");
+      await user.click(view.getByRole("checkbox", { name: /^human/ }));
       await user.type(view.getByRole("textbox", { name: "Subject" }), "Check in");
       await user.type(view.getByRole("textbox", { name: "Message" }), "Are you there?");
       await reviewAndSend(user, view, "Send");

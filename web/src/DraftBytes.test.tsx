@@ -11,7 +11,7 @@ async function compose() {
     throw new Error("missing compose");
   }
   const view = within(form);
-  fireEvent.change(view.getByRole("textbox", { name: "Recipients" }), { target: { value: "claude-host" } });
+  fireEvent.click(view.getByRole("checkbox", { name: /claude-host/ }));
   fireEvent.change(view.getByRole("textbox", { name: "Subject" }), { target: { value: "Check in" } });
   return view;
 }

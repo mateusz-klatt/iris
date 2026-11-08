@@ -2736,3 +2736,36 @@ html[data-flag-polyfill="true"] select {
     grid-column: 1 / -1;
   }
 }
+.recipient-picker {
+  min-width: 0;
+  margin: 0;
+  padding: 0.75rem;
+  border: 1px solid var(--line);
+  border-radius: 0.5rem;
+}
+
+.recipient-options {
+  max-height: 15rem;
+  overflow-y: auto;
+}
+
+.recipient-picker .recipient-option {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  padding: 0.5rem 0;
+}
+
+.recipient-picker .recipient-option input {
+  width: auto;
+  flex: 0 0 auto;
+}
+
+.recipient-option span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.recipient-option small {
+  display: block;
+}

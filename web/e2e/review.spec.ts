@@ -21,6 +21,18 @@ test("the review before a send fits a phone and sends only on Send", async ({ pa
             last_seen: "2026-11-08T10:00:00Z",
             unread: 0,
           },
+          {
+            id: "ag_codex",
+            name: "codex-a-rather-long-agent-name-on-another-host",
+            client: "codex",
+            host: "another-host",
+            repository_id: "rp_iris",
+            worktree: "/work/iris",
+            branch: "main",
+            state: "active",
+            last_seen: "2026-11-08T10:00:00Z",
+            unread: 0,
+          },
         ],
         claims: [],
         human_unread: 0,
@@ -36,7 +48,14 @@ test("the review before a send fits a phone and sends only on Send", async ({ pa
 
   await page.goto("/");
   const compose = page.locator("#compose");
-  await compose.getByRole("textbox", { name: "Recipients", exact: true }).fill("claude-host, codex-a-rather-long-agent-name-on-another-host, human");
+  const search = compose.getByRole("searchbox", { name: "Find recipients" });
+  await search.fill("claude");
+  await compose.getByRole("checkbox", { name: /claude-host/ }).check();
+  await search.fill("another-host");
+  await compose.getByRole("checkbox", { name: /codex-a-rather-long/ }).check();
+  await search.clear();
+  await expect(compose.getByRole("checkbox", { name: /claude-host/ })).toBeChecked();
+  await compose.getByRole("checkbox", { name: /^human/ }).check();
   await compose.getByRole("textbox", { name: "Subject", exact: true }).fill("Rollout");
   await compose
     .getByRole("textbox", { name: "Message", exact: true })
@@ -48,7 +67,7 @@ test("the review before a send fits a phone and sends only on Send", async ({ pa
 
   await compose.getByRole("button", { name: "Review", exact: true }).click();
   const review = compose.getByRole("region", { name: "Check before sending", exact: true });
-  await expect(review.getByRole("listitem")).toHaveText(["claude-host", "codex-a-rather-long-agent-name-on-another-host", "human"]);
+  await expect(review.getByRole("listitem")).toHaveText(["claude-host (ag_claude)", "codex-a-rather-long-agent-name-on-another-host (ag_codex)", "human"]);
   await expect(review.locator("strong")).toHaveText("Ready?");
   expect(sent).toHaveLength(0);
 
@@ -61,4 +80,5 @@ test("the review before a send fits a phone and sends only on Send", async ({ pa
   await review.getByRole("button", { name: "Send", exact: true }).click();
   await expect(page.getByText("Sent.")).toBeVisible();
   expect(sent).toHaveLength(1);
+  expect(sent[0]).toMatchObject({ to: ["ag_claude", "ag_codex", "human"] });
 });
