@@ -33,7 +33,9 @@ func TestABundleCarriesNoSecretOnlyStatesAndCounts(t *testing.T) {
 		line(integrate.Codex, "touch", "hook deadline exceeded", now.Add(-time.Hour)) +
 		// Lines failureText never writes, as an older iris or another writer might have left.
 		line(integrate.Codex, "touch", "unknown tool secret_old_tool", now.Add(-time.Hour)) +
-		line(integrate.Codex, "secret_stage /Users/alice", "Post https://hub.private.example/v1: refused", now.Add(-time.Hour))
+		line(integrate.Codex, "secret_stage /Users/alice", "Post https://hub.private.example/v1: refused", now.Add(-time.Hour)) +
+		// A decode failure names the payload's tool and field names, for the local log only.
+		fmt.Sprintf(`{"time":%q,"client":"claude","event":"PostToolUse","stage":"decode","error":"hook payload has no session id","shape":{"tool":"secret_shape_tool","keys":["secret_shape_key"]}}`+"\n", now.Add(-time.Hour).Format(time.RFC3339))
 	observed := line(integrate.Copilot, "observed", "unknown tool secret_tool_name", now.Add(-time.Hour)) +
 		line(integrate.Copilot, "observed", "cross-load: ran in a session of antigravity", now.Add(-time.Hour))
 	if err := os.WriteFile(filepath.Join(dir, "hook-failures.log"), []byte(failures), 0o600); err != nil {
@@ -60,7 +62,7 @@ func TestABundleCarriesNoSecretOnlyStatesAndCounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(raw)
-	for _, secret := range []string{"tok_SECRET_TOKEN", "hunter2", "alice", "hub.private.example", "/Users", "SECRET-MESSAGE-BODY", "secret_tool_name", "antigravity", "client.json", "pre-commit", "500", "secret_old_tool", "secret_stage", "secret_status", "secret_client", "refused", "built by"} {
+	for _, secret := range []string{"tok_SECRET_TOKEN", "hunter2", "alice", "hub.private.example", "/Users", "SECRET-MESSAGE-BODY", "secret_tool_name", "antigravity", "client.json", "pre-commit", "500", "secret_old_tool", "secret_stage", "secret_status", "secret_client", "refused", "built by", "secret_shape_tool", "secret_shape_key", "shape"} {
 		if strings.Contains(text, secret) {
 			t.Errorf("the bundle carries %q:\n%s", secret, text)
 		}
@@ -77,6 +79,7 @@ func TestABundleCarriesNoSecretOnlyStatesAndCounts(t *testing.T) {
 		// Sorted by client, then stage; a name that is no client's is left out, and a stage or
 		// text the hook never writes is "other".
 		Failures: []BundleCount{
+			{Client: integrate.Claude, Stage: "decode", Category: "hook payload has no session id", Count: 1},
 			{Client: integrate.Claude, Stage: "decode", Category: "invalid JSON", Count: 1},
 			{Client: integrate.Claude, Stage: "session", Category: "hub request failed: lost", Count: 2},
 			{Client: integrate.Codex, Stage: "other", Category: "other", Count: 1},

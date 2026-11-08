@@ -490,7 +490,7 @@ func TestRecordFailureWithoutATokenPathIsSilent(t *testing.T) {
 	for _, key := range []string{"HOME", "XDG_CONFIG_HOME", "AppData"} {
 		t.Setenv(key, "")
 	}
-	Runner{ClientName: "claude", Getenv: func(string) string { return "" }}.recordFailure("read", errors.New("x"))
+	Runner{ClientName: "claude", Getenv: func(string) string { return "" }}.recordFailure("read", errors.New("x"), nil)
 }
 
 // faultyLog is a real file with one call that fails.

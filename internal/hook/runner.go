@@ -64,7 +64,7 @@ func (r Runner) Run() Output {
 	var failureStage string
 	defer func() {
 		if failure != nil {
-			r.recordFailure(failureStage, failure)
+			r.recordFailure(failureStage, failure, state.payloadShape())
 		}
 	}()
 	deadline := r.Deadline
@@ -92,7 +92,7 @@ func (r Runner) Run() Output {
 		failureStage, failure = state.snapshot()
 		out.Stderr = append(out.Stderr, state.receiptLine()...)
 		if seen := state.observation(); seen != "" {
-			r.record(stageObserved, seen)
+			r.record(stageObserved, seen, nil)
 		}
 		return out
 	case <-after(deadline):
@@ -121,6 +121,7 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 			state.observe(crossLoadText(runner))
 			return FallbackAllow(runner)
 		}
+		state.shaped(payloadShape(payload))
 		return state.fail(err, allow)
 	}
 	if runner, cross := r.crossLoad(ev.SessionID, client); cross {

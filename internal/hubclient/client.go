@@ -112,7 +112,7 @@ func (c *Client) RegisterSession(ctx context.Context, req SessionRequest) (Sessi
 		return SessionResponse{}, err
 	}
 	if resp.ExecutionID == "" {
-		return SessionResponse{}, fmt.Errorf("hub returned no execution id")
+		return SessionResponse{}, ErrNoExecution
 	}
 	return resp, nil
 }
@@ -124,7 +124,7 @@ func (c *Client) Touch(ctx context.Context, req TouchRequest) (TouchResponse, er
 		return TouchResponse{}, err
 	}
 	if resp.Action == "" {
-		return TouchResponse{}, fmt.Errorf("hub returned no action")
+		return TouchResponse{}, ErrNoAction
 	}
 	return resp, nil
 }
@@ -204,7 +204,7 @@ func (c *Client) Do(ctx context.Context, method, path string, body, dest any) er
 		if json.Unmarshal(slurp, &envelope) == nil && envelope.Error != nil {
 			return envelope.Error
 		}
-		return fmt.Errorf("hub %s: %s", path, res.Status)
+		return &StatusError{Path: path, Code: res.StatusCode, Status: res.Status}
 	}
 	if dest == nil || len(bytes.TrimSpace(slurp)) == 0 {
 		return nil
@@ -221,6 +221,23 @@ const responseLimit = 1 << 20
 // ErrResponseTooLarge is a hub response longer than responseLimit. It is refused whole: a
 // response cut short would only fail later as broken JSON, without saying why.
 var ErrResponseTooLarge = errors.New("the hub's response is larger than the 1 MiB a client reads")
+
+// StatusError is an error status from the hub, or from a proxy in front of it, that carries no
+// hub error envelope: a 502 while the hub restarts, for example. It is typed so a hook can log
+// the status code alone.
+type StatusError struct {
+	Path   string
+	Code   int
+	Status string
+}
+
+func (e *StatusError) Error() string { return "hub " + e.Path + ": " + e.Status }
+
+// ErrNoExecution is a session answer that named no Execution.
+var ErrNoExecution = errors.New("hub returned no execution id")
+
+// ErrNoAction is a touch answer that named no action.
+var ErrNoAction = errors.New("hub returned no action")
 
 // ErrRedirect is a hub answer that tried to send the request elsewhere.
 var ErrRedirect = errors.New("the hub answered with a redirect, which Iris does not follow: set the hub URL to the final address")
