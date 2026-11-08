@@ -107,7 +107,7 @@ func installFaultDriver(t *testing.T, s *Store, file string) *storageFault {
 }
 
 func TestStorageFailuresRollBackAndRetry(t *testing.T) {
-	for _, op := range []string{"sessions", "session-resume", "session-resume-learns-root", "session-remote-learns-root", "heartbeat-recovery", "session-new-slot", "session-learns-root", "touch-cached", "touch-conflict", "claim-conflict", "check-known", "policy", "bind", "heartbeat", "end", "end-handover", "touch", "claim", "claim-reuse", "claim-cached", "release", "claims", "messages", "message-repo", "contact", "message-cached", "inbox", "ack", "ack-handled", "inbox-receipt", "receipt-sweep", "receipts", "read_body", "agents", "agents-all", "hooks_seen", "events", "events-reset", "status", "validate", "monitor_cursor", "check", "check-alias", "session-alias", "reconcile", "reconcile-release", "reconcile-session", "ui_overview", "ui_deliveries", "ui_threads", "ui_threads-human", "ui_thread", "ui_read", "ui_messages", "ui_messages-existing-human", "ui_messages-cached", "ui_messages-merged-cached", "ui_messages-retired-cached", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_events", "expire", "sweep", "forget", "forget-repository", "history", "thread", "read_message_body", "merge", "merge-dry-run"} {
+	for _, op := range []string{"sessions", "session-resume", "session-resume-learns-root", "session-remote-learns-root", "session-checkout-continuity", "session-checkout-rewrite", "heartbeat-recovery", "session-new-slot", "session-learns-root", "touch-cached", "touch-conflict", "claim-conflict", "check-known", "policy", "bind", "heartbeat", "end", "end-handover", "touch", "claim", "claim-reuse", "claim-cached", "release", "claims", "messages", "message-repo", "contact", "message-cached", "inbox", "ack", "ack-handled", "inbox-receipt", "receipt-sweep", "receipts", "read_body", "agents", "agents-all", "hooks_seen", "events", "events-reset", "status", "validate", "monitor_cursor", "check", "check-alias", "session-alias", "reconcile", "reconcile-release", "reconcile-session", "ui_overview", "ui_deliveries", "ui_threads", "ui_threads-human", "ui_thread", "ui_read", "ui_messages", "ui_messages-existing-human", "ui_messages-cached", "ui_messages-merged-cached", "ui_messages-retired-cached", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_events", "expire", "sweep", "forget", "forget-repository", "history", "thread", "read_message_body", "merge", "merge-dry-run"} {
 		t.Run(op, func(t *testing.T) {
 			s, clock, file := testStore(t)
 			a, ar := session(t, s, 1)
@@ -153,6 +153,13 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 				r = Request{Client: "codex", Host: "late", SessionID: "late", Cwd: "/late", Worktree: "/late", RemoteURL: "https://late.example/late.git", RootCommit: "late-root"}
 				if op == "session-remote-learns-root" {
 					r.Host, r.SessionID, r.Cwd, r.Worktree = "other", "other", "/other", "/other"
+				}
+			case "session-checkout-continuity", "session-checkout-rewrite":
+				route = "sessions"
+				r, _ = unknownCheckout(t, s, rewriteRemote)
+				r.SessionID = "next-checkout"
+				if op == "session-checkout-rewrite" {
+					r.RootCommit = "current"
 				}
 			case "session-new-slot":
 				route = "sessions"
