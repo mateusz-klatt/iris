@@ -171,7 +171,10 @@ func openDatabase(filename string, clock Clock, driverName string) (*Store, erro
 	}
 	db.SetMaxOpenConns(1)
 	s := &Store{db: db, lock: lock, clock: clock, changed: make(chan struct{})}
-	for _, q := range []string{"PRAGMA foreign_keys=ON", "PRAGMA journal_mode=WAL", "PRAGMA synchronous=FULL", "PRAGMA busy_timeout=5000"} {
+	// temp_store=MEMORY: the hub's image is FROM scratch, with no temporary directory, and a large
+	// delete's statement journal or a sort would otherwise need one. A sweep of 17,153 events made
+	// the hub crash-loop with IOERR_GETTEMPPATH before this (ADR 006's first deploy).
+	for _, q := range []string{"PRAGMA foreign_keys=ON", "PRAGMA journal_mode=WAL", "PRAGMA synchronous=FULL", "PRAGMA busy_timeout=5000", "PRAGMA temp_store=MEMORY"} {
 		if _, err = db.Exec(q); err != nil {
 			_ = s.Close()
 			return nil, err
