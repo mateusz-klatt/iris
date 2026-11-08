@@ -15,7 +15,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -61,8 +60,9 @@ func run(ctx context.Context, backup, scratch, listen string, out io.Writer) err
 	server := &http.Server{Handler: hub.New(s, token, []string{listener.Addr().String()}), ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = server.Serve(listener) }()
 	defer func() { _ = server.Close() }()
-	// The throwaway hub listens on loopback only, for this run, so plain HTTP is enough.
-	base := (&url.URL{Scheme: "http", Host: listener.Addr().String()}).String()
+	// Plain HTTP on purpose: this is a throwaway hub on a loopback port, for this run only,
+	// with a token of its own, and nothing leaves the machine.
+	base := "http://" + listener.Addr().String()
 
 	var status struct {
 		DatabaseBytes int64 `json:"database_bytes"`
