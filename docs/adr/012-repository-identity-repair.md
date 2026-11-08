@@ -42,6 +42,27 @@ acknowledgements, events, cursors and idempotency records. Repository references
 move to the destination; duplicate alias mappings become one mapping, preserving
 every alias spelling. The source repository is removed after its references move.
 
+**Running clients.** A peer or claim read carrying an Execution handle derives
+its repository from that live Execution, even if an older client also sends a
+retired repository id. An invalid handle fails; it never falls back to the stale
+scope. Explicit operator repository filters and whole-hub peer lists keep their
+existing scope. Cached clients refresh their binding through the existing bind
+route, and heartbeats return current identity as well as the lease. The client
+keeps its binding rung and tolerates older, lease-only heartbeat replies. A
+failed refresh retains the generation so the heartbeat can still reattach it
+after a restart.
+
+**Operator retries.** Preserved operator mailboxes retain their original retry
+namespaces. An identical operator send searches those namespaces in the currently
+resolved repository before choosing a sender for new mail. A unique exact request
+match returns the original saved result without another send. This also permits
+an exact saved retry explicitly naming a retired repository through its preserved
+operator origin; it does not permit a fresh send from that retired id. The request
+hash and saved result are unchanged. When merged origins have the same key,
+different requests can each retrieve their own exact result. A changed request
+with no exact match, or several exact origin matches, returns `key_reused` with an
+explanation. The operator must inspect history before choosing a fresh key.
+
 Agent names are already globally unique and remain unchanged. If two durable
 mailboxes occupy the same host/client/worktree/slot after the merge, allocate the
 source mailbox the first free slot in a deterministic order; do not combine
@@ -66,3 +87,10 @@ undo work performed during a split, or prevent an unmediated edit. A dry run is 
 transactional snapshot, not a reservation: the real run checks again. Retaining
 separate mailboxes means a resumed session may need the operator to identify the
 mailbox it should use. Hooks and the commit guard remain cooperative.
+
+An old MCP client benefits from server-derived peer and claim scope immediately,
+but its old `whoami` implementation still discards heartbeat identity. Upgrade or
+restart that client to refresh its display. A new client can use the old bind and
+lease-only heartbeat responses; an old hub does not gain these server fixes.
+Downgrading only the hub binary after a merge can restore the stale-scope and
+operator-retry bugs. Roll back with the pre-merge database backup as well.

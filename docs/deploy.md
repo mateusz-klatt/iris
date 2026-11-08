@@ -143,16 +143,37 @@ history and must never be used as a substitute.
 6. Check that every host's peers and claims share the destination repository,
    bindings retain their Execution ids and generations, and historical mail is
    still accessible. The source id ceases to exist; update any saved repository
-   ids. Existing Execution handles continue to work. Agent names and mailbox ids
+   ids. Existing Execution handles continue to work, and peer and claim reads with
+   those handles use the current repository even when a client sends its cached
+   source id. Updated clients refresh cached binding data through the existing
+   bind route and consume heartbeat identity; `whoami` reports that response.
+   Agent names and mailbox ids
    never change, even if two mailboxes have the same host/client/worktree slot:
    the source receives the first free slot and its mail stays separate. No mail
    is combined or acknowledged by the merge. Retried old operations still return
-   their saved results, which can contain the retired repository id.
+   their saved results, which can contain the retired repository id. Operator
+   retries search the preserved operator mailbox namespaces before choosing the
+   sender for new mail, so a lost response cannot cause a second send merely
+   because the recipient moved. Exact saved retries explicitly naming a retired
+   source id also work; fresh sends from that id are refused. Colliding keys with
+   a unique exact request return that request's saved result. A changed request
+   with no exact match, or multiple exact origins, gets `key_reused`; inspect
+   history before deliberately choosing a new key.
+
+Old MCP clients already send an Execution handle with peer and claim reads, so the
+updated hub fixes their scope immediately. Their `whoami` still prints cached
+identity because that client discards heartbeat data: upgrade or restart the MCP
+process to refresh it. Updated clients also work with older bind responses and
+lease-only heartbeat replies, but an older hub retains its server-side bugs.
+Repository-only API requests have no Execution context and keep their explicitly
+selected scope; update any retired ids in those integrations.
 
 Rollback requires stopping the hub and restoring the complete pre-merge backup
 using the restore procedure above. It also rolls back any later mail and other
 writes, so stop clients and preserve a fresh backup before choosing that recovery.
 There is no automatic inverse merge.
+Do not roll back only the hub binary while keeping the merged database: older
+code can lose operator retry continuity and select a nonexistent human mailbox.
 
 Root discovery remains bounded to 128 loose first-parent commits. Packed or longer
 histories report an unknown root; an unknown host cannot select among contradictory
