@@ -90,9 +90,10 @@ func TestHubVariablesOverrideClientJSON(t *testing.T) {
 	}
 	trapped.Store(0)
 
+	// The MCP binds to the session the hook registered above: it never registers one itself.
 	exe, _ := os.Executable()
 	cmd := exec.Command(exe, "-test.run=^TestMCPStdio$")
-	cmd.Env = append(os.Environ(), "IRIS_TEST_MCP_CHILD=1", "IRIS_EXECUTION=", "CLAUDE_CODE_SESSION_ID=env-override-test", "IRIS_CHILD_HUB_URL="+scratch.URL, "IRIS_CHILD_TOKEN_FILE="+token)
+	cmd.Env = append(os.Environ(), "IRIS_TEST_MCP_CHILD=1", "IRIS_EXECUTION=", "CLAUDE_CODE_SESSION_ID=s", "IRIS_CHILD_HUB_URL="+scratch.URL, "IRIS_CHILD_TOKEN_FILE="+token)
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 	defer cancel()
 	session, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil).Connect(ctx, &mcp.CommandTransport{Command: cmd}, nil)
@@ -108,7 +109,8 @@ func TestHubVariablesOverrideClientJSON(t *testing.T) {
 		t.Fatal("iris mcp reached the configured hub")
 	}
 	status, _ := s.Call(ctx, "status", store.Request{})
-	if status["counts"].(map[string]int)["Execution"] < 2 {
-		t.Fatalf("whoami was not bound on the scratch hub: %v", status)
+	// Bound on the scratch hub, to the hook's Execution, not to one of its own.
+	if status["counts"].(map[string]int)["Execution"] != 1 {
+		t.Fatalf("whoami was not bound to the hook's Execution on the scratch hub: %v", status)
 	}
 }
