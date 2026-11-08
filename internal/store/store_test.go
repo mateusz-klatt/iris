@@ -403,13 +403,13 @@ func TestRollbackAndLock(t *testing.T) {
 	}
 	a, _ := session(t, s, 1)
 	err := s.transact(context.Background(), func(tx *transaction) error {
-		if _, err := tx.exec("INSERT INTO Message VALUES('rolled-back',?,'s','b',1)", a.ExecutionID); err != nil {
+		if _, err := tx.exec("INSERT INTO Message(id,sender_execution_id,subject,body,created_ms) VALUES('rolled-back',?,'s','b',1)", a.ExecutionID); err != nil {
 			return err
 		}
 		return fmt.Errorf("injected failure")
 	})
-	if err == nil {
-		t.Fatal("expected failure")
+	if err == nil || err.Error() != "injected failure" {
+		t.Fatal("expected failure after a successful insert", err)
 	}
 	status := call(t, s, "status", Request{})
 	if status["counts"].(map[string]int)["Message"] != 0 {
