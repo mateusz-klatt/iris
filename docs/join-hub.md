@@ -153,6 +153,10 @@ fixes that for this window only. To run `iris` in later windows, add the directo
 
 ## Checking it
 
+Iris protects edits made on the machine where the client's hooks run. When a client runs its tools
+somewhere else, such as on a remote host, in a container or in a cloud sandbox, those edits are
+**unprotected**: Iris neither claims nor checks them (ADR 009).
+
 `iris doctor` must show `hub: ok`, `token: ok` and `claude ok`. Start a new Claude Code session, because
 a running one does not load the plugin. Ask it to call the Iris `whoami` and `peers` tools, then to send
 a message to a peer. An interactive session reports it at once, with no prompt.
