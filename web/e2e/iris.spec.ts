@@ -231,7 +231,8 @@ test("mailbox navigation opens the reader, returns focus, and separates team act
     const url = new URL(route.request().url());
     if (url.pathname.endsWith("/read")) { await route.fulfill({ json: { read: 0 } }); return; }
     if (url.pathname === "/v1/ui/threads/ms_human") {
-      await route.fulfill({ json: { id: myThread.id, messages: [{ id: myThread.id, sender: "claude-laptop", repository_id: "rp_iris", recipients: [{ name: "human", state: "pending" }], subject: myThread.subject, body: "Please review the local inbox preview.\n\nThe details are ready for your feedback.", created_at: myThread.last_at }] } });
+      const body = ["Please review the local inbox preview.", ...Array.from({ length: 24 }, (_, index) => `Review detail ${index + 1}: the conversation can be longer than the screen while you read and prepare your response.`)].join("\n\n");
+      await route.fulfill({ json: { id: myThread.id, messages: [{ id: myThread.id, sender: "claude-laptop", repository_id: "rp_iris", recipients: [{ name: "human", state: "pending" }], subject: myThread.subject, body, created_at: myThread.last_at }] } });
       return;
     }
     queries.push(url);
@@ -243,6 +244,9 @@ test("mailbox navigation opens the reader, returns focus, and separates team act
   await expect(mine).toHaveAttribute("aria-current", "page");
   const row = page.getByRole("button", { name: /Open thread: Ready for your review/ });
   await expect(row).toBeVisible();
+  // Mail is the first task: a complete conversation row is visible without scrolling.
+  const firstRow = (await row.boundingBox())!;
+  expect(firstRow.y + firstRow.height).toBeLessThanOrEqual(page.viewportSize()!.height);
   await expectLayoutToFit(page);
   expect(queries.at(-1)?.searchParams.get("agent")).toBe("human");
   await expect(page.getByRole("button", { name: /Open thread: Review handoff/ })).toHaveCount(0);
@@ -255,6 +259,10 @@ test("mailbox navigation opens the reader, returns focus, and separates team act
   await expect(page.getByText("Please review the local inbox preview.", { exact: true })).toBeVisible();
   if ((page.viewportSize()?.width ?? 0) < 700) {
     await expect(page.locator(".mailbox-list")).toBeHidden();
+    await expect(page.locator(".mail-filters")).toBeHidden();
+    await expect(page.locator(".console-stats")).toBeHidden();
+    await expect(page.locator(".console-heading")).toBeHidden();
+    await expect(page.locator(".thread-reader textarea")).toHaveCSS("font-size", "16px");
   } else {
     await expect(page.locator(".mailbox-list")).toBeVisible();
     await expect(row).toHaveAttribute("aria-current", "true");
@@ -265,10 +273,23 @@ test("mailbox navigation opens the reader, returns focus, and separates team act
     expect((listBox?.x ?? 0) + (listBox?.width ?? 0)).toBeLessThanOrEqual((readerBox?.x ?? 0) + 1);
   }
   await expectLayoutToFit(page);
+  // Back stays reachable after reading a long conversation, including on a phone.
+  await page.locator(".thread-reader textarea").scrollIntoViewIfNeeded();
+  await expect(page.getByRole("button", { name: "Back to threads", exact: true })).toBeInViewport();
+  // A reader kept in page memory must not hide the heading of another view.
+  await navigation.getByRole("button", { name: /^Fleet/ }).click();
+  await expect(page.getByRole("heading", { name: "Fleet", exact: true })).toBeVisible();
+  await page.getByRole("button", { name: "+ New message", exact: true }).click();
+  await expect(page.getByRole("heading", { name: "New message", level: 1, exact: true })).toBeVisible();
+  await mine.click();
+  await row.click();
+  await expect(title).toHaveText(myThread.subject);
   await page.locator(".thread-reader").getByRole("button", { name: "Back to threads", exact: true }).click();
   await expect(page.locator(".thread-reader")).toHaveCount(0);
   await expect(row).toBeVisible();
   await expect(row).toBeFocused();
+  await expect(row).toBeInViewport();
+  await expect(page.locator(".mail-filters")).toBeVisible();
 
   await navigation.getByRole("button", { name: "All activity", exact: true }).click();
   await expect(page.getByRole("heading", { name: "All activity", exact: true })).toBeVisible();
@@ -283,4 +304,32 @@ test("mailbox navigation opens the reader, returns focus, and separates team act
   await mine.click();
   await expect(page.getByRole("button", { name: /Open thread: Review handoff/ })).toHaveCount(0);
   await expect(mine).toHaveAttribute("aria-current", "page");
+});
+
+test("a long conversation title never covers the reply editor while scrolling", async ({ page }) => {
+  const subject = "A long but valid subject for the review. ".repeat(24).trim();
+  const agents = [{ id: "ag_claude", name: "claude-laptop", client: "claude", host: "laptop", repository_id: "rp_iris", worktree: "/work/iris", branch: "main", state: "active", last_seen: new Date().toISOString(), unread: 0 }];
+  await serve(page, { repositories: [], agents, claims: [], human_unread: 0 }, []);
+  await page.route("**/v1/ui/threads**", (route) => {
+    const detail = { id: "ms_long", messages: [{ id: "ms_long", sender: "claude-laptop", recipients: [{ name: "human", state: "acked" }], subject, body: "A detailed update that needs a response.\n\n".repeat(30), created_at: "2026-11-08T10:00:00Z" }] };
+    return route.fulfill({ json: new URL(route.request().url()).pathname.endsWith("ms_long") ? detail : { threads: [{ id: "ms_long", subject, participants: ["claude-laptop", "human"], count: 1, last_at: "2026-11-08T10:00:00Z", unread: 0 }] } });
+  });
+  await page.goto("/");
+  const row = page.locator(".thread-row");
+  await expect(row).toBeVisible();
+  const rowBounds = (await row.boundingBox())!;
+  expect(rowBounds.y + rowBounds.height).toBeLessThanOrEqual(page.viewportSize()!.height);
+  await row.click();
+  await expect(page.locator("#thread-title")).toHaveText(subject);
+  const editor = page.locator(".thread-reader textarea");
+  await editor.scrollIntoViewIfNeeded();
+  await expect(page.getByRole("button", { name: "Back to threads", exact: true })).toBeInViewport();
+  // Visibility alone misses an opaque sticky heading laid on top of the editor.
+  expect(await editor.evaluate((element) => {
+    const bounds = element.getBoundingClientRect();
+    return document.elementFromPoint(bounds.x + bounds.width / 2, bounds.y + bounds.height / 2) === element;
+  })).toBe(true);
+  await editor.fill("My reply remains reachable.");
+  await expect(editor).toHaveValue("My reply remains reachable.");
+  await expectLayoutToFit(page);
 });
