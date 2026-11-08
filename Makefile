@@ -2,7 +2,7 @@
 # only for themselves. Nothing in Iris links C code.
 GO ?= go
 
-.PHONY: test race fixtures build web cov cov-check check-all lint vuln secrets pins
+.PHONY: test race fixtures build web cov cov-check check-all lint vuln secrets pins refresh
 
 test:
 	$(GO) vet ./...
@@ -63,3 +63,9 @@ secrets:
 
 pins:
 	$(GO) run ./.github/pincheck .github/workflows
+
+# Updates Go modules, web packages, the tool pins above, workflow actions (to the full SHA of
+# their newest release) and Docker base digests, then runs test and check-all. It never
+# commits: read its summary, then open a pull request. GITHUB_TOKEN raises GitHub's rate limit.
+refresh:
+	$(GO) run ./.github/refresh
