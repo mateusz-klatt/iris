@@ -643,6 +643,11 @@ reported with a warning. It is not refused beforehand. This is detection, not pr
 into a path someone else holds is reported, not stopped, and the pre-commit guard remains the
 last checkpoint.
 
+Claude Code on Windows has a `PowerShell` tool beside `Bash` (measured on 2.1.319). It takes a
+command in `tool_input.command` and writes files as freely, as `Set-Content` does, so it takes the
+same shell path: a write is detected afterwards and reported, not refused beforehand. Until this
+was measured, the tool was unknown to Iris, so its writes went unreconciled and unreported.
+
 ## 4. Known gaps
 
 - The test suite passes on Windows and macOS in CI, but no real client has run there yet. Hook

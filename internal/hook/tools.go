@@ -23,7 +23,9 @@ func classifyTool(name string, mcp bool) (ToolClass, bool) {
 	case "write", "edit", "multiedit", "notebookedit", "apply_patch", "write_file", "edit_file",
 		"search_replace", "hashline_edit", "delete", "delete_file", "move_file", "strreplace", "str_replace":
 		return ClassEdit, false
-	case "bash", "shell", "run_terminal_command", "run_command":
+	// Claude Code on Windows has a PowerShell tool beside Bash (measured on 2.1.319), and it
+	// writes files as freely, so it is reconciled the same way: detected, not prevented.
+	case "bash", "powershell", "shell", "run_terminal_command", "run_command":
 		return ClassShell, false
 	case "read", "view", "grep", "glob", "ls":
 		return ClassRead, false

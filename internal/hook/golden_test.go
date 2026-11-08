@@ -254,6 +254,9 @@ const (
 	agySession    = "4d437c2d-a30c-4479-bc04-0c09ca6ebdc5"
 	cursorSession = "<SESSION_OR_TOOL_ID>"
 	proj          = "/workspace/project"
+	// Captured from Claude Code 2.1.319 on Windows 11, where the PowerShell tool exists.
+	claudeWindowsSession = "a2a33065-7989-4987-bb5f-8f6866658a25"
+	projWindows          = `C:\workspace\project`
 )
 
 var fixtureWant = map[string]decoded{
@@ -270,6 +273,8 @@ var fixtureWant = map[string]decoded{
 	"claude/PostToolUse-toolsearch.json":             {kind: KindPostTool, session: claudeSession, cwd: proj, tool: "ToolSearch", class: ClassOther, call: "toolu_013NVHcqMWYvDzyw35RYC4o1"},
 	"claude/PostToolUse-write.json":                  {kind: KindPostTool, session: claudeSession, cwd: proj, tool: "Write", class: ClassEdit, paths: []string{"/workspace/project/allowed.txt"}, call: "toolu_01C7qtJco6B2Sdj5LxibnJBp"},
 	"claude/PreToolUse-bash.json":                    {kind: KindPreTool, session: claudeSession, cwd: proj, tool: "Bash", class: ClassShell, command: "printf shell_ok", call: "toolu_01ECwF1dVgjgN9pZRc5Veud4"},
+	"claude/PostToolUse-powershell.json":             {kind: KindPostTool, session: claudeWindowsSession, cwd: projWindows, tool: "PowerShell", class: ClassShell, command: "Set-Content -Path note.txt -Value hi", call: "toolu_019CphLqu8vVcvbw3YHBShVL"},
+	"claude/PreToolUse-powershell.json":              {kind: KindPreTool, session: claudeWindowsSession, cwd: projWindows, tool: "PowerShell", class: ClassShell, command: "Set-Content -Path note.txt -Value hi", call: "toolu_019CphLqu8vVcvbw3YHBShVL"},
 	"claude/PreToolUse-mcp__iris_probe__probe.json":  {kind: KindPreTool, session: claudeSession, cwd: proj, tool: "mcp__iris-probe__probe", class: ClassMCP, call: "toolu_01VZQc8PJf7R4RUQzfncvpbL"},
 	"claude/PreToolUse-read.json":                    {kind: KindPreTool, session: claudeSession, cwd: proj, tool: "Read", class: ClassRead, paths: []string{"/workspace/project/fixtures/denied-target.txt"}, call: "toolu_01RPA5VWZ24nnjpDeyBs5xBZ"},
 	"claude/PreToolUse-toolsearch.json":              {kind: KindPreTool, session: claudeSession, cwd: proj, tool: "ToolSearch", class: ClassOther, call: "toolu_013NVHcqMWYvDzyw35RYC4o1"},
