@@ -39,11 +39,11 @@ The first sweep after an upgrade logs what it removed, which can be a lot once.
 To take a backup while the hub runs, on the hub's machine:
 
 ```sh
-iris admin backup /data/hub.db /path/to/new-backup.db
+iris admin backup /data/iris.db /path/to/new-backup.db
 ```
 
 In the container built from `deploy/Dockerfile`, run it as
-`docker exec iris /iris admin backup /data/hub.db /data/<name>.db` and copy the file out; the
+`docker exec iris /iris admin backup /data/iris.db /data/<name>.db` and copy the file out; the
 release image has the binary at `/usr/local/bin/iris`. The copy keeps SQLite's temporary storage
 in memory, so the image's lack of a temporary directory does not matter. It reads the database read-only, in one read transaction (SQLite's
 `VACUUM INTO`), so the copy is one moment of the live database with its WAL applied. It writes an
@@ -69,7 +69,7 @@ throwaway hub on a loopback port with a token of its own. It then checks:
 - that a monitor whose cursor is ahead of the restored history gets a reset.
 
 It also prints what the first retention sweep would remove. A failed check prints `FAIL` and exits
-non-zero. To restore for real, stop the hub, put the backup in place of `hub.db` (removing its
+non-zero. To restore for real, stop the hub, put the backup in place of `iris.db` (removing its
 `-wal` and `-shm` files), and start it: every session then reattaches with proof, or registers
 afresh.
 
