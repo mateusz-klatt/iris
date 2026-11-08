@@ -208,6 +208,22 @@ describe("console send retries", () => {
     expect(calls).toBe(1);
   }, 20000);
 
+  it("keeps compose edits made while the previous version is being sent", async () => {
+    const user = userEvent.setup({ delay: null });
+    const pending = deferred<Response>();
+    server.use(http.post("*/v1/ui/messages", () => pending.promise));
+    await showSession();
+    const view = await fillCompose(user, "First version");
+    await reviewAndSend(user, view, "Send");
+    await user.type(view.getByRole("textbox", { name: "Message" }), " with an extra detail");
+    pending.resolve(new HttpResponse(null, { status: 204 }));
+    expect(await screen.findByText("Sent.")).toBeVisible();
+    expect(view.getByRole("textbox", { name: "Message" })).toHaveValue("First version with an extra detail");
+    expect(view.getByRole("textbox", { name: "Subject" })).toHaveValue("Check in");
+    expect(view.getByRole("checkbox", { name: /claude-host/ })).toBeChecked();
+    expect(view.getByRole("button", { name: "Review" })).toBeEnabled();
+  });
+
   it("gives a new key to the same message sent again after success, and to an edited draft", async () => {
     const user = userEvent.setup({ delay: null });
     const keys: string[] = [];
@@ -1016,8 +1032,8 @@ describe("Iris operator console", () => {
     await showSession();
     await user.click(await screen.findByRole("button", { name: /Rollout check/ }));
     const detail = await screen.findByRole("article", { name: "ms_root" });
-    expect(within(detail).getByRole("textbox", { name: "Recipients" })).toHaveValue("");
-    expect(within(detail).getByRole("button", { name: "Review" })).toBeDisabled();
+    expect(within(detail).queryByRole("textbox", { name: "Recipients" })).toBeNull();
+    expect(within(detail).queryByRole("button", { name: "Review" })).toBeNull();
   });
 
   it("keeps a subject that already starts with Re: and sends the edited reply", async () => {

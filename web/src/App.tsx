@@ -79,8 +79,6 @@ interface Draft {
   sentFrom?: string;
   /** When this key was first sent, in milliseconds. The hub's one-copy promise runs from then. */
   firstTried?: number;
-  /** The thread a reply draft is for. */
-  thread?: string;
   /**
    * Whether the console made this reply draft and the operator has not touched it, so a refresh
    * may replace it. An edit makes it the operator's, and a live refresh never discards it (A14).
@@ -102,7 +100,7 @@ const operatorName = "human";
 // replyDraft starts a reply to a thread. It answers the other party: the latest sender who is not
 // the operator, or, in a thread only the operator has written to, whom they wrote to. Answering
 // the latest sender would address a follow-up after the operator's own message back to them.
-function replyDraft(thread: string, messages: ThreadMessage[]): Draft | null {
+function replyDraft(messages: ThreadMessage[]): Draft | null {
   const last = messages.at(-1);
   if (last === undefined) {
     return null;
@@ -114,7 +112,7 @@ function replyDraft(thread: string, messages: ThreadMessage[]): Draft | null {
       .map((recipient) => recipient.name)
       .filter((name) => name !== operatorName)
       .join(", ");
-  return newDraft({ to, subject: last.subject.startsWith("Re:") ? last.subject : `Re: ${last.subject}`, replyTo: last.id, thread, offered: true });
+  return newDraft({ to, subject: last.subject.startsWith("Re:") ? last.subject : `Re: ${last.subject}`, replyTo: last.id, offered: true });
 }
 
 // unreadForOperator is whether a thread holds mail to the operator not yet acknowledged.
@@ -257,7 +255,13 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [thread, setThread] = useState<ThreadDetail | null>(null);
   const [compose, setCompose] = useState<Draft>(newDraft);
-  const [reply, setReply] = useState<Draft>(newDraft);
+  // A conversation can be read through different repository views. Keep each view's
+  // draft and retry identity together while the operator moves between conversations.
+  const [replies, setReplies] = useState<Record<string, Draft>>({});
+  const [emptyReply] = useState<Draft>(newDraft);
+  const replyScope = JSON.stringify([repositoryId, selectedId]);
+  const reply = replies[replyScope] ?? emptyReply;
+  const setReply = (draft: Draft) => setReplies((current) => ({ ...current, [replyScope]: draft }));
   const composeReview = useReview(compose.key);
   const replyReview = useReview(reply.key);
   // One send at a time: a second submit while one is pending would be a second send. The ref
@@ -415,11 +419,12 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
             })
             .catch(() => undefined);
         }
-        // A reply is per thread: opening another thread replaces even an edited draft, so one
-        // thread's words never go out as a reply in another.
-        const fresh = replyDraft(detail.id, detail.messages);
+        // Refresh an untouched suggestion, but retain an edited draft and its retry key
+        // even when the operator left this conversation and has now returned to it.
+        const fresh = replyDraft(detail.messages);
         if (fresh !== null) {
-          setReply((current) => (current.thread === detail.id && current.offered === false ? current : fresh));
+          const scope = JSON.stringify([repositoryId, selectedId]);
+          setReplies((current) => current[scope]?.offered === false ? current : { ...current, [scope]: fresh });
         }
       })
       .catch((error: unknown) => {
@@ -472,7 +477,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
     }
   };
 
-  const submit = async (start: Draft, keep: (draft: Draft) => void, clear: () => void) => {
+  const submit = async (start: Draft, keep: (draft: Draft) => void, clear: (sent: Draft) => void) => {
     if (inFlight.current) {
       return;
     }
@@ -495,7 +500,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
         reply_to: draft.replyTo,
         ...(repositoryId === "" ? {} : { repository_id: repositoryId }),
       });
-      clear();
+      clear(draft);
       setNotice(t("operator.sent"));
       setThreadRevision((value) => value + 1);
       void reload();
@@ -541,23 +546,35 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
   const visibleAgents = sessions.filter((item) => (showInactive || item.state === "active") &&
     `${item.name} ${item.host} ${item.client} ${item.branch} ${repositoryName(overview!, item.repository_id)}`.toLowerCase().includes(agentSearch.toLowerCase().trim()));
   const clearThread = () => {
+    replyReview.stop();
+    composeReview.stop();
     setSelectedId(null);
     setThread(null);
     setThreadError(false);
   };
+  const chooseView = (next: ConsoleView) => {
+    if (next !== activeView) {
+      replyReview.stop();
+      composeReview.stop();
+    }
+    setView(next);
+  };
   const openThread = (id: string, trigger: HTMLButtonElement) => {
     lastThreadButton.current = trigger;
-    setView("messages");
+    chooseView("messages");
     if (id === selectedId) {
       readerTitle.current?.focus();
       return;
     }
+    // Review is an explicit step in this visit to the draft. Restoring its text must
+    // not reopen the send control and pull focus away from the conversation heading.
+    replyReview.stop();
     setThread(null);
     setThreadError(false);
     setSelectedId(id);
   };
   const openMailbox = (scope: "mine" | "all") => {
-    setView("messages");
+    chooseView("messages");
     setMailScope(scope);
     clearThread();
   };
@@ -600,15 +617,15 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
       <div className="console-workspace">
         {phase === "ready" && overview !== null ? (
           <aside className="console-sidebar">
-            <button type="button" className="primary-button compose-action" onClick={() => setView("compose")}>+ {t("operator.compose")}</button>
+            <button type="button" className="primary-button compose-action" onClick={() => chooseView("compose")}>+ {t("operator.compose")}</button>
             <nav className="console-nav" aria-label={t("navigation")}>
               <button type="button" className="console-nav-item" aria-current={activeView === "messages" && mailScope === "mine" ? "page" : undefined} onClick={() => openMailbox("mine")}>
                 {t("console.myMessages")}<span className="nav-count">{overview.human_unread}</span>
               </button>
               <button type="button" className="console-nav-item" aria-current={activeView === "messages" && mailScope === "all" ? "page" : undefined} onClick={() => openMailbox("all")}>{t("console.allActivity")}</button>
-              <button type="button" className="console-nav-item" aria-current={activeView === "fleet" ? "page" : undefined} onClick={() => setView("fleet")}>{t("console.fleet")}<span className="nav-count">{activeAgents.length}</span></button>
-              <button type="button" className="console-nav-item" aria-current={activeView === "claims" ? "page" : undefined} onClick={() => setView("claims")}>{t("operator.claims")}<span className="nav-count">{overview.claims.length}</span></button>
-              <button type="button" className="console-nav-item" aria-current={activeView === "diagnostics" ? "page" : undefined} onClick={() => setView("diagnostics")}>{t("console.diagnostics")}</button>
+              <button type="button" className="console-nav-item" aria-current={activeView === "fleet" ? "page" : undefined} onClick={() => chooseView("fleet")}>{t("console.fleet")}<span className="nav-count">{activeAgents.length}</span></button>
+              <button type="button" className="console-nav-item" aria-current={activeView === "claims" ? "page" : undefined} onClick={() => chooseView("claims")}>{t("operator.claims")}<span className="nav-count">{overview.claims.length}</span></button>
+              <button type="button" className="console-nav-item" aria-current={activeView === "diagnostics" ? "page" : undefined} onClick={() => chooseView("diagnostics")}>{t("console.diagnostics")}</button>
             </nav>
           </aside>
         ) : null}
@@ -642,8 +659,8 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
             <div hidden={activeView !== "messages"} className="console-view">
               <div className="console-stats">
                 <button type="button" className="console-stat" onClick={() => openMailbox("mine")}><span>{t("console.unread")}</span><strong>{overview.human_unread}</strong></button>
-                <button type="button" className="console-stat" onClick={() => setView("fleet")}><span>{t("console.active")}</span><strong>{activeAgents.length}</strong></button>
-                <button type="button" className="console-stat" onClick={() => setView("claims")}><span>{t("console.reservations")}</span><strong>{overview.claims.length}</strong></button>
+                <button type="button" className="console-stat" onClick={() => chooseView("fleet")}><span>{t("console.active")}</span><strong>{activeAgents.length}</strong></button>
+                <button type="button" className="console-stat" onClick={() => chooseView("claims")}><span>{t("console.reservations")}</span><strong>{overview.claims.length}</strong></button>
               </div>
               <DeliveryProblems repositoryId={repositoryId} revision={threadRevision} onOpenThread={openThread} onUnauthorized={onUnauthorized} />
               <section id="threads" aria-label={t("operator.threads")}>
@@ -688,8 +705,8 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                   </div>
                   {selectedId === null ? <div className="thread-empty"><h2>{t("console.selectThread")}</h2><p>{t("console.selectHint")}</p></div> : (
                     <article className="message-detail thread-reader" aria-labelledby="thread-title" aria-busy={thread === null && !threadError}>
+                      <button type="button" className="back-link reader-back" onClick={clearThread}>{t("operator.back")}</button>
                       <header className="page-heading">
-                        <button type="button" className="back-link" onClick={clearThread}>{t("operator.back")}</button>
                         <h2 id="thread-title" tabIndex={-1} ref={readerTitle}>{thread === null ? t(threadError ? "operator.loadError" : "message.loading") : thread.messages[0]?.subject ?? thread.id}</h2>
                       </header>
                       {threadError ? <div className="state-panel"><p role="alert">{t("operator.loadError")}</p><button type="button" onClick={() => { readerTitle.current?.focus(); setThreadError(false); setThreadRevision((value) => value + 1); }}>{t("operator.retry")}</button></div> : null}
@@ -709,7 +726,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                       <MessageBody body={message.body} />
                     </article>
                   ))}
-                  <form
+                  {thread.messages.length > 0 ? <form
                     className="search-form"
                     onSubmit={(event) => {
                       event.preventDefault();
@@ -739,14 +756,17 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                       sending={sending}
                       sendLabel={t("operator.reply")}
                       onSend={() =>
-                        void submit(reply, setReply, () =>
-                          // A sent reply leaves nothing of the operator's to keep, so the next
-                          // refresh may answer the newest message.
-                          setReply((current) => ({ ...edited(current, { body: "" }), offered: true })),
-                        )
+                        void submit(reply, setReply, (sent) => {
+                          // Only this send's unchanged draft is finished. A different thread,
+                          // or words typed while sending, must survive its completion.
+                          const cleared = { ...edited(sent, { body: "" }), offered: true };
+                          setReplies((current) => Object.fromEntries(Object.entries(current).map(
+                            ([scope, draft]) => [scope, draft.key === sent.key ? cleared : draft],
+                          )));
+                        })
                       }
                     />
-                  </form>
+                  </form> : null}
                       </> : null}
                     </article>
                   )}
@@ -888,7 +908,10 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                   sendable={composeSendable}
                   sending={sending}
                   sendLabel={t("operator.send")}
-                  onSend={() => void submit(compose, setCompose, () => setCompose(newDraft()))}
+                  onSend={() => void submit(compose, setCompose, (sent) => {
+                    const cleared = newDraft();
+                    setCompose((current) => current.key === sent.key ? cleared : current);
+                  })}
                 />
               </form>
             </section>
