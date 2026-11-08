@@ -204,7 +204,7 @@ describe("Iris operator console", () => {
     await showSession();
     expect(screen.getByRole("rowheader", { name: "iris" })).toBeVisible();
     expect(screen.getByRole("rowheader", { name: "claude-host" })).toBeVisible();
-    expect(screen.getByRole("rowheader", { name: "docs/api.md" })).toBeVisible();
+    expect(screen.getByText("docs/api.md")).toBeVisible();
     expect(screen.getByText("Hook received.")).toBeVisible();
     expect(screen.getAllByText("1 unread").length).toBeGreaterThan(0);
   });
@@ -240,7 +240,7 @@ describe("Iris operator console", () => {
     await showSession();
     await user.click(screen.getByRole("button", { name: "Revoke" }));
     await waitFor(() => {
-      expect(screen.queryByRole("rowheader", { name: "docs/api.md" })).toBeNull();
+      expect(screen.queryByText("docs/api.md")).toBeNull();
     });
   });
 
@@ -290,7 +290,7 @@ describe("Iris operator console", () => {
       }),
     );
     await showSession();
-    await user.selectOptions(await screen.findByRole("combobox", { name: "Repository" }), "rp_iris");
+    await user.selectOptions(await within(await screen.findByRole("region", { name: "Threads" })).findByRole("combobox", { name: "Repository" }), "rp_iris");
     await user.click(await screen.findByRole("button", { name: /Rollout check/ }));
     const detail = await screen.findByRole("article", { name: "Rollout check" });
     expect(within(detail).getByText("snapper")).toBeVisible();
@@ -327,7 +327,7 @@ describe("Iris operator console", () => {
     await user.type(view.getByRole("textbox", { name: "Message" }), "Status?");
     await user.click(view.getByRole("button", { name: "Send" }));
     await waitFor(() => expect(bodies).toHaveLength(1));
-    await user.selectOptions(screen.getByRole("combobox", { name: "Repository" }), "rp_snapper");
+    await user.selectOptions(within(screen.getByRole("region", { name: "Threads" })).getByRole("combobox", { name: "Repository" }), "rp_snapper");
     await user.click(view.getByRole("button", { name: "Send" }));
     await waitFor(() => expect(bodies).toHaveLength(2));
     expect(bodies[1]?.repository_id).toBe("rp_snapper");
@@ -645,10 +645,11 @@ describe("Iris operator console", () => {
     expect(await screen.findByRole("rowheader", { name: "orphan-agent" })).toBeVisible();
     expect(screen.getByRole("cell", { name: "rp_missing" })).toBeVisible();
     expect(screen.getByText(/^Checked\s*$/)).toBeVisible();
-    const raw = screen.getByRole("row", { name: /raw-expiry/ });
-    expect(within(raw).getByRole("cell", { name: "soon" })).toBeVisible();
-    const blank = screen.getByRole("row", { name: /empty-expiry/ });
-    expect(within(blank).getAllByRole("cell")[1]).toHaveTextContent("");
+    // A time the console cannot read is shown as given, never as a countdown or as expired.
+    const raw = screen.getByText("raw-expiry").closest("li")!;
+    expect(within(raw).getByText("soon")).toBeVisible();
+    const blank = screen.getByText("empty-expiry").closest("li")!;
+    expect(blank.querySelector(".claim-left")).toHaveTextContent(/^$/);
 
     await user.click(screen.getByRole("button", { name: "Reload the last doctor report" }));
     expect(await screen.findByText("Checked soon")).toBeVisible();
@@ -880,7 +881,7 @@ describe("Iris operator console", () => {
       }),
     );
     await showSession();
-    await user.selectOptions(screen.getByRole("combobox", { name: "Repository" }), "rp_iris");
+    await user.selectOptions(within(screen.getByRole("region", { name: "Threads" })).getByRole("combobox", { name: "Repository" }), "rp_iris");
     await user.selectOptions(screen.getByRole("combobox", { name: "Agent" }), "claude-host");
     expect(await screen.findByRole("button", { name: /Filtered only/ })).toBeVisible();
   });
@@ -1011,7 +1012,7 @@ describe("Iris operator console", () => {
     const failed = render(<App connect={() => () => {}} />);
     await user.click(await screen.findByRole("button", { name: "Revoke" }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Iris could not load this view.");
-    expect(screen.getByRole("rowheader", { name: "docs/api.md" })).toBeVisible();
+    expect(screen.getByText("docs/api.md")).toBeVisible();
     expect(screen.getByRole("button", { name: "Revoke" })).toBeEnabled();
     failed.unmount();
 

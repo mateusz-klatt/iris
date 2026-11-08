@@ -2482,3 +2482,138 @@ html[data-flag-polyfill="true"] select {
     gap: 0.4rem;
   }
 }
+
+/* The brand in the page's face, like the headings. */
+.brand strong {
+  font-family: inherit;
+  font-weight: 800;
+}
+
+/* Table cells keep off the panel's edge and read from the start, not the middle. */
+.panel > table th,
+.panel > table td {
+  padding: 0.5rem 0.75rem;
+  text-align: start;
+  vertical-align: top;
+}
+
+/* On a phone a row of a stacked table is a card: each cell on its own line, in the order of the
+   columns, so a long name or branch is not broken over five lines in a narrow column. The
+   column headings stay for screen readers. */
+@media (max-width: 640px) {
+  .stack-table,
+  .stack-table tbody,
+  .stack-table tr,
+  .stack-table th,
+  .stack-table td {
+    display: block;
+  }
+
+  .stack-table thead {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+
+  .stack-table tr {
+    border-bottom: 1px solid var(--line);
+    padding: 0.6rem 0.45rem;
+  }
+
+  .stack-table tr:last-child {
+    border-bottom: 0;
+  }
+
+  .stack-table th,
+  .stack-table td {
+    padding-block: 0.1rem;
+    overflow-wrap: anywhere;
+  }
+}
+
+/* Claims (item 10): filters, then one row per claim with the time left and Revoke. */
+.claims-panel {
+  grid-column: 1 / -1;
+}
+
+.claim-filters {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.5rem 0.75rem;
+  border-bottom: 1px solid var(--line);
+  padding: 1rem 1.2rem;
+}
+
+.claim-filters label {
+  display: grid;
+  min-width: 0;
+  gap: 0.35rem;
+  color: var(--muted);
+  font-size: 0.76rem;
+  font-weight: 800;
+}
+
+.claim-filters select {
+  width: 100%;
+}
+
+.claim-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.claim-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  align-items: center;
+  gap: 0.5rem 1rem;
+  border-bottom: 1px solid var(--line);
+  padding: 0.75rem 1.2rem;
+}
+
+.claim-row:last-child {
+  border-bottom: 0;
+}
+
+.claim-row div {
+  display: grid;
+  min-width: 0;
+  gap: 0.25rem;
+}
+
+.claim-row strong,
+.claim-row small {
+  overflow-wrap: anywhere;
+}
+
+.claim-row small {
+  color: var(--muted);
+}
+
+.claim-left {
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.claim-left[data-expired="yes"] {
+  color: var(--muted);
+  font-style: italic;
+}
+
+@media (max-width: 640px) {
+  .claim-filters {
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .claim-row {
+    grid-template-columns: minmax(0, 1fr) auto;
+  }
+
+  .claim-row div {
+    grid-column: 1 / -1;
+  }
+}
