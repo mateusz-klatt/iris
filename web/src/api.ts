@@ -88,9 +88,16 @@ export interface DoctorClient {
   last_hook_at: string;
 }
 
+/** One host's last doctor report (ADR 007). A doctor too old to name its host reports as "unknown". */
 export interface DoctorReport {
+  host: string;
   checked_at: string | null;
   clients: DoctorClient[];
+}
+
+/** Every host's last report. A host that never ran doctor is absent. */
+export interface DoctorReports {
+  hosts: DoctorReport[];
 }
 
 export interface OutgoingMessage {
@@ -155,9 +162,9 @@ export function getOverview(signal?: AbortSignal): Promise<Overview> {
   return getJson("/v1/ui/overview", signal);
 }
 
-export async function getDoctor(signal?: AbortSignal): Promise<DoctorReport | null> {
+export async function getDoctor(signal?: AbortSignal): Promise<DoctorReports | null> {
   try {
-    return await getJson<DoctorReport>("/v1/ui/doctor", signal);
+    return await getJson<DoctorReports>("/v1/ui/doctor", signal);
   } catch (error) {
     if (error instanceof ApiError && error.status === 404) {
       return null;

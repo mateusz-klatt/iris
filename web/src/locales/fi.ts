@@ -358,6 +358,8 @@ const translation = {
     doctorTitle: "Asiakasohjelmat",
     doctorHint: "Kunkin asiakasohjelman tila on peräisin viimeisimmästä doctor-raportista. Päivitä se suorittamalla {{command}} tällä tietokoneella.",
     doctorReload: "Lataa viimeisin doctor-raportti uudelleen",
+    doctorUnknownHost: "Liian vanha doctor nimeämään konettaan",
+    doctorStale: "Tarkistettu yli päivä sitten, joten se kertoo nyt vähän asiakkaasta.",
     retry: "Yritä uudelleen",
     doctorMissing: "Yhtään doctor-raporttia ei ole vielä tallennettu. Suorita {{command}} tällä tietokoneella.",
     statusOk: "Hook vastaanotettu",

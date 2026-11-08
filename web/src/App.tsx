@@ -14,6 +14,7 @@ import {
   type Agent,
   type Claim,
   type DoctorReport,
+  type DoctorReports,
   type DoctorStatus,
   type Overview,
   type ThreadDetail,
@@ -165,13 +166,48 @@ function humanKey(): string {
   return `human:${crypto.randomUUID()}`;
 }
 
+// staleAfter is how old a report may be before it says little about the client now (ADR 007).
+const staleAfter = 24 * 60 * 60 * 1000;
+
+function HostReport({ report }: { report: DoctorReport }) {
+  const { t } = useTranslation();
+  // An age that cannot be read is no fresher than an old one.
+  const stale = report.checked_at === null || !(Date.now() - Date.parse(report.checked_at) <= staleAfter);
+  return (
+    <section className="host-report" data-host={report.host} data-stale={stale ? "yes" : "no"} aria-label={report.host}>
+      <h2>{report.host === "unknown" ? t("operator.doctorUnknownHost") : report.host}</h2>
+      {report.checked_at !== null ? <p>{t("operator.checkedAt", { date: formatWhen(report.checked_at) })}</p> : null}
+      {stale ? <p className="stale-note">{t("operator.doctorStale")}</p> : null}
+      <ul className="message-list">
+        {report.clients.map((client) => (
+          <li key={client.client}>
+            <article className="message-row" data-client={client.client} data-status={client.status}>
+              <div>
+                <strong>{client.client}</strong>
+                <small>
+                  {t("operator.version")}: {client.version.length > 0 ? client.version : t("operator.none")}
+                </small>
+              </div>
+              <span className="status">{t(statusKey(client.status))}</span>
+              <p>
+                {client.status === "silent" || client.status === "slow" ? <span>{t("operator.cause")}: </span> : null}
+                {client.detail}
+              </p>
+            </article>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
+
 export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
   const { t } = useTranslation();
   const [locale, setLocale] = useState<SupportedLocale>("en");
   const [soundOn, setSoundOn] = useState(false);
   const [phase, setPhase] = useState<"loading" | "ready" | "unauthorized" | "error">("loading");
   const [overview, setOverview] = useState<Overview | null>(null);
-  const [doctor, setDoctor] = useState<DoctorReport | null>(null);
+  const [doctor, setDoctor] = useState<DoctorReports | null>(null);
   const [revision, setRevision] = useState(0);
   const [threadRevision, setThreadRevision] = useState(0);
   const [stream, setStream] = useState<WatchStatus>("connecting");
@@ -496,31 +532,10 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                 </button>
               </div>
               <p>{t("operator.doctorHint", { command: "iris doctor" })}</p>
-              {doctor !== null && doctor.checked_at !== null ? (
-                <p>{t("operator.checkedAt", { date: formatWhen(doctor.checked_at) })}</p>
-              ) : null}
-              {doctor === null || doctor.clients.length === 0 ? (
+              {doctor === null || doctor.hosts.length === 0 ? (
                 <p className="state-panel">{t("operator.doctorMissing", { command: "iris doctor" })}</p>
               ) : (
-                <ul className="message-list">
-                  {doctor.clients.map((client) => (
-                    <li key={client.client}>
-                      <article className="message-row" data-client={client.client} data-status={client.status}>
-                        <div>
-                          <strong>{client.client}</strong>
-                          <small>
-                            {t("operator.version")}: {client.version.length > 0 ? client.version : t("operator.none")}
-                          </small>
-                        </div>
-                        <span className="status">{t(statusKey(client.status))}</span>
-                        <p>
-                          {client.status === "silent" || client.status === "slow" ? <span>{t("operator.cause")}: </span> : null}
-                          {client.detail}
-                        </p>
-                      </article>
-                    </li>
-                  ))}
-                </ul>
+                doctor.hosts.map((report) => <HostReport key={report.host} report={report} />)
               )}
               {waiting ? (
                 <p className="state-panel" role="status">

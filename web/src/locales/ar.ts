@@ -358,6 +358,8 @@ const translation = {
     doctorTitle: "العملاء",
     doctorHint: "تأتي حالة كل عميل من آخر تقرير doctor. شغّل {{command}} على هذا الحاسوب لتحديثه.",
     doctorReload: "إعادة تحميل آخر تقرير doctor",
+    doctorUnknownHost: "doctor قديم جدًا لا يذكر اسم جهازه",
+    doctorStale: "فُحص قبل أكثر من يوم، لذا لا يقول الكثير عن العميل الآن.",
     retry: "حاول مرة أخرى",
     doctorMissing: "لم يُحفظ أي تقرير doctor بعد. شغّل {{command}} على هذا الحاسوب.",
     statusOk: "تم استلام الـ hook",

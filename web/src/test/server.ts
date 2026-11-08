@@ -1,7 +1,7 @@
 import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
 
-import type { Claim, DoctorReport, Overview, ThreadDetail, ThreadsPage } from "../api";
+import type { Claim, DoctorReport, DoctorReports, Overview, ThreadDetail, ThreadsPage } from "../api";
 
 export const sessionOverview: Overview = {
   repositories: [{ id: "rp_iris", name: "iris", aliases: ["iris-wt"] }],
@@ -41,6 +41,7 @@ export const emptyOverview: Overview = {
 };
 
 export const doctorReport: DoctorReport = {
+  host: "local",
   checked_at: "2026-11-06T09:00:00Z",
   clients: [
     {
@@ -135,7 +136,7 @@ function overview(): Overview {
 
 export const server = setupServer(
   http.get("*/v1/ui/overview", () => HttpResponse.json(overview())),
-  http.get("*/v1/ui/doctor", () => HttpResponse.json(doctorReport)),
+  http.get("*/v1/ui/doctor", () => HttpResponse.json({ hosts: [doctorReport] } satisfies DoctorReports)),
   http.get("*/v1/ui/threads", ({ request }) => {
     const url = new URL(request.url);
     if (url.pathname !== "/v1/ui/threads") {

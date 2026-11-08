@@ -358,6 +358,8 @@ const translation = {
     doctorTitle: "Klijenti",
     doctorHint: "Status svakog klijenta dolazi iz posljednjeg doctor izvještaja. Pokrenite {{command}} na ovom računaru da ga osvježite.",
     doctorReload: "Ponovo učitaj posljednji doctor izvještaj",
+    doctorUnknownHost: "doctor prestar da imenuje svoj računar",
+    doctorStale: "Provjereno prije više od jednog dana, pa sada malo govori o klijentu.",
     retry: "Pokušaj ponovo",
     doctorMissing: "Još nema sačuvanog doctor izvještaja. Pokrenite {{command}} na ovom računaru.",
     statusOk: "Hook primljen",

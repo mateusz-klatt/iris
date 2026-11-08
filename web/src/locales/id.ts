@@ -358,6 +358,8 @@ const translation = {
     doctorTitle: "Klien",
     doctorHint: "Status setiap klien berasal dari laporan doctor terakhir. Jalankan {{command}} di komputer ini untuk memperbaruinya.",
     doctorReload: "Muat ulang laporan doctor terakhir",
+    doctorUnknownHost: "doctor yang terlalu lama untuk menyebut nama mesinnya",
+    doctorStale: "Diperiksa lebih dari sehari lalu, jadi kini hanya sedikit menggambarkan klien.",
     retry: "Coba lagi",
     doctorMissing: "Belum ada laporan doctor yang tersimpan. Jalankan {{command}} di komputer ini.",
     statusOk: "Hook diterima",

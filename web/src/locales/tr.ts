@@ -349,6 +349,8 @@ const translation = {
     doctorTitle: "İstemciler",
     doctorHint: "Her istemcinin durumu son doctor raporundan gelir. Yenilemek için bu bilgisayarda {{command}} komutunu çalıştırın.",
     doctorReload: "Son doctor raporunu yeniden yükle",
+    doctorUnknownHost: "Makinesinin adını bildiremeyecek kadar eski bir doctor",
+    doctorStale: "Bir günden uzun süre önce denetlendi, bu yüzden şu an istemci hakkında pek bir şey söylemiyor.",
     retry: "Yeniden dene",
     doctorMissing: "Henüz kayıtlı bir doctor raporu yok. Bu bilgisayarda {{command}} komutunu çalıştırın.",
     statusOk: "Hook alındı",

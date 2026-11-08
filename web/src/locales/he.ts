@@ -358,6 +358,8 @@ const translation = {
     doctorTitle: "לקוחות",
     doctorHint: "המצב של כל לקוח מגיע מדוח doctor האחרון. הריצו את {{command}} במחשב הזה כדי לרענן אותו.",
     doctorReload: "טעינה מחדש של דוח doctor האחרון",
+    doctorUnknownHost: "doctor ישן מכדי לציין את שם המחשב שלו",
+    doctorStale: "נבדק לפני יותר מיום, ולכן הוא אומר מעט על הלקוח כעת.",
     retry: "ניסיון חוזר",
     doctorMissing: "עדיין לא נשמר דוח doctor. הריצו את {{command}} במחשב הזה.",
     statusOk: "ה-hook התקבל",

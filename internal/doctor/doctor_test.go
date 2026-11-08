@@ -61,6 +61,7 @@ func TestCodexNeedsHumanAndIsStored(t *testing.T) {
 		HubURL:    srv.URL,
 		TokenFile: token,
 		HTTP:      srv.Client(),
+		Host:      "this-host",
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -82,7 +83,8 @@ func TestCodexNeedsHumanAndIsStored(t *testing.T) {
 			t.Fatalf("%s is %s", row.Client, row.Status)
 		}
 	}
-	if !strings.Contains(string(put), `"status":"needs_human"`) {
+	// The report names its host, so the hub keeps it beside other hosts' (ADR 007).
+	if !strings.Contains(string(put), `"status":"needs_human"`) || !strings.Contains(string(put), `"host":"this-host"`) {
 		t.Fatalf("put body: %s", put)
 	}
 	if res.ExitCode() != 0 {

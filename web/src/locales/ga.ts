@@ -358,6 +358,8 @@ const translation = {
     doctorTitle: "Cliaint",
     doctorHint: "Tagann stádas gach cliaint ón tuarascáil doctor is déanaí. Rith {{command}} ar an ríomhaire seo chun í a athnuachan.",
     doctorReload: "Athluchtaigh an tuarascáil doctor is déanaí",
+    doctorUnknownHost: "doctor ró-shean chun a mheaisín a ainmniú",
+    doctorStale: "Seiceáladh níos mó ná lá ó shin, mar sin is beag a insíonn sé faoin gcliant anois.",
     retry: "Bain triail eile as",
     doctorMissing: "Níl aon tuarascáil doctor stóráilte fós. Rith {{command}} ar an ríomhaire seo.",
     statusOk: "Fuarthas an hook",

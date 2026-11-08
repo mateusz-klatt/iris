@@ -358,6 +358,8 @@ const translation = {
     doctorTitle: "Klientai",
     doctorHint: "Kiekvieno kliento būsena gaunama iš paskutinės doctor ataskaitos. Norėdami ją atnaujinti, šiame kompiuteryje paleiskite {{command}}.",
     doctorReload: "Iš naujo įkelti paskutinę doctor ataskaitą",
+    doctorUnknownHost: "Per senas doctor, kad nurodytų savo kompiuterį",
+    doctorStale: "Patikrinta daugiau nei prieš dieną, todėl dabar mažai ką sako apie klientą.",
     retry: "Bandyti dar kartą",
     doctorMissing: "Dar neišsaugota jokia doctor ataskaita. Šiame kompiuteryje paleiskite {{command}}.",
     statusOk: "Hook gautas",

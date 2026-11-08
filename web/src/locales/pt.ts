@@ -358,6 +358,8 @@ const translation = {
     doctorTitle: "Clientes",
     doctorHint: "O estado de cada cliente vem do último relatório do doctor. Execute {{command}} neste computador para o atualizar.",
     doctorReload: "Recarregar o último relatório do doctor",
+    doctorUnknownHost: "Um doctor antigo demais para indicar a sua máquina",
+    doctorStale: "Verificado há mais de um dia, por isso diz pouco sobre o cliente agora.",
     retry: "Tentar novamente",
     doctorMissing: "Ainda não há nenhum relatório do doctor guardado. Execute {{command}} neste computador.",
     statusOk: "Hook recebido",

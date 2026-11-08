@@ -358,6 +358,8 @@ const translation = {
     doctorTitle: "Kliensek",
     doctorHint: "Minden kliens állapota a legutóbbi doctor-jelentésből származik. A frissítéshez futtassa a(z) {{command}} parancsot ezen a számítógépen.",
     doctorReload: "A legutóbbi doctor-jelentés újratöltése",
+    doctorUnknownHost: "Túl régi doctor ahhoz, hogy megnevezze a gépét",
+    doctorStale: "Több mint egy napja ellenőrizve, így most keveset mond a kliensről.",
     retry: "Újrapróbálás",
     doctorMissing: "Még nincs mentett doctor-jelentés. Futtassa a(z) {{command}} parancsot ezen a számítógépen.",
     statusOk: "Hook megérkezett",

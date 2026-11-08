@@ -289,19 +289,24 @@ and sends as `human`.
 
 `POST /v1/ui/claims/{fence}/revoke` revokes any claim.
 
-`GET /v1/ui/doctor` returns the last report that `iris doctor` stored with `PUT /v1/ui/doctor`:
+`GET /v1/ui/doctor` returns each host's last report, which `iris doctor` stored with `PUT /v1/ui/doctor`
+(ADR 007):
 
 ```json
-{"checked_at":"...","clients":[{"client":"codex","version":"...",
-  "status":"needs_human","detail":"Review hooks once in /hooks","last_hook_at":"..."}]}
+{"hosts":[{"host":"mac","checked_at":"...","clients":[{"client":"codex","version":"...",
+  "status":"needs_human","detail":"Review hooks once in /hooks","last_hook_at":"..."}]}]}
 ```
+
+A `PUT` carries `host`, the machine's name as its hooks give it, and replaces that host's report
+only. One from a doctor too old to send `host` is kept under `unknown`, so it never replaces a real
+host's. A host that never reported is absent. The console greys a report checked more than 24 hours
+ago.
 
 `status` is `ok`, `not_configured`, `needs_human`, `silent` or `slow`. `slow` means the hooks run,
 but shell reconciliation passed its budget more than ten times in 24 hours, so those commands'
 changes went unclaimed. A doctor sends it as `silent`, with `slow: ` in the detail, to a hub that
 refuses it. `last_hook_at` is when that client's hooks on the doctor's host last reached the hub,
-and empty when they never did or the hub cannot say. Before the first report, `checked_at` is
-null and `clients` is empty. `expires_at` on a claim is null when it has no expiry.
+and empty when they never did or the hub cannot say. Before the first report, `hosts` is empty. `expires_at` on a claim is null when it has no expiry.
 
 `GET /v1/ui/watch` upgrades to a WebSocket, with frames `{"cursor":124,"kind":"changed"}`. The UI
 refetches on a frame. Frames carry no content.
