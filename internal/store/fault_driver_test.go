@@ -374,6 +374,7 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 				f.trace = nil
 				_, err := invoke()
 				f.at = 0
+				// Domain refusals are final to clients; a storage fault must remain retryable.
 				if !errors.Is(err, errStorageFault) {
 					t.Fatalf("fault %d (%s) was not reported: %v", i+1, label, err)
 				}

@@ -31,6 +31,7 @@ func TestInvalidOperationsLeaveStateUnchanged(t *testing.T) {
 		{"validate", Request{ExecutionID: "missing"}, "lost"}, {"bind", Request{Client: "codex", Host: "host", Execution: "missing"}, "lost"},
 		{"bind", Request{Client: "wrong", Host: "host", Execution: a.ExecutionID}, "unbound"}, {"bind", Request{Client: "codex", Host: "host"}, "unbound"},
 		{"heartbeat", Request{ExecutionID: a.ExecutionID, Generation: 1, Source: "bad"}, "bad_request"}, {"end", Request{ExecutionID: a.ExecutionID, Generation: 9}, "lost"},
+		{"end", Request{ExecutionID: "missing", Generation: 1}, "lost"},
 	} {
 		before := databaseState(t, s)
 		expectError(t, s, tc.op, tc.r, tc.code)

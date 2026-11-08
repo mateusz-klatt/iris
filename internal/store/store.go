@@ -95,6 +95,7 @@ func missing(err error, message string) error {
 	return absent(err, "not_found", message)
 }
 
+// absent maps an empty lookup to its domain refusal while preserving storage failures.
 func absent(err error, code, message string) error {
 	if errors.Is(err, sql.ErrNoRows) {
 		return fail(code, message)
