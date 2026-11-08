@@ -241,6 +241,14 @@ func TestLookupFailuresSayWhy(t *testing.T) {
 		_, _ = w.Write([]byte(`{"object":{"type":"tag","sha":"` + tagSHA + `"}}`))
 	})
 	mux.HandleFunc("/gh/repos/o/noref/releases/latest", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"tag_name":"v1"}`)) })
+	// A tag object that points at itself.
+	mux.HandleFunc("/gh/repos/o/loop/releases/latest", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"tag_name":"v1"}`)) })
+	mux.HandleFunc("/gh/repos/o/loop/git/ref/tags/v1", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"object":{"type":"tag","sha":"` + tagSHA + `"}}`))
+	})
+	mux.HandleFunc("/gh/repos/o/loop/git/tags/"+tagSHA, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"object":{"type":"tag","sha":"` + tagSHA + `"}}`))
+	})
 	mux.HandleFunc("/r/v2/nochallenge/manifests/t", func(w http.ResponseWriter, r *http.Request) { w.WriteHeader(http.StatusUnauthorized) })
 	mux.HandleFunc("/r/v2/notoken/manifests/t", func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Www-Authenticate", `Bearer realm="`+srv.URL+`/empty",service="s",scope="x"`)
@@ -252,6 +260,26 @@ func TestLookupFailuresSayWhy(t *testing.T) {
 	})
 	mux.HandleFunc("/empty", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{}`)) })
 	mux.HandleFunc("/access", func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{"access_token":"a"}`)) })
+	// A realm that already has a query keeps it, and service and scope are added to it.
+	mux.HandleFunc("/realm", func(w http.ResponseWriter, r *http.Request) {
+		if q := r.URL.Query(); q.Get("v") != "2" || q.Get("service") != "s" || q.Get("scope") != "repo:x pull" {
+			http.Error(w, r.URL.RawQuery, http.StatusBadRequest)
+			return
+		}
+		_, _ = w.Write([]byte(`{"token":"q"}`))
+	})
+	mux.HandleFunc("/r/v2/query/manifests/t", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") == "Bearer q" {
+			w.Header().Set("Docker-Content-Digest", newImage)
+			return
+		}
+		w.Header().Set("Www-Authenticate", `Bearer realm="`+srv.URL+`/realm?v=2",service="s",scope="repo:x pull"`)
+		w.WriteHeader(http.StatusUnauthorized)
+	})
+	mux.HandleFunc("/r/v2/badrealm/manifests/t", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Www-Authenticate", `Bearer realm="://bad"`)
+		w.WriteHeader(http.StatusUnauthorized)
+	})
 	mux.HandleFunc("/r/v2/access/manifests/t", func(w http.ResponseWriter, r *http.Request) {
 		if r.Header.Get("Authorization") == "Bearer a" {
 			w.Header().Set("Docker-Content-Digest", newImage)
@@ -262,18 +290,21 @@ func TestLookupFailuresSayWhy(t *testing.T) {
 	})
 	mux.HandleFunc("/r/v2/nodigest/manifests/t", func(w http.ResponseWriter, r *http.Request) {})
 	src := Sources{GitHub: srv.URL + "/gh", Registry: func(string) string { return srv.URL + "/r" }, HTTP: srv.Client()}
-	for repo, want := range map[string]string{"o/notag": "names no commit", "o/badtag": "404", "o/noref": "404"} {
+	for repo, want := range map[string]string{"o/notag": "names no commit", "o/badtag": "404", "o/noref": "404", "o/loop": "within 5 tag objects"} {
 		if _, _, err := src.release(repo); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: %v", repo, err)
 		}
 	}
-	for image, want := range map[string]string{"r.io/nochallenge": "credentials", "r.io/notoken": "no token", "r.io/deadtoken": "refused", "r.io/nodigest": "without a digest"} {
+	for image, want := range map[string]string{"r.io/nochallenge": "credentials", "r.io/notoken": "no token", "r.io/deadtoken": "refused", "r.io/nodigest": "without a digest", "r.io/badrealm": "bad token realm"} {
 		if _, err := src.digest(image, "t"); err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("%s: %v", image, err)
 		}
 	}
 	if d, err := src.digest("r.io/access", "t"); err != nil || d != newImage {
 		t.Errorf("access_token: %s %v", d, err)
+	}
+	if d, err := src.digest("r.io/query", "t"); err != nil || d != newImage {
+		t.Errorf("realm with a query: %s %v", d, err)
 	}
 	if err := src.getJSON("://bad", false, nil); err == nil {
 		t.Error("a malformed URL was fetched")

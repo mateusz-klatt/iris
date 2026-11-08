@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	neturl "net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -110,7 +111,7 @@ func Print(w io.Writer, r Report) int {
 	section("Changed", r.Changes)
 	section("Checks", r.Checks)
 	section("Problems", r.Problems)
-	fmt.Fprintln(w, "Nothing was committed. Review the diff and open a pull request.")
+	fmt.Fprintln(w, "Nothing was committed. Review the diff and open a pull request. A major action bump is proven only by CI, and pushing workflow changes needs a token with the workflow scope.")
 	if len(r.Problems) > 0 {
 		return 1
 	}
@@ -229,8 +230,12 @@ func (s Sources) release(repo string) (string, string, error) {
 	if err := s.getJSON(s.GitHub+"/repos/"+repo+"/git/ref/tags/"+rel.Tag, true, &ref); err != nil {
 		return "", "", err
 	}
-	// An annotated tag points at a tag object, which points at the commit.
-	for ref.Object.Type == "tag" {
+	// An annotated tag points at a tag object, which points at the commit. A chain longer than a
+	// few links, or one that loops, is refused rather than followed for ever.
+	for hops := 0; ref.Object.Type == "tag"; hops++ {
+		if hops == 5 {
+			return "", "", fmt.Errorf("tag %s does not lead to a commit within 5 tag objects", rel.Tag)
+		}
 		var tag struct {
 			Object struct{ Type, SHA string } `json:"object"`
 		}
@@ -323,7 +328,18 @@ func (s Sources) registryToken(challenge string) (string, error) {
 	if params["realm"] == "" {
 		return "", fmt.Errorf("registry asked for credentials refresh cannot give: %q", challenge)
 	}
-	url := params["realm"] + "?service=" + params["service"] + "&scope=" + params["scope"]
+	realm, err := neturl.Parse(params["realm"])
+	if err != nil {
+		return "", fmt.Errorf("registry gave a bad token realm %q: %v", params["realm"], err)
+	}
+	query := realm.Query()
+	for _, key := range []string{"service", "scope"} {
+		if params[key] != "" {
+			query.Set(key, params[key])
+		}
+	}
+	realm.RawQuery = query.Encode()
+	url := realm.String()
 	var out struct {
 		Token       string `json:"token"`
 		AccessToken string `json:"access_token"`
