@@ -204,6 +204,16 @@ client process, moves to it and ends its own, handing over the mail its stray ma
 meanwhile, so a slow hook cannot leave the session split either. A first tool call that ends
 while the grace period runs is told Iris is still binding the session and to retry. After a loss the shim never registers; it waits for the hook to reattach (D9).
 
+A worktree is one directory however it is reached. Hooks, the shim and the guard name the
+worktree root by device and inode as well as by path, and the hub keeps the first path a host
+named for that directory: a bind mount or a symlink that gives the same directory another path,
+as `/mnt/d/projects/iris` and `/home/klattm/projects/iris` on one host, is made that first path,
+so it is the same worktree, the same agent and the same claims. A remount or a reboot can give a
+device and inode to another directory, so a path folds only when its repository, by remote and
+root commit, is the one the first path was seen with. Windows sends no such id, so a
+junction or a mapped drive still counts as another worktree there; so does every path from an
+older client.
+
 ### D7. Attention: instant where possible, honest everywhere
 
 The hub exposes one stream per Execution: a WebSocket and `iris watch`, which prints the same
@@ -336,9 +346,10 @@ Changes from the reference schema:
    Execution keeps what it fetched, can acknowledge it after reattaching, and wakes no one for
    mail it already read. One that is lost at its deadline frees its deliveries then, and they
    are requeued as above. An acknowledgement made before a crash still cannot settle a fetch
-   made after it, because that fetch raised the attempt. Not covered: an `inbox` response lost
-   while its session stays alive. The session can fetch the same deliveries again, but nothing
-   wakes it. That needs a receipt step, which belongs with gap A12's acceptance semantics.
+   made after it, because that fetch raised the attempt. An `inbox` response lost while its
+   session stays alive is recovered by the fetch receipt (ADR 010): the MCP server confirms each
+   fetch it received, the mail keeps needing attention until then, and a receipt that never
+   comes wakes it once. A tool result the client itself drops after the receipt is not covered.
 
 ### D10. Claim semantics
 
@@ -641,8 +652,9 @@ last checkpoint.
 - Whether `SessionStart` context on Grok and Kimi reaches the model at all.
 - The nearest-process rung has not been tried on a Codex TUI session or a Cursor IDE session.
 - The clean-room record has had no legal review.
-- A lost `inbox` response to a session that stays alive leaves its mail fetched and unwoken (D9,
-  change 4). It is fixed with gap review A12's receipt semantics, not separately.
+- A tool result the client drops after the MCP server confirmed the fetch leaves that mail quiet
+  until something else makes the model look (ADR 010). A response lost before the MCP server
+  holds it is recovered.
 
 ## 5. Invariants the tests must prove
 

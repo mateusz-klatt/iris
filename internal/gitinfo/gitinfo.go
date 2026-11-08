@@ -21,6 +21,9 @@ type Repo struct {
 	RemoteURL  string // origin, or the first remote
 	RootCommit string // empty when the root is not cheap to read
 	Branch     string // empty when HEAD is detached
+	// WorktreeID names the worktree root by device and inode, the same through every path to
+	// it; empty where it cannot be measured.
+	WorktreeID string
 }
 
 // Find walks up from start and reads .git. A linked worktree whose .git is a
@@ -75,6 +78,7 @@ func readRepo(worktree, gitDir string) (Repo, error) {
 		RemoteURL:  readRemote(common),
 		RootCommit: rootCommit(common, sha),
 		Branch:     branch,
+		WorktreeID: directoryID(worktree),
 	}, nil
 }
 

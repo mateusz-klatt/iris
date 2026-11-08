@@ -56,7 +56,7 @@ func TestTheOldReportMovesToUnknown(t *testing.T) {
 	if _, err := s.db.Exec("DROP TABLE HostReport"); err != nil {
 		t.Fatal(err)
 	}
-	for _, q := range []string{"CREATE TABLE DoctorReport(id INTEGER PRIMARY KEY CHECK(id=1),report TEXT NOT NULL)", `INSERT INTO DoctorReport VALUES(1,'{"checked_at":"x","clients":[]}')`, "PRAGMA user_version=13"} {
+	for _, q := range []string{"DROP TABLE WorktreeAlias", "DROP INDEX DeliveryReceiptDue", "ALTER TABLE Delivery DROP COLUMN receipt_due_ms", "CREATE TABLE DoctorReport(id INTEGER PRIMARY KEY CHECK(id=1),report TEXT NOT NULL)", `INSERT INTO DoctorReport VALUES(1,'{"checked_at":"x","clients":[]}')`, "PRAGMA user_version=13"} {
 		if _, err := s.db.Exec(q); err != nil {
 			t.Fatal(err)
 		}

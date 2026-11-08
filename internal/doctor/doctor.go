@@ -712,7 +712,7 @@ func caseLine(ctx context.Context, base, token, host, dir string, hc *http.Clien
 	if folds, _ := repo.ConfigValue("core", "ignorecase"); !strings.EqualFold(folds, "true") {
 		return ""
 	}
-	body, _ := json.Marshal(hubclient.CheckRequest{CommonDir: repo.CommonDir, Host: host, Worktree: repo.Worktree, RemoteURL: repo.RemoteURL, RootCommit: repo.RootCommit, Paths: []string{}})
+	body, _ := json.Marshal(hubclient.CheckRequest{CommonDir: repo.CommonDir, Host: host, Worktree: repo.Worktree, WorktreeID: repo.WorktreeID, RemoteURL: repo.RemoteURL, RootCommit: repo.RootCommit, Paths: []string{}})
 	res, err := hubRequest(ctx, http.MethodPost, strings.TrimRight(base, "/")+"/v1/guard/check", token, bytes.NewReader(body), hc)
 	if err != nil {
 		return ""
