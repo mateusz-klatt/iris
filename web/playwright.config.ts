@@ -23,10 +23,11 @@ export default defineConfig({
     trace: "retain-on-failure",
     video: "off",
   },
-  projects: [
+  projects: (["webkit", "chromium"] as const).flatMap((browserName) => [
     {
-      name: "webkit-390",
+      name: `${browserName}-390`,
       use: {
+        browserName,
         viewport: { width: 390, height: 844 },
         deviceScaleFactor: 3,
         hasTouch: true,
@@ -34,8 +35,9 @@ export default defineConfig({
       },
     },
     {
-      name: "webkit-430",
+      name: `${browserName}-430`,
       use: {
+        browserName,
         viewport: { width: 430, height: 932 },
         deviceScaleFactor: 3,
         hasTouch: true,
@@ -43,10 +45,10 @@ export default defineConfig({
       },
     },
     {
-      name: "webkit-1440",
-      use: { viewport: { width: 1440, height: 900 } },
+      name: `${browserName}-1440`,
+      use: { browserName, viewport: { width: 1440, height: 900 } },
     },
-  ],
+  ]),
   webServer: {
     command: `npm run build && npm run preview -- --host ${host} --port ${port} --strictPort`,
     url: baseURL,

@@ -1073,6 +1073,24 @@ html[data-flag-polyfill="true"] select {
   background: var(--panel-soft);
 }
 
+/* Delivery buttons have a subject and a date, rather than the generic row's three parts. */
+#delivery-problems .message-row {
+  grid-template-columns: minmax(0, 1fr);
+  align-content: center;
+  gap: 0.3rem;
+  width: 100%;
+  appearance: none;
+  border: 0;
+  border-bottom: 1px solid var(--line);
+  background: transparent;
+  text-align: start;
+  cursor: pointer;
+}
+
+#delivery-problems .message-row:hover {
+  background: var(--panel-soft);
+}
+
 .importance-mark {
   width: 8px;
   height: 36px;
@@ -1213,6 +1231,7 @@ html[data-flag-polyfill="true"] select {
   transform: rotate(45deg);
 }
 
+#delivery-problems .message-row:focus-visible,
 .thread-message > summary:focus-visible {
   outline: 3px solid var(--focus-ring);
   outline-offset: -5px;
@@ -2294,6 +2313,7 @@ html[data-flag-polyfill="true"] select {
     box-shadow: none;
   }
 
+  #delivery-problems .message-row:focus-visible,
   .thread-message > summary:focus-visible {
     outline-color: Highlight;
     outline-offset: -5px;

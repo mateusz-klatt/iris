@@ -8,14 +8,14 @@ const silentCodex = {
   last_hook_at: "",
 };
 
-async function serve(page: Page, overview: object, clients: object[]) {
+async function serve(page: Page, overview: object, clients: object[], messages: object[] = []) {
   await page.route("**/v1/ui/overview", (route) => route.fulfill({ json: overview }));
   await page.route("**/v1/ui/doctor", (route) =>
     route.fulfill({ json: { hosts: [{ host: "laptop", checked_at: new Date().toISOString(), clients }] } }),
   );
   await page.route("**/v1/ui/threads**", (route) => route.fulfill({ json: { threads: [] } }));
   await page.route("**/v1/ui/deliveries**", (route) =>
-    route.fulfill({ json: { messages: [], window_s: 604800, wait_s: 900 } }),
+    route.fulfill({ json: { messages, window_s: 604800, wait_s: 900 } }),
   );
 }
 
@@ -27,6 +27,56 @@ test("waits for the first session beside a silent client", async ({ page }) => {
   await expect(page.getByRole("status")).toHaveText("Waiting for the first session.");
   await expect(page.getByText("No hook has arrived since install.")).toBeVisible();
   await expect(page.getByText("Cause:")).toBeVisible();
+});
+
+test("delivery rows keep their subject and time inside the screen without button chrome", async ({ page }) => {
+  const subject = "Review delivery to claude-home-iris-latency-20261107-224019: src/application/portfolio/a_rather_long_module_name.py";
+  await serve(page, { repositories: [], agents: [], claims: [], human_unread: 0 }, [silentCodex], [{
+    id: "ms_delivery",
+    thread_id: "ms_delivery",
+    subject,
+    created_at: "2026-11-08T09:00:00Z",
+    recipients: [{ name: "claude-home-iris-latency-20261107-224019", state: "pending", reason: "unreachable", execution: "lost" }],
+  }]);
+  await page.goto("/");
+  const row = page.getByRole("region", { name: "Delivery problems" }).getByRole("button");
+  await expect(row).toBeVisible();
+  await expect(row).toHaveAccessibleName(new RegExp(`Open thread: ${subject}$`));
+
+  const rowBounds = (await row.boundingBox())!;
+  const viewportWidth = page.viewportSize()!.width;
+  for (const element of [row, row.locator("strong"), row.locator("time"), row.locator("small")]) {
+    const bounds = (await element.boundingBox())!;
+    expect(bounds.width).toBeGreaterThan(0);
+    expect(bounds.x).toBeGreaterThanOrEqual(rowBounds.x);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(rowBounds.x + rowBounds.width);
+    expect(bounds.x).toBeGreaterThanOrEqual(0);
+    expect(bounds.x + bounds.width).toBeLessThanOrEqual(viewportWidth);
+    expect(bounds.y).toBeGreaterThanOrEqual(rowBounds.y);
+    expect(bounds.y + bounds.height).toBeLessThanOrEqual(rowBounds.y + rowBounds.height);
+  }
+
+  await expect(row).toHaveCSS("appearance", "none");
+  await expect(row).toHaveCSS("background-color", "rgba(0, 0, 0, 0)");
+  await expect(row).toHaveCSS("border-top-style", "none");
+  await expect(row).toHaveCSS("border-right-style", "none");
+  await expect(row).toHaveCSS("border-bottom-style", "solid");
+  await expect(row).toHaveCSS("border-bottom-width", "1px");
+  await expect(row).toHaveCSS("border-bottom-color", "rgb(217, 219, 234)");
+  await expect(row).toHaveCSS("border-left-style", "none");
+  await expect(row).toHaveCSS("text-align", "start");
+  await row.hover();
+  await expect(row).toHaveCSS("background-color", "rgb(250, 250, 254)");
+
+  // Establish keyboard modality before focus; macOS WebKit's Tab order depends on OS settings.
+  await page.keyboard.press("Tab");
+  await row.focus();
+  await expect(row).toBeFocused();
+  expect(await row.evaluate((button) => button.matches(":focus-visible"))).toBe(true);
+  await expect(row).toHaveCSS("outline-style", "solid");
+  await expect(row).toHaveCSS("outline-width", "3px");
+  await expect(row).toHaveCSS("outline-color", "rgb(109, 40, 217)");
+  await expect(row).toHaveCSS("outline-offset", "-5px");
 });
 
 // A busy hub, with the long names, paths and causes production has, fits the screen: nothing
