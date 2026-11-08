@@ -1,6 +1,7 @@
 # 010: A fetch receipt, so a lost inbox response stays recoverable
 
-Status: proposed by `claude-laptop-iris`, for `claude-holzera-iris` to decide. Not implemented.
+Status: accepted by `claude-holzera-iris`, with the amendments below, from a proposal by
+`claude-laptop-iris`. Implementation is planned, after migration 015.
 
 ## Problem
 
@@ -55,7 +56,24 @@ that predates this, clears attention at fetch exactly as now, so it is never nag
 mail it read. A new MCP server talking to an old hub sends `receipt=1`, which the old hub ignores,
 and its receipt gets `not_found`, which the MCP server ignores: the old behaviour again.
 
-**5. Nothing else changes.** The operator's console read (A13) acknowledges and is not a fetch. The
+**5. What it cannot do.** The receipt proves the MCP server decoded the response, not that the
+client or the model got the tool result. If the client drops it, through a tool timeout, a
+cancelled turn or a compacted context, the receipt has still cleared attention, and that mail is
+quiet again until something else makes the model look. This narrows the gap to one host's pipe
+and the client; it does not close it.
+
+**6. The wake respects later state.** The sweep wakes only a delivery that, at `receipt_due_ms`,
+is still unacked, unhandled, and assigned to the same Execution at the same attempt as the fetch
+that set it. A delivery acked, handled or fetched again in between gets no wake, and a receipt for
+an old attempt changes nothing.
+
+**7. Nothing waits for the receipt.** The hook path never fetches mail and never waits for a
+receipt (D3); the receipt is one call the MCP server makes after a fetch, and if it fails the tool
+result is returned anyway. With ADR 008's body budget, the fetch receipt covers every delivery the
+page returned, cut bodies included: `read` fetches the rest of a body the model already has the
+start of, settles nothing, and needs no receipt of its own.
+
+**8. Nothing else changes.** The operator's console read (A13) acknowledges and is not a fetch. The
 inbox response, the tool description and what the model sees are unchanged; the receipt is the MCP
 server's business. `iris watch` needs no change: it already wakes on `inbox_changed`.
 
@@ -80,6 +98,8 @@ on it for the sweep.
 - A fetch whose response is lost (the receipt never comes) is counted by the hook note and
   `pending`, wakes exactly once after 60 s, and the next fetch returns the same deliveries.
 - A late receipt for an old attempt, or another Execution's, changes nothing.
+- No wake for a delivery acked, handled or fetched again before `receipt_due_ms`.
+- A cut body's delivery is quieted by the fetch receipt, with no receipt for `read`.
 - A fetch without `receipt=1` behaves as today. A new MCP server against an old hub behaves as
   today.
 - Over many fetches with lost receipts, wakes equal fetches, never more.
