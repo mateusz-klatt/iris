@@ -17,8 +17,8 @@ import (
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 )
 
-// ErrLost ends Run once a heartbeat confirms that this session's generation is gone at the
-// hub. Run has already said so on its output.
+// ErrLost is Run's result when it ends while this session's generation is gone at the hub
+// and no fresh bind has replaced it. Run has already said so on its output.
 var ErrLost = errors.New("this session's generation is gone at the hub")
 
 // Stopped prints the line a monitor gives when it ends, so a dead monitor is never silent:
@@ -161,6 +161,8 @@ type Runner struct {
 	// that watches the hub instead sees the save before the client has its answer, and must
 	// not stop the client then.
 	checkpointed func(int64)
+	// stopped says "notifications stopped" was printed for a loss not yet replaced.
+	stopped bool
 }
 
 func (r *Runner) wait(d time.Duration) <-chan time.Time {
@@ -188,11 +190,27 @@ func (r *Runner) Run(ctx context.Context) error {
 	}
 	delay := base
 	var lostSince time.Time
+	// current is the Execution the monitor follows. A fresh bind after a loss gives another,
+	// which is followed from its own cursor; stopped says the loss was announced, so the
+	// resumption is too.
+	current := ""
 	for ctx.Err() == nil {
 		call, cancel := context.WithTimeout(ctx, 5*time.Second)
 		b, err := r.Resolver.Resolve(call, "")
 		cancel()
 		r.opened = time.Time{}
+		if err == nil && b.ExecutionID != current {
+			if current != "" {
+				cursor, stream, r.acked, r.ackedStream = 0, "", 0, ""
+			}
+			current = b.ExecutionID
+			if r.stopped {
+				if _, werr := fmt.Fprintln(r.Output, "Iris: notifications resumed."); werr != nil {
+					return outputError{werr}
+				}
+				r.stopped = false
+			}
+		}
 		if err == nil {
 			err = r.connect(ctx, b, &cursor, &stream, coalesce)
 		}
@@ -203,15 +221,19 @@ func (r *Runner) Run(ctx context.Context) error {
 			delay = base
 		}
 		// A lost answer from the stream or a bind can be a session still recovering after a
-		// hub restart, so it is retried like any other failure. Only the heartbeat's verdict
-		// ends the monitor, and then with a line, never silently.
+		// hub restart, so it is retried like any other failure. Once the heartbeat confirms
+		// the loss, or lost answers outlast the recovery window, the monitor says once that
+		// notifications have stopped, and keeps trying a fresh bind (D9): a monitor that
+		// exits is not restarted, and the session would go deaf.
 		if binding.IsCode(err, "lost") {
 			now := r.now()
 			if lostSince.IsZero() {
 				lostSince = now
 			}
-			if r.Resolver.Lost() || now.Sub(lostSince) >= recoveryGrace {
-				return r.lost()
+			if (r.Resolver.Lost() || now.Sub(lostSince) >= recoveryGrace) && !r.stopped {
+				if err := r.sayLost(); err != nil {
+					return err
+				}
 			}
 		} else {
 			lostSince = time.Time{}
@@ -251,20 +273,27 @@ func (r *Runner) Run(ctx context.Context) error {
 	return r.ended()
 }
 
-// ended is Run's result when its context ends. The heartbeat cancels it once the generation is
-// gone, and that is said; any other cancellation is the caller's, who says why.
+// ended is Run's result when its context ends, which the caller does and says why. A loss
+// not yet replaced is said here, once.
 func (r *Runner) ended() error {
-	if r.Resolver.Lost() {
-		return r.lost()
+	if !r.Resolver.Lost() && !r.stopped {
+		return nil
 	}
-	return nil
-}
-
-func (r *Runner) lost() error {
-	if err := Stopped(r.Output, "the hub no longer has this session's generation; restart the monitor once the session is back"); err != nil {
-		return outputError{err}
+	if !r.stopped {
+		if err := r.sayLost(); err != nil {
+			return err
+		}
 	}
 	return ErrLost
+}
+
+// sayLost announces once that notifications stopped because the generation is gone.
+func (r *Runner) sayLost() error {
+	if err := Stopped(r.Output, "the hub no longer has this session's generation; they resume once the session is back"); err != nil {
+		return outputError{err}
+	}
+	r.stopped = true
+	return nil
 }
 
 // waiting reads how much mail is unfetched. An older hub does not say.
