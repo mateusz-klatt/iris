@@ -476,7 +476,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
           <div className="state-panel state-error" role="alert">
             <p>{t("operator.loadError")}</p>
             <button type="button" className="primary-button" onClick={() => setRevision((value) => value + 1)}>
-              {t("operator.doctorRefresh")}
+              {t("operator.retry")}
             </button>
           </div>
         ) : null}
@@ -492,7 +492,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
               <div className="panel-heading">
                 <h1 id="clients-title">{t("operator.doctorTitle")}</h1>
                 <button type="button" className="primary-button" onClick={() => void reload()}>
-                  {t("operator.doctorRefresh")}
+                  {t("operator.doctorReload")}
                 </button>
               </div>
               <p>{t("operator.doctorHint", { command: "iris doctor" })}</p>

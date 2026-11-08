@@ -448,7 +448,7 @@ describe("Iris operator console", () => {
     await user.click(screen.getByRole("button", { name: "Revoke" }));
     await reloaded(before);
     before = overviews;
-    await user.click(screen.getByRole("button", { name: "Refresh the doctor report" }));
+    await user.click(screen.getByRole("button", { name: "Reload the last doctor report" }));
     await reloaded(before);
     server.events.removeAllListeners();
     expect(connects).toBe(1);
@@ -653,7 +653,7 @@ describe("Iris operator console", () => {
     const blank = screen.getByRole("row", { name: /empty-expiry/ });
     expect(within(blank).getAllByRole("cell")[1]).toHaveTextContent("");
 
-    await user.click(screen.getByRole("button", { name: "Refresh the doctor report" }));
+    await user.click(screen.getByRole("button", { name: "Reload the last doctor report" }));
     expect(await screen.findByText("Checked soon")).toBeVisible();
   });
 
@@ -672,7 +672,7 @@ describe("Iris operator console", () => {
     render(<App connect={() => () => {}} />);
 
     expect(await screen.findByRole("alert")).toHaveTextContent("Iris could not load this view.");
-    await user.click(screen.getByRole("button", { name: "Refresh the doctor report" }));
+    await user.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByRole("heading", { name: "Clients" })).toBeVisible();
   });
 
