@@ -19,6 +19,9 @@ FROM scratch
 COPY --from=binary /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
 COPY --from=binary /out/iris /iris
 COPY --from=binary --chown=65532:65532 /data /data
+# Scratch has no /tmp. SQLite needs a temporary directory for large deletes, sorts and
+# migrations, and fails with IOERR_GETTEMPPATH (6410) without one.
+ENV TMPDIR=/data
 USER 65532:65532
 VOLUME ["/data"]
 ENTRYPOINT ["/iris"]
