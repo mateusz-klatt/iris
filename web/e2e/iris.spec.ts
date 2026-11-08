@@ -84,6 +84,8 @@ test("delivery rows keep their subject and time inside the screen without button
     recipients: [{ name: "claude-home-iris-latency-20261107-224019", state: "pending", reason: "unreachable", execution: "lost" }],
   }]);
   await page.goto("/");
+  await page.getByRole("navigation").getByRole("button", { name: /^My messages/ }).click();
+  await page.getByRole("region", { name: "Delivery problems" }).locator("summary").click();
   const row = page.getByRole("region", { name: "Delivery problems" }).getByRole("button");
   await expect(row).toBeVisible();
   await expect(row).toHaveAccessibleName(new RegExp(`Open thread: ${subject}$`));

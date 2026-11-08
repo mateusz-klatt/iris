@@ -71,3 +71,17 @@ it("retries a failed conversation and returns keyboard focus to its list row", a
   expect(row).toHaveFocus();
   expect(screen.getByText("Choose a conversation")).toBeVisible();
 });
+
+it("keeps the conversation and edited reply when its selected row is opened again", async () => {
+  const user = userEvent.setup();
+  render(<App connect={() => () => {}} />);
+  const row = await screen.findByRole("button", { name: /Open thread: Rollout check/ });
+  await user.click(row);
+  const heading = await screen.findByRole("heading", { name: "Rollout check" });
+  const body = screen.getByRole("textbox", { name: "Message" });
+  await user.type(body, "Please keep these notes.");
+  await user.click(row);
+  expect(heading).toHaveFocus();
+  expect(body).toHaveValue("Please keep these notes.");
+  expect(screen.getByRole("button", { name: "Review", exact: true })).toBeEnabled();
+});

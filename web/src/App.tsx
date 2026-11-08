@@ -548,6 +548,10 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
   };
   const openThread = (id: string) => {
     setView("messages");
+    if (id === selectedId) {
+      readerTitle.current?.focus();
+      return;
+    }
     setThread(null);
     setThreadError(false);
     setSelectedId(id);
