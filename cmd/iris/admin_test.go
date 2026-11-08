@@ -5,8 +5,11 @@ import (
 	"context"
 	"encoding/json"
 	"net/http"
+	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mateusz-klatt/iris/internal/store"
 )
 
 func TestAdminForgetSendsTheRequestAndPrintsTheReport(t *testing.T) {
@@ -43,7 +46,7 @@ func TestAdminForgetReportsARefusal(t *testing.T) {
 }
 
 func TestAdminUsage(t *testing.T) {
-	for _, args := range [][]string{nil, {"nope"}, {"forget"}, {"forget", "--agent", "a", "--repository", "r"}, {"forget", "--bogus"}, {"forget", "--agent", "a", "extra"}} {
+	for _, args := range [][]string{nil, {"nope"}, {"forget"}, {"forget", "--agent", "a", "--repository", "r"}, {"forget", "--bogus"}, {"forget", "--agent", "a", "extra"}, {"restore-check", "only-one"}} {
 		if err := runAdmin(args); err == nil || err.Error() != adminUsage {
 			t.Errorf("%v: %v", args, err)
 		}
@@ -80,5 +83,19 @@ func TestAdminContactSetsAndClears(t *testing.T) {
 		if err := adminCommand(context.Background(), client, bad, &out); err == nil || err.Error() != adminUsage {
 			t.Errorf("%v: %v", bad, err)
 		}
+	}
+}
+
+// restore-check runs locally on a copy of a backup; it needs no hub and no token.
+func TestAdminRestoreCheckRunsOnACopy(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "backup.db")
+	s, err := store.Open(src, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
+	var out bytes.Buffer
+	if err := adminCommand(context.Background(), nil, []string{"restore-check", src, filepath.Join(t.TempDir(), "scratch")}, &out); err != nil || !strings.Contains(out.String(), "ok  ") {
+		t.Fatalf("%v\n%s", err, out.String())
 	}
 }
