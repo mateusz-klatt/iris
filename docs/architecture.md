@@ -301,7 +301,14 @@ Changes from the reference schema:
    ownership of either file. Measured with a real Claude Code client before this change, a
    session's edits went through unclaimed for up to the full 120 s, and its claims were then
    lost. With a heartbeating `iris mcp` that was one edit. An `iris mcp` binds on its first tool
-   call, and only a bound one heartbeats. After the change, with and without `iris mcp`, all 16
+   call, and only a bound one heartbeats. A heartbeat that finds its generation lost, as after a
+   laptop sleeps past the lease, drops the binding and the process keeps running: a client does
+   not restart an MCP server or monitor that exits, so it showed the server as failed and the
+   session went deaf. Its tools answer `lost` until the next call binds afresh, through the usual
+   rungs, to the session's current Execution. An Execution found lost is never bound again, by
+   whatever route it comes back, so no process speaks for a stale identity. `iris watch` says
+   once that notifications stopped, keeps trying a fresh bind with backoff, says when they
+   resume, and follows the new Execution from its own cursor. After the change, with and without `iris mcp`, all 16
    edits stayed claimed by the same Execution across the restart. With the file removed, the edit
    was refused and nothing went through unclaimed.
 3. A claim has `origin` (`explicit` or `auto`) and an optional expiry instead of a mandatory
