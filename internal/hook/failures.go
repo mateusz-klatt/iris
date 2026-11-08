@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"syscall"
@@ -52,6 +53,74 @@ const shellOverBudget = "shell reconciliation passed its deadline"
 type hookFailure string
 
 func (e hookFailure) Error() string { return string(e) }
+
+// The hook's own failures. Each is a fixed text with nothing from a payload in it.
+const (
+	failPanic         hookFailure = "panic during hook execution"
+	failPanicShell    hookFailure = "panic during shell reconciliation"
+	failUnknownClient hookFailure = "unknown hook client"
+	failNoHub         hookFailure = "hub client is not configured"
+	failNoPaths       hookFailure = "edit tool has no usable paths"
+	failBadTouch      hookFailure = "hub returned an invalid touch action"
+)
+
+// hubCodes are the hub error codes a failure may name; any other code is left out.
+var hubCodes = []string{"unauthorized", "bad_request", "not_found", "conflict", "key_reused", "unbound", "ambiguous", "lost", "too_large"}
+
+// fixedFailures are the failure texts that carry no variable part.
+var fixedFailures = []string{
+	string(failPanic), string(failPanicShell), string(failUnknownClient), string(failNoHub),
+	string(failNoPaths), string(failBadTouch), shellOverBudget, errNoSession.Error(),
+	"hook deadline exceeded", "hook operation canceled", "incomplete hook input or hub response",
+	"hub request failed",
+}
+
+// stages are the stages a run records a failure or an observation at.
+var stages = []string{
+	"client", "decode", "repository", "hub", "session", "end", "paths", "touch",
+	"shell repository", "shell status", "shell session", "shell reconcile", stageObserved,
+}
+
+// FailureCategory maps a logged failure's text onto a fixed set of categories, with
+// "other" for anything else. The log is a file on disk: an older iris, another process or
+// a person may have written lines failureText would never produce, so a reader that shows
+// them to someone else trusts only this mapping, never the text.
+func FailureCategory(text string) string {
+	if slices.Contains(fixedFailures, text) {
+		return text
+	}
+	if code, ok := strings.CutPrefix(text, "hub request failed: "); ok && slices.Contains(hubCodes, code) {
+		return text
+	}
+	for _, prefix := range []string{"invalid JSON field type", "invalid JSON", "dependency failure"} {
+		if strings.HasPrefix(text, prefix+" ") {
+			return prefix
+		}
+	}
+	if slices.Contains(errnoTexts(), text) {
+		return text
+	}
+	return "other"
+}
+
+// FailureStage maps a logged stage onto the stages a run records, with "other" for
+// anything else, for the reason FailureCategory gives.
+func FailureStage(stage string) string {
+	if slices.Contains(stages, stage) {
+		return stage
+	}
+	return "other"
+}
+
+// errnoTexts are this platform's texts for the low system error numbers, which failureText
+// records as they are.
+var errnoTexts = sync.OnceValue(func() []string {
+	texts := make([]string, 0, 255)
+	for n := syscall.Errno(1); n < 256; n++ {
+		texts = append(texts, n.Error())
+	}
+	return texts
+})
 
 type runState struct {
 	mu    sync.Mutex
@@ -108,8 +177,7 @@ func failureText(err error) string {
 	}
 	var hub *hubclient.Error
 	if errors.As(err, &hub) {
-		switch hub.Code {
-		case "unauthorized", "bad_request", "not_found", "conflict", "key_reused", "unbound", "ambiguous", "lost", "too_large":
+		if slices.Contains(hubCodes, hub.Code) {
 			return "hub request failed: " + hub.Code
 		}
 		return "hub request failed"

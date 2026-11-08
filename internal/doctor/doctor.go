@@ -76,6 +76,8 @@ type Result struct {
 	// Case warns when the repository doctor ran in is case-sensitive at the hub while this
 	// checkout folds case. Empty means there is nothing to warn about, or nothing known.
 	Case string
+	// tokenFile is where the hook logs beside the token are, for a Bundle. Never shown.
+	tokenFile string
 }
 
 // Options configures one offline doctor run. RunLive is separate because it calls a model.
@@ -148,7 +150,7 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 	}
 	token, tokenReadErr := readToken(tokenFile)
 	probe := probeHub(ctx, hubURL, token, tokenReadErr, opt.HTTP)
-	res := Result{HubURL: hubURL, HubSource: source, HubUp: probe.up, TokenOK: probe.tokenOK, TokenUnchecked: probe.unchecked, TokenUnavailable: probe.unavailable, TokenDetail: probe.tokenDetail, HubDetail: probe.detail, DatabaseBytes: probe.databaseBytes}
+	res := Result{tokenFile: tokenFile, HubURL: hubURL, HubSource: source, HubUp: probe.up, TokenOK: probe.tokenOK, TokenUnchecked: probe.unchecked, TokenUnavailable: probe.unavailable, TokenDetail: probe.tokenDetail, HubDetail: probe.detail, DatabaseBytes: probe.databaseBytes}
 	res.Report.CheckedAt = opt.Now().UTC()
 	res.Report.Host = opt.host()
 	for _, c := range integrate.All() {
