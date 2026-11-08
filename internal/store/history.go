@@ -47,7 +47,7 @@ func (t *transaction) agentHistory(r Request) (map[string]any, error) {
 			return nil, fail("not_found", "unknown thread")
 		}
 	}
-	q := `SELECT m.id,m.thread_id,CASE WHEN a.client='human' THEN 'human' ELSE a.name END,m.subject,m.body,m.created_ms,m.repository_id,COALESCE(r.name,''),x.agent_id=?` + historyFrom
+	q := `SELECT m.id,m.thread_id,CASE WHEN a.client='human' THEN 'human' ELSE a.name END,m.subject,m.body,m.created_ms,m.repository_id,COALESCE(r.name,''),x.agent_id=?,COALESCE(m.sender_account_id,''),COALESCE(m.sender_username,''),COALESCE(m.sender_display_name,'')` + historyFrom
 	args := []any{e.AgentID, e.AgentID, e.AgentID}
 	if r.Key != "" {
 		q += ` AND m.thread_id=?`
@@ -72,11 +72,15 @@ func (t *transaction) agentHistory(r Request) (map[string]any, error) {
 	size := len(`{"messages":[],"next":""}`)
 	next := ""
 	for rows.Next() {
-		var id, thread, sender, subject, body, repo, repoName string
+		var id, thread, sender, subject, body, repo, repoName, account, username, display string
 		var created int64
 		var sent bool
-		rows.Scan(&id, &thread, &sender, &subject, &body, &created, &repo, &repoName, &sent)
+		rows.Scan(&id, &thread, &sender, &subject, &body, &created, &repo, &repoName, &sent, &account, &username, &display)
 		item := map[string]any{"message_id": id, "thread_id": thread, "sender": sender, "subject": subject, "body": body, "created_at": time.UnixMilli(created).UTC().Format(time.RFC3339Nano), "from_repository_id": repo, "from_repository": repoName, "cross_repository": repo != e.Repo, "sent": sent}
+		messageAttribution(account, username, display, item)
+		if sender == "human" {
+			item["reply_address"] = "human:" + repo
+		}
 		raw, _ := json.Marshal(item)
 		candidate := cursor
 		candidate.At, candidate.ID = created, id
@@ -98,13 +102,13 @@ func (t *transaction) readMessageBody(r Request) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	var sender, body string
-	err = t.row(`SELECT CASE WHEN a.client='human' THEN 'human' ELSE a.name END,m.body`+historyFrom+` AND m.id=?`, e.AgentID, e.AgentID, r.Key).Scan(&sender, &body)
+	var sender, body, repo, account, username, display string
+	err = t.row(`SELECT CASE WHEN a.client='human' THEN 'human' ELSE a.name END,m.body,m.repository_id,COALESCE(m.sender_account_id,''),COALESCE(m.sender_username,''),COALESCE(m.sender_display_name,'')`+historyFrom+` AND m.id=?`, e.AgentID, e.AgentID, r.Key).Scan(&sender, &body, &repo, &account, &username, &display)
 	if errors.Is(err, sql.ErrNoRows) {
 		return nil, fail("not_found", "unknown message")
 	}
 	if err != nil {
 		return nil, err
 	}
-	return bodyPart(r, "message_id", sender, body)
+	return attributedBody(r, "message_id", sender, body, repo, account, username, display)
 }

@@ -7,6 +7,12 @@ Iris sends no-store and a CSP that permits only its own scripts. Cloudflare term
 TLS and can see credentials and message content. This is a shared-trust service for
 one developer or a small team, not a multi-tenant boundary (D13).
 
+ADR 014 account authorization is staged through schema 18 and internal typed
+store entry points. Account HTTP routes remain inactive; deploying this stage
+does not switch console authentication or enable member access. Do not import
+accounts or retire login links as part of this stage. Session/authentication
+defenses, importer, account UI and reviewed cutover are later ordered steps.
+
 The files in `deploy/` are written for this topology. No release binary is needed:
 `deploy/Dockerfile` builds the locked Node console and embeds it in a CGO_ENABLED=0
 Go binary. Its final scratch image runs as uid/gid 65532 and contains the binary,

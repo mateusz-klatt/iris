@@ -129,7 +129,7 @@ func (t *transaction) inbox(r Request) (map[string]any, error) {
 		return nil, err
 	}
 	// The sender's repository comes from its Execution, never from the message (ADR 004).
-	rows, err := t.rows(`SELECT d.id,d.attempt,CASE WHEN a.client='human' THEN 'human' ELSE a.name END,m.subject,m.body,m.created_ms,m.id,m.thread_id,m.repository_id,COALESCE(r.name,'') FROM Delivery d JOIN Message m ON m.id=d.message_id JOIN Execution sender ON sender.id=m.sender_execution_id JOIN Agent a ON a.id=sender.agent_id LEFT JOIN Repository r ON r.id=m.repository_id WHERE d.recipient_agent_id=? AND d.id NOT IN (SELECT delivery_id FROM Ack) AND (d.execution_id IS NULL OR d.execution_id=?) ORDER BY m.created_ms,d.id LIMIT ?`, e.AgentID, e.ID, boundedLimit(r.Limit, 20, 100))
+	rows, err := t.rows(`SELECT d.id,d.attempt,CASE WHEN a.client='human' THEN 'human' ELSE a.name END,m.subject,m.body,m.created_ms,m.id,m.thread_id,m.repository_id,COALESCE(r.name,''),COALESCE(m.sender_account_id,''),COALESCE(m.sender_username,''),COALESCE(m.sender_display_name,'') FROM Delivery d JOIN Message m ON m.id=d.message_id JOIN Execution sender ON sender.id=m.sender_execution_id JOIN Agent a ON a.id=sender.agent_id LEFT JOIN Repository r ON r.id=m.repository_id WHERE d.recipient_agent_id=? AND d.id NOT IN (SELECT delivery_id FROM Ack) AND (d.execution_id IS NULL OR d.execution_id=?) ORDER BY m.created_ms,d.id LIMIT ?`, e.AgentID, e.ID, boundedLimit(r.Limit, 20, 100))
 	if err != nil {
 		return nil, err
 	}
@@ -138,11 +138,15 @@ func (t *transaction) inbox(r Request) (map[string]any, error) {
 	// delivery that would pass the budget waits for the next page, unless the page is empty.
 	size := len(`{"deliveries":[],"more":false}`)
 	for rows.Next() {
-		var delivery, sender, subject, body, message, thread, fromRepo, fromName string
+		var delivery, sender, subject, body, message, thread, fromRepo, fromName, account, username, display string
 		var attempt, created int64
-		rows.Scan(&delivery, &attempt, &sender, &subject, &body, &created, &message, &thread, &fromRepo, &fromName)
+		rows.Scan(&delivery, &attempt, &sender, &subject, &body, &created, &message, &thread, &fromRepo, &fromName, &account, &username, &display)
 		item := map[string]any{"id": delivery, "message_id": message, "thread_id": thread, "attempt": attempt + 1, "sender": sender, "subject": subject, "body": body, "created_at": time.UnixMilli(created).UTC().Format(time.RFC3339Nano),
 			"from_repository": fromName, "from_repository_id": fromRepo, "cross_repository": fromRepo != e.Repo}
+		messageAttribution(account, username, display, item)
+		if sender == "human" {
+			item["reply_address"] = "human:" + fromRepo
+		}
 		raw, _ := json.Marshal(item) // strings, numbers and a bool always encode
 		if len(out) > 0 && size+len(raw)+1 > inboxBudget {
 			break
@@ -241,8 +245,8 @@ func (t *transaction) receipts(r Request, message string) (map[string]any, error
 	if err != nil {
 		return nil, err
 	}
-	var sender string
-	if err = t.row("SELECT x.agent_id FROM Message m JOIN Execution x ON x.id=m.sender_execution_id WHERE m.id=?", message).Scan(&sender); err != nil {
+	var sender, account, username, display string
+	if err = t.row("SELECT x.agent_id,COALESCE(m.sender_account_id,''),COALESCE(m.sender_username,''),COALESCE(m.sender_display_name,'') FROM Message m JOIN Execution x ON x.id=m.sender_execution_id WHERE m.id=?", message).Scan(&sender, &account, &username, &display); err != nil {
 		return nil, missing(err, "unknown message")
 	}
 	if sender != e.AgentID {
@@ -260,7 +264,9 @@ func (t *transaction) receipts(r Request, message string) (map[string]any, error
 		rows.Scan(&name, &repo, &state, &at)
 		recipients = append(recipients, map[string]any{"recipient": name, "repository_id": repo, "state": state, "at": timestamp(at)})
 	}
-	return map[string]any{"message_id": message, "recipients": recipients}, rows.Err()
+	out := map[string]any{"message_id": message, "recipients": recipients}
+	messageAttribution(account, username, display, out)
+	return out, rows.Err()
 }
 
 // readBody returns part of one delivery's body, from byte offset r.After, at most r.Limit bytes
@@ -272,8 +278,8 @@ func (t *transaction) readBody(r Request, delivery string) (map[string]any, erro
 	if err != nil {
 		return nil, err
 	}
-	var recipient, sender, body string
-	err = t.row(`SELECT d.recipient_agent_id,CASE WHEN a.client='human' THEN 'human' ELSE a.name END,m.body FROM Delivery d JOIN Message m ON m.id=d.message_id JOIN Execution x ON x.id=m.sender_execution_id JOIN Agent a ON a.id=x.agent_id WHERE d.id=?`, delivery).Scan(&recipient, &sender, &body)
+	var recipient, sender, body, repo, account, username, display string
+	err = t.row(`SELECT d.recipient_agent_id,CASE WHEN a.client='human' THEN 'human' ELSE a.name END,m.body,m.repository_id,COALESCE(m.sender_account_id,''),COALESCE(m.sender_username,''),COALESCE(m.sender_display_name,'') FROM Delivery d JOIN Message m ON m.id=d.message_id JOIN Execution x ON x.id=m.sender_execution_id JOIN Agent a ON a.id=x.agent_id WHERE d.id=?`, delivery).Scan(&recipient, &sender, &body, &repo, &account, &username, &display)
 	if errors.Is(err, sql.ErrNoRows) || (err == nil && recipient != e.AgentID) {
 		return nil, fail("not_found", "unknown delivery")
 	}
@@ -281,7 +287,7 @@ func (t *transaction) readBody(r Request, delivery string) (map[string]any, erro
 		return nil, err
 	}
 	r.Key = delivery
-	return bodyPart(r, "delivery_id", sender, body)
+	return attributedBody(r, "delivery_id", sender, body, repo, account, username, display)
 }
 
 func bodyPart(r Request, idField, sender, body string) (map[string]any, error) {
