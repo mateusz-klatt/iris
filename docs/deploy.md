@@ -26,8 +26,8 @@ docker compose -f deploy/compose.yaml up -d
 These commands start the sole container named `iris`, with restart unless-stopped.
 The hub creates /data/hub.token once. Retrieve it through an administrator-controlled
 channel and distribute it privately; do not paste it into chat, URLs or shell history.
-Setup cannot fetch or provision this credential. Back up the database using SQLite's
-backup mechanism or while the hub is stopped; copying only a live .db can omit WAL data.
+Setup cannot fetch or provision this credential. Back up the database with
+`iris admin backup` (below) or while the hub is stopped; copying only a live .db can omit WAL data.
 
 ### Retention and restore (ADR 006)
 
@@ -35,6 +35,24 @@ The hub sweeps at start and then hourly. It drops events after 7 days, idempoten
 day, claims finished 30 days ago, and Executions that ended 30 days ago and that no mail names. Mail
 is never deleted, so the database grows with it; `GET /v1/status` and `iris doctor` show its size.
 The first sweep after an upgrade logs what it removed, which can be a lot once.
+
+To take a backup while the hub runs, on the hub's machine:
+
+```sh
+iris admin backup /data/iris.db /path/to/new-backup.db
+```
+
+In the container built from `deploy/Dockerfile`, run it as
+`docker exec iris /iris admin backup /data/iris.db /data/<name>.db` and copy the file out; the
+release image has the binary at `/usr/local/bin/iris`. The copy keeps SQLite's temporary storage
+in memory, so the image's lack of a temporary directory does not matter. It reads the database read-only, in one read transaction (SQLite's
+`VACUUM INTO`), so the copy is one moment of the live database with its WAL applied. It writes an
+owner-only `<name>.partial` beside the destination, runs SQLite's integrity check on it, and only
+then links it into place. It refuses a destination or `.partial` file that exists, the live
+database among them, and never replaces a file that appears meanwhile. A failed backup leaves
+nothing behind. It prints the schema version, the counts of messages and events, and the
+restore-check command for the new file. It does not copy `hub.token`, which is in the same
+directory and must be backed up separately and kept as private.
 
 To test a restore, never use the live volume. Copy a backup out of the archive, then run:
 
@@ -51,7 +69,7 @@ throwaway hub on a loopback port with a token of its own. It then checks:
 - that a monitor whose cursor is ahead of the restored history gets a reset.
 
 It also prints what the first retention sweep would remove. A failed check prints `FAIL` and exits
-non-zero. To restore for real, stop the hub, put the backup in place of `hub.db` (removing its
+non-zero. To restore for real, stop the hub, put the backup in place of `iris.db` (removing its
 `-wal` and `-shm` files), and start it: every session then reattaches with proof, or registers
 afresh.
 

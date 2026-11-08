@@ -9,11 +9,12 @@ import (
 	"os"
 	"time"
 
+	"github.com/mateusz-klatt/iris/internal/backup"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 	"github.com/mateusz-klatt/iris/internal/restorecheck"
 )
 
-const adminUsage = "usage: iris admin forget (--repository <id> | --agent <name>) [--dry-run]\n       iris admin contact --repository <id> (<agent> | --clear)\n       iris admin restore-check <backup file> <empty scratch directory>"
+const adminUsage = "usage: iris admin forget (--repository <id> | --agent <name>) [--dry-run]\n       iris admin contact --repository <id> (<agent> | --clear)\n       iris admin backup <hub database> <new backup file>\n       iris admin restore-check <backup file> <empty scratch directory>"
 
 func runAdmin(args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -31,6 +32,13 @@ func adminCommand(ctx context.Context, client *hubclient.Client, args []string, 
 	var route string
 	var body map[string]any
 	switch args[0] {
+	case "backup":
+		// Local too: it reads the database file the hub serves, on the hub's machine, while
+		// the hub runs.
+		if len(args) != 3 {
+			return errors.New(adminUsage)
+		}
+		return backup.Run(ctx, args[1], args[2], stdout)
 	case "restore-check":
 		// Local: it runs a throwaway hub on a copy of a backup and never calls the live hub
 		// (ADR 006).
