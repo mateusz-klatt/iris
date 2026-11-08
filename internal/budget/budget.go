@@ -33,8 +33,9 @@ func Cut(s string, n int) string {
 
 // runeSize is one character's encoded size. encoding/json escapes quotes and backslashes in two
 // bytes, newline, carriage return and tab too, other control characters in six, the HTML
-// characters <, > and & and the line separators U+2028 and U+2029 in six, and writes an invalid
-// byte as the six-byte �.
+// characters <, > and & and the line separators U+2028 and U+2029 in six. An invalid byte is
+// written as the replacement character itself, three bytes, which is what range yields for it,
+// so it needs no case of its own.
 func runeSize(r rune) int {
 	switch {
 	case r == '"' || r == '\\' || r == '\n' || r == '\r' || r == '\t':
