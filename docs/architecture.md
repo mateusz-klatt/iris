@@ -93,6 +93,8 @@ Hard rules for `iris hook`, because failure semantics differ between clients:
 6. Every fallback to allow caused by a failure is recorded in `hook-failures.log`, without payload
    content, and `iris doctor` reports it. A silent fail-open once hid a real bypass: Copilot sends
    no tool call id, the hub refused the request, and the edit went through a live claim.
+   Unknown tools and cross-loads are not failures, but doctor reports them too, from
+   `hook-observed.log` (gap review C4).
 7. A client that provides no tool call id gets one derived from a hash of the raw payload.
 
 A hook is a new process, so every call starts with DNS, TCP and TLS. Against the public hub a lost

@@ -115,7 +115,7 @@ func (r Runner) reconcile(ctx context.Context, ev Event, state *runState) Output
 			return
 		}
 		if err != nil {
-			done <- settle(err, r.failOpen(ev, err, allow))
+			done <- settle(err, r.failOpen(state, ev, err, allow))
 			return
 		}
 		state.at("shell status")
@@ -135,7 +135,7 @@ func (r Runner) reconcile(ctx context.Context, ev Event, state *runState) Output
 		state.at("shell reconcile")
 		out, err := hub.Reconcile(ctx, hubclient.ReconcileRequest{ExecutionID: sess.ExecutionID, Generation: sess.Generation, Kind: phase, Status: snapshot})
 		if err != nil {
-			done <- settle(err, r.failOpen(ev, err, allow))
+			done <- settle(err, r.failOpen(state, ev, err, allow))
 			return
 		}
 		if out.Message == "" {
