@@ -119,7 +119,7 @@ func TestEveryToolIsListed(t *testing.T) {
 	for _, tool := range list.Tools {
 		names = append(names, tool.Name)
 	}
-	for _, want := range []string{"whoami", "peers", "send", "inbox", "ack", "receipts", "read", "claim", "release", "claims", "watch_ticket"} {
+	for _, want := range []string{"whoami", "peers", "send", "inbox", "ack", "receipts", "read", "history", "thread", "claim", "release", "claims", "watch_ticket"} {
 		if !strings.Contains(strings.Join(names, ","), want) {
 			t.Fatal(want, names)
 		}
@@ -135,7 +135,7 @@ func TestToolAnnotationsSayWhatEachToolDoesToTheHub(t *testing.T) {
 	}
 	type hint struct{ readOnly, destructive, idempotent bool }
 	want := map[string]hint{
-		"whoami": {readOnly: true}, "peers": {readOnly: true}, "claims": {readOnly: true}, "receipts": {readOnly: true}, "read": {readOnly: true},
+		"whoami": {readOnly: true}, "peers": {readOnly: true}, "claims": {readOnly: true}, "receipts": {readOnly: true}, "read": {readOnly: true}, "history": {readOnly: true}, "thread": {readOnly: true},
 		"inbox": {}, "send": {}, "claim": {}, "watch_ticket": {},
 		"ack":     {idempotent: true},
 		"release": {destructive: true, idempotent: true},

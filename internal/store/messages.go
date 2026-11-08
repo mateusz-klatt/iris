@@ -235,12 +235,17 @@ func (t *transaction) readBody(r Request, delivery string) (map[string]any, erro
 	if err != nil {
 		return nil, err
 	}
+	r.Key = delivery
+	return bodyPart(r, "delivery_id", sender, body)
+}
+
+func bodyPart(r Request, idField, sender, body string) (map[string]any, error) {
 	if r.After < 0 || r.After > int64(len(body)) {
 		return nil, fail("bad_request", "offset is outside the body")
 	}
 	start := runeStart(body, int(r.After))
 	part := budget.Cut(body[start:], boundedLimit(r.Limit, budget.Bodies, budget.Bodies))
-	out := map[string]any{"delivery_id": delivery, "sender": sender, "body": part, "body_bytes": len(body), "offset": start}
+	out := map[string]any{idField: r.Key, "sender": sender, "body": part, "body_bytes": len(body), "offset": start}
 	if end := start + len(part); end < len(body) {
 		out["next_offset"] = end
 	}
