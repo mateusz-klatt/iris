@@ -107,7 +107,7 @@ func installFaultDriver(t *testing.T, s *Store, file string) *storageFault {
 }
 
 func TestStorageFailuresRollBackAndRetry(t *testing.T) {
-	for _, op := range []string{"sessions", "session-resume", "heartbeat-recovery", "session-new-slot", "session-learns-root", "touch-cached", "touch-conflict", "claim-conflict", "check-known", "policy", "bind", "heartbeat", "end", "end-handover", "touch", "claim", "claim-reuse", "claim-cached", "release", "claims", "messages", "message-repo", "contact", "message-cached", "inbox", "ack", "ack-handled", "inbox-receipt", "receipt-sweep", "receipts", "read_body", "agents", "agents-all", "hooks_seen", "events", "events-reset", "status", "validate", "monitor_cursor", "check", "check-alias", "session-alias", "reconcile", "reconcile-release", "reconcile-session", "ui_overview", "ui_deliveries", "ui_threads", "ui_thread", "ui_read", "ui_messages", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_events", "expire", "sweep", "forget", "forget-repository", "history", "thread", "read_message_body"} {
+	for _, op := range []string{"sessions", "session-resume", "session-resume-learns-root", "session-remote-learns-root", "heartbeat-recovery", "session-new-slot", "session-learns-root", "touch-cached", "touch-conflict", "claim-conflict", "check-known", "policy", "bind", "heartbeat", "end", "end-handover", "touch", "claim", "claim-reuse", "claim-cached", "release", "claims", "messages", "message-repo", "contact", "message-cached", "inbox", "ack", "ack-handled", "inbox-receipt", "receipt-sweep", "receipts", "read_body", "agents", "agents-all", "hooks_seen", "events", "events-reset", "status", "validate", "monitor_cursor", "check", "check-alias", "session-alias", "reconcile", "reconcile-release", "reconcile-session", "ui_overview", "ui_deliveries", "ui_threads", "ui_thread", "ui_read", "ui_messages", "ui_messages-existing-human", "ui_messages-cached", "ui_messages-merged-cached", "ui_messages-retired-cached", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_events", "expire", "sweep", "forget", "forget-repository", "history", "thread", "read_message_body", "merge", "merge-dry-run"} {
 		t.Run(op, func(t *testing.T) {
 			s, clock, file := testStore(t)
 			a, ar := session(t, s, 1)
@@ -147,6 +147,13 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 				route = "sessions"
 				call(t, s, "sessions", Request{Client: "codex", Host: "late", SessionID: "late", Cwd: "/late", Worktree: "/late", RemoteURL: "https://late.example/late.git"})
 				r = Request{Client: "codex", Host: "late", SessionID: "late2", Cwd: "/late", Worktree: "/late", RemoteURL: "https://late.example/late.git", RootCommit: "late-root"}
+			case "session-resume-learns-root", "session-remote-learns-root":
+				route = "sessions"
+				call(t, s, "sessions", Request{Client: "codex", Host: "late", SessionID: "late", Cwd: "/late", Worktree: "/late", RemoteURL: "https://late.example/late.git"})
+				r = Request{Client: "codex", Host: "late", SessionID: "late", Cwd: "/late", Worktree: "/late", RemoteURL: "https://late.example/late.git", RootCommit: "late-root"}
+				if op == "session-remote-learns-root" {
+					r.Host, r.SessionID, r.Cwd, r.Worktree = "other", "other", "/other", "/other"
+				}
 			case "session-new-slot":
 				route = "sessions"
 				r = Request{Client: "codex", Host: "host", SessionID: "new-slot", Cwd: "/repo/w1", Worktree: "/repo/w1"}
@@ -306,6 +313,26 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 				r = Request{}
 			case "ui_messages":
 				r = Request{Key: "human", To: []string{name}, ReplyTo: sent["message_id"].(string), Body: "operator reply"}
+			case "ui_messages-existing-human":
+				route = "ui_messages"
+				call(t, s, "ui_messages", Request{RepositoryID: repo, Key: "human-first", To: []string{name}, Body: "existing human mailbox"})
+				r = Request{RepositoryID: repo, Key: "human-next", To: []string{name}, Body: "operator reply"}
+			case "ui_messages-cached":
+				route = "ui_messages"
+				r = Request{Key: "saved-operator", To: []string{name}, Body: "accepted operator send"}
+				call(t, s, "ui_messages", r)
+			case "ui_messages-merged-cached", "ui_messages-retired-cached":
+				route = "ui_messages"
+				other := call(t, s, "sessions", Request{Client: "codex", Host: "operator-origin", SessionID: "operator-origin", Cwd: "/operator-origin", RemoteURL: "https://operator-origin.example/iris.git", RootCommit: "root"})
+				otherID := other["repository_id"].(string)
+				otherName := other["agent"].(map[string]any)["name"].(string)
+				r = Request{Key: "same-operator-key", To: []string{otherName}, Body: "source operator send with a lost response"}
+				if op == "ui_messages-retired-cached" {
+					r.RepositoryID = otherID
+				}
+				call(t, s, "ui_messages", r)
+				call(t, s, "ui_messages", Request{Key: r.Key, To: []string{name}, Body: "distinct destination operation under the same key"})
+				call(t, s, "merge", mergeRequest(otherID, repo, false))
 			case "ui_revoke":
 				r.Fence = number(existing["fence"])
 			case "inbox-receipt":
@@ -342,6 +369,27 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 				other := call(t, s, "sessions", Request{Client: "codex", Host: "gone", SessionID: "gone", Cwd: "/gone", RemoteURL: "https://gone.example/gone.git"})
 				call(t, s, "end", Request{ExecutionID: other["execution_id"].(string), Generation: other["generation"].(int64)})
 				r = Request{RepositoryID: other["repository_id"].(string)}
+			case "merge", "merge-dry-run":
+				route = "merge"
+				other := call(t, s, "sessions", Request{Client: "codex", Host: "split", SessionID: "split", Cwd: "/split", RemoteURL: "https://split.example/iris.git", RootCommit: "root"})
+				otherID := other["repository_id"].(string)
+				otherAgent := other["agent"].(map[string]any)
+				// The source's mailbox collides in the destination's slot, while
+				// an ancestor relation permits the overlapping live claims.
+				if _, err := s.db.Exec("UPDATE Agent SET host='host',worktree='/repo/w1' WHERE id=?", otherAgent["id"]); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := s.db.Exec("UPDATE Execution SET parent_id=? WHERE id=?", a.ExecutionID, other["execution_id"]); err != nil {
+					t.Fatal(err)
+				}
+				otherRequest := Request{ExecutionID: other["execution_id"].(string), Generation: other["generation"].(int64)}
+				call(t, s, "claim", claimRequest(otherRequest, "overlapping", "held", "exact"))
+				historySend(t, s, otherRequest, name, "merge-mail", "", "merge", "source mail survives")
+				call(t, s, "contact", Request{RepositoryID: otherID, Agent: otherAgent["name"].(string)})
+				if _, err := s.db.Exec("INSERT INTO Waiter VALUES(?,?,'waiting','exact',?)", otherRequest.ExecutionID, otherID, clock.Now().UnixMilli()+60000); err != nil {
+					t.Fatal(err)
+				}
+				r = mergeRequest(otherID, repo, op == "merge-dry-run")
 			}
 			invoke := func() (map[string]any, error) {
 				if op == "policy" {

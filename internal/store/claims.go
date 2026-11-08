@@ -337,19 +337,14 @@ func (t *transaction) explicit(r Request) (map[string]any, error) {
 	}
 	if found {
 		var n int
+		// Recovery rotates the numeric fence; merge preserves it and its epoch.
+		// The stream is fixed for this database, so a live current-epoch fence
+		// also proves that its saved token belongs to this boot.
 		if err = t.row("SELECT COUNT(*) FROM Claim WHERE fence=? AND execution_id=? AND boot_epoch=? AND revoked_ms IS NULL", out["fence"], e.ID, t.s.epoch).Scan(&n); err != nil {
 			return nil, err
 		}
 		if n == 0 {
 			return nil, fail("lost", "cached claim is no longer live")
-		}
-		var epoch int64
-		if err = t.row("SELECT boot_epoch FROM Claim WHERE fence=?", out["fence"]).Scan(&epoch); err != nil {
-			return nil, err
-		}
-		expected := fmt.Sprintf("%s:%d:%v:%s", t.s.stream, epoch, out["fence"], e.ID)
-		if out["token"] != expected {
-			return nil, fail("lost", "cached fence belongs to an old boot epoch")
 		}
 		return out, nil
 	}

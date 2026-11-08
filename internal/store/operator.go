@@ -1,33 +1,52 @@
 package store
 
 import (
+	"bytes"
+	"crypto/sha256"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"strings"
 )
 
 // The operator has a mailbox per repository, but never a live session or lease.
 func (t *transaction) human(repo string) (string, error) {
-	agent := "human_" + repo
-	_, err := t.exec("INSERT OR IGNORE INTO Agent VALUES(?,?,?,?,?,?,1)", agent, agent, repo, "operator", "human", "")
+	// A merge preserves the source's mailbox id and may leave it as the only
+	// human mailbox here. The first slot remains the destination's address when
+	// both repositories already had human mail.
+	var agent string
+	err := t.row("SELECT id FROM Agent WHERE repository_id=? AND host='operator' AND client='human' AND worktree='' ORDER BY slot,id LIMIT 1", repo).Scan(&agent)
+	if err == nil {
+		return agent, nil
+	}
+	if !errors.Is(err, sql.ErrNoRows) {
+		return "", err
+	}
+	agent = "human_" + repo
+	_, err = t.exec("INSERT OR IGNORE INTO Agent VALUES(?,?,?,?,?,?,1)", agent, agent, repo, "operator", "human", "")
 	return agent, err
 }
-func (t *transaction) humanSender(r Request) (execution, error) {
+func (t *transaction) operatorRepository(r Request) (string, error) {
 	// The operator writes from a repository's view, and that is the message's own
 	// repository, even when it replies to mail from another one (ADR 004).
 	repo := r.RepositoryID
 	if repo == "" && r.ReplyTo != "" {
 		if err := t.row("SELECT repository_id FROM Message WHERE id=?", r.ReplyTo).Scan(&repo); err != nil {
-			return execution{}, missing(err, "unknown reply")
+			return "", missing(err, "unknown reply")
 		}
 	}
 	if repo == "" && len(r.To) > 0 {
 		if err := t.row("SELECT repository_id FROM Agent WHERE name=? OR id=?", r.To[0], r.To[0]).Scan(&repo); err != nil {
-			return execution{}, missing(err, "unknown recipient")
+			return "", missing(err, "unknown recipient")
 		}
 	}
 	if repo == "" {
-		return execution{}, fail("bad_request", "repository or recipient required")
+		return "", fail("bad_request", "repository or recipient required")
 	}
+	return repo, nil
+}
+
+func (t *transaction) operatorSender(repo string) (execution, error) {
 	// The operator may write from any repository on the hub, but only from one that exists.
 	var known int
 	if err := t.row("SELECT COUNT(*) FROM Repository WHERE id=?", repo).Scan(&known); err != nil {
@@ -43,6 +62,65 @@ func (t *transaction) humanSender(r Request) (execution, error) {
 	ex := "operator_" + repo
 	_, err = t.exec(`INSERT OR IGNORE INTO Execution(id,agent_id,repository_id,host_id,client,session_id,generation,worktree,branch,boot_epoch,deadline_tick_ms,state,client_pid,client_pid_start_ms,single_session) VALUES(?,?,?,'operator','human',?,1,'','',?,0,'ended',0,0,0)`, ex, agent, repo, ex, t.s.epoch)
 	return execution{ID: ex, AgentID: agent, Repo: repo, Generation: 1}, err
+}
+
+// operatorCached searches all preserved operator principals in the request's
+// repository. A merge changes where a recipient or reply resolves, but must not
+// change the namespace of a send whose response was lost. Retired explicit ids
+// can locate their old principal only for this lookup, never for a new send.
+func (t *transaction) operatorCached(repo string, r Request) (map[string]any, bool, error) {
+	rows, err := t.rows(`SELECT o.request_hash,o.result_json FROM Operation o JOIN Agent a ON a.id=o.principal_agent_id
+ WHERE o.key=? AND a.host='operator' AND a.client='human' AND a.worktree=''
+ AND (a.repository_id=?
+ OR a.repository_id=(SELECT repository_id FROM Agent WHERE id=? AND host='operator' AND client='human' AND worktree='')
+ OR a.repository_id=(SELECT e.repository_id FROM Execution e JOIN Agent origin ON origin.id=e.agent_id
+ WHERE e.id=? AND origin.host='operator' AND origin.client='human' AND origin.worktree='')) ORDER BY a.id`, r.Key, repo, "human_"+repo, "operator_"+repo)
+	if err != nil {
+		return nil, false, err
+	}
+	type savedOperation struct {
+		hash   []byte
+		result string
+	}
+	operations := []savedOperation{}
+	for rows.Next() {
+		var operation savedOperation
+		rows.Scan(&operation.hash, &operation.result)
+		operations = append(operations, operation)
+	}
+	err = rows.Err()
+	_ = rows.Close()
+	if err != nil {
+		return nil, false, err
+	}
+	var result map[string]any
+	matches := 0
+	raw, _ := json.Marshal(struct {
+		Route   string
+		Request any
+	}{"message", r})
+	hash := sha256.Sum256(raw)
+	for _, operation := range operations {
+		if !bytes.Equal(operation.hash, hash[:]) {
+			continue
+		}
+		decoder := json.NewDecoder(strings.NewReader(operation.result))
+		decoder.UseNumber()
+		if err = decoder.Decode(&result); err != nil {
+			return nil, false, err
+		}
+		matches++
+	}
+	if matches > 1 {
+		return nil, false, fail("key_reused", "retry key matches multiple preserved operator origins; inspect history before sending with a new key")
+	}
+	if matches == 1 {
+		return result, true, nil
+	}
+	if len(operations) > 0 {
+		return nil, false, fail("key_reused", "retry key was used for a different request in a preserved operator origin")
+	}
+	return nil, false, nil
 }
 func (t *transaction) operator(op string, r Request) (map[string]any, error) {
 	switch op {
@@ -354,7 +432,7 @@ func (t *transaction) readThread(r Request) (map[string]any, error) {
 	}
 	now := t.s.clock.Now().UnixMilli()
 	for _, u := range all {
-		operator, err := t.humanSender(Request{RepositoryID: u.repo})
+		operator, err := t.operatorSender(u.repo)
 		if err != nil {
 			return nil, err
 		}

@@ -15,8 +15,21 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 	var out map[string]any
 	var refused *Error
 	err := s.transact(ctx, func(t *transaction) error {
-		if err := t.expire(); err != nil {
-			return err
+		// A merge plan and a refused merge must leave even expired leases and
+		// delivery attempts untouched. The merge checks liveness without expiring.
+		if operation != "merge" {
+			if err := t.expire(); err != nil {
+				return err
+			}
+		}
+		// Long-lived clients may still carry a repository id retired by an
+		// operator merge. Their stable Execution determines local read scope.
+		if (operation == "claims" || (operation == "agents" && !r.All)) && r.ExecutionID != "" {
+			e, err := t.live(r.ExecutionID, r.Generation)
+			if err != nil {
+				return err
+			}
+			r.RepositoryID = e.Repo
 		}
 		var err error
 		switch operation {
@@ -95,6 +108,8 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 			out, err = t.hooksSeen(r.Host)
 		case "forget":
 			out, err = t.forget(r)
+		case "merge":
+			out, err = t.mergeRepositories(r)
 		case "monitor_cursor":
 			out, err = t.monitorCursor(r)
 		case "validate":

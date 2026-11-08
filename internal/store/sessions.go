@@ -49,31 +49,33 @@ type Request struct {
 	Exclude string `json:"exclude"`
 	// HandOver names the Execution that ending this one hands its unacknowledged mail to: the
 	// session's hook's, when an MCP ends the Execution it had to register itself.
-	HandOver     string   `json:"hand_over"`
-	ExecutionID  string   `json:"execution_id"`
-	Generation   int64    `json:"generation"`
-	Key          string   `json:"key"`
-	ToolCallID   string   `json:"tool_call_id"`
-	Paths        []string `json:"paths"`
-	RenameFrom   string   `json:"rename_from"`
-	RenameTo     string   `json:"rename_to"`
-	Kind         string   `json:"kind"`
-	Path         string   `json:"path"`
-	RepoWide     bool     `json:"repo_wide"`
-	TTLS         int64    `json:"ttl_s"`
-	Fence        int64    `json:"fence"`
-	All          bool     `json:"all"`
-	Token        string   `json:"token"`
-	To           []string `json:"to"`
-	Subject      string   `json:"subject"`
-	Body         string   `json:"body"`
-	Attempt      int64    `json:"attempt"`
-	Handled      bool     `json:"handled"`
-	RepositoryID string   `json:"repository_id"`
-	After        int64    `json:"after"`
-	Limit        int      `json:"limit"`
-	ConsumerID   string   `json:"consumer_id"`
-	Stream       string   `json:"stream"`
+	HandOver       string   `json:"hand_over"`
+	ExecutionID    string   `json:"execution_id"`
+	Generation     int64    `json:"generation"`
+	Key            string   `json:"key"`
+	ToolCallID     string   `json:"tool_call_id"`
+	Paths          []string `json:"paths"`
+	RenameFrom     string   `json:"rename_from"`
+	RenameTo       string   `json:"rename_to"`
+	Kind           string   `json:"kind"`
+	Path           string   `json:"path"`
+	RepoWide       bool     `json:"repo_wide"`
+	TTLS           int64    `json:"ttl_s"`
+	Fence          int64    `json:"fence"`
+	All            bool     `json:"all"`
+	Token          string   `json:"token"`
+	To             []string `json:"to"`
+	Subject        string   `json:"subject"`
+	Body           string   `json:"body"`
+	Attempt        int64    `json:"attempt"`
+	Handled        bool     `json:"handled"`
+	RepositoryID   string   `json:"repository_id"`
+	FromRepository string   `json:"from_repository_id,omitempty"`
+	IntoRepository string   `json:"into_repository_id,omitempty"`
+	After          int64    `json:"after"`
+	Limit          int      `json:"limit"`
+	ConsumerID     string   `json:"consumer_id"`
+	Stream         string   `json:"stream"`
 }
 
 // Receipt names one delivery a fetch returned, at the attempt that fetch gave it.
@@ -167,70 +169,67 @@ func remoteAlias(raw string) string {
 	return "remote:" + host + port + "/" + repoPath
 }
 
-func (t *transaction) repository(r Request) (string, error) {
-	// Machine-relative remotes are deliberately never global aliases.
+// localRepositoryAliases stay host-scoped, including machine-relative remotes.
+func localRepositoryAliases(r Request) []string {
 	local := "local:" + r.Host + ":" + strings.ReplaceAll(r.Worktree, "\\", "/")
 	aliases := []string{local}
 	if r.CommonDir != "" {
 		aliases = append(aliases, "gitdir:"+r.Host+":"+strings.ReplaceAll(r.CommonDir, "\\", "/"))
 	}
-	var repo, root string
-	var err error
-	for _, alias := range aliases {
-		err = t.row("SELECT r.id,r.root_commit FROM RepositoryAlias a JOIN Repository r ON r.id=a.repository_id WHERE a.alias=?", alias).Scan(&repo, &root)
-		if err == nil && (root == "" || r.RootCommit == "" || root == r.RootCommit) {
-			// A known worktree can gain its global identity later, for example after a
-			// remote is added, so that other machines can still join this repository.
-			known := aliases
-			if remote := remoteAlias(r.RemoteURL); remote != "" {
-				known = append(known, remote)
-			}
-			if r.RootCommit != "" {
-				known = append(known, "root:"+r.RootCommit)
-				// The root learned now is this repository's root from here on, so a later
-				// session that presents a different one cannot join it by remote.
-				if root == "" {
-					if _, err = t.exec("UPDATE Repository SET root_commit=? WHERE id=? AND root_commit=''", r.RootCommit, repo); err != nil {
-						return "", err
-					}
-				}
-			}
-			for _, key := range known {
-				if _, err = t.exec("INSERT OR IGNORE INTO RepositoryAlias VALUES(?,?)", key, repo); err != nil {
-					return "", err
-				}
-			}
-			return repo, nil
-		}
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return "", err
-		}
-		repo = ""
+	return aliases
+}
+
+// repositoryCandidate counts identities, not alias rows. A current root can
+// distinguish historical roots, but neither row order nor an unknown root can
+// distinguish two repositories at the same strength (D11, ADR 012).
+func (t *transaction) repositoryCandidate(aliases []string, root string) (repo string, ambiguous bool, err error) {
+	args := make([]any, len(aliases))
+	for i, alias := range aliases {
+		args[i] = alias
 	}
-	remote := remoteAlias(r.RemoteURL)
-	if remote != "" {
-		rows, err := t.rows("SELECT r.id,r.root_commit FROM RepositoryAlias a JOIN Repository r ON r.id=a.repository_id WHERE a.alias=?", remote)
+	marks := strings.TrimSuffix(strings.Repeat("?,", len(aliases)), ",")
+	rows, err := t.rows("SELECT DISTINCT r.id,r.root_commit FROM RepositoryAlias a JOIN Repository r ON r.id=a.repository_id WHERE a.alias IN ("+marks+")", args...)
+	if err != nil {
+		return "", false, err
+	}
+	var exact, unknown string
+	var matches, count int
+	for rows.Next() {
+		var candidate, commit string
+		rows.Scan(&candidate, &commit)
+		count++
+		if root == "" || commit == root {
+			exact = candidate
+			matches++
+		}
+		if commit == "" {
+			unknown = candidate
+		}
+	}
+	err = rows.Err()
+	_ = rows.Close()
+	if err != nil {
+		return "", false, err
+	}
+	if matches == 1 {
+		return exact, false, nil
+	}
+	if matches > 1 || (unknown != "" && count > 1) {
+		return "", true, nil
+	}
+	return unknown, false, nil
+}
+
+func (t *transaction) repository(r Request) (string, error) {
+	aliases := localRepositoryAliases(r)
+	repo, ambiguous, err := t.repositoryCandidate(aliases, r.RootCommit)
+	if err != nil {
+		return "", err
+	}
+	if remote := remoteAlias(r.RemoteURL); repo == "" && !ambiguous && remote != "" {
+		repo, _, err = t.repositoryCandidate([]string{remote}, r.RootCommit)
 		if err != nil {
 			return "", err
-		}
-		count := 0
-		contradiction := false
-		for rows.Next() {
-			var candidate, commit string
-			rows.Scan(&candidate, &commit)
-			count++
-			if commit != "" && r.RootCommit != "" && commit != r.RootCommit {
-				contradiction = true
-			}
-			repo = candidate
-		}
-		err = rows.Err()
-		_ = rows.Close()
-		if err != nil {
-			return "", err
-		}
-		if count != 1 || contradiction {
-			repo = ""
 		}
 	}
 	if repo == "" {
@@ -239,20 +238,28 @@ func (t *transaction) repository(r Request) (string, error) {
 			return "", err
 		}
 	}
-	for _, alias := range aliases {
-		if _, err = t.exec("INSERT OR IGNORE INTO RepositoryAlias VALUES(?,?)", alias, repo); err != nil {
-			return "", err
-		}
-	}
-	if remote != "" {
-		if _, err = t.exec("INSERT OR IGNORE INTO RepositoryAlias VALUES(?,?)", remote, repo); err != nil {
-			return "", err
-		}
+	return repo, t.rememberRepository(r, repo)
+}
+
+// rememberRepository publishes newly learned identity for both a new session and
+// a repeated registration of an existing Execution. It never changes a known root.
+func (t *transaction) rememberRepository(r Request, repo string) error {
+	aliases := localRepositoryAliases(r)
+	if remote := remoteAlias(r.RemoteURL); remote != "" {
+		aliases = append(aliases, remote)
 	}
 	if r.RootCommit != "" {
-		_, err = t.exec("INSERT OR IGNORE INTO RepositoryAlias VALUES(?,?)", "root:"+r.RootCommit, repo)
+		aliases = append(aliases, "root:"+r.RootCommit)
+		if _, err := t.exec("UPDATE Repository SET root_commit=? WHERE id=? AND root_commit=''", r.RootCommit, repo); err != nil {
+			return err
+		}
 	}
-	return repo, err
+	for _, alias := range aliases {
+		if _, err := t.exec("INSERT OR IGNORE INTO RepositoryAlias VALUES(?,?)", alias, repo); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // resume renews a session and, after a hub restart, moves it into the current epoch.
@@ -295,6 +302,16 @@ func (t *transaction) session(r Request) (map[string]any, error) {
 		}
 		if e.Recovery.Valid && r.Generation != e.Generation {
 			return nil, fail("lost", "recovery requires the prior session generation")
+		}
+		var root string
+		if err := t.row("SELECT root_commit FROM Repository WHERE id=?", e.Repo).Scan(&root); err != nil {
+			return nil, err
+		}
+		if root != "" && r.RootCommit != "" && root != r.RootCommit {
+			return nil, fail("conflict", "this active Execution belongs to another repository history; end the session or ask the owner to repair the split with iris admin merge")
+		}
+		if err := t.rememberRepository(r, e.Repo); err != nil {
+			return nil, err
 		}
 		lease, err := t.resume(&e, r.Source == "shim" || r.Source == "watch" || r.Source == "mcp")
 		if err != nil {
@@ -493,7 +510,9 @@ func (t *transaction) heartbeat(r Request) (map[string]any, error) {
 		// The session's monitor is alive, so its hooks need not repeat what it says (A4).
 		err = t.watchSeen(e.ID)
 	}
-	return map[string]any{"lease_ms": lease}, err
+	out := bound(e)
+	out["lease_ms"] = lease
+	return out, err
 }
 func (t *transaction) end(r Request) (map[string]any, error) {
 	var generation int64

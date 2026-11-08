@@ -51,10 +51,9 @@ func (h *Hub) authenticate(r *http.Request) principal {
 	return principal{name, tokenDigest(token)}
 }
 func (h *Hub) tokenRoutes() {
-	// forget removes records, and a repository's contact receives its repo: mail (ADR 004).
-	// Only the owner may do either: a host could otherwise erase others' history, or send
-	// another repository's reports to itself.
-	for route, op := range map[string]string{"POST /v1/admin/forget": "forget", "POST /v1/admin/contact": "contact"} {
+	// Repository repair, deletion and contact changes affect other hosts' coordination
+	// and mail. They require the owner's credential (ADR 004 and ADR 012).
+	for route, op := range map[string]string{"POST /v1/admin/forget": "forget", "POST /v1/admin/contact": "contact", "POST /v1/admin/merge": "merge"} {
 		h.mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) {
 			if !h.ownerOnly(w, r) {
 				return
