@@ -203,9 +203,10 @@ status refuses it, so doctor sends such a hub the row as `silent`, with a detail
 and that is how its console shows it.
 
 To ask for help elsewhere, `iris doctor --bundle` prints the same checks as JSON with nothing private
-in it: versions, each client's status, the hub's reachability and the token's state as words, and
-counts of hook failures and observations by kind. It holds no URL, path, host name, token,
-message or tool name, so it can be pasted into an issue or a chat as it is.
+in it: versions, each client's status, the hub's reachability and the token's state as true or
+false, and counts of hook failures and observations by kind. It holds no URL, path, host name,
+token, message or tool name, so it can be pasted into an issue or a chat as it is. Like a plain
+`iris doctor`, it still stores this host's report on the hub, and it exits with the same status.
 
 Notifications need an interactive session: plugin monitors do not run under `claude -p`. Hooks and MCP
 tools still work there.
