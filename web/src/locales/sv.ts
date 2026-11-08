@@ -360,7 +360,7 @@ const translation = {
     statusOk: "Hook mottagen",
     statusNotConfigured: "Inte konfigurerad",
     statusNeedsHuman: "Kräver en manuell åtgärd",
-    statusSilent: "Svarar inte",
+    statusSilent: "Svarar inte",
     statusSlow: "Långsam",
     cause: "Orsak",
     repositories: "Arkiv",

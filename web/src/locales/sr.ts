@@ -360,7 +360,7 @@ const translation = {
     statusOk: "Hook примљен",
     statusNotConfigured: "Није подешено",
     statusNeedsHuman: "Потребна је радња корисника",
-    statusSilent: "Без одзива",
+    statusSilent: "Без одзива",
     statusSlow: "Споро",
     cause: "Узрок",
     repositories: "Репозиторијуми",

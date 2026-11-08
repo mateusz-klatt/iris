@@ -360,7 +360,7 @@ const translation = {
     statusOk: "Đã nhận hook",
     statusNotConfigured: "Chưa cấu hình",
     statusNeedsHuman: "Cần người dùng thực hiện thao tác",
-    statusSilent: "Không phản hồi",
+    statusSilent: "Không phản hồi",
     statusSlow: "Chậm",
     cause: "Nguyên nhân",
     repositories: "Kho mã",

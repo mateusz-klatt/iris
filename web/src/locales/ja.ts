@@ -369,7 +369,7 @@ const translation = {
     statusOk: "Hook を受信しました",
     statusNotConfigured: "未設定",
     statusNeedsHuman: "人による操作が必要",
-    statusSilent: "応答なし",
+    statusSilent: "応答なし",
     statusSlow: "遅い",
     cause: "原因",
     repositories: "リポジトリ",

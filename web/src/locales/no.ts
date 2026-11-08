@@ -369,7 +369,7 @@ const translation = {
     statusOk: "Hook mottatt",
     statusNotConfigured: "Ikke konfigurert",
     statusNeedsHuman: "Krever en manuell handling",
-    statusSilent: "Svarer ikke",
+    statusSilent: "Svarer ikke",
     statusSlow: "Treg",
     cause: "Årsak",
     repositories: "Depoter",

@@ -369,7 +369,7 @@ const translation = {
     statusOk: "Hook-ը ստացվել է",
     statusNotConfigured: "Կարգավորված չէ",
     statusNeedsHuman: "Պահանջվում է օգտատիրոջ գործողություն",
-    statusSilent: "Չի արձագանքում",
+    statusSilent: "Չի արձագանքում",
     statusSlow: "Դանդաղ",
     cause: "Պատճառ",
     repositories: "Պահոցներ",

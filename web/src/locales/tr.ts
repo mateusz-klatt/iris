@@ -360,7 +360,7 @@ const translation = {
     statusOk: "Hook alındı",
     statusNotConfigured: "Yapılandırılmadı",
     statusNeedsHuman: "Kullanıcı müdahalesi gerekiyor",
-    statusSilent: "Yanıt vermiyor",
+    statusSilent: "Yanıt vermiyor",
     statusSlow: "Yavaş",
     cause: "Neden",
     repositories: "Depolar",

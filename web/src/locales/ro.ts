@@ -369,7 +369,7 @@ const translation = {
     statusOk: "Hook primit",
     statusNotConfigured: "Neconfigurat",
     statusNeedsHuman: "Necesită intervenție umană",
-    statusSilent: "Nu răspunde",
+    statusSilent: "Nu răspunde",
     statusSlow: "Lent",
     cause: "Cauză",
     repositories: "Depozite",

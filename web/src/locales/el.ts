@@ -369,7 +369,7 @@ const translation = {
     statusOk: "Το hook ελήφθη",
     statusNotConfigured: "Δεν έχει ρυθμιστεί",
     statusNeedsHuman: "Απαιτεί ανθρώπινη ενέργεια",
-    statusSilent: "Δεν αποκρίνεται",
+    statusSilent: "Δεν αποκρίνεται",
     statusSlow: "Αργό",
     cause: "Αιτία",
     repositories: "Αποθετήρια",

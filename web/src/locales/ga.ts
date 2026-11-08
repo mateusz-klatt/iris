@@ -369,7 +369,7 @@ const translation = {
     statusOk: "Fuarthas an hook",
     statusNotConfigured: "Gan chumrú",
     statusNeedsHuman: "Teastaíonn idirghabháil dhaonna",
-    statusSilent: "Gan freagra",
+    statusSilent: "Gan freagra",
     statusSlow: "Mall",
     cause: "Cúis",
     repositories: "Stórtha",

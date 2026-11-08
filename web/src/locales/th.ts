@@ -360,7 +360,7 @@ const translation = {
     statusOk: "ได้รับ hook แล้ว",
     statusNotConfigured: "ยังไม่ได้กำหนดค่า",
     statusNeedsHuman: "ต้องให้ผู้ใช้ดำเนินการ",
-    statusSilent: "ไม่ตอบสนอง",
+    statusSilent: "ไม่ตอบสนอง",
     statusSlow: "ช้า",
     cause: "สาเหตุ",
     repositories: "ที่เก็บ",

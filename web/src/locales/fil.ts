@@ -369,7 +369,7 @@ const translation = {
     statusOk: "Natanggap ang hook",
     statusNotConfigured: "Hindi naka-configure",
     statusNeedsHuman: "Kailangan ng aksiyon ng user",
-    statusSilent: "Walang tugon",
+    statusSilent: "Walang tugon",
     statusSlow: "Mabagal",
     cause: "Sanhi",
     repositories: "Mga repository",
