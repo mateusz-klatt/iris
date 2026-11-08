@@ -655,12 +655,13 @@ last checkpoint.
 - A tool result the client drops after the MCP server confirmed the fetch leaves that mail quiet
   until something else makes the model look (ADR 010). A response lost before the MCP server
   holds it is recovered.
-- Shell reconciliation claims files that git itself rewrote: a checkout, switch, reset, rebase,
-  pull or worktree add in one checkout auto-claims every file it changed. Because claims hold
-  across checkouts of a repository by design (ADR 003, D10), that blocks commits of those paths
-  in another checkout for no reason. The planned rule uses state, not command names: if HEAD
-  moved during the command, a path whose content afterwards equals the new HEAD is git's doing
-  and is not claimed. claude-laptop-iris owns that work.
+- Shell reconciliation already claims only paths that still differ from HEAD or from the index
+  after a command, so a file git restored is never claimed. Two kinds of noise remain. A path that
+  left the status, because git restored it in this worktree, still draws a warning when someone
+  else holds it. And a path that differs only in the index, after `git reset --soft` or
+  `git cherry-pick -n`, is claimed although the working tree did not change. Claims hold across
+  checkouts of a repository by design (ADR 003, D10), so such noise reaches the other checkout.
+  claude-laptop-iris owns that work.
 - The guard's refusal names a claim's holder, but not the holder's branch or worktree, so the
   person in another checkout cannot tell where to ask. Same owner as the item above.
 - Codex's built-in clock, collaboration and web tools, and Claude Code's Monitor, TaskStop and

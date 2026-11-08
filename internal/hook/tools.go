@@ -24,7 +24,9 @@ func classifyTool(name string, mcp bool) (ToolClass, bool) {
 		"search_replace", "hashline_edit", "delete", "delete_file", "move_file", "strreplace", "str_replace":
 		return ClassEdit, false
 	// Claude Code's Monitor runs a shell command in the background, as Bash does with
-	// run_in_background, so it is reconciled like one.
+	// run_in_background, so it is reconciled like one. Reconciling it catches only what is
+	// written before PostToolUse arrives, which for a background command is usually nothing.
+	// A later write is not caught by it; the pre-commit guard remains the checkpoint.
 	case "bash", "shell", "run_terminal_command", "run_command", "monitor":
 		return ClassShell, false
 	case "read", "view", "grep", "glob", "ls":

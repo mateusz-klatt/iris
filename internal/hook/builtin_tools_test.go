@@ -35,7 +35,8 @@ func TestBuiltinToolsAreKnown(t *testing.T) {
 }
 
 // Monitor runs a shell command in the background, so its command is read and reconciled as a
-// shell's, never taken as paths.
+// shell's, never taken as paths. That reconciliation sees only what is written before
+// PostToolUse, which for a background command is usually nothing.
 func TestMonitorIsReconciledLikeAShell(t *testing.T) {
 	var ev Event
 	applyTool(&ev, "Monitor", json.RawMessage(`{"command":"tail -f build.log > copy.log","description":"build","timeout_ms":60000}`), false)
