@@ -360,6 +360,8 @@ const translation = {
     doctorReload: "Hlaða aftur nýjustu doctor-skýrslunni",
     doctorUnknownHost: "doctor of gamall til að nefna vélina sína",
     doctorStale: "Athugað fyrir meira en degi, svo það segir lítið um biðlarann núna.",
+    clientHealth: "Staða biðlara",
+    noHostReport: "Engin skýrsla frá þessari vél",
     retry: "Reyna aftur",
     doctorMissing: "Engin doctor-skýrsla hefur verið vistuð enn. Keyrðu {{command}} á þessari tölvu.",
     statusOk: "Hook móttekinn",

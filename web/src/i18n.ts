@@ -471,6 +471,8 @@ const resources = {
         doctorReload: "Reload the last doctor report",
         doctorUnknownHost: "A doctor too old to name its machine",
         doctorStale: "Checked more than a day ago, so this says little about the client now.",
+        clientHealth: "Client health",
+        noHostReport: "No report from this host",
         retry: "Try again",
         doctorMissing: "No doctor report is stored yet. Run {{command}} on this computer.",
         statusOk: "Hook received",

@@ -13,6 +13,7 @@ import {
   watchUi,
   type Agent,
   type Claim,
+  type DoctorClient,
   type DoctorReport,
   type DoctorReports,
   type DoctorStatus,
@@ -164,6 +165,12 @@ function recipientsOf(value: string): string[] {
 
 function humanKey(): string {
   return `human:${crypto.randomUUID()}`;
+}
+
+// healthOf is what the session's own host last reported for its client (ADR 007): the evidence
+// for this session, not for another machine's installation of the same client.
+function healthOf(doctor: DoctorReports | null, agent: Agent): DoctorClient | undefined {
+  return doctor?.hosts.find((report) => report.host === agent.host)?.clients.find((client) => client.client === agent.client);
 }
 
 // staleAfter is how old a report may be before it says little about the client now (ADR 007).
@@ -582,18 +589,23 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                         <th scope="col">{t("operator.agent")}</th>
                         <th scope="col">{t("operator.detail")}</th>
                         <th scope="col">{t("operator.repository")}</th>
+                        <th scope="col">{t("operator.clientHealth")}</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {sessions.map((item: Agent) => (
-                        <tr key={item.id}>
-                          <th scope="row">{item.name}</th>
-                          <td>
-                            {item.client} · {item.state} · {item.branch}
-                          </td>
-                          <td>{repositoryName(overview, item.repository_id)}</td>
-                        </tr>
-                      ))}
+                      {sessions.map((item: Agent) => {
+                        const health = healthOf(doctor, item);
+                        return (
+                          <tr key={item.id}>
+                            <th scope="row">{item.name}</th>
+                            <td>
+                              {item.client} · {item.state} · {item.branch}
+                            </td>
+                            <td>{repositoryName(overview, item.repository_id)}</td>
+                            <td data-health={health?.status ?? "none"}>{health === undefined ? t("operator.noHostReport") : t(statusKey(health.status))}</td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 )}

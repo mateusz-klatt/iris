@@ -351,6 +351,8 @@ const translation = {
     doctorReload: "Перезавантажити останній звіт doctor",
     doctorUnknownHost: "doctor, надто старий, щоб назвати свій комп'ютер",
     doctorStale: "Перевірено понад добу тому, тож зараз це мало що каже про клієнта.",
+    clientHealth: "Стан клієнта",
+    noHostReport: "Немає звіту з цього комп'ютера",
     retry: "Спробувати ще раз",
     doctorMissing: "Звіт doctor ще не збережено. Запустіть {{command}} на цьому комп'ютері.",
     statusOk: "Hook отримано",

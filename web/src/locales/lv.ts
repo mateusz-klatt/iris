@@ -360,6 +360,8 @@ const translation = {
     doctorReload: "Atkārtoti ielādēt pēdējo doctor pārskatu",
     doctorUnknownHost: "Pārāk vecs doctor, lai nosauktu savu datoru",
     doctorStale: "Pārbaudīts vairāk nekā pirms dienas, tāpēc tagad maz ko pasaka par klientu.",
+    clientHealth: "Klienta stāvoklis",
+    noHostReport: "No šī datora nav pārskata",
     retry: "Mēģināt vēlreiz",
     doctorMissing: "Vēl nav saglabāts neviens doctor pārskats. Šajā datorā palaidiet {{command}}.",
     statusOk: "Hook saņemts",

@@ -360,6 +360,8 @@ const translation = {
     doctorReload: "Ponovno učitaj posljednje doctor izvješće",
     doctorUnknownHost: "doctor prestar da imenuje svoje računalo",
     doctorStale: "Provjereno prije više od jednog dana, pa sada malo govori o klijentu.",
+    clientHealth: "Stanje klijenta",
+    noHostReport: "Nema izvješća s ovog računala",
     retry: "Pokušaj ponovno",
     doctorMissing: "Još nema spremljenog doctor izvješća. Pokrenite {{command}} na ovom računalu.",
     statusOk: "Hook primljen",

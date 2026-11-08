@@ -360,6 +360,8 @@ const translation = {
     doctorReload: "Recharger le dernier rapport doctor",
     doctorUnknownHost: "Un doctor trop ancien pour nommer sa machine",
     doctorStale: "Vérifié il y a plus d'un jour : cela dit peu de chose du client aujourd'hui.",
+    clientHealth: "État du client",
+    noHostReport: "Aucun rapport de cette machine",
     retry: "Réessayer",
     doctorMissing: "Aucun rapport doctor n'est encore enregistré. Exécutez {{command}} sur cet ordinateur.",
     statusOk: "Hook reçu",

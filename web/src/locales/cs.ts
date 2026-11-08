@@ -360,6 +360,8 @@ const translation = {
     doctorReload: "Znovu načíst poslední zprávu doctor",
     doctorUnknownHost: "doctor příliš starý na to, aby uvedl svůj počítač",
     doctorStale: "Kontrolováno před více než dnem, takže o klientovi teď mnoho neříká.",
+    clientHealth: "Stav klienta",
+    noHostReport: "Z tohoto počítače není žádná zpráva",
     retry: "Zkusit znovu",
     doctorMissing: "Zatím není uložena žádná zpráva doctor. Spusťte {{command}} na tomto počítači.",
     statusOk: "Hook přijat",
