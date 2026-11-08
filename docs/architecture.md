@@ -345,9 +345,10 @@ Changes from the reference schema:
    Execution keeps what it fetched, can acknowledge it after reattaching, and wakes no one for
    mail it already read. One that is lost at its deadline frees its deliveries then, and they
    are requeued as above. An acknowledgement made before a crash still cannot settle a fetch
-   made after it, because that fetch raised the attempt. Not covered: an `inbox` response lost
-   while its session stays alive. The session can fetch the same deliveries again, but nothing
-   wakes it. That needs a receipt step, which belongs with gap A12's acceptance semantics.
+   made after it, because that fetch raised the attempt. An `inbox` response lost while its
+   session stays alive is recovered by the fetch receipt (ADR 010): the MCP server confirms each
+   fetch it received, the mail keeps needing attention until then, and a receipt that never
+   comes wakes it once. A tool result the client itself drops after the receipt is not covered.
 
 ### D10. Claim semantics
 
@@ -650,8 +651,9 @@ last checkpoint.
 - Whether `SessionStart` context on Grok and Kimi reaches the model at all.
 - The nearest-process rung has not been tried on a Codex TUI session or a Cursor IDE session.
 - The clean-room record has had no legal review.
-- A lost `inbox` response to a session that stays alive leaves its mail fetched and unwoken (D9,
-  change 4). It is fixed with gap review A12's receipt semantics, not separately.
+- A tool result the client drops after the MCP server confirmed the fetch leaves that mail quiet
+  until something else makes the model look (ADR 010). A response lost before the MCP server
+  holds it is recovered.
 
 ## 5. Invariants the tests must prove
 

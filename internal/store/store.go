@@ -65,6 +65,9 @@ var hostReportSchema string
 //go:embed migrations/015.sql
 var worktreeAliasSchema string
 
+//go:embed migrations/016.sql
+var receiptDueSchema string
+
 // Clock separates lease ticks from persisted wall-clock expiries. Tick must be monotonic
 // within a Store's lifetime; client timestamps never participate in lease decisions.
 type Clock interface {
@@ -264,6 +267,11 @@ func openDatabase(filename string, clock Clock, driverName string) (*Store, erro
 				return err
 			}
 		}
+		if version < 16 {
+			if _, err := t.exec(receiptDueSchema); err != nil {
+				return err
+			}
+		}
 		if err := t.fillMissingKeys(); err != nil {
 			return err
 		}
@@ -369,7 +377,42 @@ func (t *transaction) expire() error {
 			return err
 		}
 	}
-	return t.requeue()
+	if err = t.requeue(); err != nil {
+		return err
+	}
+	return t.wakeMissedReceipts(now)
+}
+
+// wakeMissedReceipts wakes, once, each delivery whose fetch asked for a receipt that has not come
+// by its due time (ADR 010): the response was likely lost, and the mail is still the fetcher's.
+// A delivery acked or fetched again since is not woken for the older fetch: an ack settles it,
+// and a newer fetch has set a new due time.
+func (t *transaction) wakeMissedReceipts(now int64) error {
+	rows, err := t.rows("SELECT id,recipient_agent_id FROM Delivery WHERE receipt_due_ms IS NOT NULL AND receipt_due_ms<=? AND id NOT IN (SELECT delivery_id FROM Ack)", now)
+	if err != nil {
+		return err
+	}
+	type missed struct{ id, agent string }
+	var all []missed
+	for rows.Next() {
+		var m missed
+		rows.Scan(&m.id, &m.agent)
+		all = append(all, m)
+	}
+	err = rows.Err()
+	_ = rows.Close()
+	if err != nil {
+		return err
+	}
+	for _, m := range all {
+		if _, err = t.exec("UPDATE Delivery SET receipt_due_ms=NULL WHERE id=?", m.id); err != nil {
+			return err
+		}
+		if err = t.event(m.agent, "", "inbox_changed", m.id); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // requeue frees the unacknowledged deliveries of Executions that are no longer active, and
@@ -393,7 +436,7 @@ func (t *transaction) requeue() error {
 		return err
 	}
 	for _, f := range all {
-		if _, err = t.exec("UPDATE Delivery SET execution_id=NULL,attention=1 WHERE id=?", f.id); err != nil {
+		if _, err = t.exec("UPDATE Delivery SET execution_id=NULL,attention=1,receipt_due_ms=NULL WHERE id=?", f.id); err != nil {
 			return err
 		}
 		if err = t.event(f.agent, "", "inbox_changed", f.id); err != nil {
