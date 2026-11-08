@@ -19,7 +19,9 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 		var err error
 		switch operation {
 		case "touch", "claim", "release", "messages", "ack", "end", "heartbeat", "reconcile":
-			if r.Generation <= 0 {
+			// A shell reconcile that names its session registers it first, and a first
+			// registration has no generation to give.
+			if r.Generation <= 0 && !shellSession(operation, r) {
 				return fail("bad_request", "generation is required")
 			}
 		}
@@ -27,7 +29,11 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 		case "ui_overview", "ui_threads", "ui_thread", "ui_read", "ui_messages", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_events":
 			out, err = t.operator(operation, r)
 		case "reconcile":
-			out, err = t.reconcile(r)
+			if shellSession(operation, r) {
+				out, err = t.shellSession(&r)
+			} else {
+				out, err = t.reconcile(r)
+			}
 		case "check":
 			out, err = t.check(r)
 		case "sessions":
