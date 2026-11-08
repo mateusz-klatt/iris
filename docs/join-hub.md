@@ -165,6 +165,15 @@ Iris, or an `iris` binary that has moved, the row is `needs_human` and names the
 `iris integrate <client>` again. This checks configuration only. It cannot show that the
 client loads it; `iris doctor --live` does that.
 
+The canary proves one more thing. Doctor runs the configured hook command with a random value in
+`IRIS_DOCTOR_NONCE`, and only `iris hook` answers it, on stderr, for doctor's own `iris-canary`
+session. A command that exits 0 with valid JSON but never reaches Iris, such as a wrapper that answers
+for it, is `silent` with "not from Iris". When the hooks run another `iris` file than the doctor
+you started, such as an installed binary from before this check while you try a new build, the row
+is `needs_human` instead, and names that binary and its version: update it, or run doctor from it.
+What this cannot show offline is that the client loads the
+hook and fires it in a real session; `iris doctor --live` does that.
+
 `claude ok` can change later. A hook that failed open in the last 24 hours turns the row into `silent`,
 and `iris doctor` exits 1. The row names the failure, and `hook-failures.log` beside the token file
 keeps it. The row clears once the entry is more than 24 hours old.

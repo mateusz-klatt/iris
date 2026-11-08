@@ -478,7 +478,10 @@ workspace `.gemini/settings.json` (measured), so a per-repository rule is not po
 present and complete, trust state, unknown tools seen, last hook received, and a synthetic canary
 through the configured hook command. Complete means equal to what `iris integrate` would write,
 rendered in a dry run that writes nothing (gap review C3). JSON is compared by value, and the
-user's own handlers are kept by that render, so neither counts as a difference. `iris doctor --live` runs the real client, on its cheapest model where
+user's own handlers are kept by that render, so neither counts as a difference. The canary must also
+come back with doctor's nonce, which `iris hook` writes to stderr only for the canary session, so a
+command that answers without running Iris does not pass. Every installed command form carries that
+stderr; a test builds iris and checks all of them on each operating system in CI. `iris doctor --live` runs the real client, on its cheapest model where
 that model edits through the client's file editing tool. Codex uses `gpt-6.1-terra`, which used
 `apply_patch` in 8 of 8 runs. `gpt-6-luna` wrote the scratch file through Code Mode's `js` tool
 in every measured run, and no pre-edit hook sees that, so the check would fail for a reason

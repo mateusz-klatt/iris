@@ -4,6 +4,8 @@ package doctor
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -77,6 +79,23 @@ type Options struct {
 	VersionTimeout time.Duration
 	// Dir is where the guard is looked for. Empty means the working directory.
 	Dir string
+	// Self is this doctor's own binary. Empty means the running executable.
+	Self string
+}
+
+func (o Options) self() string {
+	if o.Self != "" {
+		return o.Self
+	}
+	exe, _ := os.Executable() // an error leaves "", which is never the same file as the hooks'
+	return exe
+}
+
+// sameFile reports whether two paths name one file, through links.
+func sameFile(a, b string) bool {
+	ia, errA := os.Stat(a)
+	ib, errB := os.Stat(b)
+	return errA == nil && errB == nil && os.SameFile(ia, ib)
 }
 
 // versionTimeout is long enough for a normal client and short enough to keep doctor usable.
@@ -241,13 +260,14 @@ func checkClient(ctx context.Context, opt Options, c integrate.Client) ClientRep
 		defer func() { _ = os.RemoveAll(dir) }()
 	}
 	payload := canaryPayload(c.Name(), dir)
-	stdout, exit, runErr := in.Run(ctx, payload)
+	nonce := canaryNonce()
+	ran, runErr := in.Run(ctx, payload, hook.CanaryNonce+"="+nonce)
 	if runErr != nil {
 		row.Status = StatusSilent
 		row.Detail = "hook command failed: " + runErr.Error()
 		return row
 	}
-	if err := validHook(c.Name(), stdout, exit); err != nil {
+	if err := validHook(c.Name(), ran.Stdout, ran.Exit); err != nil {
 		row.Status = StatusSilent
 		row.Detail = err.Error()
 		return row
@@ -263,6 +283,21 @@ func checkClient(ctx context.Context, opt Options, c integrate.Client) ClientRep
 	if len(drift) > 0 {
 		row.Status = StatusNeedsHuman
 		row.Detail = "configuration differs from what iris integrate installs (" + strings.Join(homeRelative(opt.Layout, drift), ", ") + "): run iris integrate " + c.Name()
+		return row
+	}
+	// Exit 0 and valid JSON are what a stand-in prints too. Only iris hook answers the nonce,
+	// so its line proves this configured command reaches Iris (gap review C3). It cannot prove
+	// that the client loads the command and fires it; doctor --live does that. With no drift,
+	// the command runs the iris that integrate would name. When that is another file than this
+	// doctor, it may simply be an older iris, from before the receipt, so doctor says that.
+	if !bytes.Contains(ran.Stderr, []byte("iris: canary "+nonce+"\n")) {
+		if hooks := opt.Layout.Iris(); !sameFile(opt.self(), hooks) {
+			row.Status = StatusNeedsHuman
+			row.Detail = "the hooks run another iris than this doctor, " + hooks + " (" + describeVersion(commandVersion(ctx, hooks, opt.VersionTimeout)) + "), and it gave no canary receipt, as an iris from before the receipt does not: update that iris, or run doctor from it"
+			return row
+		}
+		row.Status = StatusSilent
+		row.Detail = "the hook command answered, but not from Iris: no canary receipt on stderr"
 		return row
 	}
 	step, note := c.Human(), ""
@@ -565,4 +600,22 @@ func homeRelative(l integrate.Layout, paths []string) []string {
 		out[i] = p
 	}
 	return out
+}
+
+// canaryNonce is a fresh random value for one canary, which only iris hook echoes back.
+func canaryNonce() string {
+	var b [16]byte
+	_, _ = rand.Read(b[:]) // crypto/rand.Read always fills b or crashes the program.
+	return hex.EncodeToString(b[:])
+}
+
+// describeVersion says what a version check found, including that it failed or timed out.
+func describeVersion(version string, err error) string {
+	switch {
+	case errors.Is(err, context.DeadlineExceeded):
+		return "version check timed out"
+	case err != nil:
+		return "version check failed: " + err.Error()
+	}
+	return "version " + version
 }

@@ -1,6 +1,8 @@
 // Command fakebin is a stand-in for iris and the client binaries in tests.
 // IRIS_FAKE_STDOUT is written to stdout, IRIS_FAKE_EXIT is the status, and
-// IRIS_FAKE_REQUIRE_CLOSED_STDIN=1 fails unless stdin is already at EOF.
+// IRIS_FAKE_REQUIRE_CLOSED_STDIN=1 fails unless stdin is already at EOF. Like iris hook, it
+// answers doctor's canary nonce on stderr, unless IRIS_FAKE_NO_RECEIPT=1 makes it a stand-in
+// that never reaches Iris.
 package main
 
 import (
@@ -31,6 +33,9 @@ func main() {
 			s += "\n"
 		}
 		_, _ = io.WriteString(os.Stdout, s)
+	}
+	if nonce := os.Getenv("IRIS_DOCTOR_NONCE"); nonce != "" && os.Getenv("IRIS_FAKE_NO_RECEIPT") != "1" {
+		_, _ = io.WriteString(os.Stderr, "iris: canary "+nonce+"\n")
 	}
 	code := 0
 	if s := os.Getenv("IRIS_FAKE_EXIT"); s != "" {

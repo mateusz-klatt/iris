@@ -534,24 +534,24 @@ func TestInvocationRun(t *testing.T) {
 	t.Setenv("IRIS_FAKE_STDIN", "payload")
 	t.Setenv("IRIS_FAKE_STDOUT", "answer")
 	t.Setenv("IRIS_FAKE_EXIT", "7")
-	out, code, err := Invocation{Argv: []string{bin}}.Run(ctx, []byte("payload"))
-	if err != nil || code != 7 || strings.TrimSpace(string(out)) != "answer" {
-		t.Fatalf("%q %d %v", out, code, err)
+	ran, err := Invocation{Argv: []string{bin}}.Run(ctx, []byte("payload"))
+	if err != nil || ran.Exit != 7 || strings.TrimSpace(string(ran.Stdout)) != "answer" {
+		t.Fatalf("%+v %v", ran, err)
 	}
-	t.Setenv("IRIS_FAKE_EXIT", "0")
-	out, code, err = Invocation{Argv: []string{bin}}.Run(ctx, []byte("payload"))
-	if err != nil || code != 0 || strings.TrimSpace(string(out)) != "answer" {
-		t.Fatalf("%q %d %v", out, code, err)
+	// Extra environment reaches the command beside the process's own.
+	ran, err = Invocation{Argv: []string{bin}}.Run(ctx, []byte("payload"), "IRIS_FAKE_EXIT=0")
+	if err != nil || ran.Exit != 0 || strings.TrimSpace(string(ran.Stdout)) != "answer" {
+		t.Fatalf("%+v %v", ran, err)
 	}
 }
 
 func TestInvocationRunWithoutAProgram(t *testing.T) {
 	ctx := context.Background()
-	if _, code, err := (Invocation{}).Run(ctx, nil); err == nil || code != -1 {
-		t.Fatal(code, err)
+	if ran, err := (Invocation{}).Run(ctx, nil); err == nil || ran.Exit != -1 {
+		t.Fatal(ran, err)
 	}
 	missing := filepath.Join(t.TempDir(), "absent")
-	if _, code, err := (Invocation{Argv: []string{missing}}).Run(ctx, nil); err == nil || code != -1 {
-		t.Fatal(code, err)
+	if ran, err := (Invocation{Argv: []string{missing}}).Run(ctx, nil); err == nil || ran.Exit != -1 {
+		t.Fatal(ran, err)
 	}
 }

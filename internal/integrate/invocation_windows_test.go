@@ -42,7 +42,8 @@ func TestWindowsClientInvocationStdin(t *testing.T) {
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			out, code, err := in.Run(ctx, []byte(payload))
+			ran, err := in.Run(ctx, []byte(payload))
+			out, code := ran.Stdout, ran.Exit
 			if err != nil || code != 0 {
 				t.Fatalf("code %d: %v (%s)", code, err, out)
 			}
@@ -59,7 +60,8 @@ func TestWindowsCmdWithoutComspec(t *testing.T) {
 	t.Setenv("COMSPEC", "")
 	for _, kind := range []ShellKind{ShellCmd, ""} {
 		in := Invocation{Shell: "echo {}", Kind: kind}
-		out, code, err := in.Run(context.Background(), nil)
+		ran, err := in.Run(context.Background(), nil)
+		out, code := ran.Stdout, ran.Exit
 		if err != nil || code != 0 || strings.TrimSpace(string(out)) != "{}" {
 			t.Fatalf("kind %q: %d %v %q", kind, code, err, out)
 		}
@@ -78,14 +80,15 @@ func TestWindowsShShell(t *testing.T) {
 	if _, err := exec.LookPath("sh"); err != nil {
 		t.Skip("no sh on this machine")
 	}
-	out, code, err := in.Run(context.Background(), nil)
+	ran, err := in.Run(context.Background(), nil)
+	out, code := ran.Stdout, ran.Exit
 	if err != nil || code != 0 || strings.TrimSpace(string(out)) != "from-sh" {
 		t.Fatalf("%d %v %q", code, err, out)
 	}
 }
 
 func TestWindowsRefusesAnUnknownShell(t *testing.T) {
-	if _, _, err := (Invocation{Shell: "echo", Kind: "fish"}).Run(context.Background(), nil); err == nil {
+	if _, err := (Invocation{Shell: "echo", Kind: "fish"}).Run(context.Background(), nil); err == nil {
 		t.Fatal("no error")
 	}
 }

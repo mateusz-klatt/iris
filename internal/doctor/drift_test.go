@@ -3,6 +3,7 @@ package doctor
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -15,11 +16,18 @@ import (
 
 func doctorRow(t *testing.T, layout integrate.Layout, client string) ClientReport {
 	t.Helper()
+	return doctorRowAs(t, layout, client, "")
+}
+
+// doctorRowAs runs doctor as if it were the binary self, so a test can say whether the hooks'
+// iris is the one doctor runs from.
+func doctorRowAs(t *testing.T, layout integrate.Layout, client, self string) ClientReport {
+	t.Helper()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
 	defer srv.Close()
-	res, err := Run(context.Background(), Options{Layout: layout, HubURL: srv.URL, TokenFile: filepath.Join(layout.Home, "hub.token"), HTTP: srv.Client()})
+	res, err := Run(context.Background(), Options{Layout: layout, HubURL: srv.URL, TokenFile: filepath.Join(layout.Home, "hub.token"), HTTP: srv.Client(), Self: self})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -106,5 +114,61 @@ func TestDriftOutsideHomeKeepsItsPath(t *testing.T) {
 	row := doctorRow(t, layout, integrate.Codex)
 	if row.Status != StatusNeedsHuman || !strings.Contains(row.Detail, "("+config+")") {
 		t.Fatalf("%+v", row)
+	}
+}
+
+// A stand-in that answers {} and exits 0, such as a guard wrapper that never runs Iris, used to
+// pass. Only iris hook answers doctor's nonce, so without that receipt the row is silent.
+func TestAHookThatDoesNotReachIrisIsSilent(t *testing.T) {
+	t.Setenv("IRIS_FAKE_STDOUT", "{}")
+	t.Setenv("IRIS_FAKE_EXIT", "0")
+	layout := doctorLayout(t)
+	codex, _ := integrate.ByName(integrate.Codex)
+	if err := codex.Install(layout, nil); err != nil {
+		t.Fatal(err)
+	}
+	if row := doctorRow(t, layout, integrate.Codex); row.Status == StatusSilent {
+		t.Fatalf("with a receipt: %+v", row)
+	}
+	t.Setenv("IRIS_FAKE_NO_RECEIPT", "1")
+	// Run from the very iris the hooks call, a missing receipt can only be a stand-in.
+	row := doctorRowAs(t, layout, integrate.Codex, layout.Iris())
+	if row.Status != StatusSilent || !strings.Contains(row.Detail, "not from Iris") {
+		t.Fatalf("%+v", row)
+	}
+}
+
+// Run from another binary, such as a new build before the old one is replaced, the hooks' iris
+// may just predate the receipt. Doctor says so and names it, instead of calling it not Iris.
+func TestAHookFromAnotherIrisBinaryIsNamed(t *testing.T) {
+	t.Setenv("IRIS_FAKE_STDOUT", "{}")
+	t.Setenv("IRIS_FAKE_EXIT", "0")
+	t.Setenv("IRIS_FAKE_NO_RECEIPT", "1")
+	layout := doctorLayout(t)
+	codex, _ := integrate.ByName(integrate.Codex)
+	if err := codex.Install(layout, nil); err != nil {
+		t.Fatal(err)
+	}
+	// This test binary is the doctor here, which is not the hooks' iris.
+	row := doctorRow(t, layout, integrate.Codex)
+	want := "the hooks run another iris than this doctor, " + layout.Iris() + " (version {})"
+	if row.Status != StatusNeedsHuman || !strings.HasPrefix(row.Detail, want) {
+		t.Fatalf("%+v", row)
+	}
+}
+
+// A version check that fails or times out is reported as such, never as a version.
+func TestAFailedVersionCheckIsSaid(t *testing.T) {
+	for _, tc := range []struct {
+		err  error
+		want string
+	}{
+		{context.DeadlineExceeded, "version check timed out"},
+		{errors.New("exit status 3"), "version check failed: exit status 3"},
+		{nil, "version 1.2.3"},
+	} {
+		if got := describeVersion("1.2.3", tc.err); got != tc.want {
+			t.Fatalf("%v: %q, want %q", tc.err, got, tc.want)
+		}
 	}
 }

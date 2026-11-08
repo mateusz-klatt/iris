@@ -34,8 +34,8 @@ func TestInvocationChoosesTheConfiguredShell(t *testing.T) {
 }
 
 func TestInvocationRunsAShellCommand(t *testing.T) {
-	out, code, err := Invocation{Shell: "cat; exit 4"}.Run(context.Background(), []byte("in"))
-	if err != nil || code != 4 || string(out) != "in" {
-		t.Fatalf("%q %d %v", out, code, err)
+	ran, err := Invocation{Shell: "cat; echo err >&2; exit 4"}.Run(context.Background(), []byte("in"))
+	if err != nil || ran.Exit != 4 || string(ran.Stdout) != "in" || string(ran.Stderr) != "err\n" {
+		t.Fatalf("%+v %v", ran, err)
 	}
 }
