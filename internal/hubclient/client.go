@@ -138,6 +138,13 @@ func (c *Client) EndExecution(ctx context.Context, id string, generation int) er
 	return c.post(ctx, path, map[string]int{"generation": generation}, nil)
 }
 
+// HandOverExecution ends id and hands its unacknowledged mail to the live Execution to, of the
+// same host and client: the session's hook's, when an MCP gives up one it had to register.
+func (c *Client) HandOverExecution(ctx context.Context, id string, generation int, to string) error {
+	path := "/v1/executions/" + url.PathEscape(id) + "/end"
+	return c.post(ctx, path, map[string]any{"generation": generation, "hand_over": to}, nil)
+}
+
 func (c *Client) post(ctx context.Context, path string, body, dest any) error {
 	return c.Do(ctx, http.MethodPost, path, body, dest)
 }

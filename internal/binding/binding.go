@@ -71,6 +71,10 @@ func IsCode(err error, code string) bool {
 	return errors.As(err, &e) && e.Code == code
 }
 
+// errBinding answers a call that ended while the first bind was still waiting for the
+// session's hook to register it.
+var errBinding = &hubclient.Error{Code: "unbound", Message: "Iris is still binding this session; retry in a few seconds."}
+
 // errLost answers a call while the binding is lost and no fresh bind has succeeded.
 var errLost = &hubclient.Error{Code: "lost", Message: "This session's Execution is gone at the hub. Iris binds afresh once the session has reattached: send any prompt, then retry."}
 
@@ -115,7 +119,7 @@ func (r *Resolver) orRegister(ctx context.Context, handle string, b Bound, err e
 	for delay := 100 * time.Millisecond; time.Since(r.since) < r.Grace; delay = min(2*delay, 2*time.Second) {
 		select {
 		case <-ctx.Done():
-			return b, err
+			return b, errBinding
 		case <-time.After(min(delay, r.Grace-time.Since(r.since))):
 		}
 		if b, err = r.resolve(ctx, handle, ""); !IsCode(err, "unbound") {
@@ -171,7 +175,8 @@ func (r *Resolver) adopt(ctx context.Context) {
 		r.bound = mine
 		return
 	}
-	_ = r.Hub.EndExecution(ctx, mine.ExecutionID, mine.Generation)
+	// Mail sent to this process's stray mailbox moves to the hook's agent, so none is stranded.
+	_ = r.Hub.HandOverExecution(ctx, mine.ExecutionID, mine.Generation, b.ExecutionID)
 	r.bound, r.own = b, false
 }
 

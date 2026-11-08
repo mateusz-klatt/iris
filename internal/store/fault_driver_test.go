@@ -107,7 +107,7 @@ func installFaultDriver(t *testing.T, s *Store, file string) *storageFault {
 }
 
 func TestStorageFailuresRollBackAndRetry(t *testing.T) {
-	for _, op := range []string{"sessions", "session-resume", "heartbeat-recovery", "session-new-slot", "session-learns-root", "touch-cached", "touch-conflict", "claim-conflict", "check-known", "policy", "bind", "heartbeat", "end", "touch", "claim", "claim-reuse", "claim-cached", "release", "claims", "messages", "message-repo", "contact", "message-cached", "inbox", "ack", "ack-handled", "inbox-receipt", "receipt-sweep", "receipts", "read_body", "agents", "agents-all", "hooks_seen", "events", "events-reset", "status", "validate", "monitor_cursor", "check", "check-alias", "session-alias", "reconcile", "reconcile-session", "ui_overview", "ui_threads", "ui_thread", "ui_read", "ui_messages", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_events", "expire", "sweep", "forget", "forget-repository"} {
+	for _, op := range []string{"sessions", "session-resume", "heartbeat-recovery", "session-new-slot", "session-learns-root", "touch-cached", "touch-conflict", "claim-conflict", "check-known", "policy", "bind", "heartbeat", "end", "end-handover", "touch", "claim", "claim-reuse", "claim-cached", "release", "claims", "messages", "message-repo", "contact", "message-cached", "inbox", "ack", "ack-handled", "inbox-receipt", "receipt-sweep", "receipts", "read_body", "agents", "agents-all", "hooks_seen", "events", "events-reset", "status", "validate", "monitor_cursor", "check", "check-alias", "session-alias", "reconcile", "reconcile-session", "ui_overview", "ui_threads", "ui_thread", "ui_read", "ui_messages", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_events", "expire", "sweep", "forget", "forget-repository"} {
 		t.Run(op, func(t *testing.T) {
 			s, clock, file := testStore(t)
 			a, ar := session(t, s, 1)
@@ -175,6 +175,23 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 			case "claim-conflict":
 				route = "claim"
 				r = claimRequest(b, "conflicting-claim", "held", "exact")
+			case "end-handover":
+				// An MCP's stray Execution with mail ends, handing it to its process's hook's.
+				route = "end"
+				same := Request{Client: "codex", Host: "host", Cwd: "/repo/w1", Worktree: "/repo/w1", ClientPID: 6, ClientPIDStartMS: 6}
+				hookReq, strayReq := same, same
+				hookReq.SessionID, hookReq.Source = "handover-hook", "hook"
+				strayReq.SessionID, strayReq.Source = "handover-stray", "mcp"
+				hook := call(t, s, "sessions", hookReq)
+				stray := call(t, s, "sessions", strayReq)
+				note := a
+				note.Key, note.To, note.Body = "handover", []string{stray["agent"].(map[string]any)["name"].(string)}, "stray mail"
+				call(t, s, "messages", note)
+				// One to both mailboxes, whose stray copy is settled rather than moved.
+				both := a
+				both.Key, both.To, both.Body = "handover-both", []string{stray["agent"].(map[string]any)["name"].(string), hook["agent"].(map[string]any)["name"].(string)}, "to both"
+				call(t, s, "messages", both)
+				r = Request{ExecutionID: stray["execution_id"].(string), Generation: stray["generation"].(int64), HandOver: hook["execution_id"].(string)}
 			case "reconcile-session":
 				// The combined form: the session registers and reconciles in one transaction.
 				route = "reconcile"
