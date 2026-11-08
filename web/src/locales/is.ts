@@ -389,9 +389,9 @@ const translation = {
     sent: "Sent.",
     sendUncertain: "Iris gat ekki séð hvort þessi skilaboð voru send. Óhætt er að senda þau aftur innan sólarhrings frá fyrstu tilraun: miðstöðin geymir eitt eintak fyrir hver drög.",
     deliveryTitle: "Afhendingarvandamál",
-    deliveryHint: "Skilaboðin þín frá síðustu {{days}} dögum sem viðtakandi hefur ekki tekið við: viðtakandinn er ekki með virka lotu, eða {{minutes}} mínútur eru liðnar. Iris heldur hverjum skilaboðum í biðröð fyrir viðtakanda sinn og sendir þau ekki aftur.",
+    deliveryHint: "Skilaboðin þín frá nýliðnu tímabili (fjöldi daga: {{days}}) sem viðtakandi hefur ekki tekið við: viðtakandinn er ekki með virka lotu, eða biðtíminn hefur náð {{minutes}} mín. Iris geymir hver skilaboð í biðröð fyrir viðtakanda þeirra og sendir þau ekki aftur.",
     deliveryUnreachable: "{{name}}: engin virk lota ({{session}})",
-    deliveryWaiting: "{{name}}: ekki tekið við eftir {{minutes}} mínútur",
+    deliveryWaiting: "{{name}}: ekki tekið við eftir {{minutes}} mín.",
     deliverySession: {
       lost: "týnd",
       ended: "lokin",

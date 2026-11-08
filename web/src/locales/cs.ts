@@ -389,9 +389,9 @@ const translation = {
     sent: "Odesláno.",
     sendUncertain: "Iris nedokázal zjistit, zda byla tato zpráva odeslána. Odeslat ji znovu do jednoho dne od prvního pokusu je bezpečné: hub uchová jednu kopii na koncept.",
     deliveryTitle: "Problémy s doručením",
-    deliveryHint: "Vaše zprávy za posledních {{days}} dní, které příjemce nepřijal: příjemce nemá aktivní relaci, nebo uplynulo {{minutes}} minut. Iris každou drží ve frontě pro příjemce a znovu ji neodesílá.",
+    deliveryHint: "Vaše zprávy z posledního období (počet dní: {{days}}), které příjemce nepřijal: příjemce nemá aktivní relaci nebo čekání trvá alespoň {{minutes}} min. Iris každou drží ve frontě pro příjemce a znovu ji neodesílá.",
     deliveryUnreachable: "{{name}}: žádná aktivní relace ({{session}})",
-    deliveryWaiting: "{{name}}: nepřijato ani po {{minutes}} minutách",
+    deliveryWaiting: "{{name}}: nepřijato ani po {{minutes}} min.",
     deliverySession: {
       lost: "ztracená",
       ended: "ukončená",

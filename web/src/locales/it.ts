@@ -389,9 +389,9 @@ const translation = {
     sent: "Inviato.",
     sendUncertain: "Iris non è riuscito a capire se questo messaggio è stato inviato. Inviarlo di nuovo entro un giorno dal primo tentativo è sicuro: l'hub conserva una copia per bozza.",
     deliveryTitle: "Problemi di consegna",
-    deliveryHint: "I tuoi messaggi degli ultimi {{days}} giorni che un destinatario non ha accettato: il destinatario non ha una sessione attiva, oppure sono passati {{minutes}} minuti. Iris mantiene ciascuno in coda per il suo destinatario e non lo invia di nuovo.",
+    deliveryHint: "I tuoi messaggi inviati da non più di {{days}} g che un destinatario non ha accettato: il destinatario non ha una sessione attiva, oppure è trascorso un intervallo di {{minutes}} min. Iris mantiene ciascuno in coda per il suo destinatario e non lo invia di nuovo.",
     deliveryUnreachable: "{{name}}: nessuna sessione attiva ({{session}})",
-    deliveryWaiting: "{{name}}: non accettato dopo {{minutes}} minuti",
+    deliveryWaiting: "{{name}}: non accettato dopo {{minutes}} min",
     deliverySession: {
       lost: "persa",
       ended: "terminata",

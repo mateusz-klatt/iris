@@ -380,7 +380,7 @@ const translation = {
     sent: "已傳送。",
     sendUncertain: "Iris 無法確認這則訊息是否已送出。在第一次嘗試後一天內再次傳送是安全的：中樞為每份草稿只保留一份。",
     deliveryTitle: "傳遞問題",
-    deliveryHint: "你在過去 {{days}} 天內、尚未被收件者接受的訊息：收件者沒有使用中的工作階段，或已過了 {{minutes}} 分鐘。Iris 會將每則訊息保留在佇列中等待收件者，不會重新傳送。",
+    deliveryHint: "您在過去 {{days}} 天內、尚未被收件者接受的訊息：收件者沒有使用中的工作階段，或已過了 {{minutes}} 分鐘。Iris 會將每則訊息保留在佇列中等待收件者，不會重新傳送。",
     deliveryUnreachable: "{{name}}：沒有使用中的工作階段（{{session}}）",
     deliveryWaiting: "{{name}}：{{minutes}} 分鐘後仍未接受",
     deliverySession: {
@@ -388,7 +388,7 @@ const translation = {
       ended: "已結束",
       none: "尚無",
     },
-    deliveryLoadError: "Iris 無法檢查你的訊息傳遞狀態。",
+    deliveryLoadError: "Iris 無法檢查您的訊息傳遞狀態。",
     recipients: "收件者",
     subject: "主旨",
     body: "訊息",

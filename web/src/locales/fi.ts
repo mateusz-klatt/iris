@@ -389,7 +389,7 @@ const translation = {
     sent: "Lähetetty.",
     sendUncertain: "Iris ei pystynyt selvittämään, lähetettiinkö tämä viesti. Sen lähettäminen uudelleen vuorokauden sisällä ensimmäisestä yrityksestä on turvallista: keskitin säilyttää yhden kopion luonnosta kohden.",
     deliveryTitle: "Toimitusongelmat",
-    deliveryHint: "Viestisi viimeisten {{days}} päivän ajalta, joita vastaanottaja ei ole hyväksynyt: vastaanottajalla ei ole aktiivista istuntoa, tai {{minutes}} minuuttia on kulunut. Iris pitää jokaisen jonossa vastaanottajaansa varten eikä lähetä sitä uudelleen.",
+    deliveryHint: "Viestisi viime {{days}} päivän ajalta, joita vastaanottaja ei ole hyväksynyt: vastaanottajalla ei ole aktiivista istuntoa, tai {{minutes}} min on kulunut. Iris pitää jokaisen jonossa vastaanottajaansa varten eikä lähetä sitä uudelleen.",
     deliveryUnreachable: "{{name}}: ei aktiivista istuntoa ({{session}})",
     deliveryWaiting: "{{name}}: ei hyväksytty {{minutes}} minuutin jälkeen",
     deliverySession: {

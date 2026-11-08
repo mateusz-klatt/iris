@@ -395,7 +395,7 @@ const translation = {
     deliverySession: {
       lost: "ازدست‌رفته",
       ended: "پایان‌یافته",
-      none: "هنوز هیچ",
+      none: "هنوز نشستی نیست",
     },
     deliveryLoadError: "Iris نتوانست تحویل پیام‌های شما را بررسی کند.",
     recipients: "گیرندگان",

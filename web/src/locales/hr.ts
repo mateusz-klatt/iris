@@ -389,9 +389,9 @@ const translation = {
     sent: "Poslano.",
     sendUncertain: "Iris nije mogao utvrditi je li ova poruka poslana. Ponovno slanje unutar jednog dana od prvog pokušaja je sigurno: čvorište čuva jednu kopiju po skici.",
     deliveryTitle: "Problemi s dostavom",
-    deliveryHint: "Vaše poruke iz posljednjih {{days}} dana koje primatelj nije prihvatio: primatelj nema aktivnu sesiju ili je prošlo {{minutes}} minuta. Iris svaku drži u redu za primatelja i ne šalje je ponovno.",
+    deliveryHint: "Vaše poruke iz proteklog razdoblja (broj dana: {{days}}) koje primatelj nije prihvatio: primatelj nema aktivnu sesiju ili vrijeme čekanja iznosi najmanje {{minutes}} min. Iris svaku drži u redu za primatelja i ne šalje je ponovno.",
     deliveryUnreachable: "{{name}}: nema aktivne sesije ({{session}})",
-    deliveryWaiting: "{{name}}: nije prihvaćeno nakon {{minutes}} minuta",
+    deliveryWaiting: "{{name}}: nije prihvaćeno nakon {{minutes}} min.",
     deliverySession: {
       lost: "izgubljena",
       ended: "završena",

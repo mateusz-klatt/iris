@@ -388,7 +388,7 @@ const translation = {
       ended: "đã kết thúc",
       none: "chưa có",
     },
-    deliveryLoadError: "Iris không thể kiểm tra việc chuyển phát tin nhắn của bạn.",
+    deliveryLoadError: "Iris không thể kiểm tra trạng thái chuyển phát tin nhắn của bạn.",
     recipients: "Người nhận",
     subject: "Tiêu đề",
     body: "Tin nhắn",

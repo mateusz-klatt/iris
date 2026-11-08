@@ -389,9 +389,9 @@ const translation = {
     sent: "Verzonden.",
     sendUncertain: "Iris kon niet vaststellen of dit bericht is verzonden. Het binnen een dag na de eerste poging opnieuw verzenden is veilig: de hub bewaart één kopie per concept.",
     deliveryTitle: "Bezorgproblemen",
-    deliveryHint: "Uw berichten van de afgelopen {{days}} dagen die een ontvanger niet heeft geaccepteerd: de ontvanger heeft geen actieve sessie, of er zijn {{minutes}} minuten verstreken. Iris houdt elk bericht in de wachtrij voor de ontvanger en verzendt het niet opnieuw.",
+    deliveryHint: "Uw berichten die hoogstens {{days}} d oud zijn en die een ontvanger niet heeft geaccepteerd: de ontvanger heeft geen actieve sessie, of de wachttijd van {{minutes}} min is verstreken. Iris houdt elk bericht in de wachtrij voor de ontvanger en verzendt het niet opnieuw.",
     deliveryUnreachable: "{{name}}: geen actieve sessie ({{session}})",
-    deliveryWaiting: "{{name}}: niet geaccepteerd na {{minutes}} minuten",
+    deliveryWaiting: "{{name}}: niet geaccepteerd na {{minutes}} min",
     deliverySession: {
       lost: "verloren",
       ended: "beëindigd",

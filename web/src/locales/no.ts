@@ -389,9 +389,9 @@ const translation = {
     sent: "Sendt.",
     sendUncertain: "Iris kunne ikke avgjøre om denne meldingen ble sendt. Det er trygt å sende den på nytt innen ett døgn etter første forsøk: huben beholder én kopi per utkast.",
     deliveryTitle: "Leveringsproblemer",
-    deliveryHint: "Meldingene dine fra de siste {{days}} dagene som en mottaker ikke har godtatt: mottakeren har ingen aktiv økt, eller det har gått {{minutes}} minutter. Iris holder hver melding i kø for mottakeren og sender den ikke på nytt.",
+    deliveryHint: "Meldingene dine som er høyst {{days}} døgn gamle, og som en mottaker ikke har godtatt: mottakeren har ingen aktiv økt, eller det har gått {{minutes}} min. Iris holder hver melding i kø for mottakeren og sender den ikke på nytt.",
     deliveryUnreachable: "{{name}}: ingen aktiv økt ({{session}})",
-    deliveryWaiting: "{{name}}: ikke godtatt etter {{minutes}} minutter",
+    deliveryWaiting: "{{name}}: ikke godtatt etter {{minutes}} min.",
     deliverySession: {
       lost: "mistet",
       ended: "avsluttet",
