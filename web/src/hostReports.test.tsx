@@ -50,3 +50,37 @@ describe("doctor reports per host", () => {
     expect(document.querySelector(".host-report")).toBeNull();
   });
 });
+
+// ADR 007: beside each session, the health its own host reported for its client, never another
+// machine's report for the same client.
+describe("a session's health", () => {
+  it("comes from its own host's report, or says there is none", async () => {
+    const agent = { id: "a", name: "", client: "claude", host: "", repository_id: "rp_iris", worktree: "/w", branch: "main", state: "active", last_seen: "", unread: 0 };
+    server.use(
+      http.get("*/v1/ui/overview", () =>
+        HttpResponse.json({
+          ...emptyOverview,
+          repositories: [{ id: "rp_iris", name: "iris", aliases: [] }],
+          agents: [
+            { ...agent, id: "a1", name: "on-mac", host: "mac" },
+            { ...agent, id: "a2", name: "on-pc", host: "pc" },
+            { ...agent, id: "a3", name: "on-mac-codex", host: "mac", client: "codex" },
+          ],
+        }),
+      ),
+      http.get("*/v1/ui/doctor", () =>
+        HttpResponse.json({
+          hosts: [
+            { host: "mac", checked_at: new Date().toISOString(), clients: [{ client: "claude", version: "", status: "ok", detail: "", last_hook_at: "" }] },
+            { host: "pc", checked_at: new Date().toISOString(), clients: [{ client: "claude", version: "", status: "silent", detail: "", last_hook_at: "" }] },
+          ],
+        } satisfies DoctorReports),
+      ),
+    );
+    render(<App connect={() => () => {}} />);
+    const row = async (name: string) => (await screen.findByRole("rowheader", { name })).closest("tr") as HTMLElement;
+    expect(within(await row("on-mac")).getByText("Hook received")).toBeVisible();
+    expect(within(await row("on-pc")).getByText("Silent")).toBeVisible();
+    expect(within(await row("on-mac-codex")).getByText("No report from this host")).toBeVisible();
+  });
+});

@@ -360,6 +360,8 @@ const translation = {
     doctorReload: "Lataa viimeisin doctor-raportti uudelleen",
     doctorUnknownHost: "Liian vanha doctor nimeämään konettaan",
     doctorStale: "Tarkistettu yli päivä sitten, joten se kertoo nyt vähän asiakasohjelmasta.",
+    clientHealth: "Asiakasohjelman tila",
+    noHostReport: "Tältä koneelta ei ole raporttia",
     retry: "Yritä uudelleen",
     doctorMissing: "Yhtään doctor-raporttia ei ole vielä tallennettu. Suorita {{command}} tällä tietokoneella.",
     statusOk: "Hook vastaanotettu",

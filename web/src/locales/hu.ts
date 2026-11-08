@@ -360,6 +360,8 @@ const translation = {
     doctorReload: "A legutóbbi doctor-jelentés újratöltése",
     doctorUnknownHost: "Túl régi doctor ahhoz, hogy megnevezze a gépét",
     doctorStale: "Több mint egy napja ellenőrizve, így most keveset mond a kliensről.",
+    clientHealth: "Kliens állapota",
+    noHostReport: "Erről a gépről nincs jelentés",
     retry: "Újrapróbálás",
     doctorMissing: "Még nincs mentett doctor-jelentés. Futtassa a(z) {{command}} parancsot ezen a számítógépen.",
     statusOk: "Hook megérkezett",

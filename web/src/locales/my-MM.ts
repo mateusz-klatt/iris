@@ -360,6 +360,8 @@ const translation = {
     doctorReload: "နောက်ဆုံး doctor အစီရင်ခံစာကို ပြန်ဖွင့်ရန်",
     doctorUnknownHost: "မိမိစက်အမည်ကို မဖော်ပြနိုင်လောက်အောင် ဟောင်းသော doctor",
     doctorStale: "စစ်ဆေးခဲ့သည်မှာ တစ်ရက်ကျော်ပြီဖြစ်သဖြင့် client ၏ လက်ရှိအခြေအနေကို သိပ်မဖော်ပြနိုင်တော့ပါ။",
+    clientHealth: "Client အခြေအနေ",
+    noHostReport: "ဤကွန်ပျူတာမှ အစီရင်ခံစာ မရှိပါ",
     retry: "ထပ်စမ်းကြည့်ရန်",
     doctorMissing: "doctor အစီရင်ခံစာ မသိမ်းရသေးပါ။ ဤကွန်ပျူတာတွင် {{command}} ကို လုပ်ဆောင်ပါ။",
     statusOk: "Hook လက်ခံရရှိပြီး",

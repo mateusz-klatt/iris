@@ -360,6 +360,8 @@ const translation = {
     doctorReload: "Перезагрузить последний отчёт doctor",
     doctorUnknownHost: "doctor слишком старый, чтобы назвать свой компьютер",
     doctorStale: "Проверено больше суток назад, поэтому сейчас это мало говорит о клиенте.",
+    clientHealth: "Состояние клиента",
+    noHostReport: "Нет отчёта с этого компьютера",
     retry: "Повторить",
     doctorMissing: "Отчёт doctor ещё не сохранён. Запустите {{command}} на этом компьютере.",
     statusOk: "Hook получен",

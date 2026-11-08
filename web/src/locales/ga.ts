@@ -360,6 +360,8 @@ const translation = {
     doctorReload: "Athluchtaigh an tuarascáil doctor is déanaí",
     doctorUnknownHost: "doctor ró-shean chun a mheaisín a ainmniú",
     doctorStale: "Seiceáladh níos mó ná lá ó shin, mar sin is beag a insíonn sé faoin gcliant anois.",
+    clientHealth: "Staid an chliaint",
+    noHostReport: "Níl tuarascáil ón ríomhaire seo",
     retry: "Bain triail eile as",
     doctorMissing: "Níl aon tuarascáil doctor stóráilte fós. Rith {{command}} ar an ríomhaire seo.",
     statusOk: "Fuarthas an hook",

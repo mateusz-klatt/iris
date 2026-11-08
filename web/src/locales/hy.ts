@@ -360,6 +360,8 @@ const translation = {
     doctorReload: "Վերաբեռնել վերջին doctor հաշվետվությունը",
     doctorUnknownHost: "Չափազանց հին doctor, որը չի նշում իր մեքենայի անունը",
     doctorStale: "Ստուգվել է ավելի քան մեկ օր առաջ, ուստի հիմա քիչ բան է ասում կլիենտի մասին։",
+    clientHealth: "Կլիենտի վիճակը",
+    noHostReport: "Այս համակարգչից հաշվետվություն չկա",
     retry: "Կրկին փորձել",
     doctorMissing: "Դեռ doctor հաշվետվություն չի պահվել։ Այս համակարգչում գործարկեք {{command}}-ը։",
     statusOk: "Hook-ը ստացվել է",

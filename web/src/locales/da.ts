@@ -360,6 +360,8 @@ const translation = {
     doctorReload: "Genindlæs den seneste doctor-rapport",
     doctorUnknownHost: "En doctor for gammel til at navngive sin maskine",
     doctorStale: "Tjekket for mere end en dag siden, så den siger ikke meget om klienten nu.",
+    clientHealth: "Klientens tilstand",
+    noHostReport: "Ingen rapport fra denne maskine",
     retry: "Prøv igen",
     doctorMissing: "Der er endnu ingen gemt doctor-rapport. Kør {{command}} på denne computer.",
     statusOk: "Hook modtaget",

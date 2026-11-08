@@ -360,6 +360,8 @@ const translation = {
     doctorReload: "I-reload ang huling ulat ng doctor",
     doctorUnknownHost: "Isang doctor na masyadong luma para ibigay ang pangalan ng computer nito",
     doctorStale: "Sinuri mahigit isang araw na ang nakalipas, kaya kaunti lang ang sinasabi nito tungkol sa client ngayon.",
+    clientHealth: "Kalagayan ng client",
+    noHostReport: "Walang ulat mula sa computer na ito",
     retry: "Subukang muli",
     doctorMissing: "Wala pang naka-save na ulat ng doctor. Patakbuhin ang {{command}} sa computer na ito.",
     statusOk: "Natanggap ang hook",

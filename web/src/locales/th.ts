@@ -351,6 +351,8 @@ const translation = {
     doctorReload: "โหลดรายงาน doctor ล่าสุดอีกครั้ง",
     doctorUnknownHost: "doctor รุ่นเก่าเกินกว่าจะระบุชื่อเครื่องของตน",
     doctorStale: "ตรวจสอบเมื่อกว่าหนึ่งวันก่อน จึงบอกอะไรเกี่ยวกับไคลเอนต์ในตอนนี้ได้น้อย",
+    clientHealth: "สถานะไคลเอนต์",
+    noHostReport: "ไม่มีรายงานจากเครื่องนี้",
     retry: "ลองอีกครั้ง",
     doctorMissing: "ยังไม่มีรายงาน doctor ที่บันทึกไว้ เรียกใช้ {{command}} บนคอมพิวเตอร์เครื่องนี้",
     statusOk: "ได้รับ hook แล้ว",

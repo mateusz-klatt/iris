@@ -360,6 +360,8 @@ const translation = {
     doctorReload: "最新の doctor レポートを再読み込み",
     doctorUnknownHost: "マシン名を送らない古い doctor",
     doctorStale: "確認後 1 日を過ぎているため、現在のクライアントの状態はほとんどわかりません。",
+    clientHealth: "クライアントの状態",
+    noHostReport: "このマシンからのレポートはありません",
     retry: "再試行",
     doctorMissing: "doctor レポートはまだ保存されていません。このコンピューターで {{command}} を実行してください。",
     statusOk: "Hook を受信しました",

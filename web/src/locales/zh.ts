@@ -351,6 +351,8 @@ const translation = {
     doctorReload: "重新加载最新的 doctor 报告",
     doctorUnknownHost: "过旧、无法报出机器名称的 doctor",
     doctorStale: "距上次检查已超过一天，因此难以反映客户端的当前状态。",
+    clientHealth: "客户端状态",
+    noHostReport: "没有来自这台计算机的报告",
     retry: "重试",
     doctorMissing: "尚未保存任何 doctor 报告。请在这台电脑上运行 {{command}}。",
     statusOk: "已收到 hook",

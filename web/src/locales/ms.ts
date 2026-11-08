@@ -360,6 +360,8 @@ const translation = {
     doctorReload: "Muat semula laporan doctor terakhir",
     doctorUnknownHost: "doctor versi lama yang tidak menyatakan nama komputernya",
     doctorStale: "Disemak lebih sehari lalu, jadi laporan ini hanya memberikan sedikit maklumat tentang keadaan semasa klien.",
+    clientHealth: "Keadaan klien",
+    noHostReport: "Tiada laporan daripada komputer ini",
     retry: "Cuba lagi",
     doctorMissing: "Belum ada laporan doctor yang disimpan. Jalankan {{command}} pada komputer ini.",
     statusOk: "Hook diterima",
