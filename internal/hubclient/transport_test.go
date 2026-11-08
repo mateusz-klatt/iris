@@ -125,7 +125,7 @@ func TestASilentPooledConnectionIsDroppedAndTheNextCallSucceeds(t *testing.T) {
 
 // Every hub client without its own HTTP client gets that transport, and so does the hedge.
 func TestEveryHubClientPingsAndDropsIdleConnections(t *testing.T) {
-	for name, rt := range map[string]http.RoundTripper{"default": NoRedirects(nil).Transport, "hedge primary": HedgedClient().Transport.(hedge).primary, "hedge backup": HedgedClient().Transport.(hedge).backup} {
+	for name, rt := range map[string]http.RoundTripper{"default": NoRedirects(nil).Transport, "exported": HTTPClient().Transport, "hedge primary": HedgedClient().Transport.(hedge).primary, "hedge backup": HedgedClient().Transport.(hedge).backup} {
 		tr, ok := rt.(*http.Transport)
 		if !ok || tr.HTTP2 == nil || tr.HTTP2.SendPingTimeout != pingAfter || tr.HTTP2.PingTimeout != pingTimeout || tr.IdleConnTimeout != idleTimeout {
 			t.Fatalf("%s: %+v", name, rt)

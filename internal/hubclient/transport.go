@@ -37,3 +37,7 @@ func newTransport() *http.Transport {
 // defaultClient replaces http.DefaultClient for every Client without its own HTTP client:
 // iris mcp, iris watch and doctor.
 var defaultClient = &http.Client{Transport: newTransport()}
+
+// HTTPClient is the shared client with that transport, for code that calls the hub without a
+// Client, such as doctor's probes.
+func HTTPClient() *http.Client { return defaultClient }
