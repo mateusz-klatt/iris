@@ -5,7 +5,11 @@ Status: accepted.
 ## Decision
 
 `history` lists the calling agent's sent and received messages and optionally searches
-their subjects and bodies through the existing FTS5 index. `thread` lists that same
+their subjects and bodies through the existing FTS5 index. Search splits text on
+whitespace and quotes each term literally; all terms are required. Whitespace alone
+means no filter. FTS5 tokenization still applies, so punctuation is not an exact
+substring constraint. Residual FTS query errors return `bad_request`. The console
+uses the same search terms. `thread` lists that same
 view restricted to one thread. Visibility is per message: the caller's agent must
 be its sender or a recipient, across repositories and across that agent's Executions.
 Membership in a thread or repository grants no access to other messages in it.

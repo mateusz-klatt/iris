@@ -1,7 +1,6 @@
 package store
 
 import (
-	"context"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -183,10 +182,10 @@ func TestHistoryCursorOrderingScopeAndDeletion(t *testing.T) {
 	if len(call(t, s, "history", r)["messages"].([]map[string]any)) != 5 {
 		t.Fatal("selectors altered agent visibility")
 	}
-	// Bad FTS syntax is reported, rather than falling back to an unfiltered view.
+	// A quote is ordinary search text, with no matching tokens here.
 	r.Q = `"`
-	if _, err := s.Call(context.Background(), "history", r); err == nil {
-		t.Fatal("invalid FTS accepted")
+	if len(call(t, s, "history", r)["messages"].([]map[string]any)) != 0 {
+		t.Fatal("quote-only search returned messages")
 	}
 }
 

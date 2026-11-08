@@ -53,9 +53,9 @@ func (t *transaction) agentHistory(r Request) (map[string]any, error) {
 		q += ` AND m.thread_id=?`
 		args = append(args, r.Key)
 	}
-	if r.Q != "" {
+	if match := literalMatch(r.Q); match != "" {
 		q += ` AND m.rowid IN (SELECT rowid FROM MessageSearch WHERE MessageSearch MATCH ?)`
-		args = append(args, r.Q)
+		args = append(args, match)
 	}
 	if r.Before != "" {
 		q += ` AND (m.created_ms<? OR (m.created_ms=? AND m.id<?))`
@@ -65,7 +65,7 @@ func (t *transaction) agentHistory(r Request) (map[string]any, error) {
 	q += ` ORDER BY m.created_ms DESC,m.id DESC LIMIT ?`
 	rows, err := t.rows(q, append(args, limit+1)...)
 	if err != nil {
-		return nil, err
+		return nil, matchError(err)
 	}
 	defer func() { _ = rows.Close() }()
 	items := []map[string]any{}
@@ -90,7 +90,7 @@ func (t *transaction) agentHistory(r Request) (map[string]any, error) {
 		items = append(items, item)
 		cursor = candidate
 	}
-	return map[string]any{"messages": items, "next": next}, rows.Err()
+	return map[string]any{"messages": items, "next": next}, matchError(rows.Err())
 }
 
 func (t *transaction) readMessageBody(r Request) (map[string]any, error) {

@@ -182,7 +182,10 @@ seconds, then turns `pending` if that session is lost.
 
 `GET /v1/messages/history?execution_id=...&q=...&before=...&limit=20` lists
 messages sent or received by the calling Execution's **agent**, across its sessions
-and repositories. `q` optionally uses FTS5 syntax to search subject and body.
+and repositories. `q` searches subject and body as literal whitespace-separated
+terms; all terms are required, with no FTS operators or column filters. Whitespace
+alone means no filter. FTS5 still tokenizes text, so punctuation is not an exact
+substring constraint. A search SQLite cannot parse returns `bad_request`.
 Only matching messages are returned, never other messages from a matching thread.
 `GET /v1/threads/{id}?execution_id=...&before=...&limit=20` lists that same
 agent-scoped view of one thread. Unknown and invisible threads both return `not_found`.
@@ -322,7 +325,10 @@ creating a link always requires the bearer token. Everything else under `/` serv
 
 `GET /v1/ui/threads?repository_id=...&agent=...&q=...&before=...&limit=50` lists threads, newest
 first, ordered by the last message visible in the view and then by thread id. `q` is a full-text
-search. `limit` is 50 by default and 100 at most.
+search with the same literal terms as agent history: all whitespace-separated
+terms are required; whitespace alone means no filter. FTS5 tokenization still
+applies. A search SQLite cannot parse returns `bad_request`.
+`limit` is 50 by default and 100 at most.
 
 ```json
 {"threads":[{"id":"ms_...","subject":"...","participants":["..."],"count":3,

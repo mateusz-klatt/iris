@@ -31,7 +31,15 @@ func TestAgentHistoryHTTPRoutes(t *testing.T) {
 	request(t, s, "GET", "/v1/threads/"+thread+"?execution_id="+c["execution_id"].(string), nil, 404)
 	request(t, s, "GET", "/v1/threads/missing"+query, nil, 404)
 	request(t, s, "GET", "/v1/messages/history"+query+"&before=invalid", nil, 400)
-	request(t, s, "GET", "/v1/messages/history"+query+"&q=%22", nil, 400)
+	if page := request(t, s, "GET", "/v1/messages/history"+query+"&q=%22", nil, 200); len(page["messages"].([]any)) != 0 {
+		t.Fatal(page)
+	}
+	for _, route := range []string{"/v1/messages/history" + query, "/v1/ui/threads?repository_id=" + a["repository_id"].(string)} {
+		out := request(t, s, "GET", route+"&q=%00", nil, 400)
+		if out["error"].(map[string]any)["code"] != "bad_request" {
+			t.Fatal(out)
+		}
+	}
 	request(t, s, "GET", "/v1/messages/history?execution_id=missing", nil, 409)
 	for _, message := range []string{id, second["message_id"].(string)} {
 		part := request(t, s, "GET", "/v1/messages/"+message+"/body"+query+"&after=8&limit=4", nil, 200)
