@@ -212,7 +212,10 @@ so it is the same worktree, the same agent and the same claims. A remount or a r
 device and inode to another directory, so a path folds only when its repository, by remote and
 root commit, is the one the first path was seen with. On Windows the id is the volume serial
 number and file index, so a junction, a mapped or subst drive, or a path spelt in another case is
-the same worktree too. Every path from an older client is keyed on itself, as before.
+the same worktree too. That index is unique on NTFS; on ReFS, Dev Drives included, it is not
+guaranteed, and on a network drive it is only as good as the server, so two directories there
+could in principle share an id, which the repository check above limits to the same repository.
+Every path from an older client is keyed on itself, as before.
 
 ### D7. Attention: instant where possible, honest everywhere
 
