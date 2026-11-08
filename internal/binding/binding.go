@@ -143,6 +143,7 @@ func (r *Resolver) register(ctx context.Context, session string, a proc.Ancestor
 	if repo, err := gitinfo.Find(r.CWD); err == nil {
 		req.CommonDir = repo.CommonDir
 		req.Worktree = repo.Worktree
+		req.WorktreeID = repo.WorktreeID
 		req.RemoteURL = repo.RemoteURL
 		req.RootCommit = repo.RootCommit
 		req.Branch = repo.Branch

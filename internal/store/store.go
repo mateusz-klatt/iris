@@ -62,6 +62,9 @@ var retentionSchema string
 //go:embed migrations/014.sql
 var hostReportSchema string
 
+//go:embed migrations/015.sql
+var worktreeAliasSchema string
+
 // Clock separates lease ticks from persisted wall-clock expiries. Tick must be monotonic
 // within a Store's lifetime; client timestamps never participate in lease decisions.
 type Clock interface {
@@ -253,6 +256,11 @@ func openDatabase(filename string, clock Clock, driverName string) (*Store, erro
 		}
 		if version < 14 {
 			if _, err := t.exec(hostReportSchema); err != nil {
+				return err
+			}
+		}
+		if version < 15 {
+			if _, err := t.exec(worktreeAliasSchema); err != nil {
 				return err
 			}
 		}

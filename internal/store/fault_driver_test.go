@@ -107,7 +107,7 @@ func installFaultDriver(t *testing.T, s *Store, file string) *storageFault {
 }
 
 func TestStorageFailuresRollBackAndRetry(t *testing.T) {
-	for _, op := range []string{"sessions", "session-resume", "heartbeat-recovery", "session-new-slot", "session-learns-root", "touch-cached", "touch-conflict", "claim-conflict", "check-known", "policy", "bind", "heartbeat", "end", "touch", "claim", "claim-reuse", "claim-cached", "release", "claims", "messages", "message-repo", "contact", "message-cached", "inbox", "ack", "ack-handled", "receipts", "read_body", "agents", "agents-all", "hooks_seen", "events", "events-reset", "status", "validate", "monitor_cursor", "check", "reconcile", "reconcile-session", "ui_overview", "ui_threads", "ui_thread", "ui_read", "ui_messages", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_events", "expire", "sweep", "forget", "forget-repository"} {
+	for _, op := range []string{"sessions", "session-resume", "heartbeat-recovery", "session-new-slot", "session-learns-root", "touch-cached", "touch-conflict", "claim-conflict", "check-known", "policy", "bind", "heartbeat", "end", "touch", "claim", "claim-reuse", "claim-cached", "release", "claims", "messages", "message-repo", "contact", "message-cached", "inbox", "ack", "ack-handled", "receipts", "read_body", "agents", "agents-all", "hooks_seen", "events", "events-reset", "status", "validate", "monitor_cursor", "check", "check-alias", "session-alias", "reconcile", "reconcile-session", "ui_overview", "ui_threads", "ui_thread", "ui_read", "ui_messages", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_events", "expire", "sweep", "forget", "forget-repository"} {
 		t.Run(op, func(t *testing.T) {
 			s, clock, file := testStore(t)
 			a, ar := session(t, s, 1)
@@ -150,6 +150,14 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 			case "session-new-slot":
 				route = "sessions"
 				r = Request{Client: "codex", Host: "host", SessionID: "new-slot", Cwd: "/repo/w1", Worktree: "/repo/w1"}
+			case "session-alias":
+				// Another path to w1's directory, which the first path already named.
+				route = "sessions"
+				call(t, s, "sessions", Request{Client: "codex", Host: "host", SessionID: "alias-first", Cwd: "/repo/w1", Worktree: "/repo/w1", WorktreeID: "1:2"})
+				r = Request{Client: "codex", Host: "host", SessionID: "alias-second", Cwd: "/mnt/w1/sub", Worktree: "/mnt/w1", WorktreeID: "1:2"}
+			case "check-alias":
+				route = "check"
+				r = Request{Host: "host", Worktree: "/mnt/w1", WorktreeID: "1:3", RemoteURL: "https://example.com/team/project.git", RootCommit: "root", Paths: []string{"held"}}
 			case "check-known":
 				route = "check"
 				r = Request{Host: "host", Worktree: "/repo/w1", RemoteURL: "https://example.com/team/project.git", RootCommit: "root", Paths: []string{"held"}}

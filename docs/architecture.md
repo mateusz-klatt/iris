@@ -203,6 +203,14 @@ the hook registers later after all, the shim's heartbeat finds the hook's Execut
 client process, moves to it and ends its own, so a slow hook cannot leave the session split
 either. After a loss the shim never registers; it waits for the hook to reattach (D9).
 
+A worktree is one directory however it is reached. Hooks, the shim and the guard name the
+worktree root by device and inode as well as by path, and the hub keeps the first path a host
+named for that directory: a bind mount or a symlink that gives the same directory another path,
+as `/mnt/d/projects/iris` and `/home/klattm/projects/iris` on one host, is made that first path,
+so it is the same worktree, the same agent and the same claims. Windows sends no such id, so a
+junction or a mapped drive still counts as another worktree there; so does every path from an
+older client.
+
 ### D7. Attention: instant where possible, honest everywhere
 
 The hub exposes one stream per Execution: a WebSocket and `iris watch`, which prints the same

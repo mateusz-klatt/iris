@@ -6,6 +6,10 @@ func (t *transaction) check(r Request) (map[string]any, error) {
 	if r.Host == "" || r.Worktree == "" {
 		return nil, fail("bad_request", "host and worktree are required")
 	}
+	// A commit from another path to the same directory is from the same worktree (D6).
+	if err := t.canonicalWorktree(&r); err != nil {
+		return nil, err
+	}
 	repo, err := t.repository(r)
 	if err != nil {
 		return nil, err
