@@ -179,6 +179,17 @@ func localRepositoryAliases(r Request) []string {
 	return aliases
 }
 
+// checkoutRepositoryAlias records an unknown-root resolution's explicit local
+// continuity, separately from historical path/gitdir aliases. Quoted fields keep
+// colons, quotes and other path characters from changing the alias boundaries.
+func checkoutRepositoryAlias(r Request) string {
+	remote := remoteAlias(r.RemoteURL)
+	if remote == "" {
+		remote = "literal:" + r.RemoteURL
+	}
+	return fmt.Sprintf("checkout:%q:%q:%q:%q", r.Host, strings.ReplaceAll(r.Worktree, "\\", "/"), strings.ReplaceAll(r.CommonDir, "\\", "/"), remote)
+}
+
 // repositoryCandidate counts identities, not alias rows. A current root can
 // distinguish historical roots, but neither row order nor an unknown root can
 // distinguish two repositories at the same strength (D11, ADR 012).
@@ -226,6 +237,13 @@ func (t *transaction) repository(r Request) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	checkout := checkoutRepositoryAlias(r)
+	if repo == "" && ambiguous && r.RootCommit == "" {
+		repo, _, err = t.repositoryCandidate([]string{checkout}, "")
+		if err != nil {
+			return "", err
+		}
+	}
 	if remote := remoteAlias(r.RemoteURL); repo == "" && !ambiguous && remote != "" {
 		repo, _, err = t.repositoryCandidate([]string{remote}, r.RootCommit)
 		if err != nil {
@@ -238,7 +256,18 @@ func (t *transaction) repository(r Request) (string, error) {
 			return "", err
 		}
 	}
-	return repo, t.rememberRepository(r, repo)
+	if err = t.rememberRepository(r, repo); err != nil {
+		return "", err
+	}
+	// Registration and the commit guard resolve checkout continuity. A refresh
+	// of an older active Execution must not redirect it after an observed rewrite.
+	if _, err = t.exec("DELETE FROM RepositoryAlias WHERE alias=? AND repository_id<>?", checkout, repo); err != nil {
+		return "", err
+	}
+	if r.RootCommit == "" {
+		_, err = t.exec("INSERT OR IGNORE INTO RepositoryAlias VALUES(?,?)", checkout, repo)
+	}
+	return repo, err
 }
 
 // rememberRepository publishes newly learned identity for both a new session and

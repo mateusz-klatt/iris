@@ -415,6 +415,14 @@ registration never chooses one by row order. Local and shared-git-directory alia
 are considered together, preferring a unique exact root. A request with no root
 cannot distinguish histories and requires unambiguous continuity. An unknown-root
 candidate can learn a known root only when no known root contradicts it.
+When historical local aliases are ambiguous, an unknown-root request may reuse
+the outcome of a prior unknown-root identity resolution for that host, canonical
+path, shared git directory and remote (ADR 012). Without that record, the first
+such request allocates one isolated repository; it never chooses an ambiguous
+historical row. A known-root resolution clears a checkout outcome pointing
+elsewhere. Refreshing an active Execution does not redirect checkout continuity;
+the commit guard uses the same resolution as registration. This cannot discover
+an unknown rewrite, join hosts or repair existing splits.
 `git@host:owner/repo.git`, `ssh://` and `https://` are one remote. That covers the normal case across machines. Spellings that depend on one machine,
 such as SSH aliases, `insteadOf` rewrites and relative remotes, stay scoped to that host and
 path. A match on root commit alone, which is what forks look like, and unresolved

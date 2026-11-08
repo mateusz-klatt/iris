@@ -21,9 +21,27 @@ identities. Count distinct repository ids, never alias rows. More than one
 candidate at the same strength is ambiguous and is never chosen by row order.
 Host-local aliases establish continuity before a global remote is considered.
 An unknown root cannot distinguish histories: use only unambiguous continuity,
-and never guess between contradictory or duplicate repositories. A root alone
-never joins forks. Repeated registration checks identity without moving an
-existing Execution, its mailbox or its claims to a different repository.
+and never guess between contradictory or duplicate repositories. Historical local
+and shared-git-directory aliases can themselves be ambiguous. Without a separate
+record of the registration outcome, allocating an isolated repository adds another
+candidate to those aliases and repeats the allocation on every new session.
+
+An unknown-root identity resolution records its selected or newly allocated
+repository in a separate checkout alias, scoped to host, canonical worktree path,
+shared git directory and remote. Global remote spellings are normalised; other
+remotes retain their literal spelling in a separate namespace. Quoted fields
+preserve the boundaries. When historical local aliases are ambiguous, subsequent
+unknown-root requests reuse that checkout's unique recorded outcome. No record is
+backfilled from ambiguous old aliases or produced by a known-root resolution:
+the first ambiguous unknown request allocates one isolated row instead of choosing
+a historical one. A known-root resolution still uses the root-qualified candidate
+rules and clears a checkout record pointing elsewhere. Registration and commit
+guard identity resolution write this continuity; refreshing an older active
+Execution cannot redirect it. These changes are transactional and use the existing
+alias storage, including merge and forget.
+
+A root alone never joins forks. Repeated registration checks identity without
+moving an existing Execution, its mailbox or its claims to a different repository.
 An active session whose known root changes is refused with an operator repair
 instruction. If its root was unknown, registration learns the root and aliases
 without replacing the Execution.
@@ -87,6 +105,15 @@ undo work performed during a split, or prevent an unmediated edit. A dry run is 
 transactional snapshot, not a reservation: the real run checks again. Retaining
 separate mailboxes means a resumed session may need the operator to identify the
 mailbox it should use. Hooks and the commit guard remain cooperative.
+
+Checkout continuity stops repeated allocations at the same host, path, shared git
+directory and remote; it does not discover a packed root or combine existing rows.
+It cannot establish continuity across hosts or an unrecognised alternate path when
+the historical aliases are ambiguous. A replacement checkout or rewritten history
+at the same location and remote remains indistinguishable while its root is
+unknown. A changed known root invalidates a different checkout outcome, but a
+later ambiguous unknown registration may need one new isolated row again. Existing
+Executions, mailboxes and claims are never moved by this mechanism.
 
 An old MCP client benefits from server-derived peer and claim scope immediately,
 but its old `whoami` implementation still discards heartbeat identity. Upgrade or
