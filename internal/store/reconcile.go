@@ -9,6 +9,33 @@ import (
 	"time"
 )
 
+// shellSession is whether a shell reconcile names its session rather than an Execution.
+func shellSession(operation string, r Request) bool {
+	return operation == "reconcile" && r.ExecutionID == "" && r.SessionID != ""
+}
+
+// shellSession registers the session as /v1/sessions does, recovery proof included (D9, #127),
+// then reconciles for the Execution it gives, all in one transaction: a shell hook pays one
+// round trip to the hub instead of two. r then names that Execution, so the caller records
+// the hook as seen there. The answer carries the Execution and generation for the hook to
+// remember as its next proof.
+func (t *transaction) shellSession(r *Request) (map[string]any, error) {
+	sess, err := t.session(*r)
+	if err != nil {
+		return nil, err
+	}
+	r.ExecutionID, r.Generation = sess["execution_id"].(string), sess["generation"].(int64)
+	if _, err = t.exec("UPDATE Execution SET last_seen_ms=? WHERE id=?", t.s.clock.Now().UnixMilli(), r.ExecutionID); err != nil {
+		return nil, err
+	}
+	out, err := t.reconcile(*r)
+	if err != nil {
+		return nil, err
+	}
+	out["session"] = map[string]any{"execution_id": r.ExecutionID, "generation": r.Generation}
+	return out, t.event("", "", "changed", "")
+}
+
 func (t *transaction) reconcile(r Request) (map[string]any, error) {
 	e, err := t.live(r.ExecutionID, r.Generation)
 	if err != nil {

@@ -55,6 +55,12 @@ type shellHub interface {
 	Reconcile(context.Context, hubclient.ReconcileRequest) (hubclient.CheckResponse, error)
 }
 
+// sessionShellHub can register the session and reconcile in one call, one round trip instead
+// of two. The hub client always can; a hub from before it answers with an error.
+type sessionShellHub interface {
+	ReconcileSession(context.Context, hubclient.ShellSessionRequest) (hubclient.ShellResponse, error)
+}
+
 func shellEvent(ev Event) bool {
 	return ev.ToolClass == ClassShell && (ev.Kind == KindPreTool || ev.Kind == KindPostTool || ev.Kind == KindPostToolFailure)
 }
@@ -102,8 +108,12 @@ func (r Runner) reconcile(ctx context.Context, ev Event, state *runState) Output
 			done <- settle(err, allow)
 			return
 		}
-		state.at("shell session")
-		sess, err := r.register(ctx, ev, repo)
+		out, fromGit, err := r.shell(ctx, hub, ev, repo, state)
+		if fromGit {
+			// A failed git status fails open without the hub's context.
+			done <- settle(err, allow)
+			return
+		}
 		if hubclient.IsCode(err, "lost") {
 			// A recovering session without its proof must not run unclaimed changes past it, as
 			// an edit may not. After the call, only a warning is possible.
@@ -114,26 +124,6 @@ func (r Runner) reconcile(ctx context.Context, ev Event, state *runState) Output
 			done <- settle(err, Encode(ev, Decision{Action: ActionWarn, Context: shellRecovering}))
 			return
 		}
-		if err != nil {
-			done <- settle(err, r.failOpen(state, ev, err, allow))
-			return
-		}
-		state.at("shell status")
-		status := r.Status
-		if status == nil {
-			status = gitinfo.Status
-		}
-		snapshot, err := status(ctx, repo.Worktree)
-		if err != nil {
-			done <- settle(err, allow)
-			return
-		}
-		phase := "after"
-		if ev.Kind == KindPreTool {
-			phase = "before"
-		}
-		state.at("shell reconcile")
-		out, err := hub.Reconcile(ctx, hubclient.ReconcileRequest{ExecutionID: sess.ExecutionID, Generation: sess.Generation, Kind: phase, Status: snapshot})
 		if err != nil {
 			done <- settle(err, r.failOpen(state, ev, err, allow))
 			return
@@ -150,6 +140,65 @@ func (r Runner) reconcile(ctx context.Context, ev Event, state *runState) Output
 	case <-ctx.Done():
 		return settle(hookFailure(shellOverBudget), allow)
 	}
+}
+
+// shell reconciles a shell call with the hub. One that can takes the snapshot and makes one
+// call, which registers the session with its remembered generation and reconciles. Otherwise,
+// and when that call is refused as an older hub would refuse it, the session registers as an
+// edit's does, proof and its retry included, and reconciles in a second call.
+// fromGit says that err came from git status rather than the hub.
+func (r Runner) shell(ctx context.Context, hub shellHub, ev Event, repo gitinfo.Repo, state *runState) (out hubclient.CheckResponse, fromGit bool, err error) {
+	phase := "after"
+	if ev.Kind == KindPreTool {
+		phase = "before"
+	}
+	status := r.Status
+	if status == nil {
+		status = gitinfo.Status
+	}
+	var taken map[string]string
+	if combined, ok := hub.(sessionShellHub); ok {
+		state.at("shell status")
+		if taken, err = status(ctx, repo.Worktree); err != nil {
+			return out, true, err
+		}
+		state.at("shell session")
+		out, err = r.reconcileSession(ctx, combined, ev, repo, phase, taken)
+		// A lost answer may also be an older hub's to a request with no Execution, so the
+		// separate calls decide; they handle a real loss as an edit does.
+		if err == nil || (!hubclient.IsCode(err, "lost") && !hubclient.IsCode(err, "bad_request") && !hubclient.IsCode(err, "not_found")) {
+			return out, false, err
+		}
+	}
+	state.at("shell session")
+	sess, err := r.register(ctx, ev, repo)
+	if err != nil {
+		return out, false, err
+	}
+	if taken == nil {
+		state.at("shell status")
+		if taken, err = status(ctx, repo.Worktree); err != nil {
+			return out, true, err
+		}
+	}
+	state.at("shell reconcile")
+	out, err = hub.Reconcile(ctx, hubclient.ReconcileRequest{ExecutionID: sess.ExecutionID, Generation: sess.Generation, Kind: phase, Status: taken})
+	return out, false, err
+}
+
+// reconcileSession is the one-call form. The generation the hub answers with is remembered as
+// the session's next proof, as a registration's is.
+func (r Runner) reconcileSession(ctx context.Context, hub sessionShellHub, ev Event, repo gitinfo.Repo, phase string, snapshot map[string]string) (hubclient.CheckResponse, error) {
+	req := hubclient.ShellSessionRequest{SessionRequest: r.sessionReq(ev, repo), Kind: phase, Status: snapshot}
+	m := r.memory()
+	if m != nil {
+		req.Generation = m.Recall(string(ev.Client), ev.SessionID)
+	}
+	res, err := hub.ReconcileSession(ctx, req)
+	if err == nil && m != nil && res.Session.Generation > 0 {
+		m.Remember(string(ev.Client), ev.SessionID, res.Session.Generation)
+	}
+	return res.CheckResponse, err
 }
 
 // shellRefused is the denial of a shell call during recovery. Every command is refused, read-only

@@ -322,6 +322,14 @@ replaces it, returning the same response shape. The first post without a baselin
 only records it. Multiple live Executions in the same host/worktree suppress
 warnings and clear their baselines. Status strings are observations, never commands.
 
+Instead of `execution_id`, a reconcile may carry the session's registration fields, those of
+`POST /v1/sessions` with `session_id` and the remembered `generation`. The hub then registers
+the session exactly as `POST /v1/sessions` would, recovery proof included, and reconciles for
+the Execution it gives, in one transaction. A shell hook therefore makes one round trip instead
+of two. The response adds `"session":{"execution_id":"ex_...","generation":4}`, whose generation
+the hook remembers as its next proof. A hub from before this form answers it with an error,
+and the hook then registers and reconciles in two calls.
+
 Session registration also accepts `common_dir`, a host-scoped alias for linked
 worktrees without a globally unambiguous remote. It never joins paths across hosts.
 

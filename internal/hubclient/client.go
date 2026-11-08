@@ -292,6 +292,31 @@ func (c *Client) Reconcile(ctx context.Context, req ReconcileRequest) (CheckResp
 	return out, err
 }
 
+// ShellSessionRequest names the session instead of an Execution. The hub registers it, with
+// the remembered generation as its recovery proof, and reconciles in the same transaction, so
+// a shell hook makes one round trip, not two. A hub from before this answers it with an error.
+type ShellSessionRequest struct {
+	SessionRequest
+	Kind   string            `json:"kind"`
+	Status map[string]string `json:"status"`
+}
+
+// ShellResponse is a reconcile result with the Execution the session registered as, which the
+// hook remembers as its next proof.
+type ShellResponse struct {
+	CheckResponse
+	Session struct {
+		ExecutionID string `json:"execution_id"`
+		Generation  int    `json:"generation"`
+	} `json:"session"`
+}
+
+func (c *Client) ReconcileSession(ctx context.Context, req ShellSessionRequest) (ShellResponse, error) {
+	var out ShellResponse
+	err := c.post(ctx, "/v1/shell/reconcile", req, &out)
+	return out, err
+}
+
 // IsCode reports whether err is a hub error with this code.
 func IsCode(err error, code string) bool {
 	var e *Error

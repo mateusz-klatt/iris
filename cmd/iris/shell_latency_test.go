@@ -205,7 +205,13 @@ func shellHooks(t *testing.T, binary, host string, delay time.Duration) {
 				continue
 			}
 			var entry struct{ Stage, Error string }
-			if json.Unmarshal([]byte(line), &entry) != nil || entry.Stage != "shell status" || entry.Error != "shell reconciliation passed its deadline" {
+			if json.Unmarshal([]byte(line), &entry) != nil {
+				t.Fatalf("an unreadable failure log:\n%s", raw)
+			}
+			// On a loopback hub every overrun is this machine's: git status runs first and can
+			// use the budget up before the hub call, so the overrun shows at that call's stage.
+			machine := entry.Stage == "shell status" || (delay == 0 && strings.HasPrefix(entry.Stage, "shell "))
+			if !machine || entry.Error != "shell reconciliation passed its deadline" {
 				t.Fatalf("a shell hook failed open:\n%s", raw)
 			}
 			gitSlow++
