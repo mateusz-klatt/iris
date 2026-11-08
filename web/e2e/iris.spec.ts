@@ -117,6 +117,8 @@ test("a busy hub fits the screen", async ({ page }) => {
           const bounds = row.getBoundingClientRect();
           return row.scrollWidth > row.clientWidth + 1 || bounds.right > panel.right + 1 || bounds.left < panel.left - 1;
         }).length,
+      clippedDeliveryRecipients: [...document.querySelectorAll<HTMLElement>("#delivery-problems li li")]
+        .filter((recipient) => recipient.scrollWidth > recipient.clientWidth + 1).length,
     };
   });
 
@@ -124,6 +126,7 @@ test("a busy hub fits the screen", async ({ page }) => {
   expect(layout.cut).toEqual([]);
   expect(layout.overlaps).toBe(0);
   expect(layout.clippedDeliveryRows).toBe(0);
+  expect(layout.clippedDeliveryRecipients).toBe(0);
   if (layout.width <= 900) {
     expect(layout.columns).toBe(1);
   }
