@@ -61,7 +61,7 @@ func TestMCPStdio(t *testing.T) {
 		t.Fatal(err)
 	}
 	tools, err := session.ListTools(ctx, nil)
-	if err != nil || len(tools.Tools) != 11 {
+	if err != nil || len(tools.Tools) != 13 {
 		t.Fatalf("tools=%v err=%v", tools, err)
 	}
 	call := func(name string, args map[string]any) map[string]any {
@@ -96,6 +96,22 @@ func TestMCPStdio(t *testing.T) {
 		t.Fatal(delivery)
 	}
 	call("ack", map[string]any{"delivery_id": delivery["id"], "attempt": delivery["attempt"]})
+	// Agent history remains available after acceptance, over the real stdio/hub/store path.
+	for _, tool := range []string{"history", "thread"} {
+		args := map[string]any{"q": "UNTRUSTED"}
+		if tool == "thread" {
+			args = map[string]any{"thread_id": sent["thread_id"]}
+		}
+		page := call(tool, args)
+		messages := page["messages"].([]any)
+		if len(messages) != 1 || messages[0].(map[string]any)["message_id"] != sent["message_id"] || messages[0].(map[string]any)["untrusted_data"].(map[string]any)["body"] != "UNTRUSTED secret" {
+			t.Fatal(page)
+		}
+	}
+	part := call("read", map[string]any{"message_id": sent["message_id"], "offset": 10})
+	if part["untrusted_data"].(map[string]any)["body"] != "secret" {
+		t.Fatal(part)
+	}
 	claim := call("claim", map[string]any{"path": "test.go", "kind": "exact"})
 	call("claims", map[string]any{})
 	call("release", map[string]any{"fence": claim["fence"], "token": claim["token"]})

@@ -207,9 +207,9 @@ func (t *transaction) threads(r Request) (map[string]any, error) {
 	// Unread counts this view's human inbox only: in a thread that crosses repositories,
 	// another repository's unread mail is not this view's to clear.
 	args := append(append(append([]any{}, titleArgs...), r.RepositoryID, r.RepositoryID), visibleArgs...)
-	if r.Q != "" {
+	if match := literalMatch(r.Q); match != "" {
 		q += " AND m.thread_id IN (SELECT thread_id FROM Message WHERE rowid IN (SELECT rowid FROM MessageSearch WHERE MessageSearch MATCH ?))"
-		args = append(args, r.Q)
+		args = append(args, match)
 	}
 	if r.Agent != "" {
 		q += ` AND m.thread_id IN (SELECT mm.thread_id FROM Message mm JOIN Execution e ON e.id=mm.sender_execution_id JOIN Agent a ON a.id=e.agent_id WHERE a.name=? OR a.id=? UNION SELECT mm.thread_id FROM Message mm JOIN Delivery d ON d.message_id=mm.id JOIN Agent a ON a.id=d.recipient_agent_id WHERE a.name=? OR a.id=?)`
@@ -235,7 +235,7 @@ func (t *transaction) threads(r Request) (map[string]any, error) {
 	args = append(args, limit+1)
 	rows, err := t.rows(q, args...)
 	if err != nil {
-		return nil, fail("bad_request", "invalid thread search")
+		return nil, matchError(err)
 	}
 	out := []map[string]any{}
 	for rows.Next() {
@@ -247,7 +247,7 @@ func (t *transaction) threads(r Request) (map[string]any, error) {
 	err = rows.Err()
 	_ = rows.Close()
 	if err != nil {
-		return nil, err
+		return nil, matchError(err)
 	}
 	page := map[string]any{}
 	if len(out) > limit {

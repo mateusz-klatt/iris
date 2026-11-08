@@ -182,6 +182,53 @@ Execution of the sending agent may ask; for anyone else the message does not exi
 is `not_found`. During a hub restart a recovering recipient's mail stays `inflight` for up to 120
 seconds, then turns `pending` if that session is lost.
 
+## Agent message history
+
+`GET /v1/messages/history?execution_id=...&q=...&before=...&limit=20` lists
+messages sent or received by the calling Execution's **agent**, across its sessions
+and repositories. `q` searches subject and body as literal whitespace-separated
+terms; all terms are required, with no FTS operators or column filters. Whitespace
+alone means no filter. FTS5 still tokenizes text, so punctuation is not an exact
+substring constraint. A search SQLite cannot parse returns `bad_request`.
+Only matching messages are returned, never other messages from a matching thread.
+`GET /v1/threads/{id}?execution_id=...&before=...&limit=20` lists that same
+agent-scoped view of one thread. Unknown and invisible threads both return `not_found`.
+Repository or agent query parameters do not broaden either view.
+
+Both return:
+
+```json
+{"messages":[{"message_id":"ms_...","thread_id":"ms_...","sender":"...",
+ "subject":"...","body":"...","created_at":"...","sent":true,
+ "from_repository_id":"rp_...","from_repository":"...","cross_repository":false}],
+ "next":"<opaque cursor>"}
+```
+
+Messages are ordered by creation time descending, then message id descending.
+`limit` defaults to 20, at most 100, and HTTP pages fit within 512 KiB.
+Pass a nonempty `next` as `before` with the same search and thread scope; an empty
+`next` ends the list. A malformed cursor or changed scope returns `bad_request`.
+The cursor survives removal of its anchor message. Pages are separate snapshots:
+new sends appear on a fresh first page, and forgotten messages disappear.
+
+MCP `history` accepts `q`, `before`, `limit`; `thread` accepts `thread_id`, `before`,
+`limit`. Their bodies share the inbox's 32 KiB JSON-encoded budget and wrap subject
+and body in `untrusted_data`. A cut body has the same `body_truncated`, `body_bytes`,
+`read_offset` and `body_note` markers as inbox. Call `read` with its `message_id` and
+`offset` equal to `read_offset` for the rest. `read` accepts exactly one of
+`message_id` and `delivery_id`.
+
+`GET /v1/messages/{id}/body?execution_id=...&after=0&limit=32768` reads a body the
+caller sent or received, using the same byte offsets and encoded budget as the
+delivery body route. Its response has `message_id`, `sender`, `body`, `body_bytes`,
+`offset`, and `next_offset` while more remains. An invisible or missing message is
+`not_found`; an offset outside the body is `bad_request`. Offsets inside a UTF-8
+character move back to its start.
+
+History, thread and body reads change no delivery attempt, assignment, attention,
+ack or receipt. They cannot prove that a model read a message, reveal unseen replies,
+restore forgotten messages or freeze a changing conversation (ADR 011).
+
 ## Peers and status
 
 `GET /v1/agents?repository_id=...` lists agents and their current state.
@@ -242,7 +289,9 @@ it does not count mail that was fetched and not yet acknowledged.
 | `inbox` | Fetch messages |
 | `ack` | Acknowledge a delivery; with `handled`, say it was acted on |
 | `receipts` | Show the recipients' states of a message you sent |
-| `read` | Read the rest of a delivery's body that `inbox` cut |
+| `read` | Read a sent or received body by `message_id`, or a received body by `delivery_id`, from a byte offset |
+| `history` | List/search your sent and received messages, newest first, with an opaque cursor |
+| `thread` | Page through only the messages you sent or received in one thread |
 | `claim` | Make an explicit claim |
 | `release` | Release a claim, or all |
 | `claims` | List live claims |
@@ -295,7 +344,10 @@ are listed. No body is returned. `execution` is the recipient's latest Execution
 
 `GET /v1/ui/threads?repository_id=...&agent=...&q=...&before=...&limit=50` lists threads, newest
 first, ordered by the last message visible in the view and then by thread id. `q` is a full-text
-search. `limit` is 50 by default and 100 at most.
+search with the same literal terms as agent history: all whitespace-separated
+terms are required; whitespace alone means no filter. FTS5 tokenization still
+applies. A search SQLite cannot parse returns `bad_request`.
+`limit` is 50 by default and 100 at most.
 
 ```json
 {"threads":[{"id":"ms_...","subject":"...","participants":["..."],"count":3,

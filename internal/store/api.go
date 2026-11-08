@@ -67,6 +67,16 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 			out, err = t.receipts(r, r.Key)
 		case "read_body":
 			out, err = t.readBody(r, r.Key)
+		case "read_message_body":
+			out, err = t.readMessageBody(r)
+		case "history":
+			r.Key = ""
+			out, err = t.agentHistory(r)
+		case "thread":
+			if r.Key == "" {
+				return fail("bad_request", "thread id is required")
+			}
+			out, err = t.agentHistory(r)
 		case "agents":
 			var v []map[string]any
 			if r.All {
