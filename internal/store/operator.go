@@ -67,17 +67,25 @@ func (t *transaction) operator(op string, r Request) (map[string]any, error) {
 		}
 		return map[string]any{}, t.released(repo, r.Key)
 	case "ui_doctor_get":
-		out := map[string]any{"checked_at": nil, "clients": []any{}}
-		var raw string
-		err := t.row("SELECT report FROM DoctorReport WHERE id=1").Scan(&raw)
-		if err == sql.ErrNoRows {
-			return out, nil
-		}
+		// Every host's last report (ADR 007). A host that never reported is absent, rather
+		// than shown as healthy.
+		rows, err := t.rows("SELECT host,report FROM HostReport ORDER BY host")
 		if err != nil {
 			return nil, err
 		}
-		err = json.Unmarshal([]byte(raw), &out)
-		return out, err
+		defer func() { _ = rows.Close() }()
+		hosts := []map[string]any{}
+		for rows.Next() {
+			var host, raw string
+			rows.Scan(&host, &raw)
+			report := map[string]any{}
+			if err := json.Unmarshal([]byte(raw), &report); err != nil {
+				return nil, err
+			}
+			report["host"] = host
+			hosts = append(hosts, report)
+		}
+		return map[string]any{"hosts": hosts}, rows.Err()
 	case "ui_doctor_put":
 		for _, c := range r.Clients {
 			switch c["status"] {
@@ -90,7 +98,13 @@ func (t *transaction) operator(op string, r Request) (map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		if _, err = t.exec("INSERT INTO DoctorReport VALUES(1,?) ON CONFLICT(id) DO UPDATE SET report=excluded.report", string(raw)); err != nil {
+		// A doctor from before ADR 007 names no host. Its report goes to "unknown", so it
+		// can never replace a real host's.
+		host := r.Host
+		if host == "" {
+			host = "unknown"
+		}
+		if _, err = t.exec("INSERT INTO HostReport VALUES(?,?) ON CONFLICT(host) DO UPDATE SET report=excluded.report", host, string(raw)); err != nil {
 			return nil, err
 		}
 		return map[string]any{}, t.event("", "", "changed", "")

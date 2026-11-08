@@ -13,8 +13,7 @@ describe("doctor's slow grade", () => {
       http.get("*/v1/ui/overview", () => HttpResponse.json(emptyOverview)),
       http.get("*/v1/ui/doctor", () =>
         HttpResponse.json({
-          ...doctorReport,
-          clients: [{ client: "claude", version: "2.1.0", status: "slow", detail: "11 shell reconciliations ran past their budget", last_hook_at: "" }],
+          hosts: [{ ...doctorReport, clients: [{ client: "claude", version: "2.1.0", status: "slow", detail: "11 shell reconciliations ran past their budget", last_hook_at: "" }] }],
         }),
       ),
     );

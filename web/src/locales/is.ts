@@ -358,6 +358,8 @@ const translation = {
     doctorTitle: "Biðlarar",
     doctorHint: "Staða hvers biðlara kemur úr nýjustu doctor-skýrslunni. Keyrðu {{command}} á þessari tölvu til að uppfæra hana.",
     doctorReload: "Hlaða aftur nýjustu doctor-skýrslunni",
+    doctorUnknownHost: "doctor of gamall til að nefna vélina sína",
+    doctorStale: "Athugað fyrir meira en degi, svo það segir lítið um biðlarann núna.",
     retry: "Reyna aftur",
     doctorMissing: "Engin doctor-skýrsla hefur verið vistuð enn. Keyrðu {{command}} á þessari tölvu.",
     statusOk: "Hook móttekinn",

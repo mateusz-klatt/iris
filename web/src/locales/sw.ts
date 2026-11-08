@@ -349,6 +349,8 @@ const translation = {
     doctorTitle: "Wateja",
     doctorHint: "Hali ya kila mteja inatoka kwenye ripoti ya mwisho ya doctor. Endesha {{command}} kwenye kompyuta hii ili kuisasisha.",
     doctorReload: "Pakia upya ripoti ya mwisho ya doctor",
+    doctorUnknownHost: "doctor iliyo ya zamani mno kutaja jina la mashine yake",
+    doctorStale: "Iliangaliwa zaidi ya siku moja iliyopita, kwa hiyo sasa inasema kidogo kuhusu mteja.",
     retry: "Jaribu tena",
     doctorMissing: "Bado hakuna ripoti ya doctor iliyohifadhiwa. Endesha {{command}} kwenye kompyuta hii.",
     statusOk: "Hook imepokelewa",

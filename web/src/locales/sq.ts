@@ -349,6 +349,8 @@ const translation = {
     doctorTitle: "Klientët",
     doctorHint: "Gjendja e çdo klienti vjen nga raporti i fundit doctor. Ekzekutoni {{command}} në këtë kompjuter për ta rifreskuar.",
     doctorReload: "Ringarko raportin e fundit doctor",
+    doctorUnknownHost: "Një doctor shumë i vjetër për të treguar emrin e kompjuterit",
+    doctorStale: "Kontrolluar më shumë se një ditë më parë, ndaj tani thotë pak për klientin.",
     retry: "Provo përsëri",
     doctorMissing: "Ende nuk është ruajtur asnjë raport doctor. Ekzekutoni {{command}} në këtë kompjuter.",
     statusOk: "Hook u mor",

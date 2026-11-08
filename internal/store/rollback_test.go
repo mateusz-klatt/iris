@@ -16,7 +16,7 @@ func TestWriteFailuresAreAtomic(t *testing.T) {
 		{"Execution", "UPDATE", "heartbeat"}, {"Execution", "UPDATE", "end"}, {"Claim", "INSERT", "claim"}, {"Claim", "UPDATE", "claim-reuse"},
 		{"Claim", "UPDATE", "touch"}, {"Claim", "UPDATE", "release"}, {"Message", "INSERT", "messages"}, {"Delivery", "INSERT", "messages"},
 		{"Event", "INSERT", "messages"}, {"Operation", "INSERT", "messages"}, {"Cursor", "INSERT", "events"}, {"Delivery", "UPDATE", "inbox"},
-		{"Ack", "INSERT", "ack"}, {"DoctorReport", "INSERT", "ui_doctor_put"}, {"ShellSnapshot", "INSERT", "reconcile"},
+		{"Ack", "INSERT", "ack"}, {"HostReport", "INSERT", "ui_doctor_put"}, {"ShellSnapshot", "INSERT", "reconcile"},
 		{"Claim", "UPDATE", "ui_revoke"}, {"Agent", "INSERT", "ui_messages"}, {"Execution", "INSERT", "ui_messages"},
 	} {
 		t.Run(tc.table+"/"+tc.verb+"/"+tc.op, func(t *testing.T) {
@@ -96,7 +96,7 @@ func TestWriteFailuresAreAtomic(t *testing.T) {
 func databaseState(t *testing.T, s *Store) string {
 	t.Helper()
 	out := map[string][][]any{}
-	for _, table := range strings.Fields("Repository RepositoryAlias Agent Execution Claim Message Delivery Event Operation Cursor Ack DoctorReport ShellSnapshot") {
+	for _, table := range strings.Fields("Repository RepositoryAlias Agent Execution Claim Message Delivery Event Operation Cursor Ack HostReport ShellSnapshot") {
 		rows, err := s.db.Query("SELECT * FROM " + table + " ORDER BY rowid")
 		if err != nil {
 			t.Fatal(err)

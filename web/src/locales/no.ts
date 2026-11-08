@@ -358,6 +358,8 @@ const translation = {
     doctorTitle: "Klienter",
     doctorHint: "Statusen til hver klient kommer fra den siste doctor-rapporten. Kjør {{command}} på denne datamaskinen for å oppdatere den.",
     doctorReload: "Last inn den siste doctor-rapporten på nytt",
+    doctorUnknownHost: "En doctor for gammel til å navngi maskinen sin",
+    doctorStale: "Sjekket for mer enn en dag siden, så den sier lite om klienten nå.",
     retry: "Prøv igjen",
     doctorMissing: "Ingen doctor-rapport er lagret ennå. Kjør {{command}} på denne datamaskinen.",
     statusOk: "Hook mottatt",

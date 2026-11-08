@@ -538,7 +538,7 @@ describe("Iris operator console", () => {
 
   it("renders the hub's real empty report and claims with no expiry", async () => {
     server.use(
-      http.get("*/v1/ui/doctor", () => HttpResponse.json({ checked_at: null, clients: [] })),
+      http.get("*/v1/ui/doctor", () => HttpResponse.json({ hosts: [] })),
       http.get("*/v1/ui/overview", () =>
         HttpResponse.json({
           ...emptyOverview,
@@ -627,10 +627,7 @@ describe("Iris operator console", () => {
     server.use(
       http.get("*/v1/ui/doctor", () => {
         doctorCalls += 1;
-        return HttpResponse.json({
-          ...doctorReport,
-          checked_at: doctorCalls === 1 ? "" : "soon",
-        });
+        return HttpResponse.json({ hosts: [{ ...doctorReport, checked_at: doctorCalls === 1 ? "" : "soon" }] });
       }),
       http.get("*/v1/ui/overview", () =>
         HttpResponse.json({

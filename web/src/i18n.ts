@@ -469,6 +469,8 @@ const resources = {
         doctorTitle: "Clients",
         doctorHint: "Each client's status comes from the last doctor report. Run {{command}} on this computer to refresh it.",
         doctorReload: "Reload the last doctor report",
+        doctorUnknownHost: "A doctor too old to name its machine",
+        doctorStale: "Checked more than a day ago, so this says little about the client now.",
         retry: "Try again",
         doctorMissing: "No doctor report is stored yet. Run {{command}} on this computer.",
         statusOk: "Hook received",

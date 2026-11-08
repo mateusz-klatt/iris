@@ -57,9 +57,9 @@ func TestOperatorThreadsAndSecurity(t *testing.T) {
 	granted := request(t, s, "POST", "/v1/claims", claim, 200)
 	raw, _ := json.Marshal(granted["fence"])
 	request(t, s, "POST", "/v1/ui/claims/"+string(raw)+"/revoke", map[string]any{}, 200)
-	request(t, s, "PUT", "/v1/ui/doctor", map[string]any{"checked_at": "now", "clients": []any{map[string]any{"client": "codex", "status": "needs_human"}}}, 200)
+	request(t, s, "PUT", "/v1/ui/doctor", map[string]any{"host": "mac", "checked_at": "now", "clients": []any{map[string]any{"client": "codex", "status": "needs_human"}}}, 200)
 	report := request(t, s, "GET", "/v1/ui/doctor", nil, 200)
-	if report["checked_at"] != "now" {
+	if hosts := report["hosts"].([]any); len(hosts) != 1 || hosts[0].(map[string]any)["host"] != "mac" || hosts[0].(map[string]any)["checked_at"] != "now" {
 		t.Fatal(report)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
