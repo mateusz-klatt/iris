@@ -362,7 +362,7 @@ const translation = {
     clientHealth: "Stav klienta",
     noHostReport: "Z tohoto počítače není žádná zpráva",
     claimFilters: "Filtrovat rezervace",
-    claimExpired: "Vypršelo",
+    claimExpired: "Vypršela",
     noClaimsMatch: "Těmto filtrům neodpovídá žádná rezervace.",
     retry: "Zkusit znovu",
     doctorMissing: "Zatím není uložena žádná zpráva doctor. Spusťte {{command}} na tomto počítači.",

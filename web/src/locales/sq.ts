@@ -354,7 +354,7 @@ const translation = {
     noHostReport: "Nuk ka raport nga ky kompjuter",
     claimFilters: "Filtro rezervimet",
     claimExpired: "Ka skaduar",
-    noClaimsMatch: "Asnjë rezervim nuk përputhet me këto filtra.",
+    noClaimsMatch: "Asnjë rezervim nuk përputhet me këta filtra.",
     retry: "Provo përsëri",
     doctorMissing: "Ende nuk është ruajtur asnjë raport doctor. Ekzekutoni {{command}} në këtë kompjuter.",
     statusOk: "Hook u mor",

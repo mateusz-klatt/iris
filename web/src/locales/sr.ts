@@ -353,7 +353,7 @@ const translation = {
     clientHealth: "Стање клијента",
     noHostReport: "Нема извештаја са овог рачунара",
     claimFilters: "Филтрирај резервације",
-    claimExpired: "Истекло",
+    claimExpired: "Истекла",
     noClaimsMatch: "Ниједна резервација не одговара овим филтерима.",
     retry: "Покушај поново",
     doctorMissing: "Још нема сачуваног doctor извештаја. Покрените {{command}} на овом рачунару.",

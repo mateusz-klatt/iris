@@ -353,7 +353,7 @@ const translation = {
     clientHealth: "Стан клієнта",
     noHostReport: "Немає звіту з цього комп'ютера",
     claimFilters: "Фільтр резервувань",
-    claimExpired: "Минуло",
+    claimExpired: "Термін дії минув",
     noClaimsMatch: "Жодне резервування не відповідає цим фільтрам.",
     retry: "Спробувати ще раз",
     doctorMissing: "Звіт doctor ще не збережено. Запустіть {{command}} на цьому комп'ютері.",
