@@ -37,30 +37,33 @@ type Request struct {
 	SingleSession    bool              `json:"single_session"`
 	Source           string            `json:"source"`
 	Execution        string            `json:"execution"`
-	ExecutionID      string            `json:"execution_id"`
-	Generation       int64             `json:"generation"`
-	Key              string            `json:"key"`
-	ToolCallID       string            `json:"tool_call_id"`
-	Paths            []string          `json:"paths"`
-	RenameFrom       string            `json:"rename_from"`
-	RenameTo         string            `json:"rename_to"`
-	Kind             string            `json:"kind"`
-	Path             string            `json:"path"`
-	RepoWide         bool              `json:"repo_wide"`
-	TTLS             int64             `json:"ttl_s"`
-	Fence            int64             `json:"fence"`
-	All              bool              `json:"all"`
-	Token            string            `json:"token"`
-	To               []string          `json:"to"`
-	Subject          string            `json:"subject"`
-	Body             string            `json:"body"`
-	Attempt          int64             `json:"attempt"`
-	Handled          bool              `json:"handled"`
-	RepositoryID     string            `json:"repository_id"`
-	After            int64             `json:"after"`
-	Limit            int               `json:"limit"`
-	ConsumerID       string            `json:"consumer_id"`
-	Stream           string            `json:"stream"`
+	// Exclude names an Execution a bind must skip: an MCP that had to register its own asks
+	// past it for the session's hook's.
+	Exclude      string   `json:"exclude"`
+	ExecutionID  string   `json:"execution_id"`
+	Generation   int64    `json:"generation"`
+	Key          string   `json:"key"`
+	ToolCallID   string   `json:"tool_call_id"`
+	Paths        []string `json:"paths"`
+	RenameFrom   string   `json:"rename_from"`
+	RenameTo     string   `json:"rename_to"`
+	Kind         string   `json:"kind"`
+	Path         string   `json:"path"`
+	RepoWide     bool     `json:"repo_wide"`
+	TTLS         int64    `json:"ttl_s"`
+	Fence        int64    `json:"fence"`
+	All          bool     `json:"all"`
+	Token        string   `json:"token"`
+	To           []string `json:"to"`
+	Subject      string   `json:"subject"`
+	Body         string   `json:"body"`
+	Attempt      int64    `json:"attempt"`
+	Handled      bool     `json:"handled"`
+	RepositoryID string   `json:"repository_id"`
+	After        int64    `json:"after"`
+	Limit        int      `json:"limit"`
+	ConsumerID   string   `json:"consumer_id"`
+	Stream       string   `json:"stream"`
 }
 type execution struct {
 	ID, AgentID, Repo, Host, Client, Session, Worktree, Branch, State, Name string
@@ -406,8 +409,15 @@ func (t *transaction) bind(r Request) (map[string]any, error) {
 		if r.ClientPID <= 0 || r.ClientPIDStartMS <= 0 {
 			return nil, fail("unbound", "provide a session id or explicit execution handle")
 		}
-		query += " AND e.single_session=1 AND e.client_pid=? AND e.client_pid_start_ms=?"
+		// A process positively known to host one session, or one top-level session, as a
+		// Claude process does: its subagents register with a parent and do not compete. A
+		// process that multiplexes sessions is never matched this way (D6).
+		query += " AND e.client_pid=? AND e.client_pid_start_ms=? AND (e.single_session=1 OR (e.parent_id IS NULL AND e.client IN ('claude')))"
 		args = append(args, r.ClientPID, r.ClientPIDStartMS)
+	}
+	if r.Exclude != "" {
+		query += " AND e.id<>?"
+		args = append(args, r.Exclude)
 	}
 	rows, err := t.rows(query, args...)
 	if err != nil {

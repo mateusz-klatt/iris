@@ -54,6 +54,12 @@ func TestMCPStdio(t *testing.T) {
 	if status["counts"].(map[string]int)["Execution"] != 0 {
 		t.Fatal("binding was not lazy")
 	}
+	// The session's hook is its only registrar; the MCP then binds to that Execution.
+	host, _ := os.Hostname()
+	cwd, _ := os.Getwd()
+	if _, err = s.Call(ctx, "sessions", store.Request{Client: "claude", Host: host, SessionID: "mcp-only-test", Cwd: cwd, Source: "hook"}); err != nil {
+		t.Fatal(err)
+	}
 	tools, err := session.ListTools(ctx, nil)
 	if err != nil || len(tools.Tools) != 10 {
 		t.Fatalf("tools=%v err=%v", tools, err)
