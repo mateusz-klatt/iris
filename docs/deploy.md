@@ -29,6 +29,32 @@ channel and distribute it privately; do not paste it into chat, URLs or shell hi
 Setup cannot fetch or provision this credential. Back up the database using SQLite's
 backup mechanism or while the hub is stopped; copying only a live .db can omit WAL data.
 
+### Retention and restore (ADR 006)
+
+The hub sweeps at start and then hourly. It drops events after 7 days, idempotency records after a
+day, claims finished 30 days ago, and Executions that ended 30 days ago and that no mail names. Mail
+is never deleted, so the database grows with it; `GET /v1/status` and `iris doctor` show its size.
+The first sweep after an upgrade logs what it removed, which can be a lot once.
+
+To test a restore, never use the live volume. Copy a backup out of the archive, then run:
+
+```sh
+iris admin restore-check /path/to/backup-copy.db /path/to/empty-scratch-dir
+```
+
+It copies the backup into the scratch directory and opens it there, as a restored hub starts, in a
+throwaway hub on a loopback port with a token of its own. It then checks:
+
+- that every session active at backup time is recovering, none live;
+- that the restored hub answers status;
+- that a session presenting a generation the backup never saw gets no restored authority;
+- that a monitor whose cursor is ahead of the restored history gets a reset.
+
+It also prints what the first retention sweep would remove. A failed check prints `FAIL` and exits
+non-zero. To restore for real, stop the hub, put the backup in place of `hub.db` (removing its
+`-wal` and `-shm` files), and start it: every session then reattaches with proof, or registers
+afresh.
+
 Use `deploy/apache-iris.conf` as the complete HTTP and HTTPS vhosts, after enabling
 ssl, headers, rewrite, proxy and proxy_http on Apache 2.4.47 or later. Provision the
 certificate at /etc/letsencrypt/live/iris.klatt.ie/ first, with the ACME webroot at

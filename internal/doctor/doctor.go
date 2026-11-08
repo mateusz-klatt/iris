@@ -64,8 +64,10 @@ type Result struct {
 	TokenUnavailable bool
 	TokenDetail      string
 	HubDetail        string
-	Stored           bool
-	StoreError       string
+	// DatabaseBytes is the hub database's size, when the hub says it.
+	DatabaseBytes int64
+	Stored        bool
+	StoreError    string
 	// Guard is the pre-commit guard line for the repository doctor ran in.
 	Guard string
 	// Case warns when the repository doctor ran in is case-sensitive at the hub while this
@@ -143,7 +145,7 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 	}
 	token, tokenReadErr := readToken(tokenFile)
 	probe := probeHub(ctx, hubURL, token, tokenReadErr, opt.HTTP)
-	res := Result{HubURL: hubURL, HubSource: source, HubUp: probe.up, TokenOK: probe.tokenOK, TokenUnchecked: probe.unchecked, TokenUnavailable: probe.unavailable, TokenDetail: probe.tokenDetail, HubDetail: probe.detail}
+	res := Result{HubURL: hubURL, HubSource: source, HubUp: probe.up, TokenOK: probe.tokenOK, TokenUnchecked: probe.unchecked, TokenUnavailable: probe.unavailable, TokenDetail: probe.tokenDetail, HubDetail: probe.detail, DatabaseBytes: probe.databaseBytes}
 	res.Report.CheckedAt = opt.Now().UTC()
 	for _, c := range integrate.All() {
 		res.Report.Clients = append(res.Report.Clients, checkClient(ctx, opt, c))
@@ -212,6 +214,9 @@ func (r Result) Format() string {
 		state = "ok"
 	}
 	fmt.Fprintf(&b, "hub: %s", state)
+	if r.DatabaseBytes > 0 {
+		fmt.Fprintf(&b, " (database %.1f MiB)", float64(r.DatabaseBytes)/(1<<20))
+	}
 	if r.HubDetail != "" {
 		fmt.Fprintf(&b, " (%s)", r.HubDetail)
 	}
@@ -517,7 +522,9 @@ func canaryPayload(client, cwd string) []byte {
 // hubProbe is what one run learned about the hub and the token.
 type hubProbe struct {
 	up, tokenOK, unchecked, unavailable bool
-	detail, tokenDetail                 string
+	// databaseBytes is the hub database's size, which grows with mail (ADR 006).
+	databaseBytes       int64
+	detail, tokenDetail string
 }
 
 // hubRequest sends one call. An empty token sends no credential.
@@ -545,6 +552,10 @@ func probeHub(ctx context.Context, base, token string, tokenErr error, hc *http.
 	if err != nil {
 		return hubProbe{detail: "hub unreachable"}
 	}
+	var status struct {
+		DatabaseBytes int64 `json:"database_bytes"`
+	}
+	_ = json.NewDecoder(res.Body).Decode(&status) // an older hub does not say, which leaves 0
 	_ = res.Body.Close()
 	if res.StatusCode >= 500 {
 		return hubProbe{detail: "hub status " + res.Status}
@@ -564,7 +575,7 @@ func probeHub(ctx context.Context, base, token string, tokenErr error, hc *http.
 	case res.StatusCode >= 500:
 		return hubProbe{up: true, unchecked: true, tokenDetail: "token check failed: hub status " + res.Status}
 	}
-	return hubProbe{up: true, tokenOK: true}
+	return hubProbe{up: true, tokenOK: true, databaseBytes: status.DatabaseBytes}
 }
 
 func putReport(ctx context.Context, base, token string, report Report, hc *http.Client) error {

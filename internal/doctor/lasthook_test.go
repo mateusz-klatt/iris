@@ -71,3 +71,27 @@ func TestTheLastHookComesFromTheHubForThisHost(t *testing.T) {
 		t.Fatalf("host %q, want %q", (Options{}).host(), want)
 	}
 }
+
+// The hub's database grows with mail, which nothing prunes (ADR 006), so doctor says its size.
+func TestDoctorSaysHowLargeTheHubDatabaseIs(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/status" {
+			_, _ = w.Write([]byte(`{"database_bytes":3145728}`))
+			return
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	layout := doctorLayout(t)
+	token := filepath.Join(layout.Home, "hub.token")
+	if err := os.WriteFile(token, []byte("secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res, err := Run(context.Background(), Options{Layout: layout, HubURL: srv.URL, TokenFile: token, HTTP: srv.Client(), Host: "h"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if res.DatabaseBytes != 3145728 || !strings.Contains(res.Format(), "hub: ok (database 3.0 MiB)") {
+		t.Fatalf("%d\n%s", res.DatabaseBytes, res.Format())
+	}
+}

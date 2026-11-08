@@ -56,6 +56,9 @@ var receiptsSchema string
 //go:embed migrations/012.sql
 var hookSeenSchema string
 
+//go:embed migrations/013.sql
+var retentionSchema string
+
 // Clock separates lease ticks from persisted wall-clock expiries. Tick must be monotonic
 // within a Store's lifetime; client timestamps never participate in lease decisions.
 type Clock interface {
@@ -234,6 +237,11 @@ func openDatabase(filename string, clock Clock, driverName string) (*Store, erro
 		}
 		if version < 12 {
 			if _, err := t.exec(hookSeenSchema); err != nil {
+				return err
+			}
+		}
+		if version < 13 {
+			if _, err := t.exec(retentionSchema); err != nil {
 				return err
 			}
 		}
@@ -423,7 +431,7 @@ func (t *transaction) remember(e execution, key, route string, request any, resu
 	}{route, request})
 	hash := sha256.Sum256(raw)
 	body, _ := json.Marshal(result) // results are hub-owned JSON maps, never client metadata
-	_, err := t.exec("INSERT INTO Operation VALUES(?,?,?,?)", e.AgentID, key, hash[:], string(body))
+	_, err := t.exec("INSERT INTO Operation(principal_agent_id,key,request_hash,result_json,created_ms) VALUES(?,?,?,?,?)", e.AgentID, key, hash[:], string(body), t.s.clock.Now().UnixMilli())
 	return err
 }
 
