@@ -325,3 +325,28 @@ func TestLostReportsOnlyTheHeartbeatsVerdict(t *testing.T) {
 		t.Fatal("a resolver the heartbeat found lost reads as live")
 	}
 }
+
+// After a loss the resolver never registers a session itself: right after a hub restart the
+// next tool call usually comes before the session's hook has registered again, and a
+// registration then would give this process an Execution of its own, beside the hook's. It
+// answers lost until a bind finds the session's Execution.
+func TestAfterALossTheResolverWaitsForTheSessionsOwnExecution(t *testing.T) {
+	hub := &scriptedHub{binds: []string{"unbound"}}
+	r := resolverFor(t, hub, "claude", map[string]string{"CLAUDE_CODE_SESSION_ID": "s"}, proc.Ancestor{})
+	r.lost, r.gone = true, map[string]bool{"ex_old": true}
+	if _, err := r.Resolve(context.Background(), ""); !IsCode(err, "lost") || hub.session != nil {
+		t.Fatalf("registered after a loss: %v %+v", err, hub.session)
+	}
+	// Once the hook has registered, the bind finds that Execution.
+	b, err := r.Resolve(context.Background(), "")
+	if err != nil || b.ExecutionID != "ex_bound" || r.Lost() || hub.session != nil {
+		t.Fatalf("%+v %v lost %v registered %+v", b, err, r.Lost(), hub.session)
+	}
+	// The single-session rung waits as well.
+	single := &scriptedHub{binds: []string{"unbound"}}
+	s := resolverFor(t, single, "codex", map[string]string{}, proc.Ancestor{PID: 42, StartMS: 7})
+	s.gone = map[string]bool{"ex_old": true}
+	if _, err := s.register(context.Background(), "mcp-42-7", proc.Ancestor{PID: 42, StartMS: 7}, true, 3); !IsCode(err, "lost") || single.session != nil {
+		t.Fatalf("registered after a loss: %v %+v", err, single.session)
+	}
+}

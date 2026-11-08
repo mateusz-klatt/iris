@@ -18,8 +18,9 @@ import (
 
 // A monitor whose generation is found lost, as after a laptop sleeps past its lease, says once
 // that notifications stopped and keeps going: a plugin monitor that exits is not restarted, and
-// the session would go deaf. When the session has an Execution again, the monitor binds to it,
-// never to the lost one, says notifications resumed, and follows it from its own cursor (D9).
+// the session would go deaf. When the session's hook has registered it again, the monitor binds
+// to that Execution, never to the lost one and never to one of its own, says notifications
+// resumed, and follows it from its own cursor (D9).
 func TestAMonitorResumesOnTheSessionsNextExecution(t *testing.T) {
 	h := newRestartableHub(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -57,8 +58,19 @@ func TestAMonitorResumesOnTheSessionsNextExecution(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	// The session's Execution goes; the next heartbeat finds it lost.
+	// The session's Execution goes; the next heartbeat finds it lost. The monitor never
+	// registers the session itself, which would split it from its hook, so it waits until
+	// the hook has registered again.
 	if _, err = h.store.Call(ctx, "end", first); err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); !strings.Contains(output.String(), "Iris: notifications stopped: "); {
+		if time.Now().After(deadline) {
+			t.Fatalf("never said it stopped: %q", output.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if _, err = h.store.Call(ctx, "sessions", store.Request{Client: "claude", Host: "host", SessionID: "s", Cwd: "/repo", Source: "hook"}); err != nil {
 		t.Fatal(err)
 	}
 	for deadline := time.Now().Add(10 * time.Second); ; {
@@ -75,10 +87,13 @@ func TestAMonitorResumesOnTheSessionsNextExecution(t *testing.T) {
 		}
 		time.Sleep(10 * time.Millisecond)
 	}
-	// A gap the monitor announced is closed by its resumption; one the fresh bind closed first
-	// needed no word. Either way the lost Execution is never followed again.
-	if got := output.String(); strings.Count(got, "Iris: notifications stopped: ") > 1 ||
-		(strings.Contains(got, "stopped") && !strings.Contains(got[strings.Index(got, "stopped"):], "Iris: notifications resumed.")) {
+	for deadline := time.Now().Add(5 * time.Second); !strings.Contains(output.String(), "Iris: notifications resumed."); {
+		if time.Now().After(deadline) {
+			t.Fatalf("never said it resumed: %q", output.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if got := output.String(); strings.Count(got, "Iris: notifications stopped: ") != 1 || strings.Index(got, "stopped") > strings.Index(got, "resumed") {
 		t.Fatalf("output %q", got)
 	}
 	stop()

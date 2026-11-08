@@ -151,6 +151,13 @@ func (r *Resolver) resolve(ctx context.Context, handle string) (Bound, error) {
 	return Bound{}, &hubclient.Error{Code: "unbound", Message: "Pass the execution handle from SessionStart in the execution argument, or restart with IRIS_EXECUTION set. Iris cannot identify this session safely."}
 }
 func (r *Resolver) register(ctx context.Context, session string, a proc.Ancestor, single bool, rung int) (Bound, error) {
+	// After a loss this process never registers a session itself. Right after a hub restart
+	// its next call usually comes before the session's hook has registered again, and a
+	// registration then would split the session: an Execution for this process beside the
+	// hook's. It answers lost until a bind finds the session's own Execution.
+	if len(r.gone) > 0 {
+		return Bound{}, errLost
+	}
 	req := hubclient.SessionRequest{Client: r.Client, SessionID: session, Host: r.Host, CWD: r.CWD, Source: "mcp", ClientPID: a.PID, ClientPIDStartMS: a.StartMS, SingleSession: single}
 	if repo, err := gitinfo.Find(r.CWD); err == nil {
 		req.CommonDir = repo.CommonDir
