@@ -24,6 +24,9 @@ import {
   type WatchFrame,
   type WatchStatus,
 } from "./api";
+import { ClaimsPanel } from "./ClaimsPanel";
+import { DraftBody, DraftReview } from "./DraftReview";
+import { useReview } from "./review";
 import { loadLocale, type SupportedLocale } from "./i18n";
 import LocalePicker from "./LocalePicker";
 import { MessageBody } from "./MessageBody";
@@ -232,6 +235,8 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
   const [thread, setThread] = useState<ThreadDetail | null>(null);
   const [compose, setCompose] = useState<Draft>(newDraft);
   const [reply, setReply] = useState<Draft>(newDraft);
+  const composeReview = useReview(compose.key);
+  const replyReview = useReview(reply.key);
   // One send at a time: a second submit while one is pending would be a second send. The ref
   // stops one that comes before React re-renders; the state disables the buttons.
   const inFlight = useRef(false);
@@ -300,7 +305,14 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
       }
       void reload();
       setThreadRevision((value) => value + 1);
-    }, setStream);
+    }, (status) => {
+      // A refused session ends the watch; the operator is shown how to sign in again.
+      if (status === "unauthorized") {
+        setPhase("unauthorized");
+        return;
+      }
+      setStream(status);
+    });
     return () => {
       // A load still in flight lands on a closed view, so it is dropped.
       requests.current++;
@@ -493,7 +505,6 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
           </span>
           <span>
             <strong>{t("appName")}</strong>
-            <small>{t("appSubtitle")}</small>
           </span>
         </a>
         <div className="topbar-controls">
@@ -558,7 +569,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                   <span>{t("operator.unread", { count: overview.human_unread })}</span>
                 </div>
                 {overview.repositories.length === 0 ? <p>{t("operator.none")}</p> : (
-                  <table>
+                  <table className="stack-table">
                     <caption className="sr-only">{t("operator.repositories")}</caption>
                     <thead>
                       <tr>
@@ -582,7 +593,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                   <h2>{t("operator.agents")}</h2>
                 </div>
                 {sessions.length === 0 ? <p>{t("operator.waiting")}</p> : (
-                  <table>
+                  <table className="stack-table">
                     <caption className="sr-only">{t("operator.agents")}</caption>
                     <thead>
                       <tr>
@@ -610,45 +621,12 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                   </table>
                 )}
               </article>
-              <article className="panel">
-                <div className="panel-heading">
-                  <h2>{t("operator.claims")}</h2>
-                </div>
-                {overview.claims.length === 0 ? <p>{t("operator.none")}</p> : (
-                  <table>
-                    <caption className="sr-only">{t("operator.claims")}</caption>
-                    <thead>
-                      <tr>
-                        <th scope="col">{t("reservations.path")}</th>
-                        <th scope="col">{t("reservations.holder")}</th>
-                        <th scope="col">{t("reservations.expires")}</th>
-                        <th scope="col">{t("operator.revoke")}</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {overview.claims.map((claim) => (
-                        <tr key={claim.fence}>
-                          <th scope="row">{claim.path}</th>
-                          <td>
-                            {claim.holder} · {claim.kind}
-                          </td>
-                          <td>{claim.expires_at === null ? t("operator.none") : formatWhen(claim.expires_at)}</td>
-                          <td>
-                            <button
-                              type="button"
-                              className="primary-button"
-                              disabled={revoking === claim.fence}
-                              onClick={() => void onRevoke(claim)}
-                            >
-                              {revoking === claim.fence ? t("operator.revoking") : t("operator.revoke")}
-                            </button>
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </article>
+              <ClaimsPanel
+                claims={overview.claims}
+                repositories={overview.repositories}
+                revoking={revoking}
+                onRevoke={(claim) => void onRevoke(claim)}
+              />
             </section>
 
             <section id="threads" className="panel" aria-labelledby="threads-title">
@@ -752,11 +730,9 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                     className="search-form"
                     onSubmit={(event) => {
                       event.preventDefault();
-                      void submit(reply, setReply, () =>
-                        // A sent reply leaves nothing of the operator's to keep, so the next
-                        // refresh may answer the newest message.
-                        setReply((current) => ({ ...edited(current, { body: "" }), offered: true })),
-                      );
+                      if (sendable(reply)) {
+                        replyReview.start();
+                      }
                     }}
                   >
                     <h3>{t("operator.reply")}</h3>
@@ -769,18 +745,24 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                       <input value={reply.subject} onChange={(event) => setReply(edited(reply, { subject: event.target.value }))} />
                     </label>
                     <SubjectSize subject={reply.subject} />
-                    <label>
-                      {t("operator.body")}
-                      <textarea value={reply.body} onChange={(event) => setReply(edited(reply, { body: event.target.value }))} />
-                    </label>
+                    <DraftBody value={reply.body} onChange={(body) => setReply(edited(reply, { body }))} />
                     <p>{t("markdown.byteCount", { count: byteLength(reply.body), maximum: maximumBodyBytes })}</p>
-                    <button
-                      type="submit"
-                      className="primary-button"
-                      disabled={sending || !sendable(reply)}
-                    >
-                      {t("operator.reply")}
-                    </button>
+                    <DraftReview
+                      review={replyReview}
+                      recipients={recipientsOf(reply.to)}
+                      subject={reply.subject}
+                      body={reply.body}
+                      sendable={sendable(reply)}
+                      sending={sending}
+                      sendLabel={t("operator.reply")}
+                      onSend={() =>
+                        void submit(reply, setReply, () =>
+                          // A sent reply leaves nothing of the operator's to keep, so the next
+                          // refresh may answer the newest message.
+                          setReply((current) => ({ ...edited(current, { body: "" }), offered: true })),
+                        )
+                      }
+                    />
                   </form>
                 </article>
               ) : null}
@@ -794,7 +776,9 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                 className="search-form"
                 onSubmit={(event) => {
                   event.preventDefault();
-                  void submit(compose, setCompose, () => setCompose(newDraft()));
+                  if (sendable(compose)) {
+                    composeReview.start();
+                  }
                 }}
               >
                 <label>
@@ -806,18 +790,18 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                   <input value={compose.subject} onChange={(event) => setCompose(edited(compose, { subject: event.target.value }))} />
                 </label>
                 <SubjectSize subject={compose.subject} />
-                <label>
-                  {t("operator.body")}
-                  <textarea value={compose.body} onChange={(event) => setCompose(edited(compose, { body: event.target.value }))} />
-                </label>
+                <DraftBody value={compose.body} onChange={(body) => setCompose(edited(compose, { body }))} />
                 <p>{t("markdown.byteCount", { count: byteLength(compose.body), maximum: maximumBodyBytes })}</p>
-                <button
-                  type="submit"
-                  className="primary-button"
-                  disabled={sending || !sendable(compose)}
-                >
-                  {t("operator.send")}
-                </button>
+                <DraftReview
+                  review={composeReview}
+                  recipients={recipientsOf(compose.to)}
+                  subject={compose.subject}
+                  body={compose.body}
+                  sendable={sendable(compose)}
+                  sending={sending}
+                  sendLabel={t("operator.send")}
+                  onSend={() => void submit(compose, setCompose, () => setCompose(newDraft()))}
+                />
               </form>
               {notice.length > 0 ? <p role="status">{notice}</p> : null}
               {formError.length > 0 ? <p role="alert">{formError}</p> : null}

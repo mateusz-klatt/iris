@@ -2,7 +2,6 @@ import type { TranslationResource } from "../i18n";
 
 const translation = {
   appName: "Iris",
-  appSubtitle: "Iris",
   skipToContent: "본문으로 건너뛰기",
   mailboxSecureDelivery: "영구 전달",
   navigation: "기본 탐색",
@@ -362,6 +361,9 @@ const translation = {
     doctorStale: "확인한 지 하루가 넘어 현재 클라이언트의 상태를 거의 알 수 없습니다.",
     clientHealth: "클라이언트 상태",
     noHostReport: "이 기기의 보고서가 없습니다",
+    claimFilters: "예약 필터",
+    claimExpired: "만료됨",
+    noClaimsMatch: "이 필터와 일치하는 예약이 없습니다.",
     retry: "다시 시도",
     doctorMissing: "저장된 doctor 보고서가 아직 없습니다. 이 컴퓨터에서 {{command}}을(를) 실행하세요.",
     statusOk: "Hook 수신됨",
@@ -398,6 +400,9 @@ const translation = {
     detail: "세부 정보",
     version: "버전",
     checkedAt: "{{date}}에 확인함",
+    review: "검토",
+    reviewTitle: "보내기 전에 확인",
+    reviewBack: "초안으로 돌아가기",
   },
 } satisfies TranslationResource;
 

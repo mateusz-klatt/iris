@@ -2,7 +2,6 @@ import type { TranslationResource } from "../i18n";
 
 const translation = {
   appName: "Iris",
-  appSubtitle: "Iris",
   skipToContent: "Μετάβαση στο περιεχόμενο",
   mailboxSecureDelivery: "Ανθεκτική παράδοση",
   navigation: "Κύρια πλοήγηση",
@@ -362,6 +361,9 @@ const translation = {
     doctorStale: "Ελέγχθηκε πριν από περισσότερο από μία ημέρα, οπότε λέει λίγα για τον πελάτη τώρα.",
     clientHealth: "Κατάσταση πελάτη",
     noHostReport: "Καμία αναφορά από αυτόν τον υπολογιστή",
+    claimFilters: "Φιλτράρισμα δεσμεύσεων",
+    claimExpired: "Έληξε",
+    noClaimsMatch: "Καμία δέσμευση δεν ταιριάζει με αυτά τα φίλτρα.",
     retry: "Δοκιμάστε ξανά",
     doctorMissing: "Δεν έχει αποθηκευτεί ακόμη αναφορά doctor. Εκτελέστε {{command}} σε αυτόν τον υπολογιστή.",
     statusOk: "Το hook ελήφθη",
@@ -398,6 +400,9 @@ const translation = {
     detail: "Λεπτομέρειες",
     version: "Έκδοση",
     checkedAt: "Ελέγχθηκε {{date}}",
+    review: "Έλεγχος",
+    reviewTitle: "Ελέγξτε πριν από την αποστολή",
+    reviewBack: "Επιστροφή στο πρόχειρο",
   },
 } satisfies TranslationResource;
 

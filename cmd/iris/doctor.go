@@ -3,6 +3,7 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"flag"
 	"fmt"
 	"io"
@@ -31,11 +32,12 @@ func runDoctorIO(ctx context.Context, args []string, stdin io.Reader, stdout, st
 	timeout := fs.Duration("timeout", 0, "with --live, the limit for each client (default 3m)")
 	only := fs.String("client", "", "with --live, run only this client")
 	hub := fs.String("hub-url", "", "hub base URL")
+	bundle := fs.Bool("bundle", false, "print a diagnostic bundle with no secret in it, to paste where others read it")
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	if fs.NArg() != 0 {
-		_, _ = fmt.Fprintln(stderr, "usage: iris doctor [--hub-url url] [--live [--client name] [--yes] [--timeout d]]")
+	if fs.NArg() != 0 || (*bundle && *liveFlag) {
+		_, _ = fmt.Fprintln(stderr, "usage: iris doctor [--hub-url url] [--bundle | --live [--client name] [--yes] [--timeout d]]")
 		return 2
 	}
 	offline, cancel := context.WithTimeout(ctx, 3*time.Minute)
@@ -44,6 +46,11 @@ func runDoctorIO(ctx context.Context, args []string, stdin io.Reader, stdout, st
 	if err != nil {
 		_, _ = fmt.Fprintln(stderr, err)
 		return 1
+	}
+	if *bundle {
+		raw, _ := json.MarshalIndent(doctor.NewBundle(res, version, time.Now()), "", "  ") // plain fields always encode
+		_, _ = fmt.Fprintln(stdout, string(raw))
+		return res.ExitCode()
 	}
 	_, _ = fmt.Fprint(stdout, res.Format())
 	code := res.ExitCode()

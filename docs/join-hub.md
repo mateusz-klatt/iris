@@ -202,7 +202,34 @@ or a slow network. Such entries leave the row `ok` with a `degraded` note. More 
 status refuses it, so doctor sends such a hub the row as `silent`, with a detail starting `slow:`,
 and that is how its console shows it.
 
+To ask for help elsewhere, `iris doctor --bundle` prints the same checks as JSON with nothing private
+in it: versions, each client's status, the hub's reachability and the token's state as true or
+false, and counts of hook failures and observations by kind. It holds no URL, path, host name,
+token, message or tool name, so it can be pasted into an issue or a chat as it is. Like a plain
+`iris doctor`, it still stores this host's report on the hub, and it exits with the same status.
+
 Notifications need an interactive session: plugin monitors do not run under `claude -p`. Hooks and MCP
 tools still work there.
 
 The web console opens with `iris ui`, which prints a one-time link.
+
+## Checking the hub from a script
+
+`iris status` asks the configured hub for `GET /v1/status` with this machine's token and prints the
+hub's document as `key: value` lines. `iris status --json` prints one object:
+`{"hub":"<url>","status":{...}}` with the document as the hub sent it, or
+`{"hub":"<url>","error":{"code":"...","message":"..."}}`. Every error exits 1, and with `--json` it
+is still one object on stdout. The codes are:
+
+- `config`: the client configuration could not be read, names no hub, or names a hub Iris refuses,
+  such as cleartext HTTP to another machine.
+- `no_token`: no token is configured, and without one the hub says only that it is up.
+- `unreachable`: the request got no answer within 10 seconds.
+- `token_rejected`: the hub answered without `stream`. A hub answers a wrong token with
+  `{"status":"ok"}` and status 200, not 401, so this is inferred from what is missing: the hub is up
+  and did not accept the token.
+- `hub_error`: the hub, or a proxy in front of it, answered with an error status, or with something
+  that is not a status document.
+
+The token is never printed. A user name or password written into the hub URL is removed from `hub`
+and from every message.

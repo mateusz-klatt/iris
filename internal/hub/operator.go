@@ -168,7 +168,7 @@ func (h *Hub) uiWatch(w http.ResponseWriter, r *http.Request) {
 	}
 }
 func (h *Hub) operatorRoutes() {
-	for route, op := range map[string]string{"GET /v1/ui/overview": "ui_overview", "GET /v1/ui/threads": "ui_threads", "GET /v1/ui/threads/{id}": "ui_thread", "POST /v1/ui/threads/{id}/read": "ui_read", "POST /v1/ui/messages": "ui_messages", "POST /v1/ui/claims/{fence}/revoke": "ui_revoke", "GET /v1/ui/doctor": "ui_doctor_get", "PUT /v1/ui/doctor": "ui_doctor_put"} {
+	for route, op := range map[string]string{"GET /v1/ui/overview": "ui_overview", "GET /v1/ui/deliveries": "ui_deliveries", "GET /v1/ui/threads": "ui_threads", "GET /v1/ui/threads/{id}": "ui_thread", "POST /v1/ui/threads/{id}/read": "ui_read", "POST /v1/ui/messages": "ui_messages", "POST /v1/ui/claims/{fence}/revoke": "ui_revoke", "GET /v1/ui/doctor": "ui_doctor_get", "PUT /v1/ui/doctor": "ui_doctor_put"} {
 		h.mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) {
 			req, err := decode(w, r)
 			if err != nil {

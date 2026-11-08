@@ -2,7 +2,6 @@ import type { TranslationResource } from "../i18n";
 
 const translation = {
   appName: "Iris",
-  appSubtitle: "Iris",
   skipToContent: "דילוג לתוכן",
   mailboxSecureDelivery: "מסירה עמידה",
   navigation: "ניווט ראשי",
@@ -362,6 +361,9 @@ const translation = {
     doctorStale: "נבדק לפני יותר מיום, ולכן הוא אומר מעט על הלקוח כעת.",
     clientHealth: "מצב הלקוח",
     noHostReport: "אין דוח מהמחשב הזה",
+    claimFilters: "סינון שריונות",
+    claimExpired: "פג תוקף",
+    noClaimsMatch: "אין שריון שתואם למסננים האלה.",
     retry: "ניסיון חוזר",
     doctorMissing: "עדיין לא נשמר דוח doctor. הריצו את {{command}} במחשב הזה.",
     statusOk: "ה-hook התקבל",
@@ -398,6 +400,9 @@ const translation = {
     detail: "פרטים",
     version: "גרסה",
     checkedAt: "נבדק ב-{{date}}",
+    review: "בדיקה",
+    reviewTitle: "בדקו לפני השליחה",
+    reviewBack: "חזרה לטיוטה",
   },
 } satisfies TranslationResource;
 

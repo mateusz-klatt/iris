@@ -2,7 +2,6 @@ import type { TranslationResource } from "../i18n";
 
 const translation = {
   appName: "Iris",
-  appSubtitle: "Iris",
   skipToContent: "پرش به محتوا",
   mailboxSecureDelivery: "تحویل پایدار",
   navigation: "ناوبری اصلی",
@@ -362,6 +361,9 @@ const translation = {
     doctorStale: "بیش از یک روز پیش بررسی شده، پس اکنون چیز زیادی دربارهٔ کلاینت نمی‌گوید.",
     clientHealth: "وضعیت کلاینت",
     noHostReport: "گزارشی از این دستگاه نیست",
+    claimFilters: "پالایش رزروها",
+    claimExpired: "منقضی‌شده",
+    noClaimsMatch: "هیچ رزروی با این پالایه‌ها مطابقت ندارد.",
     retry: "دوباره تلاش کنید",
     doctorMissing: "هنوز هیچ گزارش doctor ذخیره نشده است. {{command}} را روی این رایانه اجرا کنید.",
     statusOk: "hook دریافت شد",
@@ -398,6 +400,9 @@ const translation = {
     detail: "جزئیات",
     version: "نسخه",
     checkedAt: "بررسی‌شده در {{date}}",
+    review: "بازبینی",
+    reviewTitle: "پیش از ارسال بررسی کنید",
+    reviewBack: "بازگشت به پیش‌نویس",
   },
 } satisfies TranslationResource;
 

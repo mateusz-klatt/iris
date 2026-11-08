@@ -21,7 +21,7 @@
     "i18next": "26.4.2",
     "react": "19.3.0",
     "react-dom": "19.3.0",
-    "react-i18next": "17.0.15",
+    "react-i18next": "17.1.12",
     "react-markdown": "10.1.0",
     "remark-breaks": "4.0.0",
     "remark-gfm": "4.0.1"
@@ -39,7 +39,7 @@
     "@vitejs/plugin-react": "6.1.1",
     "@vitest/coverage-v8": "4.1.11",
     "autoprefixer": "10.6.2",
-    "eslint": "10.11.0",
+    "eslint": "10.14.0",
     "eslint-plugin-react-hooks": "7.1.1",
     "eslint-plugin-react-refresh": "0.5.7",
     "globals": "17.13.0",

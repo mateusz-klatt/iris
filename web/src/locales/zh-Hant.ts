@@ -2,7 +2,6 @@ import type { TranslationResource } from "../i18n";
 
 const translation = {
   appName: "Iris",
-  appSubtitle: "Iris",
   skipToContent: "跳至內容",
   mailboxSecureDelivery: "持久傳遞",
   navigation: "主要導覽",
@@ -353,6 +352,9 @@ const translation = {
     doctorStale: "距離上次檢查已超過一天，因此難以反映用戶端目前的狀態。",
     clientHealth: "用戶端狀態",
     noHostReport: "沒有來自這台電腦的報告",
+    claimFilters: "篩選佔用",
+    claimExpired: "已過期",
+    noClaimsMatch: "沒有符合這些篩選條件的佔用。",
     retry: "重試",
     doctorMissing: "尚未儲存任何 doctor 報告。請在這台電腦上執行 {{command}}。",
     statusOk: "已收到 hook",
@@ -389,6 +391,9 @@ const translation = {
     detail: "詳細資料",
     version: "版本",
     checkedAt: "檢查於 {{date}}",
+    review: "檢閱",
+    reviewTitle: "傳送前檢查",
+    reviewBack: "返回草稿",
   },
 } satisfies TranslationResource;
 

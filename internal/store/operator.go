@@ -51,6 +51,8 @@ func (t *transaction) operator(op string, r Request) (map[string]any, error) {
 		return t.send(r)
 	case "ui_overview":
 		return t.overview()
+	case "ui_deliveries":
+		return t.deliveries(r)
 	case "ui_threads":
 		return t.threads(r)
 	case "ui_read":
