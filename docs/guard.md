@@ -23,8 +23,11 @@ it runs in, using the hooks path that Git itself resolves: installed, not instal
 pre-commit hook without Iris. A missing guard does not fail doctor.
 
 `iris guard check` reads staged paths, including both ends of renames and deletions.
-It refuses paths claimed by an Execution in another worktree. Claims in the same
-host/worktree do not block it. An unreachable hub produces a warning and allows the
+It refuses paths claimed by an Execution in another worktree, and names where the holder
+works, so the person refused knows which checkout to ask about:
+`Iris: web/src/App.tsx is held by claude-home-iris (branch feat/claims, worktree /home/a/iris on home-wsl) until …`.
+The branch is the one the holder's session started on, and is left out on a detached HEAD.
+Claims in the same host/worktree do not block it. An unreachable hub produces a warning and allows the
 commit. This is cooperative: `git commit --no-verify` bypasses the hook. It neither
 prevents arbitrary writes nor resolves a conflict.
 
