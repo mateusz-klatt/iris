@@ -7,10 +7,6 @@ services:
     container_name: iris
     network_mode: host
     restart: unless-stopped
-    # The image is FROM scratch and has no /tmp. SQLite needs a temporary directory for
-    # large deletes, sorts and migrations, and fails with IOERR_GETTEMPPATH (6410) without one.
-    environment:
-      TMPDIR: /data
     # Docker keeps json-file logs without limit by default.
     logging:
       driver: json-file
