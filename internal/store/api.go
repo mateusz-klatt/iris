@@ -69,6 +69,8 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 			out, err = t.events(r)
 		case "contact":
 			out, err = t.contact(r)
+		case "hooks_seen":
+			out, err = t.hooksSeen(r.Host)
 		case "forget":
 			out, err = t.forget(r)
 		case "monitor_cursor":
@@ -96,6 +98,15 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 				ex, _ = out["execution_id"].(string)
 			}
 			_, err = t.exec("UPDATE Execution SET last_seen_ms=? WHERE id=?", t.s.clock.Now().UnixMilli(), ex)
+		}
+		// Only hooks register with source hook, claim automatically or reconcile a shell, so
+		// these say when this client's hooks last reached the hub. A heartbeat does not.
+		if err == nil && (operation == "touch" || operation == "reconcile" || (operation == "sessions" && r.Source == "hook")) {
+			ex := r.ExecutionID
+			if operation == "sessions" {
+				ex, _ = out["execution_id"].(string)
+			}
+			_, err = t.exec("UPDATE Execution SET hook_seen_ms=? WHERE id=?", t.s.clock.Now().UnixMilli(), ex)
 		}
 		if err == nil {
 			switch operation {

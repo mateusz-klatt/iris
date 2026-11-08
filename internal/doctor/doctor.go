@@ -11,6 +11,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -81,6 +82,8 @@ type Options struct {
 	Dir string
 	// Self is this doctor's own binary. Empty means the running executable.
 	Self string
+	// Host is this machine's name as its hooks give it to the hub. Empty means os.Hostname.
+	Host string
 }
 
 func (o Options) self() string {
@@ -96,6 +99,14 @@ func sameFile(a, b string) bool {
 	ia, errA := os.Stat(a)
 	ib, errB := os.Stat(b)
 	return errA == nil && errB == nil && os.SameFile(ia, ib)
+}
+
+func (o Options) host() string {
+	if o.Host != "" {
+		return o.Host
+	}
+	host, _ := os.Hostname() // what iris hook sends; an error leaves "", and the hub then says nothing
+	return host
 }
 
 // versionTimeout is long enough for a normal client and short enough to keep doctor usable.
@@ -141,6 +152,10 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 	}
 	res.Guard = guardLine(ctx, opt.Dir)
 	if probe.up && probe.tokenOK {
+		seen := lastHooks(ctx, hubURL, token, opt.host(), opt.HTTP)
+		for i := range res.Report.Clients {
+			res.Report.Clients[i].LastHookAt = seen[res.Report.Clients[i].Client]
+		}
 		if err := storeReport(ctx, hubURL, token, res.Report, opt.HTTP); err != nil {
 			res.StoreError = err.Error()
 		} else {
@@ -214,6 +229,9 @@ func (r Result) Format() string {
 		fmt.Fprintf(&b, "%s\t%s\t%s", c.Client, c.Status, c.Version)
 		if c.Detail != "" {
 			fmt.Fprintf(&b, "\t%s", c.Detail)
+		}
+		if c.LastHookAt != "" {
+			fmt.Fprintf(&b, "\tlast hook %s", c.LastHookAt)
 		}
 		b.WriteByte('\n')
 	}
@@ -618,4 +636,22 @@ func describeVersion(version string, err error) string {
 		return "version check failed: " + err.Error()
 	}
 	return "version " + version
+}
+
+// lastHooks asks the hub when each client's hooks on host last reached it: a session a hook
+// registered, an automatic claim or a shell reconcile, never a heartbeat (gap review C4). A
+// hub that cannot say, being older, unreachable or refusing, leaves every client unknown.
+func lastHooks(ctx context.Context, base, token, host string, hc *http.Client) map[string]string {
+	res, err := hubRequest(ctx, http.MethodGet, strings.TrimRight(base, "/")+"/v1/hooks/seen?"+url.Values{"host": {host}}.Encode(), token, nil, hc)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = res.Body.Close() }()
+	var out struct {
+		Clients map[string]string `json:"clients"`
+	}
+	if res.StatusCode != http.StatusOK || json.NewDecoder(res.Body).Decode(&out) != nil {
+		return nil
+	}
+	return out.Clients
 }
