@@ -217,8 +217,11 @@ func (t *transaction) overview() (map[string]any, error) {
 	}
 	for _, id := range ids {
 		aliases := []string{}
-		var name string
-		if err = t.row("SELECT name FROM Repository WHERE id=?", id).Scan(&name); err != nil {
+		var name, access, accountID string
+		if t.console != nil {
+			accountID = t.console.ID
+		}
+		if err = t.row("SELECT name,COALESCE((SELECT mode FROM ConsoleRepositoryAccess WHERE account_id=? AND repository_id=Repository.id),'') FROM Repository WHERE id=?", accountID, id).Scan(&name, &access); err != nil {
 			return nil, err
 		}
 		rows, err = t.rows("SELECT alias FROM RepositoryAlias WHERE repository_id=? ORDER BY alias", id)
@@ -235,7 +238,16 @@ func (t *transaction) overview() (map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		repos = append(repos, map[string]any{"id": id, "name": name, "aliases": aliases})
+		repository := map[string]any{"id": id, "name": name, "aliases": aliases}
+		// This describes the current console controls; each mutation still checks
+		// authority in its own transaction. Legacy link sessions have no account.
+		if t.console != nil {
+			if t.console.Role == "operator" {
+				access = "rw"
+			}
+			repository["console_access"] = access
+		}
+		repos = append(repos, repository)
 		cs, err := t.claims(id)
 		if err != nil {
 			return nil, err

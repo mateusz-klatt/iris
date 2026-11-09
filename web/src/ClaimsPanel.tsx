@@ -36,11 +36,13 @@ export function ClaimsPanel({
   repositories,
   revoking,
   onRevoke,
+  canRevoke = true,
 }: {
   claims: Claim[];
   repositories: Repository[];
   revoking: number | null;
   onRevoke: (claim: Claim) => void;
+  canRevoke?: boolean;
 }) {
   const { t, i18n } = useTranslation();
   const [repository, setRepository] = useState("");
@@ -127,9 +129,9 @@ export function ClaimsPanel({
                   ) : (
                     <Expiry at={claim.expires_at} now={now} locale={i18n.language} />
                   )}
-                  <button type="button" className="primary-button" disabled={revoking === claim.fence} onClick={() => onRevoke(claim)}>
+                  {canRevoke ? <button type="button" className="primary-button" disabled={revoking === claim.fence} onClick={() => onRevoke(claim)}>
                     {revoking === claim.fence ? t("operator.revoking") : t("operator.revoke")}
-                  </button>
+                  </button> : null}
                 </li>
               ))}
             </ul>

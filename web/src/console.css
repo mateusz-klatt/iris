@@ -1,4 +1,11 @@
 /* Operator workspace. Kept separate from the shared message and draft styles. */
+.account-identity {
+  max-inline-size: min(12rem, 38vw);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .operator-console {
   --console-accent: #5145a6;
   --console-accent-soft: #efedfa;

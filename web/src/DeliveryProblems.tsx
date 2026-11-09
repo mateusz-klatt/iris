@@ -72,6 +72,7 @@ export function DeliveryProblems({ repositoryId, revision, onOpenThread, onUnaut
           <li key={message.id}>
             <button type="button" className="message-row" onClick={(event) => onOpenThread(message.thread_id, event.currentTarget)}>
               <strong>{message.subject}</strong>
+              {message.sender_account_id ? <span>{t("accountUi.sharedAuthor", { person: message.sender_display_name || message.sender_username, sender: "human" })}</span> : null}
               <small>
                 <time dateTime={message.created_at}>{when.format(new Date(message.created_at))}</time>
               </small>

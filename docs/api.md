@@ -375,6 +375,12 @@ No named login/session, profile, access or scoped watch route is activated here.
 The following account contract is implemented behind the private account gate
 and tested independently of the deployed legacy routes:
 
+ADR 014 step 5 adds the staged browser forms without enabling that gate. A legacy
+`GET /v1/ui/session` response includes `X-Iris-Console-Mode: links`, even when the
+browser is unsigned and receives 401. The frontend retains the `iris ui` sign-in
+instruction in that mode. A named-session 401 shows the account login form. CSRF
+tokens stay in memory; login obtains a new single-use challenge on every retry.
+
 - `GET /v1/ui/login` creates a short-lived single-use challenge bound to an
   HttpOnly pre-login cookie. `POST /v1/ui/login` consumes it, requires exact
   same-origin `Origin` and `X-Iris-CSRF`, and verifies bounded credentials.
@@ -388,6 +394,12 @@ and tested independently of the deployed legacy routes:
   The token belongs in the request header and UI memory, never a URL or browser
   persistent storage. WebSocket upgrades require exact origin and a valid account
   session.
+- Mounted consoles also send their session CSRF token on HTTP reads. A supplied
+  token must match the request cookie; a mismatch returns 401 before console data
+  is served. This binds reads triggered by an existing socket to that tab's
+  session when another tab replaces the shared cookie. Bootstrap reads may omit
+  the token. The affected tab discards its console, drafts and cached locale;
+  neither account's server session is revoked by this mismatch.
 - `POST /v1/ui/logout` revokes the current session and clears its cookie. A
   same-origin retry after expiry or revocation only clears the stale cookie.
   Password changes verify the current password and revoke every session,
@@ -465,6 +477,11 @@ forwarding headers before setting its own. Links expire after one minute and wor
 creating a link always requires the bearer token. Everything else under `/` serves the embedded web UI.
 
 `GET /v1/ui/overview` returns everything the first screen needs:
+
+On the gated account path each visible repository also has `console_access`,
+either `ro` or `rw` (`rw` for an operator). The legacy response omits this field.
+It is presentation metadata, not authorization supplied by the browser. Member
+queries remain scoped by current grants in the store transaction.
 
 ```json
 {"repositories":[{"id":"rp_...","name":"iris","aliases":["..."]}],

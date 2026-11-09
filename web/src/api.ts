@@ -9,6 +9,8 @@ export interface Repository {
   id: string;
   name: string;
   aliases: string[];
+  /** Current account capability; absent on the legacy console. The store enforces it. */
+  console_access?: "ro" | "rw";
 }
 
 export interface Agent {
@@ -48,6 +50,13 @@ export interface ThreadSummary {
   count: number;
   last_at: string;
   unread: number;
+  authors?: MessageAuthor[];
+}
+
+export interface MessageAuthor {
+  sender_account_id?: string;
+  sender_username?: string;
+  sender_display_name?: string;
 }
 
 export interface ThreadsPage {
@@ -61,7 +70,7 @@ export interface ThreadRecipient {
   state: string;
 }
 
-export interface ThreadMessage {
+export interface ThreadMessage extends MessageAuthor {
   id: string;
   sender: string;
   /** The sender's repository. A thread can cross repositories (ADR 004). */
@@ -130,7 +139,7 @@ export interface DeliveryRecipient {
   execution: string;
 }
 
-export interface DeliveryProblem {
+export interface DeliveryProblem extends MessageAuthor {
   id: string;
   thread_id: string;
   subject: string;
@@ -154,28 +163,51 @@ export interface WatchFrame {
 
 export type WatchStatus = "connecting" | "live" | "reconnecting" | "unauthorized";
 
+// CSRF is a synchronizer token held only for the current page, never a credential in storage.
+let consoleCsrf = "";
+export function setConsoleCsrf(token: string): void {
+  consoleCsrf = token;
+}
+
+function requireConsoleSession(token: string): void {
+  if (token !== consoleCsrf) {
+    const failure = new Error("Iris session changed");
+    failure.name = "AbortError";
+    throw failure;
+  }
+}
+
 async function request(
   path: string,
   init: RequestInit = {},
 ): Promise<Response> {
+  const requestCsrf = consoleCsrf;
   const response = await fetch(new URL(path, window.location.origin), {
     ...init,
     cache: "no-store",
     credentials: "same-origin",
     headers: {
       Accept: "application/json",
+      ...(requestCsrf !== "" ? { "X-Iris-CSRF": requestCsrf } : {}),
       ...init.headers,
     },
   });
   if (!response.ok) {
+    if (response.status === 401 && requestCsrf !== "" && requestCsrf === consoleCsrf) {
+      window.dispatchEvent(new Event("iris:unauthorized"));
+    }
     throw new ApiError(response.status);
   }
+  requireConsoleSession(requestCsrf);
   return response;
 }
 
 async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+  const token = consoleCsrf;
   const response = await request(path, { method: "GET", signal });
-  return response.json() as Promise<T>;
+  const value = await response.json() as T;
+  requireConsoleSession(token);
+  return value;
 }
 
 async function postJson(path: string, body: unknown, signal?: AbortSignal): Promise<void> {
@@ -228,6 +260,7 @@ export function getThread(id: string, repositoryId = "", signal?: AbortSignal): 
 /** Marks the operator's mail in a thread as read, in repositoryId or the whole hub (A13). */
 /** Reads the operator's mail in a thread, and says how many deliveries that read. */
 export async function readThread(id: string, repositoryId = "", signal?: AbortSignal): Promise<number> {
+  const token = consoleCsrf;
   const response = await request(`/v1/ui/threads/${encodeURIComponent(id)}/read`, {
     method: "POST",
     signal,
@@ -235,6 +268,7 @@ export async function readThread(id: string, repositoryId = "", signal?: AbortSi
     body: JSON.stringify({ repository_id: repositoryId }),
   });
   const out = (await response.json()) as { read: number };
+  requireConsoleSession(token);
   return out.read;
 }
 
@@ -305,7 +339,7 @@ export function watchUi(
       if (closed) {
         return;
       }
-      if (opened) {
+      if (opened && consoleCsrf === "") {
         retry();
         return;
       }

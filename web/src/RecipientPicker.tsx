@@ -2,15 +2,16 @@ import { useId, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { Agent } from "./api";
 
-export function RecipientPicker({ agents, selected, onChange }: {
+export function RecipientPicker({ agents, selected, onChange, allowHuman = true }: {
   agents: Agent[];
   selected: string[];
   onChange: (ids: string[]) => void;
+  allowHuman?: boolean;
 }) {
   const { t } = useTranslation();
   const [query, setQuery] = useState("");
   const search = useId();
-  const choices = [{ id: "human", name: "human", client: "human", host: "" }, ...agents];
+  const choices = [...(allowHuman ? [{ id: "human", name: "human", client: "human", host: "" }] : []), ...agents];
   const matches = choices.filter((agent) => `${agent.name} ${agent.client} ${agent.host}`.toLowerCase().includes(query.toLowerCase().trim()));
   const missing = selected.filter((id) => !choices.some((agent) => agent.id === id));
   return <fieldset className="recipient-picker">

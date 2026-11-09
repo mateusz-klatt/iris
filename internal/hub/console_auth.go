@@ -91,9 +91,12 @@ func (h *Hub) consoleOrigin(r *http.Request) bool {
 func consoleFailure(w http.ResponseWriter) {
 	writeError(w, &store.Error{Code: "unauthorized", Message: "Invalid username or password"})
 }
-func consoleCSRF(w http.ResponseWriter, r *http.Request, want string) bool {
+func consoleCSRFMatches(r *http.Request, want string) bool {
 	headers := r.Header.Values("X-Iris-CSRF")
-	if len(headers) != 1 || subtle.ConstantTimeCompare([]byte(headers[0]), []byte(want)) != 1 {
+	return len(headers) == 1 && subtle.ConstantTimeCompare([]byte(headers[0]), []byte(want)) == 1
+}
+func consoleCSRF(w http.ResponseWriter, r *http.Request, want string) bool {
+	if !consoleCSRFMatches(r, want) {
 		writeError(w, &store.Error{Code: "forbidden", Message: "valid console CSRF token required"})
 		return false
 	}
@@ -199,6 +202,12 @@ func (h *Hub) serveConsole(w http.ResponseWriter, r *http.Request) bool {
 	p, err := consoleRequestPrincipal(r, digest)
 	if err != nil {
 		writeError(w, err)
+		return true
+	}
+	// A mounted console binds reads to its session even if another tab replaces
+	// the shared cookie. Bootstrap reads may omit the synchronizer token.
+	if r.Method == http.MethodGet && len(r.Header.Values("X-Iris-CSRF")) != 0 && !consoleCSRFMatches(r, h.console.csrf("session-csrf", token)) {
+		writeError(w, &store.Error{Code: "unauthorized", Message: "console session changed"})
 		return true
 	}
 	if r.Method != http.MethodGet && !consoleCSRF(w, r, h.console.csrf("session-csrf", token)) {

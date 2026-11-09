@@ -164,24 +164,53 @@ const resources = {
         stateOrphaned: "Inactive owner",
       },
       globalRole: { admin: "Administrator", member: "Member" },
+      accountUi: {
+        sendUncertain: "The result is unknown. Retrying within ten minutes uses the same delivery.",
+        retryExpired: "The retry window has ended. Check the conversation and review the draft before sending again.",
+        messages: "Messages",
+        sharedMail: "Messages and replies use the repository’s shared operator mailbox.",
+        noRepositories: "No repository access has been granted. You can manage your account.",
+        signingOut: "Signing out…",
+        signOutError: "Could not sign out. Try again.",
+        sessionLoading: "Checking your session…",
+        sessionError: "Could not check your session. Try again.",
+        permissionChanged: "Your permissions changed. Review the repository and recipients before sending.",
+        sharedAuthor: "{{person}} via {{sender}}",
+        loginTitle: "Sign in to Iris",
+        password: "Password",
+        signIn: "Sign in",
+        signingIn: "Signing in…",
+        invalidLogin: "Invalid username or password",
+        loginError: "Could not sign in. Try again.",
+        displayNameInvalid: "Display name must contain at most 128 Unicode characters.",
+        passwordInvalid: "Use at least 15 Unicode characters and at most 1024 UTF-8 bytes.",
+        operator: "Operator",
+        member: "Member",
+        none: "No access",
+        account: "Account",
+        signOut: "Sign out",
+        retry: "Try again",
+        rateLimited: "Too many attempts. Wait before trying again.",
+        browserLanguage: "Default language (English)",
+      },
       account: {
         eyebrow: "Your profile",
         title: "Account",
-        hint: "Manage how Iris identifies you and communicates with you.",
+        hint: "Manage your profile, interface language and password.",
         loading: "Loading your account…",
         loadError: "Your account could not be loaded. Try again later.",
         identityTitle: "Identity",
         username: "Username",
         globalRole: "Global role",
         displayName: "Display name",
-        displayNameHint: "Leave blank to use your username. Maximum 128 characters.",
+        displayNameHint: "Leave blank to use your username. Maximum 128 Unicode characters.",
         saveDisplayName: "Save display name",
         savingDisplayName: "Saving display name…",
         displayNameSaved: "Display name saved.",
         displayNameConflict: "Your profile changed elsewhere. We refreshed it; review and try again.",
         displayNameError: "The display name could not be saved.",
         languagesTitle: "Languages",
-        languagesHint: "The correspondence choice is a suggestion for agents replying to you.",
+        languagesHint: "Choose the language of the Iris interface.",
         uiLanguage: "Interface language",
         correspondenceLanguage: "Correspondence language",
         correspondenceInherit: "Use interface language",
@@ -189,13 +218,13 @@ const resources = {
         correspondenceSaved: "Correspondence language saved.",
         correspondenceError: "The correspondence language could not be saved.",
         passwordTitle: "Change password",
-        passwordHint: "Use at least 15 characters. Your current session remains signed in.",
+        passwordHint: "Use at least 15 Unicode characters and at most 1024 UTF-8 bytes. Changing your password ends all sessions.",
         currentPassword: "Current password",
         newPassword: "New password",
         confirmPassword: "Confirm new password",
         changePassword: "Change password",
         changingPassword: "Changing password…",
-        passwordSaved: "Password changed.",
+        passwordSaved: "Password changed. Sign in again.",
         passwordMismatch: "The new password and confirmation do not match.",
         passwordTooShort: "The new password must contain at least 15 characters.",
         passwordError: "The password could not be changed. Check the current password and requirements.",
@@ -615,6 +644,7 @@ const localeLoaders: Partial<
 };
 
 const loadedLocales = new Set<SupportedLocale>(["en"]);
+let localeRequest = 0;
 
 export async function prepareLocale(locale: SupportedLocale): Promise<void> {
   if (!loadedLocales.has(locale)) {
@@ -629,10 +659,14 @@ export async function prepareLocale(locale: SupportedLocale): Promise<void> {
 }
 
 export async function loadLocale(locale: SupportedLocale): Promise<void> {
+  const request = ++localeRequest;
   await prepareLocale(locale);
-  await i18n.changeLanguage(locale);
+  if (request !== localeRequest) return;
+  // The catalog is ready. Apply all global state together, before yielding again,
+  // so an old account's delayed catalog cannot replace a newer language choice.
   document.documentElement.lang = locale;
   document.documentElement.dir = localeMetadata[locale].direction;
+  await i18n.changeLanguage(locale);
 }
 
 void i18n.use(initReactI18next).init({

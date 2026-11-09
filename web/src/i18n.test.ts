@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import i18n, {
   canonicalLocale,
@@ -64,14 +64,16 @@ describe("Iris locale catalog contract", () => {
       expect(module, locale).toBeDefined();
       const catalog = flatten(module?.default);
       expect(Object.keys(catalog).sort(), locale).toEqual(Object.keys(english).sort());
-      for (const [key, value] of Object.entries(catalog)) {
-        expect(value.trim().length, `${locale}:${key}`).toBeGreaterThan(0);
-        const englishValue = english[key];
-        expect(englishValue, key).toBeDefined();
-        expect(placeholders(value), `${locale}:${key}`).toEqual(
-          placeholders(englishValue ?? ""),
-        );
-      }
+      const emptyKeys = Object.entries(catalog)
+        .filter(([, value]) => value.trim().length === 0)
+        .map(([key]) => key);
+      expect(emptyKeys, `${locale}: empty translations`).toEqual([]);
+      const placeholderMismatches = Object.entries(catalog)
+        .filter(([key, value]) =>
+          placeholders(value).join(",") !== placeholders(english[key] ?? "").join(","),
+        )
+        .map(([key]) => key);
+      expect(placeholderMismatches, `${locale}: mismatched placeholders`).toEqual([]);
       for (const root of pluralRoots) {
         for (const category of pluralCategories) {
           expect(catalog[`${root}_${category}`], `${locale}:${root}_${category}`)
@@ -93,6 +95,39 @@ describe("Iris locale catalog contract", () => {
       loadLocale("not-a-locale" as SupportedLocale),
     ).rejects.toThrow("No translation catalog is registered for not-a-locale.");
     expect(i18n.resolvedLanguage ?? i18n.language).toBe("en");
+  });
+
+  it.each([
+    ["ar", "en", "Sign in"],
+    ["he", "pl", "Zaloguj się"],
+  ] as const)("ignores a delayed %s catalog after switching accounts to %s", async (previous, current, signIn) => {
+    const catalog = localeCatalogs[`./locales/${previous}.ts`]!;
+    let finishImport!: (module: { default: TranslationResource }) => void;
+    const delayedImport = new Promise<{ default: TranslationResource }>((resolve) => {
+      finishImport = resolve;
+    });
+    const importStarted = vi.fn(() => delayedImport);
+    vi.doMock(`./locales/${previous}`, importStarted);
+    try {
+      const priorAccount = loadLocale(previous);
+      await vi.waitFor(() => expect(importStarted).toHaveBeenCalledOnce());
+
+      await loadLocale("en");
+      expect(i18n.language).toBe("en");
+      expect(document.documentElement.lang).toBe("en");
+      expect(document.documentElement.dir).toBe("ltr");
+
+      await loadLocale(current);
+      finishImport(catalog);
+      await priorAccount;
+      expect(i18n.language).toBe(current);
+      expect(document.documentElement.lang).toBe(current);
+      expect(document.documentElement.dir).toBe("ltr");
+      expect(i18n.t("accountUi.signIn")).toBe(signIn);
+      expect(i18n.hasResourceBundle(previous, "translation")).toBe(true);
+    } finally {
+      vi.doUnmock(`./locales/${previous}`);
+    }
   });
 
   it("loads every catalog and applies only the three declared RTL directions", async () => {
