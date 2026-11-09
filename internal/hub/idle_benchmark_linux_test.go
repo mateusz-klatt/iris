@@ -459,7 +459,7 @@ func idleBenchmarkFixture(b *testing.B, scale int) idleFixture {
 		_ = s.Close()
 		b.Fatal(err)
 	}
-	defer db.Close()
+	defer func() { _ = db.Close() }()
 	if _, err := db.Exec("PRAGMA foreign_keys=ON"); err != nil {
 		b.Fatal(err)
 	}
@@ -467,7 +467,7 @@ func idleBenchmarkFixture(b *testing.B, scale int) idleFixture {
 	if err != nil {
 		b.Fatal(err)
 	}
-	defer tx.Rollback()
+	defer func() { _ = tx.Rollback() }()
 	counts := map[string]int{"Agent": 148 * scale, "Execution": 468 * scale, "Claim": 3227 * scale, "Delivery": 2583 * scale, "Message": 1900 * scale, "Event": 1656 * scale,
 		"active_executions": 20, "unrevoked_claims": 80, "unacked_deliveries": 200}
 	now := time.Now().UnixMilli()
