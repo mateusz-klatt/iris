@@ -95,6 +95,7 @@ func (s *Store) CreateConsoleAccount(ctx context.Context, input ConsoleAccountIn
 		if n, _ := result.RowsAffected(); n == 0 {
 			return fail("conflict", "console username is already in use")
 		}
+		t.notify = true
 		account, err = t.consoleAccount("id", accountID)
 		return err
 	})
@@ -136,76 +137,98 @@ func (s *Store) LookupConsoleAccount(ctx context.Context, username string) (Cons
 	return account, err
 }
 
+// UpdateConsoleProfile is a trusted storage primitive. Account requests use
+// EditConsoleProfile, which selects the actor from the validated session.
 func (s *Store) UpdateConsoleProfile(ctx context.Context, accountID string, expectedRevision int64, display, ui, correspondence string) (ConsoleAccount, error) {
 	if err := consoleProfile(display, ui, correspondence); err != nil {
 		return ConsoleAccount{}, err
 	}
 	var account ConsoleAccount
 	err := s.transact(ctx, func(t *transaction) error {
-		before, err := t.consoleAccount("id", accountID)
-		if err != nil {
-			return err
-		}
-		if before.EditRevision != expectedRevision {
-			return fail("conflict", "console account changed; refresh before editing")
-		}
-		if _, err = t.exec(`UPDATE ConsoleAccount SET display_name=?,ui_locale=?,correspondence_locale=?,edit_revision=edit_revision+1 WHERE id=?`, display, ui, correspondence, accountID); err != nil {
-			return err
-		}
-		account, err = t.consoleAccount("id", accountID)
+		var err error
+		account, err = t.updateConsoleProfile(accountID, expectedRevision, display, ui, correspondence)
 		return err
 	})
 	return account, err
 }
 
-// ReplaceConsoleAccess is a trusted storage primitive. The later authorization
-// stage must supply its operator/owner checks before calling it. Revision and
-// authentication-version changes, grants, and session removal commit together.
-func (s *Store) ReplaceConsoleAccess(ctx context.Context, accountID string, expectedRevision int64, role string, disabled bool, grants []ConsoleGrant) (ConsoleAccount, error) {
+func (t *transaction) updateConsoleProfile(accountID string, expectedRevision int64, display, ui, correspondence string) (ConsoleAccount, error) {
+	before, err := t.consoleAccount("id", accountID)
+	if err != nil {
+		return ConsoleAccount{}, err
+	}
+	if before.EditRevision != expectedRevision {
+		return ConsoleAccount{}, fail("conflict", "console account changed; refresh before editing")
+	}
+	if _, err = t.exec(`UPDATE ConsoleAccount SET display_name=?,ui_locale=?,correspondence_locale=?,edit_revision=edit_revision+1 WHERE id=?`, display, ui, correspondence, accountID); err != nil {
+		return ConsoleAccount{}, err
+	}
+	t.notify = true
+	return t.consoleAccount("id", accountID)
+}
+
+// validateConsoleAccess accepts exactly Iris roles and unique ro/rw grants.
+func validateConsoleAccess(role string, grants []ConsoleGrant) error {
 	if !consoleRole(role) || (role != "member" && len(grants) != 0) {
-		return ConsoleAccount{}, fail("bad_request", "invalid console role or grants")
+		return fail("bad_request", "invalid console role or grants")
 	}
 	seen := map[string]bool{}
 	for _, grant := range grants {
 		if grant.RepositoryID == "" || (grant.Mode != "ro" && grant.Mode != "rw") || seen[grant.RepositoryID] {
-			return ConsoleAccount{}, fail("bad_request", "invalid or duplicate console grant")
+			return fail("bad_request", "invalid or duplicate console grant")
 		}
 		seen[grant.RepositoryID] = true
 	}
-	if role == "none" {
-		disabled = true
+	return nil
+}
+
+// ReplaceConsoleAccess is a trusted storage primitive, without console acting-
+// operator checks. Account requests use ChangeConsoleAccess for those checks,
+// last-operator protection and transactional action attribution.
+func (s *Store) ReplaceConsoleAccess(ctx context.Context, accountID string, expectedRevision int64, role string, disabled bool, grants []ConsoleGrant) (ConsoleAccount, error) {
+	if err := validateConsoleAccess(role, grants); err != nil {
+		return ConsoleAccount{}, err
 	}
 	var account ConsoleAccount
 	err := s.transact(ctx, func(t *transaction) error {
-		before, err := t.consoleAccount("id", accountID)
-		if err != nil {
-			return err
-		}
-		if before.EditRevision != expectedRevision {
-			return fail("conflict", "console account changed; refresh before editing")
-		}
-		if _, err = t.exec(`UPDATE ConsoleAccount SET role=?,disabled=?,auth_version=auth_version+1,edit_revision=edit_revision+1 WHERE id=?`, role, disabled, accountID); err != nil {
-			return err
-		}
-		if _, err = t.exec("DELETE FROM ConsoleRepositoryAccess WHERE account_id=?", accountID); err != nil {
-			return err
-		}
-		for _, grant := range grants {
-			if _, err = t.exec("INSERT INTO ConsoleRepositoryAccess(account_id,repository_id,mode) VALUES(?,?,?)", accountID, grant.RepositoryID, grant.Mode); err != nil {
-				return err
-			}
-		}
-		if _, err = t.exec("DELETE FROM ConsoleSession WHERE account_id=?", accountID); err != nil {
-			return err
-		}
-		account, err = t.consoleAccount("id", accountID)
+		var err error
+		account, err = t.replaceConsoleAccess(accountID, expectedRevision, role, disabled, grants)
 		return err
 	})
 	return account, err
 }
 
+func (t *transaction) replaceConsoleAccess(accountID string, expectedRevision int64, role string, disabled bool, grants []ConsoleGrant) (ConsoleAccount, error) {
+	if role == "none" {
+		disabled = true
+	}
+	before, err := t.consoleAccount("id", accountID)
+	if err != nil {
+		return ConsoleAccount{}, err
+	}
+	if before.EditRevision != expectedRevision {
+		return ConsoleAccount{}, fail("conflict", "console account changed; refresh before editing")
+	}
+	if _, err = t.exec(`UPDATE ConsoleAccount SET role=?,disabled=?,auth_version=auth_version+1,edit_revision=edit_revision+1 WHERE id=?`, role, disabled, accountID); err != nil {
+		return ConsoleAccount{}, err
+	}
+	if _, err = t.exec("DELETE FROM ConsoleRepositoryAccess WHERE account_id=?", accountID); err != nil {
+		return ConsoleAccount{}, err
+	}
+	for _, grant := range grants {
+		if _, err = t.exec("INSERT INTO ConsoleRepositoryAccess(account_id,repository_id,mode) VALUES(?,?,?)", accountID, grant.RepositoryID, grant.Mode); err != nil {
+			return ConsoleAccount{}, err
+		}
+	}
+	if _, err = t.exec("DELETE FROM ConsoleSession WHERE account_id=?", accountID); err != nil {
+		return ConsoleAccount{}, err
+	}
+	t.notify = true
+	return t.consoleAccount("id", accountID)
+}
+
 // ConsoleRepositoryMode reads only strict grant modes. This prepares the storage
-// contract; it is not the operation/object authorization matrix of the next stage.
+// contract; console operations authorize through CallConsole instead.
 func (s *Store) ConsoleRepositoryMode(ctx context.Context, accountID, repositoryID string) (string, error) {
 	mode := ""
 	err := s.transact(ctx, func(t *transaction) error {

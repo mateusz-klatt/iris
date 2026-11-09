@@ -468,6 +468,18 @@ of paths held by another Execution. It is the strongest check Iris has, and it i
 
 ### D13. Security
 
+ADR 014's authorization stage adds a separate typed account path in the store.
+It rechecks the persisted session, authentication version, enabled role and
+repository predicates in the same transaction as the object operation. Members
+default to no access; strict `ro` grants read, and `rw` adds send/reply with `rw`
+on the explicit origin and every immutable agent recipient. Operators retain
+global console authority but gain no owner-token powers. Access edits revoke
+sessions atomically and cannot remove the last enabled operator. The named
+transport boundary refuses mixed bearer/session credentials and bearer-only
+console sends. This path is staged: active HTTP routes still use the legacy
+authentication below until the ordered account cutover. Session issuance,
+authentication defenses, account UI and owner provisioning remain later work.
+
 The trust boundary is the OS user on a host, plus a token per host across hosts. The token
 separates users and hosts, nothing finer. Any process running as that user, including a hook
 from a repository the user trusted, can read it and act as any Execution. Agents under one user
@@ -653,6 +665,16 @@ not a substitute for notarization, and this is to be checked on a clean Mac. Pac
 upgrades, and the binary never replaces itself.
 
 ### D16. Web UI
+
+The staged ADR 014 account path applies repository visibility before search,
+grouping, counts and pagination. Cross-repository envelopes retain the sender
+name and body while hiding outside recipient state and repository metadata.
+Authorship is immutable message metadata, not a continuing access grant. Named
+sends retain account-scoped retry results for 24 hours and reauthorize current
+objects before replay; repository repair refuses member grants of either mode.
+Per-account persisted revisions exclude hidden repository activity and global
+event cursors. The current frontend and its legacy routes remain active until
+cutover; account-session frame admission and revocation are the next stage.
 
 The new-message recipient picker stores Agent IDs, not display names, and sends those IDs
 through the existing address resolver. If a selected ID disappears from the directory, review

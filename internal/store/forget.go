@@ -86,6 +86,19 @@ func (t *transaction) forget(r Request) (map[string]any, error) {
 	if r.DryRun {
 		return out, nil
 	}
+	// Removing a repository invalidates every account that could read it. Session
+	// revocation, version changes and grant deletion share the removal transaction.
+	if _, err := t.exec(`DELETE FROM ConsoleSession WHERE account_id IN
+ (SELECT account_id FROM ConsoleRepositoryAccess WHERE repository_id=?)`, repo); err != nil {
+		return nil, err
+	}
+	if _, err := t.exec(`UPDATE ConsoleAccount SET auth_version=auth_version+1,edit_revision=edit_revision+1
+ WHERE id IN (SELECT account_id FROM ConsoleRepositoryAccess WHERE repository_id=?)`, repo); err != nil {
+		return nil, err
+	}
+	if _, err := t.exec("DELETE FROM ConsoleRepositoryAccess WHERE repository_id=?", repo); err != nil {
+		return nil, err
+	}
 	// The search index holds its own copy of each message, which only an explicit
 	// delete command removes.
 	search := messages.wrap("INSERT INTO MessageSearch(MessageSearch,rowid,subject,body) SELECT 'delete',rowid,subject,body FROM Message WHERE id IN (%s)")

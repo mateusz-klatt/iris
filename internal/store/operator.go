@@ -199,7 +199,8 @@ func (t *transaction) overview() (map[string]any, error) {
 	repos := []map[string]any{}
 	agents := []map[string]any{}
 	claims := []map[string]any{}
-	rows, err := t.rows("SELECT id FROM Repository ORDER BY id")
+	repositoryScope, repositoryArgs := t.repositoryVisibleSQL("id")
+	rows, err := t.rows("SELECT id FROM Repository WHERE "+repositoryScope+" ORDER BY id", repositoryArgs...)
 	if err != nil {
 		return nil, err
 	}
@@ -244,7 +245,8 @@ func (t *transaction) overview() (map[string]any, error) {
 			claims = append(claims, c)
 		}
 	}
-	rows, err = t.rows(`SELECT a.id,a.name,a.client,a.host,a.repository_id,a.worktree,COALESCE(e.branch,''),COALESCE(e.state,'offline'),COALESCE(e.last_seen_ms,0),(SELECT COUNT(*) FROM Delivery d WHERE d.recipient_agent_id=a.id AND d.id NOT IN (SELECT delivery_id FROM Ack)) FROM Agent a LEFT JOIN Execution e ON e.id=(SELECT id FROM Execution WHERE agent_id=a.id ORDER BY rowid DESC LIMIT 1) WHERE a.client<>'human' ORDER BY a.name`)
+	agentScope, agentArgs := t.repositoryVisibleSQL("a.repository_id")
+	rows, err = t.rows(`SELECT a.id,a.name,a.client,a.host,a.repository_id,a.worktree,COALESCE(e.branch,''),COALESCE(e.state,'offline'),COALESCE(e.last_seen_ms,0),(SELECT COUNT(*) FROM Delivery d WHERE d.recipient_agent_id=a.id AND d.id NOT IN (SELECT delivery_id FROM Ack)) FROM Agent a LEFT JOIN Execution e ON e.id=(SELECT id FROM Execution WHERE agent_id=a.id ORDER BY rowid DESC LIMIT 1) WHERE a.client<>'human' AND `+agentScope+` ORDER BY a.name`, agentArgs...)
 	if err != nil {
 		return nil, err
 	}
@@ -261,7 +263,7 @@ func (t *transaction) overview() (map[string]any, error) {
 		return nil, err
 	}
 	var unread int
-	err = t.row(`SELECT COUNT(*) FROM Delivery d JOIN Agent a ON a.id=d.recipient_agent_id WHERE a.client='human' AND d.id NOT IN (SELECT delivery_id FROM Ack)`).Scan(&unread)
+	err = t.row(`SELECT COUNT(*) FROM Delivery d JOIN Agent a ON a.id=d.recipient_agent_id WHERE a.client='human' AND d.id NOT IN (SELECT delivery_id FROM Ack) AND `+agentScope, agentArgs...).Scan(&unread)
 	return map[string]any{"repositories": repos, "agents": agents, "claims": claims, "human_unread": unread}, err
 }
 
@@ -277,17 +279,22 @@ func visibleIn(alias, repo string) (string, []any) {
 }
 
 func (t *transaction) threads(r Request) (map[string]any, error) {
+	if err := t.validateConsoleThreadFilters(r); err != nil {
+		return nil, err
+	}
 	// A thread is titled by its earliest message visible here, because its first message
 	// may belong to another repository's view, or have been removed by forget.
-	title, titleArgs := visibleIn("m2", r.RepositoryID)
-	visible, visibleArgs := visibleIn("m", r.RepositoryID)
-	q := `SELECT m.thread_id,(SELECT m2.subject FROM Message m2 WHERE m2.thread_id=m.thread_id AND ` + title + ` ORDER BY m2.created_ms,m2.rowid LIMIT 1),COUNT(*),MAX(m.created_ms),SUM((SELECT COUNT(*) FROM Delivery d JOIN Agent a ON a.id=d.recipient_agent_id WHERE d.message_id=m.id AND a.client='human' AND (?='' OR a.repository_id=?) AND d.id NOT IN (SELECT delivery_id FROM Ack))) FROM Message m WHERE ` + visible
+	title, titleArgs := t.visibleIn("m2", r.RepositoryID)
+	visible, visibleArgs := t.visibleIn("m", r.RepositoryID)
+	humanScope, humanArgs := t.repositoryVisibleSQL("a.repository_id")
+	q := `SELECT m.thread_id,(SELECT m2.subject FROM Message m2 WHERE m2.thread_id=m.thread_id AND ` + title + ` ORDER BY m2.created_ms,m2.rowid LIMIT 1),COUNT(*),MAX(m.created_ms),SUM((SELECT COUNT(*) FROM Delivery d JOIN Agent a ON a.id=d.recipient_agent_id WHERE d.message_id=m.id AND a.client='human' AND (?='' OR a.repository_id=?) AND d.id NOT IN (SELECT delivery_id FROM Ack) AND ` + humanScope + `)) FROM Message m WHERE ` + visible
 	// Unread counts this view's human inbox only: in a thread that crosses repositories,
 	// another repository's unread mail is not this view's to clear.
-	args := append(append(append([]any{}, titleArgs...), r.RepositoryID, r.RepositoryID), visibleArgs...)
+	args := append(append(append(append([]any{}, titleArgs...), r.RepositoryID, r.RepositoryID), humanArgs...), visibleArgs...)
 	if match := literalMatch(r.Q); match != "" {
-		q += " AND m.thread_id IN (SELECT thread_id FROM Message WHERE rowid IN (SELECT rowid FROM MessageSearch WHERE MessageSearch MATCH ?))"
-		args = append(args, match)
+		search, searchArgs := t.consoleMatchIn("ms", r.RepositoryID)
+		q += " AND m.thread_id IN (SELECT ms.thread_id FROM Message ms WHERE ms.rowid IN (SELECT rowid FROM MessageSearch WHERE MessageSearch MATCH ?) AND " + search + ")"
+		args = append(append(args, match), searchArgs...)
 	}
 	if r.Agent != "" {
 		participant := "a.name=? OR a.id=?"
@@ -297,8 +304,9 @@ func (t *transaction) threads(r Request) (map[string]any, error) {
 			// them as one human participant across sent and received conversations.
 			participant, participantArgs = "a.client='human'", nil
 		}
-		q += ` AND m.thread_id IN (SELECT mm.thread_id FROM Message mm JOIN Execution e ON e.id=mm.sender_execution_id JOIN Agent a ON a.id=e.agent_id WHERE ` + participant + ` UNION SELECT mm.thread_id FROM Message mm JOIN Delivery d ON d.message_id=mm.id JOIN Agent a ON a.id=d.recipient_agent_id WHERE ` + participant + `)`
-		args = append(append(args, participantArgs...), participantArgs...)
+		participantVisible, participantVisibleArgs := t.consoleMatchIn("mm", r.RepositoryID)
+		q += ` AND m.thread_id IN (SELECT mm.thread_id FROM Message mm JOIN Execution e ON e.id=mm.sender_execution_id JOIN Agent a ON a.id=e.agent_id WHERE (` + participant + `) AND ` + participantVisible + ` UNION SELECT mm.thread_id FROM Message mm JOIN Delivery d ON d.message_id=mm.id JOIN Agent a ON a.id=d.recipient_agent_id WHERE (` + participant + `) AND ` + participantVisible + ` AND ` + humanScope + `)`
+		args = append(append(append(append(append(args, participantArgs...), participantVisibleArgs...), participantArgs...), participantVisibleArgs...), humanArgs...)
 	}
 	q += " GROUP BY m.thread_id"
 	if r.Before != "" {
@@ -306,7 +314,7 @@ func (t *transaction) threads(r Request) (map[string]any, error) {
 		// message visible in this view, then by thread id, so threads that share the
 		// cursor's millisecond are neither skipped nor repeated (gap review A15). A cursor
 		// that names no thread is a millisecond timestamp, as before.
-		cursor, cursorArgs := visibleIn("mc", r.RepositoryID)
+		cursor, cursorArgs := t.visibleIn("mc", r.RepositoryID)
 		at := "COALESCE((SELECT MAX(mc.created_ms) FROM Message mc WHERE mc.thread_id=? AND " + cursor + "),CAST(? AS INTEGER))"
 		q += " HAVING MAX(m.created_ms)<" + at + " OR (MAX(m.created_ms)=" + at + " AND m.thread_id<? AND EXISTS(SELECT 1 FROM Message WHERE thread_id=?))"
 		for range 2 {
@@ -340,10 +348,11 @@ func (t *transaction) threads(r Request) (map[string]any, error) {
 		page["next"] = out[limit-1]["id"]
 	}
 	page["threads"] = out
+	recipientScope, recipientArgs := t.repositoryVisibleSQL("ar.repository_id")
 	for _, th := range out {
 		names := []string{}
 		// Participants of the messages visible here only, not of the whole thread.
-		rows, err = t.rows(`SELECT DISTINCT CASE WHEN a.client='human' THEN 'human' ELSE a.name END FROM Agent a WHERE a.id IN (SELECT e.agent_id FROM Message m JOIN Execution e ON e.id=m.sender_execution_id WHERE m.thread_id=? AND `+visible+` UNION SELECT d.recipient_agent_id FROM Delivery d JOIN Message m ON m.id=d.message_id WHERE m.thread_id=? AND `+visible+`) ORDER BY 1`, append(append(append([]any{th["id"]}, visibleArgs...), th["id"]), visibleArgs...)...)
+		rows, err = t.rows(`SELECT DISTINCT CASE WHEN a.client='human' THEN 'human' ELSE a.name END FROM Agent a WHERE a.id IN (SELECT e.agent_id FROM Message m JOIN Execution e ON e.id=m.sender_execution_id WHERE m.thread_id=? AND `+visible+` UNION SELECT d.recipient_agent_id FROM Delivery d JOIN Message m ON m.id=d.message_id JOIN Agent ar ON ar.id=d.recipient_agent_id WHERE m.thread_id=? AND `+visible+` AND `+recipientScope+`) ORDER BY 1`, append(append(append(append([]any{th["id"]}, visibleArgs...), th["id"]), visibleArgs...), recipientArgs...)...)
 		if err != nil {
 			return nil, err
 		}
@@ -358,23 +367,35 @@ func (t *transaction) threads(r Request) (map[string]any, error) {
 			return nil, err
 		}
 		th["participants"] = names
+		if err = t.threadAuthors(th, visible, visibleArgs); err != nil {
+			return nil, err
+		}
 	}
 	return page, nil
 }
 func (t *transaction) thread(id, repo string) (map[string]any, error) {
-	visible, args := visibleIn("m", repo)
-	rows, err := t.rows(`SELECT m.id,CASE WHEN a.client='human' THEN 'human' ELSE a.name END,m.subject,m.body,m.created_ms,m.reply_to,m.repository_id FROM Message m JOIN Execution e ON e.id=m.sender_execution_id JOIN Agent a ON a.id=e.agent_id WHERE m.thread_id=? AND `+visible+` ORDER BY m.created_ms,m.rowid`, append([]any{id}, args...)...)
+	visible, args := t.visibleIn("m", repo)
+	originScope, originArgs := t.repositoryVisibleSQL("m.repository_id")
+	rows, err := t.rows(`SELECT m.id,CASE WHEN a.client='human' THEN 'human' ELSE a.name END,m.subject,m.body,m.created_ms,m.reply_to,CASE WHEN `+originScope+` THEN m.repository_id ELSE '' END,COALESCE(m.sender_account_id,''),COALESCE(m.sender_username,''),COALESCE(m.sender_display_name,'') FROM Message m JOIN Execution e ON e.id=m.sender_execution_id JOIN Agent a ON a.id=e.agent_id WHERE m.thread_id=? AND `+visible+` ORDER BY m.created_ms,m.rowid`, append(append(originArgs, id), args...)...)
 	if err != nil {
 		return nil, err
 	}
 	messages := []map[string]any{}
 	for rows.Next() {
-		var mid, sender, subject, body, repo string
+		var mid, sender, subject, body, repo, accountID, username, displayName string
 		var at int64
 		var reply sql.NullString
-		rows.Scan(&mid, &sender, &subject, &body, &at, &reply, &repo)
+		rows.Scan(&mid, &sender, &subject, &body, &at, &reply, &repo, &accountID, &username, &displayName)
 		// The sender's repository, so a thread that crosses repositories shows where each message came from.
-		messages = append(messages, map[string]any{"id": mid, "thread_id": id, "sender": sender, "subject": subject, "body": body, "created_at": timestamp(sql.NullInt64{Int64: at, Valid: true}), "reply_to": reply.String, "repository_id": repo})
+		message := map[string]any{"id": mid, "thread_id": id, "sender": sender, "subject": subject, "body": body, "created_at": timestamp(sql.NullInt64{Int64: at, Valid: true}), "reply_to": reply.String}
+		if repo != "" {
+			message["repository_id"] = repo
+			if sender == "human" {
+				message["reply_address"] = "human:" + repo
+			}
+		}
+		messageAttribution(accountID, username, displayName, message)
+		messages = append(messages, message)
 	}
 	err = rows.Err()
 	_ = rows.Close()
@@ -384,9 +405,10 @@ func (t *transaction) thread(id, repo string) (map[string]any, error) {
 	if len(messages) == 0 {
 		return nil, fail("not_found", "unknown thread")
 	}
+	recipientScope, recipientArgs := t.repositoryVisibleSQL("a.repository_id")
 	for _, m := range messages {
 		recipients := []map[string]any{}
-		rows, err = t.rows(`SELECT CASE WHEN a.client='human' THEN 'human' ELSE a.name END,d.state FROM DeliveryState d JOIN Agent a ON a.id=d.recipient_agent_id WHERE d.message_id=? ORDER BY a.name`, m["id"])
+		rows, err = t.rows(`SELECT CASE WHEN a.client='human' THEN 'human' ELSE a.name END,d.state FROM DeliveryState d JOIN Agent a ON a.id=d.recipient_agent_id WHERE d.message_id=? AND `+recipientScope+` ORDER BY a.name`, append([]any{m["id"]}, recipientArgs...)...)
 		if err != nil {
 			return nil, err
 		}

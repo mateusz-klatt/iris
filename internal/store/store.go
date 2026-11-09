@@ -71,6 +71,9 @@ var receiptDueSchema string
 //go:embed migrations/017.sql
 var consoleAccountsSchema string
 
+//go:embed migrations/018.sql
+var consoleRevisionSchema string
+
 // Clock separates lease ticks from persisted wall-clock expiries. Tick must be monotonic
 // within a Store's lifetime; client timestamps never participate in lease decisions.
 type Clock interface {
@@ -120,10 +123,12 @@ type Store struct {
 	cross map[string]crossWindow
 }
 type transaction struct {
-	conn   *sql.Conn
-	ctx    context.Context
-	s      *Store
-	notify bool
+	// console is set only after transactional account/session authorization.
+	console *ConsoleAccount
+	conn    *sql.Conn
+	ctx     context.Context
+	s       *Store
+	notify  bool
 	// refused is a refusal whose side effects must still commit, such as the
 	// waiter a conflicting claim leaves. Call returns it after the commit.
 	refused *Error
@@ -292,6 +297,11 @@ func openDatabase(filename string, clock Clock, driverName string) (*Store, erro
 		}
 		if version < 17 {
 			if _, err := t.exec(consoleAccountsSchema); err != nil {
+				return err
+			}
+		}
+		if version < 18 {
+			if _, err := t.exec(consoleRevisionSchema); err != nil {
 				return err
 			}
 		}

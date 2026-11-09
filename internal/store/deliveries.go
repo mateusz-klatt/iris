@@ -18,18 +18,27 @@ const deliveryMessageLimit = 200
 // deliveries lists the human's messages of the last deliveryWindow with a delivery in trouble:
 // unacked, to a recipient with no active Execution ("unreachable"), or from a message created
 // longer than deliveryWait ago ("waiting"). An acked or handled delivery is never listed, so
-// nothing stored is offered again just because nobody has said it was handled. With a repository,
-// only messages the human sent from that repository's view are listed. No body is returned.
+// nothing stored is offered again just because nobody has said it was handled. The legacy
+// repository filter selects the sending view. Named accounts see the permitted message
+// envelopes and recipients, including an incoming delivery in their selected view. No body
+// is returned.
 func (t *transaction) deliveries(r Request) (map[string]any, error) {
 	now := t.s.clock.Now()
+	visible, visibleArgs := t.visibleIn("m", r.RepositoryID)
+	recipientScope, recipientArgs := t.repositoryVisibleSQL("a.repository_id")
+	originFilter, originArgs := "(?='' OR m.repository_id=?)", []any{r.RepositoryID, r.RepositoryID}
+	if t.console != nil {
+		originFilter, originArgs = "1=1", nil
+	}
 	rows, err := t.rows(`SELECT m.id,m.thread_id,m.subject,m.created_ms,a.name,d.state,
  COALESCE((SELECT x.state FROM Execution x WHERE x.agent_id=a.id ORDER BY x.rowid DESC LIMIT 1),'none'),
- EXISTS(SELECT 1 FROM Execution x WHERE x.agent_id=a.id AND x.state='active')
+ EXISTS(SELECT 1 FROM Execution x WHERE x.agent_id=a.id AND x.state='active'),
+ COALESCE(m.sender_account_id,''),COALESCE(m.sender_username,''),COALESCE(m.sender_display_name,'')
  FROM Message m JOIN Execution e ON e.id=m.sender_execution_id
  JOIN DeliveryState d ON d.message_id=m.id JOIN Agent a ON a.id=d.recipient_agent_id
  WHERE e.client='human' AND a.client<>'human' AND d.state IN ('pending','inflight') AND m.created_ms>=?
- AND (?='' OR m.repository_id=?)
- ORDER BY m.created_ms DESC,m.id,a.name`, now.Add(-deliveryWindow).UnixMilli(), r.RepositoryID, r.RepositoryID)
+ AND `+originFilter+` AND `+visible+` AND `+recipientScope+`
+ ORDER BY m.created_ms DESC,m.id,a.name`, append(append(append([]any{now.Add(-deliveryWindow).UnixMilli()}, originArgs...), visibleArgs...), recipientArgs...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -37,10 +46,10 @@ func (t *transaction) deliveries(r Request) (map[string]any, error) {
 	byID := map[string]map[string]any{}
 	more := false
 	for rows.Next() {
-		var id, thread, subject, name, state, latest string
+		var id, thread, subject, name, state, latest, accountID, username, displayName string
 		var created int64
 		var reachable bool
-		rows.Scan(&id, &thread, &subject, &created, &name, &state, &latest, &reachable)
+		rows.Scan(&id, &thread, &subject, &created, &name, &state, &latest, &reachable, &accountID, &username, &displayName)
 		reason := "unreachable"
 		if reachable {
 			if now.Sub(time.UnixMilli(created)) <= deliveryWait {
@@ -57,6 +66,7 @@ func (t *transaction) deliveries(r Request) (map[string]any, error) {
 				break
 			}
 			m = map[string]any{"id": id, "thread_id": thread, "subject": subject, "created_at": timestamp(sql.NullInt64{Int64: created, Valid: true}), "recipients": []map[string]any{}}
+			messageAttribution(accountID, username, displayName, m)
 			byID[id] = m
 			messages = append(messages, m)
 		}

@@ -314,6 +314,43 @@ reaches the operator through the web UI, not through a session.
 
 ## Operator API, for the web UI
 
+ADR 014 steps 1–2 provide storage and a staged authorization path, without
+registering account HTTP routes or changing the legacy authentication described
+here. `Store.CallConsole` accepts only a trusted typed console principal and
+rechecks its persisted session, enabled account/authentication version, operation
+and object scope within one transaction. Profile/access methods use the same
+checks; only operators list accounts or change access. Revision conflicts refuse
+stale edits, and the last enabled operator cannot be disabled or demoted.
+
+In that staged path members have no default repository access. `ro` and `rw` read
+only the granted union when the filter is omitted. Explicit inaccessible objects
+return `not_found`; prohibited operations return `forbidden`. Search matches,
+titles, counts, participants and pagination use visible messages only. Received
+cross-repository envelopes show body/sender but omit outside repository IDs,
+recipient names/states and session metadata. Authorship never grants access.
+Only operators acknowledge shared mail, revoke claims or view diagnostics.
+
+Named sends require an account session; bearers and mixed credentials are
+refused by the staged boundary. Members supply `repository_id` with current
+`rw`, explicit non-human Agent IDs with current `rw` on every destination, and
+a reply parent visible in that origin. The batch commits atomically. Both
+operators and members use `(account ID, retry key)` across sessions/restarts;
+changed requests return `key_reused`. Exact retries reauthorize the moved message
+and saved current recipients, without resolving addresses again. Deleted results
+retain tombstones for 24 hours, and retired repository IDs cannot start sends.
+New sends are limited to 120 a minute per account, with a separate limit of 120
+cross-repository recipients a minute per account. These in-memory quotas reset
+on restart; exact retries do not consume either quota.
+
+Message, body, history, send and receipt projections include immutable
+`sender_account_id`, `sender_username` and `sender_display_name` when attributed.
+Old shared human messages have no named author. Human envelopes include
+`reply_address: "human:<current repository ID>"`; this shared address and
+`reply_to` never add recipients automatically. Per-account refresh revisions
+advance only for authorized changes, independently of the global event sequence.
+No named login/session, profile, access or scoped watch route is activated here;
+authentication defenses and socket admission/revocation precede cutover.
+
 Agents never use these routes. They accept the bearer token, or the session cookie of the web UI.
 
 `iris ui` calls `POST /v1/ui/links` with the bearer token, gets

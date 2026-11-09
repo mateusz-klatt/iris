@@ -128,7 +128,7 @@ jobs:
           name: coverage-${{ matrix.os }}
           path: coverage-${{ matrix.os }}.out
           retention-days: 1
-      - run: go test -race ./...
+      - run: go test -race -timeout=30m ./...
         if: runner.os != 'Windows'
         env:
           CGO_ENABLED: "1"

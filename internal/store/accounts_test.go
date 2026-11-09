@@ -16,7 +16,45 @@ const consoleTestHash = "scrypt$16384$8$1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAA
 
 // Old-schema fixtures undo only this migration before reconstructing their
 // historical version. Fresh-migration tests remain backed by captured old SQL.
-const removeConsoleSchema = `
+const removeConsoleRevisionSchema = `
+DROP TRIGGER console_repository_change;
+DROP TRIGGER console_revision_account_insert;
+DROP TRIGGER console_revision_account_update;
+DROP TRIGGER console_revision_grant_insert;
+DROP TRIGGER console_revision_grant_update;
+DROP TRIGGER console_revision_grant_delete;
+DROP TRIGGER console_revision_repository_insert;
+DROP TRIGGER console_revision_repository_update;
+DROP TRIGGER console_revision_repository_delete;
+DROP TRIGGER console_revision_repositoryalias_insert;
+DROP TRIGGER console_revision_repositoryalias_update;
+DROP TRIGGER console_revision_repositoryalias_delete;
+DROP TRIGGER console_revision_agent_insert;
+DROP TRIGGER console_revision_agent_update;
+DROP TRIGGER console_revision_agent_delete;
+DROP TRIGGER console_revision_execution_insert;
+DROP TRIGGER console_revision_execution_update;
+DROP TRIGGER console_revision_execution_delete;
+DROP TRIGGER console_revision_claim_insert;
+DROP TRIGGER console_revision_claim_update;
+DROP TRIGGER console_revision_claim_delete;
+DROP TRIGGER console_revision_message_insert;
+DROP TRIGGER console_revision_message_update;
+DROP TRIGGER console_revision_message_delete;
+DROP TRIGGER console_revision_delivery_insert;
+DROP TRIGGER console_revision_delivery_update;
+DROP TRIGGER console_revision_delivery_delete;
+DROP TRIGGER console_revision_ack_insert;
+DROP TRIGGER console_revision_ack_update;
+DROP TRIGGER console_revision_ack_delete;
+DROP TRIGGER console_revision_hostreport_insert;
+DROP TRIGGER console_revision_hostreport_update;
+DROP TRIGGER console_revision_hostreport_delete;
+DROP VIEW ConsoleRepositoryChange;
+DROP TABLE ConsoleRevision;
+`
+
+const removeConsoleSchema = removeConsoleRevisionSchema + `
 DROP TRIGGER console_authorship_insert;
 DROP TRIGGER console_authorship_immutable;
 DROP TRIGGER console_operation_message_delete;

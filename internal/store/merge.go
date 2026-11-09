@@ -28,6 +28,16 @@ func (t *transaction) mergeRepositories(r Request) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	// Repair cannot infer whether combining two histories is appropriate for a
+	// member. Both grant modes must be reviewed and removed before any move.
+	var grants int
+	if err = t.row(`SELECT COUNT(*) FROM ConsoleRepositoryAccess g JOIN ConsoleAccount a ON a.id=g.account_id
+ WHERE g.repository_id IN (?,?) AND a.role='member' AND g.mode IN ('ro','rw')`, from, into).Scan(&grants); err != nil {
+		return nil, err
+	}
+	if grants > 0 {
+		return nil, fail("conflict", "member repository grants must be reviewed and removed before merging")
+	}
 	if source.policy != destination.policy || source.action != destination.action {
 		return nil, fail("conflict", "repository policies differ; choose matching policies before merging")
 	}

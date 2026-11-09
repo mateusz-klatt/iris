@@ -15,6 +15,11 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 	var out map[string]any
 	var refused *Error
 	err := s.transact(ctx, func(t *transaction) error {
+		if principal, ok := ctx.Value(authorizationKey{}).(Principal); ok {
+			if err := t.authorize(principal, operation, r); err != nil {
+				return err
+			}
+		}
 		// A merge plan and a refused merge must leave even expired leases and
 		// delivery attempts untouched. The merge checks liveness without expiring.
 		if operation != "merge" {
@@ -41,8 +46,22 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 			}
 		}
 		switch operation {
+		case "ui_receipts":
+			if t.console == nil {
+				return fail("forbidden", "a console account session is required")
+			}
+			out, err = t.consoleReceipts(r)
 		case "ui_overview", "ui_deliveries", "ui_threads", "ui_thread", "ui_read", "ui_messages", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_events":
-			out, err = t.operator(operation, r)
+			if t.console != nil && operation == "ui_messages" {
+				out, err = t.consoleSend(r)
+			} else if t.console != nil && operation == "ui_events" {
+				out, err = t.consoleEvents()
+			} else {
+				out, err = t.operator(operation, r)
+			}
+			if err == nil && t.console != nil && (operation == "ui_read" || operation == "ui_revoke") {
+				err = t.consoleAction(t.console.ID, "", operation)
+			}
 		case "reconcile":
 			if shellSession(operation, r) {
 				out, err = t.shellSession(&r)
