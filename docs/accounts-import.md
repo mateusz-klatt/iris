@@ -1,11 +1,12 @@
-# Reviewed account import (ADR 014, step 4)
+# Reviewed account import and access review (ADR 014, steps 4 and 6)
 
 The importer transfers account records into Iris. It does not run a source
 backend, import sessions, infer repository access, activate named console login,
-or perform the later UI/cutover steps. Use synthetic SQLite files for rehearsal.
+or perform the cutover. Use synthetic SQLite files for rehearsal.
 A real apply is a separate owner operation after reviewing its manifest and
 backup. The examples below describe that operation; they are not evidence of a
-production import.
+production import. The operator access editor and its rehearsal are described in
+[the last part of this file](#access-review-and-isolated-rehearsal-step-6-first-pr).
 
 ## Source and manifest
 
@@ -221,3 +222,116 @@ contain a compromised source file, browser, hub or trusted host process. It
 validates a bounded account transfer, not the completeness of an export or its
 historical permissions. No real account data or production import is required
 to verify this implementation.
+
+## Access review and isolated rehearsal (step 6, first PR)
+
+The first part of step 6 supplies the staged operator access editor. It does
+**not** activate named authentication in `iris serve`, create a production
+console key, change `iris ui`, or retire deployed login links. The production
+switch is a separate second PR. There is no supported production activation
+command in this version. The existing account create/reset CLI commands require
+the private account gate and return `not_found` against ordinary `iris serve`.
+Do not infer a flag or change a deployed hub to exercise this editor.
+
+In the tested account mode, an enabled operator opens Access, selects an account
+by its immutable Iris identity, and reviews its role, disabled state and each
+repository's access. Members start with no grants. Choose no grant, `ro` or `rw`
+for each existing repository, then save using the displayed account revision.
+`ro` permits scoped reading. `rw` also permits sending/replying to agents, with
+`rw` required on the sending repository and every destination repository. Neither
+mode permits shared-mail acknowledgement, claim changes or administration.
+Operators have global console authority without per-repository grants; `none`
+is always disabled. A disabled account cannot sign in even when grants exist.
+
+Every accepted access edit revokes all target sessions, so the editor offers Save
+only once something has changed. Editing your own access
+therefore requires signing in again. A stale revision returns `conflict`: refresh
+the account list, compare the current saved permissions, and deliberately reapply
+the intended edit. Do not keep retrying an old revision or overwrite someone
+else's update. Removing or disabling the last enabled operator is refused; have
+the owner provision and verify another named operator before removing that role.
+An absent account row is not a reason to grant access by a similar display name.
+
+The reproducible rehearsal uses only test-owned temporary SQLite databases,
+console keys, synthetic passwords and browser sessions. Run from the repository
+root, without any hub/token/source configuration:
+
+```sh
+CGO_ENABLED=0 go test ./internal/hub -run '^TestStagedAccessCutoverAndRecoveryRehearsal$' -count=1
+```
+
+The test enters the private account gate in-process; it is not a deployment
+switch. It provisions an owner-authenticated named operator, verifies its real
+password and browser login, checks member default denial, grants `ro` then `rw`,
+refuses stale edits and loss of the last operator, and verifies session revocation,
+disabled/`none` refusal and message permission changes. It also checks rejection of
+old links/cookies and bearer-created browser sessions in account mode, persistent sessions across
+a normal restart, and named owner recovery. It never opens an external account
+export or connects to a configured hub. This proves those staged components
+together; it cannot prove a production switch, proxy configuration or restoration
+procedure that this version does not yet expose.
+
+### Required second-PR cutover sequence
+
+The later cutover implementation and its runbook must make this sequence
+executable before the owner uses it. These are acceptance steps, not commands
+available for a real deployment in this release:
+
+1. Keep browsers out of the console during the maintenance window. Take a fresh
+   consistent backup using the existing backup command, protecting both database
+   and owner credential, and rehearse restoration of a copy:
+
+   ```sh
+   iris admin backup /data/iris.db /private/new-before-cutover.db
+   iris admin restore-check /private/backup-copy.db /private/empty-scratch-dir
+   ```
+
+   Use a new destination for backup and an unchanged preserved backup. These
+   commands cannot provision accounts, enable authentication or rotate keys.
+2. Prepare the independent protected console key, then provision/import and
+   verify an enabled named operator while public console access stays closed.
+   Owner provisioning and recovery use these already implemented command forms
+   **only once the second PR provides their supported gated setup path**:
+
+   ```sh
+   iris admin console create ReviewedOperator < /private/new-password
+   iris admin console reset ReviewedOperator < /private/recovery-password
+   ```
+
+   Password files must be private. Standard input is read exactly: a final newline
+   is part of the password. Neither command creates a browser session. Host tokens
+   and account cookies cannot perform this operation. Verification must include
+   a successful named login with the intended operator capabilities; a successful
+   create response alone does not establish that the operator can sign in.
+3. Switch the console atomically to named accounts, remove link minting/redemption
+   and the old maps/cookie namespace, and change `iris ui` to open the ordinary
+   sign-in page. Require old links, old cookies and both owner/host bearer attempts
+   to mint a browser session to fail. Never expose an anonymous operator beside
+   named permissions. The current release does not perform this step.
+4. Verify a new member sees no repositories; grant `ro` and verify read without
+   send, then explicitly grant `rw` and verify send to an agent in that repository.
+   Confirm a downgrade revokes the old browser session and prevents a prepared
+   send or retry. Verify stale edits, last-operator refusal, both browser sizes,
+   a second account in the same browser and keyboard operation. Reopen normal
+   console access only after these checks pass.
+
+### Required cutover recovery
+
+Keep the console closed if operator login, key loading or the switch fails.
+Agent coordination may continue when only console authentication is unavailable;
+this is not permission to expose the old browser bypass. Once the supported setup
+path exists, use the owner-only `reset` form above to recover the same named
+operator. It restores that account as an enabled operator, revokes all its old
+sessions and requires a fresh login. It does not recover a lost owner credential,
+repair the database or authenticate a browser without a password.
+
+A full restore is different from an ordinary restart. Follow the existing
+[restore procedure](deploy.md#retention-and-restore-adr-006) while the hub and
+clients are stopped. The second PR must supply the exact supported procedure to
+rotate the independent console key and clear restored sessions before reopening
+the console. Review the restored passwords, roles, disabled states and grants:
+restoring a database can reinstate old credentials/permissions and loses later
+mail/coordination changes. Do not patch SQLite tables behind the serving hub.
+Rollback must keep named authentication or keep the console unavailable; never
+roll back to anonymous login links beside named accounts. A binary rollback alone
+cannot safely undo an account cutover or revoke already disclosed credentials.

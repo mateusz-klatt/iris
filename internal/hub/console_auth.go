@@ -447,6 +447,11 @@ func (h *Hub) consoleOperation(w http.ResponseWriter, r *http.Request, p store.P
 			if !consoleDecode(w, r, &input) {
 				return
 			}
+			// A missing key is not []: only an explicit empty list removes every grant.
+			if input.Grants == nil {
+				writeError(w, &store.Error{Code: "bad_request", Message: "grants are required"})
+				return
+			}
 			grants := make([]store.ConsoleGrant, len(input.Grants))
 			for i, g := range input.Grants {
 				grants[i] = store.ConsoleGrant{RepositoryID: g.Repository, Mode: g.Mode}

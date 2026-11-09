@@ -2,7 +2,7 @@ import { http, HttpResponse } from "msw";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "./api";
-import { changePassword, clearAccountSession, getSession, login, logout, updateProfile, type AccountSession } from "./accountApi";
+import { changePassword, clearAccountSession, getSession, listAccounts, login, logout, updateAccess, updateProfile, type AccountSession } from "./accountApi";
 import { server } from "./test/server";
 
 const session: AccountSession = {
@@ -13,6 +13,56 @@ const session: AccountSession = {
 afterEach(() => { clearAccountSession(); vi.restoreAllMocks(); });
 
 describe("account browser API", () => {
+  it("loads current access and sends an explicit revision, role, disabled state and ro/rw grants with session CSRF", async () => {
+    const account = { ...session.account, grants: [{ repository_id: "rp_one", mode: "ro" }] };
+    const edit = { edit_revision: 3, role: "member", disabled: false, grants: [{ repository_id: "rp_one", mode: "rw" as const }] };
+    server.use(
+      http.get("*/v1/ui/session", () => HttpResponse.json(session)),
+      http.get("*/v1/ui/accounts", ({ request }) => {
+        expect(request.headers.get("X-Iris-CSRF")).toBe(session.csrf);
+        expect(request.credentials).toBe("same-origin");
+        expect(request.cache).toBe("no-store");
+        return HttpResponse.json({ accounts: [account] });
+      }),
+      http.put("*/v1/ui/accounts/:id/access", async ({ request, params }) => {
+        expect(params.id).toBe("ca target/with slash");
+        expect(request.headers.get("X-Iris-CSRF")).toBe(session.csrf);
+        expect(await request.json()).toEqual(edit);
+        return HttpResponse.json({ account: { ...account, ...edit, edit_revision: 4 } });
+      }),
+    );
+    await getSession();
+    expect(await listAccounts()).toEqual([account]);
+    expect(await updateAccess("ca target/with slash", edit)).toMatchObject({ ...edit, edit_revision: 4 });
+  });
+
+  it.each([401, 403, 409])("preserves access authorization/conflict status %s for the editor", async (status) => {
+    server.use(
+      http.get("*/v1/ui/accounts", () => new HttpResponse(null, { status })),
+      http.put("*/v1/ui/accounts/:id/access", () => new HttpResponse(null, { status })),
+    );
+    await expect(listAccounts()).rejects.toEqual(new ApiError(status));
+    await expect(updateAccess("ca_target", { edit_revision: 1, role: "member", disabled: false, grants: [] })).rejects.toEqual(new ApiError(status));
+  });
+
+  it.each(["list", "save"])("discards the previous account's delayed access %s response", async (operation) => {
+    let finish: (response: Response) => void = () => undefined;
+    vi.spyOn(globalThis, "fetch").mockImplementationOnce(() => new Promise((resolve) => { finish = resolve; }));
+    const pending = operation === "list" ? listAccounts() : updateAccess("ca_target", { edit_revision: 1, role: "member", disabled: false, grants: [] });
+    clearAccountSession();
+    finish(new Response(JSON.stringify({ accounts: [], account: session.account })));
+    await expect(pending).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("discards an access snapshot if its caller aborts before the response is admitted", async () => {
+    const controller = new AbortController();
+    vi.spyOn(globalThis, "fetch").mockImplementationOnce(async () => {
+      controller.abort();
+      return new Response(JSON.stringify({ accounts: [] }));
+    });
+    await expect(listAccounts(controller.signal)).rejects.toMatchObject({ name: "AbortError" });
+  });
+
   it.each(["account", "authentication version", "session token"])("rejects a changed %s before replacing the mounted session token", async (change) => {
     const next = structuredClone(session);
     const tokens: (string | null)[] = [];

@@ -1,0 +1,77 @@
+/* The account list follows ADR 014's permitted export presentation. */
+.iris-access-layout {
+  display: grid;
+  grid-template-columns: minmax(12rem, 1fr) minmax(0, 2fr);
+  gap: 1rem;
+  align-items: start;
+}
+
+.iris-access-people {
+  display: grid;
+  gap: .5rem;
+  margin: .75rem 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.iris-access-people button {
+  display: grid;
+  gap: .25rem;
+  width: 100%;
+  min-height: 44px;
+  padding: .6rem .75rem;
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  color: inherit;
+  background: var(--panel);
+  font: inherit;
+  text-align: start;
+  overflow-wrap: anywhere;
+  cursor: pointer;
+}
+
+.iris-access-people button:disabled {
+  cursor: wait;
+  opacity: .65;
+}
+
+/* An unchanged form is not waiting for anything; the shared button style says it is. */
+.iris-access-save:disabled:not([aria-busy="true"]) {
+  cursor: not-allowed;
+}
+
+.iris-access-people button[aria-pressed="true"] {
+  outline: 2px solid currentColor;
+  outline-offset: 2px;
+}
+
+.iris-access-disabled {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+}
+
+.iris-access-disabled input {
+  width: auto;
+}
+
+.iris-access-grants {
+  display: grid;
+  min-width: 0;
+  margin: 0;
+  padding: .75rem;
+  gap: .75rem;
+}
+
+.iris-access-grants label {
+  display: grid;
+  min-width: 0;
+  gap: .25rem;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 760px) {
+  .iris-access-layout {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}

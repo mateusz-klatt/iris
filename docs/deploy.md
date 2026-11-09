@@ -18,7 +18,10 @@ reviewed cutover in the next ordered step.
 The step 5 frontend includes staged login/logout and profile/password forms but
 does not expose a deployment switch. Its session probe distinguishes legacy
 links from named authentication, so updating console assets keeps current login.
-Account-list/access controls and the owner-approved cutover belong to step 6.
+The first part of step 6 adds staged operator account-list/access controls and
+a temporary-database access/recovery rehearsal. Production activation, retirement
+of login links and the `iris ui` change require the separate cutover PR. See the
+[access and cutover runbook](accounts-import.md#access-review-and-isolated-rehearsal-step-6-first-pr).
 
 The account implementation uses a separate random 256-bit console key, stored
 with mode 0600 or the owner-only Windows DACL. It never reuses the owner token or

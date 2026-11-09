@@ -173,7 +173,7 @@ func TestConsoleAccessLifecycleAndActionAttribution(t *testing.T) {
 	consoleError(t, err, "unauthorized")
 	_, err = s.ChangeConsoleAccess(context.Background(), p, member.ID, 1, "member", false, nil)
 	consoleError(t, err, "conflict")
-	mp = consoleTestPrincipal(t, s, updated)
+	mp = consoleTestPrincipal(t, s, updated.ConsoleAccount)
 	_, err = s.EditConsoleProfile(context.Background(), mp, 1, "Stale", "en", "en")
 	consoleError(t, err, "conflict")
 	_, err = s.EditConsoleProfile(context.Background(), mp, 2, strings.Repeat("x", 129), "en", "en")

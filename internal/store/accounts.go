@@ -32,8 +32,15 @@ type ConsoleAccountInput struct {
 }
 
 type ConsoleGrant struct {
-	RepositoryID string
-	Mode         string
+	RepositoryID string `json:"repository_id"`
+	Mode         string `json:"mode"`
+}
+
+// ConsoleAccessAccount is the operator editor's snapshot. Its grants and edit
+// revision are read in the same transaction; credential fields are cleared.
+type ConsoleAccessAccount struct {
+	ConsoleAccount
+	Grants []ConsoleGrant `json:"grants"`
 }
 
 // Enabled denies unrecognized stored roles even if a malformed database row has
@@ -224,6 +231,14 @@ func (t *transaction) replaceConsoleAccess(accountID string, expectedRevision in
 		return ConsoleAccount{}, err
 	}
 	for _, grant := range grants {
+		// An open editor can still offer a repository that was forgotten or merged since it loaded.
+		var known bool
+		if err = t.row("SELECT EXISTS(SELECT 1 FROM Repository WHERE id=?)", grant.RepositoryID).Scan(&known); err != nil {
+			return ConsoleAccount{}, err
+		}
+		if !known {
+			return ConsoleAccount{}, fail("conflict", "a selected repository no longer exists; refresh before editing")
+		}
 		if _, err = t.exec("INSERT INTO ConsoleRepositoryAccess(account_id,repository_id,mode) VALUES(?,?,?)", accountID, grant.RepositoryID, grant.Mode); err != nil {
 			return ConsoleAccount{}, err
 		}

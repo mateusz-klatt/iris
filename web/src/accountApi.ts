@@ -19,6 +19,22 @@ export interface AccountSession {
   expires_ms: number;
 }
 
+export interface ConsoleGrant {
+  repository_id: string;
+  mode: "ro" | "rw";
+}
+
+export interface ConsoleAccessAccount extends ConsoleAccount {
+  grants: ConsoleGrant[];
+}
+
+export interface ConsoleAccessEdit {
+  edit_revision: number;
+  role: string;
+  disabled: boolean;
+  grants: ConsoleGrant[];
+}
+
 let csrf = "";
 let sessionGeneration = 0;
 
@@ -105,4 +121,22 @@ export async function changePassword(currentPassword: string, newPassword: strin
   await request("/v1/ui/password", "POST", { current_password: currentPassword, new_password: newPassword });
   requireSessionGeneration(generation);
   clearAccountSession();
+}
+
+async function accessJson<T>(path: string, method: string, body?: unknown, signal?: AbortSignal): Promise<T> {
+  const generation = sessionGeneration;
+  const value = await (await request(path, method, body, csrf, signal)).json() as T;
+  signal?.throwIfAborted();
+  requireSessionGeneration(generation);
+  return value;
+}
+
+export async function listAccounts(signal?: AbortSignal): Promise<ConsoleAccessAccount[]> {
+  const result = await accessJson<{ accounts: ConsoleAccessAccount[] }>("/v1/ui/accounts", "GET", undefined, signal);
+  return result.accounts;
+}
+
+export async function updateAccess(accountID: string, edit: ConsoleAccessEdit): Promise<ConsoleAccessAccount> {
+  const result = await accessJson<{ account: ConsoleAccessAccount }>(`/v1/ui/accounts/${encodeURIComponent(accountID)}/access`, "PUT", edit);
+  return result.account;
 }

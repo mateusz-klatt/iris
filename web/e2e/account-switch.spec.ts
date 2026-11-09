@@ -1,12 +1,12 @@
 import { expect, test, type Page, type WebSocketRoute } from "@playwright/test";
 
-test("a second tab's login cannot mix its data with a live first-account console", async ({ context, page }) => {
+for (const view of ["compose", "access"] as const) test(`a second tab's login clears the first operator's ${view} state only when the first tab notices`, async ({ context, page }) => {
   const secondTab = await context.newPage();
   const errors: string[] = [];
   for (const tab of [page, secondTab]) tab.on("pageerror", (error) => { errors.push(error.message); });
   const accounts = [
-    { id: "ca_first", username: "first-person", display_name: "First person", ui_locale: "pl", csrf: "iris-first-csrf", cookie: "first-session", subject: "First-only conversation" },
-    { id: "ca_second", username: "second-person", display_name: "Second person", ui_locale: "en", csrf: "iris-second-csrf", cookie: "second-session", subject: "Second-only conversation" },
+    { id: "ca_first", username: "first-person", display_name: "First person", role: "operator", ui_locale: "pl", csrf: "iris-first-csrf", cookie: "first-session", subject: "First-only conversation" },
+    { id: "ca_second", username: "second-person", display_name: "Second person", role: "member", ui_locale: "en", csrf: "iris-second-csrf", cookie: "second-session", subject: "Second-only conversation" },
   ];
   const sockets = new Map<Page, WebSocketRoute[]>();
   const closed = new Set<WebSocketRoute>();
@@ -18,6 +18,7 @@ test("a second tab's login cannot mix its data with a live first-account console
     });
   }
   const reads: { cookie: string; csrf: string | null; status: number }[] = [];
+  const directoryReads: string[] = [];
   await context.route("**/v1/ui/**", async (route) => {
     const request = route.request();
     const path = new URL(request.url()).pathname;
@@ -47,9 +48,15 @@ test("a second tab's login cannot mix its data with a live first-account console
     }
     if (path === "/v1/ui/session") {
       await route.fulfill({ json: {
-        account: { id: account.id, username: account.username, display_name: account.display_name, ui_locale: account.ui_locale, role: "member", disabled: false, correspondence_locale: "en", edit_revision: 1, auth_version: 1 },
+        account: { id: account.id, username: account.username, display_name: account.display_name, ui_locale: account.ui_locale, role: account.role, disabled: false, correspondence_locale: "en", edit_revision: 1, auth_version: 1 },
         csrf: account.csrf, created_ms: 1, expires_ms: 99_999_999_999_999,
       } });
+    } else if (path === "/v1/ui/accounts") {
+      directoryReads.push(account.id);
+      await route.fulfill(account.role === "operator" ? { json: { accounts: [
+        { id: account.id, username: account.username, display_name: account.display_name, ui_locale: account.ui_locale, role: account.role, disabled: false, correspondence_locale: "en", edit_revision: 1, auth_version: 1, grants: [] },
+        { id: "ca_directory_member", username: "First-only directory member", display_name: "First-only directory member", ui_locale: "en", role: "member", disabled: false, correspondence_locale: "en", edit_revision: 1, auth_version: 1, grants: [{ repository_id: "rp_shared", mode: "ro" }] },
+      ] } } : { status: 403 });
     } else if (path === "/v1/ui/overview") {
       await route.fulfill({ json: {
         repositories: [{ id: "rp_shared", name: account.subject, aliases: [], console_access: "rw" }],
@@ -62,6 +69,10 @@ test("a second tab's login cannot mix its data with a live first-account console
       await route.fulfill({ json: { id: "ms_shared", messages: [{ id: "ms_reply", sender: "codex-peer", repository_id: "rp_shared", recipients: [{ name: "human", state: "acked" }], subject: account.subject, body: account.subject, created_at: "2026-11-09T10:00:00Z" }] } });
     } else if (path === "/v1/ui/deliveries") {
       await route.fulfill({ json: { messages: [], more: false, window_s: 604800, wait_s: 900 } });
+    } else if (path.endsWith("/read")) {
+      await route.fulfill({ json: { read: 0 } });
+    } else if (path === "/v1/ui/doctor") {
+      await route.fulfill({ json: { hosts: [] } });
     } else {
       await route.fulfill({ status: 404 });
     }
@@ -85,13 +96,26 @@ test("a second tab's login cannot mix its data with a live first-account console
   await expect.poll(() => sockets.get(page)!.length).toBe(1);
   await expect(page.locator(".stream-status")).toHaveClass(/stream-live/);
   const firstSocket = sockets.get(page)![0]!;
+  const directoryMember = page.getByRole("button", { name: /^First-only directory member/ });
+  const repositoryAccess = page.locator("#iris-access-panel select").last();
+  if (view === "access") {
+    await page.getByRole("navigation").getByRole("button", { name: "Dostęp", exact: true }).click();
+    await directoryMember.click();
+    await expect(repositoryAccess).toHaveValue("ro");
+    await repositoryAccess.selectOption("rw");
+  }
   await expect(secondTab.locator(".iris-login")).toBeVisible();
   await signIn(secondTab, "second-person");
   await expect(secondTab.locator(".account-identity")).toHaveText("Second person");
   expect((await context.cookies()).find((cookie) => cookie.name === "iris_console_session")?.value).toBe("second-session");
   expect(closed.has(firstSocket)).toBe(false);
   await expect(page.locator(".account-identity")).toHaveText("First person");
-  await expect(page.locator("#compose textarea")).toHaveValue("First account compose draft");
+  if (view === "access") {
+    await expect(directoryMember).toBeVisible();
+    await expect(repositoryAccess).toHaveValue("rw");
+  } else {
+    await expect(page.locator("#compose textarea")).toHaveValue("First account compose draft");
+  }
   await page.evaluate(() => {
     const state = window as Window & { irisMixedAccounts?: boolean };
     state.irisMixedAccounts = false;
@@ -105,11 +129,14 @@ test("a second tab's login cannot mix its data with a live first-account console
   await expect(page.locator(".iris-login")).toBeVisible();
   await expect(page.locator(".account-identity")).toHaveCount(0);
   await expect(page.locator("#compose")).toHaveCount(0);
+  await expect(page.locator("#iris-access-panel")).toHaveCount(0);
+  await expect(page.getByText("First-only directory member", { exact: true })).toHaveCount(0);
   await expect(page.locator("html")).toHaveAttribute("lang", "en");
   expect(await page.evaluate(() => localStorage.getItem("iris.uiLocale"))).toBeNull();
   await expect.poll(() => closed.has(firstSocket)).toBe(true);
   expect(reads.at(-1)).toEqual({ cookie: "second-session", csrf: "iris-first-csrf", status: 401 });
   await expect(secondTab.locator(".account-identity")).toHaveText("Second person");
+  await expect(secondTab.getByRole("navigation").getByRole("button", { name: "Access", exact: true })).toHaveCount(0);
   await signIn(page, "second-person");
   await expect(page.locator(".account-identity")).toHaveText("Second person");
   await page.locator(".mail-filters select").first().selectOption("rp_shared");
@@ -117,5 +144,6 @@ test("a second tab's login cannot mix its data with a live first-account console
   await expect(page.locator(".thread-reader textarea")).toHaveValue("");
   await page.locator(".compose-action").click();
   await expect(page.locator("#compose textarea")).toHaveValue("");
+  expect(directoryReads).toEqual(view === "access" ? ["ca_first"] : []);
   expect(errors).toEqual([]);
 });
