@@ -61,26 +61,45 @@ func TestFileMemoryIsOwnerOnlyOnWindows(t *testing.T) {
 	m.prune()
 }
 
-func TestFileMemoryKeepsProofWhenWindowsRefusesCreatingAFile(t *testing.T) {
+func TestFileMemoryKeepsProofWhenItsDirectoryIsReplacedByAFile(t *testing.T) {
 	m := newFileMemory(t)
 	m.Remember("claude", "s", 3)
-	t.Run("creation denied after protection", func(t *testing.T) {
+	t.Run("directory replaced after protection", func(t *testing.T) {
+		saved := m.dir + ".saved"
 		m.restrict = func(path string) error {
 			if err := config.OwnerOnly(path); err != nil {
 				return err
 			}
-			// A concurrent ACL change can refuse new files after protection succeeded.
+			// A concurrent path replacement can refuse creation after protection succeeded.
 			if path == m.dir {
-				denyFileAccess(t, path, windows.FILE_WRITE_DATA) // FILE_ADD_FILE for a directory.
+				if err := os.Rename(m.dir, saved); err != nil {
+					t.Fatal(err)
+				}
+				t.Cleanup(func() {
+					if err := os.Remove(m.dir); err != nil && !os.IsNotExist(err) {
+						t.Error(err)
+					}
+					if err := os.Rename(saved, m.dir); err != nil {
+						t.Error(err)
+					}
+				})
+				if err := os.WriteFile(m.dir, []byte("replacement"), 0o600); err != nil {
+					t.Fatal(err)
+				}
 			}
 			return nil
 		}
 		m.Remember("claude", "s", 4)
-		if got := m.Recall("claude", "s"); got != 3 {
+		preserved := m
+		preserved.dir = saved
+		if got := preserved.Recall("claude", "s"); got != 3 {
 			t.Fatalf("a failed write replaced the previous proof with %d", got)
 		}
-		if entries := mustList(t, m.dir); len(entries) != 1 {
+		if entries := mustList(t, saved); len(entries) != 1 {
 			t.Fatalf("a failed write left temporary files: %v", entries)
+		}
+		if raw, err := os.ReadFile(m.dir); err != nil || string(raw) != "replacement" {
+			t.Fatalf("a failed write changed the replacement file: %q %v", raw, err)
 		}
 	})
 	m.restrict = config.OwnerOnly

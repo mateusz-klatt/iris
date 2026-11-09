@@ -135,71 +135,34 @@ func TestOwnerOnlyAppliesTheTokenDACL(t *testing.T) {
 	}
 }
 
-// denyDACLChanges leaves ordinary file access available but denies permission changes.
-// Keep an authorized handle so cleanup can restore the original DACL even after the denial.
-func denyDACLChanges(t *testing.T, path string) {
-	t.Helper()
-	original, err := windows.GetNamedSecurityInfo(path, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
-	if err != nil {
-		t.Fatal(err)
-	}
-	originalDACL, _, err := original.DACL()
-	if err != nil {
-		t.Fatal(err)
-	}
-	name, err := windows.UTF16PtrFromString(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	handle, err := windows.CreateFile(name, windows.READ_CONTROL|windows.WRITE_DAC, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE, nil, windows.OPEN_EXISTING, windows.FILE_FLAG_BACKUP_SEMANTICS, 0)
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := windows.SetSecurityInfo(handle, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, originalDACL, nil); err != nil {
-			t.Error(err)
-		}
-		if err := windows.CloseHandle(handle); err != nil {
-			t.Error(err)
-		}
-	})
-	// OWNER RIGHTS controls the owner's implicit WRITE_DAC permission too.
-	denied, err := windows.SecurityDescriptorFromString("D:P(D;OICI;WD;;;OW)(A;OICI;FA;;;" + currentUserSID(t) + ")")
-	if err != nil {
-		t.Fatal(err)
-	}
-	deniedDACL, _, err := denied.DACL()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := windows.SetSecurityInfo(handle, windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION|windows.PROTECTED_DACL_SECURITY_INFORMATION, nil, nil, deniedDACL, nil); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func TestTokenRefusesAnExistingFileWhoseDACLItCannotProtect(t *testing.T) {
+func TestTokenRefusesAnExistingFileMovedBeforeProtection(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "hub.token")
 	want, err := Token(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	denyDACLChanges(t, path)
-	if token, err := Token(path); token != "" || !errors.Is(err, windows.ERROR_ACCESS_DENIED) {
-		t.Fatalf("unprotected token was accepted: %q %v", token, err)
+	moved := path + ".moved"
+	original := lstatToken
+	t.Cleanup(func() { lstatToken = original })
+	// Model a concurrent move after the regular-file check. Unlike a DACL denial,
+	// a missing path also prevents an administrator from protecting the file.
+	lstatToken = func(name string) (os.FileInfo, error) {
+		info, err := original(name)
+		if err != nil {
+			return nil, err
+		}
+		if err := os.Rename(name, moved); err != nil {
+			t.Fatal(err)
+		}
+		return info, nil
 	}
-	if raw, err := os.ReadFile(path); err != nil || strings.TrimSpace(string(raw)) != want {
-		t.Fatalf("refusal altered the existing token: %q %v", raw, err)
+	if token, err := Token(path); token != "" || !errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
+		t.Fatalf("token whose protection failed was accepted: %q %v", token, err)
 	}
-}
-
-func TestTokenRemovesANewFileWhoseInheritedDACLItCannotProtect(t *testing.T) {
-	dir := t.TempDir()
-	denyDACLChanges(t, dir)
-	path := filepath.Join(dir, "hub.token")
-	if token, err := Token(path); token != "" || !errors.Is(err, windows.ERROR_ACCESS_DENIED) {
-		t.Fatalf("unprotected token was created: %q %v", token, err)
+	if raw, err := os.ReadFile(moved); err != nil || strings.TrimSpace(string(raw)) != want {
+		t.Fatalf("refusal altered the moved token: %q %v", raw, err)
 	}
 	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("partial token left behind: %v", err)
+		t.Fatalf("refusal recreated the moved token: %v", err)
 	}
 }
