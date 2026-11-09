@@ -209,10 +209,11 @@ or a slow network. Such entries leave the row `ok` with a `degraded` note. More 
 status refuses it, so doctor sends such a hub the row as `silent`, with a detail starting `slow:`,
 and that is how its console shows it.
 
-`iris doctor --live` can run clients graded `ok`, `silent` or `slow` when their binaries are
-available. It asks before running billable client sessions unless `--yes` is given. Clients
-graded `needs_human` are skipped unless selected explicitly with `--client <client>`; a missing
-binary or `not_configured` grade still prevents selection. The offline grades remain in the
+`iris doctor --live` can run ready clients graded `ok`, `silent` or `slow` when their binaries
+are available. It keeps current readiness separate from the historical grade: recent failures
+never override a `needs_human` or `not_configured` result. These clients are skipped even when
+selected explicitly with `--client <client>`, as is a client whose binary is missing. It asks
+before running billable client sessions unless `--yes` is given. The offline grades remain in the
 output, but the live command exits 0 when at least one selected client runs, all live checks
 pass and the configured hub and token are usable. It exits 1 for a failed live check, an
 unusable hub or token, no eligible client or a declined run. Other clients' offline grades

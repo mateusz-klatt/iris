@@ -120,7 +120,7 @@ func TestDoctorLiveExitReflectsLiveResults(t *testing.T) {
 }
 
 func TestLiveStageAsksBeforeSpending(t *testing.T) {
-	plans := []doctor.LivePlan{{Client: "claude", Binary: "/bin/claude", Model: "haiku"}, {Client: "codex", Binary: "/bin/codex", Model: "gpt-6.1-terra", Requires: "Review hooks once in /hooks"}}
+	plans := []doctor.LivePlan{{Client: "claude", Binary: "/bin/claude", Model: "haiku"}, {Client: "codex", Binary: "/bin/codex", Model: "gpt-6.1-terra"}}
 	var ran []string
 	var limits []time.Duration
 	live := func(_ context.Context, opt doctor.LiveOptions, p doctor.LivePlan) doctor.LiveResult {
@@ -145,7 +145,7 @@ func TestLiveStageAsksBeforeSpending(t *testing.T) {
 	if strings.Join(ran, ",") != "claude,codex" || limits[0] != time.Minute {
 		t.Fatalf("ran %v limits %v", ran, limits)
 	}
-	if !strings.Contains(out.String(), "claude (/bin/claude, model haiku): ok") || !strings.Contains(out.String(), "codex (/bin/codex, model gpt-6.1-terra): failed") || !strings.Contains(errOut.String(), "its hook runs only if you have done this: Review hooks once in /hooks") {
+	if !strings.Contains(out.String(), "claude (/bin/claude, model haiku): ok") || !strings.Contains(out.String(), "codex (/bin/codex, model gpt-6.1-terra): failed") {
 		t.Fatal(out.String())
 	}
 	ran = nil

@@ -296,16 +296,15 @@ func TestLiveEnvReplacesTheHubAndDropsTheParentSession(t *testing.T) {
 	}
 }
 
-func TestNamedCodexRunsAndPutsItsConfigBack(t *testing.T) {
+func TestLiveCodexPutsItsConfigBack(t *testing.T) {
 	layout, config := codexLayout(t)
 	writeConfig(t, config, userCodexConfig)
 	t.Setenv("IRIS_FAKE_CODEX_CONFIG", config)
 	t.Setenv("IRIS_FAKE_LIVE_NAME", integrate.Codex)
 	plan := fakePlan(t, "nohook")
 	plan.Client = integrate.Codex
-	plan.Requires = "Review hooks once in /hooks"
 	res := RunLive(context.Background(), LiveOptions{Layout: layout, Timeout: time.Minute}, plan)
-	if res.HookFired || !strings.Contains(res.Detail, "it runs only after this step: Review hooks once in /hooks") {
+	if res.HookFired || !strings.Contains(res.Detail, "the scratch hub saw no session from this client's hook") {
 		t.Fatalf("%+v", res)
 	}
 	if got, _ := os.ReadFile(config); string(got) != userCodexConfig {
@@ -336,7 +335,9 @@ func TestLivePlansNeedAWorkingHookAndABinary(t *testing.T) {
 		{Client: integrate.Claude, Status: StatusOK},
 		{Client: integrate.Codex, Status: StatusNeedsHuman, Detail: "Review hooks once in /hooks"},
 		{Client: integrate.Copilot, Status: StatusSilent},
-		{Client: integrate.Cursor, Status: StatusNotConfigured},
+		{Client: integrate.Cursor, Status: StatusNotConfigured, Detail: "configuration is absent"},
+		// An unknown status cannot authorize a billable run.
+		{Client: integrate.Antigravity, Status: "unknown"},
 		{Client: integrate.Grok, Status: StatusOK},
 		{Client: integrate.Kimi, Status: StatusOK},
 	}
@@ -345,15 +346,18 @@ func TestLivePlansNeedAWorkingHookAndABinary(t *testing.T) {
 	if len(plans) != 3 || plans[0] != (LivePlan{Client: integrate.Claude, Binary: "/bin/claude", Model: "haiku"}) || plans[1].Client != integrate.Copilot || plans[2] != (LivePlan{Client: integrate.Grok, Binary: "/bin/grok", Model: "grok-4.7-build-fast"}) {
 		t.Fatalf("%+v", plans)
 	}
-	if strings.Join(skipped, "\n") != "codex: Review hooks once in /hooks\nkimi: client binary not found" {
+	if strings.Join(skipped, "\n") != "codex: Review hooks once in /hooks\ncursor: configuration is absent\nkimi: client binary not found" {
 		t.Fatalf("%q", skipped)
 	}
 	if only, _ := LivePlans(layout, rows, integrate.Grok); len(only) != 1 || only[0].Client != integrate.Grok {
 		t.Fatalf("%+v", only)
 	}
-	// Naming a client that needs a person runs it, and the plan says what it relies on.
-	if named, skipped := LivePlans(layout, rows, integrate.Codex); len(named) != 1 || named[0].Requires != "Review hooks once in /hooks" || len(skipped) != 0 {
+	// Naming a client never bypasses the step doctor knows is still needed.
+	if named, skipped := LivePlans(layout, rows, integrate.Codex); len(named) != 0 || strings.Join(skipped, "\n") != "codex: Review hooks once in /hooks" {
 		t.Fatalf("%+v %v", named, skipped)
+	}
+	if named, skipped := LivePlans(layout, rows, integrate.Cursor); len(named) != 0 || len(skipped) != 1 {
+		t.Fatalf("an explicitly named unconfigured client must be skipped: %+v %v", named, skipped)
 	}
 	missing := []ClientReport{{Client: integrate.Codex, Status: StatusNeedsHuman, Detail: "client binary not found"}}
 	if named, skipped := LivePlans(layout, missing, integrate.Codex); len(named) != 0 || len(skipped) != 1 {

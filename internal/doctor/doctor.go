@@ -52,6 +52,10 @@ type ClientReport struct {
 	Status     string `json:"status"`
 	Detail     string `json:"detail,omitempty"`
 	LastHookAt string `json:"last_hook_at,omitempty"`
+	// Readiness is local to live planning. Historical grades must not erase a
+	// missing configuration or human step, or its reason. It is not published.
+	readinessStatus string
+	readinessDetail string
 }
 
 // Result is the human-readable outcome plus the stored report.
@@ -420,6 +424,9 @@ func applyFailures(res *Result, tokenFile string, now time.Time) error {
 	}
 	for i := range res.Report.Clients {
 		row := &res.Report.Clients[i]
+		if row.readinessStatus == "" {
+			row.readinessStatus, row.readinessDetail = row.Status, row.Detail
+		}
 		n := degraded[row.Client]
 		switch {
 		case len(broken[row.Client]) > 0:
