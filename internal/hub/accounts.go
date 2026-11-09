@@ -8,7 +8,7 @@ import (
 )
 
 // consoleRequestPrincipal is the staged account transport boundary. Authentication
-// will supply the verified opaque-session digest in the next ordered step; this
+// supplies the verified opaque-session digest in the gated account path; this
 // function never derives a person from request fields or a machine bearer. It is
 // deliberately not wired into the legacy routes before account cutover.
 func consoleRequestPrincipal(r *http.Request, sessionDigest []byte) (store.Principal, error) {

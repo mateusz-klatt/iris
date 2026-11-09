@@ -7,11 +7,30 @@ Iris sends no-store and a CSP that permits only its own scripts. Cloudflare term
 TLS and can see credentials and message content. This is a shared-trust service for
 one developer or a small team, not a multi-tenant boundary (D13).
 
-ADR 014 account authorization is staged through schema 18 and internal typed
-store entry points. Account HTTP routes remain inactive; deploying this stage
-does not switch console authentication or enable member access. Do not import
-accounts or retire login links as part of this stage. Session/authentication
-defenses, importer, account UI and reviewed cutover are later ordered steps.
+ADR 014 account authentication is staged through schema 19 and internal typed
+store entry points. Account HTTP routes remain inactive in `iris serve`; deploying
+this stage does not switch console authentication or enable member access. The
+session/authentication defenses and owner setup commands are implemented behind
+the account gate for verification. Do not import accounts, provision a production
+account or retire login links as part of this stage. Importer, account UI and
+reviewed cutover are later ordered steps.
+
+The account implementation uses a separate random 256-bit console key, stored
+with mode 0600 or the owner-only Windows DACL. It never reuses the owner token or
+a source application's key. Normal restarts keep that key and the database:
+sessions retain their original twelve-hour absolute expiry. An unreadable or
+invalid console key must leave account authentication closed while agent
+coordination continues. No console key is created by this staged deployment.
+
+A future account-mode backup must protect both the database (which contains
+password hashes and permissions) and its separate console key. Restoration is
+different from restart: keep the hub stopped, replace the console key with a fresh
+independent key, clear restored sessions and have the owner review restored account passwords,
+disabled states and grants. Restoring old database state can restore old
+credentials and authority. Key rotation invalidates every old console cookie;
+it does not change machine credentials. Restart with that key only after review;
+hot key reload is not implemented. Account-mode restore/cutover is not an operation
+enabled by this stage.
 
 The files in `deploy/` are written for this topology. No release binary is needed:
 `deploy/Dockerfile` builds the locked Node console and embeds it in a CGO_ENABLED=0

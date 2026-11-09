@@ -191,3 +191,20 @@ func BenchmarkArgonCreate(b *testing.B) {
 		}
 	}
 }
+
+func TestUpgradePreservesImportedPasswordLength(t *testing.T) {
+	record, err := UpgradePassword("x")
+	if err != nil {
+		t.Fatal("short imported password could not upgrade")
+	}
+	if ok, err := VerifyPassword("x", record); err != nil || !ok {
+		t.Fatal("upgraded imported password changed its bytes")
+	}
+	if _, err = UpgradePassword(strings.Repeat("x", MaxPasswordBytes+1)); !errors.Is(err, ErrInvalidPassword) {
+		t.Fatal("oversized upgrade input reached KDF")
+	}
+	occupyKDF(t)
+	if _, err = UpgradePassword("x"); !errors.Is(err, ErrBusy) {
+		t.Fatal("upgrade bypassed shared KDF capacity")
+	}
+}

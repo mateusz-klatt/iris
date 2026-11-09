@@ -477,8 +477,12 @@ global console authority but gain no owner-token powers. Access edits revoke
 sessions atomically and cannot remove the last enabled operator. The named
 transport boundary refuses mixed bearer/session credentials and bearer-only
 console sends. This path is staged: active HTTP routes still use the legacy
-authentication below until the ordered account cutover. Session issuance,
-authentication defenses, account UI and owner provisioning remain later work.
+authentication below until the ordered account cutover. The gated account path
+now issues opaque, hashed database sessions with a twelve-hour absolute expiry,
+bound CSRF challenges, password-attempt limits and owner provisioning/recovery.
+Password work runs outside the store lock; issuance and password changes recheck
+the verified account snapshot inside their committing transaction. Password and
+access changes revoke every session. Account UI and cutover remain later work.
 
 The trust boundary is the OS user on a host, plus a token per host across hosts. The token
 separates users and hosts, nothing finer. Any process running as that user, including a hook
@@ -673,8 +677,10 @@ Authorship is immutable message metadata, not a continuing access grant. Named
 sends retain account-scoped retry results for 24 hours and reauthorize current
 objects before replay; repository repair refuses member grants of either mode.
 Per-account persisted revisions exclude hidden repository activity and global
-event cursors. The current frontend and its legacy routes remain active until
-cutover; account-session frame admission and revocation are the next stage.
+event cursors. Gated account sockets validate their session before each frame;
+frame admission serializes with revocation, and access changes wake idle sockets
+to close. A previously admitted frame may already be in transit. The current
+frontend and its legacy routes remain active until the later account cutover.
 
 The new-message recipient picker stores Agent IDs, not display names, and sends those IDs
 through the existing address resolver. If a selected ID disappears from the directory, review

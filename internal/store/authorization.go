@@ -6,7 +6,7 @@ import (
 
 // Principal is supplied by trusted transport code, never decoded from a request.
 // SessionDigest is the stored opaque-session digest, not a cookie or password.
-// Authentication/session issuance and HTTP account routes remain a later stage.
+// HTTP account routes remain gated until the account cutover.
 type Principal struct {
 	Kind          PrincipalKind
 	SessionDigest []byte
@@ -52,17 +52,11 @@ func (t *transaction) authorize(p Principal, operation string, r Request) error 
 	if p.Kind != ConsolePrincipal || len(p.SessionDigest) != 32 {
 		return fail("unauthorized", "console session required")
 	}
-	var accountID string
-	err := t.row(`SELECT s.account_id FROM ConsoleSession s JOIN ConsoleAccount a ON a.id=s.account_id
- WHERE s.digest=? AND s.expires_ms>? AND s.created_ms<=? AND s.auth_version=a.auth_version
- AND a.disabled=0 AND a.role IN ('operator','member')`, p.SessionDigest, t.s.clock.Now().UnixMilli(), t.s.clock.Now().UnixMilli()).Scan(&accountID)
-	if err != nil {
-		return absent(err, "unauthorized", "console session is no longer valid")
-	}
-	a, err := t.consoleAccount("id", accountID)
+	session, err := t.consoleSession(p.SessionDigest)
 	if err != nil {
 		return err
 	}
+	a := session.Account
 	t.console = &a
 	switch operation {
 	case "ui_overview", "ui_deliveries", "ui_threads", "ui_thread", "ui_receipts", "ui_events", "ui_messages", "ui_profile":
@@ -72,6 +66,17 @@ func (t *transaction) authorize(p Principal, operation string, r Request) error 
 		}
 	default:
 		return fail("forbidden", "console sessions authorize only console operations")
+	}
+	// A read-only member has no send operation at all. Mixed-scope accounts
+	// still receive not_found for individual unwritable objects below.
+	if operation == "ui_messages" && a.Role == "member" {
+		var writable bool
+		if err := t.row("SELECT EXISTS(SELECT 1 FROM ConsoleRepositoryAccess WHERE account_id=? AND mode='rw')", a.ID).Scan(&writable); err != nil {
+			return err
+		}
+		if !writable {
+			return fail("forbidden", "a writable repository grant is required to send")
+		}
 	}
 	// A send checks current accepted objects before consulting the supplied origin:
 	// an exact replay may still name a repository retired by a reviewed merge.
@@ -121,7 +126,7 @@ func (s *Store) EditConsoleProfile(ctx context.Context, p Principal, revision in
 }
 
 // ChangeConsoleAccess validates the acting operator and edit revision together
-// with grant replacement and revocation. Owner provisioning remains a later CLI.
+// with grant replacement and revocation. Owner provisioning has a separate path.
 func (s *Store) ChangeConsoleAccess(ctx context.Context, p Principal, target string, revision int64, role string, disabled bool, grants []ConsoleGrant) (ConsoleAccount, error) {
 	var account ConsoleAccount
 	err := s.transact(ctx, func(t *transaction) error {

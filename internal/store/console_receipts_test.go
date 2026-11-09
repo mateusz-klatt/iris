@@ -25,7 +25,7 @@ func TestConsoleReceiptsRemainReadableAfterWriteDowngradeAndUseCurrentScope(t *t
 	consoleError(t, err, "unauthorized")
 	principal = readConsolePrincipal(t, s, updated)
 	_, err = s.CallConsole(context.Background(), principal, "ui_messages", request)
-	consoleError(t, err, "not_found")
+	consoleError(t, err, "forbidden")
 	status := accountRead(t, s, principal, "ui_receipts", Request{Key: messageID})
 	recipients := status["recipients"].([]map[string]any)
 	if status["sender_account_id"] != author.ID || status["sender_username"] != author.Username || status["sender_display_name"] != author.DisplayName || status["reply_address"] != "human:"+origin || len(recipients) != 1 || recipients[0]["recipient"] != agentName(bo) || recipients[0]["repository_id"] != target || recipients[0]["state"] != "pending" || recipients[0]["at"] != nil {

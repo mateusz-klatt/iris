@@ -139,6 +139,19 @@ func CreatePassword(password string) (string, error) {
 	if err := ValidateNewPassword(password); err != nil {
 		return "", err
 	}
+	return createPassword(password)
+}
+
+// UpgradePassword preserves an already verified imported password's original
+// length policy while replacing its record with Iris's Argon2id profile.
+func UpgradePassword(password string) (string, error) {
+	if !validPasswordInput(password) {
+		return "", ErrInvalidPassword
+	}
+	return createPassword(password)
+}
+
+func createPassword(password string) (string, error) {
 	if !admitKDF() {
 		return "", ErrBusy
 	}
