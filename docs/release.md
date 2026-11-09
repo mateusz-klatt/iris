@@ -50,6 +50,14 @@ source state. The generated index and assets are ignored; only an empty embed se
 tracked, so rebuilding a clean checkout does not create source dirt or require a Git restore.
 Both `make web` paths (Node build and `WEB_DIST` handover) retain that seed.
 
+`web/go.mod` marks the Node-only workspace as a separate Go module boundary.
+Root `./...` commands, including vet, tests, race, coverage, lint and vulnerability
+checks, therefore never discover Go packages shipped inside `web/node_modules`.
+The package discovery test exercises a dependency package under `node_modules`
+and a new first-party package outside `web/`. A layout test rejects first-party
+Go files inside `web/`, so that boundary cannot silently hide application code.
+Keep application Go source in the root module; no filtered package list is used.
+
 Plain `go build ./...` and `go test ./...` require no Node toolchain. With no embedded
 index, the version says `console missing` and console routes return HTTP 503 with build
 instructions, even if old assets remain. With an index, the version says `console unverified`:

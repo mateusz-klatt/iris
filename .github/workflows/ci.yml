@@ -118,6 +118,8 @@ jobs:
           go build -buildvcs=false -trimpath -o "$binary" ./cmd/iris
           test "$("$binary" version)" = "dev (commit unknown; source modified unknown; console missing)"
       - run: go vet ./...
+      # Includes the package-discovery regression with a Go package under
+      # node_modules; it runs on every OS without needing npm or Node.
       - run: go test -coverprofile=coverage-${{ matrix.os }}.out ./...
         # PowerShell would split the flag at the dot in its value.
         shell: bash

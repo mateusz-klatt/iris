@@ -3,6 +3,8 @@
 GO ?= go
 VERSION ?= dev
 
+# web/go.mod keeps the Node workspace outside Go's recursive package discovery.
+# Keep ./... for every Go-wide check: new application packages must count too.
 .PHONY: test race fixtures build image web cov cov-check check-all lint vuln secrets pins refresh
 
 test:
