@@ -36,7 +36,7 @@ func (h *Hub) consoleWatch(w http.ResponseWriter, r *http.Request, p store.Princ
 			changes := wakes.Changes()
 			var admitted map[string]any
 			// The callback copies data only. A failed COMMIT must not queue it.
-			err := h.store.AdmitConsoleFrame(ctx, p, func(frame map[string]any) error { admitted = frame; return nil })
+			err := h.admitConsoleFrame(ctx, p, func(frame map[string]any) error { admitted = frame; return nil })
 			if err != nil {
 				_ = conn.CloseNow()
 				cancel()

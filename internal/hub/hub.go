@@ -32,14 +32,15 @@ type Hub struct {
 	console *consoleAuth
 	// These seams are the database and WebSocket I/O boundaries; production uses
 	// the real store and transport, and tests can report their actual failure modes.
-	call         func(context.Context, string, store.Request) (map[string]any, error)
-	acceptSocket func(http.ResponseWriter, *http.Request, *websocket.AcceptOptions) (*websocket.Conn, error)
-	writeSocket  func(context.Context, *websocket.Conn, []byte) error
-	pingSocket   func(context.Context, *websocket.Conn) error
-	Limits       Limits
-	rates        map[string]window
-	socketCounts map[string]int
-	sockets      map[string]map[*websocket.Conn]bool
+	call              func(context.Context, string, store.Request) (map[string]any, error)
+	admitConsoleFrame func(context.Context, store.Principal, func(map[string]any) error) error
+	acceptSocket      func(http.ResponseWriter, *http.Request, *websocket.AcceptOptions) (*websocket.Conn, error)
+	writeSocket       func(context.Context, *websocket.Conn, []byte) error
+	pingSocket        func(context.Context, *websocket.Conn) error
+	Limits            Limits
+	rates             map[string]window
+	socketCounts      map[string]int
+	sockets           map[string]map[*websocket.Conn]bool
 	// PingInterval is configurable before serving; zero uses 25 seconds.
 	PingInterval time.Duration
 	// MaxRequestBytes bounds every HTTP body; zero uses 64 KiB.
@@ -69,7 +70,7 @@ type Hub struct {
 }
 
 func New(s *store.Store, token string, allowedHosts []string) *Hub {
-	h := &Hub{call: s.Call, acceptSocket: websocket.Accept,
+	h := &Hub{call: s.Call, admitConsoleFrame: s.AdmitConsoleFrame, acceptSocket: websocket.Accept,
 		writeSocket: func(ctx context.Context, c *websocket.Conn, raw []byte) error {
 			return c.Write(ctx, websocket.MessageText, raw)
 		},
