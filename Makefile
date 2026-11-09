@@ -16,7 +16,7 @@ race:
 fixtures:
 	CGO_ENABLED=0 $(GO) test ./internal/hook/...
 
-build:
+build: web
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags="-X github.com/mateusz-klatt/iris/internal/buildinfo.Version=$(VERSION)" -o iris ./cmd/iris
 
 # The Docker context excludes .git. Capture source identity here, before Node generates assets.
@@ -24,8 +24,8 @@ build:
 image:
 	docker compose -f deploy/compose.yaml build --build-arg VERSION="$(VERSION)" --build-arg COMMIT="$(shell git rev-parse --verify HEAD)" --build-arg MODIFIED="$(if $(shell git status --porcelain --untracked-files=normal || echo unknown),true,false)"
 
-# Rebuild the embedded console. The placeholder in internal/webui/dist is what
-# `go build` uses when Node has not run; this target replaces that tree.
+# Rebuild the ignored embedded console. The tracked .keep lets plain Go builds
+# compile without Node; such a binary reports a missing console until this runs.
 # WEB_DIST names a console built elsewhere. The release job builds it in a job of its
 # own, so no code from web/node_modules runs where its credentials are.
 web:
@@ -41,6 +41,7 @@ else
 	mkdir -p internal/webui/dist
 	cp -a "$(WEB_DIST)/." internal/webui/dist/
 endif
+	touch internal/webui/dist/.keep
 
 cov:
 	CGO_ENABLED=0 $(GO) test -coverprofile=coverage.out ./...

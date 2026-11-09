@@ -31,7 +31,6 @@ Building the binary with the web console needs Go 1.27.3 or newer, Node.js 26 an
 and Make with a POSIX shell and utilities (Git Bash on Windows). From the repository root:
 
 ```sh
-make web
 make build
 ```
 
@@ -44,8 +43,15 @@ iris doctor
 
 Setup shows the hub and client configuration before writing it. To join an existing hub,
 follow [Joining a hub](docs/join-hub.md) for the token location and platform-specific steps.
-On a fresh checkout, `make build` without `make web` builds the CLI with a placeholder
-instead of the console. Node.js is only needed to build the console, not to run Iris.
+`make build` rebuilds the console before compiling the binary. Generated console files
+are ignored, so building a clean checkout leaves its source state clean without cleanup.
+The local version label is `dev` with the commit and source state; `make build VERSION=...`
+overrides the label. Node.js is only needed to build the console, not to run Iris.
+
+Plain `go build ./...` and `go test ./...` also work without Node. On a fresh checkout,
+that binary reports `console missing` in `iris version` and serves build instructions
+with HTTP 503 at console routes. If an index was built earlier, plain Go builds embed it
+and report `console unverified`: this does not prove its assets are complete or current.
 
 ## Documentation
 

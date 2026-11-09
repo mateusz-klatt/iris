@@ -44,12 +44,26 @@ metadata; a source archive or `-buildvcs=false` without explicit linker metadata
 identity rather than claiming a clean checkout. `make build VERSION=...` overrides the version
 label. `source clean` describes only the checkout state reported by the VCS metadata (or
 explicit linker metadata). It does not cover the git-ignored `internal/webui/dist` assets.
-The version string always says `console unverified`: it cannot detect a stale console left
-by a skipped or failed `make web`, or distinguish it from a current console or the placeholder
-used when Node has not run. Run `make web` successfully before `make build` to rebuild the
-console. Release and image builds still rebuild it through their existing build steps, but
+For local installation, run `make build`: it runs `make web` first, then compiles the
+binary with `CGO_ENABLED=0`. The default label stays `dev`, qualified by the commit and
+source state. The generated index and assets are ignored; only an empty embed seed is
+tracked, so rebuilding a clean checkout does not create source dirt or require a Git restore.
+Both `make web` paths (Node build and `WEB_DIST` handover) retain that seed.
+
+Plain `go build ./...` and `go test ./...` require no Node toolchain. With no embedded
+index, the version says `console missing` and console routes return HTTP 503 with build
+instructions, even if old assets remain. With an index, the version says `console unverified`:
+its presence cannot establish that the assets are complete or current with the source.
+Release and image builds still rebuild the console through their existing build steps, but
 their explicit source metadata does not verify the embedded assets either.
 These fields identify a build; they do not attest to its provenance.
+
+Alternatives rejected:
+
+- Keep the generated index tracked: rebuilding would still create source dirt.
+- Force clean linker metadata for local builds: that could hide real source edits.
+- Track the whole compiled console: that adds generated churn and still needs a rebuild to stay current.
+
 Outputs cover Linux, macOS and Windows on
 amd64 and arm64: four tar.gz archives, two Windows zip archives, checksums, and
 Linux deb/rpm packages named `iris`. Package-manager manifests remain local. Their explicit download URL templates refer to

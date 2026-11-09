@@ -100,22 +100,23 @@ jobs:
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
-      - name: Build identity scopes source state and leaves the console unverified
+      - name: Go-only builds report the missing console and source state
         shell: bash
         env:
           CGO_ENABLED: "0"
         run: |
           set -euo pipefail
+          go build ./...
           binary="$RUNNER_TEMP/iris-version.exe"
           go build -trimpath -o "$binary" ./cmd/iris
-          test "$("$binary" version)" = "dev (commit $GITHUB_SHA; source clean; console unverified)"
+          test "$("$binary" version)" = "dev (commit $GITHUB_SHA; source clean; console missing)"
           trap 'rm -f .iris-build-identity-probe' EXIT
           echo dirty > .iris-build-identity-probe
           go build -trimpath -o "$binary" ./cmd/iris
-          test "$("$binary" --version)" = "dev (commit $GITHUB_SHA; source dirty; console unverified)"
+          test "$("$binary" --version)" = "dev (commit $GITHUB_SHA; source dirty; console missing)"
           rm .iris-build-identity-probe
           go build -buildvcs=false -trimpath -o "$binary" ./cmd/iris
-          test "$("$binary" version)" = "dev (commit unknown; source modified unknown; console unverified)"
+          test "$("$binary" version)" = "dev (commit unknown; source modified unknown; console missing)"
       - run: go vet ./...
       - run: go test -coverprofile=coverage-${{ matrix.os }}.out ./...
         # PowerShell would split the flag at the dot in its value.
@@ -194,19 +195,18 @@ jobs:
       # The release workflow builds the console in a job of its own and hands it over as
       # WEB_DIST. Build it the local way here, then give the snapshot the same hand-over,
       # so both branches of `make web` run before the first tag.
-      - name: Build the console as the release web job does
+      - name: Local build rebuilds the console without source dirt
         shell: bash
         run: |
           set -euo pipefail
-          make web
+          make build
+          test "$(./iris version)" = "dev (commit $GITHUB_SHA; source clean; console unverified)"
+          test -z "$(git status --porcelain --untracked-files=normal)"
           mkdir -p "$RUNNER_TEMP/webui-dist"
           cp -a internal/webui/dist/. "$RUNNER_TEMP/webui-dist/"
           # Vite's output is deterministic, so mark the copy: only the copy branch of
           # `make web` can then produce what the last step compares.
           printf '\n<!-- handed over by CI -->\n' >> "$RUNNER_TEMP/webui-dist/index.html"
-          # GoReleaser refuses a dirty tree, so put the placeholder back.
-          git checkout -- internal/webui/dist
-          test -z "$(git status --porcelain --untracked-files=no)"
       # Keyless signing needs a release's OIDC identity, so only the SBOM is exercised here.
       - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
