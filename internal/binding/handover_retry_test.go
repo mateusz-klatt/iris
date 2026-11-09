@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -45,12 +46,14 @@ func TestAdoptionRetriesHandoverUntilItsResponseArrives(t *testing.T) {
 				}
 				var mine Bound
 				var target string
-				ends, slowBind := 0, true
+				var ends atomic.Int32
+				slowBind := true
 				client := &hubclient.Client{Config: config{"http://127.0.0.1"}, HTTP: &http.Client{Transport: adoptionTransport(func(req *http.Request) (*http.Response, error) {
 					if err := req.Context().Err(); err != nil {
 						return nil, err
 					}
 					end := strings.HasSuffix(req.URL.Path, "/end")
+					var attempt int32
 					if end {
 						var body struct {
 							Generation int    `json:"generation"`
@@ -61,17 +64,17 @@ func TestAdoptionRetriesHandoverUntilItsResponseArrives(t *testing.T) {
 							t.Fatalf("handover changed its source, proof or destination: %s %s, err %v", req.URL.Path, raw, err)
 						}
 						req.Body = io.NopCloser(bytes.NewReader(raw))
-						ends++
+						attempt = ends.Add(1)
 					}
 					w := httptest.NewRecorder()
-					if !end || committed || ends >= 5 {
+					if !end || committed || attempt >= 5 {
 						h.ServeHTTP(w, req)
 					}
 					if target != "" && req.URL.Path == "/v1/bind" && w.Code == http.StatusOK && slowBind {
 						slowBind = false
 						time.Sleep(4800 * time.Millisecond)
 					}
-					if end && ends < 5 {
+					if end && attempt < 5 {
 						// The first bind takes 4.8s and the handover needs 0.4s:
 						// the shared 5s deadline cancels before its response.
 						select {
@@ -106,8 +109,8 @@ func TestAdoptionRetriesHandoverUntilItsResponseArrives(t *testing.T) {
 				defer func() { stop(); <-done }()
 				time.Sleep(90 * time.Second)
 				synctest.Wait()
-				if ends != 4 {
-					t.Fatalf("failed handover was not retried while renewing: %d requests, want 4", ends)
+				if got := ends.Load(); got != 4 {
+					t.Fatalf("failed handover was not retried while renewing: %d requests, want 4", got)
 				}
 				if !committed {
 					// More than the fallback's original 60s lease has passed. Its
@@ -120,8 +123,8 @@ func TestAdoptionRetriesHandoverUntilItsResponseArrives(t *testing.T) {
 				}
 				time.Sleep(20 * time.Second)
 				synctest.Wait()
-				if ends != 5 || r.Lost() {
-					t.Fatalf("handover did not settle without losing binding: requests %d, lost %v", ends, r.Lost())
+				if got := ends.Load(); got != 5 || r.Lost() {
+					t.Fatalf("handover did not settle without losing binding: requests %d, lost %v", got, r.Lost())
 				}
 				got := call("inbox", store.Request{ExecutionID: target})["deliveries"].([]map[string]any)
 				if len(got) != 1 || got[0]["message_id"] != message["message_id"] {
@@ -129,8 +132,8 @@ func TestAdoptionRetriesHandoverUntilItsResponseArrives(t *testing.T) {
 				}
 				time.Sleep(40 * time.Second)
 				synctest.Wait()
-				if ends != 5 {
-					t.Fatalf("confirmed handover kept retrying: %d", ends)
+				if got := ends.Load(); got != 5 {
+					t.Fatalf("confirmed handover kept retrying: %d", got)
 				}
 				b, err := r.Resolve(ctx, "")
 				if err != nil || b.ExecutionID != target || b.Generation != 1 {
