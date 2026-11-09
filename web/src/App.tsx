@@ -414,12 +414,7 @@ function Console({ connect, session, onSession, onSignedOut }: { connect: typeof
         return;
       }
       setStream(status);
-    }, session === null ? {} : { check: async () => {
-      const current = await getSession();
-      if (current.account.id !== session.account.id || current.account.auth_version !== session.account.auth_version || current.csrf !== session.csrf) {
-        throw new ApiError(401);
-      }
-    } });
+    }, session === null ? {} : { check: () => getSession(undefined, session) });
     return () => {
       // A load still in flight lands on a closed view, so it is dropped.
       requests.current++;

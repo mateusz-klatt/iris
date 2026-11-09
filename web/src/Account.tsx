@@ -46,11 +46,7 @@ export default function Account({ session, onSession, onSignedOut }: AccountProp
         onSignedOut();
       } else if (failure instanceof ApiError && failure.status === 409) {
         try {
-          const latest = await getSession();
-          if (latest.account.id !== account.id) {
-            onSignedOut();
-            return;
-          }
+          const latest = await getSession(undefined, session);
           onSession(latest);
           setDisplayName(latest.account.display_name);
           setProfileStatus("account.displayNameConflict");
@@ -94,12 +90,8 @@ export default function Account({ session, onSession, onSignedOut }: AccountProp
     } catch (failure) {
       if (failure instanceof ApiError && failure.status === 401) {
         try {
-          const current = await getSession();
-          if (current.account.id !== account.id) {
-            onSignedOut();
-          } else {
-            setPasswordStatus("account.passwordError");
-          }
+          await getSession(undefined, session);
+          setPasswordStatus("account.passwordError");
         } catch {
           onSignedOut();
         }

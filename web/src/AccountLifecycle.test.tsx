@@ -243,7 +243,7 @@ describe("named account lifecycle in the console", () => {
     };
     render(<App connect={connect} />);
     await screen.findByRole("heading", { name: "Messages" });
-    await expect(check()).resolves.toBeUndefined();
+    await expect(check()).resolves.toEqual(accountSession);
     if (change === "account") current.account.id = "ca_another_person";
     else if (change === "authentication version") current.account.auth_version = 2;
     else current.csrf = "iris-another-session-csrf";

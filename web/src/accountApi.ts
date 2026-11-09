@@ -47,7 +47,7 @@ async function request(path: string, method: string, body?: unknown, token = csr
     credentials: "same-origin",
     signal,
     headers: method === "GET"
-      ? { Accept: "application/json" }
+      ? { Accept: "application/json", ...(token !== "" ? { "X-Iris-CSRF": token } : {}) }
       : { Accept: "application/json", "Content-Type": "application/json", "X-Iris-CSRF": token },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
@@ -60,11 +60,14 @@ async function request(path: string, method: string, body?: unknown, token = csr
   return response;
 }
 
-export async function getSession(signal?: AbortSignal): Promise<AccountSession> {
+export async function getSession(signal?: AbortSignal, expected?: AccountSession): Promise<AccountSession> {
   const generation = sessionGeneration;
-  const session = await (await request("/v1/ui/session", "GET", undefined, "", signal)).json() as AccountSession;
+  const session = await (await request("/v1/ui/session", "GET", undefined, expected?.csrf ?? "", signal)).json() as AccountSession;
   signal?.throwIfAborted();
   requireSessionGeneration(generation);
+  if (expected !== undefined && (session.account.id !== expected.account.id || session.account.auth_version !== expected.account.auth_version || session.csrf !== expected.csrf)) {
+    throw new ApiError(401);
+  }
   csrf = session.csrf;
   setConsoleCsrf(csrf);
   return session;

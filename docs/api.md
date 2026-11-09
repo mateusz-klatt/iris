@@ -394,6 +394,12 @@ tokens stay in memory; login obtains a new single-use challenge on every retry.
   The token belongs in the request header and UI memory, never a URL or browser
   persistent storage. WebSocket upgrades require exact origin and a valid account
   session.
+- Mounted consoles also send their session CSRF token on HTTP reads. A supplied
+  token must match the request cookie; a mismatch returns 401 before console data
+  is served. This binds reads triggered by an existing socket to that tab's
+  session when another tab replaces the shared cookie. Bootstrap reads may omit
+  the token. The affected tab discards its console, drafts and cached locale;
+  neither account's server session is revoked by this mismatch.
 - `POST /v1/ui/logout` revokes the current session and clears its cookie. A
   same-origin retry after expiry or revocation only clears the stale cookie.
   Password changes verify the current password and revoke every session,

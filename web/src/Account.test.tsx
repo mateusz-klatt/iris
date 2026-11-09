@@ -80,6 +80,7 @@ describe("account profile", () => {
     vi.mocked(getSession).mockResolvedValue(latest);
     submitProfile();
     expect(await screen.findByText("Your profile changed elsewhere. We refreshed it; review and try again.")).toBeVisible();
+    expect(getSession).toHaveBeenCalledWith(undefined, session);
     expect(onSession).toHaveBeenCalledWith(latest);
     expect(screen.getByLabelText("Display name")).toHaveValue("Changed elsewhere");
   });
@@ -92,7 +93,7 @@ describe("account profile", () => {
   });
 
   it.each([new ApiError(401), new Error("offline")])("handles an unavailable conflict refresh", async (failure) => {
-    const { onSignedOut } = setup();
+    const { onSession, onSignedOut } = setup();
     vi.mocked(updateProfile).mockRejectedValue(new ApiError(409));
     vi.mocked(getSession).mockRejectedValue(failure);
     submitProfile();
@@ -102,6 +103,8 @@ describe("account profile", () => {
       expect(await screen.findByText("The display name could not be saved.")).toBeVisible();
       expect(onSignedOut).not.toHaveBeenCalled();
     }
+    expect(getSession).toHaveBeenCalledWith(undefined, session);
+    expect(onSession).not.toHaveBeenCalled();
   });
 
   it("ends the browser account view when its session is refused", async () => {
@@ -111,15 +114,10 @@ describe("account profile", () => {
     await vi.waitFor(() => expect(onSignedOut).toHaveBeenCalledOnce());
   });
 
-  it.each(["save", "conflict"])("clears the view when a %s response belongs to another browser account", async (stage) => {
+  it("clears the view when a saved profile belongs to another browser account", async () => {
     const { onSession, onSignedOut } = setup();
     const other = { ...session.account, id: "ca_other", display_name: "Another person" };
-    if (stage === "save") {
-      vi.mocked(updateProfile).mockResolvedValue(other);
-    } else {
-      vi.mocked(updateProfile).mockRejectedValue(new ApiError(409));
-      vi.mocked(getSession).mockResolvedValue({ ...session, account: other });
-    }
+    vi.mocked(updateProfile).mockResolvedValue(other);
     submitProfile();
     await vi.waitFor(() => expect(onSignedOut).toHaveBeenCalledOnce());
     expect(onSession).not.toHaveBeenCalled();
@@ -198,17 +196,11 @@ describe("account password", () => {
     vi.mocked(getSession).mockResolvedValue(session);
     enterPasswords();
     expect(await screen.findByText("The password could not be changed. Check the current password and requirements.")).toBeVisible();
+    expect(getSession).toHaveBeenCalledWith(undefined, session);
     expect(onSignedOut).not.toHaveBeenCalled();
     vi.mocked(getSession).mockRejectedValue(new ApiError(401));
     enterPasswords();
     await vi.waitFor(() => expect(onSignedOut).toHaveBeenCalledOnce());
-  });
-
-  it("clears an account view when the current cookie has switched to another person", async () => {
-    const { onSignedOut } = setup();
-    vi.mocked(changePassword).mockRejectedValue(new ApiError(401));
-    vi.mocked(getSession).mockResolvedValue({ ...session, account: { ...session.account, id: "ca_other" } });
-    enterPasswords();
-    await vi.waitFor(() => expect(onSignedOut).toHaveBeenCalledOnce());
+    expect(getSession).toHaveBeenLastCalledWith(undefined, session);
   });
 });

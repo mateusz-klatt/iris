@@ -13,6 +13,29 @@ const session: AccountSession = {
 afterEach(() => { clearAccountSession(); vi.restoreAllMocks(); });
 
 describe("account browser API", () => {
+  it.each(["account", "authentication version", "session token"])("rejects a changed %s before replacing the mounted session token", async (change) => {
+    const next = structuredClone(session);
+    const tokens: (string | null)[] = [];
+    server.use(
+      http.get("*/v1/ui/session", ({ request }) => {
+        tokens.push(request.headers.get("X-Iris-CSRF"));
+        return HttpResponse.json(next);
+      }),
+      http.post("*/v1/ui/logout", ({ request }) => {
+        expect(request.headers.get("X-Iris-CSRF")).toBe(session.csrf);
+        return HttpResponse.json({ logged_out: true });
+      }),
+    );
+    await getSession();
+    await expect(getSession(undefined, session)).resolves.toEqual(session);
+    if (change === "account") next.account.id = "ca_other";
+    else if (change === "authentication version") next.account.auth_version = 2;
+    else next.csrf = "iris-other-csrf";
+    await expect(getSession(undefined, session)).rejects.toEqual(new ApiError(401));
+    expect(tokens).toEqual([null, session.csrf, session.csrf]);
+    await logout();
+  });
+
   it.each([401, 404])("recognizes the staged legacy-mode marker before interpreting authentication", async (status) => {
     server.use(http.get("*/v1/ui/session", () => new HttpResponse(null, { status, headers: { "X-Iris-Console-Mode": "links" } })));
     await expect(getSession()).rejects.toEqual(new ApiError(404));

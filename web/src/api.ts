@@ -169,6 +169,14 @@ export function setConsoleCsrf(token: string): void {
   consoleCsrf = token;
 }
 
+function requireConsoleSession(token: string): void {
+  if (token !== consoleCsrf) {
+    const failure = new Error("Iris session changed");
+    failure.name = "AbortError";
+    throw failure;
+  }
+}
+
 async function request(
   path: string,
   init: RequestInit = {},
@@ -180,7 +188,7 @@ async function request(
     credentials: "same-origin",
     headers: {
       Accept: "application/json",
-      ...(init.method !== "GET" && requestCsrf !== "" ? { "X-Iris-CSRF": requestCsrf } : {}),
+      ...(requestCsrf !== "" ? { "X-Iris-CSRF": requestCsrf } : {}),
       ...init.headers,
     },
   });
@@ -190,12 +198,16 @@ async function request(
     }
     throw new ApiError(response.status);
   }
+  requireConsoleSession(requestCsrf);
   return response;
 }
 
 async function getJson<T>(path: string, signal?: AbortSignal): Promise<T> {
+  const token = consoleCsrf;
   const response = await request(path, { method: "GET", signal });
-  return response.json() as Promise<T>;
+  const value = await response.json() as T;
+  requireConsoleSession(token);
+  return value;
 }
 
 async function postJson(path: string, body: unknown, signal?: AbortSignal): Promise<void> {
@@ -248,6 +260,7 @@ export function getThread(id: string, repositoryId = "", signal?: AbortSignal): 
 /** Marks the operator's mail in a thread as read, in repositoryId or the whole hub (A13). */
 /** Reads the operator's mail in a thread, and says how many deliveries that read. */
 export async function readThread(id: string, repositoryId = "", signal?: AbortSignal): Promise<number> {
+  const token = consoleCsrf;
   const response = await request(`/v1/ui/threads/${encodeURIComponent(id)}/read`, {
     method: "POST",
     signal,
@@ -255,6 +268,7 @@ export async function readThread(id: string, repositoryId = "", signal?: AbortSi
     body: JSON.stringify({ repository_id: repositoryId }),
   });
   const out = (await response.json()) as { read: number };
+  requireConsoleSession(token);
   return out.read;
 }
 

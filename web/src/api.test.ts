@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, getDeliveryProblems, getDoctor, listThreads, revokeClaim, setConsoleCsrf, watchUi, type WatchFrame } from "./api";
+import { ApiError, getDeliveryProblems, getDoctor, listThreads, readThread, revokeClaim, setConsoleCsrf, watchUi, type WatchFrame } from "./api";
 import { server } from "./test/server";
 import { http, HttpResponse } from "msw";
 
@@ -27,6 +27,44 @@ afterEach(() => {
 });
 
 describe("operator watch", () => {
+  it("binds reads to the mounted session and requests a reset when the shared cookie changes", async () => {
+    setConsoleCsrf("iris-first-csrf");
+    const tokens: (string | null)[] = [];
+    const unauthorized = vi.fn();
+    window.addEventListener("iris:unauthorized", unauthorized);
+    server.use(http.get("*/v1/ui/deliveries", ({ request }) => {
+      tokens.push(request.headers.get("X-Iris-CSRF"));
+      return new HttpResponse(null, { status: 401 });
+    }));
+    try {
+      await expect(getDeliveryProblems()).rejects.toMatchObject({ status: 401 });
+      expect(tokens).toEqual(["iris-first-csrf"]);
+      expect(unauthorized).toHaveBeenCalledOnce();
+    } finally {
+      window.removeEventListener("iris:unauthorized", unauthorized);
+    }
+  });
+
+  it.each(["fetch", "JSON", "read acknowledgement JSON"])("discards an old account's successful response after switching during %s", async (stage) => {
+    setConsoleCsrf("iris-first-csrf");
+    let finish!: () => void;
+    const response = new Response(JSON.stringify({ threads: [], read: 1 }));
+    const json = vi.fn(() => new Promise((resolve) => { finish = () => resolve({ threads: [], read: 1 }); }));
+    if (stage !== "fetch") response.json = json;
+    const fetch = vi.fn<typeof globalThis.fetch>(() => stage === "fetch"
+      ? new Promise<Response>((resolve) => { finish = () => resolve(response); })
+      : Promise.resolve(response));
+    vi.stubGlobal("fetch", fetch);
+    const pending = (stage === "read acknowledgement JSON" ? readThread("ms_first") : listThreads({})).catch((error: unknown) => error);
+    await vi.waitFor(() => expect(stage === "fetch" ? fetch : json).toHaveBeenCalledOnce());
+    setConsoleCsrf("iris-second-csrf");
+    finish();
+    expect(await pending).toMatchObject({ name: "AbortError" });
+    fetch.mockResolvedValueOnce(new Response(null, { status: 204 }));
+    await revokeClaim(7);
+    expect(fetch.mock.calls.at(-1)?.[1]?.headers).toMatchObject({ "X-Iris-CSRF": "iris-second-csrf" });
+  });
+
   it("does not expire a new account when an old request fails after the browser switches sessions", async () => {
     setConsoleCsrf("iris-first-csrf");
     let finish!: () => void;

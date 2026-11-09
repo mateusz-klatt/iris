@@ -759,7 +759,11 @@ take precedence over browser preferences, which are used only while signed out.
 Logout, password changes and session revocation unmount the console, close its
 stream and discard prior-account drafts/data and cached locale. Reconnect checks
 also compare the current account and authentication version before admitting a
-new stream. Password validation counts Unicode code points and UTF-8 bytes.
+new stream. HTTP reads carry the mounted session's synchronizer token, and the
+hub rejects a token/cookie mismatch before serving data. Thus another tab
+replacing the shared cookie causes the old console's next read to reset its
+state even while its socket is live. Responses overtaken by a local session
+change are discarded. Password validation counts Unicode code points and UTF-8 bytes.
 
 The account overview describes each visible repository with `console_access`:
 `ro` or `rw`. Member compose/reply requires a selected writable origin, explicit
