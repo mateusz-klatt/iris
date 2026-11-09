@@ -30,11 +30,8 @@ type Repo struct {
 // file is followed. RootCommit is set only when a short loose-object walk
 // reaches a parentless commit.
 func Find(start string) (Repo, error) {
-	if start == "" {
-		return Repo{}, ErrNotRepo
-	}
 	dir, err := filepath.Abs(start)
-	if err != nil {
+	if start == "" || err != nil {
 		return Repo{}, ErrNotRepo
 	}
 	for {

@@ -48,9 +48,10 @@ endif
 cov:
 	CGO_ENABLED=0 $(GO) test -coverprofile=coverage.out ./...
 
-# Every statement is covered. There is no threshold to negotiate.
+# Every statement is covered. There is no threshold to negotiate, and the gate counts
+# statements: a percentage rounds 10306 of 10309 to 100.0%.
 cov-check:
-	$(GO) tool cover -func=coverage.out | awk '/^total:/ { print; exit ($$3 == "100.0%" ? 0 : 1) }'
+	$(GO) run ./.github/covermerge -check coverage.out
 
 # Static checks, run in CI by the check-all job. Each tool runs at a pinned version
 # through `go run`, so nothing needs installing and go.mod does not change. Dependabot

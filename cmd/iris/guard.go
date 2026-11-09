@@ -24,10 +24,9 @@ func runGuard(args []string) error {
 	if len(args) != 1 {
 		return errors.New(help) //nolint:staticcheck // usage text for a person, shown as written
 	}
-	dir, err := os.Getwd()
-	if err != nil {
-		return err
-	}
+	// Find makes this absolute, so a working directory that cannot be named reads as what it is
+	// to the guard: not a repository.
+	const dir = "."
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
 	switch args[0] {

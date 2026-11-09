@@ -135,6 +135,11 @@ jobs:
         if: runner.os != 'Windows'
         env:
           CGO_ENABLED: "1"
+      # The sonar job's gate credits a statement covered on any system. This one holds each system
+      # to its own profile, which is what `make cov-check` reports on a machine of that system.
+      - name: Every statement this system builds is covered
+        run: go run ./.github/covermerge -check coverage-${{ matrix.os }}.out
+        shell: bash
   build:
     runs-on: ubuntu-latest
     strategy:

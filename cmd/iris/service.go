@@ -210,8 +210,11 @@ func userServiceDB(listen, tokenFile, database string) (service.Manager, error) 
 	if err != nil {
 		return nil, err
 	}
+	// Both come from the environment. Which of them a missing home fails depends on the system:
+	// macOS has no other source for either, while Linux and Windows can still name a config folder.
 	cfg, err := config.Default()
-	if err != nil {
+	home, homeErr := os.UserHomeDir()
+	if err = errors.Join(err, homeErr); err != nil {
 		return nil, err
 	}
 	if listen == "" {
@@ -219,10 +222,6 @@ func userServiceDB(listen, tokenFile, database string) (service.Manager, error) 
 	}
 	if tokenFile == "" {
 		tokenFile = cfg.TokenFile
-	}
-	home, err := os.UserHomeDir()
-	if err != nil {
-		return nil, err
 	}
 	if database == "" {
 		database = cfg.Database
