@@ -244,9 +244,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
   }, []);
   useEffect(() => {
     const controller = new AbortController();
-    void getSession(controller.signal).then((current) => {
-      if (!controller.signal.aborted) setSession(current);
-    }).catch((error: unknown) => {
+    void getSession(controller.signal).then(setSession).catch((error: unknown) => {
       if (controller.signal.aborted || isAbort(error)) return;
       if (error instanceof ApiError && error.status === 404) setAuthentication("legacy");
       else if (error instanceof ApiError && error.status === 401) { clearAccountSession(); setAuthentication("login"); }
