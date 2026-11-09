@@ -7,6 +7,9 @@ services:
     container_name: iris
     network_mode: host
     restart: unless-stopped
+    # The hub shares its machine. This is a relative weight under contention, not a cap: half the
+    # default 1024, and with no competition for the CPU the hub can still use all of it.
+    cpu_shares: 512
     # Docker keeps json-file logs without limit by default.
     logging:
       driver: json-file
