@@ -4,6 +4,8 @@ package buildinfo
 import (
 	"fmt"
 	"runtime/debug"
+
+	"github.com/mateusz-klatt/iris/internal/webui"
 )
 
 // These values may be set by the build with -ldflags. Empty Commit and Modified
@@ -21,10 +23,10 @@ var (
 // even when the build supplies explicit linker metadata.
 func String() string {
 	info, _ := debug.ReadBuildInfo()
-	return describe(Version, Commit, Modified, info)
+	return describe(Version, Commit, Modified, info, webui.Available())
 }
 
-func describe(version, commit, modified string, info *debug.BuildInfo) string {
+func describe(version, commit, modified string, info *debug.BuildInfo, consoleAvailable bool) string {
 	if version == "" {
 		version = "dev"
 	}
@@ -52,5 +54,9 @@ func describe(version, commit, modified string, info *debug.BuildInfo) string {
 	case "false":
 		state = "clean"
 	}
-	return fmt.Sprintf("%s (commit %s; source %s; console unverified)", version, commit, state)
+	console := "missing"
+	if consoleAvailable {
+		console = "unverified"
+	}
+	return fmt.Sprintf("%s (commit %s; source %s; console %s)", version, commit, state, console)
 }

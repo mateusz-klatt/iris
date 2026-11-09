@@ -15,7 +15,7 @@ func (closedBundle) Open(string) (fs.File, error) { return nil, fs.ErrNotExist }
 func (closedBundle) Sub(string) (fs.FS, error)    { return nil, fs.ErrNotExist }
 
 func TestHandlerServesTheShellAndFallsBack(t *testing.T) {
-	handler := Handler()
+	handler := handlerFrom(fstest.MapFS{"dist/index.html": {Data: []byte("<title>Iris</title>")}})
 
 	index := httptest.NewRecorder()
 	handler.ServeHTTP(index, httptest.NewRequest(http.MethodGet, "/", nil))
@@ -45,6 +45,22 @@ func TestHandlerServesTheShellAndFallsBack(t *testing.T) {
 	}
 }
 
+func TestEmbeddedConsolePresenceMatchesWhatIsServed(t *testing.T) {
+	_, err := fs.Stat(dist, "dist/index.html")
+	if Available() != (err == nil) {
+		t.Fatalf("console availability does not match embedded index: %v", err)
+	}
+	want := http.StatusServiceUnavailable
+	if Available() {
+		want = http.StatusOK
+	}
+	r := httptest.NewRecorder()
+	Handler().ServeHTTP(r, httptest.NewRequest(http.MethodGet, "/", nil))
+	if r.Code != want || !strings.Contains(r.Body.String(), "Iris") {
+		t.Fatalf("embedded console: %d %q", r.Code, r.Body.String())
+	}
+}
+
 func TestHandlerServesAnEmbeddedAssetAndMissesAShell(t *testing.T) {
 	bundle := fstest.MapFS{
 		"dist/app.js":     {Data: []byte("var iris = 1\n")},
@@ -65,8 +81,28 @@ func TestHandlerServesAnEmbeddedAssetAndMissesAShell(t *testing.T) {
 	shell := handlerFrom(fstest.MapFS{"dist/app.js": {Data: []byte("x")}})
 	missing := httptest.NewRecorder()
 	shell.ServeHTTP(missing, httptest.NewRequest(http.MethodGet, "/threads/ms_1", nil))
-	if missing.Code != http.StatusNotFound {
+	if missing.Code != http.StatusServiceUnavailable {
 		t.Fatalf("missing shell: %d", missing.Code)
+	}
+}
+
+func TestMissingConsoleIsExplicitEvenWithStaleAssets(t *testing.T) {
+	h := handlerFrom(fstest.MapFS{"dist/assets/old.js": {Data: []byte("stale console")}})
+	for _, path := range []string{"/", "/threads/ms_1", "/assets/old.js"} {
+		for _, method := range []string{http.MethodGet, http.MethodHead} {
+			r := httptest.NewRecorder()
+			h.ServeHTTP(r, httptest.NewRequest(method, path, nil))
+			if r.Code != http.StatusServiceUnavailable {
+				t.Fatalf("%s %s: %d %q", method, path, r.Code, r.Body.String())
+			}
+			if method == http.MethodHead {
+				if r.Body.Len() != 0 {
+					t.Fatalf("HEAD %s: %q", path, r.Body.String())
+				}
+			} else if !strings.Contains(r.Body.String(), "Iris console is missing") || !strings.Contains(r.Body.String(), "make build") || strings.Contains(r.Body.String(), "stale console") {
+				t.Fatalf("GET %s: %q", path, r.Body.String())
+			}
+		}
 	}
 }
 

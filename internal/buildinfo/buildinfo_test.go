@@ -3,6 +3,8 @@ package buildinfo
 import (
 	"runtime/debug"
 	"testing"
+
+	"github.com/mateusz-klatt/iris/internal/webui"
 )
 
 func TestDescribeUsesAvailableSourceIdentityWithoutGuessing(t *testing.T) {
@@ -31,10 +33,21 @@ func TestDescribeUsesAvailableSourceIdentityWithoutGuessing(t *testing.T) {
 		{"modification override keeps embedded revision", "dev", "", "unknown", metadata("false"), "dev (commit " + revision + "; source modified unknown; console unverified)"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := describe(tc.version, tc.commit, tc.modified, tc.info); got != tc.want {
+			if got := describe(tc.version, tc.commit, tc.modified, tc.info, true); got != tc.want {
 				t.Fatalf("build identity %q, want %q", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestMissingConsoleDoesNotChangeSourceIdentity(t *testing.T) {
+	for _, tc := range []struct{ modified, state string }{
+		{"false", "clean"}, {"true", "dirty"}, {"", "modified unknown"},
+	} {
+		want := "dev (commit revision; source " + tc.state + "; console missing)"
+		if got := describe("dev", "revision", tc.modified, nil, false); got != want {
+			t.Fatalf("missing console identity %q, want %q", got, want)
+		}
 	}
 }
 
@@ -42,7 +55,11 @@ func TestStringUsesTheLinkerFieldsForEveryConsumer(t *testing.T) {
 	oldVersion, oldCommit, oldModified := Version, Commit, Modified
 	t.Cleanup(func() { Version, Commit, Modified = oldVersion, oldCommit, oldModified })
 	Version, Commit, Modified = "v1.2.3", "fedcba9876543210", "false"
-	if got := String(); got != "v1.2.3 (commit fedcba9876543210; source clean; console unverified)" {
+	console := "missing"
+	if webui.Available() {
+		console = "unverified"
+	}
+	if got := String(); got != "v1.2.3 (commit fedcba9876543210; source clean; console "+console+")" {
 		t.Fatalf("build identity %q", got)
 	}
 }
