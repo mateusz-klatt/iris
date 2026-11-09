@@ -86,6 +86,51 @@ func TestNamedSendRequiresEveryWritableRepositoryAndImmutableAgentAddresses(t *t
 	}
 }
 
+func TestNamedNewSendsRequireWritableOriginIndependentlyOfRecipients(t *testing.T) {
+	for _, operation := range []string{"send", "reply"} {
+		for _, originMode := range []string{"none", "ro"} {
+			t.Run(operation+"/"+originMode, func(t *testing.T) {
+				s, ar, aout, _, bout := crossRepo(t)
+				aRepo, bRepo := aout["repository_id"].(string), bout["repository_id"].(string)
+				bID := bout["agent"].(map[string]any)["id"].(string)
+				a := operationAccount(t, s, "Member")
+				grantNamed(t, s, a, bRepo, "rw")
+				if originMode == "ro" {
+					grantNamed(t, s, a, aRepo, "ro")
+				}
+				r := Request{RepositoryID: aRepo, Key: "fresh-" + operation, To: []string{bID}, Body: "reviewed message"}
+				if operation == "reply" {
+					// A parent sent from A to B is visible in the selected origin
+					// and through the member's B grant. Parent visibility must not
+					// conceal a missing origin-write check either.
+					parent := call(t, s, "messages", sendTo(ar, "parent", "visible parent", bID))
+					r.ReplyTo = parent["message_id"].(string)
+				}
+				principal := consoleTestPrincipal(t, s, a)
+				before := databaseState(t, s)
+				_, err := s.CallConsole(t.Context(), principal, "ui_messages", r)
+				var domain *Error
+				if !errors.As(err, &domain) || domain.Code != "not_found" {
+					t.Errorf("%s without rw on its origin must be refused: %v", operation, err)
+				}
+				if databaseState(t, s) != before {
+					t.Error("refused origin wrote mail, retry records or other store state")
+				}
+				if t.Failed() {
+					return
+				}
+				// The same request succeeds with rw on A, proving the origin
+				// grant was the only missing authority and refusal saved no retry.
+				grantNamed(t, s, a, aRepo, "rw")
+				accepted := consoleCall(t, s, principal, "ui_messages", r)
+				if len(accepted["deliveries"].([]map[string]any)) != 1 {
+					t.Fatal("authorized cross-repository request did not deliver once")
+				}
+			})
+		}
+	}
+}
+
 func TestNamedReplyRequiresTheParentInItsSelectedOriginAndNeverAcknowledges(t *testing.T) {
 	s, ar, aout, br, bout := crossRepo(t)
 	aRepo, bRepo := aout["repository_id"].(string), bout["repository_id"].(string)
