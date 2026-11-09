@@ -125,7 +125,7 @@ it("retains the retry identity after leaving a reply whose send outcome is uncer
   let first = await open(user, "Rollout check");
   await user.type(first.getByRole("textbox", { name: "Message" }), "Send this once");
   await reviewAndSend(user, first, "Reply");
-  expect(await screen.findByRole("alert")).toHaveTextContent("within a day of the first attempt is safe");
+  expect(await screen.findByRole("alert")).toHaveTextContent("Retrying within ten minutes uses the same delivery.");
   const second = await open(user, "Second conversation");
   await user.type(second.getByRole("textbox", { name: "Message" }), "Still working here");
   first = await open(user, "Rollout check");

@@ -19,6 +19,13 @@ export interface AccountSession {
   expires_ms: number;
 }
 
+export class ConsoleClosedError extends ApiError {
+  constructor() {
+    super(401);
+    this.name = "ConsoleClosedError";
+  }
+}
+
 export interface ConsoleGrant {
   repository_id: string;
   mode: "ro" | "rw";
@@ -67,8 +74,8 @@ async function request(path: string, method: string, body?: unknown, token = csr
       : { Accept: "application/json", "Content-Type": "application/json", "X-Iris-CSRF": token },
     body: body === undefined ? undefined : JSON.stringify(body),
   });
-  if (path === "/v1/ui/session" && response.headers.get("X-Iris-Console-Mode") === "links") {
-    throw new ApiError(404);
+  if (response.status === 401 && response.headers.get("X-Iris-Console-Mode") === "closed") {
+    throw new ConsoleClosedError();
   }
   if (!response.ok) {
     throw new ApiError(response.status);

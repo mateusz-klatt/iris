@@ -60,7 +60,7 @@ func TestConfigureConsoleRequiresExplicitActivationAndRestart(t *testing.T) {
 	logs.Reset()
 	restarted := &observedConsoleConfiguration{}
 	configureConsole(restarted, keyFile, ownerFile, ownerToken, &logs)
-	if !bytes.Equal(restarted.key, want) || logs.Len() != 0 {
+	if !bytes.Equal(restarted.key, want) || logs.String() != "Iris console open\n" {
 		t.Fatal("restart did not load the persisted key")
 	}
 	if err = restarted.activate(); err != nil {

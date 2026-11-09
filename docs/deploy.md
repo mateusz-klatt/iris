@@ -1,5 +1,15 @@
 # Public Iris hub
 
+Before running commands for the first named-console deployment, the owner must
+explicitly confirm in their own terminal that they are present and ready to
+complete activation, the second restart and sign-in checks. Take the backup
+before deploying: the first replacement of the legacy binary immediately closes
+browser access while agent coordination continues. An approved import apply and
+its repeated dry-run precede owner activation; then the owner runs
+`docker restart iris`, signs in and completes the checks. Agents may prepare and
+rehearse but must not activate real accounts on the owner's behalf. Passwords
+and machine credentials stay out of chat.
+
 The intended path is client HTTPS → Cloudflare HTTPS → Apache → HTTP on
 127.0.0.1:7878. Use Cloudflare Full (strict), a valid origin certificate, and
 WebSocket support. Disable caching and script rewriting/injection for this hostname;
@@ -7,38 +17,36 @@ Iris sends no-store and a CSP that permits only its own scripts. Cloudflare term
 TLS and can see credentials and message content. This is a shared-trust service for
 one developer or a small team, not a multi-tenant boundary (D13).
 
-ADR 014 account authentication is staged through schema 20 and internal typed
-store entry points. Account HTTP routes remain inactive in `iris serve`; deploying
-this stage does not switch console authentication or enable member access. The
-session/authentication defenses and owner setup commands are implemented behind
-the account gate for verification. The owner-only importer is available separately;
-see [account import and recovery](accounts-import.md) for its reviewed procedure.
-Deploying this code does not authorize a real import. Keep login links until the
-reviewed cutover in the next ordered step.
-The step 5 frontend includes staged login/logout and profile/password forms but
-does not expose a deployment switch. Its session probe distinguishes legacy
-links from named authentication, so updating console assets keeps current login.
-The first part of step 6 adds staged operator account-list/access controls and
-a temporary-database access/recovery rehearsal. Production activation, retirement
-of login links and the `iris ui` change require the separate cutover PR. See the
-[access and cutover runbook](accounts-import.md#access-review-and-isolated-rehearsal-step-6-first-pr).
+The browser console uses named accounts. Follow
+[console activation and recovery](console-activation.md) before opening browser
+access. The owner creates an operator or performs a separately approved
+[account import](accounts-import.md), verifies its password with
+`iris admin console activate <username> < /private/password`, then personally
+performs the second restart. Create/reset/activate remove exactly one final LF
+or CRLF from stdin as line framing before password validation; all other bytes
+are preserved and HTTP password verification remains exact.
+Deploying this code does not authorize a real import or activate a missing key.
+Old login links and cookies grant no browser authority, and `iris ui` opens the
+ordinary sign-in URL without reading a machine token.
 
-The account implementation uses a separate random 256-bit console key, stored
-with mode 0600 or the owner-only Windows DACL. It never reuses the owner token or
-a source application's key. Normal restarts keep that key and the database:
-sessions retain their original twelve-hour absolute expiry. An unreadable or
-invalid console key must leave account authentication closed while agent
-coordination continues. No console key is created by this staged deployment.
+`iris serve` loads a separate protected 256-bit console key from
+`<database>.console.key`, or the path selected by `--console-key-file`.
+It creates no key during ordinary startup. Missing, unreadable, malformed or
+owner-token-reusing material leaves browser authentication closed while agents,
+authenticated doctor uploads and owner setup/recovery/import remain available.
+An enabled operator is also required. Normal restarts retain that key, database
+and each session's original twelve-hour absolute expiry; there is no hot reload.
 
-A future account-mode backup must protect both the database (which contains
-password hashes and permissions) and its separate console key. Restoration is
-different from restart: keep the hub stopped, replace the console key with a fresh
-independent key, clear restored sessions and have the owner review restored account passwords,
-disabled states and grants. Restoring old database state can restore old
-credentials and authority. Key rotation invalidates every old console cookie;
-it does not change machine credentials. Restart with that key only after review;
-hot key reload is not implemented. Account-mode restore/cutover is not an operation
-enabled by this stage.
+Protect the database, owner token and independent console key separately in
+backups. A restore can reinstate older passwords and grants. Restore a copy in
+isolation with the old key withheld, activate a verified operator using fresh
+key material and cleared sessions, then review restored authority through a
+private literal-loopback named UI before public reopening. See the exact
+[restore and rollback boundary](console-activation.md#restore-a-database-with-browser-access-isolated).
+Local real-binary/browser/restore checks passed 44/44 on a modified checkout;
+the expanded actual local Apache rollback rehearsal passed 73/73. See the
+[provisional evidence and limits](console-activation.md#provisional-rehearsal-evidence).
+Final clean-candidate validation and target-deployment checks remain pending.
 
 The files in `deploy/` are written for this topology. No release binary is needed:
 `deploy/Dockerfile` builds the locked Node console and embeds it in a CGO_ENABLED=0
@@ -143,7 +151,17 @@ To deploy, in one shell on the hub's machine, from a checkout of that commit (fo
    identifies the loaded image on this host. None of them is a registry digest: `docker save` and
    `docker load` produce none.
 
-To roll back, return the tag to the previous image, replace the container the same way, and take
+Before rolling back, verify the previous image retains supported named authentication.
+For an older backend, first close public browser/login/UI API access using the
+[Apache rollback boundary](console-activation.md#rollback-while-preserving-the-browser-boundary),
+preserving agent routes and authenticated doctor PUT. Do this before the old backend starts;
+a binary or database rollback alone can restore legacy browser authority.
+The current host requires the owner's password for Apache `sudo`; only the owner
+can install/reload the live filter and drain existing browser connections. Agents
+can prepare and rehearse it. While the owner is unavailable, keep a supported
+named-authentication image, or stop/move the hub off the proxied port; the latter
+makes agent coordination unavailable too. Do not start an exposed old backend.
+Then return the tag to the reviewed previous image, replace the container the same way, and take
 the command-line `iris` from that image with step 5:
 
 ```sh
@@ -211,8 +229,8 @@ owner-only `<name>.partial` beside the destination, runs SQLite's integrity chec
 then links it into place. It refuses a destination or `.partial` file that exists, the live
 database among them, and never replaces a file that appears meanwhile. A failed backup leaves
 nothing behind. It prints the schema version, the counts of messages and events, and the
-restore-check command for the new file. It does not copy `hub.token`, which is in the same
-directory and must be backed up separately and kept as private.
+restore-check command for the new file. It does not copy `hub.token` or the independent
+console key; back up both separately and keep all credential-bearing files private.
 
 To test a restore, never use the live volume. Copy a backup out of the archive, then run:
 
@@ -229,9 +247,12 @@ throwaway hub on a loopback port with a token of its own. It then checks:
 - that a monitor whose cursor is ahead of the restored history gets a reset.
 
 It also prints what the first retention sweep would remove. A failed check prints `FAIL` and exits
-non-zero. To restore for real, stop the hub, put the backup in place of `iris.db` (removing its
-`-wal` and `-shm` files), and start it: every session then reattaches with proof, or registers
-afresh.
+non-zero. This checks agent recovery, not named browser authentication. Before a real
+restore, stop the hub and follow [console isolation, fresh-key activation and grant
+review](console-activation.md#restore-a-database-with-browser-access-isolated). Replace
+`iris.db` with the reviewed backup while stopped, removing its old `-wal` and `-shm`
+files. Keep the old console key withheld. Agents then reattach with proof or register
+afresh; reopen browser access only after the named-console recovery checks pass.
 
 ### Repairing a repository identity split (ADR 012)
 
@@ -375,8 +396,8 @@ before the generic HTTP rule. Their distinct backend paths avoid worker sharing 
 the catch-all. Iris sends protocol pings every 25 seconds, below the approximately
 100-second Cloudflare idle cutoff, and closes a socket without a pong in 10 seconds.
 A proxy or network restart can still disconnect clients; both CLI and console reconnect.
-The custom access-log format omits query strings so one-time login codes are not
-recorded there. Check Cloudflare and any global logging policy for the same exposure.
+The custom access-log format omits query strings. Login links are retired;
+credentials and request bodies must remain absent from Cloudflare and global logs too.
 
 Apache directive details: [proxying and upgrades](https://httpd.apache.org/docs/2.4/mod/mod_proxy.html)
 and [request/response headers](https://httpd.apache.org/docs/2.4/mod/mod_headers.html).
@@ -392,9 +413,10 @@ Setup shows the exact configuration and token paths, saves client.json, skips th
 local service for this remote HTTPS URL, and reports missing credentials honestly.
 Place the privately obtained hub token at the displayed path with user-only access
 (0600 on Unix or an owner-only DACL on Windows). Then use `iris doctor` to check
-connectivity, authentication and the source of the URL, and `iris ui` for a login link.
-The link expires after one minute and works once; its public session cookie is Secure,
-HttpOnly and SameSite=Strict. Do not share the link.
+connectivity, authentication and the source of the URL. `iris ui` opens the ordinary
+named sign-in page without reading that machine credential. After explicit owner
+activation, sign in with a named account; the public session cookie is Secure,
+HttpOnly and SameSite=Strict.
 
 Every client command resolves environment, then client.json, then defaults. Discovery
 looks beside IRIS_TOKEN_FILE if it is set, otherwise beside the platform's default
@@ -408,19 +430,20 @@ authenticates, UI login sets the secure cookie, and an idle monitor remains conn
 for several minutes. This repository's tests cover the hub and its clients; they do
 not prove the deployed Apache, certificates or Cloudflare settings are correct.
 
-Rollback: stop the new container if port ownership needs to return to the previous
-service, restore the previous vhost file, run `apachectl configtest`, and reload Apache
-(for example `systemctl reload apache2`). Restore the previous service using its own
-operational procedure. Keep the Iris volume; do not delete credentials or database as
-part of rollback. Before later re-enabling Iris, inspect its state and backup.
+Rollback must preserve named authentication or first close browser/login/UI API
+routes at the proxy, as in [the activation rollback runbook](console-activation.md#rollback-while-preserving-the-browser-boundary).
+Do not restore a previous vhost that reopens browser access to an old backend.
+The owner must run `apachectl configtest` and reload Apache (for example
+`systemctl reload apache2`) before that backend starts. Keep the Iris volume;
+review state and backups before re-enabling the console.
 
 The hub logs every failed authentication, and the first use of each token since it started,
 by name and peer, never the secret. `serve --access-log` adds one line, about 120 bytes, for every
 authenticated request. It is off by default, because at that rate a busy hub fills its log in days.
 
-Remaining operational limits: no per-user authorization, per-IP rate limit, global
-session/socket quota, token revocation API or automatic database retention. Failed-auth
-logs may be flooded; use edge limits and bounded log retention. Backups, credential
+Named console accounts have repository authorization; machine processes still
+share their host's bearer authority. Failed-auth logs may be flooded; use edge
+limits and bounded log retention. Backups, credential
 rotation, origin firewall policy and Cloudflare account security remain operator tasks.
 
 ## Replacing an existing vhost

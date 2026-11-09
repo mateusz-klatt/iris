@@ -53,6 +53,7 @@ const translation = {
   },
   globalRole: { admin: "Administrator", member: "Mitglied" },
   accountUi: {
+    consoleClosed: "Die Anmeldung an der Konsole ist nicht verfügbar. Wenden Sie sich an den Besitzer des Hubs.",
     sendUncertain: "Das Ergebnis ist unbekannt. Ein erneuter Versuch innerhalb von zehn Minuten verwendet dieselbe Zustellung.",
     retryExpired: "Die Frist für einen erneuten Versuch ist abgelaufen. Prüfen Sie die Unterhaltung und den Entwurf, bevor Sie erneut senden.",
     messages: "Nachrichten",

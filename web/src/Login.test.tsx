@@ -3,12 +3,12 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "./api";
-import { login, type AccountSession } from "./accountApi";
+import { ConsoleClosedError, login, type AccountSession } from "./accountApi";
 import Login from "./Login";
 import i18n, * as languages from "./i18n";
 import { uiLocalePreferenceKey } from "./preferences";
 
-vi.mock("./accountApi", () => ({ login: vi.fn() }));
+vi.mock("./accountApi", async (original) => ({ ...await original<typeof import("./accountApi")>(), login: vi.fn() }));
 
 beforeEach(async () => {
   vi.resetAllMocks();
@@ -62,6 +62,7 @@ describe("Iris sign in", () => {
   });
 
   it.each([
+    [new ConsoleClosedError(), "Console sign-in is unavailable. Contact the hub owner."],
     [new ApiError(401), "Invalid username or password"],
     [new ApiError(429), "Too many attempts. Wait before trying again."],
     [new ApiError(403), "Could not sign in. Try again."],

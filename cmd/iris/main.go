@@ -198,6 +198,8 @@ func configureConsole(handler consoleConfiguration, keyFile, ownerFile, ownerTok
 	}); err != nil {
 		// A database/setup error cannot stop coordination or disclose its details.
 		fmt.Fprintln(logs, "Iris console closed: account authentication unavailable")
+	} else if len(key) == 32 {
+		fmt.Fprintln(logs, "Iris console open")
 	}
 }
 

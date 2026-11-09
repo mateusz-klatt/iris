@@ -53,6 +53,7 @@ const translation = {
   },
   globalRole: { admin: "Administrator", member: "Użytkownik" },
   accountUi: {
+    consoleClosed: "Logowanie do konsoli jest niedostępne. Skontaktuj się z właścicielem huba.",
     sendUncertain: "Wynik jest nieznany. Ponowienie próby w ciągu dziesięciu minut korzysta z tego samego doręczenia.",
     retryExpired: "Czas na ponowienie próby minął. Sprawdź rozmowę i przejrzyj szkic przed ponownym wysłaniem.",
     messages: "Wiadomości",

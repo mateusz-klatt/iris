@@ -53,6 +53,7 @@ const translation = {
   },
   globalRole: { admin: "Administrators", member: "Dalībnieks" },
   accountUi: {
+    consoleClosed: "Pieteikšanās konsolē nav pieejama. Sazinieties ar centrmezgla īpašnieku.",
     sendUncertain: "Rezultāts nav zināms. Mēģinot vēlreiz desmit minūšu laikā, tiek izmantota tā pati piegāde.",
     retryExpired: "Atkārtota mēģinājuma termiņš ir beidzies. Pirms sūtīšanas vēlreiz pārbaudiet sarunu un pārskatiet melnrakstu.",
     messages: "Ziņojumi",

@@ -9,7 +9,7 @@ import (
 	"strings"
 )
 
-// openBrowser is best effort. The link is already printed for a machine without one.
+// openBrowser is best effort. The URL is already printed for a machine without one.
 func openBrowser(argv []string) bool {
 	path, err := exec.LookPath(argv[0])
 	if err != nil {

@@ -165,6 +165,7 @@ const resources = {
       },
       globalRole: { admin: "Administrator", member: "Member" },
       accountUi: {
+        consoleClosed: "Console sign-in is unavailable. Contact the hub owner.",
         sendUncertain: "The result is unknown. Retrying within ten minutes uses the same delivery.",
         retryExpired: "The retry window has ended. Check the conversation and review the draft before sending again.",
         messages: "Messages",

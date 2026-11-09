@@ -7,10 +7,9 @@ import (
 	"github.com/mateusz-klatt/iris/internal/store"
 )
 
-// consoleRequestPrincipal is the staged account transport boundary. Authentication
-// supplies the verified opaque-session digest in the gated account path; this
-// function never derives a person from request fields or a machine bearer. It is
-// deliberately not wired into the legacy routes before account cutover.
+// consoleRequestPrincipal is the account transport boundary. Authentication
+// supplies the verified opaque-session digest; this function never derives a
+// person from request fields or a machine bearer.
 func consoleRequestPrincipal(r *http.Request, sessionDigest []byte) (store.Principal, error) {
 	if len(r.Header.Values("Authorization")) != 0 {
 		return store.Principal{}, &store.Error{Code: "forbidden", Message: "console account requests cannot include machine credentials"}

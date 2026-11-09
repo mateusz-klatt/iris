@@ -6,11 +6,13 @@ import { afterAll, afterEach, beforeAll } from "vitest";
 configure({ asyncUtilTimeout: 5000 });
 
 import { resetFixtures, server } from "./server";
+import { clearAccountSession } from "../accountApi";
 
 beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
 
 afterEach(() => {
   cleanup();
+  clearAccountSession();
   resetFixtures();
   server.resetHandlers();
 });

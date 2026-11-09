@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -11,9 +12,9 @@ import (
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 )
 
-const adminConsoleUsage = "usage: iris admin console (create | reset | activate) <username> < password-file\n       iris admin console import --source <SQLite file> --manifest <JSON file> [--apply]\n       iris admin console import-grants --manifest <JSON file> [--apply]\nThe password is read exactly from standard input, without trimming a final newline"
+const adminConsoleUsage = "usage: iris admin console (create | reset | activate) <username> < password-file\n       iris admin console import --source <SQLite file> --manifest <JSON file> [--apply]\n       iris admin console import-grants --manifest <JSON file> [--apply]\nOne final LF or CRLF is removed as input line framing; all other password bytes are preserved"
 
-// adminConsoleCommand sends a password to the owner-only setup/recovery path.
+// adminConsoleCommand sends setup or activation material to owner-only routes.
 // Passwords are never command arguments, printed output or URL components. The
 // hub performs the KDF and is the only process writing account records.
 func adminConsoleCommand(ctx context.Context, client *hubclient.Client, args []string, stdin io.Reader, stdout io.Writer) error {
@@ -26,9 +27,16 @@ func adminConsoleCommand(ctx context.Context, client *hubclient.Client, args []s
 	if _, err := consoleauth.LoginKey(args[1]); err != nil {
 		return errors.New("invalid console username")
 	}
-	raw, err := io.ReadAll(io.LimitReader(stdin, consoleauth.MaxPasswordBytes+1))
+	// The extra three bytes admit a maximum-size password plus CRLF while still
+	// detecting oversized input after removing at most one framing sequence.
+	raw, err := io.ReadAll(io.LimitReader(stdin, consoleauth.MaxPasswordBytes+3))
 	if err != nil {
 		return errors.New("could not read password from standard input")
+	}
+	if bytes.HasSuffix(raw, []byte("\r\n")) {
+		raw = raw[:len(raw)-2]
+	} else if bytes.HasSuffix(raw, []byte("\n")) {
+		raw = raw[:len(raw)-1]
 	}
 	password := string(raw)
 	if args[0] == "activate" {

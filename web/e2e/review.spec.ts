@@ -1,7 +1,23 @@
 import { expect, test } from "@playwright/test";
 
 test.beforeEach(async ({ page }) => {
-  await page.route("**/v1/ui/session", (route) => route.fulfill({ status: 404 }));
+  let account = {
+    id: "ca_operator", username: "iris-operator", display_name: "Iris operator", role: "operator", disabled: false,
+    ui_locale: "en", correspondence_locale: "en", edit_revision: 1, auth_version: 1,
+  };
+  const csrf = "iris-operator-browser-csrf";
+  await page.route("**/v1/ui/session", (route) => route.fulfill({ json: {
+    account, csrf, created_ms: 1, expires_ms: 99_999_999_999_999,
+  } }));
+  await page.route("**/v1/ui/profile", async (route) => {
+    const request = route.request();
+    expect(request.method()).toBe("PATCH");
+    expect(request.headers()["x-iris-csrf"]).toBe(csrf);
+    const edit = request.postDataJSON() as { edit_revision: number; display_name: string; ui_locale: string; correspondence_locale: string };
+    expect(edit.edit_revision).toBe(account.edit_revision);
+    account = { ...account, display_name: edit.display_name, ui_locale: edit.ui_locale, correspondence_locale: edit.correspondence_locale, edit_revision: account.edit_revision + 1 };
+    await route.fulfill({ json: { account } });
+  });
 });
 
 // The review before a send lists every recipient, the subject and the rendered body. On a phone
@@ -11,7 +27,7 @@ test("the review before a send fits a phone and sends only on Send", async ({ pa
   await page.route("**/v1/ui/overview", (route) =>
     route.fulfill({
       json: {
-        repositories: [{ id: "rp_iris", name: "iris", aliases: [] }],
+        repositories: [{ id: "rp_iris", name: "iris", aliases: [], console_access: "rw" }],
         agents: [
           {
             id: "ag_claude",

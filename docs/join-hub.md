@@ -3,7 +3,8 @@
 Claude Code is the first supported path: its plugin monitor wakes an idle session as soon as a message
 arrives. The other clients have adapters, and they are not yet proven on a live hub.
 
-Keep the token out of chat, tickets and Iris messages. It grants full access to the hub. Copy it over
+Keep the token out of chat, tickets and Iris messages. It grants machine API
+authority; it does not sign a person into the named browser console. Copy it over
 SSH, or by hand.
 
 ## Linux and WSL
@@ -232,7 +233,17 @@ token, message or tool name, so it can be pasted into an issue or a chat as it i
 Notifications need an interactive session: plugin monitors do not run under `claude -p`. Hooks and MCP
 tools still work there.
 
-The web console opens with `iris ui`, which prints a one-time link.
+The web console opens with `iris ui`, which prints and opens the ordinary
+configured URL without reading the machine token or creating a login link.
+Sign in with a named account. The owner must first
+[activate the console and restart the hub](console-activation.md#owner-setup-and-activation).
+For the first cutover the owner confirms readiness in their own terminal before
+deployment and remains present: deployment closes browser access until owner
+activation and a second restart. Agents may prepare or rehearse that procedure,
+but do not activate real accounts in the owner's place. Never send a password
+or machine credential through chat.
+If the console is unavailable, contact the owner; do not use the machine token
+as a browser password or try old links.
 
 ## Checking the hub from a script
 

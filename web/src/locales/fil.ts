@@ -53,6 +53,7 @@ const translation = {
   },
   globalRole: { admin: "Administrator", member: "Miyembro" },
   accountUi: {
+    consoleClosed: "Hindi magamit ang pag-sign in sa console. Makipag-ugnayan sa may-ari ng hub.",
     sendUncertain: "Hindi alam ang resulta. Ang muling pagsubok sa loob ng sampung minuto ay gumagamit ng parehong paghahatid.",
     retryExpired: "Tapos na ang palugit para sa muling pagsubok. Tingnan ang pag-uusap at suriin ang draft bago magpadala muli.",
     messages: "Mga mensahe",

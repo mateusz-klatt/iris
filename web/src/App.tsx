@@ -37,8 +37,8 @@ import {
   setSoundEnabled,
   soundEnabled,
 } from "./notificationSound";
-import { clearUiLocale, isSupportedLocale, readUiLocale, writeUiLocale } from "./preferences";
-import { clearAccountSession, getSession, logout, updateProfile, type AccountSession } from "./accountApi";
+import { clearUiLocale, isSupportedLocale } from "./preferences";
+import { clearAccountSession, ConsoleClosedError, getSession, logout, updateProfile, type AccountSession } from "./accountApi";
 import Login from "./Login";
 import Account from "./Account";
 import AccessPanel from "./access";
@@ -94,9 +94,7 @@ function newDraft(fields: Partial<Draft> = {}): Draft {
   return { to: "", subject: "", body: "", replyTo: "", ...fields, key: humanKey() };
 }
 
-// retryWindow is how long the hub remembers a send's key, ADR 006's 24 hours for Operation
-// records. The console promises a safe retry only within it.
-const retryWindow = 24 * 60 * 60 * 1000;
+// The console bounds an uncertain retry more tightly than the hub's retained key.
 const accountRetryWindow = 10 * 60 * 1000;
 
 // operatorName is the sender name the hub gives the console's own messages.
@@ -228,7 +226,7 @@ function HostReport({ report }: { report: DoctorReport }) {
 
 export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
   const { t } = useTranslation();
-  const [authentication, setAuthentication] = useState<"loading" | "legacy" | "login" | "error">("loading");
+  const [authentication, setAuthentication] = useState<"loading" | "closed" | "login" | "error">("loading");
   const [session, setSession] = useState<AccountSession | null>(null);
   const [attempt, setAttempt] = useState(0);
   const [passwordChanged, setPasswordChanged] = useState(false);
@@ -247,13 +245,15 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
     const controller = new AbortController();
     void getSession(controller.signal).then(setSession).catch((error: unknown) => {
       if (controller.signal.aborted || isAbort(error)) return;
-      if (error instanceof ApiError && error.status === 404) setAuthentication("legacy");
+      if (error instanceof ConsoleClosedError) { clearAccountSession(); setAuthentication("closed"); }
       else if (error instanceof ApiError && error.status === 401) { clearAccountSession(); setAuthentication("login"); }
       else setAuthentication("error");
     });
     return () => controller.abort();
   }, [attempt, signedOut]);
   useEffect(() => {
+    // Session-bound HTTP failures unmount the console here before a view's
+    // asynchronous rejection handler can expose stale data or an error panel.
     const expired = () => signedOut();
     window.addEventListener("iris:unauthorized", expired);
     return () => window.removeEventListener("iris:unauthorized", expired);
@@ -269,25 +269,25 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
   const endSession = useCallback((changed?: boolean) => {
     if (currentGeneration === sessionGeneration.current) signedOut(changed);
   }, [currentGeneration, signedOut]);
-  if (session !== null || authentication === "legacy") {
-    return <Console key={session?.account.id ?? "legacy"} connect={connect} session={session} onSession={updateSession} onSignedOut={endSession} />;
+  if (session !== null) {
+    return <Console key={session.account.id} connect={connect} session={session} onSession={updateSession} onSignedOut={endSession} />;
   }
   if (authentication === "login") return <main>{passwordChanged ? <p role="status">{t("account.passwordSaved")}</p> : null}<Login onLogin={setSession} /></main>;
-  return <main className="content"><p role={authentication === "error" ? "alert" : "status"}>{t(authentication === "error" ? "accountUi.sessionError" : "accountUi.sessionLoading")}</p>
-    {authentication === "error" ? <button type="button" onClick={() => { setAuthentication("loading"); setAttempt((value) => value + 1); }}>{t("accountUi.retry")}</button> : null}</main>;
+  return <main className="content"><p role={authentication === "loading" ? "status" : "alert"}>{t(authentication === "error" ? "accountUi.sessionError" : authentication === "closed" ? "accountUi.consoleClosed" : "accountUi.sessionLoading")}</p>
+    {authentication !== "loading" ? <button type="button" onClick={() => { setAuthentication("loading"); setAttempt((value) => value + 1); }}>{t("accountUi.retry")}</button> : null}</main>;
 }
 
-function Console({ connect, session, onSession, onSignedOut }: { connect: typeof watchUi; session: AccountSession | null; onSession: (session: AccountSession) => void; onSignedOut: (passwordChanged?: boolean) => void }) {
+function Console({ connect, session, onSession, onSignedOut }: { connect: typeof watchUi; session: AccountSession; onSession: (session: AccountSession) => void; onSignedOut: (passwordChanged?: boolean) => void }) {
   const { t } = useTranslation();
-  const member = session?.account.role === "member";
+  const member = session.account.role === "member";
   const [locale, setLocale] = useState<SupportedLocale>("en");
   const [soundOn, setSoundOn] = useState(false);
-  const [phase, setPhase] = useState<"loading" | "ready" | "unauthorized" | "error">("loading");
+  const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
   const [overview, setOverview] = useState<Overview | null>(null);
   const [doctor, setDoctor] = useState<DoctorReports | null>(null);
   const [revision, setRevision] = useState(0);
   const [threadRevision, setThreadRevision] = useState(0);
-  const onUnauthorized = useCallback(() => { if (session !== null) onSignedOut(); else setPhase("unauthorized"); }, [session, onSignedOut]);
+  const onUnauthorized = useCallback(() => onSignedOut(), [onSignedOut]);
   const [stream, setStream] = useState<WatchStatus>("connecting");
   const [repositoryId, setRepositoryId] = useState("");
   const [agent, setAgent] = useState("");
@@ -353,10 +353,8 @@ function Console({ connect, session, onSession, onSignedOut }: { connect: typeof
   useEffect(() => {
     try {
       setSoundOn(soundEnabled());
-      const saved = session === null ? readUiLocale() : isSupportedLocale(session.account.ui_locale) ? session.account.ui_locale : "en";
-      if (saved !== null) {
-        void loadLocale(saved).then(() => setLocale(saved));
-      }
+      const saved = isSupportedLocale(session.account.ui_locale) ? session.account.ui_locale : "en";
+      void loadLocale(saved).then(() => setLocale(saved));
     } catch {
       setSoundOn(false);
     }
@@ -394,9 +392,9 @@ function Console({ connect, session, onSession, onSignedOut }: { connect: typeof
       if (current !== overviewRequest.current || isAbort(error)) {
         return;
       }
-      if (error instanceof ApiError && error.status === 401) onUnauthorized(); else setPhase("error");
+      setPhase("error");
     }
-  }, [member, onUnauthorized]);
+  }, [member]);
 
   // revision changes only to retry after an error, which reconnects too.
   useEffect(() => {
@@ -415,7 +413,7 @@ function Console({ connect, session, onSession, onSignedOut }: { connect: typeof
         return;
       }
       setStream(status);
-    }, session === null ? {} : { check: () => getSession(undefined, session) });
+    }, { check: () => getSession(undefined, session) });
     return () => {
       // A load still in flight lands on a closed view, so it is dropped.
       requests.current++;
@@ -457,10 +455,6 @@ function Console({ connect, session, onSession, onSignedOut }: { connect: typeof
       })
       .catch((error: unknown) => {
         if (ignore || isAbort(error)) {
-          return;
-        }
-        if (error instanceof ApiError && error.status === 401) {
-          setPhase("unauthorized");
           return;
         }
         setThreadsError(true);
@@ -511,10 +505,6 @@ function Console({ connect, session, onSession, onSignedOut }: { connect: typeof
         if (ignore || isAbort(error)) {
           return;
         }
-        if (error instanceof ApiError && error.status === 401) {
-          setPhase("unauthorized");
-          return;
-        }
         setThreadError(true);
       });
     return () => {
@@ -536,20 +526,11 @@ function Console({ connect, session, onSession, onSignedOut }: { connect: typeof
   }, [activeView, selectedId]);
 
   const chooseLocale = (next: SupportedLocale) => {
-    if (session !== null) {
-      setLocaleSaving(true);
-      void updateProfile(session.account, session.account.display_name, next).then((account) => onSession({ ...session, account })).catch((error: unknown) => {
-        if (error instanceof ApiError && error.status === 401) onSignedOut();
-        else setFormError(t("localeStatus.saveError"));
-      }).finally(() => setLocaleSaving(false));
-      return;
-    }
-    try {
-      writeUiLocale(next);
-    } catch {
-      // The language still changes for this visit.
-    }
-    void loadLocale(next).then(() => setLocale(next));
+    setLocaleSaving(true);
+    void updateProfile(session.account, session.account.display_name, next).then((account) => onSession({ ...session, account })).catch((error: unknown) => {
+      if (error instanceof ApiError && error.status === 401) onSignedOut();
+      else setFormError(t("localeStatus.saveError"));
+    }).finally(() => setLocaleSaving(false));
   };
 
   const signOut = async () => {
@@ -585,7 +566,7 @@ function Console({ connect, session, onSession, onSignedOut }: { connect: typeof
     // The message belongs to the repository being read (ADR 004), and the hub refuses a key
     // reused for another repository. A retry from another view therefore gets a new key, and
     // the draft keeps it for its own retries.
-    const expired = session !== null && start.firstTried !== undefined && Date.now() - start.firstTried >= accountRetryWindow;
+    const expired = start.firstTried !== undefined && Date.now() - start.firstTried >= accountRetryWindow;
     if (expired) {
       keep(edited(start, { sentFrom: undefined }));
       setFormError(t("accountUi.retryExpired"));
@@ -613,17 +594,15 @@ function Console({ connect, session, onSession, onSignedOut }: { connect: typeof
       void reload();
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
-        setPhase("unauthorized");
+        onUnauthorized();
         return;
       }
       // A network failure or a 5xx may have come after the hub stored the message. The draft keeps
-      // its key, and the hub keeps one copy per key for retryWindow from when it stored the first
-      // (ADR 006), so within that window the person is told a retry is safe. Past it the hub has
-      // forgotten the key, and the plain error promises nothing. A 4xx is a refusal: nothing was
-      // stored.
+      // its key. The console offers a bounded retry; after its window, the draft
+      // requires another review with a fresh key. A 4xx is a refusal.
       const ambiguous = !(error instanceof ApiError) || error.status >= 500;
-      const uncertain = ambiguous && Date.now() - draft.firstTried < (session === null ? retryWindow : accountRetryWindow);
-      setFormError(t(uncertain ? session === null ? "operator.sendUncertain" : "accountUi.sendUncertain" : "operator.loadError"));
+      const uncertain = ambiguous && Date.now() - draft.firstTried < accountRetryWindow;
+      setFormError(t(uncertain ? "accountUi.sendUncertain" : "operator.loadError"));
     } finally {
       inFlight.current = false;
       setSending(false);
@@ -638,7 +617,7 @@ function Console({ connect, session, onSession, onSignedOut }: { connect: typeof
       void reload();
     } catch (error) {
       if (error instanceof ApiError && error.status === 401) {
-        setPhase("unauthorized");
+        onUnauthorized();
         return;
       }
       setFormError(t("operator.loadError"));
@@ -709,10 +688,8 @@ function Console({ connect, session, onSession, onSignedOut }: { connect: typeof
             {t(stream === "live" ? "stream.live" : stream === "reconnecting" ? "stream.reconnecting" : "stream.connecting")}
           </p>
           <LocalePicker disabled={localeSaving} locale={locale} onSelect={chooseLocale} />
-          {session !== null ? <>
-            <button type="button" className="account-identity" onClick={() => chooseView("account")}>{session.account.display_name || session.account.username}</button>
-            <button type="button" disabled={signingOut} onClick={() => void signOut()}>{t(signingOut ? "accountUi.signingOut" : "accountUi.signOut")}</button>
-          </> : null}
+          <button type="button" className="account-identity" onClick={() => chooseView("account")}>{session.account.display_name || session.account.username}</button>
+          <button type="button" disabled={signingOut} onClick={() => void signOut()}>{t(signingOut ? "accountUi.signingOut" : "accountUi.signOut")}</button>
           <button
             type="button"
             className="sound-toggle"
@@ -737,8 +714,8 @@ function Console({ connect, session, onSession, onSignedOut }: { connect: typeof
               <button type="button" className="console-nav-item" aria-current={activeView === "fleet" ? "page" : undefined} onClick={() => chooseView("fleet")}>{t("console.fleet")}<span className="nav-count">{activeAgents.length}</span></button>
               <button type="button" className="console-nav-item" aria-current={activeView === "claims" ? "page" : undefined} onClick={() => chooseView("claims")}>{t("operator.claims")}<span className="nav-count">{overview.claims.length}</span></button>
               {!member ? <button type="button" className="console-nav-item" aria-current={activeView === "diagnostics" ? "page" : undefined} onClick={() => chooseView("diagnostics")}>{t("console.diagnostics")}</button> : null}
-              {session !== null ? <button type="button" className="console-nav-item" aria-current={activeView === "account" ? "page" : undefined} onClick={() => chooseView("account")}>{t("accountUi.account")}</button> : null}
-              {session?.account.role === "operator" ? <button type="button" className="console-nav-item" aria-current={activeView === "access" ? "page" : undefined} onClick={() => chooseView("access")}>{t("access.title")}</button> : null}
+              <button type="button" className="console-nav-item" aria-current={activeView === "account" ? "page" : undefined} onClick={() => chooseView("account")}>{t("accountUi.account")}</button>
+              {session.account.role === "operator" ? <button type="button" className="console-nav-item" aria-current={activeView === "access" ? "page" : undefined} onClick={() => chooseView("access")}>{t("access.title")}</button> : null}
             </nav>
           </aside>
         ) : null}
@@ -752,17 +729,11 @@ function Console({ connect, session, onSession, onSignedOut }: { connect: typeof
             </button>
           </div>
         ) : null}
-        {phase === "unauthorized" ? (
-          <section className="welcome" aria-labelledby="sign-in-title">
-            <h1 id="sign-in-title">{t("appName")}</h1>
-            <p>{t("operator.signIn", { command: "iris ui" })}</p>
-          </section>
-        ) : null}
         {phase === "ready" && overview !== null ? (
           <>
             {activeView !== "account" && activeView !== "access" ? <header className="console-heading">
               <div><p className="console-kicker">{t("appName")}</p><h1>{member && activeView === "messages" ? t("accountUi.messages") : title}</h1>
-                <p>{activeView === "messages" ? t(member || session !== null ? "accountUi.sharedMail" : mailScope === "mine" ? "console.subtitle" : "console.activityHint") : activeView === "fleet" ? t("console.fleetHint") : activeView === "compose" ? t("console.composeHint") : null}</p>
+                <p>{activeView === "messages" ? t("accountUi.sharedMail") : activeView === "fleet" ? t("console.fleetHint") : activeView === "compose" ? t("console.composeHint") : null}</p>
               </div>
             </header> : null}
             <div className="console-notices">
@@ -776,7 +747,7 @@ function Console({ connect, session, onSession, onSignedOut }: { connect: typeof
                 <button type="button" className="console-stat" onClick={() => chooseView("fleet")}><span>{t("console.active")}</span><strong>{activeAgents.length}</strong></button>
                 <button type="button" className="console-stat" onClick={() => chooseView("claims")}><span>{t("console.reservations")}</span><strong>{overview.claims.length}</strong></button>
               </div>
-              <DeliveryProblems repositoryId={repositoryId} revision={threadRevision} onOpenThread={openThread} onUnauthorized={onUnauthorized} />
+              <DeliveryProblems repositoryId={repositoryId} revision={threadRevision} onOpenThread={openThread} />
               <section id="threads" aria-label={t("operator.threads")}>
                 <form className="search-form mail-filters" onSubmit={(event) => { event.preventDefault(); setQuery(searchDraft); clearThread(); }}>
                   <label>{t("operator.search")}<input type="search" value={searchDraft} onChange={(event) => setSearchDraft(event.target.value)} /></label>
@@ -1030,8 +1001,8 @@ function Console({ connect, session, onSession, onSignedOut }: { connect: typeof
                 />
               </form>
             </section> : null}
-            {session !== null && activeView === "account" ? <Account session={session} onSession={onSession} onSignedOut={onSignedOut} /> : null}
-            {session?.account.role === "operator" && activeView === "access" ? <AccessPanel session={session} repositories={overview.repositories} onSignedOut={onSignedOut} /> : null}
+            {activeView === "account" ? <Account session={session} onSession={onSession} onSignedOut={onSignedOut} /> : null}
+            {session.account.role === "operator" && activeView === "access" ? <AccessPanel session={session} repositories={overview.repositories} onSignedOut={onSignedOut} /> : null}
           </>
         ) : null}
       </main>

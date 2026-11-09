@@ -34,3 +34,14 @@ func TestClosedConsoleDiscoveryRejectsBearerAuthentication(t *testing.T) {
 		t.Fatal("machine bearer selected active browser authority", w.Code, w.Header())
 	}
 }
+
+func TestAnOpenConsoleTransportRefusalDoesNotReportClosedActivation(t *testing.T) {
+	h, server, _ := consoleSetup(t)
+	r := httptest.NewRequest(http.MethodGet, server.URL+"/v1/ui/session", nil)
+	r.RemoteAddr = "192.0.2.10:1234"
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, r)
+	if w.Code != http.StatusUnauthorized || w.Header().Get("X-Iris-Console-Mode") != "" {
+		t.Fatal("a refused request changed the reported activation state", w.Code, w.Header())
+	}
+}

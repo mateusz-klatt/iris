@@ -171,7 +171,9 @@ func (h *Hub) serveConsole(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	if len(h.console.key) != 32 || !h.consoleTransport(r) {
-		w.Header().Set("X-Iris-Console-Mode", "closed")
+		if len(h.console.key) != 32 {
+			w.Header().Set("X-Iris-Console-Mode", "closed")
+		}
 		writeError(w, &store.Error{Code: "unauthorized", Message: "console authentication unavailable"})
 		return true
 	}

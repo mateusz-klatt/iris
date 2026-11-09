@@ -53,6 +53,7 @@ const translation = {
   },
   globalRole: { admin: "Beheerder", member: "Lid" },
   accountUi: {
+    consoleClosed: "Aanmelden bij de console is niet beschikbaar. Neem contact op met de eigenaar van de hub.",
     sendUncertain: "Het resultaat is onbekend. Binnen tien minuten opnieuw proberen gebruikt dezelfde bezorging.",
     retryExpired: "De termijn om opnieuw te proberen is verstreken. Controleer het gesprek en bekijk het concept voordat je opnieuw verzendt.",
     messages: "Berichten",

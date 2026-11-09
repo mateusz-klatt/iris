@@ -2,7 +2,7 @@ import { http, HttpResponse } from "msw";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { ApiError } from "./api";
-import { changePassword, clearAccountSession, getSession, listAccounts, login, logout, updateAccess, updateProfile, type AccountSession } from "./accountApi";
+import { changePassword, clearAccountSession, ConsoleClosedError, getSession, listAccounts, login, logout, updateAccess, updateProfile, type AccountSession } from "./accountApi";
 import { server } from "./test/server";
 
 const session: AccountSession = {
@@ -86,9 +86,21 @@ describe("account browser API", () => {
     await logout();
   });
 
-  it.each([401, 404])("recognizes the staged legacy-mode marker before interpreting authentication", async (status) => {
+  it.each([401, 404])("never treats an obsolete links marker with HTTP %s as authenticated", async (status) => {
     server.use(http.get("*/v1/ui/session", () => new HttpResponse(null, { status, headers: { "X-Iris-Console-Mode": "links" } })));
-    await expect(getSession()).rejects.toEqual(new ApiError(404));
+    await expect(getSession()).rejects.toEqual(new ApiError(status));
+  });
+
+  it("distinguishes a closed console from a missing browser session", async () => {
+    server.use(http.get("*/v1/ui/session", () => new HttpResponse(null, { status: 401, headers: { "X-Iris-Console-Mode": "closed" } })));
+    await expect(getSession()).rejects.toEqual(new ConsoleClosedError());
+    server.use(http.get("*/v1/ui/session", () => new HttpResponse(null, { status: 401 })));
+    await expect(getSession()).rejects.toEqual(new ApiError(401));
+  });
+
+  it("does not reinterpret another HTTP failure because it carries a closed marker", async () => {
+    server.use(http.get("*/v1/ui/session", () => new HttpResponse(null, { status: 503, headers: { "X-Iris-Console-Mode": "closed" } })));
+    await expect(getSession()).rejects.toEqual(new ApiError(503));
   });
 
   it("uses a fresh same-origin challenge on each attempt and keeps tokens only in memory", async () => {

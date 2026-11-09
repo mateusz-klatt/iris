@@ -53,6 +53,7 @@ const translation = {
   },
   globalRole: { admin: "Kerfisstjóri", member: "Meðlimur" },
   accountUi: {
+    consoleClosed: "Innskráning í stjórnborðið er ekki tiltæk. Hafðu samband við eiganda miðstöðvarinnar.",
     sendUncertain: "Niðurstaðan er óþekkt. Ef þú reynir aftur innan tíu mínútna er sama afhending notuð.",
     retryExpired: "Fresturinn til að reyna aftur er liðinn. Athugaðu samtalið og farðu yfir drögin áður en þú sendir aftur.",
     messages: "Skilaboð",

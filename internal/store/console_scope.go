@@ -20,9 +20,9 @@ func (t *transaction) visibleIn(alias, repo string) (string, []any) {
 	return "(" + filter + ") AND (" + origin + " OR EXISTS(SELECT 1 FROM Delivery dv JOIN Agent av ON av.id=dv.recipient_agent_id WHERE dv.message_id=" + alias + ".id AND " + recipient + "))", append(append(filterArgs, originArgs...), recipientArgs...)
 }
 
-// The staged account path filters search and participant matches before a
-// thread is selected. The legacy console retains its existing search contract
-// until account cutover.
+// Account searches filter search and participant matches before selecting a
+// thread. Internal unscoped observations retain the store's search contract;
+// they do not create a browser principal.
 func (t *transaction) consoleMatchIn(alias, repo string) (string, []any) {
 	if t.console == nil {
 		return "1=1", nil

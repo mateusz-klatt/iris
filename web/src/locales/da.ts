@@ -53,6 +53,7 @@ const translation = {
   },
   globalRole: { admin: "Administrator", member: "Medlem" },
   accountUi: {
+    consoleClosed: "Det er ikke muligt at logge ind på konsollen. Kontakt hubbens ejer.",
     sendUncertain: "Resultatet er ukendt. Et nyt forsøg inden for ti minutter bruger den samme levering.",
     retryExpired: "Fristen for at prøve igen er udløbet. Kontroller samtalen, og gennemgå kladden, før du sender igen.",
     messages: "Beskeder",

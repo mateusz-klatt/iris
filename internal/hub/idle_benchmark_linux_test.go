@@ -108,6 +108,14 @@ func benchmarkHubCPU(b *testing.B, live bool) {
 						}
 						return out, err
 					}
+					realAdmission := h.admitConsoleFrame
+					h.admitConsoleFrame = func(ctx context.Context, principal store.Principal, admit func(map[string]any) error) error {
+						err := realAdmission(ctx, principal, admit)
+						if live {
+							calls.record("console_admission")
+						}
+						return err
+					}
 					server.Config.Handler = h
 					server.Start()
 					defer server.Close()
@@ -283,7 +291,7 @@ func benchmarkHubCPU(b *testing.B, live bool) {
 						result["heartbeat_skipped_slots"] = heartbeats.skipped.Load()
 						result["heartbeat_operation_calls"] = measuredCalls.heartbeats
 						result["watch_observation_calls"] = measuredCalls.events
-						result["legacy_console_observation_calls"] = measuredCalls.console
+						result["named_console_observation_calls"] = measuredCalls.console
 						result["maintenance_calls"] = measuredCalls.expire
 						result["hub_operation_calls"] = measuredCalls.total
 						result["store_transactions_outside_hub_calls"] = int64(transactions) - int64(measuredCalls.total)
@@ -316,7 +324,7 @@ func (c *idleBenchmarkCallCounts) record(operation string) {
 	switch operation {
 	case "events":
 		c.events.Add(1)
-	case "ui_events":
+	case "console_admission":
 		c.console.Add(1)
 	case "expire":
 		c.expire.Add(1)

@@ -31,7 +31,7 @@ const problems: DeliveryProblems = {
 describe("delivery problems", () => {
   it.each(["At-send display name", ""])("shows the immutable person beside the shared human sender (%s)", async (displayName) => {
     server.use(http.get("*/v1/ui/deliveries", () => HttpResponse.json({ ...problems, messages: [{ ...problems.messages[0], sender_account_id: "ca_author", sender_username: "at-send-username", sender_display_name: displayName }] })));
-    render(<DeliveryProblemsPanel repositoryId="rp_iris" revision={0} onOpenThread={() => {}} onUnauthorized={() => {}} />);
+    render(<DeliveryProblemsPanel repositoryId="rp_iris" revision={0} onOpenThread={() => {}} />);
     const panel = await screen.findByRole("region", { name: "Delivery problems" });
     await userEvent.click(within(panel).getByRole("heading", { name: "Delivery problems" }));
     expect(within(panel).getByText(`${displayName || "at-send-username"} via human`)).toBeVisible();
@@ -101,6 +101,6 @@ describe("delivery problems", () => {
     first.unmount();
     server.use(http.get("*/v1/ui/deliveries", () => new HttpResponse(null, { status: 401 })));
     render(<App connect={() => () => {}} />);
-    expect(await screen.findByText(/This browser is not signed in/)).toBeVisible();
+    expect(await screen.findByLabelText("Username")).toBeVisible();
   });
 });

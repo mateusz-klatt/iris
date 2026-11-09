@@ -7,7 +7,7 @@ import (
 	"github.com/mateusz-klatt/iris/internal/store"
 )
 
-// Import remains an owner operation while the account console is staged. The
+// Import remains an owner operation while browser authentication is closed. The
 // source adapter sends a bounded snapshot; only the hub writes Iris records.
 func (h *Hub) consoleImportRoutes() {
 	h.mux.HandleFunc("POST /v1/admin/console/import", func(w http.ResponseWriter, r *http.Request) {

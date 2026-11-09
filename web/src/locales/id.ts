@@ -53,6 +53,7 @@ const translation = {
   },
   globalRole: { admin: "Administrator", member: "Anggota" },
   accountUi: {
+    consoleClosed: "Akses masuk ke konsol tidak tersedia. Hubungi pemilik hub.",
     sendUncertain: "Hasilnya belum diketahui. Mencoba lagi dalam sepuluh menit menggunakan pengiriman yang sama.",
     retryExpired: "Batas waktu untuk mencoba lagi telah berakhir. Periksa percakapan dan tinjau draf sebelum mengirim lagi.",
     messages: "Pesan",

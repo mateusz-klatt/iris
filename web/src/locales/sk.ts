@@ -53,6 +53,7 @@ const translation = {
   },
   globalRole: { admin: "Správca", member: "Člen" },
   accountUi: {
+    consoleClosed: "Prihlásenie do konzoly nie je dostupné. Kontaktujte vlastníka hubu.",
     sendUncertain: "Výsledok nie je známy. Opakovanie do desiatich minút použije rovnaké doručenie.",
     retryExpired: "Lehota na opakovanie vypršala. Pred ďalším odoslaním skontrolujte konverzáciu a koncept.",
     messages: "Správy",
