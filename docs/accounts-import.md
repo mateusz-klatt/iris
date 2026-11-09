@@ -20,9 +20,53 @@ The source must be an ordinary table with exactly these columns:
 `preferred_ui_locale`, `preferred_correspondence_locale`, `created_ts`,
 `last_login_ts`. IDs are positive SQLite integers; booleans are integer 0 or 1.
 Last login may be SQL NULL. Other values must use the required SQLite text/integer
-storage types, independently of column affinity. The adapter opens the supplied
-file with SQLite `mode=ro` and reads one
-transactional snapshot. It neither creates a missing file nor writes the source.
+storage types, independently of column affinity.
+
+Supply a **closed, stable, checkpointed export in DELETE journal mode**, not a
+live application database. Before SQLite opens anything, the adapter checks the
+main-file journal-mode header and refuses WAL mode or any `-wal`, `-shm` or
+`-journal` sidecar, including empty or stale files. It resolves symlinks first and
+rejects nonregular inputs. A checkpointed WAL-mode file is still refused even
+when its sidecars are absent: checkpointing alone does not change journal mode.
+
+Accepted exports are opened with `mode=ro&immutable=1` and SQL query-only mode.
+The immutable flag disables SQLite locking and shared-memory update paths;
+`mode=ro` and query-only alone would not prevent WAL machinery from creating or
+updating `-shm`. See SQLite's [read-only WAL rules](https://sqlite.org/wal.html#read_only_databases)
+and [immutable connection contract](https://sqlite.org/uri.html#uriimmutable).
+The owner must keep the export unchanged throughout both dry-run and apply.
+Iris cannot enforce that prerequisite or provide a live-source snapshot while
+immutable locking/change detection is disabled. On a fixed export, one read
+transaction covers schema and rows. The importer never creates a missing input,
+opens its source backend, or repairs, checkpoints or removes source sidecars.
+
+### Preparing a refused source
+
+Have the source owner produce a consistent backup through its approved export
+workflow, such as SQLite's [online backup mechanism](https://sqlite.org/backup.html).
+This preparation is separate from the importer and must not target the preserved
+original dump or a production file. A raw copy of only a live main database can
+omit committed WAL rows. If working from a frozen filesystem snapshot, keep the
+main database and its matching WAL together when making a disposable working
+copy; never mix files from different moments.
+
+On that **disposable backup copy only**, with all other connections closed, the
+owner may use the SQLite CLI to checkpoint and convert journal mode:
+
+```sh
+sqlite3 /private/disposable-export.db 'PRAGMA wal_checkpoint(TRUNCATE); PRAGMA journal_mode=DELETE;'
+```
+
+Require the final journal-mode result to be `delete`, then close SQLite before
+passing this file to Iris. If conversion is busy or sidecars remain, resolve the
+export with its owner and repeat preparation; never delete or rename sidecars to
+force acceptance. SQLite may update the disposable copy while preparing it. Iris
+performs no such preparation and never drops uncheckpointed rows silently.
+Review expected safe row IDs/counts through dry-run against the prepared export
+before applying it. The supplied table, source identifier and manifest mappings
+still require the same explicit review.
+
+### Manifest fields and mappings
 
 Obtain the table name and timestamp contract from the owner of the export.
 Declare them explicitly; do not guess from values. Supported timestamps are

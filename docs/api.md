@@ -417,8 +417,11 @@ The sketches show the envelope only; use the CLI and complete reviewed manifests
 in [account import and recovery](accounts-import.md). `dry_run` must be explicitly
 present and boolean. Missing/mismatched payloads, duplicate keys, unknown fields,
 invalid Unicode and ambiguous field casing are refused. The usual hub body limit
-applies, and each transfer is limited to 32 rows. The CLI reads its source through
-a read-only SQLite snapshot; it never writes the hub database directly.
+applies, and each transfer is limited to 32 rows. The CLI requires a closed,
+stable, checkpointed DELETE-mode export. It refuses WAL mode and journal sidecars
+before SQLite opens the source, then reads with immutable/read-only settings.
+Keeping the export fixed is an owner prerequisite, not a live-source snapshot
+guarantee. The CLI never writes the hub database directly.
 
 Dry-run uses dedicated validation without session/coordination expiry writes.
 Apply repeats validation inside one immediate transaction with accounts/grants,

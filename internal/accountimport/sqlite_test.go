@@ -279,6 +279,7 @@ func TestSourceSnapshotStorageFailuresRemainReadOnlyAndSanitized(t *testing.T) {
 }
 
 func TestSourceEntryFailuresDoNotOpenOrCreateData(t *testing.T) {
+	file := sourceFile(t, sourceSchema, 1)
 	called := false
 	open := func(string, string) (*sql.DB, error) { called = true; return nil, errors.New("private-sentinel") }
 	m := testManifest()
@@ -286,7 +287,7 @@ func TestSourceEntryFailuresDoNotOpenOrCreateData(t *testing.T) {
 	if _, err := read(context.Background(), "unused", m, open); err == nil || called {
 		t.Fatal("invalid manifest opened source")
 	}
-	if _, err := read(context.Background(), "unused", testManifest(), open); err == nil || strings.Contains(err.Error(), "private-sentinel") || !called {
+	if _, err := read(context.Background(), file, testManifest(), open); err == nil || strings.Contains(err.Error(), "private-sentinel") || !called {
 		t.Fatal("source open error was not sanitized")
 	}
 	ctx, cancel := context.WithCancel(context.Background())

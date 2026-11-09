@@ -1,9 +1,12 @@
 package accountimport
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
+	"io"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -13,9 +16,11 @@ import (
 
 var columns = []string{"id", "username", "password_hash", "role", "disabled", "display_name", "preferred_ui_locale", "preferred_correspondence_locale", "created_ts", "last_login_ts"}
 
-// Read opens only the named SQLite source, in mode=ro. One read transaction
-// covers schema inspection and every selected row, giving a consistent snapshot.
-// It does not invoke a source backend or open the hub's database.
+// Read accepts only a closed, stable, checkpointed DELETE-mode export. WAL and
+// journal sidecars are refused before SQLite opens the source. Immutable reads
+// disable SQLite's locking and shared-memory write paths as well as SQL writes.
+// The owner must keep the export unchanged throughout the read; this is not a
+// snapshot facility for a live database or a connection to its source backend.
 func Read(ctx context.Context, path string, manifest Manifest) (Batch, error) {
 	return read(ctx, path, manifest, sql.Open)
 }
@@ -28,9 +33,17 @@ func read(ctx context.Context, path string, manifest Manifest, open func(string,
 	if err != nil {
 		return Batch{}, invalid("", "could not locate source SQLite file")
 	}
+	abs, err = filepath.EvalSymlinks(abs)
+	if err != nil {
+		return Batch{}, invalid("", "could not locate source SQLite export")
+	}
+	if err = checkpointedSource(abs); err != nil {
+		return Batch{}, err
+	}
 	u := url.URL{Scheme: "file", Path: filepath.ToSlash(abs)}
 	q := u.Query()
 	q.Set("mode", "ro")
+	q.Set("immutable", "1")
 	q.Add("_pragma", "query_only(1)")
 	q.Add("_pragma", "trusted_schema(0)")
 	q.Add("_pragma", "busy_timeout(5000)")
@@ -54,6 +67,33 @@ func read(ctx context.Context, path string, manifest Manifest, open func(string,
 		return Batch{}, invalid("", "could not complete source snapshot")
 	}
 	return batch, nil
+}
+
+func checkpointedSource(path string) error {
+	return inspectCheckpointedSource(path, os.Lstat, func(path string) (io.ReadCloser, error) { return os.Open(path) })
+}
+
+func inspectCheckpointedSource(path string, stat func(string) (os.FileInfo, error), open func(string) (io.ReadCloser, error)) error {
+	refuse := invalid("", "source must be a closed checkpointed DELETE-mode export without WAL or journal sidecars; see docs/accounts-import.md")
+	for _, suffix := range []string{"-wal", "-shm", "-journal"} {
+		if _, err := stat(path + suffix); !os.IsNotExist(err) {
+			return refuse
+		}
+	}
+	info, err := stat(path)
+	if err != nil || !info.Mode().IsRegular() {
+		return refuse
+	}
+	file, err := open(path)
+	if err != nil {
+		return refuse
+	}
+	defer func() { _ = file.Close() }()
+	var header [20]byte
+	if _, err = io.ReadFull(file, header[:]); err != nil || !bytes.Equal(header[:16], []byte("SQLite format 3\x00")) || header[18] != 1 || header[19] != 1 {
+		return refuse
+	}
+	return nil
 }
 
 func snapshot(ctx context.Context, tx *sql.Tx, m Manifest) (Batch, error) {
