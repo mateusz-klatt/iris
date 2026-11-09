@@ -198,6 +198,12 @@ func preserveConsoleKeyIO(t *testing.T) func() {
 	return restore
 }
 
+// consoleKeyFileClosed reports whether f has been closed. Sync says so on every system; Stat
+// on Windows reports an invalid handle instead of os.ErrClosed.
+func consoleKeyFileClosed(f *os.File) bool {
+	return errors.Is(f.Sync(), os.ErrClosed)
+}
+
 func assertNoConsoleKeyTemps(t *testing.T, dir string) {
 	t.Helper()
 	files, err := filepath.Glob(filepath.Join(dir, ".console-key-*"))
@@ -239,7 +245,7 @@ func TestConsoleKeyPublishesOnlyAfterCompleteProtectedWriteSyncAndClose(t *testi
 		return nil
 	}
 	linkConsoleKeyFile = func(source, target string) error {
-		if _, err := file.Stat(); !errors.Is(err, os.ErrClosed) || !synced {
+		if !consoleKeyFileClosed(file) || !synced {
 			return errors.New("publication preceded sync or close")
 		}
 		raw, err := os.ReadFile(source)
@@ -443,8 +449,8 @@ func TestConsoleKeyPublicationFailuresLeaveNoFinalOrTempAndPermitRetry(t *testin
 				t.Fatal("failed publication left a final file", err)
 			}
 			if file != nil {
-				if _, err = file.Stat(); !errors.Is(err, os.ErrClosed) {
-					t.Fatal("failed publication left its file descriptor open", err)
+				if !consoleKeyFileClosed(file) {
+					t.Fatal("failed publication left its file descriptor open")
 				}
 			}
 			assertNoConsoleKeyTemps(t, dir)
