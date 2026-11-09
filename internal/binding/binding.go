@@ -176,6 +176,10 @@ func (r *Resolver) adopt(ctx context.Context) {
 	if !r.own {
 		return
 	}
+	// Adoption runs before the heartbeat and holds the binding lock. A stalled
+	// lookup or handover must leave time to renew the session's 60-second lease.
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
 	mine := r.bound
 	b, err := r.resolve(ctx, "", mine.ExecutionID)
 	if err != nil {

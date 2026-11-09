@@ -281,6 +281,10 @@ Notifications and digests carry the `kind` only.
 
 A stdio MCP server normally lives exactly as long as its client session, on every client.
 `iris mcp` therefore sends a heartbeat every 20 s for its positively bound Execution generation.
+Before renewing a fallback Execution, the client may look for the hook's Execution and hand over
+to it (D6). That attempt has a five-second deadline, separate from the heartbeat's five seconds,
+so a stalled lookup or handover cannot prevent lease renewal. An outage that also prevents the
+heartbeat from reaching the hub can still cost the session its lease.
 It stops on stdin EOF, when its parent process is gone and on loss of binding, so that an orphan
 cannot keep claims alive. The parent is checked by identity, because on Windows a process keeps
 its parent pid after the parent dies (found by CI). An Execution with a recent heartbeat has a 60 s lease. With no shim or
