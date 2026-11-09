@@ -328,7 +328,9 @@ hub on the same database.
 
 The hub logs one diagnostic after each committed generation replacement, naming the prior
 Execution and generation, the replacement, the registration operation and source, and whether
-the prior Execution ended or lost its lease, recovery window or epoch. No payload, token, path,
+the prior Execution ended or lost its lease or recovery window. A lost Execution from an earlier
+epoch without recovery evidence is labelled `prior_lost`: its cause was not persisted, so the
+current epoch mismatch cannot identify it. No payload, token, path,
 client/session/host name or message content is logged by this diagnostic. Ordinary registration,
 resume, reattachment and heartbeats preserve the generation and stay quiet; rolled-back changes
 emit nothing. New hooks mark retries that discarded stale proof with `retry_generation`; this is

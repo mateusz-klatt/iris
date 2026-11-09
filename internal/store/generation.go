@@ -30,7 +30,9 @@ func (t *transaction) generationChanged(previous, current execution, r Request) 
 		if previous.Recovery.Valid {
 			reason = "recovery_expired"
 		} else if previous.Epoch != t.s.epoch {
-			reason = "epoch_lost"
+			// Loss may have committed before a later restart changed the epoch.
+			// Without a persisted cause, the mismatch cannot explain that loss.
+			reason = "prior_lost"
 		}
 	}
 	source := r.Source

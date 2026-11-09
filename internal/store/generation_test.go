@@ -26,7 +26,7 @@ func TestGenerationObserverNamesCommittedReplacementCauses(t *testing.T) {
 		{"ended", "hook", "hook", 0},
 		{"lease_expired", "mcp", "mcp", 9},
 		{"recovery_expired", "shim", "shim", 0},
-		{"epoch_lost", "watch", "watch", 0},
+		{"prior_lost", "watch", "watch", 0},
 		{"ended", "", "legacy", 0},
 		{"ended", "sensitive-source", "other", -1},
 	} {
@@ -83,7 +83,7 @@ func TestGenerationObserverNamesCommittedReplacementCauses(t *testing.T) {
 				}
 				defer func() { _ = s.Close() }()
 				clock.advance(121 * time.Second)
-			case "epoch_lost":
+			case "prior_lost":
 				if _, err := s.db.Exec("UPDATE Execution SET boot_epoch=boot_epoch-1 WHERE id=?", ex); err != nil {
 					t.Fatal(err)
 				}
@@ -133,6 +133,34 @@ func TestRolledBackGenerationNeverReachesObserver(t *testing.T) {
 	second, err := s.Call(ctx, "sessions", registration)
 	if err != nil || len(changes) != 1 || changes[0].Generation != 2 || changes[0].ExecutionID != second["execution_id"] {
 		t.Fatalf("committed retry: %v, %v, changes %+v", second, err, changes)
+	}
+}
+
+func TestGenerationLostBeforeRestartDoesNotBlameTheNewEpoch(t *testing.T) {
+	s, clock, file := testStore(t)
+	registration := Request{Client: "claude", Host: "host", SessionID: "session", Cwd: "/repo", Source: "watch"}
+	first := call(t, s, "sessions", registration)
+	clock.advance(61 * time.Second)
+	// Commit lease expiry in the original epoch before the hub restarts.
+	call(t, s, "status", Request{})
+	expectError(t, s, "validate", Request{ExecutionID: first["execution_id"].(string), Generation: 1}, "lost")
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s.lock = nil
+	reopened, err := Open(file, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reopened.Close() }()
+	var changes []GenerationChange
+	ctx := WithGenerationObserver(context.Background(), func(change GenerationChange) { changes = append(changes, change) })
+	second, err := reopened.Call(ctx, "sessions", registration)
+	if err != nil || second["generation"] != int64(2) || second["execution_id"] == first["execution_id"] {
+		t.Fatalf("replacement after restart: %v, err %v", second, err)
+	}
+	if len(changes) != 1 || changes[0].Reason != "prior_lost" || changes[0].PreviousExecutionID != first["execution_id"] || changes[0].ExecutionID != second["execution_id"] {
+		t.Fatalf("a later epoch mismatch misidentified an earlier lease loss: %+v", changes)
 	}
 }
 
