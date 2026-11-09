@@ -34,9 +34,9 @@ func TestFailuresAreGradedByStage(t *testing.T) {
 		{"one slow git status", overBudget(integrate.Claude, 1), StatusOK, "degraded: 1 shell reconciliation(s) ran past their budget", 0},
 		{"ten are still degraded", overBudget(integrate.Claude, slowLimit), StatusOK, "degraded: 10", 0},
 		{"more than ten are slow", overBudget(integrate.Claude, slowLimit+1), StatusSlow, "11 shell reconciliations ran past their budget (1s, or 300ms for a hub on this machine) in 24 h", 1},
-		{"a broken hook beside slow ones", overBudget(integrate.Claude, 3) + entry(integrate.Claude, "decode", "invalid JSON at byte 1"), StatusSilent, "recent hook failure: pre_tool decode: invalid JSON at byte 1", 1},
+		{"a broken hook beside slow ones", overBudget(integrate.Claude, 3) + entry(integrate.Claude, "decode", "invalid JSON at byte 1"), StatusSilent, "hook failed open in the last 24 h; edits may have gone unclaimed: pre_tool decode: invalid JSON at byte 1", 1},
 		{"a lost session without proof", entry(integrate.Claude, "shell session", "hub request failed: lost"), StatusSilent, "shell session: hub request failed: lost", 1},
-		{"a deadline outside a shell stage", entry(integrate.Claude, "touch", "shell reconciliation passed its deadline"), StatusSilent, "recent hook failure", 1},
+		{"a deadline outside a shell stage", entry(integrate.Claude, "touch", "shell reconciliation passed its deadline"), StatusSilent, "hook failed open in the last 24 h; edits may have gone unclaimed:", 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

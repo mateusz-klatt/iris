@@ -36,7 +36,7 @@ func TestRepeatedFailuresAreGroupedNewestFirst(t *testing.T) {
 	if err := applyFailures(&res, token, now); err != nil {
 		t.Fatal(err)
 	}
-	want := "recent hook failure: SessionStart session: connection refused ×2, last at 11:30 UTC; " +
+	want := "hook failed open in the last 24 h; edits may have gone unclaimed: SessionStart session: connection refused ×2, last at 11:30 UTC; " +
 		"PreToolUse shell session: dependency failure (*errors.errorString) ×150, last at 04:02 UTC; " +
 		"PreToolUse client: hook deadline exceeded, at 16:00 UTC; " +
 		"PreToolUse decode: hook deadline exceeded, at 15:59 UTC; " +

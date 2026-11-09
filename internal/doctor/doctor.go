@@ -424,7 +424,7 @@ func applyFailures(res *Result, tokenFile string, now time.Time) error {
 		switch {
 		case len(broken[row.Client]) > 0:
 			row.Status = StatusSilent
-			row.Detail = "recent hook failure: " + brokenText(broken[row.Client])
+			row.Detail = "hook failed open in the last 24 h; edits may have gone unclaimed: " + brokenText(broken[row.Client])
 		case n > slowLimit:
 			row.Status = StatusSlow
 			row.Detail = fmt.Sprintf("%d shell reconciliations ran past their budget (%s, or %s for a hub on this machine) in 24 h, so those commands' changes went unclaimed; git status or the hub is slow here, as on a big or cold worktree, a loaded machine or a slow network", n, hook.RemoteReconcileDeadline, hook.ReconcileDeadline)

@@ -186,8 +186,12 @@ What this cannot show offline is that the client loads the
 hook and fires it in a real session; `iris doctor --live` does that.
 
 `claude ok` can change later. A hook that failed open in the last 24 hours turns the row into `silent`,
-and `iris doctor` exits 1. The row names the failure, and `hook-failures.log` beside the token file
-keeps it. The row clears once the entry is more than 24 hours old.
+and `iris doctor` exits 1. Its detail says "hook failed open in the last 24 h; edits may have gone
+unclaimed", followed by the failure, count and time. This records a hook that ran and allowed work
+after a failure; it does not mean the client was never heard from or is down now. The warning can
+remain alongside a newer successful `last hook` time. Doctor cannot tell which edits went unclaimed
+from this log. `hook-failures.log` beside the token file keeps the failure, and the warning clears
+once the entry is more than 24 hours old.
 
 Doctor also prints a `case policy:` line when the repository you run it in is case-sensitive at the
 hub, which is only by an explicit opt-out (ADR 003), while this checkout folds case, as git records in

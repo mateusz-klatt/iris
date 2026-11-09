@@ -124,7 +124,12 @@ func TestRejectedTokenIsNotStored(t *testing.T) {
 
 func TestRecentHookFailureIsSilent(t *testing.T) {
 	var put []byte
+	const lastHook = "2026-11-06T12:59:00Z"
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/hooks/seen" {
+			_, _ = fmt.Fprintf(w, `{"clients":{"codex":%q}}`, lastHook)
+			return
+		}
 		if r.URL.Path == "/v1/ui/doctor" {
 			put, _ = io.ReadAll(r.Body)
 		}
@@ -153,7 +158,7 @@ func TestRecentHookFailureIsSilent(t *testing.T) {
 	}
 	for _, row := range res.Report.Clients {
 		if row.Client == integrate.Codex {
-			if row.Status != StatusSilent || !strings.Contains(row.Detail, "recent hook failure:") || !strings.Contains(row.Detail, "hub client is not configured") {
+			if row.Status != StatusSilent || !strings.Contains(row.Detail, "hook failed open in the last 24 h; edits may have gone unclaimed:") || !strings.Contains(row.Detail, "hub client is not configured") || row.LastHookAt != lastHook {
 				t.Fatalf("%+v", row)
 			}
 			continue
@@ -167,6 +172,9 @@ func TestRecentHookFailureIsSilent(t *testing.T) {
 	}
 	if !strings.Contains(string(put), `"status":"silent"`) {
 		t.Fatalf("stored report: %s", put)
+	}
+	if text := res.Format(); !strings.Contains(text, "hook failed open in the last 24 h; edits may have gone unclaimed:") || !strings.Contains(text, "last hook "+lastHook) {
+		t.Fatalf("recent failure and hook activity must both be shown:\n%s", text)
 	}
 }
 
