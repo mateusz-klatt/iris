@@ -6,6 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import { ApiError, type OutgoingMessage, type WatchFrame, type WatchOptions, type WatchStatus } from "./api";
 import { clearAccountSession, type AccountSession } from "./accountApi";
+import * as accountApi from "./accountApi";
 import { loadLocale } from "./i18n";
 import { uiLocalePreferenceKey } from "./preferences";
 import { server, sessionOverview } from "./test/server";
@@ -150,9 +151,7 @@ describe("named account lifecycle in the console", () => {
     installSession();
     let finish: () => void = () => {};
     const requested = vi.fn();
-    const responseFinished = new Promise<void>((resolve) => {
-      server.events.on("response:mocked", ({ request }) => { if (request.method === "PATCH") resolve(); });
-    });
+    const profile = vi.spyOn(accountApi, "updateProfile");
     server.use(http.patch("*/v1/ui/profile", async () => {
       requested();
       await new Promise<void>((resolve) => { finish = resolve; });
@@ -166,7 +165,7 @@ describe("named account lifecycle in the console", () => {
     await waitFor(() => expect(requested).toHaveBeenCalledOnce());
     act(() => window.dispatchEvent(new Event("iris:unauthorized")));
     expect(await screen.findByLabelText("Username")).toBeVisible();
-    await act(async () => { finish(); await responseFinished; });
+    await act(async () => { finish(); await profile.mock.results[0]!.value; });
     expect(screen.getByLabelText("Username")).toBeVisible();
     expect(screen.queryByRole("navigation")).toBeNull();
     expect(screen.queryByText("Iris person")).toBeNull();
