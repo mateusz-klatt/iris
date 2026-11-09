@@ -99,15 +99,49 @@ func TestANewMonitorHearsAboutMailStillWaiting(t *testing.T) {
 	sender, gen := h.session(t, "sender")
 	reader, _ := h.session(t, "reader")
 	name := h.agentName(t, reader)
+	watchUntilSaved := func(after int64) (string, int64) {
+		t.Helper()
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		out := &lines{}
+		var saved int64
+		r := &Runner{
+			Resolver: &binding.Resolver{Hub: &hubclient.Client{Config: testConfig{url: h.url}}, Client: "claude", Host: "host", Getenv: func(key string) string {
+				if key == "IRIS_EXECUTION" {
+					return reader
+				}
+				return ""
+			}},
+			Output:  out,
+			Backoff: time.Millisecond,
+			checkpointed: func(cursor int64) {
+				if cursor > after {
+					saved = cursor
+					cancel()
+				}
+			},
+		}
+		if err := r.Run(ctx); err != nil {
+			t.Fatal(err)
+		}
+		if ctx.Err() != context.Canceled {
+			t.Fatal("monitor never completed its cursor save")
+		}
+		return out.String(), saved
+	}
 	for _, key := range []string{"m1", "m2"} {
 		h.call(t, "messages", store.Request{ExecutionID: sender, Generation: gen, Key: key, To: []string{name}, Body: "waiting"})
 	}
-	if got := h.watchFor(t, reader, 300*time.Millisecond); got != "Iris: 2 new messages. Use the inbox tool.\n" {
+	got, saved := watchUntilSaved(0)
+	if got != "Iris: 2 new messages. Use the inbox tool.\n" {
 		t.Fatalf("%q", got)
 	}
-	// Reconnecting is not a new monitor, so the same mail is not announced twice.
-	if got := h.watchFor(t, reader, 300*time.Millisecond); got != "" {
-		t.Fatalf("announced twice: %q", got)
+	// The next completed save proves the reconnect processed new mail, without
+	// relying on a silence interval. The two older messages still need attention
+	// but their saved cursor keeps them from being announced again.
+	h.call(t, "messages", store.Request{ExecutionID: sender, Generation: gen, Key: "m3", To: []string{name}, Body: "new"})
+	if got, _ := watchUntilSaved(saved); got != "Iris: 1 new message. Use the inbox tool.\n" {
+		t.Fatalf("reconnect repeated waiting mail or missed new mail: %q", got)
 	}
 }
 
