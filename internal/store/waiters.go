@@ -13,14 +13,11 @@ import (
 // hour has moved on, and a wake then would be noise.
 const waitLimit = time.Hour
 
-// wait records that e was refused key, of kind exact or prefix, because of
-// the blocking claim. It lasts until that claim's expiry or waitLimit,
-// whichever comes first.
-func (t *transaction) wait(e execution, key, kind string, blocking claim) error {
+// wait records that e was refused key, of kind exact or prefix. It lasts
+// waitLimit whatever the blocking claim's expiry: that expiry is itself a
+// release, and a wait that ended with it could not hear about it.
+func (t *transaction) wait(e execution, key, kind string) error {
 	until := t.s.clock.Now().Add(waitLimit).UnixMilli()
-	if blocking.Expiry.Valid && blocking.Expiry.Int64 < until {
-		until = blocking.Expiry.Int64
-	}
 	_, err := t.exec(`INSERT INTO Waiter(execution_id,repository_id,path_key,kind,expires_ms) VALUES(?,?,?,?,?)
  ON CONFLICT(execution_id,path_key,kind) DO UPDATE SET expires_ms=MAX(Waiter.expires_ms,excluded.expires_ms)`, e.ID, e.Repo, key, kind, until)
 	return err
