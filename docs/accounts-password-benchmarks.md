@@ -40,8 +40,9 @@ The benchmark calls the credential package directly and never opens or locks a
 store. Creation includes random salt generation and encoding. These small samples
 show cost on this host, not latency guarantees or results for other architectures.
 Repeat on each supported deployment platform before enabling account mode. The
-admission bound does not replace the login attempt quotas and revocation checks
-scheduled for later ADR steps.
+admission bound supplements the login attempt quotas and transactional revocation
+checks added in ADR 014 step 3. Account routes remain gated pending the later UI
+and cutover steps.
 
 Sonar rule `go:S5344` recommends stronger scrypt parameters. ADR 014 accepts this
 profile only to verify existing hashes: raising the cost changes the derived key

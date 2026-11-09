@@ -314,9 +314,9 @@ reaches the operator through the web UI, not through a session.
 
 ## Operator API, for the web UI
 
-ADR 014 steps 1–2 provide storage and a staged authorization path, without
-registering account HTTP routes or changing the legacy authentication described
-here. `Store.CallConsole` accepts only a trusted typed console principal and
+ADR 014 steps 1–3 provide storage, authorization and gated authentication without
+enabling account HTTP routes in `iris serve` or changing the legacy authentication
+described here. `Store.CallConsole` accepts only a trusted typed console principal and
 rechecks its persisted session, enabled account/authentication version, operation
 and object scope within one transaction. Profile/access methods use the same
 checks; only operators list accounts or change access. Revision conflicts refuse
@@ -348,10 +348,58 @@ Old shared human messages have no named author. Human envelopes include
 `reply_address: "human:<current repository ID>"`; this shared address and
 `reply_to` never add recipients automatically. Per-account refresh revisions
 advance only for authorized changes, independently of the global event sequence.
-No named login/session, profile, access or scoped watch route is activated here;
-authentication defenses and socket admission/revocation precede cutover.
+No named login/session, profile, access or scoped watch route is activated here.
+The following account contract is implemented behind the private account gate
+and tested independently of the deployed legacy routes:
 
-Agents never use these routes. They accept the bearer token, or the session cookie of the web UI.
+- `GET /v1/ui/login` creates a short-lived single-use challenge bound to an
+  HttpOnly pre-login cookie. `POST /v1/ui/login` consumes it, requires exact
+  same-origin `Origin` and `X-Iris-CSRF`, and verifies bounded credentials.
+- A successful login issues a fresh opaque 256-bit host-only cookie; SQLite stores
+  only its domain-separated HMAC digest under the independent console key.
+  Sessions have a twelve-hour absolute lifetime across restarts and at most
+  sixteen active sessions per account. `GET /v1/ui/session` returns the current account and
+  session-bound CSRF token, never a password record or session secret.
+- Every account mutation requires exact origin and CSRF, including logout,
+  password/profile/access changes, sends, shared read/ACK and claim revocation.
+  The token belongs in the request header and UI memory, never a URL or browser
+  persistent storage. WebSocket upgrades require exact origin and a valid account
+  session.
+- `POST /v1/ui/logout` revokes the current session and clears its cookie. A
+  same-origin retry after expiry or revocation only clears the stale cookie.
+  Password changes verify the current password and revoke every session,
+  including the caller's. Password resets, disabling and role/grant changes also
+  revoke all sessions atomically; profile/locale changes preserve them.
+- Login attempts are limited before password work to five per normalized login
+  key in fifteen minutes and thirty aggregate per minute, with bounded expiring
+  digest-keyed buckets. Unknown names consume the same quotas. Across login,
+  change, reset and upgrade, at most two KDF jobs run concurrently with no queue.
+  Refusal returns `rate_limited` and `Retry-After`; the limits reset on restart.
+  Missing/disabled/unusable accounts and incorrect passwords return the same
+  `unauthorized` status and `Invalid username or password`, with bounded dummy
+  work after admission. Different accepted hash profiles can still differ in timing.
+- Old sessions become `unauthorized` after an `rw` downgrade. Reauthenticated
+  `ro` accounts can read but cannot send, reply or replay a cached send result.
+  Authorization runs inside the write transaction. Socket frame admission shares
+  the revocation boundary, and idle sockets wake on access/password changes;
+  an already admitted frame may be in transit.
+
+Owner-authenticated `iris admin console create <username>` and
+`iris admin console reset <username>` create or recover a named operator through
+`POST /v1/admin/console/accounts` and `POST /v1/admin/console/accounts/reset`,
+never a browser session. Host tokens cannot invoke those paths. Passwords are
+read exactly from bounded standard input, including any final newline, never
+command arguments, URLs or logs. Malformed UTF-8 and unpaired surrogate escapes
+in account JSON are rejected before decoding can replace credential characters.
+The commands require the gated owner endpoints, which remain inactive in ordinary
+`iris serve` until the later cutover. A failed
+console-key load refuses account authentication without stopping coordination.
+Account cookies use a separate namespace from legacy links/cookies, with
+HttpOnly, Path=/, SameSite=Strict and Secure outside literal-loopback HTTP.
+The ADR 002 exact public-origin/trusted-loopback-proxy requirements still apply.
+
+The currently active operator routes below accept a bearer token or the legacy
+web UI session cookie. Agents use their machine APIs.
 
 `iris ui` calls `POST /v1/ui/links` with the bearer token, gets
 `{"url":"http://127.0.0.1:7878/ui/login?code=..."}` and opens it. `GET /ui/login?code=...` works

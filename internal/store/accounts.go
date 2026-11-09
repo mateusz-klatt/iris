@@ -11,7 +11,7 @@ import (
 
 // ConsoleAccount is a storage record, not an authenticated principal. Its password
 // hash is available only to trusted hub code for work outside the store lock.
-// These storage methods have no HTTP, MCP or Store.Call dispatch in this stage.
+// Password lookup is a trusted hub primitive, never an account/profile projection.
 type ConsoleAccount struct {
 	ID                   string `json:"id"`
 	Username             string `json:"username"`
@@ -65,6 +65,10 @@ func consoleProfile(display, ui, correspondence string) error {
 }
 
 func (s *Store) CreateConsoleAccount(ctx context.Context, input ConsoleAccountInput) (ConsoleAccount, error) {
+	return s.createConsoleAccount(ctx, input, false)
+}
+
+func (s *Store) createConsoleAccount(ctx context.Context, input ConsoleAccountInput, owner bool) (ConsoleAccount, error) {
 	key, err := consoleauth.LoginKey(input.Username)
 	if err != nil {
 		return ConsoleAccount{}, fail("bad_request", "invalid console username")
@@ -97,7 +101,13 @@ func (s *Store) CreateConsoleAccount(ctx context.Context, input ConsoleAccountIn
 		}
 		t.notify = true
 		account, err = t.consoleAccount("id", accountID)
-		return err
+		if err != nil {
+			return err
+		}
+		if owner {
+			return t.consoleOwnerAction(accountID, "owner_provision")
+		}
+		return nil
 	})
 	return account, err
 }

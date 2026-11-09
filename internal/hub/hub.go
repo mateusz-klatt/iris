@@ -29,6 +29,7 @@ type ticket struct {
 	used       bool
 }
 type Hub struct {
+	console *consoleAuth
 	// These seams are the database and WebSocket I/O boundaries; production uses
 	// the real store and transport, and tests can report their actual failure modes.
 	call         func(context.Context, string, store.Request) (map[string]any, error)
@@ -98,6 +99,7 @@ func New(s *store.Store, token string, allowedHosts []string) *Hub {
 	})
 	h.operatorRoutes()
 	h.tokenRoutes()
+	h.ownerAccountsRoutes()
 	h.mux.HandleFunc("GET /v1/watch", h.watch)
 	h.mux.HandleFunc("POST /v1/wake-tickets", h.wakeTicket)
 	return h
@@ -158,6 +160,9 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			h.reject(w, r, "Origin is not allowed")
 			return
 		}
+	}
+	if h.serveConsole(w, r) {
+		return
 	}
 	if strings.HasPrefix(r.URL.Path, "/v1/") && r.URL.Path != "/v1/status" && r.URL.Path != "/v1/watch" && !h.authorized(r) && (!strings.HasPrefix(r.URL.Path, "/v1/ui/") || r.URL.Path == "/v1/ui/links" || !h.cookieAuthorized(r)) {
 		h.reject(w, r, h.refusal(r))

@@ -11,8 +11,8 @@ import (
 	"time"
 )
 
-// Synthetic sessions exercise authorization, not session issuance or login. The
-// latter remain gated behind the next ordered implementation step.
+// Synthetic sessions isolate the authorization matrix from credential verification.
+// Session issuance and login have separate lifecycle tests.
 func consoleTestPrincipal(t *testing.T, s *Store, a ConsoleAccount) Principal {
 	t.Helper()
 	digest := make([]byte, 32)
