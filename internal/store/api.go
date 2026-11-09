@@ -47,6 +47,9 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 			}
 		}
 		switch operation {
+		case "expire":
+			// The hub's shared maintenance wake has already run expiry above.
+			out = map[string]any{}
 		case "ui_receipts":
 			if t.console == nil {
 				return fail("forbidden", "a console account session is required")
@@ -194,9 +197,11 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 // pendingDeliveries counts mail that needs its recipient's attention: not fetched yet, or
 // fetched by an Execution that is gone. A fetched delivery stays unread until it is
 // acknowledged, but while its fetcher lives it needs no one's attention.
+const pendingDeliveriesSQL = `SELECT COUNT(*) FROM Delivery WHERE recipient_agent_id=? AND attention=1 AND id NOT IN (SELECT delivery_id FROM Ack)`
+
 func (t *transaction) pendingDeliveries(agent string) (int, error) {
 	var n int
-	err := t.row("SELECT COUNT(*) FROM Delivery WHERE recipient_agent_id=? AND attention=1 AND id NOT IN (SELECT delivery_id FROM Ack)", agent).Scan(&n)
+	err := t.row(pendingDeliveriesSQL, agent).Scan(&n)
 	return n, err
 }
 
@@ -232,8 +237,10 @@ func (t *transaction) monitorCursor(r Request) (map[string]any, error) {
 	return map[string]any{"cursor": cursor, "pending": pending}, nil
 }
 
+const agentEventsSQL = `SELECT seq,kind,kind='inbox_changed' AND object_id NOT IN (SELECT id FROM Delivery WHERE attention=1 AND id NOT IN (SELECT delivery_id FROM Ack)) FROM Event WHERE seq>? AND agent_id=? AND (execution_id IS NULL OR execution_id=?) ORDER BY seq LIMIT ?`
+
 func (t *transaction) events(r Request) (map[string]any, error) {
-	e, err := t.live(r.ExecutionID, 0)
+	e, err := t.live(r.ExecutionID, r.Generation)
 	if err != nil {
 		return nil, err
 	}
@@ -264,7 +271,7 @@ func (t *transaction) events(r Request) (map[string]any, error) {
 		out["snapshot"] = map[string]any{"claims": claims, "unread": unread}
 	} else {
 		// A delivery that is no longer waiting was already seen, so its event needs no attention.
-		rows, err := t.rows(`SELECT seq,kind,kind='inbox_changed' AND object_id NOT IN (SELECT id FROM Delivery WHERE attention=1 AND id NOT IN (SELECT delivery_id FROM Ack)) FROM Event WHERE seq>? AND agent_id=? AND (execution_id IS NULL OR execution_id=?) ORDER BY seq LIMIT ?`, r.After, e.AgentID, e.ID, boundedLimit(r.Limit, 100, 1000))
+		rows, err := t.rows(agentEventsSQL, r.After, e.AgentID, e.ID, boundedLimit(r.Limit, 100, 1000))
 		if err != nil {
 			return nil, err
 		}
@@ -290,7 +297,7 @@ func (t *transaction) events(r Request) (map[string]any, error) {
 	if r.ConsumerID != "" {
 		// Namespace consumers by Execution, so names do not allow one stream to move another.
 		consumer := fmt.Sprintf("%s:%s", e.ID, r.ConsumerID)
-		if _, err = t.exec("INSERT INTO Cursor VALUES(?,?,?) ON CONFLICT(consumer_id) DO UPDATE SET seq=MAX(Cursor.seq,excluded.seq)", consumer, e.ID, r.After); err != nil {
+		if _, err = t.execQuiet("INSERT INTO Cursor VALUES(?,?,?) ON CONFLICT(consumer_id) DO UPDATE SET seq=excluded.seq WHERE excluded.seq>Cursor.seq", consumer, e.ID, r.After); err != nil {
 			return nil, err
 		}
 	}

@@ -77,7 +77,7 @@ func (s *Store) AuthenticateToken(ctx context.Context, token string) (string, er
 		if err != nil {
 			return err
 		}
-		_, err = t.exec("UPDATE HostToken SET last_used_ms=?,requests=requests+1 WHERE name=?", s.clock.Now().UnixMilli(), name)
+		_, err = t.execQuiet("UPDATE HostToken SET last_used_ms=?,requests=requests+1 WHERE name=?", s.clock.Now().UnixMilli(), name)
 		return err
 	})
 	return name, err

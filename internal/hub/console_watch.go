@@ -22,57 +22,61 @@ func (h *Hub) consoleWatch(w http.ResponseWriter, r *http.Request, p store.Princ
 	defer func() { _ = conn.CloseNow() }()
 	ctx, cancel := context.WithCancel(conn.CloseRead(r.Context()))
 	defer cancel()
-	// A separate revocation observer closes even a socket whose network write is
-	// stalled. Store changes wake it for logout/access/password changes without a
-	// repository event; the ticker also enforces absolute session expiry.
+	wakes, release := h.subscribeStreams()
+	defer release()
+	// One observer owns admission and revocation, including while the network
+	// writer is stalled. The latest scoped revision is enough for a UI refresh;
+	// it is enqueued only after its admission transaction has committed.
+	frames := make(chan map[string]any, 1)
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		ticker := time.NewTicker(time.Second)
-		defer ticker.Stop()
+		previous := int64(-1)
 		for {
-			changes := h.store.Changes()
-			if _, err := h.store.ConsoleSessionAccount(ctx, p.SessionDigest); err != nil {
+			changes := wakes.Changes()
+			var admitted map[string]any
+			// The callback copies data only. A failed COMMIT must not queue it.
+			err := h.store.AdmitConsoleFrame(ctx, p, func(frame map[string]any) error { admitted = frame; return nil })
+			if err != nil {
 				_ = conn.CloseNow()
 				cancel()
 				return
+			}
+			cursor := admitted["cursor"].(int64)
+			if cursor != previous {
+				select {
+				case frames <- admitted:
+				default:
+					// Coalesce queued UI revisions, never Execution event pages.
+					select {
+					case <-frames:
+					default:
+					}
+					// This observer is the only producer. Either it removed the
+					// old frame or the writer already did, so this cannot block.
+					frames <- admitted
+				}
+				previous = cursor
 			}
 			select {
 			case <-ctx.Done():
 				return
 			case <-changes:
-			case <-ticker.C:
 			}
 		}
 	}()
 	defer func() { cancel(); <-done }()
-	ticks := time.NewTicker(time.Second)
-	defer ticks.Stop()
 	pings := time.NewTicker(h.pingInterval())
 	defer pings.Stop()
-	previous := int64(-1)
 	for {
-		changes := h.store.Changes()
-		var admitted map[string]any
-		// Admission is serialized with revocation. The callback does no network I/O;
-		// only after its transaction commits may an admitted frame enter the socket.
-		err = h.store.AdmitConsoleFrame(ctx, p, func(frame map[string]any) error { admitted = frame; return nil })
-		if err != nil {
+		select {
+		case <-ctx.Done():
 			return
-		}
-		cursor := admitted["cursor"].(int64)
-		if cursor != previous {
+		case admitted := <-frames:
 			raw, _ := json.Marshal(admitted)
 			if h.writeSocket(ctx, conn, raw) != nil {
 				return
 			}
-			previous = cursor
-		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-changes:
-		case <-ticks.C:
 		case <-pings.C:
 			if !h.ping(ctx, conn) {
 				return

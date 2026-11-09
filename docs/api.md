@@ -275,6 +275,11 @@ on the hub. Missing build metadata is reported as unknown.
 {"stream":"<uuid>","events":[{"cursor":124,"kind":"inbox_changed"}],"high_water":124}
 ```
 
+Persisted consumer cursors advance monotonically and an unchanged cursor is not rewritten.
+Wake-ticket streams check the ticket's generation in the same transaction as each event
+snapshot. The bearer-authenticated HTTP event read retains its unqualified-generation
+behavior.
+
 If `after` is older than the log keeps, it returns `{"reset":true,"high_water":200,...}`, and the
 client must take a snapshot. The response includes `snapshot` with live `claims` and
 `unread` count captured in the same transaction as `high_water`. Optional `stream` detects

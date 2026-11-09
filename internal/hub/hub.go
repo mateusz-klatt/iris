@@ -48,21 +48,24 @@ type Hub struct {
 	// start is logged; authentication failures are logged either way.
 	AccessLog bool
 	// Log receives the hub's log lines; nil uses the standard logger.
-	Log       *log.Logger
-	usedMu    sync.Mutex
-	used      map[string]bool
-	publicURL *url.URL
-	monitors  map[string]bool
-	ui        http.Handler
-	links     map[string]loginGrant
-	cookies   map[string]loginGrant
-	store     *store.Store
-	token     string
-	hosts     map[string]bool
-	mux       *http.ServeMux
-	mu        sync.Mutex
-	tickets   map[string]ticket
-	now       func() time.Time
+	Log           *log.Logger
+	usedMu        sync.Mutex
+	used          map[string]bool
+	publicURL     *url.URL
+	monitors      map[string]bool
+	ui            http.Handler
+	links         map[string]loginGrant
+	cookies       map[string]loginGrant
+	store         *store.Store
+	token         string
+	hosts         map[string]bool
+	mux           *http.ServeMux
+	mu            sync.Mutex
+	tickets       map[string]ticket
+	now           func() time.Time
+	streamMu      sync.Mutex
+	streams       *streamWakes
+	ticketChanged chan struct{}
 }
 
 func New(s *store.Store, token string, allowedHosts []string) *Hub {
@@ -71,6 +74,7 @@ func New(s *store.Store, token string, allowedHosts []string) *Hub {
 			return c.Write(ctx, websocket.MessageText, raw)
 		},
 		pingSocket: func(ctx context.Context, c *websocket.Conn) error { return c.Ping(ctx) }, rates: map[string]window{}, socketCounts: map[string]int{}, sockets: map[string]map[*websocket.Conn]bool{}, monitors: map[string]bool{}, links: map[string]loginGrant{}, cookies: map[string]loginGrant{}, store: s, token: token, hosts: map[string]bool{}, mux: http.NewServeMux(), tickets: map[string]ticket{}, used: map[string]bool{}, now: time.Now}
+	h.ticketChanged = make(chan struct{})
 	for _, host := range allowedHosts {
 		h.hosts[strings.ToLower(host)] = true
 	}
@@ -318,14 +322,20 @@ func (h *Hub) wakeTicket(w http.ResponseWriter, r *http.Request) {
 	key := base64.RawURLEncoding.EncodeToString(raw[:])
 	expires := h.now().Add(2 * time.Minute)
 	h.mu.Lock()
+	rotated := false
 	for k, t := range h.tickets {
 		// A used ticket tracks its socket until disconnect or rotation. Its expiry
 		// limits the handshake only, so another Execution's arming must retain it.
 		if t.execution == req.ExecutionID || (!t.used && !t.expires.After(h.now())) {
 			delete(h.tickets, k)
+			rotated = true
 		}
 	}
 	h.tickets[key] = ticket{principal: requestPrincipal(r), execution: req.ExecutionID, generation: req.Generation, expires: expires}
+	if rotated {
+		close(h.ticketChanged)
+		h.ticketChanged = make(chan struct{})
+	}
 	h.mu.Unlock()
 	scheme := "ws"
 	if r.TLS != nil {
@@ -437,23 +447,14 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 	}
 	defer h.untrackSocket(conn, p)
 	ctx := conn.CloseRead(r.Context())
+	wakes, release := h.subscribeStreams()
+	defer release()
 	pings := time.NewTicker(h.pingInterval())
 	defer pings.Stop()
-	ticker := time.NewTicker(100 * time.Millisecond)
-	defer ticker.Stop()
 	for {
-		changes := h.store.Changes()
-		if ticketKey != "" {
-			h.mu.Lock()
-			_, exists := h.tickets[ticketKey]
-			h.mu.Unlock()
-			if !exists {
-				_ = conn.Close(websocket.StatusPolicyViolation, "wake ticket rotated or revoked")
-				return
-			}
-		}
-		if _, err = h.call(ctx, "validate", req); err != nil {
-			_ = conn.Close(websocket.StatusPolicyViolation, "Execution lease lost")
+		changes, tickets := wakes.Changes(), h.ticketChanges()
+		if !h.ticketPresent(ticketKey) {
+			_ = conn.Close(websocket.StatusPolicyViolation, "wake ticket rotated or revoked")
 			return
 		}
 		pageReq := req
@@ -500,17 +501,30 @@ func (h *Hub) watch(w http.ResponseWriter, r *http.Request) {
 			}
 			if len(events) < boundedPageSize {
 				req.After = high
+			} else {
+				// A full page can leave a backlog even without another commit.
+				// Drain it now rather than relying on a timer or transport ping.
+				continue
 			}
 
 		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-changes:
-		case <-ticker.C:
-		case <-pings.C:
-			if !h.ping(ctx, conn) {
+		waitingForChange := true
+		for waitingForChange {
+			select {
+			case <-ctx.Done():
 				return
+			case <-changes:
+				waitingForChange = false
+			case <-tickets:
+				tickets = h.ticketChanges()
+				if !h.ticketPresent(ticketKey) {
+					_ = conn.Close(websocket.StatusPolicyViolation, "wake ticket rotated or revoked")
+					return
+				}
+			case <-pings.C:
+				if !h.ping(ctx, conn) {
+					return
+				}
 			}
 		}
 	}

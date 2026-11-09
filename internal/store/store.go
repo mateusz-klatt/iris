@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	_ "modernc.org/sqlite"
@@ -80,6 +81,9 @@ var consoleOwnerActionsSchema string
 //go:embed migrations/020.sql
 var consoleAssignmentImportSchema string
 
+//go:embed migrations/021.sql
+var idleExpirySchema string
+
 // Clock separates lease ticks from persisted wall-clock expiries. Tick must be monotonic
 // within a Store's lifetime; client timestamps never participate in lease decisions.
 type Clock interface {
@@ -123,6 +127,8 @@ type Store struct {
 	epoch   int64
 	stream  string
 	changed chan struct{}
+	// transactions is process-local diagnostic state, never part of a durable cursor.
+	transactions atomic.Uint64
 	// cross counts cross-repository recipient attempts per credential, per minute. It is
 	// guarded by mu, which every transaction holds, and lost on restart, which is fine
 	// for a rate.
@@ -143,6 +149,20 @@ type transaction struct {
 }
 
 func (t *transaction) exec(q string, a ...any) (sql.Result, error) {
+	result, err := t.execQuiet(q, a...)
+	if err == nil {
+		// SQLite reports actual affected rows. Publish only after the surrounding
+		// transaction commits, including writes whose scoped revision is trigger-driven.
+		if n, _ := result.RowsAffected(); n > 0 {
+			t.notify = true
+		}
+	}
+	return result, err
+}
+
+// execQuiet persists bookkeeping that cannot change a stream's projection.
+// Consumer cursors and bearer-use counters must not create observer feedback.
+func (t *transaction) execQuiet(q string, a ...any) (sql.Result, error) {
 	return t.conn.ExecContext(t.ctx, q, a...)
 }
 func (t *transaction) row(q string, a ...any) *sql.Row { return t.conn.QueryRowContext(t.ctx, q, a...) }
@@ -323,6 +343,11 @@ func openDatabase(filename string, clock Clock, driverName string) (*Store, erro
 				return err
 			}
 		}
+		if version < 21 {
+			if _, err := t.exec(idleExpirySchema); err != nil {
+				return err
+			}
+		}
 		if err := t.fillMissingKeys(); err != nil {
 			return err
 		}
@@ -358,6 +383,11 @@ func (s *Store) Close() error {
 	return err
 }
 func (s *Store) Changes() <-chan struct{} { s.mu.Lock(); defer s.mu.Unlock(); return s.changed }
+
+// TransactionCount reports how many transactions successfully began in this Store.
+// It includes transactions that later rolled back and resets when the Store is reopened.
+func (s *Store) TransactionCount() uint64 { return s.transactions.Load() }
+
 func (s *Store) transact(ctx context.Context, f func(*transaction) error) error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -372,6 +402,7 @@ func (s *Store) transact(ctx context.Context, f func(*transaction) error) error 
 	if _, err = c.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
 		return err
 	}
+	s.transactions.Add(1)
 	tx := &transaction{conn: c, ctx: ctx, s: s}
 	if err = f(tx); err != nil {
 		return err
@@ -385,23 +416,45 @@ func (s *Store) transact(ctx context.Context, f func(*transaction) error) error 
 	}
 	return nil
 }
+
+const expireExecutionsSQL = `UPDATE Execution SET state='lost' WHERE state='active' AND
+ ((recovery_deadline IS NOT NULL AND recovery_deadline<=?) OR
+ (recovery_deadline IS NULL AND (boot_epoch<>? OR deadline_tick_ms<=?))) RETURNING id`
+
+const expiredClaimsSQL = `SELECT c.fence,c.repository_id FROM Claim c JOIN Execution e ON e.id=c.execution_id
+ WHERE c.revoked_ms IS NULL AND (e.state<>'active' OR (c.expires_ms IS NOT NULL AND c.expires_ms<=?))`
+
+const missedReceiptsSQL = `SELECT id,recipient_agent_id FROM Delivery WHERE receipt_due_ms IS NOT NULL AND receipt_due_ms<=? AND id NOT IN (SELECT delivery_id FROM Ack)`
+
+const requeueExecutionSQL = `SELECT id,recipient_agent_id FROM Delivery WHERE execution_id=? AND NOT EXISTS (SELECT 1 FROM Ack WHERE delivery_id=Delivery.id)`
+
+const expireConsoleSessionsSQL = `DELETE FROM ConsoleSession WHERE expires_ms<=?`
+
 func (t *transaction) expire() error {
 	now, tick := t.s.clock.Now().UnixMilli(), t.s.clock.Tick()
-	res, err := t.exec(`UPDATE Execution SET state='lost' WHERE state='active' AND
- ((recovery_deadline IS NOT NULL AND recovery_deadline<=?) OR
- (recovery_deadline IS NULL AND (boot_epoch<>? OR deadline_tick_ms<=?)))`, now, t.s.epoch, tick)
+	rows, err := t.rows(expireExecutionsSQL, now, t.s.epoch, tick)
+	if err != nil {
+		return err
+	}
+	var lost []string
+	for rows.Next() {
+		var ex string
+		rows.Scan(&ex)
+		lost = append(lost, ex)
+	}
+	err = rows.Err()
+	_ = rows.Close()
 	if err != nil {
 		return err
 	}
 	// A lost session changes what the console shows even when it held no claims, so it moves
 	// the event cursor the console refreshes on. Its claims, if any, are announced below.
-	if n, _ := res.RowsAffected(); n > 0 {
+	if len(lost) > 0 {
 		if err = t.event("", "", "changed", ""); err != nil {
 			return err
 		}
 	}
-	rows, err := t.rows(`SELECT c.fence,c.repository_id FROM Claim c JOIN Execution e ON e.id=c.execution_id
- WHERE c.revoked_ms IS NULL AND (e.state<>'active' OR (c.expires_ms IS NOT NULL AND c.expires_ms<=?))`, now)
+	rows, err = t.rows(expiredClaimsSQL, now)
 	if err != nil {
 		return err
 	}
@@ -428,10 +481,18 @@ func (t *transaction) expire() error {
 			return err
 		}
 	}
-	if err = t.requeue(); err != nil {
+	// Requeue only the Executions that changed state in this transaction. A scan
+	// of every ended Execution would grow with history on every maintenance wake.
+	for _, ex := range lost {
+		if err = t.requeue(ex); err != nil {
+			return err
+		}
+	}
+	if err = t.wakeMissedReceipts(now); err != nil {
 		return err
 	}
-	return t.wakeMissedReceipts(now)
+	_, err = t.exec(expireConsoleSessionsSQL, now)
+	return err
 }
 
 // wakeMissedReceipts wakes, once, each delivery whose fetch asked for a receipt that has not come
@@ -439,7 +500,7 @@ func (t *transaction) expire() error {
 // A delivery acked or fetched again since is not woken for the older fetch: an ack settles it,
 // and a newer fetch has set a new due time.
 func (t *transaction) wakeMissedReceipts(now int64) error {
-	rows, err := t.rows("SELECT id,recipient_agent_id FROM Delivery WHERE receipt_due_ms IS NOT NULL AND receipt_due_ms<=? AND id NOT IN (SELECT delivery_id FROM Ack)", now)
+	rows, err := t.rows(missedReceiptsSQL, now)
 	if err != nil {
 		return err
 	}
@@ -466,11 +527,11 @@ func (t *transaction) wakeMissedReceipts(now int64) error {
 	return nil
 }
 
-// requeue frees the unacknowledged deliveries of Executions that are no longer active, and
+// requeue frees the unacknowledged deliveries of an Execution that just ended or was lost, and
 // wakes their recipient: the mail was fetched, but whoever fetched it is gone, so nobody may
 // have read it. Each is announced once, because a freed delivery no longer matches.
-func (t *transaction) requeue() error {
-	rows, err := t.rows(`SELECT id,recipient_agent_id FROM Delivery WHERE execution_id IN (SELECT id FROM Execution WHERE state<>'active') AND id NOT IN (SELECT delivery_id FROM Ack)`)
+func (t *transaction) requeue(ex string) error {
+	rows, err := t.rows(requeueExecutionSQL, ex)
 	if err != nil {
 		return err
 	}

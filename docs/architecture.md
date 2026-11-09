@@ -238,6 +238,22 @@ frames. A frame says only that something changed, never what:
 {"stream":"<uuid>","cursor":123,"kind":"inbox_changed"}
 ```
 
+Streams observe committed-change hints rather than polling (ADR 016). One hub worker
+coalesces commit bursts within 10 ms of their first change and performs at most one expiry
+sweep per second while streams exist. A no-op sweep does not wake the sockets. Each
+observation validates and reads in one transaction; a full event page drains immediately,
+and transport pings perform no store query. Subscribe before observing state so a commit
+between a read and its wait cannot be lost. Durable cursors and reset snapshots remain
+authoritative; hints are neither acknowledgements nor message contents.
+
+Lease, claim, receipt and absolute console-session deadlines use that shared sweep.
+Their observation can wait for its interval, coalescing, scheduling and store contention;
+this is not a hard real-time guarantee. Ticket rotation signals affected sockets in memory.
+A named console keeps observing revocation while a network write is stalled and queues a
+frame only after admission commits. Already admitted frames can be in transit. Steady
+expiry work uses live-row indexes; a real loss still visits deliveries assigned to that
+Execution, and claim release retains its existing repository fanout.
+
 Each client gets the strongest tier it has:
 
 | Tier | Mechanism | Clients |

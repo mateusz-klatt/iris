@@ -47,6 +47,7 @@ func (s *Store) importRead(ctx context.Context, f func(*transaction) error) erro
 	if _, err = c.ExecContext(ctx, "BEGIN"); err != nil {
 		return err
 	}
+	s.transactions.Add(1)
 	return f(&transaction{conn: c, ctx: ctx, s: s})
 }
 

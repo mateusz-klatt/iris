@@ -107,7 +107,7 @@ func TestConsoleAssignmentMigrationFromPopulatedVersion19PreservesHistory(t *tes
 	}
 	var nextStream string
 	var nextEpoch, assignments int64
-	if err = reopened.db.QueryRow("SELECT stream_id,boot_epoch,(SELECT user_version FROM pragma_user_version),(SELECT COUNT(*) FROM ConsoleAssignmentImport) FROM Meta").Scan(&nextStream, &nextEpoch, &version, &assignments); err != nil || version != 20 || assignments != 0 || nextStream != stream || nextEpoch != epoch+1 {
+	if err = reopened.db.QueryRow("SELECT stream_id,boot_epoch,(SELECT user_version FROM pragma_user_version),(SELECT COUNT(*) FROM ConsoleAssignmentImport) FROM Meta").Scan(&nextStream, &nextEpoch, &version, &assignments); err != nil || version != 21 || assignments != 0 || nextStream != stream || nextEpoch != epoch+1 {
 		t.Fatal("upgrade lost stream identity, boot recovery or the new empty ledger")
 	}
 	for execution, want := range map[string]int64{first.ExecutionID: clock.Now().Add(120 * time.Second).UnixMilli(), second.ExecutionID: priorRecovery} {

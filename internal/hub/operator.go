@@ -136,13 +136,13 @@ func (h *Hub) uiWatch(w http.ResponseWriter, r *http.Request) {
 	}
 	defer h.untrackSocket(conn, p)
 	ctx := conn.CloseRead(r.Context())
+	wakes, release := h.subscribeStreams()
+	defer release()
 	pings := time.NewTicker(h.pingInterval())
 	defer pings.Stop()
-	ticker := time.NewTicker(time.Second)
-	defer ticker.Stop()
 	var previous int64 = -1
 	for {
-		changes := h.store.Changes()
+		changes := wakes.Changes()
 		result, err := h.call(ctx, "ui_events", store.Request{})
 		if err != nil {
 			return
@@ -155,14 +155,17 @@ func (h *Hub) uiWatch(w http.ResponseWriter, r *http.Request) {
 			}
 			previous = cursor
 		}
-		select {
-		case <-ctx.Done():
-			return
-		case <-changes:
-		case <-ticker.C:
-		case <-pings.C:
-			if !h.ping(ctx, conn) {
+		waiting := true
+		for waiting {
+			select {
+			case <-ctx.Done():
 				return
+			case <-changes:
+				waiting = false
+			case <-pings.C:
+				if !h.ping(ctx, conn) {
+					return
+				}
 			}
 		}
 	}
