@@ -1,8 +1,58 @@
 package mcpserver
 
 import (
+	"context"
+	"encoding/json"
+	"reflect"
+	"strings"
 	"testing"
 )
+
+func TestReceiptDescriptionExplainsCurrentReachabilityAndItsLimits(t *testing.T) {
+	session := connect(t, &fakeHub{})
+	list, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range list.Tools {
+		if tool.Name != "receipts" {
+			continue
+		}
+		for _, meaning := range []string{
+			"pending or inflight",
+			"unreachable=true",
+			"no active Execution now",
+			"cannot predict whether a reply will come",
+			"mail stays queued",
+			"if the agent returns",
+			"Acked or handled deliveries never show it",
+			"Human recipients never show it",
+			"console can read their mail without a live Execution",
+		} {
+			if !strings.Contains(tool.Description, meaning) {
+				t.Fatalf("receipts description does not explain %q: %s", meaning, tool.Description)
+			}
+		}
+		return
+	}
+	t.Fatal("receipts tool was not listed")
+}
+
+func TestReceiptsPreserveEachRecipientsReachabilityWithoutChangingStates(t *testing.T) {
+	reply := `{"message_id":"ms_1","recipients":[{"recipient":"lost","repository_id":"rp","state":"pending","at":null,"unreachable":true},{"recipient":"gone","repository_id":"rp","state":"inflight","at":null,"unreachable":true},{"recipient":"live","repository_id":"rp","state":"pending","at":null},{"recipient":"accepted","repository_id":"rp","state":"acked","at":"2027-01-15T08:00:01Z"},{"recipient":"finished","repository_id":"rp","state":"handled","at":"2027-01-15T08:01:01Z"}]}`
+	f := &fakeHub{reply: reply}
+	out, failed := use(t, connect(t, f), "receipts", map[string]any{"message_id": "ms_1"})
+	var want map[string]any
+	if err := json.Unmarshal([]byte(reply), &want); err != nil {
+		t.Fatal(err)
+	}
+	if failed || !reflect.DeepEqual(out, want) {
+		t.Fatalf("receipt result changed: got %v (failed=%v), want %v", out, failed, want)
+	}
+	if got := f.last(t); got.method != "GET" || got.path != "/v1/messages/ms_1/status?execution_id=ex" {
+		t.Fatalf("receipt request: %s %s", got.method, got.path)
+	}
+}
 
 // Once the MCP server has the fetch's response it posts the receipt, naming each delivery at
 // the attempt the fetch gave it, so the hub quiets the mail; a fetch that returned nothing

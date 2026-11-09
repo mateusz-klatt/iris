@@ -52,6 +52,18 @@ acked), `acked`, or `handled`. These are the names `DeliveryState` already uses,
 `inflight`: `Delivery` stores no fetch or free time, and this decision adds none. No subject, no
 body and no recipient Execution is returned.
 
+An undelivered (`pending` or `inflight`) non-human recipient also carries `"unreachable":true` when
+it has no active Execution: its Executions are lost, ended, or absent. This is the delivery-problems
+query's definition of unreachable. The field is omitted for reachable recipients and for every
+`acked` or `handled` delivery. Human recipients also omit it because the console can read their
+mail without a live Execution. It is computed when asked, not stored as a delivery state, so the
+existing states and `at` keep their meanings and older clients can ignore the addition.
+
+Unreachable describes now, not whether someone will answer. An active Execution cannot promise
+a reply either. Mail stays queued for a returning agent; a new active Execution removes the
+indication and can fetch the same delivery. Reading a receipt neither acknowledges nor discards
+mail. The MCP tool description and API documentation state these limits.
+
 After a hub restart, a recovering Execution's deliveries stay `inflight` for up to the 120 s
 recovery window. They become `pending` if it is lost (A10). A sender polling during a deploy can
 see that, and it is not a fault.
@@ -63,8 +75,9 @@ which ids exist.
 
 **4. No new visibility across repositories.** The status lists only the recipients of the sender's
 own message, which the sender chose and which `send` already returned to it as deliveries. It does
-not reveal any other message, and nothing about a recipient beyond its name, its repository and the
-state of this one delivery. This stays within ADR 004's visibility rule: the message is visible in
+not reveal any other message, and nothing about a recipient beyond its name, its repository, the
+state of this one delivery and whether it is currently unreachable while undelivered. This stays
+within ADR 004's visibility rule: the message is visible in
 the sender's repository because its sender is there. A `repo:` address appears as the contact it resolved
 to, which `send` already returned to the sender.
 
