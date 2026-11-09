@@ -32,8 +32,9 @@ func (in Invocation) start(ctx context.Context) (*exec.Cmd, error) {
 			comspec = "cmd.exe"
 		}
 		cmd := exec.CommandContext(ctx, comspec)
-		// Clients append configured command text without a second quoting pass.
-		cmd.SysProcAttr = &syscall.SysProcAttr{CmdLine: quoteCmdExe(comspec) + " /d /c " + in.Shell}
+		// /s removes the outer command quotes, preserving a quoted executable
+		// path even when it contains no whitespace, as with installed=true.
+		cmd.SysProcAttr = &syscall.SysProcAttr{CmdLine: quoteCmdExe(comspec) + ` /d /s /c "` + in.Shell + `"`}
 		return cmd, nil
 	default:
 		return nil, errors.New("unknown hook shell")

@@ -4,13 +4,140 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/mateusz-klatt/iris/internal/buildinfo"
 	"github.com/mateusz-klatt/iris/internal/doctor"
+	"github.com/mateusz-klatt/iris/internal/integrate"
 )
+
+// All client binaries and the hub are local stand-ins. Only the injected runner
+// supplies live results, so these command tests cannot start a billable session.
+func TestDoctorLiveExitReflectsLiveResults(t *testing.T) {
+	binDir := t.TempDir()
+	for _, name := range []string{"iris", "grok", "codex"} {
+		if _, err := integrate.PlaceFake(binDir, name); err != nil {
+			t.Fatal(err)
+		}
+	}
+	home := t.TempDir()
+	for _, key := range []string{"HOME", "USERPROFILE", "AppData", "LOCALAPPDATA", "XDG_CONFIG_HOME", "XDG_STATE_HOME"} {
+		t.Setenv(key, home)
+	}
+	for _, key := range []string{"CODEX_HOME", "COPILOT_HOME", "KIMI_CODE_HOME", "IRIS_STATE_DIR"} {
+		t.Setenv(key, filepath.Join(home, key))
+	}
+	t.Setenv("GROK_HOME", filepath.Join(home, ".grok"))
+	t.Setenv("PATH", binDir)
+	t.Setenv("IRIS_FAKE_STDOUT", "{}")
+	t.Setenv("IRIS_FAKE_EXIT", "0")
+	t.Setenv("IRIS_FAKE_NO_RECEIPT", "0")
+	grok, _ := integrate.ByName(integrate.Grok)
+	if err := grok.Install(integrate.Layout{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	codex, _ := integrate.ByName(integrate.Codex)
+	if err := codex.Install(integrate.Layout{}, nil); err != nil {
+		t.Fatal(err)
+	}
+	token := filepath.Join(home, "hub.token")
+	if err := os.WriteFile(token, []byte("test-token"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("IRIS_TOKEN_FILE", token)
+	for _, tc := range []struct {
+		name, client                  string
+		live, grades, codexSlow, pass bool
+		hubUp, tokenOK                bool
+		want                          int
+	}{
+		{name: "selected live pass despite unrelated grades", live: true, client: integrate.Grok, grades: true, pass: true, hubUp: true, tokenOK: true},
+		{name: "all selected live clients pass despite grades", live: true, grades: true, pass: true, hubUp: true, tokenOK: true},
+		{name: "explicit needs human with slow history warns of original step", live: true, client: integrate.Codex, codexSlow: true, pass: true, hubUp: true, tokenOK: true},
+		{name: "explicit needs human with silent history warns of original step", live: true, client: integrate.Codex, grades: true, codexSlow: true, pass: true, hubUp: true, tokenOK: true},
+		{name: "live failure with healthy offline grades", live: true, client: integrate.Grok, hubUp: true, tokenOK: true, want: 1},
+		{name: "hub failure despite live pass", live: true, client: integrate.Grok, pass: true, tokenOK: true, want: 1},
+		{name: "token failure despite live pass", live: true, client: integrate.Grok, pass: true, hubUp: true, want: 1},
+		{name: "plain doctor still fails unrelated grades", grades: true, hubUp: true, tokenOK: true, want: 1},
+		{name: "plain doctor still passes healthy grades", hubUp: true, tokenOK: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var log string
+			if tc.grades {
+				when := time.Now().UTC().Format(time.RFC3339)
+				log = fmt.Sprintf(`{"time":%q,"client":"codex","event":"PreToolUse","stage":"touch","error":"test failure"}`+"\n", when)
+				log += strings.Repeat(fmt.Sprintf(`{"time":%q,"client":"copilot","event":"PostToolUse","stage":"shell status","error":"shell reconciliation passed its deadline"}`+"\n", when), 11)
+			}
+			if tc.codexSlow {
+				log += strings.Repeat(fmt.Sprintf(`{"time":%q,"client":"codex","event":"PostToolUse","stage":"shell status","error":"shell reconciliation passed its deadline"}`+"\n", time.Now().UTC().Format(time.RFC3339)), 11)
+			}
+			if err := os.WriteFile(filepath.Join(home, "hook-failures.log"), []byte(log), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch {
+				case !tc.hubUp:
+					w.WriteHeader(http.StatusServiceUnavailable)
+				case r.URL.Path == "/v1/agents" && !tc.tokenOK:
+					w.WriteHeader(http.StatusUnauthorized)
+				default:
+					_, _ = w.Write([]byte(`{}`))
+				}
+			}))
+			defer srv.Close()
+			args := []string{"--hub-url", srv.URL}
+			if tc.live {
+				args = append(args, "--live", "--yes")
+			}
+			if tc.client != "" {
+				args = append(args, "--client", tc.client)
+			}
+			ran := 0
+			live := func(_ context.Context, _ doctor.LiveOptions, p doctor.LivePlan) doctor.LiveResult {
+				ran++
+				wantClient := tc.client
+				if wantClient == "" {
+					wantClient = integrate.Grok
+				}
+				if p.Client != wantClient || filepath.Dir(p.Binary) != binDir {
+					t.Fatalf("unexpected live client: %+v", p)
+				}
+				return doctor.LiveResult{LivePlan: p, HookFired: true, ClaimReached: true, ToolsAnswered: true, FileEdited: tc.pass}
+			}
+			var out, errOut bytes.Buffer
+			if code := runDoctorIO(context.Background(), args, strings.NewReader(""), &out, &errOut, live); code != tc.want {
+				t.Fatalf("exit %d, want %d\n%s\n%s", code, tc.want, out.String(), errOut.String())
+			}
+			wantRan := 0
+			if tc.live {
+				wantRan = 1
+			}
+			if ran != wantRan || !strings.Contains(out.String(), "grok\tok\t") {
+				t.Fatalf("ran %d, want %d\n%s\n%s", ran, wantRan, out.String(), errOut.String())
+			}
+			if tc.grades && (!strings.Contains(out.String(), "codex\tsilent\t") || !strings.Contains(out.String(), "copilot\tslow\t")) {
+				t.Fatalf("offline grades missing:\n%s", out.String())
+			}
+			if tc.codexSlow && !tc.grades && !strings.Contains(out.String(), "codex\tslow\t") {
+				t.Fatalf("slow history missing:\n%s", out.String())
+			}
+			warning := "codex: doctor could not confirm this step; the live run depends on it: Review hooks once in /hooks"
+			if warned := strings.Contains(errOut.String(), warning); warned != (tc.client == integrate.Codex) {
+				t.Fatalf("original unconfirmed readiness step warning = %v:\n%s", warned, errOut.String())
+			}
+			if explained := strings.Contains(out.String(), "exit status reflects live results and hub/token health; offline client grades are reported separately"); explained != tc.live {
+				t.Fatalf("live exit semantics explained = %v, live = %v:\n%s", explained, tc.live, out.String())
+			}
+		})
+	}
+}
 
 func TestLiveStageAsksBeforeSpending(t *testing.T) {
 	plans := []doctor.LivePlan{{Client: "claude", Binary: "/bin/claude", Model: "haiku"}, {Client: "codex", Binary: "/bin/codex", Model: "gpt-6.1-terra", Requires: "Review hooks once in /hooks"}}
@@ -30,6 +157,9 @@ func TestLiveStageAsksBeforeSpending(t *testing.T) {
 		if len(ran) != 0 || !strings.Contains(errOut.String(), "claude (/bin/claude), model haiku") || !strings.Contains(errOut.String(), "nothing was run") || !strings.Contains(errOut.String(), "skips codex: Review hooks once in /hooks") {
 			t.Fatalf("%q: ran %v\n%s", answer, ran, errOut.String())
 		}
+		if !strings.Contains(errOut.String(), "codex: doctor could not confirm this step; the live run depends on it: Review hooks once in /hooks") {
+			t.Fatalf("the unconfirmed step must be shown before consent: %s", errOut.String())
+		}
 	}
 	var out, errOut bytes.Buffer
 	if code := liveStage(context.Background(), plans, nil, false, time.Minute, strings.NewReader("Yes\n"), &out, &errOut, live); code != 1 {
@@ -38,7 +168,7 @@ func TestLiveStageAsksBeforeSpending(t *testing.T) {
 	if strings.Join(ran, ",") != "claude,codex" || limits[0] != time.Minute {
 		t.Fatalf("ran %v limits %v", ran, limits)
 	}
-	if !strings.Contains(out.String(), "claude (/bin/claude, model haiku): ok") || !strings.Contains(out.String(), "codex (/bin/codex, model gpt-6.1-terra): failed") || !strings.Contains(errOut.String(), "its hook runs only if you have done this: Review hooks once in /hooks") {
+	if !strings.Contains(out.String(), "claude (/bin/claude, model haiku): ok") || !strings.Contains(out.String(), "codex (/bin/codex, model gpt-6.1-terra): failed") {
 		t.Fatal(out.String())
 	}
 	ran = nil

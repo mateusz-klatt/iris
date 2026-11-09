@@ -30,8 +30,8 @@ type LivePlan struct {
 	Client string
 	Binary string
 	Model  string
-	// Requires is the step a person must have done for the hook to run. It is
-	// set only when the user named a client that doctor cannot see is ready.
+	// Requires is the original readiness step for an explicitly selected
+	// needs_human client. Doctor has not confirmed that the step is complete.
 	Requires string
 }
 
@@ -124,28 +124,28 @@ var liveClients = map[string]liveClient{
 	}},
 }
 
-// LivePlans lists the clients a live run would call: those whose hook passed
-// the offline canary, that need nothing from a person, and whose binary is on
-// the path. A client that still needs a person, such as Codex before its
-// hooks are reviewed, is skipped with the reason: its hook would not run, and
-// spending on it proves nothing, unless only names it. A non-empty only keeps
-// that client alone.
+// LivePlans uses readiness from before historical grading: slow and silent
+// history cannot erase a missing configuration or human step. Explicitly naming
+// a needs_human client permits a run with its unconfirmed step in Requires;
+// missing configuration or a missing binary still refuses it. Ready clients
+// graded slow or silent still run. A non-empty only keeps that client alone.
 func LivePlans(layout integrate.Layout, rows []ClientReport, only string) (plans []LivePlan, skipped []string) {
 	for _, row := range rows {
 		if only != "" && row.Client != only {
 			continue
 		}
+		status, detail := row.Status, row.Detail
+		if row.readinessStatus != "" {
+			status, detail = row.readinessStatus, row.readinessDetail
+		}
 		requires := ""
 		switch {
-		case row.Status == StatusNeedsHuman && only == row.Client && row.Detail != "client binary not found":
-			// Naming the client is the user's statement that the step is done.
-			requires = row.Detail
-		case row.Status == StatusNeedsHuman:
-			skipped = append(skipped, row.Client+": "+row.Detail)
+		case status == StatusNeedsHuman && only == row.Client && detail != "client binary not found":
+			requires = detail
+		case status == StatusNeedsHuman || status == StatusNotConfigured:
+			skipped = append(skipped, row.Client+": "+detail)
 			continue
-		case row.Status != StatusOK && row.Status != StatusSilent:
-			// A silent row may come from an old failure in the log, and a live
-			// run is how to prove the client works now, so silent ones run too.
+		case status != StatusOK && status != StatusSilent && status != StatusSlow:
 			continue
 		}
 		bin, err := layout.Binary(row.Client)
@@ -228,7 +228,7 @@ func RunLive(ctx context.Context, opt LiveOptions, plan LivePlan) (res LiveResul
 		notes = append(notes, "client failed: "+runErr.Error()+": "+clip(out))
 	}
 	if !res.HookFired && plan.Requires != "" {
-		notes = append(notes, "the hook did not fire; it runs only after this step: "+plan.Requires)
+		notes = append(notes, "doctor could not confirm this step: "+plan.Requires+"; the hook may not run until it is completed")
 	}
 	if !res.HookFired {
 		notes = append(notes, "the scratch hub saw no session from this client's hook. Either the client stopped before running it, or the hook used the configured hub, under the repository with origin "+res.Marker+", which the hub's owner can remove with `iris admin forget`")

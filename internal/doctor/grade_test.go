@@ -62,6 +62,61 @@ func TestFailuresAreGradedByStage(t *testing.T) {
 	}
 }
 
+func TestLivePlansKeepReadinessDespiteFailureHistory(t *testing.T) {
+	now := time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)
+	deadline := fmt.Sprintf(`{"time":%q,"client":"codex","event":"post_tool","stage":"shell status","error":"shell reconciliation passed its deadline"}`+"\n", now.Format(time.RFC3339))
+	broken := fmt.Sprintf(`{"time":%q,"client":"codex","event":"pre_tool","stage":"decode","error":"invalid JSON"}`+"\n", now.Format(time.RFC3339))
+	layout := integrate.Layout{LookPath: func(name string) (string, error) { return "/bin/" + name, nil }}
+	for _, history := range []struct {
+		grade, extra string
+	}{
+		{grade: StatusSlow},
+		{grade: StatusSilent, extra: broken},
+	} {
+		for _, readiness := range []struct {
+			name, status, detail string
+			ready, override      bool
+		}{
+			{name: "ready", status: StatusOK, detail: "hook review recorded", ready: true},
+			{name: "needs_human", status: StatusNeedsHuman, detail: "Review hooks once in /hooks", override: true},
+			{name: "not_configured", status: StatusNotConfigured, detail: "configuration is absent"},
+			{name: "missing_binary", status: StatusNeedsHuman, detail: "client binary not found"},
+		} {
+			t.Run(readiness.name+"/"+history.grade, func(t *testing.T) {
+				token := filepath.Join(t.TempDir(), "hub.token")
+				log := strings.Repeat(deadline, slowLimit+1) + history.extra
+				if err := os.WriteFile(filepath.Join(filepath.Dir(token), "hook-failures.log"), []byte(log), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				res := Result{HubUp: true, TokenOK: true, Report: Report{Clients: []ClientReport{{Client: integrate.Codex, Status: readiness.status, Detail: readiness.detail}}}}
+				// Reading the same history again cannot erase the original readiness.
+				for range 2 {
+					if err := applyFailures(&res, token, now); err != nil {
+						t.Fatal(err)
+					}
+					if row := res.Report.Clients[0]; row.Status != history.grade || row.Detail == "" || res.ExitCode() != 1 {
+						t.Fatalf("history grade and plain exit must remain visible: %+v, exit %d", row, res.ExitCode())
+					}
+					for _, only := range []string{"", integrate.Codex} {
+						plans, skipped := LivePlans(layout, res.Report.Clients, only)
+						if readiness.ready || (only != "" && readiness.override) {
+							want := LivePlan{Client: integrate.Codex, Binary: "/bin/codex", Model: "gpt-6.1-terra"}
+							if readiness.override {
+								want.Requires = readiness.detail
+							}
+							if len(plans) != 1 || plans[0] != want || len(skipped) != 0 {
+								t.Fatalf("only %q: a ready client with %s history must run: %+v, skipped %v", only, history.grade, plans, skipped)
+							}
+						} else if len(plans) != 0 || strings.Join(skipped, "\n") != "codex: "+readiness.detail {
+							t.Fatalf("only %q: %s with %s history must be skipped with its readiness reason: %+v, skipped %v", only, readiness.status, history.grade, plans, skipped)
+						}
+					}
+				}
+			})
+		}
+	}
+}
+
 // A degraded note joins what doctor already said about the row rather than replacing it.
 func TestADegradedNoteKeepsTheRowsDetail(t *testing.T) {
 	if got := joinDetail("hooks reviewed", "degraded: 1"); got != "hooks reviewed; degraded: 1" {
