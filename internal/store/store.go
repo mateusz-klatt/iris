@@ -135,6 +135,8 @@ type transaction struct {
 	// refused is a refusal whose side effects must still commit, such as the
 	// waiter a conflicting claim leaves. Call returns it after the commit.
 	refused *Error
+	// A diagnostic becomes observable only after its replacement generation commits.
+	generationChange *GenerationChange
 }
 
 func (t *transaction) exec(q string, a ...any) (sql.Result, error) {

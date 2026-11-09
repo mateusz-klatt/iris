@@ -248,7 +248,9 @@ func (h *Hub) api(w http.ResponseWriter, r *http.Request, operation string) {
 	if operation == "ack" || operation == "receipts" || operation == "read_body" || operation == "read_message_body" || operation == "thread" {
 		req.Key = r.PathValue("id")
 	}
-	ctx := r.Context()
+	ctx := store.WithGenerationObserver(r.Context(), func(change store.GenerationChange) {
+		h.logger().Printf("session generation advanced: operation=%s reason=%s proof=%s source=%s previous_execution=%s previous_generation=%d execution=%s generation=%d retry_generation=%d", operation, change.Reason, change.Proof, change.Source, change.PreviousExecutionID, change.PreviousGeneration, change.ExecutionID, change.Generation, change.RetryGeneration)
+	})
 	if operation == "messages" {
 		// Sends to other repositories are counted per credential (ADR 004).
 		ctx = store.WithPrincipal(ctx, requestPrincipal(r).digest)

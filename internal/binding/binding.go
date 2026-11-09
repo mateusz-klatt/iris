@@ -43,6 +43,14 @@ type Resolver struct {
 	// registered, which it gives up for the hook's once one appears.
 	since time.Time
 	own   bool
+	// pending keeps an unconfirmed handover's original source and destination.
+	// Its /end may have committed even when the response never arrived.
+	pending *handover
+}
+
+type handover struct {
+	from Bound
+	to   string
 }
 
 func New(h *hubclient.Client, client string) *Resolver {
@@ -173,18 +181,28 @@ func (r *Resolver) register(ctx context.Context, session string, a proc.Ancestor
 func (r *Resolver) adopt(ctx context.Context) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if !r.own {
+	if !r.own && r.pending == nil {
 		return
 	}
-	mine := r.bound
-	b, err := r.resolve(ctx, "", mine.ExecutionID)
-	if err != nil {
-		r.bound = mine
-		return
+	// Adoption runs before the heartbeat and holds the binding lock. A stalled
+	// lookup or handover must leave time to renew the session's 60-second lease.
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	if r.pending == nil {
+		mine := r.bound
+		b, err := r.resolve(ctx, "", mine.ExecutionID)
+		if err != nil {
+			r.bound = mine
+			return
+		}
+		r.bound, r.own = b, false
+		r.pending = &handover{from: mine, to: b.ExecutionID}
 	}
-	// Mail sent to this process's stray mailbox moves to the hook's agent, so none is stranded.
-	_ = r.Hub.HandOverExecution(ctx, mine.ExecutionID, mine.Generation, b.ExecutionID)
-	r.bound, r.own = b, false
+	// Retry the same idempotent end until its response confirms that the mail moved.
+	p := r.pending
+	if err := r.Hub.HandOverExecution(ctx, p.from.ExecutionID, p.from.Generation, p.to); err == nil {
+		r.pending = nil
+	}
 }
 
 // ancestor is the nearest client process, or none when there is no way to look.
@@ -275,35 +293,50 @@ func (r *Resolver) Maintain(ctx context.Context, source string, interval time.Du
 		}
 		r.adopt(ctx)
 		r.mu.Lock()
-		b := r.bound
+		renew := []Bound{r.bound}
+		if r.pending != nil && !r.gone[r.pending.from.ExecutionID] {
+			// Keep the fallback's mail reachable until handover is confirmed. An
+			// already committed end answers lost; only the live destination binds.
+			renew = append(renew, r.pending.from)
+		}
 		r.mu.Unlock()
-		if b.ExecutionID == "" {
-			continue
-		}
-		call, cancel := context.WithTimeout(ctx, 5*time.Second)
-		// Decode over the previous binding: older hubs return only lease_ms on an
-		// ordinary heartbeat, and omit all binding fields, including its local rung.
-		fresh := b
-		err := r.Hub.Do(call, "POST", "/v1/executions/"+b.ExecutionID+"/heartbeat", map[string]any{"generation": b.Generation, "source": source}, &fresh)
-		cancel()
-		if err == nil {
-			r.mu.Lock()
-			// Resolve may have selected another explicit handle during this request.
-			if r.bound.ExecutionID == b.ExecutionID && r.bound.Generation == b.Generation {
-				r.bound = fresh
+		for _, b := range renew {
+			if b.ExecutionID == "" {
+				continue
 			}
-			r.mu.Unlock()
-		}
-		if IsCode(err, "lost") {
-			r.mu.Lock()
-			if r.gone == nil {
-				r.gone = map[string]bool{}
+			call, cancel := context.WithTimeout(ctx, 5*time.Second)
+			// Decode over the previous binding: older hubs return only lease_ms on an
+			// ordinary heartbeat, and omit all binding fields, including its local rung.
+			fresh := b
+			err := r.Hub.Do(call, "POST", "/v1/executions/"+b.ExecutionID+"/heartbeat", map[string]any{"generation": b.Generation, "source": source}, &fresh)
+			cancel()
+			if err == nil {
+				r.mu.Lock()
+				// Resolve may have selected another explicit handle during this request.
+				if r.bound.ExecutionID == b.ExecutionID && r.bound.Generation == b.Generation {
+					r.bound = fresh
+				}
+				r.mu.Unlock()
 			}
-			r.gone[b.ExecutionID] = true
-			if r.bound.ExecutionID == b.ExecutionID {
-				r.bound, r.lost = Bound{}, true
+			if IsCode(err, "lost") {
+				r.mu.Lock()
+				if r.gone == nil {
+					r.gone = map[string]bool{}
+				}
+				r.gone[b.ExecutionID] = true
+				if r.bound.ExecutionID == b.ExecutionID {
+					r.bound, r.lost = Bound{}, true
+				}
+				r.mu.Unlock()
 			}
-			r.mu.Unlock()
 		}
 	}
+}
+
+// Rebound reports a positively known replacement for the stream's binding. An
+// empty cache is not evidence of another Execution; the hub closes a lost stream.
+func (r *Resolver) Rebound(b Bound) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.bound.ExecutionID != "" && (r.bound.ExecutionID != b.ExecutionID || r.bound.Generation != b.Generation)
 }

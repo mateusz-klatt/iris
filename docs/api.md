@@ -55,6 +55,11 @@ generation cannot be reattached. `generation:0` starts or resumes a non-recoveri
 Recovery keeps claim ownership and expiry but rotates fence numbers; use the `claims`
 in the reattachment response. Old fence numbers and tokens are invalid.
 
+An optional `retry_generation` reports the proof a hook discarded before retrying with
+`generation:0`. It affects only the hub's generation-replacement diagnostic, grants no authority,
+and is omitted by older clients. Resume and reattachment preserve the generation; a new
+Execution after loss or end advances it.
+
 A shim or `iris watch` reattaches by itself: a heartbeat with the current generation does the
 same work during the recovery window and returns the same response, so an idle session that
 fires no hook survives a hub restart. After the window the heartbeat returns `lost`, and the
@@ -80,7 +85,8 @@ arrives once. Only an Execution an MCP registered may hand over, and only to the
 process rung finds for it: top-level, of the same host, client, process id and start time; anything
 else is refused as `bad_request`. An MCP server uses it when it gives up an Execution it had to
 register for the session's hook's (D6), so mail sent to the stray mailbox is not stranded. Ending
-again moves nothing.
+again moves nothing. A client that loses the response retries the same source, generation and
+destination until the end is confirmed, renewing live Executions while the handover is pending.
 
 ## Claims
 

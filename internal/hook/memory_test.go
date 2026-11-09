@@ -179,6 +179,7 @@ type recoveryHub struct {
 	generation int
 	recovering bool
 	sent       []int
+	retries    []int
 	touched    int
 	ended      int
 }
@@ -187,6 +188,7 @@ func (h *recoveryHub) RegisterSession(_ context.Context, r hubclient.SessionRequ
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	h.sent = append(h.sent, r.Generation)
+	h.retries = append(h.retries, r.RetryGeneration)
 	switch {
 	case r.Generation != 0 && r.Generation != h.generation:
 		return hubclient.SessionResponse{}, &hubclient.Error{Code: "lost", Message: "session generation no longer exists"}
@@ -259,6 +261,9 @@ func TestAStaleGenerationIsDroppedAndTheCallRepeated(t *testing.T) {
 	}
 	if len(h.sent) != 2 || h.sent[0] != 1 || h.sent[1] != 0 {
 		t.Fatal("the hook must retry once without the stale generation", h.sent)
+	}
+	if len(h.retries) != 2 || h.retries[0] != 0 || h.retries[1] != 1 {
+		t.Fatalf("the retry did not identify its discarded proof for diagnostics: %v", h.retries)
 	}
 	if m.Recall("claude", "s") != 5 {
 		t.Fatal("the current generation was not remembered")

@@ -14,8 +14,10 @@ import (
 
 // SessionRequest is the body of POST /v1/sessions.
 type SessionRequest struct {
-	CommonDir        string `json:"common_dir"`
-	Generation       int    `json:"generation"`
+	CommonDir  string `json:"common_dir"`
+	Generation int    `json:"generation"`
+	// RetryGeneration reports discarded proof for hub diagnostics, never authority.
+	RetryGeneration  int    `json:"retry_generation,omitempty"`
 	Client           string `json:"client"`
 	SessionID        string `json:"session_id"`
 	Host             string `json:"host"`

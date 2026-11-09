@@ -204,6 +204,14 @@ client process, moves to it and ends its own, handing over the mail its stray ma
 meanwhile, so a slow hook cannot leave the session split either. A first tool call that ends
 while the grace period runs is told Iris is still binding the session and to retry. After a loss the shim never registers; it waits for the hook to reattach (D9).
 
+Adoption keeps the original handover source, generation and destination until the hub confirms
+the end. Failed calls retry that same idempotent end, including when it committed but its response
+was lost. The destination becomes the binding immediately; both it and a still-live fallback are
+renewed while handover is pending. A monitor follows the new binding even while its old stream
+remains live, without announcing a loss. Retry state lasts only for the client process: if it ends
+before handover commits, the fallback mailbox still holds the mail. A genuine lease loss can
+still prevent handover; retries never revive a lost generation.
+
 A worktree is one directory however it is reached. Hooks, the shim and the guard name the
 worktree root by device and inode as well as by path, and the hub keeps the first path a host
 named for that directory: a bind mount or a symlink that gives the same directory another path,
@@ -281,6 +289,10 @@ Notifications and digests carry the `kind` only.
 
 A stdio MCP server normally lives exactly as long as its client session, on every client.
 `iris mcp` therefore sends a heartbeat every 20 s for its positively bound Execution generation.
+Before renewing a fallback Execution, the client may look for the hook's Execution and hand over
+to it (D6). That attempt has a five-second deadline, separate from the heartbeat's five seconds,
+so a stalled lookup or handover cannot prevent lease renewal. An outage that also prevents the
+heartbeat from reaching the hub can still cost the session its lease.
 It stops on stdin EOF, when its parent process is gone and on loss of binding, so that an orphan
 cannot keep claims alive. The parent is checked by identity, because on Windows a process keeps
 its parent pid after the parent dies (found by CI). An Execution with a recent heartbeat has a 60 s lease. With no shim or
@@ -293,6 +305,8 @@ has not passed.
 does not fire reliably, and it has a 1 to 1.5 s budget. Leases are measured on the hub's
 monotonic clock within one boot. Claim expiries must survive a restart, so they use the hub's
 wall clock. Client clocks are never trusted.
+A `SessionEnd` carrying stale remembered proof is not retried without that proof: a delayed end
+must not acquire a healthy replacement generation and end it.
 
 ### D9. Domain model and storage
 
@@ -311,6 +325,18 @@ in Python. The Go implementation must repeat them on `modernc.org/sqlite`. The m
 
 Every state change happens in one `BEGIN IMMEDIATE` transaction. An OS file lock stops a second
 hub on the same database.
+
+The hub logs one diagnostic after each committed generation replacement, naming the prior
+Execution and generation, the replacement, the registration operation and source, and whether
+the prior Execution ended or lost its lease or recovery window. A lost Execution from an earlier
+epoch without recovery evidence is labelled `prior_lost`: its cause was not persisted, so the
+current epoch mismatch cannot identify it. No payload, token, path,
+client/session/host name or message content is logged by this diagnostic. Ordinary registration,
+resume, reattachment and heartbeats preserve the generation and stay quiet; rolled-back changes
+emit nothing. New hooks mark retries that discarded stale proof with `retry_generation`; this is
+a client claim for diagnosis, never authority. Older clients omit it and are logged as registering
+without proof. This records why the store replaced the generation, not why a heartbeat failed
+to arrive; it cannot establish a network or client failure by itself.
 
 Changes from the reference schema:
 

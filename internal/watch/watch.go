@@ -382,6 +382,11 @@ func (r *Runner) connect(ctx context.Context, b binding.Bound, cursor *int64, st
 		case err := <-fail:
 			return readFailure(ctx, err)
 		case <-tick.C:
+			// Adoption can keep the fallback alive while its mail handover retries.
+			// Follow the new binding without waiting for that old socket to expire.
+			if r.Resolver.Rebound(b) {
+				return nil
+			}
 			if err = c.Flush(r.now()); err != nil {
 				return err
 			}
