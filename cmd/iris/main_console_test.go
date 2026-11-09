@@ -170,11 +170,12 @@ func TestClosedConsoleStartupPreservesAgentCoordination(t *testing.T) {
 				t.Fatal(err)
 			}
 			t.Cleanup(func() { _ = s.Close() })
-			if state == "malformed" {
+			switch state {
+			case "malformed":
 				if err = os.WriteFile(keyFile, []byte("private malformed key"), 0600); err != nil {
 					t.Fatal(err)
 				}
-			} else if state == "reused" {
+			case "reused":
 				keyFile = ownerFile
 			}
 			h := hub.New(s, ownerToken, []string{"127.0.0.1:7878"})

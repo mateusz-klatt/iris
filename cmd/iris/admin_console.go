@@ -47,9 +47,10 @@ func adminConsoleCommand(ctx context.Context, client *hubclient.Client, args []s
 		return errors.New("new password must have at least 15 Unicode code points and at most 1024 UTF-8 bytes")
 	}
 	path := "/v1/admin/console/accounts"
-	if args[0] == "reset" {
+	switch args[0] {
+	case "reset":
 		path += "/reset"
-	} else if args[0] == "activate" {
+	case "activate":
 		path = "/v1/admin/console/activate"
 	}
 	var out map[string]any

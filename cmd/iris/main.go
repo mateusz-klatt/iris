@@ -190,16 +190,16 @@ type consoleConfiguration interface {
 func configureConsole(handler consoleConfiguration, keyFile, ownerFile, ownerToken string, logs io.Writer) {
 	key, err := consoleKeyForHub(keyFile, ownerFile, ownerToken, false)
 	if err != nil {
-		fmt.Fprintln(logs, "Iris console closed: console key unavailable or not independent")
+		_, _ = fmt.Fprintln(logs, "Iris console closed: console key unavailable or not independent")
 	}
 	if err = handler.ConfigureConsole(key, func() error {
 		_, err := consoleKeyForHub(keyFile, ownerFile, ownerToken, true)
 		return err
 	}); err != nil {
 		// A database/setup error cannot stop coordination or disclose its details.
-		fmt.Fprintln(logs, "Iris console closed: account authentication unavailable")
+		_, _ = fmt.Fprintln(logs, "Iris console closed: account authentication unavailable")
 	} else if len(key) == 32 {
-		fmt.Fprintln(logs, "Iris console open")
+		_, _ = fmt.Fprintln(logs, "Iris console open")
 	}
 }
 

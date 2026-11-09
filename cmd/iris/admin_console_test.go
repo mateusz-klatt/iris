@@ -128,9 +128,10 @@ func TestAdminConsoleStripsOnlyOneFinalLFOrCRLFForEveryPasswordCommand(t *testin
 				client := tokenClient(t, func(w http.ResponseWriter, r *http.Request) {
 					requests++
 					expectedPath := "/v1/admin/console/accounts"
-					if action == "reset" {
+					switch action {
+					case "reset":
 						expectedPath += "/reset"
-					} else if action == "activate" {
+					case "activate":
 						expectedPath = "/v1/admin/console/activate"
 					}
 					var input map[string]string

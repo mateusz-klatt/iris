@@ -40,9 +40,10 @@ func TestAccountStorageLeavesUnconfiguredConsoleClosed(t *testing.T) {
 			r.RemoteAddr = "127.0.0.1:1234"
 			r.Header.Set("Origin", server.URL)
 			want, code := http.StatusUnauthorized, "unauthorized"
-			if credential == "owner" {
+			switch credential {
+			case "owner":
 				r.Header.Set("Authorization", "Bearer test-secret")
-			} else if credential == "legacy-cookie" {
+			case "legacy-cookie":
 				r.AddCookie(&http.Cookie{Name: "iris_session", Value: "obsolete"})
 			}
 			w := httptest.NewRecorder()
