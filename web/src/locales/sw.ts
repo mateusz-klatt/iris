@@ -121,7 +121,7 @@ const translation = {
   access: {
     title: "Ufikiaji",
     hint: "Wanachama huanza bila ufikiaji wa hazina. ro huruhusu kusoma; rw pia kutuma ujumbe. Mabadiliko hukomesha vipindi vya akaunti.",
-    forbidden: "Haki za opereta zinahitajika.",
+    forbidden: "Haki za mwendeshaji zinahitajika.",
     role: "Jukumu",
     assignment: "Ufikiaji wa {{repository}}",
     noGrant: "Hakuna ruhusa",
@@ -131,8 +131,8 @@ const translation = {
     saving: "Inahifadhi ufikiaji…",
     saved: "Ufikiaji umehifadhiwa. Akaunti lazima iingie tena.",
     reload: "Pakia akaunti upya",
-    conflict: "Ufikiaji umebadilika au opereta wa mwisho aliyewashwa angeondolewa. Kagua akaunti za sasa kabla ya kujaribu tena.",
-    lastOperator: "Opereta wa mwisho aliyewashwa hawezi kuzimwa au kushushwa jukumu.",
+    conflict: "Ufikiaji umebadilika au mwendeshaji wa mwisho aliyewashwa angeondolewa. Kagua akaunti za sasa kabla ya kujaribu tena.",
+    lastOperator: "Mwendeshaji wa mwisho aliyewashwa hawezi kuzimwa au kushushwa jukumu.",
     operatorHint: "Waendeshaji wana ufikiaji wa hazina zote.",
   },
   admin: {

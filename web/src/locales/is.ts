@@ -121,7 +121,7 @@ const translation = {
   access: {
     title: "Aðgangur",
     hint: "Meðlimir byrja án aðgangs að kóðasöfnum. ro leyfir lestur; rw einnig að senda skilaboð. Breytingar enda setur reikningsins.",
-    forbidden: "Stjórnandaréttindi eru nauðsynleg.",
+    forbidden: "Réttindi rekstraraðila eru nauðsynleg.",
     role: "Hlutverk",
     assignment: "Aðgangur að {{repository}}",
     noGrant: "Engin heimild",
@@ -131,9 +131,9 @@ const translation = {
     saving: "Vista aðgang…",
     saved: "Aðgangur vistaður. Reikningurinn þarf að skrá sig inn aftur.",
     reload: "Endurhlaða reikningum",
-    conflict: "Aðgangur breyttist eða síðasti virki stjórnandinn yrði fjarlægður. Farðu yfir núverandi reikninga áður en þú reynir aftur.",
-    lastOperator: "Ekki er hægt að gera síðasta virka stjórnandann óvirkan eða lækka réttindi hans.",
-    operatorHint: "Stjórnendur hafa aðgang að öllum kóðasöfnum.",
+    conflict: "Aðgangur breyttist eða síðasti virki rekstraraðilinn yrði fjarlægður. Farðu yfir núverandi reikninga áður en þú reynir aftur.",
+    lastOperator: "Ekki er hægt að gera síðasta virka rekstraraðilann óvirkan eða lækka réttindi hans.",
+    operatorHint: "Rekstraraðilar hafa aðgang að öllum kóðasöfnum.",
   },
   admin: {
     eyebrow: "Aðgangsstýring",

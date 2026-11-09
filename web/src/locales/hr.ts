@@ -121,7 +121,7 @@ const translation = {
   access: {
     title: "Pristup",
     hint: "Članovi počinju bez pristupa repozitorijima. ro omogućuje čitanje; rw i slanje poruka. Promjene završavaju sesije računa.",
-    forbidden: "Potrebne su operatorske ovlasti.",
+    forbidden: "Potrebne su operaterske ovlasti.",
     role: "Uloga",
     assignment: "Pristup za {{repository}}",
     noGrant: "Bez ovlasti",
@@ -131,9 +131,9 @@ const translation = {
     saving: "Spremanje pristupa…",
     saved: "Pristup je spremljen. Račun se mora ponovno prijaviti.",
     reload: "Ponovno učitaj račune",
-    conflict: "Pristup je promijenjen ili bi posljednji aktivni operator bio uklonjen. Pregledajte trenutačne račune prije ponovnog pokušaja.",
-    lastOperator: "Posljednjeg aktivnog operatora nije moguće onemogućiti niti mu sniziti ulogu.",
-    operatorHint: "Operatori imaju pristup svim repozitorijima.",
+    conflict: "Pristup je promijenjen ili bi posljednji aktivni operater bio uklonjen. Pregledajte trenutačne račune prije ponovnog pokušaja.",
+    lastOperator: "Posljednjeg aktivnog operatera nije moguće onemogućiti niti mu sniziti ulogu.",
+    operatorHint: "Operateri imaju pristup svim repozitorijima.",
   },
   admin: {
     eyebrow: "Kontrola pristupa",

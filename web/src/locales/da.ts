@@ -120,7 +120,7 @@ const translation = {
   },
   access: {
     title: "Adgang",
-    hint: "Medlemmer starter uden adgang til repositories. ro giver læseadgang; rw tillader også beskeder. Ændringer afslutter kontoens sessioner.",
+    hint: "Medlemmer starter uden adgang til repositories. ro giver læseadgang; rw tillader også afsendelse af beskeder. Ændringer afslutter kontoens sessioner.",
     forbidden: "Operatørrettigheder er påkrævet.",
     role: "Rolle",
     assignment: "Adgang til {{repository}}",
