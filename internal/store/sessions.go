@@ -76,6 +76,10 @@ type Request struct {
 	Limit          int      `json:"limit"`
 	ConsumerID     string   `json:"consumer_id"`
 	Stream         string   `json:"stream"`
+
+	// RetryGeneration is an optional client diagnostic claim. Unlike Generation,
+	// it never participates in registration, recovery or authority decisions.
+	RetryGeneration int64 `json:"retry_generation,omitempty"`
 }
 
 // Receipt names one delivery a fetch returned, at the attempt that fetch gave it.
@@ -358,10 +362,11 @@ func (t *transaction) session(r Request) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	var generation int64
-	if err = t.row("SELECT COALESCE(MAX(generation),0)+1 FROM Execution WHERE host_id=? AND client=? AND session_id=?", r.Host, r.Client, r.SessionID).Scan(&generation); err != nil {
+	previous, err := scanExecution(t.row(executionSelect+"WHERE e.host_id=? AND e.client=? AND e.session_id=? ORDER BY e.generation DESC LIMIT 1", r.Host, r.Client, r.SessionID))
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
+	generation := previous.Generation + 1
 	var agent, agentName string
 	// A session that ran here before gets its own mailbox back, unless another active
 	// session holds it now. Without this, the first free slot was taken, so the
@@ -428,6 +433,7 @@ func (t *transaction) session(r Request) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	t.generationChanged(previous, e, r)
 	return t.sessionResponse(e, lease)
 }
 func (t *transaction) sessionResponse(e execution, lease int64) (map[string]any, error) {

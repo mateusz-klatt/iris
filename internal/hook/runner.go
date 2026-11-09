@@ -258,7 +258,8 @@ const recovering = "Iris: the hub restarted and this session cannot prove it is 
 
 // register attaches a hook to its Execution. A remembered generation is the proof a
 // recovering Execution asks for. A stale one is dropped and the call made once without it,
-// which is what the hook sent before it had a memory.
+// which is what the hook sent before it had a memory. SessionEnd must keep its proof:
+// retrying without it could end a newer, healthy generation of the session.
 func (r Runner) register(ctx context.Context, ev Event, repo gitinfo.Repo) (hubclient.SessionResponse, error) {
 	m := r.memory()
 	req := r.sessionReq(ev, repo)
@@ -266,8 +267,9 @@ func (r Runner) register(ctx context.Context, ev Event, repo gitinfo.Repo) (hubc
 		req.Generation = m.Recall(string(ev.Client), ev.SessionID)
 	}
 	sess, err := r.Hub.RegisterSession(ctx, req)
-	if req.Generation != 0 && hubclient.IsCode(err, "lost") {
+	if req.Generation != 0 && ev.Kind != KindSessionEnd && hubclient.IsCode(err, "lost") {
 		m.Forget(string(ev.Client), ev.SessionID)
+		req.RetryGeneration = req.Generation
 		req.Generation = 0
 		sess, err = r.Hub.RegisterSession(ctx, req)
 	}

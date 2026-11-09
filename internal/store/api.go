@@ -14,6 +14,7 @@ import (
 func (s *Store) Call(ctx context.Context, operation string, r Request) (map[string]any, error) {
 	var out map[string]any
 	var refused *Error
+	var change *GenerationChange
 	err := s.transact(ctx, func(t *transaction) error {
 		if principal, ok := ctx.Value(authorizationKey{}).(Principal); ok {
 			if err := t.authorize(principal, operation, r); err != nil {
@@ -176,8 +177,14 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 			}
 		}
 		refused = t.refused
+		change = t.generationChange
 		return err
 	})
+	if observe, ok := ctx.Value(generationObserverKey{}).(func(GenerationChange)); ok && err == nil && change != nil {
+		// transact has committed and released the store lock: a slow logger must
+		// not prevent unrelated sessions from renewing their leases.
+		observe(*change)
+	}
 	if err == nil && refused != nil {
 		return nil, refused
 	}
