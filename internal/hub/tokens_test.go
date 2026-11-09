@@ -12,7 +12,8 @@ import (
 )
 
 func TestNamedTokenRevokesStreams(t *testing.T) {
-	_, s := setup(t)
+	h, s := setup(t)
+	h.console = newConsoleAuth(make([]byte, 32))
 	session := register(t, s, 1)
 	token := request(t, s, "POST", "/v1/tokens", map[string]string{"host": "laptop"}, 200)["token"].(string)
 	call := func(path string, status int) {
@@ -41,7 +42,14 @@ func TestNamedTokenRevokesStreams(t *testing.T) {
 		return c
 	}
 	bearer := open(watchURL(s, session["execution_id"], 0), []string{"iris.v1"}, headers)
-	ui := open("ws"+strings.TrimPrefix(s.URL, "http")+"/v1/ui/watch", []string{"iris.v1"}, headers)
+	ui, response, err := websocket.Dial(ctx, "ws"+strings.TrimPrefix(s.URL, "http")+"/v1/ui/watch", &websocket.DialOptions{HTTPHeader: headers})
+	if err == nil {
+		_ = ui.CloseNow()
+		t.Fatal("host bearer opened a browser stream")
+	}
+	if response == nil || response.StatusCode != http.StatusForbidden {
+		t.Fatal("browser stream did not reject a machine credential", response, err)
+	}
 	r, _ := http.NewRequest("POST", s.URL+"/v1/wake-tickets", strings.NewReader(`{"execution_id":"`+session["execution_id"].(string)+`","generation":1}`))
 	r.Header = headers
 	resp, err := s.Client().Do(r)
@@ -59,7 +67,7 @@ func TestNamedTokenRevokesStreams(t *testing.T) {
 	}
 	wake := open(ticket.URL, ticket.Protocols, nil)
 	request(t, s, "DELETE", "/v1/tokens/laptop", nil, 200)
-	for _, c := range []*websocket.Conn{bearer, ui, wake} {
+	for _, c := range []*websocket.Conn{bearer, wake} {
 		for {
 			_, _, err := c.Read(ctx)
 			if err != nil {

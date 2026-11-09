@@ -55,7 +55,7 @@ type consoleBrokenWriter struct{}
 func (consoleBrokenWriter) Write([]byte) (int, error) { return 0, errors.New("write failed") }
 
 func TestAdminConsoleRefusesInvalidInputBeforeCallingHub(t *testing.T) {
-	for _, args := range [][]string{nil, {"create"}, {"delete", "Owner"}, {"reset", "Owner", "password"}, {"create", "Owner", "--password", "secret"}} {
+	for _, args := range [][]string{nil, {"create"}, {"activate"}, {"delete", "Owner"}, {"reset", "Owner", "password"}, {"activate", "Owner", "password"}, {"create", "Owner", "--password", "secret"}} {
 		if err := adminConsoleCommand(context.Background(), nil, args, nil, io.Discard); err == nil || err.Error() != adminConsoleUsage {
 			t.Fatal("accepted password argument or invalid command")
 		}
@@ -73,6 +73,48 @@ func TestAdminConsoleRefusesInvalidInputBeforeCallingHub(t *testing.T) {
 	}
 	if err := adminCommand(context.Background(), nil, []string{"console"}, io.Discard); err == nil || err.Error() != adminConsoleUsage {
 		t.Fatal("console command not dispatched")
+	}
+}
+
+func TestAdminConsoleActivateAcceptsImportedPasswordsAndReportsRestart(t *testing.T) {
+	passwords := []string{"short", "\n", strings.Repeat("é", 512)}
+	var requests int
+	client := tokenClient(t, func(w http.ResponseWriter, r *http.Request) {
+		var got map[string]string
+		if err := json.NewDecoder(r.Body).Decode(&got); err != nil {
+			t.Error(err)
+		}
+		if r.Method != http.MethodPost || r.URL.Path != "/v1/admin/console/activate" || r.URL.RawQuery != "" || got["username"] != "Owner" || got["password"] != passwords[requests] || len(got) != 2 {
+			t.Error("activation changed the password or attempted a browser login")
+		}
+		requests++
+		_, _ = w.Write([]byte(`{"account":{"id":"ca_owner","role":"operator"},"restart_required":true}`))
+	})
+	for _, password := range passwords {
+		var out bytes.Buffer
+		if err := adminConsoleCommand(t.Context(), client, []string{"activate", "Owner"}, strings.NewReader(password), &out); err != nil {
+			t.Fatal(err)
+		}
+		var result struct {
+			RestartRequired bool `json:"restart_required"`
+		}
+		if err := json.Unmarshal(out.Bytes(), &result); err != nil || !result.RestartRequired || strings.Contains(out.String(), "password") {
+			t.Fatal("activation did not report the required restart safely", err)
+		}
+	}
+	if requests != len(passwords) {
+		t.Fatal("an imported password was rejected by the new-password minimum")
+	}
+}
+
+func TestAdminConsoleActivateBoundsInputBeforeAnyRequest(t *testing.T) {
+	for _, password := range []string{strings.Repeat("a", 1025), strings.Repeat("é", 513), "invalid\xff"} {
+		if err := adminConsoleCommand(t.Context(), nil, []string{"activate", "Owner"}, strings.NewReader(password), io.Discard); err == nil || err.Error() != "password must be valid UTF-8 and at most 1024 bytes" {
+			t.Fatal("activation accepted oversized or invalid UTF-8 input", err)
+		}
+	}
+	if err := adminConsoleCommand(t.Context(), nil, []string{"activate", "Owner"}, consoleBrokenReader{}, io.Discard); err == nil || err.Error() != "could not read password from standard input" {
+		t.Fatal("activation lost or exposed a stdin failure", err)
 	}
 }
 

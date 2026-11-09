@@ -31,8 +31,8 @@ type passwordAttempt struct {
 	expires time.Time
 }
 
-// consoleAuth is deliberately private. No serve flag or production initialization
-// activates account routes before the remaining ADR 014 cutover steps are ready.
+// consoleAuth is configured before serving. A missing key closes browser
+// authentication while owner recovery and agent coordination remain available.
 type consoleAuth struct {
 	key        []byte
 	mu         sync.Mutex
@@ -145,13 +145,9 @@ func (c *consoleAuth) passwordRate(w http.ResponseWriter, now time.Time, usernam
 	return true
 }
 
-// serveConsole intercepts the staged namespace in full: an unknown route cannot
-// fall through to the legacy anonymous console. It also rejects mixed credentials
+// serveConsole owns the browser namespace in full. It also rejects mixed credentials
 // on machine routes, instead of silently selecting the bearer authority.
 func (h *Hub) serveConsole(w http.ResponseWriter, r *http.Request) bool {
-	if h.console == nil {
-		return false
-	}
 	if len(r.Header.Values("Authorization")) != 0 && len(r.CookiesNamed(consoleCookieName)) != 0 {
 		writeError(w, &store.Error{Code: "forbidden", Message: "mixed machine and console credentials"})
 		return true
@@ -163,6 +159,10 @@ func (h *Hub) serveConsole(w http.ResponseWriter, r *http.Request) bool {
 	if !strings.HasPrefix(r.URL.Path, "/v1/ui/") {
 		return false
 	}
+	if r.URL.Path == "/v1/ui/links" {
+		writeError(w, &store.Error{Code: "not_found", Message: "unknown API route"})
+		return true
+	}
 	if r.Method == http.MethodPut && r.URL.Path == "/v1/ui/doctor" {
 		if !h.authorized(r) {
 			writeError(w, &store.Error{Code: "unauthorized", Message: "machine bearer required for doctor upload"})
@@ -171,6 +171,7 @@ func (h *Hub) serveConsole(w http.ResponseWriter, r *http.Request) bool {
 		return false
 	}
 	if len(h.console.key) != 32 || !h.consoleTransport(r) {
+		w.Header().Set("X-Iris-Console-Mode", "closed")
 		writeError(w, &store.Error{Code: "unauthorized", Message: "console authentication unavailable"})
 		return true
 	}

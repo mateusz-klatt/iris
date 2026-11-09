@@ -6,7 +6,6 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
-	"time"
 )
 
 func TestConsoleMissingChallengeAndMalformedLoginDoNotReachPasswordWork(t *testing.T) {
@@ -91,7 +90,6 @@ func TestConsoleMutationCSRFAndMachineBoundariesApplyAcrossRoutes(t *testing.T) 
 	}
 	consoleDo(t, h, server.URL, "GET", "/v1/ui/session", nil, b, 200)
 	request(t, server, "GET", "/v1/ui/session", nil, 403)
-	h.cookies["legacy"] = loginGrant{expires: h.now().Add(time.Hour)}
 	for _, cookie := range []*http.Cookie{b.cookie, {Name: "iris_session", Value: "legacy"}} {
 		r := httptest.NewRequest(http.MethodPut, server.URL+"/v1/ui/doctor", strings.NewReader(`{}`))
 		r.RemoteAddr = "127.0.0.1:1234"

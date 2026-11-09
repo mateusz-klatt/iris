@@ -2,10 +2,13 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/base64"
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"os"
@@ -81,7 +84,7 @@ func run(args []string) error {
 		return nil
 	}
 	if len(args) == 0 || args[0] != "serve" {
-		return errors.New("usage: iris serve [--listen address] [--db path] [--token-file path] [--tls-cert path --tls-key path] [--allowed-hosts host:port,...] | setup | doctor | status | service | ui | token | admin | guard | hook | mcp | watch | integrate | version")
+		return errors.New("usage: iris serve [--listen address] [--db path] [--token-file path] [--console-key-file path] [--tls-cert path --tls-key path] [--allowed-hosts host:port,...] | setup | doctor | status | service | ui | token | admin | guard | hook | mcp | watch | integrate | version")
 	}
 	cfg, err := config.Default()
 	if err != nil {
@@ -91,6 +94,7 @@ func run(args []string) error {
 	flags.StringVar(&cfg.Listen, "listen", cfg.Listen, "HTTP listen address")
 	flags.StringVar(&cfg.Database, "db", cfg.Database, "hub-local SQLite file (not a network or drvfs mount)")
 	flags.StringVar(&cfg.TokenFile, "token-file", cfg.TokenFile, "owner-only bearer token file")
+	consoleKeyFile := flags.String("console-key-file", "", "existing independent console key file (default: database path plus .console.key)")
 	flags.StringVar(&cfg.TLSCert, "tls-cert", "", "TLS certificate file")
 	flags.StringVar(&cfg.TLSKey, "tls-key", "", "TLS private key file")
 	publicURL := flags.String("public-url", "", "public https origin behind a trusted loopback TLS proxy")
@@ -109,6 +113,9 @@ func run(args []string) error {
 	}
 	if err = cfg.Validate(); err != nil {
 		return err
+	}
+	if *consoleKeyFile == "" {
+		*consoleKeyFile = cfg.Database + ".console.key"
 	}
 	// Validate the public origin before creating any state.
 	if *publicURL != "" {
@@ -132,6 +139,7 @@ func run(args []string) error {
 		}
 	}
 	handler := hub.New(s, token, allowed)
+	configureConsole(handler, *consoleKeyFile, cfg.TokenFile, token, os.Stderr)
 	handler.Limits = *limits
 	handler.AccessLog = *accessLog
 	if *publicURL != "" {
@@ -170,4 +178,57 @@ func run(args []string) error {
 		return nil
 	}
 	return err
+}
+
+// consoleConfiguration is the immutable hub setup boundary, before serving any
+// request. Explicit owner activation prepares the key for the next process; its
+// callback never changes the key or opens the running console.
+type consoleConfiguration interface {
+	ConfigureConsole([]byte, func() error) error
+}
+
+func configureConsole(handler consoleConfiguration, keyFile, ownerFile, ownerToken string, logs io.Writer) {
+	key, err := consoleKeyForHub(keyFile, ownerFile, ownerToken, false)
+	if err != nil {
+		fmt.Fprintln(logs, "Iris console closed: console key unavailable or not independent")
+	}
+	if err = handler.ConfigureConsole(key, func() error {
+		_, err := consoleKeyForHub(keyFile, ownerFile, ownerToken, true)
+		return err
+	}); err != nil {
+		// A database/setup error cannot stop coordination or disclose its details.
+		fmt.Fprintln(logs, "Iris console closed: account authentication unavailable")
+	}
+}
+
+// consoleKeyForHub refuses file aliases before protecting or creating a key, and
+// copied owner credentials after decoding. The owner token has already passed
+// config.Token validation. No file path, key or filesystem diagnostic is returned
+// in a failure message. Only the explicit activation callback requests creation.
+func consoleKeyForHub(keyFile, ownerFile, ownerToken string, create bool) ([]byte, error) {
+	ownerInfo, err := os.Stat(ownerFile)
+	if err != nil {
+		return nil, errors.New("owner credential file unavailable")
+	}
+	keyInfo, err := os.Stat(keyFile)
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, errors.New("console key file unavailable")
+	}
+	if err == nil && os.SameFile(ownerInfo, keyInfo) {
+		return nil, errors.New("console key must be independent of owner credential")
+	}
+	var key []byte
+	if create {
+		key, err = config.ConsoleKey(keyFile)
+	} else {
+		key, err = config.LoadConsoleKey(keyFile)
+	}
+	if err != nil {
+		return nil, errors.New("console key file unavailable")
+	}
+	ownerKey, _ := base64.RawURLEncoding.DecodeString(ownerToken) // config.Token already validated this credential.
+	if bytes.Equal(key, ownerKey) {
+		return nil, errors.New("console key must be independent of owner credential")
+	}
+	return key, nil
 }

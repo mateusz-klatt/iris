@@ -77,6 +77,16 @@ func benchmarkHubCPU(b *testing.B, live bool) {
 					h := New(fixture.store, "idle-owner-secret", []string{server.Listener.Addr().String()})
 					h.Log = log.New(io.Discard, "", 0)
 					var calls idleBenchmarkCallCounts
+					h.console = newConsoleAuth(bytes.Repeat([]byte{9}, 32))
+					operator, err := fixture.store.CreateConsoleAccount(context.Background(), store.ConsoleAccountInput{Username: "Idle benchmark operator", PasswordHash: dummyConsoleHash, Role: "operator"})
+					if err != nil {
+						b.Fatal(err)
+					}
+					consoleToken := secret()
+					if _, err := fixture.store.IssueConsoleSession(context.Background(), operator, h.console.mac("session", consoleToken), ""); err != nil {
+						b.Fatal(err)
+					}
+					consoleCookie := &http.Cookie{Name: consoleCookieName, Value: consoleToken}
 					type readyEvent struct {
 						once sync.Once
 						done chan struct{}
@@ -108,11 +118,11 @@ func benchmarkHubCPU(b *testing.B, live bool) {
 					var readers sync.WaitGroup
 					var frames atomic.Uint64
 					var connections []*websocket.Conn
-					dial := func(endpoint, credential string, protocol []string, initialFrame bool) {
+					dial := func(endpoint string, headers http.Header, protocol []string, initialFrame bool) {
 						ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 						defer cancel()
 						conn, _, err := websocket.Dial(ctx, endpoint, &websocket.DialOptions{
-							HTTPHeader: http.Header{"Authorization": {"Bearer " + credential}}, Subprotocols: protocol,
+							HTTPHeader: headers, Subprotocols: protocol,
 						})
 						if err != nil {
 							b.Fatal(err)
@@ -166,10 +176,10 @@ func benchmarkHubCPU(b *testing.B, live bool) {
 					for i := range watches {
 						endpoint := "ws" + strings.TrimPrefix(server.URL, "http") + "/v1/watch?execution_id=" + url.QueryEscape(fmt.Sprintf("idle-ex-%d", i)) +
 							fmt.Sprintf("&generation=1&after=%d&consumer_id=%s", fixture.events, url.QueryEscape(consumer))
-						dial(endpoint, token, []string{"iris.v1"}, false)
+						dial(endpoint, http.Header{"Authorization": {"Bearer " + token}}, []string{"iris.v1"}, false)
 					}
 					for range 2 {
-						dial("ws"+strings.TrimPrefix(server.URL, "http")+"/v1/ui/watch", "idle-owner-secret", nil, true)
+						dial("ws"+strings.TrimPrefix(server.URL, "http")+"/v1/ui/watch", http.Header{"Origin": {server.URL}, "Cookie": {consoleCookie.String()}}, nil, true)
 					}
 					for _, initial := range initialEvents {
 						select {
@@ -246,7 +256,7 @@ func benchmarkHubCPU(b *testing.B, live bool) {
 					b.ReportMetric(float64(transactions)/elapsed, "transactions/s")
 					b.ReportMetric(latencies[9], "registration_p50_ms")
 					b.ReportMetric(latencies[18], "registration_p95_ms")
-					result := map[string]any{"history_scale": scale, "watch_sockets": watches, "legacy_console_sockets": 2, "consumer_id": consumer,
+					result := map[string]any{"history_scale": scale, "watch_sockets": watches, "named_operator_console_sockets": 2, "consumer_id": consumer,
 						"started_utc": startedUTC, "idle_ended_utc": start.Add(time.Duration(elapsed * float64(time.Second))).UTC().Format(time.RFC3339Nano),
 						"measured_seconds": elapsed, "cpu_seconds": cpu, "cpu_seconds_per_minute": cpu * 60 / elapsed,
 						"store_transactions": transactions, "transactions_per_second": float64(transactions) / elapsed,

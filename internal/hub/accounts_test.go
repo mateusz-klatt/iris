@@ -51,7 +51,6 @@ func TestStagedConsoleCredentialsNeverSelectMachineAuthority(t *testing.T) {
 
 func TestLegacyCookieDoesNotAuthorizeMachineRoutes(t *testing.T) {
 	h, server := setup(t)
-	h.cookies["synthetic"] = loginGrant{expires: h.now().Add(1_000_000_000)}
 	for _, route := range []struct{ method, path string }{{"GET", "/v1/agents"}, {"GET", "/v1/tokens"}, {"POST", "/v1/admin/merge"}} {
 		r := httptest.NewRequest(route.method, server.URL+route.path, nil)
 		r.RemoteAddr = "127.0.0.1:1234"

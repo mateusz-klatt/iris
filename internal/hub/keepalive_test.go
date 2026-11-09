@@ -37,10 +37,16 @@ func TestWatchKeepalive(t *testing.T) {
 			if path == "/v1/watch" {
 				endpoint = watchURL(s, b["execution_id"], 0)
 			}
+			headers := http.Header{"Authorization": {"Bearer test-secret"}}
+			if path == "/v1/ui/watch" {
+				h.console = newConsoleAuth(make([]byte, 32))
+				_, cookie, _ := routeConsoleAccount(t, h, "Keepalive operator", "operator")
+				headers = http.Header{"Origin": {s.URL}, "Cookie": {cookie.String()}}
+			}
 			var pings atomic.Int64
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			conn, _, err := websocket.Dial(ctx, endpoint, &websocket.DialOptions{HTTPHeader: http.Header{"Authorization": {"Bearer test-secret"}}, Subprotocols: []string{"iris.v1"}, OnPingReceived: func(context.Context, []byte) bool { pings.Add(1); return true }})
+			conn, _, err := websocket.Dial(ctx, endpoint, &websocket.DialOptions{HTTPHeader: headers, Subprotocols: []string{"iris.v1"}, OnPingReceived: func(context.Context, []byte) bool { pings.Add(1); return true }})
 			if err != nil {
 				t.Fatal(err)
 			}
