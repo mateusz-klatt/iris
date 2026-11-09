@@ -200,37 +200,56 @@ func TestConsoleChallengeSingleUseAndSessionProtection(t *testing.T) {
 }
 func TestConsoleGenericLoginFailuresAndNoSensitiveOutput(t *testing.T) {
 	h, server, filename := consoleSetup(t)
+	storedRecord, err := consoleauth.CreatePassword(consoleTestPassword)
+	if err != nil || storedRecord == dummyConsoleHash {
+		t.Fatal("could not create a distinct synthetic password record", err)
+	}
 	enabled := consoleAccount(t, h, "Enabled", "member")
 	disabled := consoleAccount(t, h, "Disabled", "member")
 	consoleDB(t, filename, "UPDATE ConsoleAccount SET disabled=1 WHERE id=?", disabled.ID)
-	consoleAccount(t, h, "None", "none")
+	none := consoleAccount(t, h, "None", "none")
+	for _, account := range []store.ConsoleAccount{enabled, disabled, none} {
+		consoleDB(t, filename, "UPDATE ConsoleAccount SET password_hash=? WHERE id=?", storedRecord, account.ID)
+	}
 	malformed := consoleAccount(t, h, "Malformed", "member")
 	consoleDB(t, filename, "UPDATE ConsoleAccount SET password_hash='unusable-sensitive-record' WHERE id=?", malformed.ID)
 	var logs bytes.Buffer
 	h.Log = log.New(&logs, "", 0)
-	count := 0
-	h.console.verify = func(password, record string) (bool, error) {
-		count++
-		return password == consoleTestPassword && record == dummyConsoleHash, nil
-	}
 	expected := ""
-	for _, test := range []struct{ name, password string }{{"Unknown", consoleTestPassword}, {enabled.Username, "wrong-sensitive-password"}, {disabled.Username, consoleTestPassword}, {"None", consoleTestPassword}, {malformed.Username, consoleTestPassword}, {" invalid name ", consoleTestPassword}} {
-		b := consoleChallengeBrowser(t, h, server.URL)
-		w := consoleDo(t, h, server.URL, "POST", "/v1/ui/login", map[string]any{"username": test.name, "password": test.password}, b, 401)
-		if expected == "" {
-			expected = w.Body.String()
-		}
-		if w.Body.String() != expected || !strings.Contains(w.Body.String(), "Invalid username or password") {
-			t.Fatal("login failure disclosed account state")
-		}
-		for _, sentinel := range []string{test.name, test.password, b.cookie.Value, b.csrf, "unusable-sensitive-record"} {
-			if sentinel != "" && (strings.Contains(logs.String(), sentinel) || strings.Contains(w.Body.String(), sentinel)) {
-				t.Fatal("authentication emitted sensitive input")
+	for _, test := range []struct{ label, name, password, record string }{
+		{"missing", "Unknown", consoleTestPassword, dummyConsoleHash},
+		{"bad-password", enabled.Username, "wrong-sensitive-password", storedRecord},
+		{"disabled", disabled.Username, consoleTestPassword, dummyConsoleHash},
+		{"none", none.Username, consoleTestPassword, dummyConsoleHash},
+		{"unusable-hash", malformed.Username, consoleTestPassword, dummyConsoleHash},
+		{"invalid-name", " invalid name ", consoleTestPassword, dummyConsoleHash},
+	} {
+		t.Run(test.label, func(t *testing.T) {
+			count := 0
+			h.console.verify = func(password, record string) (bool, error) {
+				count++
+				if record != test.record || consoleauth.ValidateHash(record) != nil {
+					t.Error("password verifier did not receive the expected valid record")
+				}
+				return password == consoleTestPassword, nil
 			}
-		}
-	}
-	if count != 6 {
-		t.Fatal("rejected identities skipped bounded dummy work")
+			b := consoleChallengeBrowser(t, h, server.URL)
+			w := consoleDo(t, h, server.URL, "POST", "/v1/ui/login", map[string]any{"username": test.name, "password": test.password}, b, 401)
+			if count != 1 {
+				t.Fatal("login attempt did not perform exactly one password verification")
+			}
+			if expected == "" {
+				expected = w.Body.String()
+			}
+			if w.Body.String() != expected || !strings.Contains(w.Body.String(), "Invalid username or password") {
+				t.Fatal("login failure disclosed account state")
+			}
+			for _, sentinel := range []string{test.name, test.password, b.cookie.Value, b.csrf, storedRecord, dummyConsoleHash, "unusable-sensitive-record"} {
+				if sentinel != "" && (strings.Contains(logs.String(), sentinel) || strings.Contains(w.Body.String(), sentinel)) {
+					t.Fatal("authentication emitted sensitive input")
+				}
+			}
+		})
 	}
 }
 func TestConsoleLoginRateQuotasExpireAndBoundMemory(t *testing.T) {
