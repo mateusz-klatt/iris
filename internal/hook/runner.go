@@ -407,7 +407,7 @@ func (r Runner) sessionReq(ev Event, repo gitinfo.Repo) hubclient.SessionRequest
 		ParentSessionID:  ev.ParentSessionID,
 		ClientPID:        anc.PID,
 		ClientPIDStartMS: anc.StartMS,
-		SingleSession:    singleSession(ev.Client),
+		SingleSession:    singleSession(ev.Client) || proc.SingleSession(anc, string(ev.Client)),
 		Source:           "hook",
 	}
 }
@@ -424,8 +424,8 @@ func (r Runner) ancestor() proc.Ancestor {
 	return a
 }
 
-// singleSession is true only where one process hosts one session.
-// Codex app-server, Claude and Grok were observed multiplexing, so they stay false.
+// singleSession names clients whose launchers need no command-line check.
+// Codex exec is checked separately; app-server, Claude and Grok can multiplex.
 func singleSession(c Client) bool {
 	switch c {
 	case ClientCursor, ClientAntigravity, ClientKimi:
