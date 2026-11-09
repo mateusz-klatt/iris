@@ -86,6 +86,14 @@ var errBinding = &hubclient.Error{Code: "unbound", Message: "Iris is still bindi
 // errLost answers a call while the binding is lost and no fresh bind has succeeded.
 var errLost = &hubclient.Error{Code: "lost", Message: "This session's Execution is gone at the hub. Iris binds afresh once the session has reattached: send any prompt, then retry."}
 
+// LostError keeps the failed retry available for diagnosis while calls still answer lost.
+// Cause is evidence about the retry, never permission to register or reuse a lost Execution.
+type LostError struct{ Cause error }
+
+func (e *LostError) Error() string { return errLost.Error() }
+
+func (e *LostError) Unwrap() []error { return []error{errLost, e.Cause} }
+
 // Resolve refreshes an existing binding from its preserved Execution, making one when
 // there is none. Repository merges can change its repository without changing the
 // Execution, generation or mailbox. After a loss it binds afresh
@@ -102,16 +110,13 @@ func (r *Resolver) Resolve(ctx context.Context, handle string) (Bound, error) {
 		r.bound = b
 		return b, nil
 	}
-	if r.gone[handle] {
-		handle = ""
-	}
 	b, err := r.resolve(ctx, handle, "")
 	b, err = r.orRegister(ctx, handle, b, err)
 	if err == nil && r.gone[b.ExecutionID] {
-		r.bound, b, err = Bound{}, Bound{}, errLost
+		r.bound, b, err = Bound{}, Bound{}, &hubclient.Error{Code: "lost", Message: "the binding retry returned an Execution already found lost"}
 	}
 	if err != nil && r.lost {
-		return Bound{}, errLost
+		return Bound{}, &LostError{Cause: err}
 	}
 	if err == nil {
 		r.lost = false
@@ -231,7 +236,15 @@ func (r *Resolver) resolve(ctx context.Context, handle, exclude string) (Bound, 
 		}
 		return b, err
 	}
-	if ex := r.Getenv("IRIS_EXECUTION"); ex != "" && !r.gone[ex] {
+	ex := r.Getenv("IRIS_EXECUTION")
+	var lastErr error = &hubclient.Error{Code: "unbound", Message: "Pass the execution handle from SessionStart in the execution argument, or restart with IRIS_EXECUTION set. Iris cannot identify this session safely."}
+	if r.gone[handle] || r.gone[ex] {
+		lastErr = &hubclient.Error{Code: "unbound", Message: "the execution handle names an Execution already found lost"}
+	}
+	if r.gone[handle] {
+		handle = ""
+	}
+	if ex != "" && !r.gone[ex] {
 		req["execution"] = ex
 		return bind(1)
 	}
@@ -249,6 +262,7 @@ func (r *Resolver) resolve(ctx context.Context, handle, exclude string) (Bound, 
 		if err == nil || !IsCode(err, "unbound") {
 			return b, err
 		}
+		lastErr = err
 		delete(req, "session_id")
 	}
 	ancestor := r.ancestor()
@@ -272,7 +286,7 @@ func (r *Resolver) resolve(ctx context.Context, handle, exclude string) (Bound, 
 		req["execution"] = handle
 		return bind(4)
 	}
-	return Bound{}, &hubclient.Error{Code: "unbound", Message: "Pass the execution handle from SessionStart in the execution argument, or restart with IRIS_EXECUTION set. Iris cannot identify this session safely."}
+	return Bound{}, lastErr
 }
 
 // Maintain stops before any renewal after parent loss. The process owner also cancels

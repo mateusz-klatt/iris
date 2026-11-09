@@ -35,6 +35,9 @@ func Stopped(w io.Writer, reason string) error {
 // heartbeat ever runs to confirm it.
 const recoveryGrace = 150 * time.Second
 
+// diagnosticDelay leaves hooks time to register a replacement before another model turn.
+const diagnosticDelay = time.Minute
+
 // maxBackoff caps reconnect delay. Tests shrink it so the cap is observable.
 var maxBackoff = 30 * time.Second
 
@@ -144,7 +147,7 @@ type Runner struct {
 	Resolver        *binding.Resolver
 	Output          io.Writer
 	Window, Backoff time.Duration
-	// Now reads the clock for the coalescing window. Nil means time.Now.
+	// Now reads the clock for coalescing, recovery and stopped diagnostics. Nil means time.Now.
 	Now func() time.Time
 	// after waits out a backoff. Tests replace it to see each delay without waiting.
 	after func(time.Duration) <-chan time.Time
@@ -162,7 +165,9 @@ type Runner struct {
 	// not stop the client then.
 	checkpointed func(int64)
 	// stopped says "notifications stopped" was printed for a loss not yet replaced.
-	stopped bool
+	stopped      bool
+	stoppedSince time.Time
+	diagnosed    bool
 }
 
 func (r *Runner) wait(d time.Duration) <-chan time.Time {
@@ -198,6 +203,7 @@ func (r *Runner) Run(ctx context.Context) error {
 		call, cancel := context.WithTimeout(ctx, 5*time.Second)
 		b, err := r.Resolver.Resolve(call, "")
 		cancel()
+		bindErr := err
 		r.opened = time.Time{}
 		if err == nil && b.ExecutionID != current {
 			if current != "" {
@@ -238,9 +244,15 @@ func (r *Runner) Run(ctx context.Context) error {
 		} else {
 			lostSince = time.Time{}
 		}
+		if r.stopped && !r.diagnosed && r.now().Sub(r.stoppedSince) >= diagnosticDelay {
+			if _, werr := fmt.Fprintf(r.Output, "Iris: notifications still stopped: %s\n", retryDiagnostic(bindErr)); werr != nil {
+				return outputError{werr}
+			}
+			r.diagnosed = true
+		}
 		// Say it once: each retry would cost the model another turn.
 		rejected := binding.IsCode(err, "unauthorized")
-		if rejected && !warned {
+		if rejected && !warned && !r.stopped {
 			if _, werr := fmt.Fprintln(r.Output, "Iris: the hub rejected this host's token, so notifications have stopped. Tell the user to run `iris doctor`."); werr != nil {
 				return werr
 			}
@@ -293,7 +305,44 @@ func (r *Runner) sayLost() error {
 		return outputError{err}
 	}
 	r.stopped = true
+	r.stoppedSince = r.now()
+	r.diagnosed = false
 	return nil
+}
+
+// retryDiagnostic uses binding evidence only. An unbound retry does not prove hooks are
+// missing; unknown errors and hub text cannot safely establish a more specific cause.
+func retryDiagnostic(err error) string {
+	var lost *binding.LostError
+	if errors.As(err, &lost) {
+		err = lost.Cause
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "the binding retry timed out. Run `iris doctor`."
+	}
+	var failure *hubclient.Error
+	if errors.As(err, &failure) {
+		switch failure.Code {
+		case "ambiguous":
+			return "multiple sessions match; Iris cannot choose a replacement safely. Restart this session."
+		case "unbound":
+			if failure.Message == "handle does not match this client and host" {
+				return "the execution handle does not match this client and host. Restart this session."
+			}
+			if failure.Message == "the execution handle names an Execution already found lost" {
+				return "the execution handle names an Execution already found lost; Iris will not reuse it. Restart this session."
+			}
+			return "Iris cannot positively identify a replacement Execution. Run `iris doctor` to check the hooks, or restart this session."
+		case "lost":
+			if failure.Message == "the binding retry returned an Execution already found lost" {
+				return "the binding retry returned an Execution already found lost; Iris will not reuse it. Restart this session."
+			}
+			return "the binding retry still names an unavailable Execution. Restart this session."
+		case "unauthorized":
+			return "the hub rejected this host's token. Run `iris doctor`."
+		}
+	}
+	return "the reason a replacement binding is unavailable is unknown. Run `iris doctor`."
 }
 
 // waiting reads how much mail is unfetched. An older hub does not say.
