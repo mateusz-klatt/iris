@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 )
 
@@ -55,9 +56,6 @@ func TestOwnerOnlyStableToken(t *testing.T) {
 	}
 }
 func TestTokenSymlinkRejected(t *testing.T) {
-	if runtime.GOOS == "windows" {
-		t.Skip("symlink privilege varies")
-	}
 	dir := t.TempDir()
 	target := filepath.Join(dir, "target")
 	if err := os.WriteFile(target, []byte("do not overwrite"), 0600); err != nil {
@@ -65,10 +63,17 @@ func TestTokenSymlinkRejected(t *testing.T) {
 	}
 	link := filepath.Join(dir, "link")
 	if err := os.Symlink(target, link); err != nil {
+		// ERROR_PRIVILEGE_NOT_HELD: this Windows account cannot create the test input.
+		if runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(1314)) {
+			t.Skip("symlink creation requires Developer Mode or SeCreateSymbolicLinkPrivilege")
+		}
 		t.Fatal(err)
 	}
-	if _, err := Token(link); err == nil {
-		t.Fatal("symlink accepted")
+	if token, err := Token(link); token != "" || err == nil || !strings.Contains(err.Error(), "regular file") {
+		t.Fatalf("symlink accepted or refused for the wrong reason: %q %v", token, err)
+	}
+	if raw, err := os.ReadFile(target); err != nil || string(raw) != "do not overwrite" {
+		t.Fatalf("symlink target changed: %q %v", raw, err)
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/mateusz-klatt/iris/internal/gitinfo"
@@ -41,13 +42,6 @@ func needsPermissions(t *testing.T) {
 	t.Helper()
 	if runtime.GOOS == "windows" || os.Getuid() == 0 {
 		t.Skip("directory modes are not enforced here")
-	}
-}
-
-func needsSymlinks(t *testing.T) {
-	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("symlinks need a privilege on Windows")
 	}
 }
 
@@ -104,7 +98,6 @@ func TestInstallRefusesAHookItCannotRead(t *testing.T) {
 }
 
 func TestInstallRefusesASymlink(t *testing.T) {
-	needsSymlinks(t)
 	dir, hook := repoHook(t)
 	target := filepath.Join(t.TempDir(), "shared")
 	seed(t, target, "#!/bin/sh\n")
@@ -112,6 +105,10 @@ func TestInstallRefusesASymlink(t *testing.T) {
 		t.Fatal(err)
 	}
 	if err := os.Symlink(target, hook); err != nil {
+		// ERROR_PRIVILEGE_NOT_HELD: this Windows account cannot create the test input.
+		if runtime.GOOS == "windows" && errors.Is(err, syscall.Errno(1314)) {
+			t.Skip("symlink creation requires Developer Mode or SeCreateSymbolicLinkPrivilege")
+		}
 		t.Fatal(err)
 	}
 	if err := Install(bg, dir, testIris); err == nil || !strings.Contains(err.Error(), "symlink") {

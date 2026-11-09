@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/mateusz-klatt/iris/internal/config"
 	"golang.org/x/sys/windows"
 )
 
@@ -42,7 +43,9 @@ func TestFileMemoryIsOwnerOnlyOnWindows(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	tmp.Close()
+	if err := tmp.Close(); err != nil {
+		t.Fatal(err)
+	}
 	sd, err := windows.GetNamedSecurityInfo(tmp.Name(), windows.SE_FILE_OBJECT, windows.DACL_SECURITY_INFORMATION)
 	if err != nil {
 		t.Fatal(err)
@@ -56,4 +59,33 @@ func TestFileMemoryIsOwnerOnlyOnWindows(t *testing.T) {
 		t.Fatal("forget failed")
 	}
 	m.prune()
+}
+
+func TestFileMemoryKeepsProofWhenWindowsRefusesCreatingAFile(t *testing.T) {
+	m := newFileMemory(t)
+	m.Remember("claude", "s", 3)
+	t.Run("creation denied after protection", func(t *testing.T) {
+		m.restrict = func(path string) error {
+			if err := config.OwnerOnly(path); err != nil {
+				return err
+			}
+			// A concurrent ACL change can refuse new files after protection succeeded.
+			if path == m.dir {
+				denyFileAccess(t, path, windows.FILE_WRITE_DATA) // FILE_ADD_FILE for a directory.
+			}
+			return nil
+		}
+		m.Remember("claude", "s", 4)
+		if got := m.Recall("claude", "s"); got != 3 {
+			t.Fatalf("a failed write replaced the previous proof with %d", got)
+		}
+		if entries := mustList(t, m.dir); len(entries) != 1 {
+			t.Fatalf("a failed write left temporary files: %v", entries)
+		}
+	})
+	m.restrict = config.OwnerOnly
+	m.Remember("claude", "s", 4)
+	if got := m.Recall("claude", "s"); got != 4 {
+		t.Fatalf("a write after access was restored did not replace the proof: %d", got)
+	}
 }

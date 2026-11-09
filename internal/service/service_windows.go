@@ -34,25 +34,22 @@ func (v registryValue) Read() (string, error) {
 	if err != nil {
 		return "", present(err)
 	}
-	defer k.Close()
 	s, _, err := k.GetStringValue(v.name)
-	return s, present(err)
+	return s, errors.Join(present(err), k.Close())
 }
 func (v registryValue) Write(s string) error {
 	k, _, err := registry.CreateKey(registry.CURRENT_USER, v.key, registry.SET_VALUE)
 	if err != nil {
 		return err
 	}
-	defer k.Close()
-	return k.SetStringValue(v.name, s)
+	return errors.Join(k.SetStringValue(v.name, s), k.Close())
 }
 func (v registryValue) Remove() error {
 	k, err := registry.OpenKey(registry.CURRENT_USER, v.key, registry.SET_VALUE)
 	if err != nil {
 		return present(err)
 	}
-	defer k.Close()
-	return present(k.DeleteValue(v.name))
+	return errors.Join(present(k.DeleteValue(v.name)), k.Close())
 }
 
 // Host uses HKCU Run, which requires no administrator rights. argv is iris serve.
@@ -139,10 +136,11 @@ func (p detachedHub) Responds(ctx context.Context) bool {
 	if err != nil {
 		return false
 	}
-	res.Body.Close()
+	// The probe uses only the received status; discarding its body cannot change that result.
+	_ = res.Body.Close()
 	return res.StatusCode == http.StatusOK
 }
-func (p detachedHub) locked(f func() error) error {
+func (p detachedHub) locked(f func() error) (err error) {
 	if err := os.MkdirAll(p.dir, 0700); err != nil {
 		return err
 	}
@@ -150,16 +148,16 @@ func (p detachedHub) locked(f func() error) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	// Closing the file also releases its lock, even when the operation failed.
+	defer func() { err = errors.Join(err, file.Close()) }()
 	ov := &windows.Overlapped{}
 	if err := windows.LockFileEx(windows.Handle(file.Fd()), windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, ov); err != nil {
 		return fmt.Errorf("service operation already in progress: %w", err)
 	}
-	defer windows.UnlockFileEx(windows.Handle(file.Fd()), 0, 1, 0, ov)
 	return f()
 }
 func (p detachedHub) Start(ctx context.Context) error {
-	return p.locked(func() error {
+	return p.locked(func() (err error) {
 		if p.Responds(ctx) {
 			return nil
 		}
@@ -167,14 +165,13 @@ func (p detachedHub) Start(ctx context.Context) error {
 		if h, err := p.openRecorded(); err != nil {
 			return err
 		} else if h != 0 {
-			windows.CloseHandle(h)
-			return nil
+			return windows.CloseHandle(h)
 		}
 		log, err := os.OpenFile(p.path(".log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 		if err != nil {
 			return err
 		}
-		defer log.Close()
+		defer func() { err = errors.Join(err, log.Close()) }()
 		cmd := exec.Command(p.argv[0], p.argv[1:]...)
 		cmd.Stdout, cmd.Stderr = log, log
 		cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.DETACHED_PROCESS | windows.CREATE_NEW_PROCESS_GROUP, HideWindow: true}
@@ -182,7 +179,7 @@ func (p detachedHub) Start(ctx context.Context) error {
 			return err
 		}
 		// Keep the process handle open until its creation time has been recorded.
-		defer cmd.Process.Release()
+		defer func() { err = errors.Join(err, cmd.Process.Release()) }()
 		return p.record(cmd.Process, processCreated)
 	})
 }
@@ -215,8 +212,7 @@ func (p detachedHub) openRecorded() (windows.Handle, error) {
 	created, _ := creationTime(h)
 	state, _ := windows.WaitForSingleObject(h, 0)
 	if created != id.Created || state != uint32(windows.WAIT_TIMEOUT) {
-		windows.CloseHandle(h)
-		return 0, nil
+		return 0, windows.CloseHandle(h)
 	}
 	return h, nil
 }
@@ -231,7 +227,7 @@ func terminate(h windows.Handle, waitMS uint32) error {
 	return nil
 }
 func (p detachedHub) Stop(_ context.Context) error {
-	return p.locked(func() error {
+	return p.locked(func() (err error) {
 		h, err := p.openRecorded()
 		if err != nil {
 			return err
@@ -239,7 +235,7 @@ func (p detachedHub) Stop(_ context.Context) error {
 		if h == 0 {
 			return p.forget(nil)
 		}
-		defer windows.CloseHandle(h)
+		defer func() { err = errors.Join(err, windows.CloseHandle(h)) }()
 		return p.forget(terminate(h, 5000))
 	})
 }

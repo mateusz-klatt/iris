@@ -19,6 +19,18 @@ import (
 	"golang.org/x/sys/windows/registry"
 )
 
+func closeForTest(t *testing.T, close func() error) {
+	t.Helper()
+	if err := close(); err != nil {
+		t.Error(err)
+	}
+}
+
+func closeHandleForTest(t *testing.T, handle windows.Handle) {
+	t.Helper()
+	closeForTest(t, func() error { return windows.CloseHandle(handle) })
+}
+
 func TestRegistryOwnValue(t *testing.T) {
 	v := registryValue{runKey, fmt.Sprintf("Iris-test-%d-%d", os.Getpid(), time.Now().UnixNano())}
 	t.Cleanup(func() {
@@ -96,7 +108,7 @@ func freeAddress(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer l.Close()
+	defer closeForTest(t, l.Close)
 	return l.Addr().String()
 }
 
@@ -145,7 +157,7 @@ func TestRegistryReportsRealFailures(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer k.Close()
+	defer closeForTest(t, k.Close)
 	if err := k.SetDWordValue(v.name, 1); err != nil {
 		t.Fatal(err)
 	}
@@ -203,7 +215,7 @@ func TestTwoHubsInOneDirectoryKeepSeparateIdentities(t *testing.T) {
 	if err != nil || h == 0 {
 		t.Fatalf("second hub was not recorded: %v %v", h, err)
 	}
-	defer windows.CloseHandle(h)
+	defer closeHandleForTest(t, h)
 	if err := first.Stop(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -309,6 +321,18 @@ func TestLockedRefusesConcurrentAndBrokenState(t *testing.T) {
 	}
 }
 
+func TestLockedReleasesTheFileAfterAnOperationFails(t *testing.T) {
+	p := detachedHub{dir: t.TempDir(), stem: "hub"}
+	broken := errors.New("operation failed")
+	if err := p.locked(func() error { return broken }); !errors.Is(err, broken) {
+		t.Fatalf("operation error was lost: %v", err)
+	}
+	ran := false
+	if err := p.locked(func() error { ran = true; return nil }); err != nil || !ran {
+		t.Fatalf("failed operation retained its lock: ran=%v %v", ran, err)
+	}
+}
+
 func TestStartReportsWhatStopsIt(t *testing.T) {
 	ctx := context.Background()
 	closed := "http://127.0.0.1:1/v1/status"
@@ -374,7 +398,7 @@ func TestOpenRecordedRejectsWhatIsNotTheHub(t *testing.T) {
 	if h == 0 || err != nil {
 		t.Fatalf("running hub: %v %v", h, err)
 	}
-	windows.CloseHandle(h)
+	closeHandleForTest(t, h)
 	if err := cmd.Process.Kill(); err != nil {
 		t.Fatal(err)
 	}
@@ -395,7 +419,7 @@ func TestStaleIdentityIsReplacedByANewHub(t *testing.T) {
 	if err != nil || h == 0 {
 		t.Fatalf("%v %v", h, err)
 	}
-	windows.CloseHandle(h)
+	closeHandleForTest(t, h)
 	if err := p.Stop(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -407,7 +431,11 @@ func TestAnUnrecordedHubDoesNotKeepRunning(t *testing.T) {
 		done := make(chan error, 1)
 		go func() { done <- cmd.Wait() }()
 		select {
-		case <-done:
+		case err := <-done:
+			var exitErr *exec.ExitError
+			if !errors.As(err, &exitErr) {
+				t.Fatalf("unrecorded hub did not report termination: %v", err)
+			}
 		case <-time.After(10 * time.Second):
 			t.Fatal("hub kept running without an identity")
 		}
@@ -453,7 +481,7 @@ func TestTerminateJudgesByTheWait(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer windows.CloseHandle(h)
+	defer closeHandleForTest(t, h)
 	if err := terminate(h, 1); err == nil || !strings.Contains(err.Error(), "did not stop") {
 		t.Fatalf("a refused termination counted as stopped: %v", err)
 	}
@@ -486,7 +514,7 @@ func TestForgetKeepsTheIdentityOfARunningHub(t *testing.T) {
 	if err := p.forget(nil); err == nil {
 		t.Fatal("removed a file that another process holds")
 	}
-	windows.CloseHandle(held)
+	closeHandleForTest(t, held)
 	if err := p.forget(nil); err != nil {
 		t.Fatal(err)
 	}
@@ -525,7 +553,7 @@ func TestDetachedHubIdentity(t *testing.T) {
 	if err != nil || h == 0 {
 		t.Fatalf("identity: %v %v", h, err)
 	}
-	defer windows.CloseHandle(h)
+	defer closeHandleForTest(t, h)
 	if err := p.Start(ctx); err != nil {
 		t.Fatal(err)
 	}
