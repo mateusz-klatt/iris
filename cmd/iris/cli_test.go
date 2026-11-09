@@ -324,6 +324,40 @@ func TestServeRejectsBadFlagsAndStopsWhenSignalled(t *testing.T) {
 	}
 }
 
+// On Unix TestServeStopsOnSIGTERM proves a signal ends this context. Windows cannot signal
+// itself, so here the test ends the context directly and asserts what follows: a clean exit.
+func TestServeExitsCleanlyWhenItsContextEnds(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
+	t.Setenv("AppData", dir)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "cfg"))
+	original := serveContext
+	t.Cleanup(func() { serveContext = original })
+	ctx, stop := context.WithCancel(context.Background())
+	defer stop()
+	serveContext = func() (context.Context, context.CancelFunc) { return ctx, stop }
+
+	errCh := make(chan error, 1)
+	_, stderr := capture(t, func() {
+		go func() {
+			errCh <- run([]string{"serve", "--listen", "127.0.0.1:0", "--db", filepath.Join(dir, "hub.db"), "--token-file", filepath.Join(dir, "hub.token")})
+		}()
+		stop()
+		select {
+		case err := <-errCh:
+			if err != nil {
+				t.Errorf("a hub told to stop did not exit cleanly: %v", err)
+			}
+		case <-time.After(10 * time.Second):
+			t.Error("the hub did not stop")
+		}
+	})
+	if !strings.Contains(stderr, "Iris listening on 127.0.0.1:") {
+		t.Fatalf("%q", stderr)
+	}
+}
+
 func TestOpenBrowserIsBestEffort(t *testing.T) {
 	dir := t.TempDir()
 	if openBrowser([]string{filepath.Join(dir, "absent")}) {
@@ -414,7 +448,7 @@ func TestGuardHelpCheckAndInstall(t *testing.T) {
 	}
 }
 
-func TestGuardReportsADeletedWorkingDirectory(t *testing.T) {
+func TestGuardTreatsADeletedWorkingDirectoryAsNoRepository(t *testing.T) {
 	if runtime.GOOS != "linux" {
 		t.Skip("only Linux reports a deleted working directory: Windows refuses to delete it and macOS still names it")
 	}
@@ -423,8 +457,17 @@ func TestGuardReportsADeletedWorkingDirectory(t *testing.T) {
 	if err := os.RemoveAll(gone); err != nil {
 		t.Fatal(err)
 	}
-	if err := runGuard([]string{"check"}); err == nil {
-		t.Fatal("expected getwd failure")
+	if err := runGuard([]string{"install"}); err == nil || !strings.Contains(err.Error(), "not a git worktree") {
+		t.Fatalf("install: %v", err)
+	}
+	// A check that cannot look warns and allows, the same as outside a repository.
+	_, stderr := capture(t, func() {
+		if err := runGuard([]string{"check"}); err != nil {
+			t.Fatalf("check: %v", err)
+		}
+	})
+	if !strings.Contains(stderr, "not a git worktree") {
+		t.Fatalf("%q", stderr)
 	}
 }
 

@@ -362,10 +362,9 @@ func appendFailure(tokenFile string, entry Failure) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
 		return err
 	}
+	// Only a special file is refused here. Anything Lstat cannot inspect, opening reports.
 	if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
 		return errors.New("failure log is not a regular file")
-	} else if err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
 	}
 	f, err := openFailureLog(path, os.O_CREATE|os.O_RDWR, 0600)
 	if err != nil {
@@ -434,17 +433,13 @@ func readLog(path string, limit int) ([]Failure, error) {
 	if limit <= 0 {
 		return out, nil
 	}
-	info, err := os.Lstat(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return out, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	if !info.Mode().IsRegular() {
+	if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
 		return nil, errors.New("failure log is not regular")
 	}
 	f, err := openFailureLog(path, os.O_RDONLY, 0)
+	if errors.Is(err, os.ErrNotExist) {
+		return out, nil
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -454,7 +449,8 @@ func readLog(path string, limit int) ([]Failure, error) {
 	}
 	defer unlockFailureLog(f)
 	// Size again under the lock: a writer may have grown or cut the file meanwhile.
-	if info, err = f.Stat(); err != nil {
+	info, err := f.Stat()
+	if err != nil {
 		return nil, err
 	}
 	offset := max(int64(0), info.Size()-failureLogLimit)

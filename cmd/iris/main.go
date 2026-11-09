@@ -24,6 +24,12 @@ import (
 // exitProcess is the process boundary. Tests replace it so main can be called.
 var exitProcess = os.Exit
 
+// serveContext ends when the hub should stop. It is the process boundary for a signal:
+// Windows has no way for a process to send itself one, so a test there ends the hub here.
+var serveContext = func() (context.Context, context.CancelFunc) {
+	return signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+}
+
 func main() {
 	exitProcess(dispatch(os.Args[1:]))
 }
@@ -139,7 +145,7 @@ func run(args []string) error {
 	if err != nil {
 		return err
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := serveContext()
 	defer stop()
 	done := make(chan struct{})
 	defer close(done)

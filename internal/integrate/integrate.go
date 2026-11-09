@@ -359,16 +359,9 @@ func saveManifest(stateDir string, m manifest) error {
 // update validates, backs up the original once, then writes next.
 // render must refuse a broken existing file by returning ErrBroken.
 func (l Layout) update(client, path string, render func(existing []byte) ([]byte, error)) error {
-	if err := refuseSpecial(path); err != nil {
+	existing, absent, err := readExisting(path)
+	if err != nil {
 		return err
-	}
-	existing, err := os.ReadFile(path)
-	absent := errors.Is(err, os.ErrNotExist)
-	if err != nil && !absent {
-		return err
-	}
-	if absent {
-		existing = nil
 	}
 	next, err := render(existing)
 	if err != nil {

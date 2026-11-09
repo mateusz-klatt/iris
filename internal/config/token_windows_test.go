@@ -66,6 +66,20 @@ func TestRestrictToChangesNothingWithoutAnOwner(t *testing.T) {
 	}
 }
 
+func TestTokenRemovesAPartialFileWhenItsOwnerCannotBeRead(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hub.token")
+	broken := errors.New("no token")
+	original := tokenOwner
+	t.Cleanup(func() { tokenOwner = original })
+	tokenOwner = func() (*windows.Tokenuser, error) { return nil, broken }
+	if _, err := Token(path); !errors.Is(err, broken) {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatal("partial token left behind", err)
+	}
+}
+
 func TestOwnerDACLRefusesAnInvalidSID(t *testing.T) {
 	if _, err := ownerDACL("", "not-a-sid"); err == nil {
 		t.Fatal("no error")

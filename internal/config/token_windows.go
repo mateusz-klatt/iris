@@ -6,8 +6,12 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// tokenOwner is the process boundary for the account a token is restricted to. No real
+// account fails this for a file it has just created, and the partial file must still go.
+var tokenOwner = windows.GetCurrentProcessToken().GetTokenUser
+
 func secureToken(path string) error {
-	return restrictTo(path, windows.GetCurrentProcessToken().GetTokenUser)
+	return restrictTo(path, tokenOwner)
 }
 
 // OwnerOnly gives a file or directory the token's protected DACL: one entry for the current

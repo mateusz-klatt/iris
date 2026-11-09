@@ -52,17 +52,14 @@ func unwireFile(stateDir, path string, rec manifestFile, strip stripFunc) error 
 	if rec.Backup != "" {
 		backup = filepath.Join(stateDir, rec.Backup)
 	}
-	if err := refuseSpecial(path); err != nil {
+	data, absent, err := readExisting(path)
+	if err != nil {
 		return err
 	}
-	data, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
+	if absent {
 		_ = os.Remove(backup)
 		removeDirs(rec)
 		return nil
-	}
-	if err != nil {
-		return err
 	}
 	next, removed, err := strip(path, data)
 	if err != nil {
