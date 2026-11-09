@@ -100,6 +100,7 @@ func New(s *store.Store, token string, allowedHosts []string) *Hub {
 	h.operatorRoutes()
 	h.tokenRoutes()
 	h.ownerAccountsRoutes()
+	h.consoleImportRoutes()
 	h.mux.HandleFunc("GET /v1/watch", h.watch)
 	h.mux.HandleFunc("POST /v1/wake-tickets", h.wakeTicket)
 	return h

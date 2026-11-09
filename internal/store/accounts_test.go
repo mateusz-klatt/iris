@@ -17,6 +17,7 @@ const consoleTestHash = "scrypt$16384$8$1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAA
 // Old-schema fixtures undo only this migration before reconstructing their
 // historical version. Fresh-migration tests remain backed by captured old SQL.
 const removeConsoleRevisionSchema = `
+DROP TABLE ConsoleAssignmentImport;
 DROP TRIGGER console_repository_change;
 DROP TRIGGER console_revision_account_insert;
 DROP TRIGGER console_revision_account_update;

@@ -295,7 +295,7 @@ func TestMigrationBackfillsEveryClaimAndFoldsEveryRepository(t *testing.T) {
 		t.Fatal(err)
 	}
 	var version int
-	if err = s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 19 {
+	if err = s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 20 {
 		t.Fatal(version, err)
 	}
 	for _, p := range held {

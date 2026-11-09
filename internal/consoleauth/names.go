@@ -2,6 +2,7 @@ package consoleauth
 
 import (
 	"errors"
+	"slices"
 	"strings"
 	"unicode"
 	"unicode/utf8"
@@ -9,6 +10,12 @@ import (
 	"golang.org/x/text/cases"
 	"golang.org/x/text/unicode/norm"
 )
+
+// ValidLocale accepts the console's supported catalog or an unset preference.
+// Import mappings must choose one explicitly for unsupported source locales.
+func ValidLocale(locale string) bool {
+	return locale == "" || slices.Contains(strings.Fields("ar bn bs cs da de el en es fa fi fil fr ga he hi hr hu hy id is it ja ko lt lv ms my-MM nl no pl pt ro ru sk sq sr sv sw th tr uk vi zh-Hant zh"), locale)
+}
 
 var (
 	ErrInvalidUsername    = errors.New("invalid username")

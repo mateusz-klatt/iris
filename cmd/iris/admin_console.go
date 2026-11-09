@@ -10,12 +10,15 @@ import (
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 )
 
-const adminConsoleUsage = "usage: iris admin console (create | reset) <username> < password-file\nThe password is read exactly from standard input, without trimming a final newline"
+const adminConsoleUsage = "usage: iris admin console (create | reset) <username> < password-file\n       iris admin console import --source <SQLite file> --manifest <JSON file> [--apply]\n       iris admin console import-grants --manifest <JSON file> [--apply]\nThe password is read exactly from standard input, without trimming a final newline"
 
 // adminConsoleCommand sends a new password to the owner-only staged setup path.
 // Passwords are never command arguments, printed output or URL components. The
 // hub performs the KDF and is the only process writing account records.
 func adminConsoleCommand(ctx context.Context, client *hubclient.Client, args []string, stdin io.Reader, stdout io.Writer) error {
+	if len(args) > 0 && (args[0] == "import" || args[0] == "import-grants") {
+		return adminConsoleImport(ctx, client, args, stdout)
+	}
 	if len(args) != 2 || (args[0] != "create" && args[0] != "reset") {
 		return errors.New(adminConsoleUsage)
 	}

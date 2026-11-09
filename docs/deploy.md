@@ -7,13 +7,14 @@ Iris sends no-store and a CSP that permits only its own scripts. Cloudflare term
 TLS and can see credentials and message content. This is a shared-trust service for
 one developer or a small team, not a multi-tenant boundary (D13).
 
-ADR 014 account authentication is staged through schema 19 and internal typed
+ADR 014 account authentication is staged through schema 20 and internal typed
 store entry points. Account HTTP routes remain inactive in `iris serve`; deploying
 this stage does not switch console authentication or enable member access. The
 session/authentication defenses and owner setup commands are implemented behind
-the account gate for verification. Do not import accounts, provision a production
-account or retire login links as part of this stage. Importer, account UI and
-reviewed cutover are later ordered steps.
+the account gate for verification. The owner-only importer is available separately;
+see [account import and recovery](accounts-import.md) for its reviewed procedure.
+Deploying this code does not authorize a real import. Account UI and reviewed
+cutover remain later ordered steps; keep login links until that cutover.
 
 The account implementation uses a separate random 256-bit console key, stored
 with mode 0600 or the owner-only Windows DACL. It never reuses the owner token or

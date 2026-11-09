@@ -3,8 +3,6 @@ package store
 import (
 	"context"
 	"database/sql"
-	"slices"
-	"strings"
 
 	"github.com/mateusz-klatt/iris/internal/consoleauth"
 )
@@ -51,7 +49,7 @@ func consoleRole(role string) bool {
 // Locale values are the exact web/src/i18n.ts catalog, or unset. An importer must
 // explicitly resolve other source values; storage never guesses a replacement.
 func consoleLocale(locale string) bool {
-	return locale == "" || slices.Contains(strings.Fields("ar bn bs cs da de el en es fa fi fil fr ga he hi hr hu hy id is it ja ko lt lv ms my-MM nl no pl pt ro ru sk sq sr sv sw th tr uk vi zh-Hant zh"), locale)
+	return consoleauth.ValidLocale(locale)
 }
 
 func consoleProfile(display, ui, correspondence string) error {
