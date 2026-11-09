@@ -73,7 +73,7 @@ hook that emitted a note moves the told state. This removes one failure: taking 
 acceptance of a message for a delivered notification. It does not prove delivery. A hook records
 its note as told when it emits it, and Iris cannot see whether the client then put it in front
 of the model, so a cancelled turn or lost hook output can still leave mail unannounced. Decision
-5 bounds that case.
+5 gives that case one more attempt.
 
 **3. One wake for one attention event, and one unconsumed wake for a session.** The runner
 keeps what it last woke for, and what the queue command answered, in the session's memory file
@@ -85,11 +85,22 @@ beside its generation, so a restarted `iris mcp` knows it too. It keeps four ans
 - it fails before it submits: nothing was stored;
 - anything else: unknown, and treated as submitted.
 
-A wake is not repeated for the same attention identity, except once after a failure before
-submission. While a submitted wake is unconsumed the runner submits no other, whatever arrives.
-A wake is consumed when a prompt hook of the session has run after it was submitted. No timer
-ends it, because a stored message cannot be shown to have gone. This first version does not
-withdraw a queued wake.
+A wake is submitted at most twice for one attention identity: when it becomes pending, and
+once more under decision 5. A failure before submission allows one retry of either. That
+allowance is part of the kept state.
+
+While a submitted wake is unconsumed the runner submits no other, whatever arrives, the second
+wake of decision 5 included. A wake is consumed only by its own turn. The fixed text ends with a
+random token that the runner made and kept, never anything taken from mail, and the prompt hook
+that finds that token in its prompt marks the wake consumed. A prompt that a person typed does
+not. The captured prompt hook of a queued turn has a prompt field; that it holds the queued text
+unchanged is a condition for accepting the implementation. The token routes and does not
+authenticate: whatever can type into the session can write it.
+
+No timer ends an unconsumed wake, because a stored message cannot be shown to have gone, and
+this first version does not withdraw one. So a submission that was stored, or whose answer was
+unknown, and that never runs holds the reservation until the session next starts. Until then
+the session hears only through its hooks.
 
 Before it submits, the runner waits a short settle time and looks again: a session that is in a
 turn and was told by a hook needs no wake. The runner cannot see turn boundaries. A marker
@@ -109,9 +120,11 @@ the count unchanged, and the second is never announced.
 
 **5. An announcement that brought no fetch is made once more.** If the same attention identity
 is still pending ten minutes after a hook emitted its note, it counts as untold once: the next
-prompt hook says it again, and the runner may wake for it once. After that second announcement
-Iris stays quiet about it until something new arrives. This bounds the lost note of decision 2
-without turning a model that chooses not to read its mail into a loop.
+prompt hook says it again, and the runner may submit the second wake that decision 3 allows.
+After that Iris stays quiet about it until something new arrives. This is best effort. It bounds
+how often Iris announces one event, and what that costs, not when the model receives the note or
+whether it does: the second note can be lost as the first was. A model that chooses not to read
+its mail is asked twice, not in a loop.
 
 **6. The shell post-tool hook carries the note.** The reconcile already calls the hub, but its
 response names only the Execution today. It gains the attention block, and the hook adds the
@@ -164,15 +177,19 @@ same and is on by default, so parity is the aim once this is measured.
 
 For the pull requests that implement this:
 
-- With a recording stand-in for the Codex binary: one submission per attention identity; none
-  when a hook told the session first; none while one is unconsumed, also across a restart of
-  `iris mcp`; each of the four answers of decision 3 handled as written; the argv exactly the
-  fixed one, with no shell; a session id that is not a UUID runs nothing; the told state never
-  moves because of a wake; nothing runs unless the wake was turned on.
+- With a recording stand-in for the Codex binary: one submission when an attention identity
+  becomes pending; none when a hook told the session first; none while one is unconsumed, also
+  across a restart of `iris mcp`; each of the four answers of decision 3 handled as written; the
+  argv exactly the fixed one, with no shell; a session id that is not a UUID runs nothing; the
+  told state never moves because of a wake; nothing runs unless the wake was turned on.
+- Consumption: a prompt that a person typed before the queued wake ran does not release the
+  reservation; the prompt that carries the wake's token does; the token is never derived from
+  mail.
 - Attention identity: one message handled and one received, with the count unchanged, is
   announced; a changed stream id announces what is pending once; a heartbeat, a registration and
   a `changed` event cause no wake.
-- The second announcement of decision 5 happens once, after ten minutes, and not again.
+- The second announcement of decision 5 happens once, after ten minutes, and not again; its wake
+  is submitted only when none is unconsumed, and the allowance survives a restart.
 - The reconcile response carries attention, and the post-tool note appears once per identity for
   Claude Code and Codex, on captured payloads only.
 - `iris doctor --live` for Codex with the wake on: mail sent to the scratch session is fetched by
