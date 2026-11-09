@@ -59,7 +59,7 @@ Grok/Cursor CLI have no prompt path here, despite
 [docs/architecture.md:248](https://github.com/mateusz-klatt/iris/blob/4840765fbd672dbb82921bb4793795aa1136b9e7/docs/architecture.md#L248)
 saying next-turn context for all with limits. Counts, rather than event identity, decide whether a
 note is new (`attention.go:45–71`). Native idle Codex attention is not demonstrated by these tests.
-The separate [Codex attention measurement](clients/codex-attention-2026-11-09.md) establishes client
+The separate [Codex attention measurement](clients/codex-attention.md) establishes client
 capabilities; it does not change the Iris implementation assessed here.
 
 **A5 — closed for the emitted-line checkpoint boundary.**
@@ -462,7 +462,7 @@ The first issues to resolve before claiming the original P1 guarantees complete 
 
 1. **A7: protect client configuration.** Replace incomplete TOML conflict scanning with valid input/output handling and define multi-file installation failure behavior. An integration must not make a valid underlying client configuration invalid.
 2. **A9/B6: stabilize ambiguous-send retries across the real failure boundary.** Fixed clock buckets do not give ten minutes of retry safety from the first attempt. Add proof using an actual stored send, response loss, client recreation and a bucket-boundary retry; narrow the MCP tool description until that guarantee holds.
-3. **A4: resolve the next-turn attention coverage claim.** Prompt and allowed-edit attention are implemented, but unsupported clients/events and native idle Codex behavior need an honest support boundary. The separate [Codex attention measurement](clients/codex-attention-2026-11-09.md) supplies client transport evidence; product integration remains separate.
+3. **A4: resolve the next-turn attention coverage claim.** Prompt and allowed-edit attention are implemented, but unsupported clients/events and native idle Codex behavior need an honest support boundary. The separate [Codex attention measurement](clients/codex-attention.md) supplies client transport evidence; product integration remains separate.
 4. **D2/C6: finish or explicitly narrow operator promises.** Stale session-adjacent health can falsely reassure an operator; repository policy switches remain unavailable despite documentation. These are P2 completion items rather than evidence that all prior P1 defects remain.
 
 A10's receipt boundary and D1's unsupported remote-target mode require explicit limitations. If a
