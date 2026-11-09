@@ -480,7 +480,8 @@ func TestConsoleOwnerAuditMigrationPreservesHistoryAndEnforcesActorKinds(t *test
  id INTEGER PRIMARY KEY AUTOINCREMENT,actor_account_id TEXT NOT NULL REFERENCES ConsoleAccount(id),
  target_account_id TEXT REFERENCES ConsoleAccount(id),action TEXT NOT NULL,outcome TEXT NOT NULL,created_ms INTEGER NOT NULL);
  INSERT INTO LegacyConsoleAction SELECT id,actor_account_id,target_account_id,action,outcome,created_ms FROM ConsoleAction;
- DROP TABLE ConsoleAction;ALTER TABLE LegacyConsoleAction RENAME TO ConsoleAction;PRAGMA user_version=18;`)
+ DROP TABLE ConsoleAction;ALTER TABLE LegacyConsoleAction RENAME TO ConsoleAction;
+ DROP TABLE ConsoleAssignmentImport;PRAGMA user_version=18;`)
 	if err != nil {
 		t.Fatal(err)
 	}

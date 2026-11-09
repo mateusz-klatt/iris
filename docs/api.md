@@ -404,6 +404,34 @@ Account cookies use a separate namespace from legacy links/cookies, with
 HttpOnly, Path=/, SameSite=Strict and Secure outside literal-loopback HTTP.
 The ADR 002 exact public-origin/trusted-loopback-proxy requirements still apply.
 
+ADR 014 step 4 adds two active owner-only endpoints independently of the gated
+account console. Both require exactly one owner bearer credential and refuse
+browser cookies, including mixed credentials. Host tokens cannot invoke them.
+
+| Endpoint | Bounded JSON request |
+|---|---|
+| `POST /v1/admin/console/import` | `{"batch":{"manifest":{},"rows":[]},"dry_run":true}` |
+| `POST /v1/admin/console/import-grants` | `{"transfer":{"version":1,"source_id":"...","rows":[],"projects":{}},"dry_run":true}` |
+
+The sketches show the envelope only; use the CLI and complete reviewed manifests
+in [account import and recovery](accounts-import.md). `dry_run` must be explicitly
+present and boolean. Missing/mismatched payloads, duplicate keys, unknown fields,
+invalid Unicode and ambiguous field casing are refused. The usual hub body limit
+applies, and each transfer is limited to 32 rows. The CLI reads its source through
+a read-only SQLite snapshot; it never writes the hub database directly.
+
+Dry-run uses dedicated validation without session/coordination expiry writes.
+Apply repeats validation inside one immediate transaction with accounts/grants,
+owner action records and the appropriate fingerprint ledger. Reports contain
+`dry_run`, `created`, `skipped`, `quarantined` and safe per-row ID/action/role and
+mapping indicators. They never contain password records, source payloads or
+fingerprints. Validation/refusal reasons are sanitized; persistence errors do not
+expose SQLite diagnostics. Exact replays skip without restoring later Iris edits;
+changed source rows/mappings and collisions refuse atomically. Account import
+always gives members zero grants; the separate assignment endpoint accepts only
+reviewed viewer-to-`ro` mappings to existing repositories and refuses source
+project `operator` roles even though Iris has `rw`.
+
 The currently active operator routes below accept a bearer token or the legacy
 web UI session cookie. Agents use their machine APIs.
 

@@ -37,3 +37,16 @@ func TestDisplayNameBounds(t *testing.T) {
 		}
 	}
 }
+
+func TestLocalePreferencesRequireCatalogValuesOrExplicitUnset(t *testing.T) {
+	for _, locale := range []string{"", "en", "pl", "my-MM", "zh-Hant"} {
+		if !ValidLocale(locale) {
+			t.Fatal("supported or unset locale refused")
+		}
+	}
+	for _, locale := range []string{"EN", "en-US", " pl", "pl ", "unsupported", "\xff"} {
+		if ValidLocale(locale) {
+			t.Fatal("unsupported locale silently reinterpreted")
+		}
+	}
+}

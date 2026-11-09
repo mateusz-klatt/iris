@@ -510,6 +510,17 @@ Password work runs outside the store lock; issuance and password changes recheck
 the verified account snapshot inside their committing transaction. Password and
 access changes revoke every session. Account UI and cutover remain later work.
 
+ADR 014's importer is an owner-only CLI/API path independent of that account
+gate. The CLI reads an explicitly described SQLite table through a read-only
+snapshot; only the hub writes accounts. Dedicated dry-runs validate without
+expiry bookkeeping or any persisted change. Apply repeats validation and target
+collision checks in one immediate transaction with an internal versioned source
+fingerprint ledger. Exact replays preserve later Iris edits; changed inputs
+refuse instead of overwriting. Imported members have no grants. A separate
+reviewed transfer accepts only explicit viewer-to-`ro` repository mappings,
+never source project operators or inferred `rw` authority. It does not activate
+account login or replace the legacy console.
+
 The trust boundary is the OS user on a host, plus a token per host across hosts. The token
 separates users and hosts, nothing finer. Any process running as that user, including a hook
 from a repository the user trusted, can read it and act as any Execution. Agents under one user
