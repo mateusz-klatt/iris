@@ -127,8 +127,8 @@ func (s *Store) EditConsoleProfile(ctx context.Context, p Principal, revision in
 
 // ChangeConsoleAccess validates the acting operator and edit revision together
 // with grant replacement and revocation. Owner provisioning has a separate path.
-func (s *Store) ChangeConsoleAccess(ctx context.Context, p Principal, target string, revision int64, role string, disabled bool, grants []ConsoleGrant) (ConsoleAccount, error) {
-	var account ConsoleAccount
+func (s *Store) ChangeConsoleAccess(ctx context.Context, p Principal, target string, revision int64, role string, disabled bool, grants []ConsoleGrant) (ConsoleAccessAccount, error) {
+	var account ConsoleAccessAccount
 	err := s.transact(ctx, func(t *transaction) error {
 		if err := t.authorize(p, "ui_access", Request{}); err != nil {
 			return err
@@ -149,7 +149,11 @@ func (s *Store) ChangeConsoleAccess(ctx context.Context, p Principal, target str
 				return fail("conflict", "the last enabled operator must remain enabled")
 			}
 		}
-		account, err = t.replaceConsoleAccess(target, revision, role, disabled, grants)
+		updated, err := t.replaceConsoleAccess(target, revision, role, disabled, grants)
+		if err != nil {
+			return err
+		}
+		account, err = t.consoleAccessProjection(updated)
 		if err != nil {
 			return err
 		}
@@ -158,8 +162,8 @@ func (s *Store) ChangeConsoleAccess(ctx context.Context, p Principal, target str
 	return account, err
 }
 
-func (s *Store) ListConsoleAccounts(ctx context.Context, p Principal) ([]ConsoleAccount, error) {
-	accounts := []ConsoleAccount{}
+func (s *Store) ListConsoleAccounts(ctx context.Context, p Principal) ([]ConsoleAccessAccount, error) {
+	accounts := []ConsoleAccessAccount{}
 	err := s.transact(ctx, func(t *transaction) error {
 		if err := t.authorize(p, "ui_accounts", Request{}); err != nil {
 			return err
@@ -184,12 +188,31 @@ func (s *Store) ListConsoleAccounts(ctx context.Context, p Principal) ([]Console
 			if err != nil {
 				return err
 			}
-			// Trusted password lookup has a separate method; a console projection
-			// must never carry the password record, even inside a Go result.
-			a.PasswordHash, a.LoginKey = "", ""
-			accounts = append(accounts, a)
+			projected, err := t.consoleAccessProjection(a)
+			if err != nil {
+				return err
+			}
+			accounts = append(accounts, projected)
 		}
 		return nil
 	})
 	return accounts, err
+}
+
+func (t *transaction) consoleAccessProjection(a ConsoleAccount) (ConsoleAccessAccount, error) {
+	// Trusted password lookup has a separate method. No console projection may
+	// carry the password record or login key, even inside a Go result.
+	a.PasswordHash, a.LoginKey = "", ""
+	account := ConsoleAccessAccount{ConsoleAccount: a, Grants: []ConsoleGrant{}}
+	rows, err := t.rows("SELECT repository_id,mode FROM ConsoleRepositoryAccess WHERE account_id=? ORDER BY repository_id", a.ID)
+	if err != nil {
+		return ConsoleAccessAccount{}, err
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var g ConsoleGrant
+		rows.Scan(&g.RepositoryID, &g.Mode)
+		account.Grants = append(account.Grants, g)
+	}
+	return account, rows.Err()
 }

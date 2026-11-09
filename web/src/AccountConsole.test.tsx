@@ -38,6 +38,37 @@ beforeEach(async () => {
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
 describe("staged named console", () => {
+  it("opens the access editor only for a named operator and returns to the account view", async () => {
+    const session = serveAccount("rw", "operator");
+    const lists = vi.fn();
+    server.use(http.get("*/v1/ui/accounts", () => {
+      lists();
+      return HttpResponse.json({ accounts: [{ ...session.account, grants: [] }] });
+    }));
+    const user = userEvent.setup();
+    render(<App connect={() => () => {}} />);
+    const access = await screen.findByRole("button", { name: "Access" });
+    expect(lists).not.toHaveBeenCalled();
+    await user.click(access);
+    expect(await screen.findByRole("heading", { name: "Access" })).toBeVisible();
+    expect(access).toHaveAttribute("aria-current", "page");
+    expect(access).toHaveAttribute("aria-controls", "iris-access-panel");
+    expect(lists).toHaveBeenCalledOnce();
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: "Account" }));
+    expect(screen.getByRole("heading", { name: "Account" })).toBeVisible();
+    expect(screen.queryByRole("heading", { name: "Access" })).toBeNull();
+  });
+
+  it.each(["member", "legacy"])("does not expose or load account access from the %s console", async (role) => {
+    if (role === "member") serveAccount();
+    const lists = vi.fn(() => HttpResponse.json({ accounts: [] }));
+    server.use(http.get("*/v1/ui/accounts", lists));
+    render(<App connect={() => () => {}} />);
+    await screen.findByRole("navigation");
+    expect(screen.queryByRole("button", { name: "Access" })).toBeNull();
+    expect(lists).not.toHaveBeenCalled();
+  });
+
   it("offers a retry after a session lookup failure without opening a stream", async () => {
     const connect = vi.fn(() => () => {});
     server.use(http.get("*/v1/ui/session", () => new HttpResponse(null, { status: 503 })));

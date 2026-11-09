@@ -534,8 +534,9 @@ bound CSRF challenges, password-attempt limits and owner provisioning/recovery.
 Password work runs outside the store lock; issuance and password changes recheck
 the verified account snapshot inside their committing transaction. Password and
 access changes revoke every session. The staged frontend now has login, logout,
-profile and password forms. Account-list/access editing and cutover remain later work;
-ordinary deployments still use the login link.
+profile and password forms, and an operator access editor for roles, disabled
+state and explicit repository grants. Production cutover remains a separate
+step; ordinary deployments still use the login link.
 
 ADR 014's importer is an owner-only CLI/API path independent of that account
 gate. The CLI reads an explicitly described table from a closed, fixed,
@@ -779,6 +780,15 @@ hub rejects a token/cookie mismatch before serving data. Thus another tab
 replacing the shared cookie causes the old console's next read to reset its
 state even while its socket is live. Responses overtaken by a local session
 change are discarded. Password validation counts Unicode code points and UTF-8 bytes.
+
+The staged access editor is available only to named operators. Its account list
+includes explicit empty or `ro`/`rw` grants with the same transaction's edit
+revision, never credential fields. Access saves return the canonical updated
+snapshot. Conflicts reload current state and discard stale edits for review;
+the console and store both protect the last enabled operator, with the store
+remaining authoritative under concurrent changes. Editing one's own access ends
+that browser session. These controls do not activate account authentication in
+ordinary deployments; the separate cutover must retire anonymous links atomically.
 
 The account overview describes each visible repository with `console_access`:
 `ro` or `rw`. Member compose/reply requires a selected writable origin, explicit

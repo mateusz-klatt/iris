@@ -381,6 +381,21 @@ browser is unsigned and receives 401. The frontend retains the `iris ui` sign-in
 instruction in that mode. A named-session 401 shows the account login form. CSRF
 tokens stay in memory; login obtains a new single-use challenge on every retry.
 
+The first part of step 6 adds the operator access editor within that same private
+gate. `GET /v1/ui/accounts` returns `{ "accounts": [...] }` with each account's
+safe profile, role, disabled state, authentication/edit versions and `grants`.
+Grants are an explicit array of `{ "repository_id": "rp_...", "mode": "ro" }`
+or `rw`; `[]` means no repository grants. Account revisions and grants come from
+one authorized transaction. Members cannot obtain this directory.
+`PUT /v1/ui/accounts/{id}/access` takes `edit_revision`, `role`, `disabled` and
+the complete `grants` array, and returns `{ "account": ... }` with the canonical
+saved account and grants. No grant is inferred for a member. Non-member roles
+accept no grants, and `none` is forced disabled. A stale revision or removal of
+the last enabled operator returns `conflict` without changing access. The editor
+reloads current state for review before another save; successful edits revoke all
+target sessions. These endpoints expose no password record or login key. They do
+not activate account authentication or change `iris ui` in ordinary deployments.
+
 - `GET /v1/ui/login` creates a short-lived single-use challenge bound to an
   HttpOnly pre-login cookie. `POST /v1/ui/login` consumes it, requires exact
   same-origin `Origin` and `X-Iris-CSRF`, and verifies bounded credentials.

@@ -41,10 +41,11 @@ import { clearUiLocale, isSupportedLocale, readUiLocale, writeUiLocale } from ".
 import { clearAccountSession, getSession, logout, updateProfile, type AccountSession } from "./accountApi";
 import Login from "./Login";
 import Account from "./Account";
+import AccessPanel from "./access";
 import "./app.css";
 import "./console.css";
 
-type ConsoleView = "messages" | "fleet" | "claims" | "diagnostics" | "compose" | "account";
+type ConsoleView = "messages" | "fleet" | "claims" | "diagnostics" | "compose" | "account" | "access";
 
 // The hub limits a message by its UTF-8 bytes, not by characters: a draft of 16 KiB of
 // characters outside ASCII can be several times that (gap review A11).
@@ -687,7 +688,7 @@ function Console({ connect, session, onSession, onSignedOut }: { connect: typeof
   const title = activeView === "messages" ? t(mailScope === "mine" ? "console.myMessages" : "console.allActivity")
     : activeView === "fleet" ? t("console.fleet")
     : activeView === "claims" ? t("console.reservations")
-    : activeView === "diagnostics" ? t("console.diagnostics") : activeView === "account" ? t("accountUi.account") : t("operator.compose");
+    : activeView === "diagnostics" ? t("console.diagnostics") : activeView === "account" ? t("accountUi.account") : activeView === "access" ? t("access.title") : t("operator.compose");
 
   return (
     <div className="app-shell operator-console">
@@ -737,6 +738,7 @@ function Console({ connect, session, onSession, onSignedOut }: { connect: typeof
               <button type="button" className="console-nav-item" aria-current={activeView === "claims" ? "page" : undefined} onClick={() => chooseView("claims")}>{t("operator.claims")}<span className="nav-count">{overview.claims.length}</span></button>
               {!member ? <button type="button" className="console-nav-item" aria-current={activeView === "diagnostics" ? "page" : undefined} onClick={() => chooseView("diagnostics")}>{t("console.diagnostics")}</button> : null}
               {session !== null ? <button type="button" className="console-nav-item" aria-current={activeView === "account" ? "page" : undefined} onClick={() => chooseView("account")}>{t("accountUi.account")}</button> : null}
+              {session?.account.role === "operator" ? <button type="button" className="console-nav-item" aria-controls="iris-access-panel" aria-current={activeView === "access" ? "page" : undefined} onClick={() => chooseView("access")}>{t("access.title")}</button> : null}
             </nav>
           </aside>
         ) : null}
@@ -758,7 +760,7 @@ function Console({ connect, session, onSession, onSignedOut }: { connect: typeof
         ) : null}
         {phase === "ready" && overview !== null ? (
           <>
-            {activeView !== "account" ? <header className="console-heading">
+            {activeView !== "account" && activeView !== "access" ? <header className="console-heading">
               <div><p className="console-kicker">{t("appName")}</p><h1>{member && activeView === "messages" ? t("accountUi.messages") : title}</h1>
                 <p>{activeView === "messages" ? t(member || session !== null ? "accountUi.sharedMail" : mailScope === "mine" ? "console.subtitle" : "console.activityHint") : activeView === "fleet" ? t("console.fleetHint") : activeView === "compose" ? t("console.composeHint") : null}</p>
               </div>
@@ -1029,6 +1031,7 @@ function Console({ connect, session, onSession, onSignedOut }: { connect: typeof
               </form>
             </section> : null}
             {session !== null && activeView === "account" ? <Account session={session} onSession={onSession} onSignedOut={onSignedOut} /> : null}
+            {session?.account.role === "operator" && activeView === "access" ? <AccessPanel session={session} repositories={overview.repositories} onSignedOut={onSignedOut} /> : null}
           </>
         ) : null}
       </main>

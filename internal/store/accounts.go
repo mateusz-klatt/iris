@@ -32,8 +32,15 @@ type ConsoleAccountInput struct {
 }
 
 type ConsoleGrant struct {
-	RepositoryID string
-	Mode         string
+	RepositoryID string `json:"repository_id"`
+	Mode         string `json:"mode"`
+}
+
+// ConsoleAccessAccount is the operator editor's snapshot. Its grants and edit
+// revision are read in the same transaction; credential fields are cleared.
+type ConsoleAccessAccount struct {
+	ConsoleAccount
+	Grants []ConsoleGrant `json:"grants"`
 }
 
 // Enabled denies unrecognized stored roles even if a malformed database row has
