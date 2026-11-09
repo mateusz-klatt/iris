@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS Execution (
  UNIQUE(host_id,client,session_id,generation)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS execution_live ON Execution(host_id,client,session_id) WHERE state='active';
+-- Peer expansion seeks each agent's latest rowid during every registration.
+CREATE INDEX IF NOT EXISTS execution_agent ON Execution(agent_id);
 CREATE TABLE IF NOT EXISTS Claim (
  fence INTEGER PRIMARY KEY AUTOINCREMENT, execution_id TEXT NOT NULL REFERENCES Execution(id),
  repository_id TEXT NOT NULL REFERENCES Repository(id), kind TEXT NOT NULL CHECK(kind IN ('exact','prefix')),
