@@ -5,7 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"io"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -26,10 +25,14 @@ func Read(ctx context.Context, path string, manifest Manifest) (Batch, error) {
 }
 
 func read(ctx context.Context, path string, manifest Manifest, open func(string, string) (*sql.DB, error)) (Batch, error) {
+	return readWithAbs(ctx, path, manifest, open, filepath.Abs)
+}
+
+func readWithAbs(ctx context.Context, path string, manifest Manifest, open func(string, string) (*sql.DB, error), absolute func(string) (string, error)) (Batch, error) {
 	if err := ValidateManifest(manifest); err != nil {
 		return Batch{}, err
 	}
-	abs, err := filepath.Abs(path)
+	abs, err := absolute(path)
 	if err != nil {
 		return Batch{}, invalid("", "could not locate source SQLite file")
 	}
@@ -40,15 +43,7 @@ func read(ctx context.Context, path string, manifest Manifest, open func(string,
 	if err = checkpointedSource(abs); err != nil {
 		return Batch{}, err
 	}
-	u := url.URL{Scheme: "file", Path: filepath.ToSlash(abs)}
-	q := u.Query()
-	q.Set("mode", "ro")
-	q.Set("immutable", "1")
-	q.Add("_pragma", "query_only(1)")
-	q.Add("_pragma", "trusted_schema(0)")
-	q.Add("_pragma", "busy_timeout(5000)")
-	u.RawQuery = q.Encode()
-	db, err := open("sqlite", u.String())
+	db, err := open("sqlite", sourceURI(abs))
 	if err != nil {
 		return Batch{}, invalid("", "could not open source SQLite file")
 	}
@@ -97,8 +92,12 @@ func inspectCheckpointedSource(path string, stat func(string) (os.FileInfo, erro
 }
 
 func snapshot(ctx context.Context, tx *sql.Tx, m Manifest) (Batch, error) {
+	query, err := sourceAccountQuery(m.Table)
+	if err != nil {
+		return Batch{}, err
+	}
 	var declaration string
-	err := tx.QueryRowContext(ctx, "SELECT sql FROM sqlite_schema WHERE type='table' AND name=?", m.Table).Scan(&declaration)
+	err = tx.QueryRowContext(ctx, "SELECT sql FROM sqlite_schema WHERE type='table' AND name=?", m.Table).Scan(&declaration)
 	if err != nil || strings.Contains(strings.ToUpper(declaration), "CREATE VIRTUAL TABLE") {
 		return Batch{}, invalid("", "source table is unavailable or unsupported")
 	}
@@ -133,20 +132,7 @@ func snapshot(ctx context.Context, tx *sql.Tx, m Manifest) (Batch, error) {
 			return Batch{}, invalid("", "source columns do not match the declared account contract")
 		}
 	}
-	// Bound text inside SQLite before allocating any field in Go. A rejected
-	// field becomes NULL and is refused; it cannot be silently truncated.
-	selected := []string{"CASE WHEN typeof(id)='integer' THEN id ELSE NULL END"}
-	limits := map[string]int{"username": 256, "password_hash": 256, "role": 64, "display_name": 512, "preferred_ui_locale": 64, "preferred_correspondence_locale": 64}
-	for _, name := range columns[1:] {
-		if limit, ok := limits[name]; ok {
-			selected = append(selected, "CASE WHEN typeof("+name+")='text' AND length(CAST("+name+" AS BLOB))<="+strconv.Itoa(limit)+" THEN "+name+" ELSE NULL END")
-		} else if name == "last_login_ts" {
-			selected = append(selected, "CASE WHEN typeof(last_login_ts) IN ('integer','null') THEN last_login_ts ELSE -1 END")
-		} else {
-			selected = append(selected, "CASE WHEN typeof("+name+")='integer' THEN "+name+" ELSE NULL END")
-		}
-	}
-	rows, err := tx.QueryContext(ctx, "SELECT "+strings.Join(selected, ",")+" FROM \""+m.Table+"\" LIMIT "+strconv.Itoa(MaxRows+1))
+	rows, err := tx.QueryContext(ctx, query, MaxRows+1)
 	if err != nil {
 		return Batch{}, invalid("", "could not read source accounts")
 	}
@@ -177,6 +163,29 @@ func snapshot(ctx context.Context, tx *sql.Tx, m Manifest) (Batch, error) {
 		return Batch{}, err
 	}
 	return batch, nil
+}
+
+func sourceAccountQuery(table string) (string, error) {
+	if !tableName(table) {
+		return "", invalid("", "invalid source table identifier")
+	}
+	// SQLite placeholders bind values, not table identifiers. The only dynamic
+	// SQL token is this quoted identifier, revalidated here against the strict
+	// ASCII allowlist [A-Za-z_][A-Za-z0-9_]{0,63}; quotes and SQL punctuation cannot
+	// enter. The projection is fixed and the row limit is a bound value.
+	// Bound field sizes inside SQLite before allocating in Go. Invalid values
+	// become NULL (or -1 for malformed nullable history), never truncated text.
+	return `SELECT CASE WHEN typeof(id)='integer' THEN id ELSE NULL END,
+ CASE WHEN typeof(username)='text' AND length(CAST(username AS BLOB))<=256 THEN username ELSE NULL END,
+ CASE WHEN typeof(password_hash)='text' AND length(CAST(password_hash AS BLOB))<=256 THEN password_hash ELSE NULL END,
+ CASE WHEN typeof(role)='text' AND length(CAST(role AS BLOB))<=64 THEN role ELSE NULL END,
+ CASE WHEN typeof(disabled)='integer' THEN disabled ELSE NULL END,
+ CASE WHEN typeof(display_name)='text' AND length(CAST(display_name AS BLOB))<=512 THEN display_name ELSE NULL END,
+ CASE WHEN typeof(preferred_ui_locale)='text' AND length(CAST(preferred_ui_locale AS BLOB))<=64 THEN preferred_ui_locale ELSE NULL END,
+ CASE WHEN typeof(preferred_correspondence_locale)='text' AND length(CAST(preferred_correspondence_locale AS BLOB))<=64 THEN preferred_correspondence_locale ELSE NULL END,
+ CASE WHEN typeof(created_ts)='integer' THEN created_ts ELSE NULL END,
+ CASE WHEN typeof(last_login_ts) IN ('integer','null') THEN last_login_ts ELSE -1 END
+ FROM "` + table + `" LIMIT ?`, nil
 }
 
 func sourceRow(values [10]any, encoding string) (Row, error) {

@@ -295,13 +295,10 @@ func TestSourceEntryFailuresDoNotOpenOrCreateData(t *testing.T) {
 	if _, err := Read(ctx, "unused", testManifest()); err == nil {
 		t.Fatal("canceled snapshot succeeded")
 	}
-	dir := t.TempDir()
-	t.Chdir(dir)
-	if err := os.Remove(dir); err != nil {
-		t.Fatal("could not remove synthetic working directory")
-	}
-	if _, err := Read(context.Background(), "relative", testManifest()); err == nil {
-		t.Fatal("missing working directory resolved a relative source")
+	called = false
+	absolute := func(string) (string, error) { return "", errors.New("private-path-sentinel") }
+	if _, err := readWithAbs(context.Background(), "relative", testManifest(), open, absolute); err == nil || called || strings.Contains(err.Error(), "private-path-sentinel") {
+		t.Fatal("path resolution failure opened source or exposed details")
 	}
 }
 
