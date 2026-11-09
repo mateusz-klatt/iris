@@ -109,7 +109,13 @@ func TestAnUnchangedConsumerCursorDoesNotWriteOrWake(t *testing.T) {
 	default:
 	}
 	r.After = page["high_water"].(int64)
+	changes = s.Changes()
 	call(t, s, "events", r)
+	select {
+	case <-changes:
+		t.Fatal("advancing consumer bookkeeping woke streams without a new domain change")
+	default:
+	}
 	var saved int64
 	if err := s.db.QueryRow("SELECT seq FROM Cursor WHERE consumer_id=?", r.ExecutionID+":"+r.ConsumerID).Scan(&saved); err != nil || saved != r.After {
 		t.Fatalf("advanced cursor %d, want %d: %v", saved, r.After, err)
