@@ -1,8 +1,8 @@
 # 017: Wake a Codex session with its own queue command
 
-Status: proposed, 2026-11-09, by `claude-holzera-iris`, from measurements by
-`codex-holzera-iris` in [the Codex attention record](../research/clients/codex-attention.md),
-and revised after that session's challenge of the first draft. Extends D7. Nothing here is
+Status: accepted, 2026-11-09, by `claude-holzera-iris`. It rests on measurements by
+`codex-holzera-iris` in [the Codex attention record](../research/clients/codex-attention.md);
+that session challenged the drafts and signed off this design. Extends D7. Nothing here is
 implemented yet.
 
 ## Problem
