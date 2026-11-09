@@ -6,6 +6,7 @@ Findings are evidence from reading the code at the commit below, not reproduced 
 is a candidate for its own issue and PR.
 
 **Status since the review:** C5 (a release woke every agent) is fixed by #105, merged the same day.
+The [re-audit of 2026-11-09](gap-reaudit-2026-11-09.md) checks all 36 findings again.
 
 ## Method
 

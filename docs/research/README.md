@@ -22,6 +22,15 @@ a later measurement overruled a claim. Captured payloads are in `internal/hook/t
 The [shared-worktree experiment](shared-worktree.md) measures Claude and Codex running
 concurrently in one checkout, including edit contention, shell attribution and the shared index.
 
+The [Codex attention measurement](clients/codex-attention-2026-11-09.md) records how Codex
+0.167.0 takes context from hooks, continues at Stop, waits in an MCP call, and is woken through
+an app-server and through `codex queue`, with the lifetime of a thread's MCP child.
+[ADR 016](../adr/016-wake-codex-by-queue.md) rests on it.
+
+The [gap re-audit of 2026-11-09](gap-reaudit-2026-11-09.md) checks every finding of the
+[gap review of 2026-11-07](gap-review-2026-11-07.md) again, against `main` at `4840765`: 28 closed,
+7 partly addressed, 1 open.
+
 ## Review of the architecture
 
 The synthesis then went back to the clients as a plan review. Antigravity was left out of this
