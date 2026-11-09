@@ -662,6 +662,8 @@ billable, so it is opt-in: it names each client, binary and model first and asks
 is given. Without `--client`, a client that still needs a person, such as Codex before its
 hooks are reviewed in `/hooks`, is skipped with that reason: no trust is bypassed, and a run whose hook cannot fire
 spends money to prove nothing. Doctor keeps current readiness separate from historical grades.
+It checks the human step even when the canary fails: that failure stays visible, but does not
+establish that the step is complete or permit a default live run of an unreviewed client.
 Ready clients reported `silent` or `slow` still run: a silent grade may come from an old failure
 in the log, and a slow grade means hooks ran but shell reconciliation often exceeded its budget.
 Those histories never make a client ready when it needs a person or is not configured.
