@@ -147,13 +147,17 @@ async function installAccounts(page: Page, signedIn = true) {
 }
 
 async function fitsScreen(page: Page) {
-  expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
-  for (const element of await page.locator("input:visible, select:visible, textarea:visible, .settings-card:visible").all()) {
-    const bounds = await element.boundingBox();
-    expect(bounds).not.toBeNull();
-    expect(bounds!.x).toBeGreaterThanOrEqual(0);
-    expect(bounds!.x + bounds!.width).toBeLessThanOrEqual(page.viewportSize()!.width);
-  }
+  const layout = await page.evaluate(() => ({
+    overflow: document.documentElement.scrollWidth - document.documentElement.clientWidth,
+    clipped: [...document.querySelectorAll<HTMLElement>("input, select, textarea, .settings-card")]
+      .filter((element) => element.getClientRects().length > 0 && getComputedStyle(element).visibility !== "hidden")
+      .flatMap((element) => {
+        const bounds = element.getBoundingClientRect();
+        return bounds.left < 0 || bounds.right > window.innerWidth ? [{ element: element.tagName, id: element.id, left: bounds.left, right: bounds.right }] : [];
+      }),
+  }));
+  expect(layout.overflow).toBeLessThanOrEqual(0);
+  expect(layout.clipped).toEqual([]);
 }
 
 test("login renews its challenge after rejection and signs in using the keyboard", async ({ page }) => {

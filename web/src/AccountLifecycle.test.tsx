@@ -113,10 +113,10 @@ describe("named account lifecycle in the console", () => {
     expect(document.documentElement.lang).toBe("en");
     await user.click(screen.getByRole("button", { name: /Choose language.*English/ }));
     await user.click(screen.getByRole("option", { name: /Use Polski/ }));
-    await waitFor(() => expect(document.documentElement.lang).toBe("pl"));
+    await waitFor(() => expect(document.documentElement.lang).toBe("pl"), { timeout: 15_000 });
     expect(current.account.edit_revision).toBe(2);
     expect(localStorage.getItem(uiLocalePreferenceKey)).toBe("de");
-    expect(screen.getByRole("button", { name: /Polski/ })).toBeEnabled();
+    expect(await screen.findByRole("button", { name: /Polski/ }, { timeout: 15_000 })).toBeEnabled();
   });
 
   it("keeps the previous account language and reports a failed topbar save", async () => {

@@ -82,13 +82,18 @@ describe("staged named console", () => {
   });
 
   it("keeps profile available for an account with no repositories", async () => {
-    serveAccount();
+    const session = serveAccount();
+    session.account.display_name = "";
+    session.account.ui_locale = "";
+    localStorage.setItem(uiLocalePreferenceKey, "pl");
     server.use(http.get("*/v1/ui/overview", () => HttpResponse.json({ repositories: [], agents: [], claims: [], human_unread: 0 })));
     render(<App connect={() => () => {}} />);
     expect(await screen.findByText(/No repository access has been granted/)).toBeVisible();
+    expect(screen.getByRole("button", { name: "reader" })).toBeVisible();
+    expect(screen.getByRole("button", { name: /English/ })).toBeVisible();
     await userEvent.click(within(screen.getByRole("navigation")).getByRole("button", { name: "Account" }));
     expect(screen.getByRole("heading", { name: "Account" })).toBeVisible();
-    expect(screen.getByDisplayValue("Reader")).toBeVisible();
+    expect(screen.getByLabelText("Display name")).toHaveValue("");
   });
 
   it.each(["Author", ""])("uses current rw grants and immutable author snapshots for a scoped reply (%s)", async (displayName) => {
@@ -118,7 +123,11 @@ describe("staged named console", () => {
 
   it("requires an explicit recipient when a cross-repository sender is outside the writable directory", async () => {
     serveAccount("rw");
-    server.use(http.get("*/v1/ui/threads/:id", () => HttpResponse.json({ ...threadDetail, messages: [{ ...threadDetail.messages[0], sender: "outside-directory" }] })));
+    const sent: unknown[] = [];
+    server.use(
+      http.get("*/v1/ui/threads/:id", () => HttpResponse.json({ ...threadDetail, messages: [{ ...threadDetail.messages[0], sender: "outside-directory" }] })),
+      http.post("*/v1/ui/messages", async ({ request }) => { sent.push(await request.json()); return new HttpResponse(null, { status: 204 }); }),
+    );
     const user = userEvent.setup();
     render(<App connect={() => () => {}} />);
     await screen.findByRole("heading", { name: "Messages" });
@@ -128,9 +137,15 @@ describe("staged named console", () => {
     expect(within(reply).getByRole("alert")).toHaveTextContent("outside-directory");
     fireEvent.change(within(reply).getByRole("textbox", { name: "Message" }), { target: { value: "A reply" } });
     expect(within(reply).getByRole("button", { name: "Review" })).toBeDisabled();
+    fireEvent.submit(reply);
+    expect(within(reply).queryByRole("region", { name: "Check before sending" })).toBeNull();
     await user.click(within(reply).getByRole("button", { name: "Clear selection" }));
     await user.click(within(reply).getByRole("checkbox", { name: /claude-host/ }));
     expect(within(reply).getByRole("button", { name: "Review" })).toBeEnabled();
+    fireEvent.submit(reply);
+    await user.click(within(reply).getByRole("button", { name: "Reply" }));
+    await waitFor(() => expect(sent).toHaveLength(1));
+    expect(sent[0]).toMatchObject({ to: ["ag_claude"], repository_id: "rp_iris", reply_to: "ms_root", body: "A reply" });
   });
 
   it("invalidates an open review when repository permissions change", async () => {
@@ -141,6 +156,9 @@ describe("staged named console", () => {
     render(<App connect={connect} />);
     await screen.findByRole("heading", { name: "Messages" });
     await user.selectOptions(screen.getByRole("combobox", { name: "Repository" }), "rp_iris");
+    await user.click(await screen.findByRole("button", { name: /Open thread: Rollout check/ }));
+    const reply = (await screen.findByRole("heading", { name: "Reply" })).closest("form")!;
+    fireEvent.change(within(reply).getByRole("textbox", { name: "Message" }), { target: { value: "Retain this reply" } });
     await user.click(screen.getByRole("button", { name: "+ New message" }));
     const compose = within(document.getElementById("compose")!);
     await user.click(compose.getByRole("checkbox", { name: /claude-host/ }));
@@ -153,6 +171,14 @@ describe("staged named console", () => {
     await waitFor(() => expect(screen.queryByRole("button", { name: "+ New message" })).toBeNull());
     expect(screen.queryByRole("button", { name: "Send" })).toBeNull();
     expect(await screen.findByText(/Your permissions changed/)).toBeVisible();
+    serveAccount("rw");
+    act(() => refresh({ cursor: 3, kind: "changed" }));
+    await screen.findByRole("button", { name: "+ New message" });
+    await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: /^Messages/ }));
+    await user.click(await screen.findByRole("button", { name: /Open thread: Rollout check/ }));
+    const restoredReply = (await screen.findByRole("heading", { name: "Reply" })).closest("form")!;
+    expect(within(restoredReply).getByRole("textbox", { name: "Message" })).toHaveValue("Retain this reply");
+    expect(within(restoredReply).queryByRole("region", { name: "Check before sending" })).toBeNull();
   });
 
   it("ends streams and clears drafts on revocation before a different account signs in", async () => {
