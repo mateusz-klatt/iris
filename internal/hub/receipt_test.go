@@ -28,3 +28,29 @@ func TestTheFetchReceiptRoutes(t *testing.T) {
 		t.Fatalf("the receipt settled the delivery: %v", again)
 	}
 }
+
+// The sender's HTTP receipt observes reachability without settling queued mail.
+func TestMessageStatusReportsAnUnreachableRecipient(t *testing.T) {
+	_, server := setup(t)
+	sender, recipient := register(t, server, 1), register(t, server, 2)
+	sent := send(t, server, sender, recipient, "waiting for consent")
+	status := "/v1/messages/" + sent["message_id"].(string) + "/status?execution_id=" + sender["execution_id"].(string)
+	request(t, server, "POST", "/v1/executions/"+recipient["execution_id"].(string)+"/end", map[string]any{"generation": recipient["generation"]}, 200)
+	got := request(t, server, "GET", status, nil, 200)["recipients"].([]any)
+	if len(got) != 1 {
+		t.Fatal(got)
+	}
+	receipt := got[0].(map[string]any)
+	if receipt["state"] != "pending" || receipt["at"] != nil || receipt["unreachable"] != true || receipt["body"] != nil {
+		t.Fatal(receipt)
+	}
+	returned := register(t, server, 2)
+	receipt = request(t, server, "GET", status, nil, 200)["recipients"].([]any)[0].(map[string]any)
+	if _, flagged := receipt["unreachable"]; flagged || receipt["state"] != "pending" {
+		t.Fatal("a returning recipient stayed unreachable", receipt)
+	}
+	deliveries := request(t, server, "GET", "/v1/inbox?execution_id="+returned["execution_id"].(string), nil, 200)["deliveries"].([]any)
+	if len(deliveries) != 1 || deliveries[0].(map[string]any)["id"] != sent["deliveries"].([]any)[0].(map[string]any)["id"] {
+		t.Fatal("observing reachability settled queued mail", deliveries)
+	}
+}

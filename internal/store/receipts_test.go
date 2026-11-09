@@ -72,6 +72,121 @@ func TestTheSenderSeesEachRecipientsState(t *testing.T) {
 	}
 }
 
+// Unreachable describes the mailbox now. Losing a session leaves the mail waiting,
+// and a replacement session makes it reachable and receives that same delivery.
+func TestReceiptsReportUnreachableUntilTheRecipientReturns(t *testing.T) {
+	for _, state := range []string{"lost", "ended"} {
+		t.Run(state, func(t *testing.T) {
+			s, clock, _ := testStore(t)
+			sender, recipient, message := receiptSetup(t, s)
+			got := receiptOf(t, s, sender, message)
+			if _, flagged := got["unreachable"]; flagged {
+				t.Fatal("a live recipient was unreachable before fetching", got)
+			}
+			delivery := call(t, s, "inbox", recipient)["deliveries"].([]map[string]any)[0]
+			got = receiptOf(t, s, sender, message)
+			if _, flagged := got["unreachable"]; flagged || got["state"] != "inflight" {
+				t.Fatal("a live recipient was unreachable after fetching", got)
+			}
+			if state == "ended" {
+				call(t, s, "end", recipient)
+			} else {
+				recipient.Source = "shim"
+				call(t, s, "heartbeat", recipient)
+				clock.advance(61 * time.Second)
+			}
+			if got := receiptOf(t, s, sender, message); got["state"] != "pending" || got["at"] != nil || got["unreachable"] != true {
+				t.Fatal("an undelivered receipt hid the unreachable recipient", got)
+			}
+			out := call(t, s, "sessions", Request{Client: "codex", Host: "host", Cwd: "/repo/w2", Worktree: "/repo/w2", RemoteURL: "https://example.com/team/project.git", RootCommit: "root", SessionID: "returned", Source: "hook"})
+			returned := Request{ExecutionID: out["execution_id"].(string), Generation: out["generation"].(int64)}
+			got = receiptOf(t, s, sender, message)
+			if _, flagged := got["unreachable"]; flagged || got["state"] != "pending" {
+				t.Fatal("a returned recipient stayed unreachable", got)
+			}
+			again := call(t, s, "inbox", returned)["deliveries"].([]map[string]any)
+			if len(again) != 1 || again[0]["id"] != delivery["id"] || number(again[0]["attempt"]) != number(delivery["attempt"])+1 {
+				t.Fatal("unreachable mail did not survive for the returning recipient", again)
+			}
+		})
+	}
+}
+
+// Recovery still counts as active, as it does in delivery problems. The sender sees
+// unreachable only if the recipient fails to reattach before its recovery deadline.
+func TestReceiptsWaitForRecoveryBeforeReportingUnreachable(t *testing.T) {
+	s, clock, file := testStore(t)
+	sender, recipient, message := receiptSetup(t, s)
+	call(t, s, "inbox", recipient)
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s.lock = nil
+	reopened, err := Open(file, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reopened.Close() }()
+	// The sender reattaches, but the recipient remains in its 120-second window.
+	sender.Source = "hook"
+	call(t, reopened, "heartbeat", sender)
+	clock.advance(time.Minute)
+	got := receiptOf(t, reopened, sender, message)
+	if _, flagged := got["unreachable"]; flagged || got["state"] != "inflight" || got["at"] != nil {
+		t.Fatal("a recovering recipient was reported unreachable", got)
+	}
+	clock.advance(61 * time.Second)
+	if got := receiptOf(t, reopened, sender, message); got["state"] != "pending" || got["at"] != nil || got["unreachable"] != true {
+		t.Fatal("an expired recovery hid the unreachable recipient", got)
+	}
+}
+
+func TestReceiptsDoNotFlagSettledDeliveriesWhenTheRecipientEnds(t *testing.T) {
+	for _, state := range []string{"acked", "handled"} {
+		t.Run(state, func(t *testing.T) {
+			s, _, _ := testStore(t)
+			sender, recipient, message := receiptSetup(t, s)
+			delivery := call(t, s, "inbox", recipient)["deliveries"].([]map[string]any)[0]
+			ack := recipient
+			ack.Key, ack.Attempt, ack.Handled = delivery["id"].(string), number(delivery["attempt"]), state == "handled"
+			call(t, s, "ack", ack)
+			before := receiptOf(t, s, sender, message)
+			call(t, s, "end", recipient)
+			got := receiptOf(t, s, sender, message)
+			if _, flagged := got["unreachable"]; flagged || got["state"] != state || got["at"] != before["at"] {
+				t.Fatal("an ended recipient changed its settled receipt", got)
+			}
+		})
+	}
+}
+
+func TestReceiptReachabilityIsPerRecipientIncludingAMailboxWithoutAnExecution(t *testing.T) {
+	s, _, _ := testStore(t)
+	sender, _ := session(t, s, 1)
+	missing, mo := session(t, s, 2)
+	_, live := session(t, s, 3)
+	// A mailbox can outlive all its Executions. It must still receive queued mail.
+	if _, err := s.db.Exec("DELETE FROM Execution WHERE id=?", missing.ExecutionID); err != nil {
+		t.Fatal(err)
+	}
+	mail := sender
+	mail.Key, mail.Body = "mixed-reachability", "untrusted body"
+	mail.To = []string{mo["agent"].(map[string]any)["name"].(string), live["agent"].(map[string]any)["name"].(string)}
+	message := call(t, s, "messages", mail)["message_id"].(string)
+	sender.Key = message
+	got := call(t, s, "receipts", sender)["recipients"].([]map[string]any)
+	if len(got) != 2 {
+		t.Fatal(got)
+	}
+	for _, recipient := range got {
+		want := recipient["recipient"] == mail.To[0]
+		value, flagged := recipient["unreachable"]
+		if recipient["state"] != "pending" || recipient["at"] != nil || flagged != want || (flagged && value != true) {
+			t.Fatal("reachability leaked between recipients", recipient)
+		}
+	}
+}
+
 // One call can accept and mark handled, under the accepting ack's rules.
 func TestAHandledAckAlsoAccepts(t *testing.T) {
 	s, _, _ := testStore(t)

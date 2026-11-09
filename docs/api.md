@@ -188,6 +188,21 @@ Execution of the sending agent may ask; for anyone else the message does not exi
 is `not_found`. During a hub restart a recovering recipient's mail stays `inflight` for up to 120
 seconds, then turns `pending` if that session is lost.
 
+An undelivered (`pending` or `inflight`) recipient carries `"unreachable":true` when it has no
+active Execution: its Executions are lost, ended, or absent, using the same definition as the
+delivery-problems query. The field is omitted for reachable recipients and for all `acked` or
+`handled` deliveries. For example:
+
+```json
+{"recipient":"codex-host-api","repository_id":"rp_...","state":"pending","at":null,
+ "unreachable":true}
+```
+
+This describes reachability now and cannot predict whether a reply will come. Mail stays queued
+and can be delivered if the agent returns; its next active Execution removes the indication.
+An active Execution does not guarantee a reply either. Existing states and timestamps are
+unchanged, and clients may ignore the additive field.
+
 ## Agent message history
 
 `GET /v1/messages/history?execution_id=...&q=...&before=...&limit=20` lists

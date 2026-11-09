@@ -239,6 +239,7 @@ func (t *transaction) ack(r Request, delivery string) (map[string]any, error) {
 
 // receipts is what the sender of message may see of it: each recipient's name, repository
 // and delivery state, and when it was acked or said handled (ADR 005). No subject or body.
+// Undelivered mail flags a recipient with no active Execution, as in delivery problems.
 // Any Execution of the sending agent may ask; to anyone else the message does not exist.
 func (t *transaction) receipts(r Request, message string) (map[string]any, error) {
 	e, err := t.live(r.ExecutionID, r.Generation)
@@ -252,7 +253,9 @@ func (t *transaction) receipts(r Request, message string) (map[string]any, error
 	if sender != e.AgentID {
 		return nil, fail("not_found", "unknown message")
 	}
-	rows, err := t.rows(`SELECT CASE WHEN a.client='human' THEN 'human' ELSE a.name END,a.repository_id,d.state,COALESCE(d.handled_ms,d.acked_ms) FROM DeliveryState d JOIN Agent a ON a.id=d.recipient_agent_id WHERE d.message_id=? ORDER BY a.name`, message)
+	rows, err := t.rows(`SELECT CASE WHEN a.client='human' THEN 'human' ELSE a.name END,a.repository_id,d.state,COALESCE(d.handled_ms,d.acked_ms),
+ d.state IN ('pending','inflight') AND NOT EXISTS(SELECT 1 FROM Execution x WHERE x.agent_id=a.id AND x.state='active')
+ FROM DeliveryState d JOIN Agent a ON a.id=d.recipient_agent_id WHERE d.message_id=? ORDER BY a.name`, message)
 	if err != nil {
 		return nil, err
 	}
@@ -261,8 +264,13 @@ func (t *transaction) receipts(r Request, message string) (map[string]any, error
 	for rows.Next() {
 		var name, repo, state string
 		var at sql.NullInt64
-		rows.Scan(&name, &repo, &state, &at)
-		recipients = append(recipients, map[string]any{"recipient": name, "repository_id": repo, "state": state, "at": timestamp(at)})
+		var unreachable bool
+		rows.Scan(&name, &repo, &state, &at, &unreachable)
+		recipient := map[string]any{"recipient": name, "repository_id": repo, "state": state, "at": timestamp(at)}
+		if unreachable {
+			recipient["unreachable"] = true
+		}
+		recipients = append(recipients, recipient)
 	}
 	out := map[string]any{"message_id": message, "recipients": recipients}
 	messageAttribution(account, username, display, out)
