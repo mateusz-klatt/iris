@@ -6,6 +6,14 @@ export function isSupportedLocale(value: unknown): value is SupportedLocale {
 
 export const uiLocalePreferenceKey = "iris.uiLocale";
 
+export function clearUiLocale(): void {
+  try {
+    globalThis.localStorage.removeItem(uiLocalePreferenceKey);
+  } catch {
+    // Account language is also held only in memory when storage is unavailable.
+  }
+}
+
 export function readUiLocale(
   storage: Pick<Storage, "getItem"> | undefined = globalThis.localStorage,
 ): SupportedLocale | null {

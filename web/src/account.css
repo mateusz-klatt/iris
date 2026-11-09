@@ -1,0 +1,18 @@
+/* Account form layout is adapted from the owner's UI export listed in ADR 014.
+   Existing settings-grid/settings-card rules remain part of the console shell. */
+.iris-login {
+  width: min(calc(100% - 2rem), 30rem);
+  margin: clamp(1rem, 5vw, 4rem) auto;
+  overflow: visible;
+}
+
+.iris-login h1 {
+  margin-top: 0;
+}
+
+.iris-login input,
+.settings-form input,
+.settings-form select {
+  min-width: 0;
+  max-width: 100%;
+}

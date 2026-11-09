@@ -9,6 +9,8 @@ export interface Repository {
   id: string;
   name: string;
   aliases: string[];
+  /** Current account capability; absent on the legacy console. The store enforces it. */
+  console_access?: "ro" | "rw";
 }
 
 export interface Agent {
@@ -48,6 +50,13 @@ export interface ThreadSummary {
   count: number;
   last_at: string;
   unread: number;
+  authors?: MessageAuthor[];
+}
+
+export interface MessageAuthor {
+  sender_account_id?: string;
+  sender_username?: string;
+  sender_display_name?: string;
 }
 
 export interface ThreadsPage {
@@ -61,7 +70,7 @@ export interface ThreadRecipient {
   state: string;
 }
 
-export interface ThreadMessage {
+export interface ThreadMessage extends MessageAuthor {
   id: string;
   sender: string;
   /** The sender's repository. A thread can cross repositories (ADR 004). */
@@ -130,7 +139,7 @@ export interface DeliveryRecipient {
   execution: string;
 }
 
-export interface DeliveryProblem {
+export interface DeliveryProblem extends MessageAuthor {
   id: string;
   thread_id: string;
   subject: string;
@@ -154,20 +163,31 @@ export interface WatchFrame {
 
 export type WatchStatus = "connecting" | "live" | "reconnecting" | "unauthorized";
 
+// CSRF is a synchronizer token held only for the current page, never a credential in storage.
+let consoleCsrf = "";
+export function setConsoleCsrf(token: string): void {
+  consoleCsrf = token;
+}
+
 async function request(
   path: string,
   init: RequestInit = {},
 ): Promise<Response> {
+  const requestCsrf = consoleCsrf;
   const response = await fetch(new URL(path, window.location.origin), {
     ...init,
     cache: "no-store",
     credentials: "same-origin",
     headers: {
       Accept: "application/json",
+      ...(init.method !== "GET" && requestCsrf !== "" ? { "X-Iris-CSRF": requestCsrf } : {}),
       ...init.headers,
     },
   });
   if (!response.ok) {
+    if (response.status === 401 && requestCsrf !== "" && requestCsrf === consoleCsrf) {
+      window.dispatchEvent(new Event("iris:unauthorized"));
+    }
     throw new ApiError(response.status);
   }
   return response;
@@ -305,7 +325,7 @@ export function watchUi(
       if (closed) {
         return;
       }
-      if (opened) {
+      if (opened && consoleCsrf === "") {
         retry();
         return;
       }

@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 
-import { ApiError, getDeliveryProblems, getDoctor, listThreads, revokeClaim, watchUi, type WatchFrame } from "./api";
+import { ApiError, getDeliveryProblems, getDoctor, listThreads, revokeClaim, setConsoleCsrf, watchUi, type WatchFrame } from "./api";
 import { server } from "./test/server";
 import { http, HttpResponse } from "msw";
 
@@ -21,11 +21,61 @@ class FakeSocket {
 }
 
 afterEach(() => {
+  setConsoleCsrf("");
   vi.unstubAllGlobals();
   vi.useRealTimers();
 });
 
 describe("operator watch", () => {
+  it("does not expire a new account when an old request fails after the browser switches sessions", async () => {
+    setConsoleCsrf("iris-first-csrf");
+    let finish!: () => void;
+    const pending = new Promise<void>((resolve) => { finish = resolve; });
+    const started = vi.fn();
+    const unauthorized = vi.fn();
+    window.addEventListener("iris:unauthorized", unauthorized);
+    server.use(http.post("*/v1/ui/claims/:fence/revoke", async () => {
+      started();
+      await pending;
+      return new HttpResponse(null, { status: 401 });
+    }));
+    const request = revokeClaim(7).catch((error: unknown) => error);
+    await vi.waitFor(() => expect(started).toHaveBeenCalledOnce());
+    setConsoleCsrf("iris-second-csrf");
+    finish();
+    expect(await request).toMatchObject({ status: 401 });
+    expect(unauthorized).not.toHaveBeenCalled();
+    window.removeEventListener("iris:unauthorized", unauthorized);
+  });
+  it("revalidates an established named session when revocation closes its socket", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("WebSocket", FakeSocket);
+    setConsoleCsrf("iris-current-csrf");
+    const check = vi.fn().mockRejectedValue(new ApiError(401));
+    const status = vi.fn();
+    const stop = watchUi(() => {}, status, { check });
+    const socket = FakeSocket.latest!;
+    socket.onopen?.();
+    socket.close();
+    await vi.advanceTimersByTimeAsync(30_000);
+    expect(check).toHaveBeenCalledOnce();
+    expect(status).toHaveBeenLastCalledWith("unauthorized");
+    expect(FakeSocket.latest).toBe(socket);
+    stop();
+  });
+
+  it("adds memory-only CSRF to mutations and notifies the console after an authenticated 401", async () => {
+    setConsoleCsrf("iris-current-csrf");
+    const unauthorized = vi.fn();
+    window.addEventListener("iris:unauthorized", unauthorized);
+    server.use(http.post("*/v1/ui/claims/:fence/revoke", ({ request }) => {
+      expect(request.headers.get("X-Iris-CSRF")).toBe("iris-current-csrf");
+      return new HttpResponse(null, { status: 401 });
+    }));
+    await expect(revokeClaim(12)).rejects.toMatchObject({ status: 401 });
+    expect(unauthorized).toHaveBeenCalledOnce();
+    window.removeEventListener("iris:unauthorized", unauthorized);
+  });
   it("refetches from a content-free frame and reconnects until stopped", () => {
     vi.useFakeTimers();
     vi.stubGlobal("WebSocket", FakeSocket);

@@ -162,6 +162,11 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
+	// The staged frontend must distinguish an unsigned legacy browser from an
+	// expired named session without changing either authentication mechanism.
+	if h.console == nil && r.Method == http.MethodGet && r.URL.Path == "/v1/ui/session" {
+		w.Header().Set("X-Iris-Console-Mode", "links")
+	}
 	if h.serveConsole(w, r) {
 		return
 	}

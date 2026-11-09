@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor, within } from "@testing-library/react";
+import { act, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
@@ -286,7 +286,7 @@ describe("Iris operator console", () => {
     server.use(http.get("*/v1/ui/overview", () => HttpResponse.json(emptyOverview)));
     render(<App connect={() => () => {}} />);
 
-    expect(await screen.findByRole("status")).toHaveTextContent("Waiting for the first session.");
+    await waitFor(() => expect(screen.getByRole("status")).toHaveTextContent("Waiting for the first session."));
     const silent = document.querySelector("[data-status='silent']");
     expect(silent).not.toBeNull();
     expect(silent).toHaveTextContent("Cause:");
@@ -685,7 +685,7 @@ describe("Iris operator console", () => {
     vi.stubGlobal("localStorage", stored);
     const saved = render(<App connect={() => () => {}} />);
     await waitFor(() => expect(document.documentElement.lang).toBe("pl"));
-    expect(screen.getByRole("button", { name: /Polski/ })).toBeVisible();
+    expect(await screen.findByRole("button", { name: /Polski/ })).toBeVisible();
     saved.unmount();
     vi.unstubAllGlobals();
     await i18n.changeLanguage("en");
@@ -1073,8 +1073,8 @@ describe("Iris operator console", () => {
       await user.click(screen.getByRole("button", { name: "+ New message" }));
       const view = within(document.getElementById("compose") as HTMLElement);
       await user.click(view.getByRole("checkbox", { name: /^human/ }));
-      await user.type(view.getByRole("textbox", { name: "Subject" }), "Check in");
-      await user.type(view.getByRole("textbox", { name: "Message" }), "Are you there?");
+      fireEvent.change(view.getByRole("textbox", { name: "Subject" }), { target: { value: "Check in" } });
+      fireEvent.change(view.getByRole("textbox", { name: "Message" }), { target: { value: "Are you there?" } });
       await reviewAndSend(user, view, "Send");
       return view;
     };

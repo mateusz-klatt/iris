@@ -1,5 +1,9 @@
 import { expect, test, type Page } from "@playwright/test";
 
+test.beforeEach(async ({ page }) => {
+  await page.route("**/v1/ui/session", (route) => route.fulfill({ status: 404 }));
+});
+
 const silentCodex = {
   client: "codex",
   version: "0.9.0",

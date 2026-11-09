@@ -4,6 +4,7 @@ import { http, HttpResponse } from "msw";
 import { describe, expect, it } from "vitest";
 
 import { App } from "./App";
+import { DeliveryProblems as DeliveryProblemsPanel } from "./DeliveryProblems";
 import type { DeliveryProblems } from "./api";
 import { server } from "./test/server";
 
@@ -28,6 +29,13 @@ const problems: DeliveryProblems = {
 };
 
 describe("delivery problems", () => {
+  it.each(["At-send display name", ""])("shows the immutable person beside the shared human sender (%s)", async (displayName) => {
+    server.use(http.get("*/v1/ui/deliveries", () => HttpResponse.json({ ...problems, messages: [{ ...problems.messages[0], sender_account_id: "ca_author", sender_username: "at-send-username", sender_display_name: displayName }] })));
+    render(<DeliveryProblemsPanel repositoryId="rp_iris" revision={0} onOpenThread={() => {}} onUnauthorized={() => {}} />);
+    const panel = await screen.findByRole("region", { name: "Delivery problems" });
+    await userEvent.click(within(panel).getByRole("heading", { name: "Delivery problems" }));
+    expect(within(panel).getByText(`${displayName || "at-send-username"} via human`)).toBeVisible();
+  });
   it("names each recipient in trouble and why, states the thresholds, and offers no resend", async () => {
     const user = userEvent.setup({ delay: null });
     const seen: string[] = [];

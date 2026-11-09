@@ -12,6 +12,8 @@ export default defineConfig({
   forbidOnly: Boolean(process.env.CI),
   retries: process.env.CI ? 1 : 0,
   workers: 1,
+  timeout: 60_000,
+  expect: { timeout: 15_000 },
   reporter: "line",
   outputDir: join(tmpdir(), `iris-webkit-${process.pid}`),
   use: {

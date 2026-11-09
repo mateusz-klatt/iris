@@ -533,7 +533,9 @@ now issues opaque, hashed database sessions with a twelve-hour absolute expiry,
 bound CSRF challenges, password-attempt limits and owner provisioning/recovery.
 Password work runs outside the store lock; issuance and password changes recheck
 the verified account snapshot inside their committing transaction. Password and
-access changes revoke every session. Account UI and cutover remain later work.
+access changes revoke every session. The staged frontend now has login, logout,
+profile and password forms. Account-list/access editing and cutover remain later work;
+ordinary deployments still use the login link.
 
 ADR 014's importer is an owner-only CLI/API path independent of that account
 gate. The CLI reads an explicitly described table from a closed, fixed,
@@ -746,7 +748,26 @@ Per-account persisted revisions exclude hidden repository activity and global
 event cursors. Gated account sockets validate their session before each frame;
 frame admission serializes with revocation, and access changes wake idle sockets
 to close. A previously admitted frame may already be in transit. The current
-frontend and its legacy routes remain active until the later account cutover.
+frontend discovers the staged account path through the session endpoint. Legacy
+session probes carry `X-Iris-Console-Mode: links`, including their unsigned 401,
+so deploying the frontend keeps the existing login-link flow. No production
+account gate is enabled by the UI transfer.
+
+The transferred account forms retain the owner's export provenance (ADR 014's
+inventory). Named-account locale choices are saved with profile revisions and
+take precedence over browser preferences, which are used only while signed out.
+Logout, password changes and session revocation unmount the console, close its
+stream and discard prior-account drafts/data and cached locale. Reconnect checks
+also compare the current account and authentication version before admitting a
+new stream. Password validation counts Unicode code points and UTF-8 bytes.
+
+The account overview describes each visible repository with `console_access`:
+`ro` or `rw`. Member compose/reply requires a selected writable origin, explicit
+Agent IDs in writable repositories and a parent in the scoped thread. Members
+never call the shared read/ACK action and have no revoke/diagnostics/admin
+controls. These controls describe current capabilities; every request remains
+subject to store authorization. Messages show immutable person attribution
+alongside the shared human transport and explain that replies use a shared mailbox.
 
 The new-message recipient picker stores Agent IDs, not display names, and sends those IDs
 through the existing address resolver. If a selected ID disappears from the directory, review

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import {
@@ -37,11 +37,14 @@ import {
   setSoundEnabled,
   soundEnabled,
 } from "./notificationSound";
-import { readUiLocale, writeUiLocale } from "./preferences";
+import { clearUiLocale, isSupportedLocale, readUiLocale, writeUiLocale } from "./preferences";
+import { clearAccountSession, getSession, logout, updateProfile, type AccountSession } from "./accountApi";
+import Login from "./Login";
+import Account from "./Account";
 import "./app.css";
 import "./console.css";
 
-type ConsoleView = "messages" | "fleet" | "claims" | "diagnostics" | "compose";
+type ConsoleView = "messages" | "fleet" | "claims" | "diagnostics" | "compose" | "account";
 
 // The hub limits a message by its UTF-8 bytes, not by characters: a draft of 16 KiB of
 // characters outside ASCII can be several times that (gap review A11).
@@ -93,9 +96,11 @@ function newDraft(fields: Partial<Draft> = {}): Draft {
 // retryWindow is how long the hub remembers a send's key, ADR 006's 24 hours for Operation
 // records. The console promises a safe retry only within it.
 const retryWindow = 24 * 60 * 60 * 1000;
+const accountRetryWindow = 10 * 60 * 1000;
 
 // operatorName is the sender name the hub gives the console's own messages.
 const operatorName = "human";
+const noAgents: Agent[] = [];
 
 // replyDraft starts a reply to a thread. It answers the other party: the latest sender who is not
 // the operator, or, in a thread only the operator has written to, whom they wrote to. Answering
@@ -222,6 +227,60 @@ function HostReport({ report }: { report: DoctorReport }) {
 
 export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
   const { t } = useTranslation();
+  const [authentication, setAuthentication] = useState<"loading" | "legacy" | "login" | "error">("loading");
+  const [session, setSession] = useState<AccountSession | null>(null);
+  const [attempt, setAttempt] = useState(0);
+  const [passwordChanged, setPasswordChanged] = useState(false);
+  const sessionGeneration = useRef(0);
+  const signedOut = useCallback((changed = false) => {
+    sessionGeneration.current++;
+    clearAccountSession();
+    setPasswordChanged(changed);
+    clearUiLocale();
+    delete document.body.dataset.humanUnread;
+    void loadLocale("en");
+    setSession(null);
+    setAuthentication("login");
+  }, []);
+  useEffect(() => {
+    const controller = new AbortController();
+    void getSession(controller.signal).then((current) => {
+      if (!controller.signal.aborted) setSession(current);
+    }).catch((error: unknown) => {
+      if (controller.signal.aborted || isAbort(error)) return;
+      if (error instanceof ApiError && error.status === 404) setAuthentication("legacy");
+      else if (error instanceof ApiError && error.status === 401) { clearAccountSession(); setAuthentication("login"); }
+      else setAuthentication("error");
+    });
+    return () => controller.abort();
+  }, [attempt, signedOut]);
+  useEffect(() => {
+    const expired = () => signedOut();
+    window.addEventListener("iris:unauthorized", expired);
+    return () => window.removeEventListener("iris:unauthorized", expired);
+  }, [signedOut]);
+  useEffect(() => () => clearAccountSession(), []);
+  const currentGeneration = sessionGeneration.current;
+  const updateSession = useCallback((next: AccountSession) => {
+    if (currentGeneration === sessionGeneration.current) {
+      // A matching generation still has the mounted Console's account.
+      setSession((current) => current!.account.id === next.account.id ? next : current);
+    }
+  }, [currentGeneration]);
+  const endSession = useCallback((changed?: boolean) => {
+    if (currentGeneration === sessionGeneration.current) signedOut(changed);
+  }, [currentGeneration, signedOut]);
+  if (session !== null || authentication === "legacy") {
+    return <Console key={session?.account.id ?? "legacy"} connect={connect} session={session} onSession={updateSession} onSignedOut={endSession} />;
+  }
+  if (authentication === "login") return <main>{passwordChanged ? <p role="status">{t("account.passwordSaved")}</p> : null}<Login onLogin={setSession} /></main>;
+  return <main className="content"><p role={authentication === "error" ? "alert" : "status"}>{t(authentication === "error" ? "accountUi.sessionError" : "accountUi.sessionLoading")}</p>
+    {authentication === "error" ? <button type="button" onClick={() => { setAuthentication("loading"); setAttempt((value) => value + 1); }}>{t("accountUi.retry")}</button> : null}</main>;
+}
+
+function Console({ connect, session, onSession, onSignedOut }: { connect: typeof watchUi; session: AccountSession | null; onSession: (session: AccountSession) => void; onSignedOut: (passwordChanged?: boolean) => void }) {
+  const { t } = useTranslation();
+  const member = session?.account.role === "member";
   const [locale, setLocale] = useState<SupportedLocale>("en");
   const [soundOn, setSoundOn] = useState(false);
   const [phase, setPhase] = useState<"loading" | "ready" | "unauthorized" | "error">("loading");
@@ -229,7 +288,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
   const [doctor, setDoctor] = useState<DoctorReports | null>(null);
   const [revision, setRevision] = useState(0);
   const [threadRevision, setThreadRevision] = useState(0);
-  const onUnauthorized = useCallback(() => setPhase("unauthorized"), []);
+  const onUnauthorized = useCallback(() => { if (session !== null) onSignedOut(); else setPhase("unauthorized"); }, [session, onSignedOut]);
   const [stream, setStream] = useState<WatchStatus>("connecting");
   const [repositoryId, setRepositoryId] = useState("");
   const [agent, setAgent] = useState("");
@@ -240,10 +299,11 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
   const [threadError, setThreadError] = useState(false);
   const readerTitle = useRef<HTMLHeadingElement>(null);
   const lastThreadButton = useRef<HTMLButtonElement | null>(null);
-  const sessions = overview?.agents ?? [];
+  const sessions = useMemo(() => overview?.agents ?? [], [overview]);
+  const replyAgents = member ? sessions : noAgents;
   const waiting = phase === "ready" && sessions.length === 0;
-  const activeView = view ?? (waiting ? "diagnostics" : "messages");
-  const participant = mailScope === "mine" ? "human" : agent;
+  const activeView = view ?? (waiting && !member ? "diagnostics" : "messages");
+  const participant = mailScope === "mine" && !member ? "human" : agent;
   const [query, setQuery] = useState("");
   const [searchDraft, setSearchDraft] = useState("");
   const [threads, setThreads] = useState<ThreadSummary[]>([]);
@@ -273,18 +333,35 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
   const [notice, setNotice] = useState("");
   const [formError, setFormError] = useState("");
   const [revoking, setRevoking] = useState<number | null>(null);
+  const [signingOut, setSigningOut] = useState(false);
+  const [localeSaving, setLocaleSaving] = useState(false);
+  const writableRepositories = overview?.repositories.filter((repository) => repository.console_access === "rw") ?? [];
+  const canSend = !member || writableRepositories.some((repository) => repository.id === repositoryId);
+  const recipientAgents = member ? sessions.filter((agent) => writableRepositories.some((repository) => repository.id === agent.repository_id)) : sessions;
+  const validRecipients = (draft: Draft) => recipientsOf(draft.to).every((id) => (!member && id === "human") || recipientAgents.some((agent) => agent.id === id));
+  const replyVisible = !member || thread?.messages.some((message) => message.id === reply.replyTo) === true;
+  const permissions = overview?.repositories.map((repository) => `${repository.id}:${repository.console_access}`).join(",");
+  const previousPermissions = useRef<string | undefined>(undefined);
+  useEffect(() => {
+    if (member && previousPermissions.current !== undefined && permissions !== previousPermissions.current) {
+      setCompose((draft) => edited(draft, {}));
+      setReplies((drafts) => Object.fromEntries(Object.entries(drafts).map(([scope, draft]) => [scope, edited(draft, {})])));
+      setNotice(t("accountUi.permissionChanged"));
+    }
+    previousPermissions.current = permissions;
+  }, [member, permissions, t]);
 
   useEffect(() => {
     try {
       setSoundOn(soundEnabled());
-      const saved = readUiLocale();
+      const saved = session === null ? readUiLocale() : isSupportedLocale(session.account.ui_locale) ? session.account.ui_locale : "en";
       if (saved !== null) {
         void loadLocale(saved).then(() => setLocale(saved));
       }
     } catch {
       setSoundOn(false);
     }
-  }, []);
+  }, [session]);
 
   useEffect(() => {
     if (overview === null) {
@@ -307,7 +384,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
   const reload = useCallback(async () => {
     const current = ++overviewRequest.current;
     try {
-      const [nextOverview, nextDoctor] = await Promise.all([getOverview(), getDoctor()]);
+      const [nextOverview, nextDoctor] = await Promise.all([getOverview(), member ? Promise.resolve(null) : getDoctor()]);
       if (current !== overviewRequest.current) {
         return;
       }
@@ -318,9 +395,9 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
       if (current !== overviewRequest.current || isAbort(error)) {
         return;
       }
-      setPhase(error instanceof ApiError && error.status === 401 ? "unauthorized" : "error");
+      if (error instanceof ApiError && error.status === 401) onUnauthorized(); else setPhase("error");
     }
-  }, []);
+  }, [member, onUnauthorized]);
 
   // revision changes only to retry after an error, which reconnects too.
   useEffect(() => {
@@ -335,17 +412,22 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
     }, (status) => {
       // A refused session ends the watch; the operator is shown how to sign in again.
       if (status === "unauthorized") {
-        setPhase("unauthorized");
+        onUnauthorized();
         return;
       }
       setStream(status);
-    });
+    }, session === null ? {} : { check: async () => {
+      const current = await getSession();
+      if (current.account.id !== session.account.id || current.account.auth_version !== session.account.auth_version || current.csrf !== session.csrf) {
+        throw new ApiError(401);
+      }
+    } });
     return () => {
       // A load still in flight lands on a closed view, so it is dropped.
       requests.current++;
       stop();
     };
-  }, [connect, reload, revision]);
+  }, [connect, reload, revision, onUnauthorized, session]);
 
   useEffect(() => {
     if (phase !== "ready") {
@@ -410,7 +492,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
         // counts then follow. A failure here leaves the mail unread, which is safe. Every
         // watch frame reloads the open thread, so a thread with nothing unread costs that
         // GET only: no read, and no second overview.
-        if (unreadForOperator(detail)) {
+        if (!member && unreadForOperator(detail)) {
           readThread(selectedId, repositoryId)
             .then((read) => {
               if (read > 0) {
@@ -421,7 +503,11 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
         }
         // Refresh an untouched suggestion, but retain an edited draft and its retry key
         // even when the operator left this conversation and has now returned to it.
-        const fresh = replyDraft(detail.messages);
+        const suggestion = replyDraft(detail.messages);
+        const fresh = suggestion !== null && member ? { ...suggestion, to: recipientsOf(suggestion.to).map((name) => {
+          const matches = replyAgents.filter((agent) => agent.name === name);
+          return matches.length === 1 ? matches[0]!.id : name;
+        }).join(", ") } : suggestion;
         if (fresh !== null) {
           const scope = JSON.stringify([repositoryId, selectedId]);
           setReplies((current) => current[scope]?.offered === false ? current : { ...current, [scope]: fresh });
@@ -440,7 +526,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
     return () => {
       ignore = true;
     };
-  }, [activeView, phase, reload, repositoryId, selectedId, threadRevision]);
+  }, [activeView, phase, reload, repositoryId, selectedId, threadRevision, member, replyAgents]);
 
   useEffect(() => {
     if (activeView !== "messages") {
@@ -456,12 +542,33 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
   }, [activeView, selectedId]);
 
   const chooseLocale = (next: SupportedLocale) => {
+    if (session !== null) {
+      setLocaleSaving(true);
+      void updateProfile(session.account, session.account.display_name, next).then((account) => onSession({ ...session, account })).catch((error: unknown) => {
+        if (error instanceof ApiError && error.status === 401) onSignedOut();
+        else setFormError(t("localeStatus.saveError"));
+      }).finally(() => setLocaleSaving(false));
+      return;
+    }
     try {
       writeUiLocale(next);
     } catch {
       // The language still changes for this visit.
     }
     void loadLocale(next).then(() => setLocale(next));
+  };
+
+  const signOut = async () => {
+    setSigningOut(true);
+    try {
+      await logout();
+      onSignedOut();
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 401) onSignedOut();
+      else setFormError(t("accountUi.signOutError"));
+    } finally {
+      setSigningOut(false);
+    }
   };
 
   const toggleSound = () => {
@@ -484,6 +591,12 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
     // The message belongs to the repository being read (ADR 004), and the hub refuses a key
     // reused for another repository. A retry from another view therefore gets a new key, and
     // the draft keeps it for its own retries.
+    const expired = session !== null && start.firstTried !== undefined && Date.now() - start.firstTried >= accountRetryWindow;
+    if (expired) {
+      keep(edited(start, { sentFrom: undefined }));
+      setFormError(t("accountUi.retryExpired"));
+      return;
+    }
     const keyed = start.sentFrom === undefined || start.sentFrom === repositoryId ? { ...start, sentFrom: repositoryId } : { ...start, key: humanKey(), firstTried: undefined, sentFrom: repositoryId };
     const draft = { ...keyed, firstTried: keyed.firstTried ?? Date.now() };
     keep(draft);
@@ -515,8 +628,8 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
       // forgotten the key, and the plain error promises nothing. A 4xx is a refusal: nothing was
       // stored.
       const ambiguous = !(error instanceof ApiError) || error.status >= 500;
-      const uncertain = ambiguous && Date.now() - draft.firstTried < retryWindow;
-      setFormError(t(uncertain ? "operator.sendUncertain" : "operator.loadError"));
+      const uncertain = ambiguous && Date.now() - draft.firstTried < (session === null ? retryWindow : accountRetryWindow);
+      setFormError(t(uncertain ? session === null ? "operator.sendUncertain" : "accountUi.sendUncertain" : "operator.loadError"));
     } finally {
       inFlight.current = false;
       setSending(false);
@@ -541,7 +654,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
   };
 
   const composeRecipients = recipientsOf(compose.to);
-  const composeSendable = sendable(compose) && composeRecipients.every((id) => id === "human" || sessions.some((agent) => agent.id === id));
+  const composeSendable = canSend && sendable(compose) && validRecipients(compose);
   const activeAgents = sessions.filter((item) => item.state === "active");
   const visibleAgents = sessions.filter((item) => (showInactive || item.state === "active") &&
     `${item.name} ${item.host} ${item.client} ${item.branch} ${repositoryName(overview!, item.repository_id)}`.toLowerCase().includes(agentSearch.toLowerCase().trim()));
@@ -581,7 +694,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
   const title = activeView === "messages" ? t(mailScope === "mine" ? "console.myMessages" : "console.allActivity")
     : activeView === "fleet" ? t("console.fleet")
     : activeView === "claims" ? t("console.reservations")
-    : activeView === "diagnostics" ? t("console.diagnostics") : t("operator.compose");
+    : activeView === "diagnostics" ? t("console.diagnostics") : activeView === "account" ? t("accountUi.account") : t("operator.compose");
 
   return (
     <div className="app-shell operator-console">
@@ -601,7 +714,11 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
           <p className={stream === "live" ? "stream-status stream-live" : "stream-status stream-reconnecting"}>
             {t(stream === "live" ? "stream.live" : stream === "reconnecting" ? "stream.reconnecting" : "stream.connecting")}
           </p>
-          <LocalePicker disabled={false} locale={locale} onSelect={chooseLocale} />
+          <LocalePicker disabled={localeSaving} locale={locale} onSelect={chooseLocale} />
+          {session !== null ? <>
+            <button type="button" className="account-identity" onClick={() => chooseView("account")}>{session.account.display_name || session.account.username}</button>
+            <button type="button" disabled={signingOut} onClick={() => void signOut()}>{t(signingOut ? "accountUi.signingOut" : "accountUi.signOut")}</button>
+          </> : null}
           <button
             type="button"
             className="sound-toggle"
@@ -617,15 +734,16 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
       <div className="console-workspace">
         {phase === "ready" && overview !== null ? (
           <aside className="console-sidebar">
-            <button type="button" className="primary-button compose-action" onClick={() => chooseView("compose")}>+ {t("operator.compose")}</button>
+            {canSend ? <button type="button" className="primary-button compose-action" onClick={() => chooseView("compose")}>+ {t("operator.compose")}</button> : null}
             <nav className="console-nav" aria-label={t("navigation")}>
               <button type="button" className="console-nav-item" aria-current={activeView === "messages" && mailScope === "mine" ? "page" : undefined} onClick={() => openMailbox("mine")}>
-                {t("console.myMessages")}<span className="nav-count">{overview.human_unread}</span>
+                {t(member ? "accountUi.messages" : "console.myMessages")}<span className="nav-count">{overview.human_unread}</span>
               </button>
-              <button type="button" className="console-nav-item" aria-current={activeView === "messages" && mailScope === "all" ? "page" : undefined} onClick={() => openMailbox("all")}>{t("console.allActivity")}</button>
+              {!member ? <button type="button" className="console-nav-item" aria-current={activeView === "messages" && mailScope === "all" ? "page" : undefined} onClick={() => openMailbox("all")}>{t("console.allActivity")}</button> : null}
               <button type="button" className="console-nav-item" aria-current={activeView === "fleet" ? "page" : undefined} onClick={() => chooseView("fleet")}>{t("console.fleet")}<span className="nav-count">{activeAgents.length}</span></button>
               <button type="button" className="console-nav-item" aria-current={activeView === "claims" ? "page" : undefined} onClick={() => chooseView("claims")}>{t("operator.claims")}<span className="nav-count">{overview.claims.length}</span></button>
-              <button type="button" className="console-nav-item" aria-current={activeView === "diagnostics" ? "page" : undefined} onClick={() => chooseView("diagnostics")}>{t("console.diagnostics")}</button>
+              {!member ? <button type="button" className="console-nav-item" aria-current={activeView === "diagnostics" ? "page" : undefined} onClick={() => chooseView("diagnostics")}>{t("console.diagnostics")}</button> : null}
+              {session !== null ? <button type="button" className="console-nav-item" aria-current={activeView === "account" ? "page" : undefined} onClick={() => chooseView("account")}>{t("accountUi.account")}</button> : null}
             </nav>
           </aside>
         ) : null}
@@ -647,12 +765,13 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
         ) : null}
         {phase === "ready" && overview !== null ? (
           <>
-            <header className="console-heading">
-              <div><p className="console-kicker">{t("appName")}</p><h1>{title}</h1>
-                <p>{activeView === "messages" ? t(mailScope === "mine" ? "console.subtitle" : "console.activityHint") : activeView === "fleet" ? t("console.fleetHint") : activeView === "compose" ? t("console.composeHint") : null}</p>
+            {activeView !== "account" ? <header className="console-heading">
+              <div><p className="console-kicker">{t("appName")}</p><h1>{member && activeView === "messages" ? t("accountUi.messages") : title}</h1>
+                <p>{activeView === "messages" ? t(member || session !== null ? "accountUi.sharedMail" : mailScope === "mine" ? "console.subtitle" : "console.activityHint") : activeView === "fleet" ? t("console.fleetHint") : activeView === "compose" ? t("console.composeHint") : null}</p>
               </div>
-            </header>
+            </header> : null}
             <div className="console-notices">
+              {member && overview.repositories.length === 0 ? <p role="status">{t("accountUi.noRepositories")}</p> : null}
               {notice.length > 0 ? <p role="status">{notice}</p> : null}
               {formError.length > 0 ? <p role="alert">{formError}</p> : null}
             </div>
@@ -690,7 +809,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                           {threads.map((item) => <li key={item.id}>
                             <button type="button" className="thread-row" aria-current={item.id === selectedId ? "true" : undefined} data-unread={item.unread > 0 ? "yes" : "no"} onClick={(event) => openThread(item.id, event.currentTarget)}>
                               <span className="thread-row-top"><strong>{item.subject}</strong><time dateTime={item.last_at}>{formatWhen(item.last_at)}</time></span>
-                              <span className="thread-participants">{item.participants.join(", ")}</span>
+                              <span className="thread-participants">{item.participants.join(", ")}{item.authors?.map((author) => <span key={author.sender_account_id}> · {author.sender_display_name || author.sender_username}</span>)}</span>
                               <span className="thread-row-bottom"><span>{t("inbox.count", { count: item.count })}</span><span>{t("operator.unread", { count: item.unread })}</span></span>
                               <span className="sr-only">{t("operator.openThread", { subject: item.subject })}</span>
                             </button>
@@ -714,7 +833,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                   {thread.messages.map((message) => (
                     <article key={message.id} className="thread-message">
                       <header>
-                        <strong>{message.sender}</strong>
+                        <strong>{message.sender_account_id ? t("accountUi.sharedAuthor", { person: message.sender_display_name || message.sender_username, sender: message.sender }) : message.sender}</strong>
                         {overview !== null && message.repository_id !== undefined && message.repository_id !== repositoryId ? (
                           <span className="message-repository">{repositoryName(overview, message.repository_id)}</span>
                         ) : null}
@@ -726,20 +845,20 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                       <MessageBody body={message.body} />
                     </article>
                   ))}
-                  {thread.messages.length > 0 ? <form
+                  {thread.messages.length > 0 && canSend && replyVisible ? <form
                     className="search-form"
                     onSubmit={(event) => {
                       event.preventDefault();
-                      if (sendable(reply)) {
+                      if (sendable(reply) && (!member || validRecipients(reply))) {
                         replyReview.start();
                       }
                     }}
                   >
                     <h3>{t("operator.reply")}</h3>
-                    <label>
+                    {member ? <RecipientPicker agents={recipientAgents} selected={recipientsOf(reply.to)} allowHuman={false} onChange={(ids) => setReply(edited(reply, { to: ids.join(", ") }))} /> : <label>
                       {t("operator.recipients")}
                       <input value={reply.to} onChange={(event) => setReply(edited(reply, { to: event.target.value }))} />
-                    </label>
+                    </label>}
                     <label>
                       {t("operator.subject")}
                       <input value={reply.subject} onChange={(event) => setReply(edited(reply, { subject: event.target.value }))} />
@@ -752,7 +871,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                       recipients={recipientsOf(reply.to)}
                       subject={reply.subject}
                       body={reply.body}
-                      sendable={sendable(reply)}
+                      sendable={sendable(reply) && (!member || validRecipients(reply))}
                       sending={sending}
                       sendLabel={t("operator.reply")}
                       onSend={() =>
@@ -773,7 +892,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                 </div>
               </section>
             </div>
-            <div hidden={activeView !== "diagnostics"} className="console-view">
+            {!member ? <div hidden={activeView !== "diagnostics"} className="console-view">
             <section id="overview" className="panel" aria-labelledby="clients-title">
               <div className="panel-heading">
                 <h2 id="clients-title">{t("operator.doctorTitle")}</h2>
@@ -793,7 +912,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                 </p>
               ) : null}
             </section>
-            </div>
+            </div> : null}
             <div hidden={activeView !== "fleet"} className="console-view">
             <section className="content-grid" aria-label={t("operator.repositories")}>
               <article className="panel">
@@ -837,7 +956,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                         <th scope="col">{t("operator.agent")}</th>
                         <th scope="col">{t("operator.detail")}</th>
                         <th scope="col">{t("operator.repository")}</th>
-                        <th scope="col">{t("operator.clientHealth")}</th>
+                        {!member ? <th scope="col">{t("operator.clientHealth")}</th> : null}
                       </tr>
                     </thead>
                     <tbody>
@@ -850,7 +969,7 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                               {item.host} · {item.client} · {item.state}<br />{item.branch}
                             </td>
                             <td>{repositoryName(overview, item.repository_id)}</td>
-                            <td data-health={health?.status ?? "none"}>{health === undefined ? t("operator.noHostReport") : t(statusKey(health.status))}</td>
+                            {!member ? <td data-health={health?.status ?? "none"}>{health === undefined ? t("operator.noHostReport") : t(statusKey(health.status))}</td> : null}
                           </tr>
                         );
                       })}
@@ -867,10 +986,11 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                 repositories={overview.repositories}
                 revoking={revoking}
                 onRevoke={(claim) => void onRevoke(claim)}
+                canRevoke={!member}
               />
 
             </div>
-            <section id="compose" hidden={activeView !== "compose"} className="panel console-view" aria-labelledby="compose-title">
+            {canSend ? <section id="compose" hidden={activeView !== "compose"} className="panel console-view" aria-labelledby="compose-title">
               <div className="panel-heading">
                 <h2 id="compose-title">{t("operator.compose")}</h2>
               </div>
@@ -885,11 +1005,11 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
               >
                 <label>{t("console.composeRepository")}
                   <select value={repositoryId} onChange={(event) => { setRepositoryId(event.target.value); clearThread(); }}>
-                    <option value="">{t("console.automaticRepository")}</option>
-                    {overview.repositories.map((repository) => <option key={repository.id} value={repository.id}>{repository.name} · {repository.id}</option>)}
+                    {!member ? <option value="">{t("console.automaticRepository")}</option> : null}
+                    {(member ? writableRepositories : overview.repositories).map((repository) => <option key={repository.id} value={repository.id}>{repository.name} · {repository.id}</option>)}
                   </select>
                 </label>
-                <RecipientPicker agents={sessions} selected={composeRecipients} onChange={(ids) => setCompose(edited(compose, { to: ids.join(", ") }))} />
+                <RecipientPicker agents={recipientAgents} allowHuman={!member} selected={composeRecipients} onChange={(ids) => setCompose(edited(compose, { to: ids.join(", ") }))} />
                 <label>
                   {t("operator.subject")}
                   <input value={compose.subject} onChange={(event) => setCompose(edited(compose, { subject: event.target.value }))} />
@@ -914,7 +1034,8 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
                   })}
                 />
               </form>
-            </section>
+            </section> : null}
+            {session !== null && activeView === "account" ? <Account session={session} onSession={onSession} onSignedOut={onSignedOut} /> : null}
           </>
         ) : null}
       </main>

@@ -1,5 +1,9 @@
 import { expect, test } from "@playwright/test";
 
+test.beforeEach(async ({ page }) => {
+  await page.route("**/v1/ui/session", (route) => route.fulfill({ status: 404 }));
+});
+
 // The review before a send lists every recipient, the subject and the rendered body. On a phone
 // it must fit the screen, with long names and a wide code block, and only its button sends.
 test("the review before a send fits a phone and sends only on Send", async ({ page }) => {

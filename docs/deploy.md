@@ -13,8 +13,12 @@ this stage does not switch console authentication or enable member access. The
 session/authentication defenses and owner setup commands are implemented behind
 the account gate for verification. The owner-only importer is available separately;
 see [account import and recovery](accounts-import.md) for its reviewed procedure.
-Deploying this code does not authorize a real import. Account UI and reviewed
-cutover remain later ordered steps; keep login links until that cutover.
+Deploying this code does not authorize a real import. Keep login links until the
+reviewed cutover in the next ordered step.
+The step 5 frontend includes staged login/logout and profile/password forms but
+does not expose a deployment switch. Its session probe distinguishes legacy
+links from named authentication, so updating console assets keeps current login.
+Account-list/access controls and the owner-approved cutover belong to step 6.
 
 The account implementation uses a separate random 256-bit console key, stored
 with mode 0600 or the owner-only Windows DACL. It never reuses the owner token or
