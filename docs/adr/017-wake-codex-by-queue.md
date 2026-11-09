@@ -91,8 +91,9 @@ allowance is part of the kept state.
 
 While a submitted wake is unconsumed the runner submits no other, whatever arrives, the second
 wake of decision 5 included. A wake is consumed only by its own turn. The fixed text ends with a
-random token, new for each attempt and never taken from mail, and the prompt hook that finds
-that token in its prompt marks the wake consumed. A prompt that a person typed does not. The
+random token, new for each attempt and never taken from mail, and the prompt hook whose whole
+prompt is that fixed text with the token of the kept attempt marks the wake consumed. A prompt
+that a person typed does not, and neither does one that only contains the token. The
 runner writes the attempt and its token to the kept state before it starts the command, because
 the woken turn's prompt hook can run before the command returns; the command's answer, arriving
 later, never turns a consumed wake back. The captured prompt hook of a queued turn has a prompt
@@ -101,9 +102,13 @@ The token routes and does not authenticate: whatever can type into the session c
 and a match shows only that this prompt hook ran.
 
 No timer ends an unconsumed wake, because a stored message cannot be shown to have gone, and
-this first version does not withdraw one. This trades liveness for not piling up wakes: a
-submission that was stored, or whose answer was unknown, and that never runs holds the
-reservation until the session next starts. Until then the session hears only through its hooks.
+this first version does not withdraw one. A session start does not end it either: a resumed
+thread fires SessionStart before it runs its stored messages, so a start does not show the
+stored wake gone, and the kept attempt and its token survive the start. Only the wake's own
+prompt hook releases the reservation. This trades liveness for not piling up wakes: a submission
+whose answer was unknown and that was never stored blocks later wakes for that session, and
+until it is cleared the session hears only through its hooks. `iris doctor` reports a wake that
+has stayed unconsumed and says how to clear it by hand.
 
 Before it submits, the runner waits a short settle time and looks again: a session that is in a
 turn and was told by a hook needs no wake. The runner cannot see turn boundaries. A marker
@@ -187,8 +192,11 @@ For the pull requests that implement this:
   told state never moves because of a wake; nothing runs unless the wake was turned on.
 - Consumption: a prompt that a person typed before the queued wake ran does not release the
   reservation; the prompt that carries the wake's token does; the token is never derived from
-  mail. The attempt is on disk before the command starts: a prompt hook that runs before the
-  command returns consumes it, and the late answer does not undo that.
+  mail, and a prompt that only contains it inside other text does not release the reservation.
+  The attempt is on disk before the command starts: a prompt hook that runs before the command
+  returns consumes it, and the late answer does not undo that. A resumed session whose stored
+  wake runs after SessionStart keeps the reservation through the start, and the wake's own
+  prompt hook releases it.
 - Attention identity: one message handled and one received, with the count unchanged, is
   announced; a changed stream id announces what is pending once; a heartbeat, a registration and
   a `changed` event cause no wake.
