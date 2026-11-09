@@ -48,7 +48,9 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 		}
 		switch operation {
 		case "expire":
-			// The hub's shared maintenance wake has already run expiry above.
+			// Session cleanup belongs to shared maintenance, not unrelated domain
+			// calls. Authorization independently rejects sessions at their deadline.
+			_, err = t.exec(expireConsoleSessionsSQL, t.s.clock.Now().UnixMilli())
 			out = map[string]any{}
 		case "ui_receipts":
 			if t.console == nil {

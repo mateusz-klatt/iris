@@ -74,8 +74,14 @@ application code. The same frozen benchmark helper is used before and after.
 The WSL host is shared rather than CPU-isolated; per-process CPU, fixture,
 toolchain, affinity and observation intervals are recorded with the raw results.
 Both six-case series completed successfully, with at least 60 measured seconds
-per case and no idle frames. Every after case began 60 store transactions in its
-minute, independent of the number of sockets and the history multiplier.
+per case and no idle frames. These intervals contain no application writes or
+periodic heartbeats. Every after case began 60 store transactions in its minute,
+independent of the number of sockets and the history multiplier. This is a
+quiescent measurement, not a claim that active watch clients cost one transaction
+per second. The current notifier broadcasts each semantic commit to all streams;
+staggered heartbeats therefore add their own authentication/write transactions and
+an observer-count multiplied by write-rate term. Scoped observer notifications
+remain a separate follow-up.
 
 | History | Watch sockets, plus two legacy consoles | CPU seconds/minute before | CPU seconds/minute after | Transactions/second before | Transactions/second after | Registration RPC p95 ms before | Registration RPC p95 ms after |
 | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
@@ -139,6 +145,67 @@ the original first case. The binaries were built once with
 The repeat used the anchored selector
 `-test.bench=^BenchmarkIdleHubCPU$/^history=1$/^watches=1$`.
 
+## Live heartbeat experiment
+
+The separate opt-in `BenchmarkLiveHubCPU` uses the 10× history fixture, 20 watch
+sockets and two legacy consoles. Each watch client sends a real authenticated
+heartbeat every 20 seconds. Initial phases are 0.5–19.5 seconds, spaced one
+second apart, so the 10 ms coalescer cannot turn the workload into one artificial
+burst. On 2026-11-09, the full minute ended at 18:53:40 UTC:
+
+| Measured quantity | Result |
+| --- | ---: |
+| Actual interval | 60.001088 seconds |
+| Process CPU seconds/minute | 0.768528 |
+| Store transactions | 1,500, or 24.99955/second |
+| Successful heartbeat RPCs | 60 of 60; no errors or skipped slots |
+| Watch observations | 1,200 |
+| Legacy console observations | 120 |
+| Shared maintenance calls | 60 |
+| Heartbeat operation transactions | 60 |
+| Named-token authentication transactions | 60 |
+
+Every client sent three heartbeats. Raw request timestamps show inter-client
+spacing of 0.997545–1.000952 seconds and per-client periods of
+19.996586–20.000466 seconds; the largest scheduled-phase error was 4.299 ms.
+Thus the extra transactions are the expected broadcast observation cost, not
+idle timer polls. With `H` writers, period `T` and `N` subscribed streams, separated
+commits can add about `N*H/T` observation transactions per second, in addition
+to maintenance and each heartbeat's own authentication/write transactions.
+Here, `H=20`, `T=20` and `N=22` give 22 observations plus two request transactions
+and one maintenance transaction per second. Watch hints scoped to their Agent's
+events and Execution state, with console broadcasts retained, are follow-up work.
+
+The heartbeat workers stop and join before registration RPC sampling. Its p50
+19.08 ms and p95 24.57 ms therefore describe the same open sockets after that
+write workload stops, not registration latency during ongoing heartbeats or a
+full hook. No frames were sent: these legacy consoles use the global event
+cursor, which heartbeats do not advance. Named-console scoped revisions can
+advance on heartbeat writes; their correctness has separate tests.
+
+The application fingerprint was
+`5963ffb6afd30711b39e6c74abbd05186ec774324c80b56104c9c47955c7ca9d`:
+`df1d873` plus the follow-up moving console-session deletion into the shared
+maintenance operation. The live binary SHA256 was
+`b21a6087791fd7132dd28567de9ad715508da8c7b63713c7bdc37f917579790a`,
+and the extended helper SHA256 was
+`89223bd35dc026d2e1874c16363f07a3e0e9be2a12db1a04d8e27f5e96b8506e`.
+The six-case quiescent table above retains its original frozen helper and
+source provenance; it was not silently remeasured or relabelled. A later hub
+admission I/O-boundary refactor for deterministic ordering tests preserves
+behavior and is outside the captured measurement source.
+
+Go 1.27.3, `CGO_ENABLED=0`, runtime CPU count 16, `GOMAXPROCS=16`, affinity 0–15,
+host and boot identity match the earlier experiments. Iris heavy checks were
+paused; residual external activity and historical load remained on this shared
+WSL host. Load averages fell from 3.41 to 1.18; this is not CPU isolation. Raw
+events, phase audit, source/module manifests, patches, binary, process/load
+snapshots and report are in `/tmp/iris-live-cpu-jp4nn7ac`.
+
+```sh
+CGO_ENABLED=0 go test ./internal/hub -run '^$' -bench '^BenchmarkLiveHubCPU$' -benchtime=1x -count=1 -timeout=5m
+```
+
 ## Query and migration limits
 
 Schema 21 adds partial active-Execution/open-Claim/attention indexes, an event
@@ -173,6 +240,11 @@ deadlines too. Startup therefore has a one-time history-dependent cost. Real
 loss transitions can still visit acknowledged deliveries attached to that
 Execution; claim-release fanout still visits durable repository Agents. No fault
 injection boundary, state comparison, retry assertion or coverage gate is removed.
+Console-session deletion runs only in the shared maintenance operation. With no
+streams its worker is stopped, so expired rows can remain until another stream
+or session cleanup. Authentication checks absolute expiry at use and never treats
+an expired retained row as authority. Ordinary domain calls, including forget
+dry-runs, do not perform this unrelated housekeeping.
 
 ## What was not measured
 

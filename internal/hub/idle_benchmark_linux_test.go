@@ -38,6 +38,19 @@ import (
 // IRIS_IDLE_BENCH_CONSUMER defaults to a named durable consumer; set iris-watch
 // to measure the monitor path whose cursor is acknowledged separately.
 func BenchmarkIdleHubCPU(b *testing.B) {
+	benchmarkHubCPU(b, false)
+}
+
+// BenchmarkLiveHubCPU measures the 10x-history, 20-watch, two-console fixture
+// with one authenticated heartbeat per watch every 20 seconds. Phases are
+// separated by one second, so the 10ms observer coalescer cannot normally turn
+// independent heartbeats into an artificial single burst. CPU includes clients,
+// authentication, writes, observer wakeups and the bounded worker drain.
+func BenchmarkLiveHubCPU(b *testing.B) {
+	benchmarkHubCPU(b, true)
+}
+
+func benchmarkHubCPU(b *testing.B, live bool) {
 	duration := time.Minute
 	if value := os.Getenv("IRIS_IDLE_BENCH_DURATION"); value != "" {
 		var err error
@@ -50,15 +63,20 @@ func BenchmarkIdleHubCPU(b *testing.B) {
 	if consumer == "" {
 		consumer = "idle-benchmark"
 	}
-	for _, scale := range []int{1, 10} {
+	scales, socketCounts := []int{1, 10}, []int{1, 5, 20}
+	if live {
+		scales, socketCounts = []int{10}, []int{20}
+	}
+	for _, scale := range scales {
 		b.Run(fmt.Sprintf("history=%d", scale), func(b *testing.B) {
-			for _, watches := range []int{1, 5, 20} {
+			for _, watches := range socketCounts {
 				b.Run(fmt.Sprintf("watches=%d", watches), func(b *testing.B) {
 					b.StopTimer()
 					fixture := idleBenchmarkFixture(b, scale)
 					server := httptest.NewUnstartedServer(nil)
 					h := New(fixture.store, "idle-owner-secret", []string{server.Listener.Addr().String()})
 					h.Log = log.New(io.Discard, "", 0)
+					var calls idleBenchmarkCallCounts
 					type readyEvent struct {
 						once sync.Once
 						done chan struct{}
@@ -70,6 +88,9 @@ func BenchmarkIdleHubCPU(b *testing.B) {
 					realCall := h.call
 					h.call = func(ctx context.Context, operation string, request store.Request) (map[string]any, error) {
 						out, err := realCall(ctx, operation, request)
+						if live {
+							calls.record(operation)
+						}
 						if err == nil && operation == "events" {
 							if ready := initialEvents[request.ExecutionID]; ready != nil {
 								ready.once.Do(func() { close(ready.done) })
@@ -162,17 +183,36 @@ func BenchmarkIdleHubCPU(b *testing.B) {
 					time.Sleep(1500 * time.Millisecond)
 					beforeCPU := idleBenchmarkCPU(b)
 					beforeTransactions, beforeFrames := fixture.store.TransactionCount(), frames.Load()
+					beforeCalls := calls.snapshot()
 					start := time.Now()
 					startedUTC := start.UTC().Format(time.RFC3339Nano)
+					var heartbeats *idleBenchmarkHeartbeats
+					if live {
+						heartbeats = startIdleBenchmarkHeartbeats(server.Client(), server.URL, token, watches, start)
+						defer heartbeats.stopAndWait()
+					}
 					b.StartTimer()
 					for range b.N {
 						time.Sleep(duration)
 					}
 					b.StopTimer()
+					if heartbeats != nil {
+						// Join before final metrics, registration RPCs and socket cleanup.
+						// A request already in flight has a five-second deadline; its
+						// bounded drain is included in the reported actual interval.
+						heartbeats.stopAndWait()
+						for _, err := range heartbeats.errors() {
+							b.Error(err)
+						}
+						if b.Failed() {
+							b.FailNow()
+						}
+					}
 					elapsed := time.Since(start).Seconds()
 					cpu := idleBenchmarkCPU(b) - beforeCPU
 					transactions := fixture.store.TransactionCount() - beforeTransactions
 					idleFrames := frames.Load() - beforeFrames
+					measuredCalls := calls.snapshot().subtract(beforeCalls)
 					// Sample the hook's server-side registration RPC after the idle
 					// interval, under the same open sockets. This does not measure a
 					// real agent process, full hook startup, DNS, TLS or a reverse proxy.
@@ -213,15 +253,182 @@ func BenchmarkIdleHubCPU(b *testing.B) {
 						"idle_frames": idleFrames, "registration_rpc_samples": len(latencies), "registration_rpc_p50_ms": latencies[9], "registration_rpc_p95_ms": latencies[18],
 						"go_version": runtime.Version(), "gomaxprocs": runtime.GOMAXPROCS(0), "cpu_scope": "whole benchmark process, including loopback clients",
 						"fixture": fixture.counts}
+					prefix := "IDLE_CPU_RESULT"
+					if heartbeats != nil {
+						prefix = "LIVE_CPU_RESULT"
+						delete(result, "idle_frames")
+						result["frames_during_interval"] = idleFrames
+						result["measurement_ended_utc"] = result["idle_ended_utc"]
+						delete(result, "idle_ended_utc")
+						result["workload"] = "20 watch clients, heartbeat every 20 seconds, staggered phases"
+						result["heartbeat_clients"] = watches
+						result["heartbeat_period_seconds"] = idleBenchmarkHeartbeatPeriod.Seconds()
+						result["heartbeat_first_phase_seconds"] = idleBenchmarkHeartbeatPeriod.Seconds() / float64(2*watches)
+						result["heartbeat_phase_spacing_seconds"] = idleBenchmarkHeartbeatPeriod.Seconds() / float64(watches)
+						result["heartbeat_rpc_attempts"] = heartbeats.attempts.Load()
+						result["heartbeat_rpc_successes"] = heartbeats.successes.Load()
+						result["heartbeat_rpc_errors"] = 0
+						result["heartbeat_samples"] = heartbeats.samples
+						result["runtime_num_cpu"] = runtime.NumCPU()
+						result["heartbeat_skipped_slots"] = heartbeats.skipped.Load()
+						result["heartbeat_operation_calls"] = measuredCalls.heartbeats
+						result["watch_observation_calls"] = measuredCalls.events
+						result["legacy_console_observation_calls"] = measuredCalls.console
+						result["maintenance_calls"] = measuredCalls.expire
+						result["hub_operation_calls"] = measuredCalls.total
+						result["store_transactions_outside_hub_calls"] = int64(transactions) - int64(measuredCalls.total)
+						result["authentication_scope"] = "Every heartbeat authenticates a named host token in its own store transaction; included in total Store transactions. Outside-hub-call residual can include interval-boundary in-flight operations."
+						result["measurement_scope"] = "CPU/TPS include heartbeat HTTP clients, authentication, writes, all broadcast observer reads and heartbeat worker stop/join. Registration RPCs follow worker join under the same sockets, without ongoing heartbeats; not full hook/process/proxy latency."
+					}
 					encoded, err := json.Marshal(result)
 					if err != nil {
 						b.Fatal(err)
 					}
-					b.Logf("IDLE_CPU_RESULT %s", encoded)
+					b.Logf("%s %s", prefix, encoded)
 				})
 			}
 		})
 	}
+}
+
+const idleBenchmarkHeartbeatPeriod = 20 * time.Second
+
+type idleBenchmarkCallCounts struct {
+	total, events, console, expire, heartbeats atomic.Uint64
+}
+
+type idleBenchmarkCallSnapshot struct {
+	total, events, console, expire, heartbeats uint64
+}
+
+func (c *idleBenchmarkCallCounts) record(operation string) {
+	c.total.Add(1)
+	switch operation {
+	case "events":
+		c.events.Add(1)
+	case "ui_events":
+		c.console.Add(1)
+	case "expire":
+		c.expire.Add(1)
+	case "heartbeat":
+		c.heartbeats.Add(1)
+	}
+}
+
+func (c *idleBenchmarkCallCounts) snapshot() idleBenchmarkCallSnapshot {
+	return idleBenchmarkCallSnapshot{c.total.Load(), c.events.Load(), c.console.Load(), c.expire.Load(), c.heartbeats.Load()}
+}
+
+func (s idleBenchmarkCallSnapshot) subtract(before idleBenchmarkCallSnapshot) idleBenchmarkCallSnapshot {
+	return idleBenchmarkCallSnapshot{s.total - before.total, s.events - before.events, s.console - before.console, s.expire - before.expire, s.heartbeats - before.heartbeats}
+}
+
+type idleBenchmarkHeartbeatSample struct {
+	ExecutionID string  `json:"execution_id"`
+	StartedUTC  string  `json:"started_utc"`
+	LatencyMS   float64 `json:"latency_ms"`
+}
+
+type idleBenchmarkHeartbeats struct {
+	samplesMu                    sync.Mutex
+	samples                      []idleBenchmarkHeartbeatSample
+	stop                         chan struct{}
+	stopOnce                     sync.Once
+	workers                      sync.WaitGroup
+	failures                     chan error
+	attempts, successes, skipped atomic.Uint64
+}
+
+func startIdleBenchmarkHeartbeats(client *http.Client, base, token string, clients int, start time.Time) *idleBenchmarkHeartbeats {
+	run := &idleBenchmarkHeartbeats{stop: make(chan struct{}), failures: make(chan error, clients)}
+	for i := range clients {
+		run.workers.Add(1)
+		go func(i int) {
+			defer run.workers.Done()
+			execution := fmt.Sprintf("idle-ex-%d", i)
+			phase := time.Duration(2*i+1) * idleBenchmarkHeartbeatPeriod / time.Duration(2*clients)
+			next := start.Add(phase)
+			timer := time.NewTimer(time.Until(next))
+			defer timer.Stop()
+			for {
+				select {
+				case <-run.stop:
+					return
+				case <-timer.C:
+				}
+				// Prefer stopping over starting another request at the boundary.
+				select {
+				case <-run.stop:
+					return
+				default:
+				}
+				run.attempts.Add(1)
+				requestStart := time.Now()
+				if err := idleBenchmarkHeartbeat(client, base, token, execution); err != nil {
+					// At most one error per worker fits the buffer. The benchmark
+					// goroutine reports errors after joining; workers never call b.Fatal.
+					run.failures <- fmt.Errorf("heartbeat %s: %w", execution, err)
+					return
+				}
+				run.successes.Add(1)
+				run.samplesMu.Lock()
+				run.samples = append(run.samples, idleBenchmarkHeartbeatSample{execution, requestStart.UTC().Format(time.RFC3339Nano), float64(time.Since(requestStart)) / float64(time.Millisecond)})
+				run.samplesMu.Unlock()
+				next = next.Add(idleBenchmarkHeartbeatPeriod)
+				// Do not create catch-up bursts if this shared host was stalled.
+				for !next.After(time.Now()) {
+					run.skipped.Add(1)
+					next = next.Add(idleBenchmarkHeartbeatPeriod)
+				}
+				timer.Reset(time.Until(next))
+			}
+		}(i)
+	}
+	return run
+}
+
+func (run *idleBenchmarkHeartbeats) stopAndWait() {
+	run.stopOnce.Do(func() { close(run.stop) })
+	run.workers.Wait()
+}
+
+func (run *idleBenchmarkHeartbeats) errors() []error {
+	// Called only after stopAndWait, so no producer remains.
+	var errors []error
+	for {
+		select {
+		case err := <-run.failures:
+			errors = append(errors, err)
+		default:
+			return errors
+		}
+	}
+}
+
+func idleBenchmarkHeartbeat(client *http.Client, base, token, execution string) error {
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	r, err := http.NewRequestWithContext(ctx, http.MethodPost, base+"/v1/executions/"+url.PathEscape(execution)+"/heartbeat", strings.NewReader(`{"generation":1,"source":"watch"}`))
+	if err != nil {
+		return err
+	}
+	r.Header.Set("Authorization", "Bearer "+token)
+	response, err := client.Do(r)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = response.Body.Close() }()
+	var out struct {
+		ExecutionID string `json:"execution_id"`
+		Generation  int64  `json:"generation"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&out); err != nil {
+		return fmt.Errorf("status %d: %w", response.StatusCode, err)
+	}
+	if response.StatusCode != http.StatusOK || out.ExecutionID != execution || out.Generation != 1 {
+		return fmt.Errorf("status %d, execution %q generation %d", response.StatusCode, out.ExecutionID, out.Generation)
+	}
+	return nil
 }
 
 func idleBenchmarkCPU(b *testing.B) float64 {

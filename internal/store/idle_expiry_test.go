@@ -3,6 +3,7 @@ package store
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"testing"
 	"time"
 )
@@ -152,6 +153,13 @@ func TestMaintenanceExpiresConsoleSessionsAndNotifiesOnce(t *testing.T) {
 	a := newSessionAccount(t, s, "maintenance-session", "member")
 	p := issueTestSession(t, s, a, 71)
 	clock.advance(ConsoleSessionLifetime)
+	call(t, s, "status", Request{})
+	if n := sessionCount(t, s, a); n != 1 {
+		t.Fatalf("an unrelated domain call purged expired console sessions: %d", n)
+	}
+	if _, err := s.ConsoleSessionAccount(context.Background(), p.SessionDigest); err == nil {
+		t.Fatal("expired console session still authenticates before maintenance")
+	}
 	changes := s.Changes()
 	call(t, s, "expire", Request{})
 	if n := sessionCount(t, s, a); n != 0 {
@@ -171,6 +179,64 @@ func TestMaintenanceExpiresConsoleSessionsAndNotifiesOnce(t *testing.T) {
 	case <-changes:
 		t.Fatal("expired console session notified twice")
 	default:
+	}
+}
+
+func TestMaintenanceConsoleCleanupStorageFailuresRollBackAndRetry(t *testing.T) {
+	s, clock, file := testStore(t)
+	a := newSessionAccount(t, s, "maintenance-fault", "member")
+	expired := issueTestSession(t, s, a, 72)
+	clock.advance(ConsoleSessionLifetime - time.Second)
+	live := issueTestSession(t, s, a, 73)
+	clock.advance(time.Second)
+	before, changes := databaseState(t, s), s.Changes()
+	fault := installFaultDriver(t, s, file)
+	invoke := func() error {
+		_, err := s.Call(t.Context(), "expire", Request{})
+		return err
+	}
+	fault.discover = true
+	if err := invoke(); !errors.Is(err, errStorageFault) {
+		t.Fatal("discovery failed to refuse the cleanup commit", err)
+	}
+	trace := append([]string(nil), fault.trace...)
+	fault.discover = false
+	cleanup := false
+	for _, label := range trace {
+		cleanup = cleanup || label == expireConsoleSessionsSQL
+	}
+	if !cleanup {
+		t.Fatal("fault discovery did not reach console-session cleanup")
+	}
+	for i := range trace {
+		fault.at, fault.count, fault.trace = i+1, 0, nil
+		err := invoke()
+		fault.at = 0
+		if !errors.Is(err, errStorageFault) || databaseState(t, s) != before {
+			t.Fatalf("boundary %d exposed partial maintenance state: %v", i+1, err)
+		}
+		select {
+		case <-changes:
+			t.Fatalf("boundary %d notified for a rolled-back cleanup", i+1)
+		default:
+		}
+	}
+	if err := invoke(); err != nil {
+		t.Fatal("maintenance retry failed", err)
+	}
+	if n := sessionCount(t, s, a); n != 1 {
+		t.Fatalf("retry did not preserve exactly the live session: %d", n)
+	}
+	if _, err := s.ConsoleSessionAccount(t.Context(), expired.SessionDigest); err == nil {
+		t.Fatal("expired session authenticated after cleanup")
+	}
+	if _, err := s.ConsoleSessionAccount(t.Context(), live.SessionDigest); err != nil {
+		t.Fatal("cleanup removed the live session", err)
+	}
+	select {
+	case <-changes:
+	default:
+		t.Fatal("committed cleanup did not wake revocation observers")
 	}
 }
 

@@ -38,7 +38,20 @@ store's transaction mutex.
 ## Limits
 
 The hub can still perform one maintenance transaction per second while streams
-exist; zero per-socket polling does not mean zero hub transactions. Time-driven
+exist. A total near one transaction per second applies only when there are no
+application writes or time-driven transitions; it is not a live-client rate bound.
+The current committed-change hint is broadcast to all subscribed streams, so a
+heartbeat or other semantic write can make every observer read another snapshot,
+including observers for unrelated Executions. Each authenticated write also pays
+its own request-authentication and operation transactions. Coalescing combines
+nearby commits, but staggered writes retain a write-rate multiplied by observer-count
+term. Scoping notifications to affected observers remains a separate follow-up.
+With `H` heartbeat writers, period `T` and `N` observers, separated heartbeat
+commits can add about `N*H/T` observation transactions per second, besides
+maintenance and the heartbeats' own authentication/write transactions. The
+follow-up is to scope watch hints to their Agent's events and Execution state,
+while retaining broadcasts for consoles.
+Zero per-socket polling therefore does not mean zero hub transactions. Time-driven
 revocation can be delayed by that sweep interval and bounded coalescing. A frame
 admitted before revocation can already be in transit. Frames remain content-free.
 Scheduling and store contention can add latency; this is not a hard real-time
@@ -47,6 +60,10 @@ rules. A real loss can still visit acknowledged deliveries assigned to that
 Execution, and a claim release retains its existing durable-Agent fanout. The
 change removes repeated historical scans during steady idle operation, rather
 than promising every non-idle transition is proportional only to unacked mail.
+Expired console-session rows are deleted by the shared maintenance operation,
+not by unrelated domain calls. Without streams the worker is stopped, so those
+rows can remain until another stream or session cleanup. Authentication still
+checks absolute expiry at use; retaining an expired row grants no authority.
 
 ## Validation
 

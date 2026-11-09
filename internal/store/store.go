@@ -488,11 +488,7 @@ func (t *transaction) expire() error {
 			return err
 		}
 	}
-	if err = t.wakeMissedReceipts(now); err != nil {
-		return err
-	}
-	_, err = t.exec(expireConsoleSessionsSQL, now)
-	return err
+	return t.wakeMissedReceipts(now)
 }
 
 // wakeMissedReceipts wakes, once, each delivery whose fetch asked for a receipt that has not come

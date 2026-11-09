@@ -280,7 +280,7 @@ func oldDatabase(t *testing.T) (file string, held []string) {
 	}
 	defer func() { _ = raw.Close() }()
 	// A version 5 database has neither path_key nor the later Delivery.attention.
-	for _, q := range []string{removeConsoleSchema, "ALTER TABLE Claim DROP COLUMN path_key", "ALTER TABLE Delivery DROP COLUMN attention", "ALTER TABLE Repository DROP COLUMN contact_agent_id", "ALTER TABLE Execution DROP COLUMN watch_seen_ms", "ALTER TABLE Execution DROP COLUMN hook_seen_ms", "ALTER TABLE Operation DROP COLUMN created_ms", "DROP TABLE HostReport", "DROP TABLE WorktreeAlias", "DROP INDEX DeliveryReceiptDue", "ALTER TABLE Delivery DROP COLUMN receipt_due_ms", "CREATE TABLE DoctorReport(id INTEGER PRIMARY KEY CHECK(id=1),report TEXT NOT NULL)", "DROP VIEW DeliveryState", "ALTER TABLE Ack DROP COLUMN handled_ms", "UPDATE Repository SET case_policy='sensitive'", "PRAGMA user_version=5"} {
+	for _, q := range []string{removeConsoleSchema, "ALTER TABLE Claim DROP COLUMN path_key", "DROP INDEX delivery_attention_recipient", "ALTER TABLE Delivery DROP COLUMN attention", "ALTER TABLE Repository DROP COLUMN contact_agent_id", "ALTER TABLE Execution DROP COLUMN watch_seen_ms", "ALTER TABLE Execution DROP COLUMN hook_seen_ms", "ALTER TABLE Operation DROP COLUMN created_ms", "DROP TABLE HostReport", "DROP TABLE WorktreeAlias", "DROP INDEX DeliveryReceiptDue", "ALTER TABLE Delivery DROP COLUMN receipt_due_ms", "CREATE TABLE DoctorReport(id INTEGER PRIMARY KEY CHECK(id=1),report TEXT NOT NULL)", "DROP VIEW DeliveryState", "ALTER TABLE Ack DROP COLUMN handled_ms", "UPDATE Repository SET case_policy='sensitive'", "PRAGMA user_version=5"} {
 		if _, err = raw.Exec(q); err != nil {
 			t.Fatal(err)
 		}
