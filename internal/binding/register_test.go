@@ -2,11 +2,16 @@ package binding
 
 import (
 	"context"
+	"net/http"
+	"net/http/httptest"
 	"os/exec"
 	"strings"
+	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
+	"github.com/mateusz-klatt/iris/internal/hubclient"
 	"github.com/mateusz-klatt/iris/internal/proc"
 )
 
@@ -33,14 +38,65 @@ func TestAnOwnExecutionNamesItsRepositoryAndAHubRefusalIsSaid(t *testing.T) {
 // The grace period ends with the call that waits in it: a caller that gives up is told Iris is
 // still binding and to retry, and nothing is registered.
 func TestTheGracePeriodEndsWithItsCaller(t *testing.T) {
-	hub := &scriptedHub{binds: []string{"unbound", "unbound", "unbound", "unbound", "unbound"}}
-	r := resolverFor(t, hub, "claude", map[string]string{"CLAUDE_CODE_SESSION_ID": "s"}, proc.Ancestor{})
-	r.Grace = time.Minute
-	ctx, cancel := context.WithTimeout(context.Background(), 150*time.Millisecond)
-	defer cancel()
-	_, err := r.Resolve(ctx, "")
-	if !IsCode(err, "unbound") || !strings.Contains(err.Error(), "still binding this session; retry in a few seconds") || hub.session != nil {
-		t.Fatalf("%v registered %+v", err, hub.session)
+	for _, ending := range []string{"cancel", "deadline"} {
+		t.Run(ending, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				hub := &scriptedHub{binds: []string{"unbound", "unbound", "unbound", "unbound", "unbound"}}
+				var hubMu sync.Mutex
+				// Keep the refusal inside the virtual-time bubble. A real HTTP
+				// handshake can consume the caller's deadline before grace begins.
+				r := &Resolver{
+					Hub: &hubclient.Client{Config: config{"http://127.0.0.1"}, HTTP: &http.Client{Transport: adoptionTransport(func(req *http.Request) (*http.Response, error) {
+						hubMu.Lock()
+						defer hubMu.Unlock()
+						w := httptest.NewRecorder()
+						hub.ServeHTTP(w, req)
+						return w.Result(), nil
+					})}},
+					Client: "claude", Grace: time.Minute,
+					Getenv: func(key string) string {
+						if key == "CLAUDE_CODE_SESSION_ID" {
+							return "s"
+						}
+						return ""
+					},
+				}
+				var ctx context.Context
+				var cancel context.CancelFunc
+				if ending == "deadline" {
+					ctx, cancel = context.WithTimeout(context.Background(), 150*time.Millisecond)
+				} else {
+					ctx, cancel = context.WithCancel(context.Background())
+				}
+				defer cancel()
+				done := make(chan error, 1)
+				go func() {
+					_, err := r.Resolve(ctx, "")
+					done <- err
+				}()
+				synctest.Wait()
+				hubMu.Lock()
+				binds := len(hub.bound)
+				hubMu.Unlock()
+				if binds != 1 {
+					t.Fatalf("grace must wait after the initial refusal: %d binds", binds)
+				}
+				select {
+				case err := <-done:
+					t.Fatalf("grace ended before its caller: %v registered %+v", err, hub.session)
+				default:
+				}
+				if ending == "deadline" {
+					<-ctx.Done()
+				} else {
+					cancel()
+				}
+				err := <-done
+				if !IsCode(err, "unbound") || !strings.Contains(err.Error(), "still binding this session; retry in a few seconds") || hub.session != nil {
+					t.Fatalf("%v registered %+v", err, hub.session)
+				}
+			})
+		})
 	}
 }
 
