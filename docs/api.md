@@ -188,10 +188,12 @@ Execution of the sending agent may ask; for anyone else the message does not exi
 is `not_found`. During a hub restart a recovering recipient's mail stays `inflight` for up to 120
 seconds, then turns `pending` if that session is lost.
 
-An undelivered (`pending` or `inflight`) recipient carries `"unreachable":true` when it has no
-active Execution: its Executions are lost, ended, or absent, using the same definition as the
-delivery-problems query. The field is omitted for reachable recipients and for all `acked` or
-`handled` deliveries. For example:
+An undelivered (`pending` or `inflight`) non-human recipient carries `"unreachable":true` when it
+has no active Execution: its Executions are lost, ended, or absent, using the same definition as
+the delivery-problems query. The field is omitted for reachable recipients and for all `acked` or
+`handled` deliveries. Human recipients always omit it, including `human`, `human:<repo>` and
+`repo:` addresses resolved to a human inbox: the console can read their mail without a live
+Execution. For example:
 
 ```json
 {"recipient":"codex-host-api","repository_id":"rp_...","state":"pending","at":null,

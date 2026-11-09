@@ -32,6 +32,33 @@ func receiptOf(t *testing.T, s *Store, r Request, message string) map[string]any
 	return recipients[0]
 }
 
+// Human mail is available through the console without an active Execution,
+// including explicit repository addresses and a repository's fallback contact.
+func TestReceiptsDoNotFlagHumanRecipientsAsUnreachable(t *testing.T) {
+	s, _, target, sender, origin := crossRepo(t)
+	for _, tc := range []struct{ address, repository string }{
+		{"human", origin["repository_id"].(string)},
+		{"human:" + target["repository_id"].(string), target["repository_id"].(string)},
+		{"repo:" + target["repository_id"].(string), target["repository_id"].(string)},
+	} {
+		t.Run(tc.address, func(t *testing.T) {
+			sent := call(t, s, "messages", sendTo(sender, tc.address, "waiting for human consent", tc.address))
+			got := receiptOf(t, s, sender, sent["message_id"].(string))
+			if _, flagged := got["unreachable"]; flagged || got["recipient"] != "human" || got["repository_id"] != tc.repository || got["state"] != "pending" || got["at"] != nil {
+				t.Fatal("human mail was reported unreachable before the console read it", got)
+			}
+			read := call(t, s, "ui_read", Request{Key: sent["thread_id"].(string), RepositoryID: tc.repository})
+			if read["read"] != 1 {
+				t.Fatal("the console could not read the human delivery immediately", read)
+			}
+			got = receiptOf(t, s, sender, sent["message_id"].(string))
+			if _, flagged := got["unreachable"]; flagged || got["state"] != "acked" || got["at"] == nil {
+				t.Fatal("the console read did not settle the human receipt", got)
+			}
+		})
+	}
+}
+
 // The sender follows its message through every state, and sees no body.
 func TestTheSenderSeesEachRecipientsState(t *testing.T) {
 	s, c, _ := testStore(t)

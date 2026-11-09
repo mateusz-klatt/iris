@@ -52,10 +52,11 @@ acked), `acked`, or `handled`. These are the names `DeliveryState` already uses,
 `inflight`: `Delivery` stores no fetch or free time, and this decision adds none. No subject, no
 body and no recipient Execution is returned.
 
-An undelivered (`pending` or `inflight`) recipient also carries `"unreachable":true` when it has
-no active Execution: its Executions are lost, ended, or absent. This is the delivery-problems
+An undelivered (`pending` or `inflight`) non-human recipient also carries `"unreachable":true` when
+it has no active Execution: its Executions are lost, ended, or absent. This is the delivery-problems
 query's definition of unreachable. The field is omitted for reachable recipients and for every
-`acked` or `handled` delivery. It is computed when asked, not stored as a delivery state, so the
+`acked` or `handled` delivery. Human recipients also omit it because the console can read their
+mail without a live Execution. It is computed when asked, not stored as a delivery state, so the
 existing states and `at` keep their meanings and older clients can ignore the addition.
 
 Unreachable describes now, not whether someone will answer. An active Execution cannot promise

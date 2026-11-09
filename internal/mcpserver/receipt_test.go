@@ -26,6 +26,8 @@ func TestReceiptDescriptionExplainsCurrentReachabilityAndItsLimits(t *testing.T)
 			"mail stays queued",
 			"if the agent returns",
 			"Acked or handled deliveries never show it",
+			"Human recipients never show it",
+			"console can read their mail without a live Execution",
 		} {
 			if !strings.Contains(tool.Description, meaning) {
 				t.Fatalf("receipts description does not explain %q: %s", meaning, tool.Description)

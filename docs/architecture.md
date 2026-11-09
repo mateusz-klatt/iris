@@ -388,9 +388,10 @@ Changes from the reference schema:
    fetch it received, the mail keeps needing attention until then, and a receipt that never
    comes wakes it once. A tool result the client itself drops after the receipt is not covered.
 
-   Sender receipts (ADR 005) add `unreachable: true` for an undelivered recipient with no active
-   Execution, the same definition used by delivery problems. Reachable, acked and handled
-   recipients omit the field. This is computed when asked and changes no delivery state or
+   Sender receipts (ADR 005) add `unreachable: true` for an undelivered non-human recipient with
+   no active Execution, the same definition used by delivery problems. Reachable, acked and
+   handled recipients omit the field. Human recipients also omit it because the console can read
+   their mail without a live Execution. This is computed when asked and changes no delivery state or
    timestamp. It describes now, cannot predict a reply, and leaves mail queued for a returning
    agent. A recovering Execution remains active until its recovery deadline, as above.
 
