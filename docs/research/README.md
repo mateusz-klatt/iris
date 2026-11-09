@@ -36,6 +36,11 @@ reports for a submodule under each `--ignore-submodules` mode and under a reposi
 settings, and that a submodule can be present without a declaration in `.gitmodules`.
 [ADR 018](../adr/018-reduced-reconcile-scope.md) rests on it.
 
+The [Git process and index follow-up](adr018-git-process-index-2026-11-09.md)
+measures descendant lifetime after cancellation and index inventory across small conflict,
+sparse, split, linked-worktree and nested-submodule fixtures. It distinguishes the Linux
+measurements from unverified concurrency, portability and production-cost assumptions.
+
 ## Review of the architecture
 
 The synthesis then went back to the clients as a plan review. Antigravity was left out of this
