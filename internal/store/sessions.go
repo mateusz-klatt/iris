@@ -573,6 +573,9 @@ func (t *transaction) end(r Request) (map[string]any, error) {
 	if _, err := t.exec("UPDATE Execution SET state='ended' WHERE id=?", r.ExecutionID); err != nil {
 		return nil, err
 	}
+	if err = t.requeue(r.ExecutionID); err != nil {
+		return nil, err
+	}
 	return map[string]any{}, t.expire()
 }
 
@@ -620,7 +623,7 @@ func (t *transaction) handOver(from execution, to string) error {
 		if d.dup {
 			// An acknowledgement names an attempt above zero; settling counts as one.
 			attempt := max(d.attempt, 1)
-			if _, err = t.exec("UPDATE Delivery SET execution_id=?,attempt=?,attention=0 WHERE id=?", from.ID, attempt, d.id); err != nil {
+			if _, err = t.exec("UPDATE Delivery SET execution_id=?,attempt=?,attention=0,receipt_due_ms=NULL WHERE id=?", from.ID, attempt, d.id); err != nil {
 				return err
 			}
 			if _, err = t.exec("INSERT INTO Ack(delivery_id,execution_id,attempt,acked_ms) VALUES(?,?,?,?)", d.id, from.ID, attempt, now); err != nil {
@@ -628,7 +631,7 @@ func (t *transaction) handOver(from execution, to string) error {
 			}
 			continue
 		}
-		if _, err = t.exec("UPDATE Delivery SET recipient_agent_id=?,execution_id=NULL,attention=1 WHERE id=?", dst.AgentID, d.id); err != nil {
+		if _, err = t.exec("UPDATE Delivery SET recipient_agent_id=?,execution_id=NULL,attention=1,receipt_due_ms=NULL WHERE id=?", dst.AgentID, d.id); err != nil {
 			return err
 		}
 		if err = t.event(dst.AgentID, "", "inbox_changed", d.id); err != nil {
