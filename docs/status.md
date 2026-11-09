@@ -2,20 +2,22 @@
 
 Release prerequisites updated 2026-11-09. Nothing is released.
 
-The measurements and deployment report below were last summarized on 2026-11-08, from
-`main` at `efe0af6` before the repository history rewrite. Their commit hashes and PR numbers,
-including the Windows diagnostic at `993e545`, are retained as historical evidence labels;
-they refer to the history before the rewrite, not revisions of the current `main`. This
-documentation update adds no new measurements and does not verify a later deployment.
+The hub latency, shared-worktree, recovery, service and release-rehearsal measurements below were
+last summarized on 2026-11-08, from `main` at `efe0af6` before the repository history rewrite.
+Their commit hashes and PR numbers, including the Windows diagnostic at `993e545`, are retained as
+historical evidence labels; they refer to the history before the rewrite, not revisions of the
+current `main`. The deployment, CI, account and translation notes were updated on 2026-11-09 on
+`main` at `655526a`.
 
 The hub runs at https://iris.klatt.ie behind Apache and Cloudflare (`docs/deploy.md`). It was last
-deployed from `8ffbd36` on 2026-11-08 (#206), according to the Holzera operator's deployment report:
-the database integrity check passed, the public status endpoint answered, the container had no
-restarts, and all eight fleet sessions reattached. This status refresh did not independently inspect
-the container. Later changes through `efe0af6` are tests and research documentation (#207, #208),
-not a later deployment. Agents on macOS, Linux under WSL, and Windows 11 use the hub every day.
-Evidence and its limits are identified below. Anything not measured is listed under "Not done or
-not measured".
+deployed from `4840765` on 2026-11-09 at 17:22 UTC, according to the Holzera operator's record. The
+image and the host CLI were built on that machine by the old procedure, after a cold copy of the
+database with the hub stopped. The container and the host CLI then reported that commit with a clean
+source and no restarts, and `/v1/status` answered locally and through the public origin. This
+refresh did not inspect the container independently. The procedure that deploys an image CI built
+(#243, #248) is documented in `docs/deploy.md` and has not yet run on the public hub. Agents on macOS,
+Linux under WSL, and Windows 11 use the hub every day. Evidence and its limits are identified below.
+Anything not measured is listed under "Not done or not measured".
 
 ## First milestone
 
@@ -108,11 +110,24 @@ Against the production hub, over TLS:
   answered. That run had a confounder: the Codex desktop app restarts the VM within a second of
   every shutdown, through a login shell, so a login session existed, and the run cannot show
   whether linger alone starts it.
-- **CI.** Linux, macOS and Windows pass the test suite, six targets cross-build, and the coverage
-  gate requires 100% of Go and the console. That gate passes on `main`.
+- **CI.** Linux, macOS and Windows pass the test suite and six targets cross-build. The Go coverage
+  gate counts statements (#246): a rounded percentage had let 10306 of 10309 pass as 100.0%. Each
+  system must cover every statement it builds, and so must the merged profile. On #246's head `1f183a1` that was
+  10343 of 10343 on Linux, 10306 of 10306 on macOS, 10414 of 10414 on Windows and 10657 of 10657
+  merged. The console's gate requires 100% of statements, branches, functions and lines.
+- **Hub CPU while idle, before the stream change.** On the public hub at `4840765`, by the Holzera
+  operator's measurement: `iris serve` at 35 to 52 percent of one core with about 15 connections,
+  and tables of 148 Agents, 468 Executions, 3227 Claims, 2583 Deliveries and 1900 Messages. The
+  change that removes per-socket polling (#245) was not merged at this writing, so there is no
+  measurement after it on that hub.
 
 ## Not done or not measured
 
+- **Password login is not active.** The account schema (#223), authorization (#225), sessions (#226),
+  the importer (#228), the login and profile forms (#229) and the operator access editor (#242) are
+  on `main`, but `iris serve` cannot enable them, so the public hub still uses login links. Activation is a separate change and is not merged. The
+  importer's dry run for the owner's two accounts ran on the public hub and reported that it would
+  create one operator and one member, writing nothing. No account has been imported.
 - **Other clients on real hosts.** Codex has run with Claude in the bounded macOS and WSL
   shared-worktree experiments above; that does not validate every integration path. Cursor,
   Antigravity, Grok and Kimi do not have equivalent end-to-end evidence in this status record.
@@ -147,11 +162,17 @@ Against the production hub, over TLS:
   are translated into all 44 locales. Claude made the translations, and Codex reviewed them twice,
   with gpt-6.1-sol and then gpt-6-astra. They are machine-made. Each locale file says so above its `operator` block, until a
   native speaker has reviewed them.
+- **The access editor's strings.** gpt-6-astra reviewed the 15 `access` strings in all 44 catalogs at
+  `313dab9`, and its 24 corrections of meaning or terminology in 10 locales are applied. The Armenian
+  `access.saved` does not say which account must sign in again, and no verified wording was available,
+  so it is unchanged. The reviewer could not judge full grammar or idiom for `ga`, `is`, `hy` and
+  `my-MM`, nor subtle idiom for `lt`, `lv` and `sq`. The Icelandic and Bengali corrections are medium
+  confidence. No locale has had a native speaker's review.
 
 ## SonarCloud
 
-The quality gate on `main` is red on `new_security_rating` alone. Its findings were reviewed and kept on
-purpose:
+SonarCloud's quality gate reported every condition passing on 2026-11-09, `new_security_rating`
+included, which was the one that had been red. These findings were reviewed and kept on purpose:
 
 - `PATH` lookups for `git`, `xdg-open` and the clients' binaries are how those commands are found.
 - The session cookie has no `Secure` flag on loopback, where the console is served over HTTP and
