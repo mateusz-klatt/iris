@@ -11,8 +11,6 @@ import (
 	"syscall"
 	"testing"
 	"time"
-
-	"github.com/mateusz-klatt/iris/internal/integrate"
 )
 
 // Windows has no way to send a process SIGTERM, so this stops serve only here.
@@ -69,24 +67,3 @@ func signalUntilStopped(sig syscall.Signal, done <-chan error) error {
 }
 
 var errStopped = errors.New("the command did not stop on the signal")
-
-func TestOpenBrowserIsBestEffort(t *testing.T) {
-	dir := t.TempDir()
-	if openBrowser([]string{filepath.Join(dir, "absent")}) {
-		t.Fatal("started a program that does not exist")
-	}
-	bad := filepath.Join(dir, "not-a-program")
-	if err := os.WriteFile(bad, []byte{0}, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if openBrowser([]string{bad}) {
-		t.Fatal("started a file that cannot run")
-	}
-	fake, err := integrate.PlaceFake(dir, "browser")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !openBrowser([]string{fake, "https://hub.example/ui"}) {
-		t.Fatal("did not start the browser")
-	}
-}

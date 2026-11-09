@@ -13,7 +13,8 @@ func lockDatabase(path string) (*os.File, error) {
 	}
 	err = windows.LockFileEx(windows.Handle(f.Fd()), windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, &windows.Overlapped{})
 	if err != nil {
-		f.Close()
+		// Nothing was written or locked; preserve the lock failure if cleanup also fails.
+		_ = f.Close()
 		return nil, fmt.Errorf("database already owned by another hub: %w", err)
 	}
 	return f, nil
@@ -21,6 +22,7 @@ func lockDatabase(path string) (*os.File, error) {
 func unlockDatabase(f *os.File) {
 	if f != nil {
 		_ = windows.UnlockFileEx(windows.Handle(f.Fd()), 0, 1, 0, &windows.Overlapped{})
+		// The lock file holds no data; closing also releases any lock left by a failed unlock.
 		_ = f.Close()
 	}
 }

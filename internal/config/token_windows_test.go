@@ -134,3 +134,39 @@ func TestOwnerOnlyAppliesTheTokenDACL(t *testing.T) {
 		t.Fatal("a missing path was protected")
 	}
 }
+
+func TestTokenRefusesAnExistingFileMovedBeforeProtection(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "hub.token")
+	want, err := Token(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	moved := path + ".moved"
+	original, originalRead := lstatToken, readTokenFile
+	t.Cleanup(func() { lstatToken, readTokenFile = original, originalRead })
+	readTokenFile = func(string) ([]byte, error) {
+		t.Fatal("token was read after protection failed")
+		return nil, nil
+	}
+	// Model a concurrent move after the regular-file check. Unlike a DACL denial,
+	// a missing path also prevents an administrator from protecting the file.
+	lstatToken = func(name string) (os.FileInfo, error) {
+		info, err := original(name)
+		if err != nil {
+			return nil, err
+		}
+		if err := os.Rename(name, moved); err != nil {
+			t.Fatal(err)
+		}
+		return info, nil
+	}
+	if token, err := Token(path); token != "" || !errors.Is(err, windows.ERROR_FILE_NOT_FOUND) {
+		t.Fatalf("token whose protection failed was accepted: %q %v", token, err)
+	}
+	if raw, err := os.ReadFile(moved); err != nil || strings.TrimSpace(string(raw)) != want {
+		t.Fatalf("refusal altered the moved token: %q %v", raw, err)
+	}
+	if _, err := os.Lstat(path); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("refusal recreated the moved token: %v", err)
+	}
+}

@@ -190,6 +190,22 @@ func TestAgyWriteCannotCreateTheSettingsDirectory(t *testing.T) {
 	}
 }
 
+// A file obstructing the parent directory is refused on every platform, even
+// when the test account can bypass directory permission bits.
+func TestWriteSettingsPreservesAFileObstructingTheDirectory(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "file")
+	const before = "existing file\n"
+	if err := os.WriteFile(parent, []byte(before), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeSettings(filepath.Join(parent, "settings.json"), []byte("{}\n")); err == nil {
+		t.Fatal("wrote settings through a file")
+	}
+	if got := read(t, parent); got != before {
+		t.Fatalf("obstructing file changed: %q", got)
+	}
+}
+
 // Without a home directory there is no settings file, and nothing to allow or undo.
 func TestAgyWriteWithoutAHomeDoesNothing(t *testing.T) {
 	t.Setenv("HOME", "")

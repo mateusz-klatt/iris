@@ -16,7 +16,8 @@ func lookupOS(pid int) (Snapshot, bool) {
 	if err != nil {
 		return Snapshot{}, false
 	}
-	defer windows.CloseHandle(h)
+	// This query-only handle owns no pending writes; closing it cannot affect the snapshot.
+	defer func() { _ = windows.CloseHandle(h) }()
 
 	var info windows.PROCESS_BASIC_INFORMATION
 	var n uint32

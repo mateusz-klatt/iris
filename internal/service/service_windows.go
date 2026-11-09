@@ -34,7 +34,8 @@ func (v registryValue) Read() (string, error) {
 	if err != nil {
 		return "", present(err)
 	}
-	defer k.Close()
+	// Closing this query handle cannot change the value already read.
+	defer func() { _ = k.Close() }()
 	s, _, err := k.GetStringValue(v.name)
 	return s, present(err)
 }
@@ -43,7 +44,8 @@ func (v registryValue) Write(s string) error {
 	if err != nil {
 		return err
 	}
-	defer k.Close()
+	// Registry writes report their own errors; closing the key does not flush them.
+	defer func() { _ = k.Close() }()
 	return k.SetStringValue(v.name, s)
 }
 func (v registryValue) Remove() error {
@@ -51,7 +53,8 @@ func (v registryValue) Remove() error {
 	if err != nil {
 		return present(err)
 	}
-	defer k.Close()
+	// Deletion reports its own error; closing the key does not flush the change.
+	defer func() { _ = k.Close() }()
 	return present(k.DeleteValue(v.name))
 }
 
@@ -139,7 +142,8 @@ func (p detachedHub) Responds(ctx context.Context) bool {
 	if err != nil {
 		return false
 	}
-	res.Body.Close()
+	// The probe uses only the received status; discarding its body cannot change that result.
+	_ = res.Body.Close()
 	return res.StatusCode == http.StatusOK
 }
 func (p detachedHub) locked(f func() error) error {
@@ -150,12 +154,12 @@ func (p detachedHub) locked(f func() error) error {
 	if err != nil {
 		return err
 	}
-	defer file.Close()
+	// The lock file holds no data; closing releases its lock without changing f's result.
+	defer func() { _ = file.Close() }()
 	ov := &windows.Overlapped{}
 	if err := windows.LockFileEx(windows.Handle(file.Fd()), windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, ov); err != nil {
 		return fmt.Errorf("service operation already in progress: %w", err)
 	}
-	defer windows.UnlockFileEx(windows.Handle(file.Fd()), 0, 1, 0, ov)
 	return f()
 }
 func (p detachedHub) Start(ctx context.Context) error {
@@ -167,14 +171,16 @@ func (p detachedHub) Start(ctx context.Context) error {
 		if h, err := p.openRecorded(); err != nil {
 			return err
 		} else if h != 0 {
-			windows.CloseHandle(h)
+			// Releasing our handle cannot change the already-running hub.
+			_ = windows.CloseHandle(h)
 			return nil
 		}
 		log, err := os.OpenFile(p.path(".log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 		if err != nil {
 			return err
 		}
-		defer log.Close()
+		// Only the child writes this log through its inherited handle; the parent has no pending writes.
+		defer func() { _ = log.Close() }()
 		cmd := exec.Command(p.argv[0], p.argv[1:]...)
 		cmd.Stdout, cmd.Stderr = log, log
 		cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.DETACHED_PROCESS | windows.CREATE_NEW_PROCESS_GROUP, HideWindow: true}
@@ -182,7 +188,8 @@ func (p detachedHub) Start(ctx context.Context) error {
 			return err
 		}
 		// Keep the process handle open until its creation time has been recorded.
-		defer cmd.Process.Release()
+		// Releasing it cannot undo startup or change the recorded identity.
+		defer func() { _ = cmd.Process.Release() }()
 		return p.record(cmd.Process, processCreated)
 	})
 }
@@ -215,7 +222,8 @@ func (p detachedHub) openRecorded() (windows.Handle, error) {
 	created, _ := creationTime(h)
 	state, _ := windows.WaitForSingleObject(h, 0)
 	if created != id.Created || state != uint32(windows.WAIT_TIMEOUT) {
-		windows.CloseHandle(h)
+		// Releasing this rejected handle cannot change the process identity check.
+		_ = windows.CloseHandle(h)
 		return 0, nil
 	}
 	return h, nil
@@ -239,7 +247,8 @@ func (p detachedHub) Stop(_ context.Context) error {
 		if h == 0 {
 			return p.forget(nil)
 		}
-		defer windows.CloseHandle(h)
+		// Releasing our handle cannot change whether the hub stopped or its identity was removed.
+		defer func() { _ = windows.CloseHandle(h) }()
 		return p.forget(terminate(h, 5000))
 	})
 }

@@ -270,6 +270,7 @@ func TestServiceRejectsAMissingHome(t *testing.T) {
 	}
 
 	t.Setenv("XDG_CONFIG_HOME", t.TempDir())
+	t.Setenv("AppData", t.TempDir())
 	if _, err := userServiceDB("127.0.0.1:9", filepath.Join(t.TempDir(), "token"), ""); err == nil {
 		t.Fatal("missing home")
 	}
@@ -307,6 +308,7 @@ func TestServeRejectsBadFlagsAndStopsWhenSignalled(t *testing.T) {
 		t.Fatal("missing config")
 	}
 	t.Setenv("HOME", dir)
+	t.Setenv("USERPROFILE", dir)
 	t.Setenv("AppData", dir)
 	t.Setenv("XDG_CONFIG_HOME", filepath.Join(dir, "cfg"))
 
@@ -317,8 +319,63 @@ func TestServeRejectsBadFlagsAndStopsWhenSignalled(t *testing.T) {
 	if err := os.WriteFile(key, []byte("nope"), 0600); err != nil {
 		t.Fatal(err)
 	}
-	if err := run([]string{"serve", "--listen", "127.0.0.1:0", "--db", filepath.Join(dir, "tls.db"), "--token-file", filepath.Join(dir, "tls.token"), "--tls-cert", cert, "--tls-key", key}); err == nil {
-		t.Fatal("tls")
+	if err := run([]string{"serve", "--listen", "127.0.0.1:0", "--db", filepath.Join(dir, "tls.db"), "--token-file", filepath.Join(dir, "tls.token"), "--tls-cert", cert, "--tls-key", key, "--allowed-hosts", " iris.example:443, ,other.example:443", "--public-url", "https://iris.example"}); err == nil || !strings.Contains(err.Error(), "failed to find any PEM data in certificate input") {
+		t.Fatalf("invalid certificate was not rejected by TLS: %v", err)
+	}
+}
+
+func TestOpenBrowserIsBestEffort(t *testing.T) {
+	dir := t.TempDir()
+	if openBrowser([]string{filepath.Join(dir, "absent")}) {
+		t.Fatal("started a program that does not exist")
+	}
+	bad := filepath.Join(dir, "not-a-program.exe")
+	if err := os.WriteFile(bad, []byte{0}, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if openBrowser([]string{bad}) {
+		t.Fatal("started a file that cannot run")
+	}
+	fake, err := integrate.PlaceFake(dir, "browser")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !openBrowser([]string{fake, "https://hub.example/ui"}) {
+		t.Fatal("did not start the browser")
+	}
+}
+
+func TestWatchStopsWhenItCannotReportTheRejectedToken(t *testing.T) {
+	token := filepath.Join(t.TempDir(), "token")
+	if err := os.WriteFile(token, []byte("secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/bind" || r.Header.Get("Authorization") != "Bearer secret" {
+			t.Errorf("unexpected binding request: %s %s", r.Method, r.URL.Path)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusUnauthorized)
+		if _, err := io.WriteString(w, `{"error":{"code":"unauthorized","message":"rejected"}}`); err != nil {
+			t.Error(err)
+		}
+	}))
+	defer srv.Close()
+	t.Setenv("IRIS_HUB_URL", srv.URL)
+	t.Setenv("IRIS_TOKEN_FILE", token)
+	t.Setenv("IRIS_EXECUTION", "ex_test")
+	closed, err := os.CreateTemp(t.TempDir(), "stdout")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := closed.Close(); err != nil {
+		t.Fatal(err)
+	}
+	original := os.Stdout
+	os.Stdout = closed
+	t.Cleanup(func() { os.Stdout = original })
+	if err := runWatch([]string{"--client", "claude"}); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("a monitor unable to print kept running or hid the output error: %v", err)
 	}
 }
 
