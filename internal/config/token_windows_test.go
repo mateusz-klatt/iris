@@ -142,8 +142,12 @@ func TestTokenRefusesAnExistingFileMovedBeforeProtection(t *testing.T) {
 		t.Fatal(err)
 	}
 	moved := path + ".moved"
-	original := lstatToken
-	t.Cleanup(func() { lstatToken = original })
+	original, originalRead := lstatToken, readTokenFile
+	t.Cleanup(func() { lstatToken, readTokenFile = original, originalRead })
+	readTokenFile = func(string) ([]byte, error) {
+		t.Fatal("token was read after protection failed")
+		return nil, nil
+	}
 	// Model a concurrent move after the regular-file check. Unlike a DACL denial,
 	// a missing path also prevents an administrator from protecting the file.
 	lstatToken = func(name string) (os.FileInfo, error) {
