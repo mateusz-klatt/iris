@@ -52,8 +52,9 @@ and the token private. A bind-mounted replacement must be writable by uid 65532.
 ### Deploying the public hub from an image CI built
 
 The public hub's machine does other work, and building the console and the binary starves it, so
-it compiles nothing. On every push to `main`, CI builds the deployment image with `make image`,
-checks that it names that commit with a clean source, and keeps it for 7 days as a workflow
+it compiles nothing. On every push to `main`, a CI job of its own builds the deployment image with
+`make image` from a checkout no other step has touched, checks that it names that commit with a
+clean source, and keeps it for 7 days as a workflow
 artifact named `iris-image-<full commit>`. The artifact holds `iris-image.tar.gz`, from `docker
 save`, and `iris-image.txt`, which records the commit, the platform, the runner's image ID and the
 layer list. The image is linux/amd64, which is what the hub's machine runs.

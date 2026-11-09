@@ -273,23 +273,26 @@ jobs:
           inspect ls -ln /data
           inspect stat -c '%u:%g' /data /data/hub.token /data/iris.db | sort -u | tee owners
           test "$(cat owners)" = "65532:65532"
-      - name: The deployment image carries the source checkout identity
+  deploy-image:
+    # The public hub's machine compiles nothing, so CI builds what it runs. The image stamps the
+    # source state it sees and a deploy takes it as the build of this commit, so it gets a job of
+    # its own: a checkout no other step has touched. A pull request runs all of this except the
+    # upload. docs/deploy.md has the procedure and says what it does not prove.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Build and save the deployment image from a clean tree
         shell: bash
         run: |
           set -euo pipefail
-          tree=clean
-          if test -n "$(git status --porcelain --untracked-files=normal)"; then tree=dirty; fi
           make image
-          test "$(docker run --rm iris-iris version)" = "dev (commit $GITHUB_SHA; source $tree; console unverified)"
-      # The public hub's machine compiles nothing, so main keeps the image this job just built.
-      # A deploy takes the artifact as the build of this commit, so source dirt must stop it here.
-      # docs/deploy.md has the procedure and says what it does not prove.
-      - name: Save the deployment image of a main commit
-        if: ${{ github.event_name == 'push' }}
-        shell: bash
-        run: |
-          set -euo pipefail
-          test "$(docker run --rm iris-iris version)" = "dev (commit $GITHUB_SHA; source clean; console unverified)"
+          identity=$(docker run --rm iris-iris version)
+          if test "$identity" != "dev (commit $GITHUB_SHA; source clean; console unverified)"; then
+            echo "$identity"
+            git status --porcelain --untracked-files=normal
+            echo "::error title=Deployment image::it must name this commit and a clean source"
+            exit 1
+          fi
           mkdir deploy-image
           docker save iris-iris:latest | gzip -1 > deploy-image/iris-image.tar.gz
           # An image ID depends on the daemon's image store, and this runner's is not overlay2,
