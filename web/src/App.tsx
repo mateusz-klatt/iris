@@ -738,7 +738,7 @@ function Console({ connect, session, onSession, onSignedOut }: { connect: typeof
               <button type="button" className="console-nav-item" aria-current={activeView === "claims" ? "page" : undefined} onClick={() => chooseView("claims")}>{t("operator.claims")}<span className="nav-count">{overview.claims.length}</span></button>
               {!member ? <button type="button" className="console-nav-item" aria-current={activeView === "diagnostics" ? "page" : undefined} onClick={() => chooseView("diagnostics")}>{t("console.diagnostics")}</button> : null}
               {session !== null ? <button type="button" className="console-nav-item" aria-current={activeView === "account" ? "page" : undefined} onClick={() => chooseView("account")}>{t("accountUi.account")}</button> : null}
-              {session?.account.role === "operator" ? <button type="button" className="console-nav-item" aria-controls="iris-access-panel" aria-current={activeView === "access" ? "page" : undefined} onClick={() => chooseView("access")}>{t("access.title")}</button> : null}
+              {session?.account.role === "operator" ? <button type="button" className="console-nav-item" aria-current={activeView === "access" ? "page" : undefined} onClick={() => chooseView("access")}>{t("access.title")}</button> : null}
             </nav>
           </aside>
         ) : null}

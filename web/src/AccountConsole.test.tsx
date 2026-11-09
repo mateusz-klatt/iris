@@ -52,7 +52,6 @@ describe("staged named console", () => {
     await user.click(access);
     expect(await screen.findByRole("heading", { name: "Access" })).toBeVisible();
     expect(access).toHaveAttribute("aria-current", "page");
-    expect(access).toHaveAttribute("aria-controls", "iris-access-panel");
     expect(lists).toHaveBeenCalledOnce();
     await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: "Account" }));
     expect(screen.getByRole("heading", { name: "Account" })).toBeVisible();

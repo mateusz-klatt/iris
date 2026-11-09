@@ -67,6 +67,12 @@ func TestConsoleAccessEditorSnapshotsAndConflictPreserveGrants(t *testing.T) {
 	if !reflect.DeepEqual(snapshot(), after) {
 		t.Fatal("stale access edit changed the current projection")
 	}
+	// A repository forgotten while the form was open is a conflict the editor can reload from.
+	_, err = s.ChangeConsoleAccess(t.Context(), p, member.ID, updated.EditRevision, "member", false, []ConsoleGrant{{repoA, "ro"}, {"rp_forgotten", "rw"}})
+	consoleError(t, err, "conflict")
+	if !reflect.DeepEqual(snapshot(), after) {
+		t.Fatal("a refused grant changed the current projection")
+	}
 	_, err = s.ChangeConsoleAccess(t.Context(), p, member.ID, updated.EditRevision, "none", false, nil)
 	if err != nil {
 		t.Fatal(err)

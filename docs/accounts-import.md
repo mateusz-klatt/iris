@@ -1,11 +1,12 @@
-# Reviewed account import (ADR 014, step 4)
+# Reviewed account import and access review (ADR 014, steps 4 and 6)
 
 The importer transfers account records into Iris. It does not run a source
 backend, import sessions, infer repository access, activate named console login,
-or perform the later UI/cutover steps. Use synthetic SQLite files for rehearsal.
+or perform the cutover. Use synthetic SQLite files for rehearsal.
 A real apply is a separate owner operation after reviewing its manifest and
 backup. The examples below describe that operation; they are not evidence of a
-production import.
+production import. The operator access editor and its rehearsal are described in
+[the last part of this file](#access-review-and-isolated-rehearsal-step-6-first-pr).
 
 ## Source and manifest
 
@@ -242,7 +243,8 @@ mode permits shared-mail acknowledgement, claim changes or administration.
 Operators have global console authority without per-repository grants; `none`
 is always disabled. A disabled account cannot sign in even when grants exist.
 
-Every accepted access edit revokes all target sessions. Editing your own access
+Every accepted access edit revokes all target sessions, so the editor offers Save
+only once something has changed. Editing your own access
 therefore requires signing in again. A stale revision returns `conflict`: refresh
 the account list, compare the current saved permissions, and deliberately reapply
 the intended edit. Do not keep retrying an old revision or overwrite someone
@@ -255,7 +257,7 @@ console keys, synthetic passwords and browser sessions. Run from the repository
 root, without any hub/token/source configuration:
 
 ```sh
-PATH="$HOME/.local/toolchains/go1.27.3/bin:$PATH" CGO_ENABLED=0 go test ./internal/hub -run '^TestStagedAccessCutoverAndRecoveryRehearsal$' -count=1
+CGO_ENABLED=0 go test ./internal/hub -run '^TestStagedAccessCutoverAndRecoveryRehearsal$' -count=1
 ```
 
 The test enters the private account gate in-process; it is not a deployment

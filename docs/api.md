@@ -389,11 +389,14 @@ or `rw`; `[]` means no repository grants. Account revisions and grants come from
 one authorized transaction. Members cannot obtain this directory.
 `PUT /v1/ui/accounts/{id}/access` takes `edit_revision`, `role`, `disabled` and
 the complete `grants` array, and returns `{ "account": ... }` with the canonical
-saved account and grants. No grant is inferred for a member. Non-member roles
-accept no grants, and `none` is forced disabled. A stale revision or removal of
-the last enabled operator returns `conflict` without changing access. The editor
-reloads current state for review before another save; successful edits revoke all
-target sessions. These endpoints expose no password record or login key. They do
+saved account and grants. `grants` is required for every role: a missing or null
+value is `bad_request`, and `[]` is the only way to remove all grants. No grant is
+inferred for a member. Non-member roles accept no grants, and `none` is forced
+disabled. A stale revision, removal of the last enabled operator or a repository
+that no longer exists returns `conflict` without changing access. The editor
+reloads current state for review before another save. Every accepted `PUT` ends
+all of the target's sessions, even one that changes nothing; the editor therefore
+offers Save only after an edit. These endpoints expose no password record or login key. They do
 not activate account authentication or change `iris ui` in ordinary deployments.
 
 - `GET /v1/ui/login` creates a short-lived single-use challenge bound to an

@@ -1,9 +1,9 @@
 // Account list and conflict presentation adapted from the owner's UI export, ADR 014.
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useRef, useState, type FormEvent, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ApiError, type Repository } from "./api";
-import { listAccounts, updateAccess, type AccountSession, type ConsoleAccessAccount } from "./accountApi";
+import { getSession, listAccounts, updateAccess, type AccountSession, type ConsoleAccessAccount, type ConsoleGrant } from "./accountApi";
 import "./access.css";
 
 interface AccessProps {
@@ -13,6 +13,26 @@ interface AccessProps {
 }
 
 type AccessInput = Parameters<typeof updateAccess>[1];
+
+// Names are not unique and can be empty, so a grant is always offered against the id.
+function repositoryLabel(repository: Repository): string {
+  return repository.name === "" ? repository.id : `${repository.name} · ${repository.id}`;
+}
+
+function grantKey(grants: ConsoleGrant[]): string {
+  return grants.map((grant) => `${grant.repository_id}:${grant.mode}`).sort().join();
+}
+
+// A write from a tab whose browser session was replaced is refused as 403 for its stale CSRF
+// token, where a read gets 401. Ask, so the operator is not told they lack access.
+async function sessionReplaced(session: AccountSession): Promise<boolean> {
+  try {
+    await getSession(undefined, session);
+    return false;
+  } catch (error) {
+    return error instanceof ApiError && error.status === 401;
+  }
+}
 
 export default function AccessPanel(props: AccessProps) {
   const { t } = useTranslation();
@@ -32,11 +52,25 @@ function AccessEditor({ session, repositories, onSignedOut }: AccessProps) {
   const [failure, setFailure] = useState("");
   const [status, setStatus] = useState("");
   const mounted = useRef(true);
+  // Saving and reloading disable or replace the control that was used, and selecting a person
+  // can leave the form out of view. Each ends with focus on the form's heading. The request is
+  // state so that it always renders: a ref set for an unchanged selection would fire later.
+  const heading = useRef<HTMLHeadingElement>(null);
+  const [focusRequest, setFocusRequest] = useState(0);
+  const focusHandled = useRef(0);
+  const requestFocus = () => setFocusRequest((value) => value + 1);
 
   useEffect(() => {
     mounted.current = true;
     return () => { mounted.current = false; };
   }, []);
+
+  useEffect(() => {
+    if (focusRequest !== focusHandled.current && !loading && !saving) {
+      focusHandled.current = focusRequest;
+      heading.current?.focus();
+    }
+  }, [focusRequest, loading, saving]);
 
   useEffect(() => {
     const controller = new AbortController();
@@ -61,6 +95,7 @@ function AccessEditor({ session, repositories, onSignedOut }: AccessProps) {
   }, [refresh, onSignedOut]);
 
   const save = async (account: ConsoleAccessAccount, input: AccessInput) => {
+    requestFocus();
     setSaving(true);
     setStatus("");
     setFailure("");
@@ -82,8 +117,10 @@ function AccessEditor({ session, repositories, onSignedOut }: AccessProps) {
         setStatus("access.conflict");
         setRefresh((value) => value + 1);
       } else if (error instanceof ApiError && error.status === 403) {
-        setAccounts([]);
-        setFailure("access.forbidden");
+        const replaced = await sessionReplaced(session);
+        if (!mounted.current) return;
+        if (replaced) onSignedOut();
+        else setFailure("access.forbidden");
       } else {
         setFailure("admin.saveError");
       }
@@ -101,7 +138,7 @@ function AccessEditor({ session, repositories, onSignedOut }: AccessProps) {
       <h1 id="iris-access-heading">{t("access.title")}</h1>
       <p>{t("access.hint")}</p>
     </div>
-      <button type="button" className="secondary-button" disabled={loading || saving} onClick={() => { setStatus(""); setRefresh((value) => value + 1); }}>{t("access.reload")}</button>
+      <button type="button" className="secondary-button" disabled={loading || saving} onClick={() => { requestFocus(); setLoading(true); setStatus(""); setRefresh((value) => value + 1); }}>{t("access.reload")}</button>
     </div>
     {loading ? <p role="status">{t("admin.loading")}</p> : null}
     {failure !== "" ? <p role="alert">{t(failure)}</p> : null}
@@ -110,8 +147,8 @@ function AccessEditor({ session, repositories, onSignedOut }: AccessProps) {
       <section className="settings-card" aria-labelledby="iris-access-people">
         <h2 id="iris-access-people">{t("admin.usersTitle")}</h2>
         {accounts.length === 0 ? <p>{t("admin.usersEmpty")}</p> : <ul className="iris-access-people">
-          {accounts.map((account) => <li key={account.id}><button type="button" aria-label={account.username} aria-pressed={selectedID === account.id} disabled={saving}
-            onClick={() => { setSelectedID(account.id); setStatus(""); setFailure(""); }}>
+          {accounts.map((account) => <li key={account.id}><button type="button" aria-pressed={selectedID === account.id} disabled={saving}
+            onClick={() => { requestFocus(); setSelectedID(account.id); setStatus(""); setFailure(""); }}>
             <strong>{account.username}</strong>
             {account.display_name !== "" ? <small>{account.display_name}</small> : null}
             <span>{t(`accountUi.${account.role}`)} · {t(account.disabled ? "admin.disabled" : "admin.active")}</span>
@@ -119,36 +156,40 @@ function AccessEditor({ session, repositories, onSignedOut }: AccessProps) {
         </ul>}
       </section>
       {selected === undefined ? null : <AccessForm key={`${selected.id}:${selected.edit_revision}`} account={selected} repositories={repositories} lastOperator={lastOperator}
-        saving={saving} onSave={(input) => { void save(selected, input); }} />}
+        saving={saving} heading={heading} onSave={(input) => { void save(selected, input); }} />}
     </div> : null}
   </section>;
 }
 
-function AccessForm({ account, repositories, lastOperator, saving, onSave }: {
+function AccessForm({ account, repositories, lastOperator, saving, heading, onSave }: {
   account: ConsoleAccessAccount;
   repositories: Repository[];
   lastOperator: boolean;
   saving: boolean;
+  heading: RefObject<HTMLHeadingElement | null>;
   onSave: (input: AccessInput) => void;
 }) {
   const { t } = useTranslation();
   const [role, setRole] = useState(account.role);
   const [disabled, setDisabled] = useState(account.disabled);
   const [grants, setGrants] = useState(account.grants);
+  // Grants stay in state while the role changes, so going back to member restores them.
+  const savedGrants = role === "member" ? grants : [];
+  // Every accepted edit ends the account's sessions, so an unchanged form cannot be saved.
+  const changed = role !== account.role || disabled !== account.disabled || grantKey(savedGrants) !== grantKey(account.grants);
 
   const submit = (event: FormEvent) => {
     event.preventDefault();
-    onSave({ edit_revision: account.edit_revision, role, disabled, grants: role === "member" ? grants : [] });
+    onSave({ edit_revision: account.edit_revision, role, disabled, grants: savedGrants });
   };
 
   return <section className="settings-card" aria-labelledby="iris-access-selected">
-    <h2 id="iris-access-selected">{t("admin.selectedUser", { user: account.username })}</h2>
+    <h2 id="iris-access-selected" ref={heading} tabIndex={-1}>{t("admin.selectedUser", { user: account.username })}</h2>
     <form className="settings-form" onSubmit={submit}>
       <label htmlFor="iris-access-role">{t("access.role")}</label>
       <select id="iris-access-role" value={role} disabled={saving || lastOperator} onChange={(event) => {
         setRole(event.target.value);
         if (event.target.value === "none") setDisabled(true);
-        if (event.target.value !== "member") setGrants([]);
       }}>
         <option value="operator">{t("accountUi.operator")}</option>
         <option value="member">{t("accountUi.member")}</option>
@@ -160,8 +201,8 @@ function AccessForm({ account, repositories, lastOperator, saving, onSave }: {
       {role === "operator" ? <p>{t("access.operatorHint")}</p> : null}
       {role === "member" ? <fieldset disabled={saving} className="iris-access-grants"><legend>{t("operator.repositories")}</legend>
         {repositories.length === 0 ? <p>{t("operator.none")}</p> : repositories.map((repository) => <label key={repository.id}>
-          <span>{repository.name}</span>
-          <select aria-label={t("access.assignment", { repository: repository.name })} value={grants.find((grant) => grant.repository_id === repository.id)?.mode ?? ""}
+          <span>{repositoryLabel(repository)}</span>
+          <select aria-label={t("access.assignment", { repository: repositoryLabel(repository) })} value={grants.find((grant) => grant.repository_id === repository.id)?.mode ?? ""}
             onChange={(event) => {
               const remaining = grants.filter((grant) => grant.repository_id !== repository.id);
               const mode = event.target.value;
@@ -173,7 +214,7 @@ function AccessForm({ account, repositories, lastOperator, saving, onSave }: {
           </select>
         </label>)}
       </fieldset> : null}
-      <button type="submit" className="primary-button" disabled={saving}>{t(saving ? "access.saving" : "access.save")}</button>
+      <button type="submit" className="primary-button iris-access-save" aria-busy={saving} disabled={saving || !changed}>{t(saving ? "access.saving" : "access.save")}</button>
     </form>
   </section>;
 }

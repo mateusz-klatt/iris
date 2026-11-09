@@ -1,6 +1,6 @@
 import { expect, test, type Page, type WebSocketRoute } from "@playwright/test";
 
-test("a second tab's login clears the first operator's access editor and mail drafts", async ({ context, page }) => {
+for (const view of ["compose", "access"] as const) test(`a second tab's login clears the first operator's ${view} state only when the first tab notices`, async ({ context, page }) => {
   const secondTab = await context.newPage();
   const errors: string[] = [];
   for (const tab of [page, secondTab]) tab.on("pageerror", (error) => { errors.push(error.message); });
@@ -96,19 +96,26 @@ test("a second tab's login clears the first operator's access editor and mail dr
   await expect.poll(() => sockets.get(page)!.length).toBe(1);
   await expect(page.locator(".stream-status")).toHaveClass(/stream-live/);
   const firstSocket = sockets.get(page)![0]!;
-  await page.locator('nav button[aria-controls="iris-access-panel"]').click();
-  await page.getByRole("button", { name: "First-only directory member", exact: true }).click();
+  const directoryMember = page.getByRole("button", { name: /^First-only directory member/ });
   const repositoryAccess = page.locator("#iris-access-panel select").last();
-  await expect(repositoryAccess).toHaveValue("ro");
-  await repositoryAccess.selectOption("rw");
+  if (view === "access") {
+    await page.getByRole("navigation").getByRole("button", { name: "Dostęp", exact: true }).click();
+    await directoryMember.click();
+    await expect(repositoryAccess).toHaveValue("ro");
+    await repositoryAccess.selectOption("rw");
+  }
   await expect(secondTab.locator(".iris-login")).toBeVisible();
   await signIn(secondTab, "second-person");
   await expect(secondTab.locator(".account-identity")).toHaveText("Second person");
   expect((await context.cookies()).find((cookie) => cookie.name === "iris_console_session")?.value).toBe("second-session");
   expect(closed.has(firstSocket)).toBe(false);
   await expect(page.locator(".account-identity")).toHaveText("First person");
-  await expect(page.getByRole("button", { name: "First-only directory member", exact: true })).toBeVisible();
-  await expect(repositoryAccess).toHaveValue("rw");
+  if (view === "access") {
+    await expect(directoryMember).toBeVisible();
+    await expect(repositoryAccess).toHaveValue("rw");
+  } else {
+    await expect(page.locator("#compose textarea")).toHaveValue("First account compose draft");
+  }
   await page.evaluate(() => {
     const state = window as Window & { irisMixedAccounts?: boolean };
     state.irisMixedAccounts = false;
@@ -129,7 +136,7 @@ test("a second tab's login clears the first operator's access editor and mail dr
   await expect.poll(() => closed.has(firstSocket)).toBe(true);
   expect(reads.at(-1)).toEqual({ cookie: "second-session", csrf: "iris-first-csrf", status: 401 });
   await expect(secondTab.locator(".account-identity")).toHaveText("Second person");
-  await expect(secondTab.locator('nav button[aria-controls="iris-access-panel"]')).toHaveCount(0);
+  await expect(secondTab.getByRole("navigation").getByRole("button", { name: "Access", exact: true })).toHaveCount(0);
   await signIn(page, "second-person");
   await expect(page.locator(".account-identity")).toHaveText("Second person");
   await page.locator(".mail-filters select").first().selectOption("rp_shared");
@@ -137,6 +144,6 @@ test("a second tab's login clears the first operator's access editor and mail dr
   await expect(page.locator(".thread-reader textarea")).toHaveValue("");
   await page.locator(".compose-action").click();
   await expect(page.locator("#compose textarea")).toHaveValue("");
-  expect(directoryReads).toEqual(["ca_first"]);
+  expect(directoryReads).toEqual(view === "access" ? ["ca_first"] : []);
   expect(errors).toEqual([]);
 });

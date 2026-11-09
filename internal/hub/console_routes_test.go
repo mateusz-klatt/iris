@@ -80,7 +80,7 @@ func TestConsoleProfileAndAccessRoutesRespectCurrentAccountAndRevisions(t *testi
 	}
 	consoleRoute(t, h, server, memberCookie, memberCSRF, "GET", "/v1/ui/session", "", 401)
 	consoleRoute(t, h, server, ownerCookie, ownerCSRF, "PUT", path, access, 409)
-	consoleRoute(t, h, server, ownerCookie, ownerCSRF, "PUT", "/v1/ui/accounts/"+operator.ID+"/access", `{"edit_revision":1,"role":"none"}`, 409)
+	consoleRoute(t, h, server, ownerCookie, ownerCSRF, "PUT", "/v1/ui/accounts/"+operator.ID+"/access", `{"edit_revision":1,"role":"none","grants":[]}`, 409)
 }
 
 func TestConsoleObjectRoutingUsesPathIDsAndReturnsOperationResults(t *testing.T) {

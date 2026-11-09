@@ -24,6 +24,8 @@ const repositories = [
   { id: "rp_alpha", name: "alpha", aliases: [], console_access: "rw" },
   { id: "rp_beta", name: "beta", aliases: [], console_access: "rw" },
 ];
+const alphaAccess = "alpha · rp_alpha access";
+const betaAccess = "beta · rp_beta access";
 
 async function installAccess(page: Page) {
   const operator = person("ca_operator", "iris-operator", "operator");
@@ -90,7 +92,7 @@ async function openAccess(page: Page) {
 
 async function fitsScreen(page: Page) {
   expect(await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth)).toBeLessThanOrEqual(0);
-  const clipped = await page.locator("input, select, .settings-card").evaluateAll((elements) => elements
+  const clipped = await page.locator("input, select, .settings-card, .iris-access-people button").evaluateAll((elements) => elements
     .filter((element) => element.getClientRects().length > 0)
     .filter((element) => { const bounds = element.getBoundingClientRect(); return bounds.left < 0 || bounds.right > window.innerWidth; })
     .map((element) => element.tagName));
@@ -100,11 +102,11 @@ async function fitsScreen(page: Page) {
 test("an operator grants read and send access with keyboard controls and explicit repository IDs", async ({ page }) => {
   const state = await installAccess(page);
   await openAccess(page);
-  const selectMember = page.getByRole("button", { name: "iris-member", exact: true });
+  const selectMember = page.getByRole("button", { name: /^iris-member/ });
   await selectMember.focus();
   await page.keyboard.press("Enter");
-  const alpha = page.getByRole("combobox", { name: "alpha access", exact: true });
-  const beta = page.getByRole("combobox", { name: "beta access", exact: true });
+  const alpha = page.getByRole("combobox", { name: alphaAccess, exact: true });
+  const beta = page.getByRole("combobox", { name: betaAccess, exact: true });
   await expect(alpha).toHaveValue("");
   await expect(beta).toHaveValue("");
   await alpha.focus();
@@ -120,6 +122,7 @@ test("an operator grants read and send access with keyboard controls and explici
   await save.focus();
   await page.keyboard.press("Enter");
   await expect(page.getByText("Access saved. The account must sign in again.", { exact: true })).toBeVisible();
+  await expect(page.locator("#iris-access-selected")).toBeFocused();
   expect(state.writes).toEqual([{ path: "/v1/ui/accounts/ca_member/access", csrf, origin: "http://127.0.0.1:4173", body: { edit_revision: 1, role: "member", disabled: false, grants: [{ repository_id: "rp_alpha", mode: "ro" }, { repository_id: "rp_beta", mode: "rw" }] } }]);
   expect(state.errors).toEqual([]);
 });
@@ -127,22 +130,22 @@ test("an operator grants read and send access with keyboard controls and explici
 test("account roles, disabled state and no-grant controls round-trip without implicit member access", async ({ page }) => {
   const state = await installAccess(page);
   await openAccess(page);
-  await page.getByRole("button", { name: "iris-quarantined", exact: true }).click();
+  await page.getByRole("button", { name: /^iris-quarantined/ }).click();
   await expect(page.getByRole("combobox", { name: "Role", exact: true })).toHaveValue("none");
   await expect(page.getByRole("checkbox", { name: "Disabled", exact: true })).toBeChecked();
   await page.getByRole("combobox", { name: "Role", exact: true }).selectOption("member");
   await page.getByRole("checkbox", { name: "Disabled", exact: true }).uncheck();
-  await expect(page.getByRole("combobox", { name: "alpha access", exact: true })).toHaveValue("");
-  await expect(page.getByRole("combobox", { name: "beta access", exact: true })).toHaveValue("");
+  await expect(page.getByRole("combobox", { name: alphaAccess, exact: true })).toHaveValue("");
+  await expect(page.getByRole("combobox", { name: betaAccess, exact: true })).toHaveValue("");
   await page.getByRole("button", { name: "Save access", exact: true }).click();
   await expect.poll(() => state.writes.length).toBe(1);
   expect(state.writes[0]!.body).toEqual({ edit_revision: 1, role: "member", disabled: false, grants: [] });
   await expect(page.getByText("Access saved. The account must sign in again.", { exact: true })).toBeVisible();
-  await page.getByRole("combobox", { name: "alpha access", exact: true }).selectOption("rw");
+  await page.getByRole("combobox", { name: alphaAccess, exact: true }).selectOption("rw");
   await page.getByRole("button", { name: "Save access", exact: true }).click();
   await expect.poll(() => state.writes.length).toBe(2);
   await expect(page.getByText("Access saved. The account must sign in again.", { exact: true })).toBeVisible();
-  await page.getByRole("combobox", { name: "alpha access", exact: true }).selectOption("");
+  await page.getByRole("combobox", { name: alphaAccess, exact: true }).selectOption("");
   await page.getByRole("checkbox", { name: "Disabled", exact: true }).check();
   await page.getByRole("button", { name: "Save access", exact: true }).click();
   await expect.poll(() => state.writes.length).toBe(3);
@@ -166,16 +169,17 @@ test("account roles, disabled state and no-grant controls round-trip without imp
 test("a stale revision refreshes grants and requires a new reviewed save", async ({ page }) => {
   const state = await installAccess(page);
   await openAccess(page);
-  await page.getByRole("button", { name: "iris-member", exact: true }).click();
-  await page.getByRole("combobox", { name: "beta access", exact: true }).selectOption("rw");
+  await page.getByRole("button", { name: /^iris-member/ }).click();
+  await page.getByRole("combobox", { name: betaAccess, exact: true }).selectOption("rw");
   state.conflict = true;
   await page.getByRole("button", { name: "Save access", exact: true }).click();
   await expect(page.getByText("Access changed or the last enabled operator would be removed. Review current accounts before trying again.", { exact: true })).toBeVisible();
-  await expect(page.getByRole("combobox", { name: "alpha access", exact: true })).toHaveValue("ro");
-  await expect(page.getByRole("combobox", { name: "beta access", exact: true })).toHaveValue("");
+  await expect(page.locator("#iris-access-selected")).toBeFocused();
+  await expect(page.getByRole("combobox", { name: alphaAccess, exact: true })).toHaveValue("ro");
+  await expect(page.getByRole("combobox", { name: betaAccess, exact: true })).toHaveValue("");
   expect(state.writes).toHaveLength(1);
   expect(state.accountReads).toBeGreaterThanOrEqual(2);
-  await page.getByRole("combobox", { name: "beta access", exact: true }).selectOption("rw");
+  await page.getByRole("combobox", { name: betaAccess, exact: true }).selectOption("rw");
   await page.getByRole("button", { name: "Save access", exact: true }).click();
   await expect(page.getByText("Access saved. The account must sign in again.", { exact: true })).toBeVisible();
   expect(state.writes[1]!.body).toEqual({ edit_revision: 2, role: "member", disabled: false, grants: [{ repository_id: "rp_alpha", mode: "ro" }, { repository_id: "rp_beta", mode: "rw" }] });
@@ -186,7 +190,7 @@ test("a stale revision refreshes grants and requires a new reviewed save", async
 test("the last enabled operator stays protected and members never request the account directory", async ({ page }) => {
   const state = await installAccess(page);
   await openAccess(page);
-  await page.locator("#iris-access-panel").getByRole("button", { name: "iris-operator", exact: true }).click();
+  await page.locator("#iris-access-panel").getByRole("button", { name: /^iris-operator/ }).click();
   await expect(page.getByText("The last enabled operator cannot be disabled or demoted.", { exact: true })).toBeVisible();
   await expect(page.getByRole("combobox", { name: "Role", exact: true })).toBeDisabled();
   await expect(page.getByRole("checkbox", { name: "Disabled", exact: true })).toBeDisabled();
@@ -202,6 +206,19 @@ test("the last enabled operator stays protected and members never request the ac
   await expect(page.getByRole("navigation").getByRole("button", { name: "Access", exact: true })).toHaveCount(0);
   await expect(page.getByText("iris-quarantined", { exact: true })).toHaveCount(0);
   expect(state.accountReads).toBe(1);
+  await fitsScreen(page);
+  expect(state.errors).toEqual([]);
+});
+
+test("selecting a person far down a long list brings the form into view", async ({ page }) => {
+  const state = await installAccess(page);
+  for (let i = 0; i < 25; i++) state.accounts.push(person(`ca_${i}`, `person-${String(i).padStart(2, "0")}`, "member"));
+  await openAccess(page);
+  await page.getByRole("button", { name: /^person-20/ }).click();
+  const heading = page.locator("#iris-access-selected");
+  await expect(heading).toHaveText("Selected account: person-20");
+  await expect(heading).toBeFocused();
+  await expect(heading).toBeInViewport();
   await fitsScreen(page);
   expect(state.errors).toEqual([]);
 });
