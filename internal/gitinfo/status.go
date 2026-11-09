@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"errors"
-	"os/exec"
 )
 
 // Status reads NUL-delimited porcelain, preserving spaces, newlines and both rename ends.
@@ -14,8 +13,7 @@ import (
 // a stale .git/index.lock, and the user's next commit then failed with "Another git process seems
 // to be running" (measured on macOS: 6 of 40 killed runs left one; 0 of 40 with the flag).
 func Status(ctx context.Context, root string) (map[string]string, error) {
-	cmd := exec.CommandContext(ctx, "git", "--no-optional-locks", "status", "--porcelain", "-z", "--untracked-files=all", "--ignore-submodules=untracked")
-	cmd.Dir = root
+	cmd := gitCommand(ctx, root, "--no-optional-locks", "status", "--porcelain", "-z", "--untracked-files=all", "--ignore-submodules=untracked")
 	var out limitedStatus
 	cmd.Stdout = &out
 	if err := cmd.Run(); err != nil {

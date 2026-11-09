@@ -522,6 +522,11 @@ state under a time limit, and warns about paths claimed from another worktree. O
 still changed after the command count: one that left the status was committed, stashed or
 restored by git in this worktree, which changes nothing in another. It detects, it
 cannot undo. In a shared worktree attribution is impossible, so it stays silent there.
+At the time limit Iris kills git's whole process group on Linux and macOS, so the status that
+git runs inside a submodule stops with it. A process that has left the group, or work the kernel
+will not interrupt, can still run past the limit, and the hook sends the kill without waiting to
+see it land. On Windows only the process Iris started is killed, so what it started can outlive
+the limit; that has not been measured there.
 
 Status compares each path's two-letter code, not its content. A second change to a path that
 was already dirty therefore goes unseen. A submodule is a single path in its superproject: it
