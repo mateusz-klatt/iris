@@ -361,6 +361,36 @@ func TestLivePlansNeedAWorkingHookAndABinary(t *testing.T) {
 	}
 }
 
+func TestLivePlansIncludeSlowClients(t *testing.T) {
+	layout := integrate.Layout{LookPath: func(name string) (string, error) {
+		if name == "kimi" {
+			return "", errors.New("not found")
+		}
+		return "/bin/" + name, nil
+	}}
+	rows := []ClientReport{
+		{Client: integrate.Codex, Status: StatusSlow, Detail: "47 shell reconciliations ran past their budget in 24 h"},
+		{Client: integrate.Kimi, Status: StatusSlow},
+	}
+	want := LivePlan{Client: integrate.Codex, Binary: "/bin/codex", Model: "gpt-6.1-terra"}
+	for _, only := range []string{"", integrate.Codex} {
+		plans, skipped := LivePlans(layout, rows, only)
+		if len(plans) != 1 || plans[0] != want {
+			t.Fatalf("only %q: a slow client must run without a human prerequisite: %+v", only, plans)
+		}
+		wantSkipped := ""
+		if only == "" {
+			wantSkipped = "kimi: client binary not found"
+		}
+		if strings.Join(skipped, "\n") != wantSkipped {
+			t.Fatalf("only %q: skipped %q, want %q", only, skipped, wantSkipped)
+		}
+	}
+	if plans, skipped := LivePlans(layout, rows, integrate.Kimi); len(plans) != 0 || strings.Join(skipped, "\n") != "kimi: client binary not found" {
+		t.Fatalf("a slow client still needs its binary: %+v %v", plans, skipped)
+	}
+}
+
 func TestLiveInvocationsHaveNoTrustBypass(t *testing.T) {
 	banned := []string{"--trust", "--always-approve", "--dangerously-skip-permissions", "--trust-folder", "--yolo", "bypassPermissions"}
 	for _, name := range integrate.Names {

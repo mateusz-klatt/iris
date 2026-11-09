@@ -124,9 +124,9 @@ var liveClients = map[string]liveClient{
 	}},
 }
 
-// LivePlans lists the clients a live run would call: those whose hook passed
-// the offline canary, that need nothing from a person, and whose binary is on
-// the path. A client that still needs a person, such as Codex before its
+// LivePlans lists clients graded ok, silent or slow whose binary is on the
+// path. Silent and slow grades can reflect past failures rather than a client
+// that cannot run now. A client that still needs a person, such as Codex before its
 // hooks are reviewed, is skipped with the reason: its hook would not run, and
 // spending on it proves nothing, unless only names it. A non-empty only keeps
 // that client alone.
@@ -143,9 +143,7 @@ func LivePlans(layout integrate.Layout, rows []ClientReport, only string) (plans
 		case row.Status == StatusNeedsHuman:
 			skipped = append(skipped, row.Client+": "+row.Detail)
 			continue
-		case row.Status != StatusOK && row.Status != StatusSilent:
-			// A silent row may come from an old failure in the log, and a live
-			// run is how to prove the client works now, so silent ones run too.
+		case row.Status != StatusOK && row.Status != StatusSilent && row.Status != StatusSlow:
 			continue
 		}
 		bin, err := layout.Binary(row.Client)
