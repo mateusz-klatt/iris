@@ -61,16 +61,12 @@ xattr -d com.apple.quarantine ~/.local/bin/iris
 
 A `curl` download carries no mark and runs at once.
 
-With Homebrew, once the `mateusz-klatt/tap` tap is published:
-
-```bash
-brew install mateusz-klatt/tap/iris
-```
-
-Homebrew links `iris` into its `bin` directory, which is already on PATH. Then place the token and run
-`iris setup` and `iris doctor` as above. The formula was measured from a local tap. It sets no
-quarantine mark, so the binary runs. Installing it by its full name also marked it as trusted, which
-Homebrew 7 requires for a formula outside its own taps.
+No Homebrew channel is published. The release configuration generates a cask locally with
+uploads disabled. Do not enable cask uploads until real signing and notarization have
+completed successfully: Homebrew Cask sets quarantine, and the unnotarized binary was held
+at start in the [macOS rehearsal](release.md#gatekeeper-and-an-unnotarized-binary).
+The formula that ran without quarantine was a historical local-tap measurement, not an
+available installation route. Build from source below until release archives are published.
 
 ### From source
 

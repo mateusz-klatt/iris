@@ -86,18 +86,18 @@ signs:
     cmd: cosign
     signature: '${artifact}.sigstore.json'
     args: [sign-blob, '--bundle=${signature}', '${artifact}', '--yes']
-# Deprecated in GoReleaser v2.20; homebrew_casks replaces it. Measured on macOS 26: a
-# cask install sets com.apple.quarantine and Gatekeeper then blocks the unsigned binary,
-# while a formula sets none. Replace this with homebrew_casks in the change that turns
-# notarization on. docs/release.md has the measured cask block.
-brews:
+# Generate the cask locally, but keep uploads disabled until real signing and
+# notarization have succeeded. A cask quarantines its binary; the unnotarized
+# binary was held by Gatekeeper on macOS 26. See docs/release.md for the measurement.
+homebrew_casks:
   - name: iris
     repository: {owner: mateusz-klatt, name: homebrew-tap}
     homepage: https://github.com/mateusz-klatt/iris
     description: Cooperative coordination for coding agents
-    license: Apache-2.0
     skip_upload: true
-    url_template: 'https://github.com/mateusz-klatt/iris/releases/download/{{ .Tag }}/{{ .ArtifactName }}'
+    binaries: [iris]
+    url:
+      template: 'https://github.com/mateusz-klatt/iris/releases/download/{{ .Tag }}/{{ .ArtifactName }}'
 scoops:
   - name: iris
     repository: {owner: mateusz-klatt, name: scoop-bucket}
