@@ -138,15 +138,15 @@ func TestAnExpiredWaiterIsNotWoken(t *testing.T) {
 	}
 }
 
-func TestAWaitEndsWithTheBlockingClaimAndOnTakingThePath(t *testing.T) {
+func TestAWaitOutlastsTheBlockingClaimAndEndsOnTakingThePath(t *testing.T) {
 	s, clock, _ := testStore(t)
 	holder, _ := session(t, s, 1)
 	waiter, _ := session(t, s, 2)
-	// An auto claim lasts ten minutes, so the wait does too, and its expiry frees the path.
+	// An auto claim lasts ten minutes. The wait must outlast it to hear about its expiry.
 	call(t, s, "touch", touchAt(holder, "h1", "a.go"))
 	call(t, s, "touch", touchAt(waiter, "w1", "a.go"))
 	var until int64
-	if err := s.db.QueryRow("SELECT expires_ms FROM Waiter").Scan(&until); err != nil || until != clock.Now().Add(10*time.Minute).UnixMilli() {
+	if err := s.db.QueryRow("SELECT expires_ms FROM Waiter").Scan(&until); err != nil || until != clock.Now().Add(waitLimit).UnixMilli() {
 		t.Fatal(until, err)
 	}
 	// Taking the path some other way clears the wait without a wake.
@@ -182,9 +182,8 @@ func TestOperatorRevokeAndExpiryWakeTheWaiter(t *testing.T) {
 	call(t, s, "touch", touchAt(waiter, "w2", "b.go"))
 	clock.advance(11 * time.Minute)
 	call(t, s, "heartbeat", Request{ExecutionID: waiter.ExecutionID, Generation: waiter.Generation, Source: "shim"})
-	if woken(t, s, waiter) != 1 {
-		// The auto claim and the wait expire together, so nothing is woken.
-		t.Fatal("an expired wait was woken by the claim's own expiry")
+	if woken(t, s, waiter) != 2 || waiting(t, s) != 0 {
+		t.Fatalf("the blocking claim's expiry woke %d and left %d waiting", woken(t, s, waiter), waiting(t, s))
 	}
 }
 

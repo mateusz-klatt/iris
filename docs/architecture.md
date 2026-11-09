@@ -276,8 +276,9 @@ unexplained background line (measured).
 
 A release wakes only a session that was waiting for it. When the hub refuses an Execution's
 touch or claim because another Execution holds the path, it records that Execution as a
-**waiter** on the path and kind it asked for. The waiter lasts until the blocking claim's expiry
-or one hour, whichever comes first, and it is cleared when the Execution takes the path.
+**waiter** on the path and kind it asked for. The waiter lasts one hour, whatever the blocking
+claim's expiry, because that expiry is itself a release the waiter must hear about. It is
+cleared when the Execution takes the path.
 After any release (by the holder, by an operator's revoke, or by expiry), each live waiter whose
 path no longer overlaps a claim of an unrelated Execution gets one `claim_available` event,
 addressed to it alone, and is cleared. Overlap follows ADR 003's path identity, prefix claims

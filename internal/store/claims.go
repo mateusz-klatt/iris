@@ -254,7 +254,7 @@ func (t *transaction) touch(r Request) (map[string]any, error) {
 			v["path"] = p
 			conflicts = append(conflicts, v)
 			// The holder's release of this path is what this session waits for.
-			if err = t.wait(e, pathKey(p, policy), "exact", c); err != nil {
+			if err = t.wait(e, pathKey(p, policy), "exact"); err != nil {
 				return nil, err
 			}
 		}
@@ -394,7 +394,7 @@ func (t *transaction) explicit(r Request) (map[string]any, error) {
 			}
 			v["path"] = p
 			conflicts = append(conflicts, v)
-			if err = t.wait(e, key, r.Kind, c); err != nil {
+			if err = t.wait(e, key, r.Kind); err != nil {
 				return nil, err
 			}
 		}
