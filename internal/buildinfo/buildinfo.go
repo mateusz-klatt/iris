@@ -17,6 +17,8 @@ var (
 
 // String returns the same build identity for the CLI, hub and diagnostic bundle.
 // Missing metadata stays unknown: an archive without .git is not proof of a clean tree.
+// Source state does not verify the freshness of the ignored embedded console assets,
+// even when the build supplies explicit linker metadata.
 func String() string {
 	info, _ := debug.ReadBuildInfo()
 	return describe(Version, Commit, Modified, info)
@@ -50,5 +52,5 @@ func describe(version, commit, modified string, info *debug.BuildInfo) string {
 	case "false":
 		state = "clean"
 	}
-	return fmt.Sprintf("%s (commit %s; %s)", version, commit, state)
+	return fmt.Sprintf("%s (commit %s; source %s; console unverified)", version, commit, state)
 }

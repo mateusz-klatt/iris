@@ -39,10 +39,17 @@ and npm. Release builds embed the rebuilt console, use `CGO_ENABLED=0`, `-trimpa
 and stamp the release version, full commit and source dirty state through ldflags, using
 GoReleaser's Git metadata captured before the console build. `iris version`, the doctor bundle,
 MCP server identity and authenticated hub status use the same value, such as
-`1.2.3 (commit <full hash>; clean)`. Plain `go build` and `make build` use Go's embedded VCS
+`1.2.3 (commit <full hash>; source clean; console unverified)`. Plain `go build` and `make build` use Go's embedded VCS
 metadata; a source archive or `-buildvcs=false` without explicit linker metadata reports unknown
 identity rather than claiming a clean checkout. `make build VERSION=...` overrides the version
-label. These fields identify a build; they do not attest to its provenance.
+label. `source clean` describes only the checkout state reported by the VCS metadata (or
+explicit linker metadata). It does not cover the git-ignored `internal/webui/dist` assets.
+The version string always says `console unverified`: it cannot detect a stale console left
+by a skipped or failed `make web`, or distinguish it from a current console or the placeholder
+used when Node has not run. Run `make web` successfully before `make build` to rebuild the
+console. Release and image builds still rebuild it through their existing build steps, but
+their explicit source metadata does not verify the embedded assets either.
+These fields identify a build; they do not attest to its provenance.
 Outputs cover Linux, macOS and Windows on
 amd64 and arm64: four tar.gz archives, two Windows zip archives, checksums, and
 Linux deb/rpm packages named `iris`. Package-manager manifests remain local. Their explicit download URL templates refer to
