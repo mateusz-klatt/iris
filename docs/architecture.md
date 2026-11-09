@@ -289,17 +289,33 @@ Notifications and digests carry the `kind` only.
 
 ### D8. Liveness comes from the MCP process
 
-A stdio MCP server normally lives exactly as long as its client session, on every client.
-`iris mcp` therefore sends a heartbeat every 20 s for its positively bound Execution generation.
+A stdio MCP server normally follows the client process that launched it. `iris mcp` sends a
+heartbeat every 20 s for its positively bound Execution generation.
 Before renewing a fallback Execution, the client may look for the hook's Execution and hand over
 to it (D6). That attempt has a five-second deadline, separate from the heartbeat's five seconds,
 so a stalled lookup or handover cannot prevent lease renewal. An outage that also prevents the
 heartbeat from reaching the hub can still cost the session its lease.
-It stops on stdin EOF, when its parent process is gone and on loss of binding, so that an orphan
-cannot keep claims alive. The parent is checked by identity, because on Windows a process keeps
-its parent pid after the parent dies (found by CI). An Execution with a recent heartbeat has a 60 s lease. With no shim or
-watch process it has a 15-minute lease, renewed by hook activity, because no hook fires during a
-long model call. That is also how long a dead session of that kind can hold a claim. Claims need
+It stops on stdin EOF or when its immediate OS parent process is gone, checked before the next
+renewal, so that an orphan cannot keep claims alive. The parent is checked by identity, because
+on Windows a process keeps its parent pid after the parent dies (found by CI). A heartbeat
+reporting a lost generation drops the binding and keeps the MCP process available for a fresh
+bind (D9).
+
+An Execution shown as `active` has not been ended or expired by the hub, including during D9's
+recovery window; the hub does not check whether its client process is alive. Ending a session
+changes only that Execution. In particular, a Codex
+`exec` started through a Claude Code MCP bridge registers as a separate Codex session, without
+an Iris parent link to Claude. Its `iris mcp` checks its immediate OS parent, normally Codex or
+its launch shell, rather than the outer Claude session. An outer session ending therefore does
+not establish whether Codex is
+still running, and Iris does not terminate delegated clients. On Windows a private-hub
+[measurement](research/clients/codex-parent-ended-windows.md) observed a dead Codex process still
+shown as `active` until its lease expired.
+
+An Execution in heartbeat mode has a 60 s lease, including after its shim or watch process
+exits. A hook-only Execution that has not entered heartbeat mode has a 15-minute lease, renewed
+by hook activity, because no hook fires during a long model call. That is also how long a dead
+session of that kind can hold a claim. Claims need
 no renewal of their own: a claim is valid while its Execution is live and its own optional expiry
 has not passed.
 
