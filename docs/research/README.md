@@ -31,6 +31,11 @@ The [gap re-audit of 2026-11-09](gap-reaudit-2026-11-09.md) checks every finding
 [gap review of 2026-11-07](gap-review-2026-11-07.md) again, against `main` at `4840765`: 28 closed,
 7 partly addressed, 1 open.
 
+The [submodule reconcile record](submodule-reconcile-2026-11-09.md) measures what `git status`
+reports for a submodule under each `--ignore-submodules` mode and under a repository's own
+settings, and that a submodule can be present without a declaration in `.gitmodules`.
+[ADR 018](../adr/018-reduced-reconcile-scope.md) rests on it.
+
 ## Review of the architecture
 
 The synthesis then went back to the clients as a plan review. Antigravity was left out of this
