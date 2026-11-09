@@ -273,7 +273,7 @@ jobs:
           tree=clean
           if test -n "$(git status --porcelain --untracked-files=normal)"; then tree=dirty; fi
           make image
-          test "$(docker run --rm iris-iris version)" = "dev (commit $GITHUB_SHA; $tree)"
+          test "$(docker run --rm iris-iris version)" = "dev (commit $GITHUB_SHA; source $tree; console unverified)"
   check-all:
     # Lint, known vulnerabilities, secrets in history, and pinned actions. Run the same
     # locally with `make check-all`; each tool's version is pinned in the Makefile.
