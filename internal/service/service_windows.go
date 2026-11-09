@@ -34,22 +34,28 @@ func (v registryValue) Read() (string, error) {
 	if err != nil {
 		return "", present(err)
 	}
+	// Closing this query handle cannot change the value already read.
+	defer func() { _ = k.Close() }()
 	s, _, err := k.GetStringValue(v.name)
-	return s, errors.Join(present(err), k.Close())
+	return s, present(err)
 }
 func (v registryValue) Write(s string) error {
 	k, _, err := registry.CreateKey(registry.CURRENT_USER, v.key, registry.SET_VALUE)
 	if err != nil {
 		return err
 	}
-	return errors.Join(k.SetStringValue(v.name, s), k.Close())
+	// Registry writes report their own errors; closing the key does not flush them.
+	defer func() { _ = k.Close() }()
+	return k.SetStringValue(v.name, s)
 }
 func (v registryValue) Remove() error {
 	k, err := registry.OpenKey(registry.CURRENT_USER, v.key, registry.SET_VALUE)
 	if err != nil {
 		return present(err)
 	}
-	return errors.Join(present(k.DeleteValue(v.name)), k.Close())
+	// Deletion reports its own error; closing the key does not flush the change.
+	defer func() { _ = k.Close() }()
+	return present(k.DeleteValue(v.name))
 }
 
 // Host uses HKCU Run, which requires no administrator rights. argv is iris serve.
@@ -140,7 +146,7 @@ func (p detachedHub) Responds(ctx context.Context) bool {
 	_ = res.Body.Close()
 	return res.StatusCode == http.StatusOK
 }
-func (p detachedHub) locked(f func() error) (err error) {
+func (p detachedHub) locked(f func() error) error {
 	if err := os.MkdirAll(p.dir, 0700); err != nil {
 		return err
 	}
@@ -148,8 +154,8 @@ func (p detachedHub) locked(f func() error) (err error) {
 	if err != nil {
 		return err
 	}
-	// Closing the file also releases its lock, even when the operation failed.
-	defer func() { err = errors.Join(err, file.Close()) }()
+	// The lock file holds no data; closing releases its lock without changing f's result.
+	defer func() { _ = file.Close() }()
 	ov := &windows.Overlapped{}
 	if err := windows.LockFileEx(windows.Handle(file.Fd()), windows.LOCKFILE_EXCLUSIVE_LOCK|windows.LOCKFILE_FAIL_IMMEDIATELY, 0, 1, 0, ov); err != nil {
 		return fmt.Errorf("service operation already in progress: %w", err)
@@ -157,7 +163,7 @@ func (p detachedHub) locked(f func() error) (err error) {
 	return f()
 }
 func (p detachedHub) Start(ctx context.Context) error {
-	return p.locked(func() (err error) {
+	return p.locked(func() error {
 		if p.Responds(ctx) {
 			return nil
 		}
@@ -165,13 +171,16 @@ func (p detachedHub) Start(ctx context.Context) error {
 		if h, err := p.openRecorded(); err != nil {
 			return err
 		} else if h != 0 {
-			return windows.CloseHandle(h)
+			// Releasing our handle cannot change the already-running hub.
+			_ = windows.CloseHandle(h)
+			return nil
 		}
 		log, err := os.OpenFile(p.path(".log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 		if err != nil {
 			return err
 		}
-		defer func() { err = errors.Join(err, log.Close()) }()
+		// Only the child writes this log through its inherited handle; the parent has no pending writes.
+		defer func() { _ = log.Close() }()
 		cmd := exec.Command(p.argv[0], p.argv[1:]...)
 		cmd.Stdout, cmd.Stderr = log, log
 		cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: windows.DETACHED_PROCESS | windows.CREATE_NEW_PROCESS_GROUP, HideWindow: true}
@@ -179,7 +188,8 @@ func (p detachedHub) Start(ctx context.Context) error {
 			return err
 		}
 		// Keep the process handle open until its creation time has been recorded.
-		defer func() { err = errors.Join(err, cmd.Process.Release()) }()
+		// Releasing it cannot undo startup or change the recorded identity.
+		defer func() { _ = cmd.Process.Release() }()
 		return p.record(cmd.Process, processCreated)
 	})
 }
@@ -212,7 +222,9 @@ func (p detachedHub) openRecorded() (windows.Handle, error) {
 	created, _ := creationTime(h)
 	state, _ := windows.WaitForSingleObject(h, 0)
 	if created != id.Created || state != uint32(windows.WAIT_TIMEOUT) {
-		return 0, windows.CloseHandle(h)
+		// Releasing this rejected handle cannot change the process identity check.
+		_ = windows.CloseHandle(h)
+		return 0, nil
 	}
 	return h, nil
 }
@@ -227,7 +239,7 @@ func terminate(h windows.Handle, waitMS uint32) error {
 	return nil
 }
 func (p detachedHub) Stop(_ context.Context) error {
-	return p.locked(func() (err error) {
+	return p.locked(func() error {
 		h, err := p.openRecorded()
 		if err != nil {
 			return err
@@ -235,7 +247,8 @@ func (p detachedHub) Stop(_ context.Context) error {
 		if h == 0 {
 			return p.forget(nil)
 		}
-		defer func() { err = errors.Join(err, windows.CloseHandle(h)) }()
+		// Releasing our handle cannot change whether the hub stopped or its identity was removed.
+		defer func() { _ = windows.CloseHandle(h) }()
 		return p.forget(terminate(h, 5000))
 	})
 }

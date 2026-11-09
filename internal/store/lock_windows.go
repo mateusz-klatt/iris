@@ -22,6 +22,7 @@ func lockDatabase(path string) (*os.File, error) {
 func unlockDatabase(f *os.File) {
 	if f != nil {
 		_ = windows.UnlockFileEx(windows.Handle(f.Fd()), 0, 1, 0, &windows.Overlapped{})
+		// The lock file holds no data; closing also releases any lock left by a failed unlock.
 		_ = f.Close()
 	}
 }
