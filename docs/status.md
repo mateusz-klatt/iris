@@ -1,6 +1,12 @@
 # Status
 
-Last updated 2026-11-08, from `main` at `efe0af6`. Nothing is released.
+Release prerequisites updated 2026-11-09. Nothing is released.
+
+The measurements and deployment report below were last summarized on 2026-11-08, from
+`main` at `efe0af6` before the repository history rewrite. Their commit hashes and PR numbers,
+including the Windows diagnostic at `993e545`, are retained as historical evidence labels;
+they refer to the history before the rewrite, not revisions of the current `main`. This
+documentation update adds no new measurements and does not verify a later deployment.
 
 The hub runs at https://iris.klatt.ie behind Apache and Cloudflare (`docs/deploy.md`). It was last
 deployed from `8ffbd36` on 2026-11-08 (#206), according to the Holzera operator's deployment report:
@@ -114,9 +120,11 @@ Against the production hub, over TLS:
 - **Remote execution targets are unprotected.** A client whose tools run on a remote host, in a
   container or in a cloud sandbox changes files Iris neither claims nor checks: the hook sees only the
   machine it runs on (ADR 009). Detection waits for a captured remote payload.
-- **No release.** No package channel is published. Windows signing is chosen (#35) but not set up. macOS
-  notarization is wired and inert until the owner's Developer ID exists (#57). Real signing and
-  notarization have not run.
+- **No release.** No package channel is published. Windows signing is chosen (#35) but not set up.
+  macOS signing and notarization are wired (#57), and the owner has a Developer ID Application
+  certificate. The App Store Connect API key and all five `MACOS_*` GitHub secrets listed in
+  [Snapshots and releases](release.md#signing-and-notarization) are still missing. Real signing
+  and notarization have not run. Keep cask upload disabled until notarization has actually succeeded.
 - **Not measured:** Defender, the SmartScreen window, Apple silicon, Gatekeeper's dialog and "Open
   Anyway", and a Mac or PC whose policy forbids unsigned code.
 - **An internal/integrate test that fails under load.** One run of four failed on Windows with every

@@ -23,18 +23,29 @@ Iris coordinates cooperating agents. It prevents and reports collisions; it is n
 
 ## Installing
 
-Planned: a package manager, then one command.
+Nothing is released yet, and no package channel is published. Build from source for now;
+release archives are the intended first installation route once a release is published.
+See [Snapshots and releases](docs/release.md) for the prepared artifacts and their limits.
+
+Building the binary with the web console needs Go 1.27.3 or newer, Node.js 26 and npm,
+and Make with a POSIX shell and utilities (Git Bash on Windows). From the repository root:
 
 ```sh
-brew install mateusz-klatt/tap/iris
-iris setup
-```
-
-Building from source needs Go:
-
-```sh
+make web
 make build
 ```
+
+Copy the resulting `iris` binary to a stable directory on your `PATH`, then run:
+
+```sh
+iris setup
+iris doctor
+```
+
+Setup shows the hub and client configuration before writing it. To join an existing hub,
+follow [Joining a hub](docs/join-hub.md) for the token location and platform-specific steps.
+On a fresh checkout, `make build` without `make web` builds the CLI with a placeholder
+instead of the console. Node.js is only needed to build the console, not to run Iris.
 
 ## Documentation
 

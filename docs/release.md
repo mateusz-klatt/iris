@@ -13,13 +13,13 @@ in `web/package.json` selects 11.0.1 for GHSA-g3hv-75wg-m249 while ESLint and
 typescript-eslint still request affected 10.x versions. Remove the override when those
 upstream ranges accept a fixed version, after running audit, lint, build and coverage.
 Vitest 4.1.12 fixes GHSA-qxg6-89mg-rqv8 and GHSA-xp26-3454-mjgp. These are build/test
-dependencies; the final scratch server image contains the Go binary, not node_modules.
+dependencies; the final distroless server image contains the Go binary, not node_modules.
 
 Use GoReleaser **v2.20.0** (the official binary, Docker image, or `go run github.com/goreleaser/goreleaser/v2@v2.20.0`) from the repository root:
 
-```
-goreleaser check
-goreleaser release --snapshot --clean --skip=publish,sign,sbom
+```sh
+go run github.com/goreleaser/goreleaser/v2@v2.20.0 check
+go run github.com/goreleaser/goreleaser/v2@v2.20.0 release --snapshot --clean --skip=publish,sign,sbom
 ```
 
 Images are built last. Without a running Docker daemon that step fails with
@@ -29,11 +29,10 @@ add `docker` to `--skip` when the archives are all you need. Measured on Windows
 On Windows, `make web` needs `rm`, `mkdir -p` and `cp -a`. The measured snapshot ran from Git Bash. It
 has not been tried from PowerShell alone.
 
-In v2.20, `check` returns **2** for this structurally valid configuration because
-`brews` is deprecated. Through `go run` the same result prints `exit status 2`, and `go run` itself exits 1. This is intentional until Apple notarization credentials
-are available. CI reports that warning and accepts exit 2; invalid configuration
-(exit 1) still fails. The formula avoids cask quarantine but does not establish
-notarization. Replace `brews` before GoReleaser v3.
+The configuration uses `homebrew_casks` instead of the deprecated `brews` key. `check`
+must exit 0 without the old deprecation warning. The cask is generated locally but its
+upload stays disabled until signing and notarization have really succeeded. `dist/` is
+ignored by Git; keep snapshot output out of commits.
 
 The before hook runs `make web`, requiring the Node version in `web/package.json`
 and npm. Release builds embed the rebuilt console, use `CGO_ENABLED=0`, `-trimpath`,
@@ -54,9 +53,14 @@ platform images without pushing; release publication remains a separate opt-in.
 It runs as uid/gid 65532 and stores the database and token under `/data`, which must be
 writable by that user. A fresh named volume is; a bind mount needs its owner set. For externally reachable serving,
 pass `--listen`, `--tls-cert` and `--tls-key` explicitly, as required by D1.
-Snapshot signing and SBOM generation are skipped by the command above. Later
-releases can generate archive SBOMs with syft and sign checksums with keyless
-cosign; this requires those tools and an OIDC identity.
+Snapshot checksum signing and SBOM generation are skipped by the command above. The tag
+workflow already installs syft and cosign, generates an SBOM per archive, signs checksums
+with keyless cosign using its OIDC identity, and creates GitHub build provenance. These
+release steps are configured; their first real tag run is still pending. Apple signing
+and notarization are separate and stay disabled without `MACOS_SIGN_P12`.
+
+The commit identifiers in the measured artifact sections below predate the repository's
+history rewrite. They are retained as historical evidence, not current checkout references.
 
 To collect process-inclusive hook latency without a timing threshold:
 
@@ -142,10 +146,11 @@ seen. The table does not cover Apple silicon or a Mac whose policy forbids runni
 So for the first release, notarization matters for anyone who downloads with a browser, and for any
 cask. It does not matter for `curl` or the formula.
 
-### Replacing `brews`
+### Homebrew cask, upload disabled
 
-`brews` is deprecated in GoReleaser v2.20, and `homebrew_casks` replaces it. Below is the block that
-was measured. It generated a cask that installed from a local tap and linked `iris`.
+`.goreleaser.yaml` uses `homebrew_casks`, replacing GoReleaser v2.20's deprecated `brews`.
+The block below generated a cask that installed from a local tap and linked `iris` in the
+historical macOS rehearsal above. That installation measurement used an unnotarized binary.
 
 ```yaml
 homebrew_casks:
@@ -159,10 +164,11 @@ homebrew_casks:
       template: 'https://github.com/mateusz-klatt/iris/releases/download/{{ .Tag }}/{{ .ArtifactName }}'
 ```
 
-A cask quarantines what it installs, so with an unnotarized binary every cask user hits the held start
-above. Switch from `brews` to this block in the same change that turns notarization on. Until then
-`check` keeps reporting the deprecation. A cask hook that strips the mark would work around Gatekeeper
-for every user, so it is not proposed.
+A cask quarantines what it installs, which caused the held start above with the unnotarized
+binary. **Do not enable cask uploads before real signing and notarization have completed
+successfully.** Creating the certificate or adding secrets alone does not satisfy that gate.
+The local manifest does not create a published package channel. A cask hook that strips
+quarantine would work around Gatekeeper for every user, so it is not proposed.
 
 ### Signing and notarization
 
@@ -189,13 +195,15 @@ to look it up online the first time it starts. That was not measured.
 | `MACOS_NOTARY_KEY_ID` | The App Store Connect API key ID |
 | `MACOS_NOTARY_KEY` | The API key's `.p8` file, base64-encoded |
 
-Steps for the owner, in the owner's Apple account. None of these were done here.
+The owner already has a Developer ID Application certificate. The App Store Connect API key
+and all five GitHub repository secrets above are still missing. The remaining setup is for
+the owner in the owner's Apple account; no credentials were created or configured here.
 
-1. Join the Apple Developer Program. A Developer ID certificate needs a paid membership, and only the
-   account holder can create one.
-2. Create a **Developer ID Application** certificate. In Xcode, it is under Settings, Accounts, Manage
-   Certificates. On the developer website, it is under Certificates, from a signing request made in
-   Keychain Access.
+1. If no usable certificate is available, confirm Apple Developer Program membership. A Developer ID
+   certificate needs a paid membership, and only the account holder can create one.
+2. Only if needed, create a **Developer ID Application** certificate. In Xcode, it is under Settings,
+   Accounts, Manage Certificates. On the developer website, it is under Certificates, from a signing
+   request made in Keychain Access. Reuse the existing certificate if its private key is available.
 3. In Keychain Access, export the certificate together with its private key as a `.p12` file with a
    password. `base64 -i developer-id.p12` gives `MACOS_SIGN_P12`.
 4. In App Store Connect, under Users and Access, Integrations, create a team API key with the Developer
