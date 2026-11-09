@@ -528,7 +528,10 @@ only. One from a doctor too old to send `host` is kept under `unknown`, so it ne
 host's. A host that never reported is absent. The console greys a report checked more than 24 hours
 ago.
 
-`status` is `ok`, `not_configured`, `needs_human`, `silent` or `slow`. `slow` means the hooks run,
+`status` is `ok`, `not_configured`, `needs_human`, `silent` or `slow`. `silent` includes a failed
+hook check or a hook that failed open in the last 24 hours; `detail` says which. A recent fail-open
+detail warns that edits may have gone unclaimed. It does not establish that the client is down now
+or that its hooks never reached the hub. `slow` means the hooks run,
 but shell reconciliation passed its budget more than ten times in 24 hours, so those commands'
 changes went unclaimed. A doctor sends it as `silent`, with `slow: ` in the detail, to a hub that
 refuses it. `last_hook_at` is when that client's hooks on the doctor's host last reached the hub,
