@@ -30,6 +30,9 @@ type LivePlan struct {
 	Client string
 	Binary string
 	Model  string
+	// Requires is the original readiness step for an explicitly selected
+	// needs_human client. Doctor has not confirmed that the step is complete.
+	Requires string
 }
 
 // LiveResult is what one live run proved. Each field is a separate claim, so a
@@ -122,9 +125,10 @@ var liveClients = map[string]liveClient{
 }
 
 // LivePlans uses readiness from before historical grading: slow and silent
-// history cannot erase a missing configuration or human step. Unready clients
-// are skipped with their reason, even when only names them. Ready clients graded
-// slow or silent still run. A non-empty only keeps that client alone.
+// history cannot erase a missing configuration or human step. Explicitly naming
+// a needs_human client permits a run with its unconfirmed step in Requires;
+// missing configuration or a missing binary still refuses it. Ready clients
+// graded slow or silent still run. A non-empty only keeps that client alone.
 func LivePlans(layout integrate.Layout, rows []ClientReport, only string) (plans []LivePlan, skipped []string) {
 	for _, row := range rows {
 		if only != "" && row.Client != only {
@@ -134,7 +138,10 @@ func LivePlans(layout integrate.Layout, rows []ClientReport, only string) (plans
 		if row.readinessStatus != "" {
 			status, detail = row.readinessStatus, row.readinessDetail
 		}
+		requires := ""
 		switch {
+		case status == StatusNeedsHuman && only == row.Client && detail != "client binary not found":
+			requires = detail
 		case status == StatusNeedsHuman || status == StatusNotConfigured:
 			skipped = append(skipped, row.Client+": "+detail)
 			continue
@@ -146,7 +153,7 @@ func LivePlans(layout integrate.Layout, rows []ClientReport, only string) (plans
 			skipped = append(skipped, row.Client+": client binary not found")
 			continue
 		}
-		plans = append(plans, LivePlan{Client: row.Client, Binary: bin, Model: liveClients[row.Client].model})
+		plans = append(plans, LivePlan{Client: row.Client, Binary: bin, Model: liveClients[row.Client].model, Requires: requires})
 	}
 	return plans, skipped
 }
@@ -219,6 +226,9 @@ func RunLive(ctx context.Context, opt LiveOptions, plan LivePlan) (res LiveResul
 		notes = append(notes, fmt.Sprintf("timed out after %s", opt.Timeout))
 	case runErr != nil:
 		notes = append(notes, "client failed: "+runErr.Error()+": "+clip(out))
+	}
+	if !res.HookFired && plan.Requires != "" {
+		notes = append(notes, "doctor could not confirm this step: "+plan.Requires+"; the hook may not run until it is completed")
 	}
 	if !res.HookFired {
 		notes = append(notes, "the scratch hub saw no session from this client's hook. Either the client stopped before running it, or the hook used the configured hub, under the repository with origin "+res.Marker+", which the hub's owner can remove with `iris admin forget`")

@@ -12,7 +12,7 @@ import (
 	"github.com/mateusz-klatt/iris/internal/integrate"
 )
 
-func TestUnreadyCodexHistoryNeverEntersLivePlan(t *testing.T) {
+func TestCodexHistoryPreservesLiveReadiness(t *testing.T) {
 	t.Setenv("IRIS_FAKE_STDOUT", "{}")
 	t.Setenv("IRIS_FAKE_EXIT", "0")
 	for _, installed := range []bool{false, true} {
@@ -48,6 +48,12 @@ func TestUnreadyCodexHistoryNeverEntersLivePlan(t *testing.T) {
 			}
 			for _, only := range []string{"", integrate.Codex} {
 				plans, skipped := LivePlans(layout, res.Report.Clients, only)
+				if installed && only != "" {
+					if len(plans) != 1 || plans[0].Client != integrate.Codex || plans[0].Requires != "Review hooks once in /hooks" || len(skipped) != 0 {
+						t.Fatalf("explicit Codex must run despite unconfirmed review: plans %+v, skipped %v", plans, skipped)
+					}
+					continue
+				}
 				if len(plans) != 0 || !strings.Contains(strings.Join(skipped, "\n"), want) {
 					t.Fatalf("only %q: unready Codex must be skipped: plans %+v, skipped %v", only, plans, skipped)
 				}

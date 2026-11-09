@@ -211,9 +211,13 @@ and that is how its console shows it.
 
 `iris doctor --live` can run ready clients graded `ok`, `silent` or `slow` when their binaries
 are available. It keeps current readiness separate from the historical grade: recent failures
-never override a `needs_human` or `not_configured` result. These clients are skipped even when
-selected explicitly with `--client <client>`, as is a client whose binary is missing. It asks
-before running billable client sessions unless `--yes` is given. The offline grades remain in the
+never erase a `needs_human` or `not_configured` result. Without `--client`, both are skipped
+regardless of their slow or silent history. Selecting a `needs_human` client explicitly with
+`--client <client>` allows it to run, with a warning naming the original step doctor could not
+confirm. If its hook does not fire, the report repeats that warning; doctor has not verified
+the step. An unconfigured client or a readiness result reporting a missing binary is still
+refused even with `--client`. Doctor asks before running billable client sessions unless `--yes`
+is given. The offline grades remain in the
 output, but the live command exits 0 when at least one selected client runs, all live checks
 pass and the configured hub and token are usable. It exits 1 for a failed live check, an
 unusable hub or token, no eligible client or a declined run. Other clients' offline grades

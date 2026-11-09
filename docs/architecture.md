@@ -659,8 +659,8 @@ that model edits through the client's file editing tool. Codex uses `gpt-6.1-ter
 in every measured run, and no pre-edit hook sees that, so the check would fail for a reason
 unrelated to Iris. It is
 billable, so it is opt-in: it names each client, binary and model first and asks, unless `--yes`
-is given. A client that still needs a person, such as Codex before its hooks are reviewed in
-`/hooks`, is skipped with that reason: no trust is bypassed, and a run whose hook cannot fire
+is given. Without `--client`, a client that still needs a person, such as Codex before its
+hooks are reviewed in `/hooks`, is skipped with that reason: no trust is bypassed, and a run whose hook cannot fire
 spends money to prove nothing. Doctor keeps current readiness separate from historical grades.
 Ready clients reported `silent` or `slow` still run: a silent grade may come from an old failure
 in the log, and a slow grade means hooks ran but shell reconciliation often exceeded its budget.
@@ -695,9 +695,12 @@ other clients' hooks (D5). If the scratch hub sees nothing from that hook, eithe
 stopped before running it, which Cursor does with exit 0 in an untrusted workspace, or a client
 that hides its environment from its hook reached the configured hub instead. Doctor then prints
 the client's output and the marker origin, so the hub's owner can find that repository and
-remove it with `iris admin forget`. Naming a client with `--client` selects only that client;
-it does not override its readiness. A client that needs a person, is not configured or has no
-binary is excluded, even when its historical grade is `silent` or `slow`.
+remove it with `iris admin forget`. Naming a client with `--client` selects only that client
+and allows a `needs_human` client to run. The plan names the original readiness step doctor
+could not confirm, even when the displayed grade is `silent` or `slow`; a missing hook repeats
+that warning. Doctor does not claim the step was verified, and the override grants no trust.
+An unconfigured client or a readiness result reporting a missing binary remains excluded,
+including with `--client`.
 Codex runs with `sandbox_mode="workspace-write"`, `approval_policy="never"` and the Iris tools approved for that
 run only, never with full access. Codex records each directory it runs in as trusted, in
 `config.toml`. Doctor removes that scratch table afterwards, but only if removing it gives back

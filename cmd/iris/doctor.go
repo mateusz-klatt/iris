@@ -79,6 +79,9 @@ func liveStage(ctx context.Context, plans []doctor.LivePlan, skipped []string, y
 	_, _ = fmt.Fprintln(stderr, "iris doctor --live runs these clients in a scratch repository, and each call may incur a charge:")
 	for _, p := range plans {
 		_, _ = fmt.Fprintf(stderr, "  %s (%s), model %s\n", p.Client, p.Binary, p.Model)
+		if p.Requires != "" {
+			_, _ = fmt.Fprintf(stderr, "    %s: doctor could not confirm this step; the live run depends on it: %s\n", p.Client, p.Requires)
+		}
 	}
 	if !yes {
 		_, _ = fmt.Fprint(stderr, "Proceed? [y/N] ")

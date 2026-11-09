@@ -303,8 +303,13 @@ func TestLiveCodexPutsItsConfigBack(t *testing.T) {
 	t.Setenv("IRIS_FAKE_LIVE_NAME", integrate.Codex)
 	plan := fakePlan(t, "nohook")
 	plan.Client = integrate.Codex
+	plans, skipped := LivePlans(integrate.Layout{LookPath: func(string) (string, error) { return plan.Binary, nil }}, []ClientReport{{Client: integrate.Codex, Status: StatusNeedsHuman, Detail: "Review hooks once in /hooks"}}, integrate.Codex)
+	if len(plans) != 1 || len(skipped) != 0 {
+		t.Fatalf("explicit Codex must run with its unconfirmed step: plans %+v, skipped %v", plans, skipped)
+	}
+	plan = plans[0]
 	res := RunLive(context.Background(), LiveOptions{Layout: layout, Timeout: time.Minute}, plan)
-	if res.HookFired || !strings.Contains(res.Detail, "the scratch hub saw no session from this client's hook") {
+	if res.HookFired || !strings.Contains(res.Detail, "doctor could not confirm this step: Review hooks once in /hooks; the hook may not run until it is completed") || !strings.Contains(res.Detail, "the scratch hub saw no session from this client's hook") {
 		t.Fatalf("%+v", res)
 	}
 	if got, _ := os.ReadFile(config); string(got) != userCodexConfig {
@@ -352,8 +357,8 @@ func TestLivePlansNeedAWorkingHookAndABinary(t *testing.T) {
 	if only, _ := LivePlans(layout, rows, integrate.Grok); len(only) != 1 || only[0].Client != integrate.Grok {
 		t.Fatalf("%+v", only)
 	}
-	// Naming a client never bypasses the step doctor knows is still needed.
-	if named, skipped := LivePlans(layout, rows, integrate.Codex); len(named) != 0 || strings.Join(skipped, "\n") != "codex: Review hooks once in /hooks" {
+	// A named client may run when doctor could not confirm its human step.
+	if named, skipped := LivePlans(layout, rows, integrate.Codex); len(named) != 1 || named[0].Requires != "Review hooks once in /hooks" || len(skipped) != 0 {
 		t.Fatalf("%+v %v", named, skipped)
 	}
 	if named, skipped := LivePlans(layout, rows, integrate.Cursor); len(named) != 0 || len(skipped) != 1 {

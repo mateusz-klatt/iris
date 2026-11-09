@@ -74,13 +74,15 @@ func TestLivePlansKeepReadinessDespiteFailureHistory(t *testing.T) {
 		{grade: StatusSilent, extra: broken},
 	} {
 		for _, readiness := range []struct {
-			status, detail string
+			name, status, detail string
+			ready, override      bool
 		}{
-			{StatusOK, "hook review recorded"},
-			{StatusNeedsHuman, "Review hooks once in /hooks"},
-			{StatusNotConfigured, "configuration is absent"},
+			{name: "ready", status: StatusOK, detail: "hook review recorded", ready: true},
+			{name: "needs_human", status: StatusNeedsHuman, detail: "Review hooks once in /hooks", override: true},
+			{name: "not_configured", status: StatusNotConfigured, detail: "configuration is absent"},
+			{name: "missing_binary", status: StatusNeedsHuman, detail: "client binary not found"},
 		} {
-			t.Run(readiness.status+"/"+history.grade, func(t *testing.T) {
+			t.Run(readiness.name+"/"+history.grade, func(t *testing.T) {
 				token := filepath.Join(t.TempDir(), "hub.token")
 				log := strings.Repeat(deadline, slowLimit+1) + history.extra
 				if err := os.WriteFile(filepath.Join(filepath.Dir(token), "hook-failures.log"), []byte(log), 0o600); err != nil {
@@ -97,8 +99,11 @@ func TestLivePlansKeepReadinessDespiteFailureHistory(t *testing.T) {
 					}
 					for _, only := range []string{"", integrate.Codex} {
 						plans, skipped := LivePlans(layout, res.Report.Clients, only)
-						if readiness.status == StatusOK {
+						if readiness.ready || (only != "" && readiness.override) {
 							want := LivePlan{Client: integrate.Codex, Binary: "/bin/codex", Model: "gpt-6.1-terra"}
+							if readiness.override {
+								want.Requires = readiness.detail
+							}
 							if len(plans) != 1 || plans[0] != want || len(skipped) != 0 {
 								t.Fatalf("only %q: a ready client with %s history must run: %+v, skipped %v", only, history.grade, plans, skipped)
 							}
