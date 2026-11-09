@@ -219,6 +219,14 @@ func TestQuoting(t *testing.T) {
 	}
 }
 
+func TestWindowsHookCommandQuotesEqualsInExecutable(t *testing.T) {
+	const path = `C:\tools\installed=true\iris.exe`
+	const want = `"C:\tools\installed=true\iris.exe" hook --client codex --event SessionStart`
+	if got := hookCmd(path, Codex, "SessionStart"); got != want {
+		t.Fatalf("a Windows executable path containing '=' must stay one command token: got %q, want %q", got, want)
+	}
+}
+
 func TestManifestProblems(t *testing.T) {
 	dir := t.TempDir()
 	path := manifestPath(dir)

@@ -209,6 +209,20 @@ or a slow network. Such entries leave the row `ok` with a `degraded` note. More 
 status refuses it, so doctor sends such a hub the row as `silent`, with a detail starting `slow:`,
 and that is how its console shows it.
 
+`iris doctor --live` can run ready clients graded `ok`, `silent` or `slow` when their binaries
+are available. It keeps current readiness separate from the historical grade: recent failures
+never erase a `needs_human` or `not_configured` result. Without `--client`, both are skipped
+regardless of their slow or silent history. Selecting a `needs_human` client explicitly with
+`--client <client>` allows it to run, with a warning naming the original step doctor could not
+confirm. If its hook does not fire, the report repeats that warning; doctor has not verified
+the step. An unconfigured client or a readiness result reporting a missing binary is still
+refused even with `--client`. Doctor asks before running billable client sessions unless `--yes`
+is given. The offline grades remain in the
+output, but the live command exits 0 when at least one selected client runs, all live checks
+pass and the configured hub and token are usable. It exits 1 for a failed live check, an
+unusable hub or token, no eligible client or a declined run. Other clients' offline grades
+do not affect that exit status. Plain `iris doctor` keeps the grading and exit status above.
+
 To ask for help elsewhere, `iris doctor --bundle` prints the same checks as JSON with nothing private
 in it: versions, each client's status, the hub's reachability and the token's state as true or
 false, and counts of hook failures and observations by kind. It holds no URL, path, host name,

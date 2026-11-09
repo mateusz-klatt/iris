@@ -659,15 +659,27 @@ that model edits through the client's file editing tool. Codex uses `gpt-6.1-ter
 in every measured run, and no pre-edit hook sees that, so the check would fail for a reason
 unrelated to Iris. It is
 billable, so it is opt-in: it names each client, binary and model first and asks, unless `--yes`
-is given. A client that still needs a person, such as Codex before its hooks are reviewed in
-`/hooks`, is skipped with that reason: no trust is bypassed, and a run whose hook cannot fire
-spends money to prove nothing. A client reported silent still runs: the cause may be an old
-failure in the log, and a live run is how to show that it works now. Every client runs on a
-named model, never its default, which can be expensive. Cursor gets `--trust`, which trusts only
+is given. Without `--client`, a client that still needs a person, such as Codex before its
+hooks are reviewed in `/hooks`, is skipped with that reason: no trust is bypassed, and a run whose hook cannot fire
+spends money to prove nothing. Doctor keeps current readiness separate from historical grades.
+It checks the human step even when the canary fails: that failure stays visible, but does not
+establish that the step is complete or permit a default live run of an unreviewed client.
+Ready clients reported `silent` or `slow` still run: a silent grade may come from an old failure
+in the log, and a slow grade means hooks ran but shell reconciliation often exceeded its budget.
+Those histories never make a client ready when it needs a person or is not configured.
+Every client runs on a named model, never its default, which can be expensive. Cursor gets
+`--trust`, which trusts only
 the scratch repository doctor created. Without it, a headless `cursor-agent` prints "Workspace
 Trust Required" and exits 0 having run nothing. That is trust in a temporary directory Iris made,
 not a bypass of trust in the user's own workspaces. Output is per client binary, not per vendor, because the Cursor IDE and
 `cursor-agent` differ.
+
+The offline grades remain visible with `--live`, but its exit status reflects the selected
+live runs and the configured hub and token checks. It exits 0 only when at least one client
+runs, every live result passes and the hub and token are usable. A failed live result, no
+eligible client or a declined run exits 1. Other clients' offline grades do not fail a live
+run. Plain `iris doctor` still exits 1 when the hub or token is unusable or any client is
+`silent` or `slow`.
 
 Each live run happens in a scratch repository under the temporary directory, with no commit and
 an origin of `https://example.invalid/iris-doctor-live/<random>.git`, never in one of the user's
@@ -685,10 +697,13 @@ other clients' hooks (D5). If the scratch hub sees nothing from that hook, eithe
 stopped before running it, which Cursor does with exit 0 in an untrusted workspace, or a client
 that hides its environment from its hook reached the configured hub instead. Doctor then prints
 the client's output and the marker origin, so the hub's owner can find that repository and
-remove it with `iris admin forget`. Naming a client with `--client` runs it even when doctor reports
-that it needs a person, because Codex's hook review cannot be read yet: the plan line says the
-hook depends on that step, and a missing session says so again. Codex runs with
-`sandbox_mode="workspace-write"`, `approval_policy="never"` and the Iris tools approved for that
+remove it with `iris admin forget`. Naming a client with `--client` selects only that client
+and allows a `needs_human` client to run. The plan names the original readiness step doctor
+could not confirm, even when the displayed grade is `silent` or `slow`; a missing hook repeats
+that warning. Doctor does not claim the step was verified, and the override grants no trust.
+An unconfigured client or a readiness result reporting a missing binary remains excluded,
+including with `--client`.
+Codex runs with `sandbox_mode="workspace-write"`, `approval_policy="never"` and the Iris tools approved for that
 run only, never with full access. Codex records each directory it runs in as trusted, in
 `config.toml`. Doctor removes that scratch table afterwards, but only if removing it gives back
 the file's bytes from before the run. A file that changed in any other way meanwhile is left

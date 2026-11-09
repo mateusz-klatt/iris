@@ -52,6 +52,10 @@ type ClientReport struct {
 	Status     string `json:"status"`
 	Detail     string `json:"detail,omitempty"`
 	LastHookAt string `json:"last_hook_at,omitempty"`
+	// Readiness is local to live planning. Historical grades must not erase a
+	// missing configuration or human step, or its reason. It is not published.
+	readinessStatus string
+	readinessDetail string
 }
 
 // Result is the human-readable outcome plus the stored report.
@@ -273,8 +277,8 @@ func (r Result) Format() string {
 	return b.String()
 }
 
-func checkClient(ctx context.Context, opt Options, c integrate.Client) ClientReport {
-	row := ClientReport{Client: c.Name(), Status: StatusNotConfigured, Detail: "configuration is absent"}
+func checkClient(ctx context.Context, opt Options, c integrate.Client) (row ClientReport) {
+	row = ClientReport{Client: c.Name(), Status: StatusNotConfigured, Detail: "configuration is absent"}
 	bin, binErr := opt.Layout.Binary(c.Name())
 	var versionErr error
 	if binErr == nil {
@@ -286,6 +290,18 @@ func checkClient(ctx context.Context, opt Options, c integrate.Client) ClientRep
 		applyVersion(&row)
 		return row
 	}
+	step, note := c.Human(), ""
+	if r, ok := c.(integrate.Reviewer); ok {
+		step, note = r.Review(opt.Layout)
+	}
+	// A canary failure must stay visible as silent, but cannot stand in for
+	// a human step the client still needs. Check that step before any canary
+	// error can return, and preserve it independently of the diagnostic grade.
+	defer func() {
+		if row.Status == StatusSilent && step != "" {
+			row.readinessStatus, row.readinessDetail = StatusNeedsHuman, step
+		}
+	}()
 	in, err := c.Canary(opt.Layout)
 	if err != nil {
 		if errors.Is(err, integrate.ErrNotConfigured) {
@@ -344,10 +360,6 @@ func checkClient(ctx context.Context, opt Options, c integrate.Client) ClientRep
 		row.Status = StatusSilent
 		row.Detail = "the hook command answered, but not from Iris: no canary receipt on stderr"
 		return row
-	}
-	step, note := c.Human(), ""
-	if r, ok := c.(integrate.Reviewer); ok {
-		step, note = r.Review(opt.Layout)
 	}
 	if step != "" {
 		row.Status = StatusNeedsHuman
@@ -420,6 +432,9 @@ func applyFailures(res *Result, tokenFile string, now time.Time) error {
 	}
 	for i := range res.Report.Clients {
 		row := &res.Report.Clients[i]
+		if row.readinessStatus == "" {
+			row.readinessStatus, row.readinessDetail = row.Status, row.Detail
+		}
 		n := degraded[row.Client]
 		switch {
 		case len(broken[row.Client]) > 0:

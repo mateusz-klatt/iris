@@ -12,9 +12,16 @@ import (
 )
 
 func TestWindowsClientInvocationStdin(t *testing.T) {
-	for _, client := range []string{Copilot, Cursor, Codex, Antigravity, Kimi} {
-		t.Run(client, func(t *testing.T) {
-			dir := filepath.Join(t.TempDir(), "path with spaces")
+	for _, tc := range []struct{ client, dir string }{
+		{Copilot, "path with spaces"},
+		{Cursor, "path with spaces"},
+		{Codex, "path with spaces"},
+		{Antigravity, "path with spaces"},
+		{Kimi, "path with spaces"},
+		{Codex, "installed=true"},
+	} {
+		t.Run(tc.client+"/"+tc.dir, func(t *testing.T) {
+			dir := filepath.Join(t.TempDir(), tc.dir)
 			bin, err := PlaceFake(dir, "iris")
 			if err != nil {
 				t.Fatal(err)
@@ -26,10 +33,11 @@ func TestWindowsClientInvocationStdin(t *testing.T) {
 			t.Setenv("IRIS_FAKE_STDIN_RECEIPT", receipt)
 			t.Setenv("IRIS_FAKE_STDOUT", "{}")
 			t.Setenv("IRIS_FAKE_EXIT", "0")
+			t.Setenv("IRIS_FAKE_NO_RECEIPT", "0")
 			// Exercise the same command read back by doctor, including both PS guards
 			// and direct PowerShell invocation. Native stdin must receive the JSON.
 			l := Layout{Home: t.TempDir(), GOOS: "windows", Getenv: func(string) string { return "" }, LookPath: func(string) (string, error) { return bin, nil }}
-			c, _ := ByName(client)
+			c, _ := ByName(tc.client)
 			if err := c.Install(l, nil); err != nil {
 				t.Fatal(err)
 			}
@@ -37,20 +45,50 @@ func TestWindowsClientInvocationStdin(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			if in.Kind != clientShell("windows", client) {
+			if in.Kind != clientShell("windows", tc.client) {
 				t.Fatal(in.Kind)
 			}
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 			defer cancel()
-			ran, err := in.Run(ctx, []byte(payload))
+			const nonce = "windows-invocation-receipt"
+			var env []string
+			if tc.client == Codex {
+				env = []string{"IRIS_DOCTOR_NONCE=" + nonce}
+			}
+			ran, err := in.Run(ctx, []byte(payload), env...)
 			out, code := ran.Stdout, ran.Exit
 			if err != nil || code != 0 {
-				t.Fatalf("code %d: %v (%s)", code, err, out)
+				t.Fatalf("code %d: %v (stdout %s; stderr %s)", code, err, out, ran.Stderr)
 			}
 			assertGuardJSON(t, string(out), code, "{}")
+			if tc.client == Codex && string(ran.Stderr) != "iris: canary "+nonce+"\n" {
+				t.Fatalf("canary receipt %q", ran.Stderr)
+			}
 			raw, err := os.ReadFile(receipt)
 			if err != nil || string(raw) != payload {
 				t.Fatalf("stdin receipt %q: %v", raw, err)
+			}
+		})
+	}
+}
+
+func TestWindowsCmdKeepsExecutableQuotes(t *testing.T) {
+	const shell = `"C:\tools\installed=true\iris.exe" hook --client codex --event SessionStart`
+	for _, tc := range []struct{ name, comspec, wantExe string }{
+		{"plain", "cmd.exe", "cmd.exe"},
+		{"spaced", `C:\Command Tools\cmd.exe`, `"C:\Command Tools\cmd.exe"`},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Setenv("COMSPEC", tc.comspec)
+			for _, kind := range []ShellKind{ShellCmd, ""} {
+				cmd, err := (Invocation{Shell: shell, Kind: kind}).start(context.Background())
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := tc.wantExe + ` /d /s /c ""C:\tools\installed=true\iris.exe" hook --client codex --event SessionStart"`
+				if cmd.SysProcAttr == nil || cmd.SysProcAttr.CmdLine != want {
+					t.Fatalf("kind %q: command line %v, want %q", kind, cmd.SysProcAttr, want)
+				}
 			}
 		})
 	}

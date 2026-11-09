@@ -4,6 +4,7 @@ import { http, HttpResponse } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { App } from "./App";
+import * as api from "./api";
 import type { WatchFrame, WatchStatus } from "./api";
 import i18n from "./i18n";
 import { reviewAndSend } from "./test/send";
@@ -911,29 +912,59 @@ describe("Iris operator console", () => {
     expect(screen.getByText("No conversations with you yet")).toBeVisible();
   });
 
-  it("ignores a thread list failure from a query the reader already replaced", async () => {
-    const user = userEvent.setup();
-    const first = deferred<Response>();
+  it("keeps threads, cursor and error state when a replaced query succeeds late", async () => {
+    const user = userEvent.setup({ delay: null });
+    const first = deferred<api.ThreadsPage>();
     let staleStarted = false;
-    server.use(
-      http.get("*/v1/ui/threads", ({ request }) => {
-        const url = new URL(request.url);
-        if (url.pathname !== "/v1/ui/threads") {
-          return undefined;
-        }
-        const q = url.searchParams.get("q") ?? "";
-        if (q === "stale") {
-          staleStarted = true;
-          return first.promise;
-        }
-        if (q === "fresh") {
-          return HttpResponse.json({
-            threads: [{ ...threadsPage.threads[0], id: "ms_fresh", subject: "Fresh thread" }],
-          });
-        }
-        return HttpResponse.json(threadsPage);
-      }),
-    );
+    vi.spyOn(api, "listThreads").mockImplementation(async ({ q }) => {
+      if (q === "stale") {
+        staleStarted = true;
+        return first.promise;
+      }
+      if (q === "fresh") {
+        throw new Error("The current query failed.");
+      }
+      return threadsPage;
+    });
+    await showSession();
+    expect(await screen.findByRole("button", { name: /Rollout check/ })).toBeVisible();
+    const search = screen.getByRole("searchbox", { name: "Search threads" });
+    await user.type(search, "stale");
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    await waitFor(() => expect(staleStarted).toBe(true));
+    await user.clear(search);
+    await user.type(search, "fresh");
+    await user.click(screen.getByRole("button", { name: "Search" }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Iris could not load this view.");
+
+    await act(async () => {
+      first.resolve({
+        threads: threadsPage.threads.map((thread) => ({ ...thread, id: "ms_stale", subject: "Stale thread" })),
+        next: "stale-cursor",
+      });
+      await first.promise;
+    });
+    expect(screen.getByRole("button", { name: /Rollout check/ })).toBeVisible();
+    expect(screen.queryByRole("button", { name: /Stale thread/ })).toBeNull();
+    expect(screen.queryByRole("button", { name: "Older threads" })).toBeNull();
+    expect(screen.getByRole("alert")).toHaveTextContent("Iris could not load this view.");
+  });
+
+  it("ignores a thread list failure from a query the reader already replaced", async () => {
+    const user = userEvent.setup({ delay: null });
+    const first = deferred<void>();
+    let staleStarted = false;
+    vi.spyOn(api, "listThreads").mockImplementation(async ({ q }) => {
+      if (q === "stale") {
+        staleStarted = true;
+        await first.promise;
+        throw new Error("The replaced query failed.");
+      }
+      if (q === "fresh") {
+        return { threads: threadsPage.threads.map((thread) => ({ ...thread, id: "ms_fresh", subject: "Fresh thread" })) };
+      }
+      return threadsPage;
+    });
     await showSession();
     const search = screen.getByRole("searchbox", { name: "Search threads" });
     await user.type(search, "stale");
@@ -944,7 +975,8 @@ describe("Iris operator console", () => {
     await user.click(screen.getByRole("button", { name: "Search" }));
     expect(await screen.findByRole("button", { name: /Fresh thread/ })).toBeVisible();
     await act(async () => {
-      first.resolve(new HttpResponse(null, { status: 500 }));
+      first.resolve();
+      await first.promise;
     });
     expect(screen.queryByRole("alert")).toBeNull();
     expect(screen.getByRole("button", { name: /Fresh thread/ })).toBeVisible();

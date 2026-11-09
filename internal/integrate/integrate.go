@@ -294,7 +294,8 @@ func hookCmd(iris, client, event string) string {
 }
 
 func cmdQuote(s string) string {
-	if strings.ContainsAny(s, " \t\"") {
+	// A path containing '=' needs quotes even when it has no spaces.
+	if strings.ContainsAny(s, " \t\"=") {
 		return `"` + strings.ReplaceAll(s, `"`, `""`) + `"`
 	}
 	return s
