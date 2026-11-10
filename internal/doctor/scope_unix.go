@@ -30,7 +30,7 @@ func scopeLines(hints []hook.ScopeHint) []string {
 		case h.Due:
 			line = fmt.Sprintf("%s: the breaker suggests reduced scope until %s, because %s", h.Worktree, h.NextFull.Format(time.RFC3339), h.Reason)
 		case h.Reduced:
-			line = fmt.Sprintf("%s: the breaker tripped because %s, and its next shell command tries full scope again", h.Worktree, h.Reason)
+			line = fmt.Sprintf("%s: the breaker tripped because %s, and the next shell command tries full scope again", h.Worktree, h.Reason)
 		default:
 			line = h.Worktree + ": the breaker suggests full scope"
 		}

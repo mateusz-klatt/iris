@@ -177,8 +177,8 @@ Each change below was made by the pull request that implemented it.
   while its parent was not cancelled; the output cap was not passed; and at least half the
   budget was left when git started.
 - Less than half does not mean the budget was spent before git started. Earlier stages took most
-  of it, and git is then not the evidence. The half is a candidate, unmeasured like the
-  cooldowns.
+  of the budget, so this is not evidence that git was slow. The half-budget threshold is a
+  candidate, unmeasured like the cooldowns.
 - A reduced status past its budget never changes the breaker.
 - Git counts as running while the reconcile is at its status stage. The hook leaves that stage
   as soon as a full status returns successfully, before it writes the reset, so a write that
@@ -194,23 +194,24 @@ Each change below was made by the pull request that implemented it.
 - The set is every entry of mode 160000, at any stage, in `git ls-files --stage -z`, sorted and
   without repeats, at most 500. It is read as a stream within bounds. A malformed or oversized
   listing, a mode no index entry has, or a git that fails, gives no set, never an empty one.
-  Without `--sparse`, a sparse index is listed expanded. The tests read it in these states: a
-  gitlink staged but declared nowhere, a removed one, a nested one, a conflicted one, a linked
-  worktree's own index, a split index and a sparse one, with `.gitmodules` missing or wrong.
+  Without `--sparse`, a sparse index is listed in expanded form. The tests read it in these
+  states: a gitlink staged but declared nowhere, a removed one, a nested one, a conflicted one, a
+  linked worktree's own index, a split index and a sparse one, with `.gitmodules` missing or
+  wrong.
 - Before the set is read and after the status, the hook takes six values from one open index
   file: device, inode, size, modification and change time, and the last 32 bytes. A published
   index ends with a checksum of its content, so two generations with different content differ
   there even when the other five values are equal. Any difference, or a value that cannot be
   read, means no reduced snapshot.
-- Both commands run as the full status runs. Nothing is written in the git directory, and
-  `GIT_INDEX_FILE` is not set.
+- Both commands run in the same way as the full status. Nothing is written in the git directory,
+  and `GIT_INDEX_FILE` is not set.
 - The hook declines, and runs full scope as before, when `GIT_DIR`, `GIT_WORK_TREE`,
   `GIT_COMMON_DIR` or `GIT_INDEX_FILE` is set in its environment, when it does not know the git
   directory, or when the index file does not exist.
 - What it cannot tell: with `index.skipHash` the checksum is zeros, and only the five other
   values remain. Then a replacement that restores all five within one clock tick is not seen,
   and neither is an in-place rewrite within one tick that keeps the size. The known case is a
-  sequence `gpt-6.1-sol` reasoned from the source of Linux 6.6 and Git 2.53 and did not
+  sequence that `gpt-6.1-sol` inferred from the source of Linux 6.6 and Git 2.53 but did not
   reproduce. On ext4 with a 10 ms tick, a script publishes the index three times within one
   tick. The hook's first read and the listing fall between the first and second publications,
   and the third reuses the first one's freed inode at an equal size. Its cost would be one
@@ -219,25 +220,28 @@ Each change below was made by the pull request that implemented it.
   finds them. A filesystem whose inode numbers change gives a false difference, which only skips
   that snapshot.
 - This replaced a copy of the index linked into the git directory, which the plan had proposed.
-  The choice, and the risk that remains, are `claude-holzera-iris`'s, made on 2026-11-10.
+  The choice, made on 2026-11-10, and the remaining risk are `claude-holzera-iris`'s.
 
 **What a hook keeps of the capability** (the hook's side; adds to decision 3).
 - A hook keeps what each registration answer, or answer to the one-call form, says about the
-  capability, in a file per hub URL beside the session memory. An answer that does not name it
-  clears it.
+  capability, in a file per hub URL beside the session memory. An answer that does not name the
+  capability clears what the hook kept.
 - A hook whose breaker says reduced, but which does not know whether its hub takes a reduced
   snapshot, registers first and lets that answer decide the scope.
-- A scoped request that fails is never sent again on the plain route. `not_found`, a bare 404 and
-  `bad_request` also forget the capability. `lost` repairs the session's proof as a registration
-  does, and that snapshot is dropped.
+- A scoped request that fails is never sent again on the plain route. On `not_found`, a bare 404
+  or `bad_request`, the hook also forgets the capability. On `lost` it repairs the session's proof
+  as a registration does, and drops that snapshot.
 - A scoped request is sent once, as a plain reconcile is: the second copy that a hook sends of a
   slow hub call is never sent for either. A second copy of a snapshot would find nothing changed,
   and if it answered first the hook would lose the first copy's warning.
 
-**Measured on WSL** (adds to Verification). [The reduced scope record](../research/adr018-reduced-scope-wsl-2026-11-10.md)
-has the run that Verification asks for, on a synthetic fixture whose full status takes about 0.9 s.
-In reduced scope a command cost 19 ms of CPU against 614 ms before the hook's side, an edit of a
-held file was warned about, and no git process was alive 100 ms after any hook exited.
+**Measured on WSL** (adds to Verification). The
+[reduced scope record](../research/adr018-reduced-scope-wsl-2026-11-10.md) has a run of the
+measurement Verification asks for, on a synthetic fixture whose full status takes about 0.9 s.
+It does not establish that the fixture is sized like the production case, which is slow for
+another reason. In reduced scope a command cost 19 ms of CPU, against 614 ms on a binary without
+the hook's side. An edit of a held file was warned about, and no git process was alive 100 ms
+after any hook exited.
 
 **No reduced scope on Windows** (the hook's side; amends decisions 1 and 4).
 - On Windows a hook takes no reduced snapshot and keeps no breaker. Every reconcile there runs

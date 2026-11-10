@@ -29,7 +29,7 @@ func TestDoctorNamesEachWorktreesShellScope(t *testing.T) {
 	want := []string{
 		"/a: the breaker suggests full scope; last recorded full status that succeeded: 2026-11-10T11:00:00Z",
 		"/b: the breaker suggests reduced scope until 2026-11-10T12:01:00Z, because " + reason + "; last recorded full status that succeeded: none",
-		"/c: the breaker tripped because " + reason + ", and its next shell command tries full scope again; last recorded full status that succeeded: 2026-11-10T11:00:00Z",
+		"/c: the breaker tripped because " + reason + ", and the next shell command tries full scope again; last recorded full status that succeeded: 2026-11-10T11:00:00Z",
 		scopeLimits,
 	}
 	if !slices.Equal(got, want) {

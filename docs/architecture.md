@@ -549,17 +549,18 @@ apart from the full ones, which are all that an older hub reads, and this versio
 whenever it starts. The first reduced snapshot after a start therefore only sets a baseline.
 
 A worktree's breaker, a file beside the session memory, suggests the scope. It trips on four
-facts: a full status started with at least half the budget left, had not passed the output cap,
-and was still running when the reconcile's own deadline passed, the hook itself not cancelled.
-A git that has just exited while its output is still being read can trip it falsely. The breaker
-then suggests reduced scope for a minute, doubled after each full attempt that fails again, up to
-ten minutes, and a full status that succeeds resets it. Hooks running at once keep it only
-approximately. A hook takes the suggestion only when its hub said in an answer that it takes
-reduced snapshots, nothing in its environment points git at another repository or index, and the
-index exists. It sends the snapshot only when the index read before its gitlinks and after the
-status is one generation, by device, inode, size, both times and the checksum at its end, and
-never resends a failed scoped call on the plain route. `iris doctor` shows what each breaker
-suggests. Windows takes no reduced snapshot and keeps no breaker.
+facts: a full status started with at least half the budget left; it had not passed the output
+cap; it was still running when the reconcile's own deadline passed; and the hook itself had not
+been cancelled. A git that has just exited while its output is still being read can trip it
+falsely. The breaker then suggests reduced scope for a minute, doubled after each full attempt
+that fails again, up to ten minutes, and a full status that succeeds resets it. With hooks
+running at once, this schedule is only approximate. A hook takes the suggestion only when its hub
+said in an answer that it takes reduced snapshots, nothing in its environment points git at
+another repository or index, and the index exists. It sends the snapshot only when the index,
+read before the gitlink listing and again after the status, is one generation: the same device,
+inode, size, modification and change times, and checksum at its end. It never resends a failed
+scoped call on the plain route. `iris doctor` shows what each breaker suggests. Windows takes no
+reduced snapshot and keeps no breaker.
 
 `iris guard` is a pre-commit check, installed per repository on request. It refuses a commit
 of paths held by another Execution. It is the strongest check Iris has, and it is cooperative.
