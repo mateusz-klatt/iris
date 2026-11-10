@@ -59,6 +59,12 @@ artifact named `iris-image-<full commit>`. The artifact holds `iris-image.tar.gz
 save`, and `iris-image.txt`, which records the commit, the platform, the runner's image ID and the
 layer list. The image is linux/amd64, which is what the hub's machine runs.
 
+A pull request's run keeps an image too, for one day, as `iris-rehearsal-image-pr<number>-<head
+commit>`. It is built from the merge of the pull request's head into `main` and names that merge
+commit, which exists nowhere else. It is there to rehearse a change before it is merged, on a
+loopback address with a scratch database. It is never deployed: the procedure below takes only
+`iris-image-<commit>` from a run of a push to `main`.
+
 To deploy, in one shell on the hub's machine, from a checkout of that commit (for its
 `deploy/compose.yaml`):
 

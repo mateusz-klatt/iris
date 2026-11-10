@@ -276,8 +276,10 @@ jobs:
   deploy-image:
     # The public hub's machine compiles nothing, so CI builds what it runs. The image stamps the
     # source state it sees and a deploy takes it as the build of this commit, so it gets a job of
-    # its own: a checkout no other step has touched. A pull request runs all of this except the
-    # upload. docs/deploy.md has the procedure and says what it does not prove.
+    # its own: a checkout no other step has touched. Only a push to main keeps the image a deploy
+    # takes. A pull request keeps its image for a day under another name, so the change can be
+    # rehearsed before it is merged without compiling anywhere else. docs/deploy.md has the
+    # procedure and says what it does not prove.
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -313,6 +315,17 @@ jobs:
           compression-level: 0
           if-no-files-found: error
           retention-days: 7
+      # On a pull request the checkout is the merge of its head into main, so that is what this
+      # image holds and the commit it names. The name says rehearsal, and a deploy looks only
+      # for iris-image-<commit> in a run of a push.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: ${{ github.event_name == 'pull_request' }}
+        with:
+          name: iris-rehearsal-image-pr${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
+          path: deploy-image/
+          compression-level: 0
+          if-no-files-found: error
+          retention-days: 1
   check-all:
     # Lint, known vulnerabilities, secrets in history, and pinned actions. Run the same
     # locally with `make check-all`; each tool's version is pinned in the Makefile.
