@@ -181,8 +181,8 @@ Each change below was made by the pull request that implemented it.
   cooldowns.
 - A reduced status past its budget never changes the breaker.
 - Git counts as running while the reconcile is at its status stage. The hook leaves that stage
-  as soon as a full status returns, before it writes the reset, so a write that stalls past the
-  deadline is not taken for slow git.
+  as soon as a full status returns successfully, before it writes the reset, so a write that
+  stalls past the deadline is not taken for slow git.
 - The trip is written before the hook returns, because the process exits right after it. A
   write that stalls past the hook's own deadline loses the trip, and the output stays valid.
 - What it cannot tell: a git that exited just before the deadline, while its output was still
@@ -230,6 +230,9 @@ Each change below was made by the pull request that implemented it.
 - A scoped request that fails is never sent again on the plain route. `not_found`, a bare 404 and
   `bad_request` also forget the capability. `lost` repairs the session's proof as a registration
   does, and that snapshot is dropped.
+- A scoped request is sent once, as a plain reconcile is: the second copy that a hook sends of a
+  slow hub call is never sent for either. A second copy of a snapshot would find nothing changed,
+  and if it answered first the hook would lose the first copy's warning.
 
 **No reduced scope on Windows** (the hook's side; amends decisions 1 and 4).
 - On Windows a hook takes no reduced snapshot and keeps no breaker. Every reconcile there runs

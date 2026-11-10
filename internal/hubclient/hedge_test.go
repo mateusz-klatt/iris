@@ -157,31 +157,47 @@ type closeNotice struct {
 
 func (c closeNotice) Close() error { close(c.closed); return nil }
 
-// Neither reconcile route is repeated, full or reduced: a second copy of a snapshot would find
-// nothing changed, and answering first it would cost the hook the first copy's warning.
+// No reconcile is sent twice, full or reduced, in either form, whatever path the hub URL puts
+// before the routes: a second copy of a snapshot would find nothing changed, and answering first
+// it would cost the hook the first copy's warning. That holds for a slow first answer, and for a
+// failure after the request was sent, when the hub may have stored the first copy already.
 func TestReconcileIsNeverRepeated(t *testing.T) {
-	for _, path := range []string{reconcilePath, scopedPath} {
-		var backups atomic.Int32
-		res, err := hedged(t,
-			func(*http.Request) (*http.Response, error) {
-				time.Sleep(40 * time.Millisecond)
-				return answer("first"), nil
-			},
-			func(*http.Request) (*http.Response, error) { backups.Add(1); return answer("second"), nil },
-			path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got := read(t, res); got != "first" || backups.Load() != 0 {
-			t.Fatal(path, got, backups.Load())
-		}
-		// A copy the hub may have stored already is not sent again after a failure either.
-		lost := errors.New("connection reset after the request was sent")
-		if _, err = hedged(t,
-			func(*http.Request) (*http.Response, error) { return nil, lost },
-			func(*http.Request) (*http.Response, error) { backups.Add(1); return answer("second"), nil },
-			path); !errors.Is(err, lost) || backups.Load() != 0 {
-			t.Fatal(path, err, backups.Load())
+	calls := map[string]func(*Client) error{
+		"reconcile": func(c *Client) error {
+			_, err := c.Reconcile(context.Background(), ReconcileRequest{})
+			return err
+		},
+		"one call": func(c *Client) error {
+			_, err := c.ReconcileSession(context.Background(), ShellSessionRequest{})
+			return err
+		},
+		"scoped": func(c *Client) error {
+			_, err := c.ReconcileScoped(context.Background(), ScopedRequest{})
+			return err
+		},
+		"scoped one call": func(c *Client) error {
+			_, err := c.ReconcileScopedSession(context.Background(), ScopedSessionRequest{})
+			return err
+		},
+	}
+	lost := errors.New("connection reset after the request was sent")
+	for _, base := range []string{"http://127.0.0.1:7878", "https://hub.example/iris"} {
+		for name, call := range calls {
+			for _, fails := range []bool{false, true} {
+				var backups atomic.Int32
+				primary := func(*http.Request) (*http.Response, error) {
+					if fails {
+						return nil, lost
+					}
+					time.Sleep(40 * time.Millisecond)
+					return answer("{}"), nil
+				}
+				backup := func(*http.Request) (*http.Response, error) { backups.Add(1); return answer("{}"), nil }
+				c := &Client{Config: staticConfig{url: base}, HTTP: &http.Client{Transport: hedge{primary: tripFunc(primary), backup: tripFunc(backup), delay: 10 * time.Millisecond}}}
+				if err := call(c); fails && !errors.Is(err, lost) || !fails && err != nil || backups.Load() != 0 {
+					t.Fatalf("%s, %s, failing %t: %v with %d copies", base, name, fails, err, backups.Load())
+				}
+			}
 		}
 	}
 }

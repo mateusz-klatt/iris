@@ -12,13 +12,14 @@ import (
 // above a normal round trip, so a healthy path never pays for a second one.
 const hedgeDelay = 300 * time.Millisecond
 
-// reconcilePath and scopedPath are not repeated. Each compares a snapshot with the last one and
-// stores it, so a second copy finds nothing changed: if it answered first, the hook would lose the
-// first copy's warning. They have their own short deadline instead.
-const (
-	reconcilePath = "/v1/shell/reconcile"
-	scopedPath    = "/v1/shell/scoped"
-)
+// sentOnce marks a request the hedge must not repeat, whatever path the hub URL puts before its
+// route. A reconcile, full or reduced, compares a snapshot with the last one and stores it, so a
+// second copy finds nothing changed: if it answered first, the hook would lose the first copy's
+// warning. A reconcile has its own short deadline instead.
+type sentOnce struct{}
+
+// once marks ctx's request as one to send a single time.
+func once(ctx context.Context) context.Context { return context.WithValue(ctx, sentOnce{}, true) }
 
 // HedgedClient is for hooks. A hook is a new process, so every call starts with DNS,
 // TCP and TLS, and a lost packet on any of them outlasts the hook's 1.5 s deadline.
@@ -51,7 +52,7 @@ type hedgeResult struct {
 }
 
 func (h hedge) RoundTrip(req *http.Request) (*http.Response, error) {
-	if req.URL.Path == reconcilePath || req.URL.Path == scopedPath {
+	if req.Context().Value(sentOnce{}) != nil {
 		return h.primary.RoundTrip(req)
 	}
 	if req.Body != nil {

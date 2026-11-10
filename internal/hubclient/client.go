@@ -318,9 +318,15 @@ type ReconcileRequest struct {
 	Status      map[string]string `json:"status"`
 }
 
+// The two reconcile routes. A request to either is sent once; see sentOnce.
+const (
+	reconcilePath = "/v1/shell/reconcile"
+	scopedPath    = "/v1/shell/scoped"
+)
+
 func (c *Client) Reconcile(ctx context.Context, req ReconcileRequest) (CheckResponse, error) {
 	var out CheckResponse
-	err := c.post(ctx, reconcilePath, req, &out)
+	err := c.post(once(ctx), reconcilePath, req, &out)
 	return out, err
 }
 
@@ -346,7 +352,7 @@ type ShellResponse struct {
 
 func (c *Client) ReconcileSession(ctx context.Context, req ShellSessionRequest) (ShellResponse, error) {
 	var out ShellResponse
-	err := c.post(ctx, reconcilePath, req, &out)
+	err := c.post(once(ctx), reconcilePath, req, &out)
 	return out, err
 }
 
@@ -381,14 +387,14 @@ type ScopedSessionRequest struct {
 // not_found, so it never reads the snapshot as a full one.
 func (c *Client) ReconcileScoped(ctx context.Context, req ScopedRequest) (CheckResponse, error) {
 	var out CheckResponse
-	err := c.post(ctx, scopedPath, req, &out)
+	err := c.post(once(ctx), scopedPath, req, &out)
 	return out, err
 }
 
 // ReconcileScopedSession is ReconcileScoped in the one-call form.
 func (c *Client) ReconcileScopedSession(ctx context.Context, req ScopedSessionRequest) (ShellResponse, error) {
 	var out ShellResponse
-	err := c.post(ctx, scopedPath, req, &out)
+	err := c.post(once(ctx), scopedPath, req, &out)
 	return out, err
 }
 
