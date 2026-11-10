@@ -545,8 +545,18 @@ included. Any other baseline is replaced and nothing is attributed. In reduced s
 submodule path that the status does not report is unknown, not clean. Nothing is released or
 renewed for it, and an automatic claim there keeps its expiry. Reduced baselines are stored
 apart from the full ones, which are all that an older hub reads, and this version clears them
-whenever it starts. The first reduced snapshot after a start therefore only sets a baseline. No
-hook sends a reduced snapshot yet.
+whenever it starts. The first reduced snapshot after a start therefore only sets a baseline.
+
+A hook runs reduced scope only while its worktree's breaker says so. The breaker is a file beside
+the session memory. It trips when a full status that started with at least half the budget
+left, and had not passed the output cap, is still running at the reconcile's own deadline. The
+worktree then runs reduced for a minute, doubled after each full attempt that fails again, up to
+ten minutes, and a full status that finishes returns it to full. Hooks running at once keep it
+only approximately. A hook sends a reduced snapshot only when the index read before its gitlinks
+and after the status is one generation, by device, inode, size, both times and the checksum at
+its end. It sends one only to a hub that said in an answer that it takes them, and a failed
+scoped call is never resent on the plain route. `iris doctor` shows each worktree's scope.
+Windows takes no reduced snapshot and keeps no breaker.
 
 `iris guard` is a pre-commit check, installed per repository on request. It refuses a commit
 of paths held by another Execution. It is the strongest check Iris has, and it is cooperative.

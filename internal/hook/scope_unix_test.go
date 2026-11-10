@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"reflect"
 	"slices"
 	"strings"
 	"sync"
@@ -736,6 +737,37 @@ func TestABreakerBelongsToTheWorktreeNotThePath(t *testing.T) {
 	g.run(g.slowGit(tripBudget), tripBudget)
 	if b, ok := g.m.Breaker(g.repo.Worktree); !ok || b.Scope != scopeReduced {
 		t.Fatalf("a worktree without an identity: %+v", b)
+	}
+}
+
+// Doctor's hints are the breakers hooks keep, sorted by worktree and read as a hook reads them:
+// a file a hook would ignore is left out, a reduced worktree is never shown as full, and one is
+// due only while a hook there would run reduced (ADR 018 decision 6).
+func TestScopeHintsAreWhatTheNextHookActsOn(t *testing.T) {
+	token := filepath.Join(t.TempDir(), "hub.token")
+	if hints := ScopeHints(token, time.Now()); hints != nil {
+		t.Fatalf("before any memory: %v", hints)
+	}
+	m := fileMemory{dir: filepath.Join(filepath.Dir(token), "sessions"), now: time.Now, restrict: func(string) error { return nil }}
+	now := time.Date(2026, 11, 10, 12, 0, 0, 0, time.UTC)
+	at := func(d time.Duration) time.Time { return time.UnixMilli(now.Add(d).UnixMilli()).UTC() }
+	const reason = "a full git status passed its 300ms budget"
+	m.SetBreaker("b", breaker{V: 1, Worktree: "/b", Scope: scopeReduced, Reason: reason, NextFullMS: at(time.Minute).UnixMilli(), CooldownMS: 60000, LastFullOKMS: at(-time.Hour).UnixMilli()})
+	m.SetBreaker("a", breaker{V: 1, Worktree: "/a", Scope: scopeFull, LastFullOKMS: at(-time.Minute).UnixMilli()})
+	m.SetBreaker("c", breaker{V: 1, Worktree: "/c", Scope: scopeReduced, Reason: reason, NextFullMS: at(-time.Second).UnixMilli()})
+	m.SetBreaker("d", breaker{V: 1, Worktree: "/d", Scope: scopeReduced, Reason: reason, NextFullMS: at(breakerCap + time.Second).UnixMilli()})
+	if err := os.WriteFile(filepath.Join(m.dir, "breaker-cut"), []byte(`{"v":1,"scope":"redu`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	m.Remember("claude", "s", 3)
+	want := []ScopeHint{
+		{Worktree: "/a", LastFullOK: at(-time.Minute)},
+		{Worktree: "/b", Reduced: true, Due: true, Reason: reason, NextFull: at(time.Minute), LastFullOK: at(-time.Hour)},
+		{Worktree: "/c", Reduced: true, Reason: reason, NextFull: at(-time.Second)},
+		{Worktree: "/d", Reduced: true, Reason: reason, NextFull: at(breakerCap + time.Second)},
+	}
+	if got := ScopeHints(token, now); !reflect.DeepEqual(got, want) {
+		t.Fatalf("hints\n%+v\nwant\n%+v", got, want)
 	}
 }
 

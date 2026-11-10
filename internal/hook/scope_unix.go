@@ -10,6 +10,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/mateusz-klatt/iris/internal/gitinfo"
@@ -82,12 +84,66 @@ func (m fileMemory) SetCapable(hub string, capable bool) {
 // Breaker reads a worktree's breaker. A file that is missing, unreadable or not this version's
 // is no breaker: the worktree runs full, as before.
 func (m fileMemory) Breaker(worktree string) (breaker, bool) {
-	raw, err := os.ReadFile(m.breakerFile(worktree))
+	return readBreaker(m.breakerFile(worktree))
+}
+
+func readBreaker(path string) (breaker, bool) {
+	raw, err := os.ReadFile(path)
 	var b breaker
 	if err != nil || json.Unmarshal(raw, &b) != nil || b.V != 1 || (b.Scope != scopeFull && b.Scope != scopeReduced) {
 		return breaker{}, false
 	}
 	return b, true
+}
+
+// reducedAt is whether a hook starting at now runs reduced by this breaker: it says reduced and
+// its cooldown has not passed. A next attempt more than breakerCap away can only come from a
+// clock that moved, and is not trusted.
+func (b breaker) reducedAt(now time.Time) bool {
+	ms := now.UnixMilli()
+	return b.Scope == scopeReduced && ms < b.NextFullMS && b.NextFullMS <= ms+breakerCap.Milliseconds()
+}
+
+// ScopeHint is one worktree's breaker, as doctor reports it (ADR 018 decision 6).
+type ScopeHint struct {
+	Worktree string
+	// Reduced says the breaker tripped and no full status has finished since. While Due, a
+	// hook there runs reduced scope; once the cooldown is over, the next one tries full.
+	Reduced, Due bool
+	Reason       string
+	// NextFull is when a reduced worktree's next hook tries full again; zero when it is full.
+	NextFull time.Time
+	// LastFullOK is when a full status last finished there after a trip; zero when none did.
+	LastFullOK time.Time
+}
+
+// ScopeHints reads every worktree's breaker in the session memory beside the token file at
+// tokenPath, sorted by worktree. A file a hook would not read is left out, so the hints are
+// what the next hook in each worktree acts on, apart from what only that hook sees: its
+// environment and whether the index is there.
+func ScopeHints(tokenPath string, now time.Time) []ScopeHint {
+	dir := filepath.Join(filepath.Dir(tokenPath), "sessions")
+	entries, _ := os.ReadDir(dir) // a missing directory has no breakers
+	var hints []ScopeHint
+	for _, e := range entries {
+		if !strings.HasPrefix(e.Name(), "breaker-") {
+			continue
+		}
+		b, ok := readBreaker(filepath.Join(dir, e.Name()))
+		if !ok {
+			continue
+		}
+		hint := ScopeHint{Worktree: b.Worktree, Reduced: b.Scope == scopeReduced, Due: b.reducedAt(now), Reason: b.Reason}
+		if hint.Reduced {
+			hint.NextFull = time.UnixMilli(b.NextFullMS).UTC()
+		}
+		if b.LastFullOKMS > 0 {
+			hint.LastFullOK = time.UnixMilli(b.LastFullOKMS).UTC()
+		}
+		hints = append(hints, hint)
+	}
+	sort.Slice(hints, func(i, j int) bool { return hints[i].Worktree < hints[j].Worktree })
+	return hints
 }
 
 // SetBreaker replaces the breaker whole, through a temporary file and a rename, never in place.
@@ -153,8 +209,7 @@ func (r Runner) gitOverride() bool {
 }
 
 // reducedDue is whether this reconcile runs reduced: nothing overrides git's repository, the
-// index exists, and the worktree's breaker says reduced and its cooldown has not passed. A next
-// attempt more than breakerCap away can only come from a clock that moved, and is not trusted.
+// index exists, and the worktree's breaker says reduced at this moment.
 func (r Runner) reducedDue(repo gitinfo.Repo) bool {
 	m, ok := r.scopeMemory()
 	if !ok || r.gitOverride() || repo.GitDir == "" {
@@ -166,8 +221,7 @@ func (r Runner) reducedDue(repo gitinfo.Repo) bool {
 		return false
 	}
 	b, ok := m.Breaker(worktreeKey(repo))
-	now := r.now().UnixMilli()
-	return ok && b.Scope == scopeReduced && now < b.NextFullMS && b.NextFullMS <= now+breakerCap.Milliseconds()
+	return ok && b.reducedAt(r.now())
 }
 
 // fullSucceeded returns a reduced worktree to full scope once a full status has finished.

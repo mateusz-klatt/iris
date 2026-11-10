@@ -84,6 +84,9 @@ type Result struct {
 	// as modified, which keeps the shell reconcile past its budget. Empty means nothing to warn
 	// about, or nothing known.
 	LineEndings string
+	// Scope is the shell scope of each worktree whose breaker tripped, followed by what reduced
+	// scope cannot do (ADR 018). Empty where none tripped, and always on Windows.
+	Scope []string
 	// tokenFile is where the hook logs beside the token are, for a Bundle. Never shown.
 	tokenFile string
 }
@@ -172,6 +175,7 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 	}
 	res.Guard = guardLine(ctx, opt.Dir)
 	res.LineEndings = lineEndingsLine(ctx, opt.Dir)
+	res.Scope = scopeReport(tokenFile, opt.Now())
 	if probe.up && probe.tokenOK {
 		res.Case = caseLine(ctx, hubURL, token, opt.host(), opt.Dir, opt.HTTP)
 		seen := lastHooks(ctx, hubURL, token, opt.host(), opt.HTTP)
@@ -268,6 +272,9 @@ func (r Result) Format() string {
 	}
 	if r.LineEndings != "" {
 		fmt.Fprintf(&b, "line endings: %s\n", r.LineEndings)
+	}
+	for _, line := range r.Scope {
+		fmt.Fprintf(&b, "shell scope: %s\n", line)
 	}
 	if r.Stored {
 		b.WriteString("stored: yes\n")
