@@ -72,7 +72,7 @@ func payloadShape(payload []byte) *PayloadShape {
 // command still ran; only that one reconciliation was skipped. Any other failure shows the
 // hook itself is broken.
 func (f Failure) Degraded() bool {
-	return strings.HasPrefix(f.Stage, "shell ") && f.Error == shellOverBudget
+	return strings.HasPrefix(f.Stage, "shell ") && (f.Error == shellOverBudget || f.Error == shellScopeUnknown)
 }
 
 // stageObserved marks an entry that is not a failure: something doctor should report, such
@@ -105,7 +105,7 @@ var hubCodes = []string{"unauthorized", "bad_request", "not_found", "conflict", 
 // fixedFailures are the failure texts that carry no variable part.
 var fixedFailures = []string{
 	string(failPanic), string(failPanicShell), string(failUnknownClient), string(failNoHub),
-	string(failNoPaths), string(failBadTouch), shellOverBudget, errNoSession.Error(),
+	string(failNoPaths), string(failBadTouch), shellOverBudget, shellScopeUnknown, errNoSession.Error(),
 	"hook deadline exceeded", "hook operation canceled", "incomplete hook input or hub response",
 	"hub request failed", failHubRedirect, failHubTooLarge, failHubNoExecution, failHubNoAction,
 }
@@ -124,7 +124,7 @@ const (
 // stages are the stages a run records a failure or an observation at.
 var stages = []string{
 	"client", "decode", "repository", "hub", "session", "end", "paths", "touch",
-	"shell repository", "shell status", "shell session", "shell reconcile", stageObserved,
+	"shell repository", "shell scope", "shell status", "shell session", "shell reconcile", stageObserved,
 }
 
 // FailureCategory maps a logged failure's text onto a fixed set of categories, with

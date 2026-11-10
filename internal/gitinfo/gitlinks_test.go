@@ -81,6 +81,13 @@ func TestTheSetIsUnknownWhenTheListingIsNotWhole(t *testing.T) {
 	}
 }
 
+// A git that fails gives no set: outside a repository, ls-files exits with an error.
+func TestAFailingGitGivesNoSet(t *testing.T) {
+	if got, err := Gitlinks(context.Background(), t.TempDir()); err == nil {
+		t.Fatalf("outside a repository: %v", got)
+	}
+}
+
 func gitlinks(t *testing.T, root string) []string {
 	t.Helper()
 	got, err := Gitlinks(context.Background(), root)

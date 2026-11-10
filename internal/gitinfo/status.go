@@ -37,14 +37,18 @@ func (a *Attempt) Allowance() time.Duration { return time.Duration(a.allowance.L
 // Capped is whether git's output passed statusLimit.
 func (a *Attempt) Capped() bool { return a.capped.Load() }
 
-// start records a started git. The allowance is stored first, so a reader that sees Started
-// also sees it.
-func (a *Attempt) start(ctx context.Context) {
+// Begin records that git started at the given time under ctx; the allowance is what was left of
+// ctx's deadline then. It is stored first, so a reader that sees Started also sees it. A
+// stand-in for git calls it as git would.
+func (a *Attempt) Begin(ctx context.Context, at time.Time) {
 	if deadline, ok := ctx.Deadline(); ok {
-		a.allowance.Store(int64(time.Until(deadline)))
+		a.allowance.Store(int64(deadline.Sub(at)))
 	}
 	a.started.Store(true)
 }
+
+// Cap records that git's output passed statusLimit.
+func (a *Attempt) Cap() { a.capped.Store(true) }
 
 // Status reads NUL-delimited porcelain in full scope, preserving spaces, newlines and both
 // rename ends.
@@ -69,7 +73,7 @@ func StatusScope(ctx context.Context, root string, scope Scope, a *Attempt) (map
 	if err := cmd.Start(); err != nil {
 		return nil, err
 	}
-	a.start(ctx)
+	a.Begin(ctx, time.Now())
 	if err := cmd.Wait(); err != nil {
 		return nil, err
 	}
@@ -91,7 +95,7 @@ type limitedStatus struct {
 
 func (b *limitedStatus) Write(p []byte) (int, error) {
 	if b.kept.Len()+len(p) > statusLimit {
-		b.attempt.capped.Store(true)
+		b.attempt.Cap()
 		return 0, errors.New("git status exceeds reconciliation limit")
 	}
 	return b.kept.Write(p)

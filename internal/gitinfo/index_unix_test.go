@@ -27,9 +27,6 @@ func readID(t *testing.T, path string) IndexID {
 // gives another, and so does rewriting it in place at the same size, through its last 32
 // bytes, where a published index keeps its checksum (ADR 018).
 func TestAnIndexIDNamesOneGeneration(t *testing.T) {
-	if !ReducedSupported {
-		t.Fatal("reduced scope is off on a system that can identify the index")
-	}
 	dir := t.TempDir()
 	p := filepath.Join(dir, "index")
 	writeFile(t, p, strings.Repeat("a", 68)+strings.Repeat("c", 32))

@@ -212,7 +212,9 @@ func TestClaimPathsKeepsARenameOnlyWhenBothEndsAreInside(t *testing.T) {
 func shellRunner(hub Hub, root string) (Runner, Event) {
 	// A context deadline cannot be one that never fires, so these tests give the shell budget
 	// an hour, past the test binary's own timeout. The budget has its own test.
-	return Runner{Hub: hub, Status: func(context.Context, string) (map[string]string, error) { return map[string]string{}, nil }, ShellDeadline: time.Hour},
+	return Runner{Hub: hub, Status: func(context.Context, string, gitinfo.Scope, *gitinfo.Attempt) (map[string]string, error) {
+			return map[string]string{}, nil
+		}, ShellDeadline: time.Hour},
 		Event{Client: ClientClaude, Kind: KindPreTool, SessionID: "s", CWD: root, ToolClass: ClassShell}
 }
 
@@ -243,7 +245,9 @@ func TestReconcileFailsOpen(t *testing.T) {
 	})
 	t.Run("status", func(t *testing.T) {
 		r, ev := shellRunner(scriptHub{}, root)
-		r.Status = func(context.Context, string) (map[string]string, error) { return nil, errors.New("git") }
+		r.Status = func(context.Context, string, gitinfo.Scope, *gitinfo.Attempt) (map[string]string, error) {
+			return nil, errors.New("git")
+		}
 		if !isAllow(r.reconcile(ctx, ev, &runState{})) {
 			t.Fatal("not an allow")
 		}

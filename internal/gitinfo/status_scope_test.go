@@ -105,4 +105,11 @@ func TestAnAttemptRecordsItsStartAndAllowance(t *testing.T) {
 	if _, err := StatusScope(expired, root, FullScope, late); err == nil || late.Started() {
 		t.Fatalf("an ended context started git: %v", err)
 	}
+	// The allowance is measured from the moment git started, not from when it is read.
+	deadline, _ := ctx.Deadline()
+	exact := &Attempt{}
+	exact.Begin(ctx, deadline.Add(-3*time.Second))
+	if exact.Allowance() != 3*time.Second {
+		t.Fatalf("allowance %v", exact.Allowance())
+	}
 }

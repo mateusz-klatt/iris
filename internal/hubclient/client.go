@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 )
 
@@ -46,6 +47,8 @@ type SessionResponse struct {
 	Claims       []Claim   `json:"claims"`
 	Unread       int       `json:"unread"`
 	Attention    Attention `json:"attention"`
+	// Capabilities names what the hub accepts beyond version one; see ShellScopeCapable.
+	Capabilities []string `json:"capabilities"`
 }
 
 // Attention is what the session has not been told yet: unacknowledged deliveries and paths
@@ -335,14 +338,57 @@ type ShellSessionRequest struct {
 type ShellResponse struct {
 	CheckResponse
 	Session struct {
-		ExecutionID string `json:"execution_id"`
-		Generation  int    `json:"generation"`
+		ExecutionID  string   `json:"execution_id"`
+		Generation   int      `json:"generation"`
+		Capabilities []string `json:"capabilities"`
 	} `json:"session"`
 }
 
 func (c *Client) ReconcileSession(ctx context.Context, req ShellSessionRequest) (ShellResponse, error) {
 	var out ShellResponse
 	err := c.post(ctx, "/v1/shell/reconcile", req, &out)
+	return out, err
+}
+
+// ShellScopeCapable is whether a registration answer names shell_scope: that hub takes reduced
+// snapshots on POST /v1/shell/scoped (ADR 018).
+func ShellScopeCapable(capabilities []string) bool {
+	return slices.Contains(capabilities, "shell_scope")
+}
+
+// Scope is what a reduced snapshot did not look into: its status ran with
+// --ignore-submodules=dirty, and Submodules are the gitlink paths of the index it read, in byte
+// order. The hub takes at most 500, and refuses a request past its body limit as too_large, so a
+// worktree with very many long submodule paths gets no reduced snapshot.
+type Scope struct {
+	Mode       string   `json:"mode"`
+	Submodules []string `json:"submodules"`
+}
+
+// ScopedRequest is a reduced snapshot for an Execution.
+type ScopedRequest struct {
+	ReconcileRequest
+	Scope Scope `json:"scope"`
+}
+
+// ScopedSessionRequest is a reduced snapshot that names its session, as ShellSessionRequest does.
+type ScopedSessionRequest struct {
+	ShellSessionRequest
+	Scope Scope `json:"scope"`
+}
+
+// ReconcileScoped sends a reduced snapshot for an Execution. A hub from before the route answers
+// not_found, so it never reads the snapshot as a full one.
+func (c *Client) ReconcileScoped(ctx context.Context, req ScopedRequest) (CheckResponse, error) {
+	var out CheckResponse
+	err := c.post(ctx, "/v1/shell/scoped", req, &out)
+	return out, err
+}
+
+// ReconcileScopedSession is ReconcileScoped in the one-call form.
+func (c *Client) ReconcileScopedSession(ctx context.Context, req ScopedSessionRequest) (ShellResponse, error) {
+	var out ShellResponse
+	err := c.post(ctx, "/v1/shell/scoped", req, &out)
 	return out, err
 }
 
