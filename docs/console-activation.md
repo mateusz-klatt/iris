@@ -126,12 +126,17 @@ section does not expect.
 `iris serve` loads an existing independent console key from
 `<database>.console.key`. For `--db /data/iris.db`, the default is
 `/data/iris.db.console.key`. `--console-key-file /private/console.key` selects
-another hub-local path. Key files require mode 0600 on Unix or the owner-only
-Windows DACL. Keep this key separate from the owner bearer and source-system keys.
+another hub-local path. At every start the hub sets the key file to mode 0600 on
+Unix, or to the owner-only Windows DACL, as it does for the owner token: a key with
+wider permissions is tightened and loaded, not refused, and Iris cannot tell
+whether it was read while they were wider. Keep this key separate from the owner
+bearer and source-system keys.
 
-A missing, unreadable or malformed key, reuse of owner-token material, or absence
-of an enabled operator leaves browser authentication closed. Startup never creates
-the key. Agent coordination, authenticated `PUT /v1/ui/doctor`, and owner account
+A missing, unreadable or malformed key, a key file that is not a regular file or
+cannot be protected (on Unix, one owned by another user), reuse of owner-token
+material, or absence of an enabled operator leaves browser authentication closed.
+Startup never creates the key. Agent coordination, authenticated
+`PUT /v1/ui/doctor`, and owner account
 create/reset/import remain available. A closed browser namespace reports
 `X-Iris-Console-Mode: closed`; the frontend reports that the console is unavailable
 and asks the user to contact the owner. An untrusted browser transport can also
