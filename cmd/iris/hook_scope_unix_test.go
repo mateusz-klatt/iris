@@ -14,7 +14,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"syscall"
 	"testing"
 	"time"
 
@@ -32,6 +31,30 @@ case " $* " in
 esac
 exec "$IRIS_REAL_GIT" "$@"
 `
+
+// gitRunning waits up to limit for pid to be gone, and gives its ps state if it is still running
+// then. A zombie has stopped and only its parent's wait is outstanding, so it counts as gone. ps
+// says a pid is gone by exiting with status 1 and no output. Any other error, or empty output
+// without that exit status, fails the test because the process state is unknown.
+func gitRunning(t *testing.T, pid int, limit time.Duration) string {
+	t.Helper()
+	for deadline := time.Now().Add(limit); ; time.Sleep(10 * time.Millisecond) {
+		out, err := exec.Command("ps", "-o", "stat=", "-p", strconv.Itoa(pid)).Output()
+		state := strings.TrimSpace(string(out))
+		var exited *exec.ExitError
+		switch {
+		case errors.As(err, &exited) && exited.ExitCode() == 1 && state == "" && len(exited.Stderr) == 0:
+			return ""
+		case err != nil || state == "":
+			t.Fatalf("ps could not say whether %d runs: %v %q", pid, err, state)
+		case strings.HasPrefix(state, "Z"):
+			return ""
+		}
+		if time.Now().After(deadline) {
+			return state
+		}
+	}
+}
 
 // A real `iris hook` whose full git status cannot finish in its budget exits on time with valid
 // output and leaves no git running, and the trip it wrote outlives it: the next hook process
@@ -143,8 +166,11 @@ func TestAHookThatTripsLeavesTheNextOneReduced(t *testing.T) {
 	if err != nil {
 		t.Fatalf("pids %q", raw)
 	}
-	if err = syscall.Kill(pid, 0); !errors.Is(err, syscall.ESRCH) {
-		t.Fatalf("the killed git %d is still there: %v", pid, err)
+	// The hook sends the kill before it returns, but it does not wait for git to exit, and a
+	// killed git is a zombie until its new parent reaps it. So this waits, within a bound, and
+	// counts a zombie as gone; a git still running then is one the hook left behind.
+	if state := gitRunning(t, pid, 5*time.Second); state != "" {
+		t.Fatalf("the killed git %d is still running: %s", pid, state)
 	}
 	breakers, _ := filepath.Glob(filepath.Join(filepath.Dir(token), "sessions", "breaker-*"))
 	if len(breakers) != 1 {

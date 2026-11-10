@@ -31,7 +31,7 @@ func Gitlinks(ctx context.Context, root string) ([]string, error) {
 	cmd := gitCommand(ctx, root, "--no-optional-locks", "ls-files", "--stage", "-z")
 	var listing gitlinkListing
 	cmd.Stdout = &listing
-	if err := cmd.Run(); err != nil {
+	if err := run(ctx, cmd); err != nil {
 		return nil, err
 	}
 	return listing.paths()

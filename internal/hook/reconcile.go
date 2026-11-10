@@ -77,6 +77,7 @@ func (r Runner) reconcile(ctx context.Context, ev Event, state *runState) Output
 	parent, budget, run := ctx, r.shellLimit(), &shellRun{}
 	ctx, cancel := context.WithTimeout(ctx, budget)
 	defer cancel()
+	ctx, git := gitinfo.WithStopper(ctx)
 	// settle records only the first outcome. When the budget runs out, the git status or hub
 	// call it interrupts fails too, and that failure is the budget's, not a broken hook's:
 	// otherwise it could land first or overwrite the budget's entry, and doctor would call a
@@ -152,6 +153,11 @@ func (r Runner) reconcile(ctx context.Context, ev Event, state *runState) Output
 	select {
 	case out = <-done:
 	case <-ctx.Done():
+		// The kill is sent from here before this shell path returns: left to os/exec's own
+		// goroutine, it could come too late, and git would go on after the hook (ADR 018). This
+		// return path does not wait for git to exit, so the hook keeps its deadline unless a start
+		// stalls.
+		git.Stop()
 		out = settle(hookFailure(shellOverBudget), allow)
 	}
 	r.tripIfSlow(parent, ctx, budget, state, run)
