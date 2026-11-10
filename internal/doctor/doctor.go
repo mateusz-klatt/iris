@@ -411,7 +411,9 @@ const slowLimit = 10
 // file. A failure that shows the hook is broken makes the client silent: that hook did not
 // protect the turn. A shell reconcile that only ran past its budget is degraded: the row
 // keeps its status with a note, unless there were more than slowLimit of them, which makes it
-// slow. An entry proves that a hook ran, so it counts even when doctor found no configuration.
+// slow. A session-file operation a hook skipped leaves the hook's allow or deny unchanged, so the
+// row keeps its status and says how many were skipped and what that may delay (ADR 017). An entry
+// proves that a hook ran, so it counts even when doctor found no configuration.
 func applyFailures(res *Result, tokenFile string, now time.Time) error {
 	if strings.TrimSpace(tokenFile) == "" {
 		return nil
@@ -427,6 +429,7 @@ func applyFailures(res *Result, tokenFile string, now time.Time) error {
 	entries = append(entries, seen...)
 	broken := map[string][]hook.Failure{}
 	degraded := map[string]int{}
+	skipped := map[string]int{}
 	observed := map[string]map[string]int{}
 	for _, entry := range entries {
 		name := integrate.Canonical(entry.Client)
@@ -435,6 +438,10 @@ func applyFailures(res *Result, tokenFile string, now time.Time) error {
 		}
 		if entry.Degraded() {
 			degraded[name]++
+			continue
+		}
+		if entry.Skipped() {
+			skipped[name]++
 			continue
 		}
 		if entry.Observed() {
@@ -462,6 +469,9 @@ func applyFailures(res *Result, tokenFile string, now time.Time) error {
 			row.Detail = fmt.Sprintf("%d shell reconciliations ran past their budget (%s, or %s for a hub on this machine) in 24 h, so those commands' changes went unclaimed; git status or the hub is slow here, as on a big or cold worktree, a loaded machine or a slow network", n, hook.RemoteReconcileDeadline, hook.ReconcileDeadline)
 		case n > 0:
 			row.Detail = joinDetail(row.Detail, fmt.Sprintf("degraded: %d shell reconciliation(s) ran past their budget in 24 h", n))
+		}
+		if k := skipped[row.Client]; k > 0 {
+			row.Detail = joinDetail(row.Detail, fmt.Sprintf("skipped in 24 h: %d session-file operation(s), which may delay an attention note, a wake's consumption or the cleanup of session files; the hooks' allow or deny was unaffected", k))
 		}
 		if seen := observed[row.Client]; len(seen) > 0 {
 			row.Detail = joinDetail(row.Detail, "observed in 24 h: "+observedText(seen))

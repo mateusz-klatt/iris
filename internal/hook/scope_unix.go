@@ -78,7 +78,7 @@ func (m fileMemory) SetCapable(hub string, capable bool) {
 		_ = os.Remove(m.capability(hub))
 		return
 	}
-	m.write(m.capability(hub), "shell_scope")
+	_ = m.write(m.capability(hub), "shell_scope") // best effort, as before: a lost write asks the hub again
 }
 
 // Breaker reads a worktree's breaker. A file that is missing, unreadable or not this version's
@@ -148,9 +148,10 @@ func ScopeHints(tokenPath string, now time.Time) []ScopeHint {
 }
 
 // SetBreaker replaces the breaker whole, through a temporary file and a rename, never in place.
+// It is best effort, as it always was.
 func (m fileMemory) SetBreaker(worktree string, b breaker) {
 	raw, _ := json.Marshal(b) // strings and integers always encode
-	m.write(m.breakerFile(worktree), string(raw))
+	_ = m.write(m.breakerFile(worktree), string(raw))
 }
 
 func (s *shellRun) read() (gitinfo.Repo, bool) {
@@ -165,13 +166,6 @@ func worktreeKey(repo gitinfo.Repo) string {
 		return repo.WorktreeID
 	}
 	return repo.Worktree
-}
-
-func (r Runner) now() time.Time {
-	if r.Now != nil {
-		return r.Now()
-	}
-	return time.Now()
 }
 
 func (r Runner) getenv(key string) string {

@@ -238,7 +238,7 @@ func TestFailureLogReadWaitsWhileWriteHoldsTheLock(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = f.Close() }()
-	if err = lockFailureLog(f); err != nil {
+	if err = tryLockFile(f); err != nil {
 		t.Fatal(err)
 	}
 	read := make(chan error, 1)
@@ -259,7 +259,7 @@ func TestFailureLogReadWaitsWhileWriteHoldsTheLock(t *testing.T) {
 		t.Fatalf("read finished while the write lock was held: %v", err)
 	case <-time.After(80 * time.Millisecond):
 	}
-	unlockFailureLog(f)
+	unlockFile(f)
 	if err := <-read; err != nil {
 		t.Fatalf("read did not resume after the lock was released: %v", err)
 	}

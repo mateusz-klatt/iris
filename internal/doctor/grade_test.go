@@ -37,6 +37,10 @@ func TestFailuresAreGradedByStage(t *testing.T) {
 		{"a broken hook beside slow ones", overBudget(integrate.Claude, 3) + entry(integrate.Claude, "decode", "invalid JSON at byte 1"), StatusSilent, "hook failed open in the last 24 h; edits may have gone unclaimed: pre_tool decode: invalid JSON at byte 1", 1},
 		{"a lost session without proof", entry(integrate.Claude, "shell session", "hub request failed: lost"), StatusSilent, "shell session: hub request failed: lost", 1},
 		{"a deadline outside a shell stage", entry(integrate.Claude, "touch", "shell reconciliation passed its deadline"), StatusSilent, "hook failed open in the last 24 h; edits may have gone unclaimed:", 1},
+		// A hook that skipped a session-file operation kept its allow or deny (ADR 017).
+		{"only skipped session-file operations", strings.Repeat(entry(integrate.Claude, "session files", "sessions directory lock held past its budget"), 2), StatusOK, "skipped in 24 h: 2 session-file operation(s), which may delay an attention note, a wake's consumption or the cleanup of session files; the hooks' allow or deny was unaffected", 0},
+		{"a skipped one beside a slow git status", overBudget(integrate.Claude, 1) + entry(integrate.Claude, "session files", "dependency failure (*os.LinkError)"), StatusOK, "degraded: 1 shell reconciliation(s) ran past their budget in 24 h; skipped in 24 h: 1 session-file operation(s)", 0},
+		{"a skipped one beside a broken hook", entry(integrate.Claude, "session files", "sessions directory lock held past its budget") + entry(integrate.Claude, "decode", "invalid JSON at byte 1"), StatusSilent, "pre_tool decode: invalid JSON at byte 1, at 11:00 UTC; skipped in 24 h: 1 session-file operation(s)", 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {

@@ -113,6 +113,7 @@ func (r Runner) reconcile(ctx context.Context, ev Event, state *runState) Output
 			return
 		}
 		run.setRepo(repo)
+		rev := r.toldRevision(ev)
 		out, fromGit, err := r.shell(ctx, hub, ev, repo, state, run)
 		if fromGit {
 			// A failed git status fails open without the hub's context.
@@ -133,11 +134,19 @@ func (r Runner) reconcile(ctx context.Context, ev Event, state *runState) Output
 			done <- settle(err, r.failOpen(state, ev, err, allow))
 			return
 		}
-		if out.Message == "" {
-			done <- allow
-			return
+		// After a command, the answer's attention is said as an edit's is (ADR 017, decision 6).
+		note := ""
+		if ev.Kind == KindPostTool && out.Attention != nil && carriesToolContext(ev.Client) {
+			note = r.attentionNote(ctx, ev, *out.Attention, false, rev)
 		}
-		done <- Encode(ev, Decision{Action: ActionWarn, Context: out.Message})
+		switch {
+		case out.Message != "":
+			done <- Encode(ev, Decision{Action: ActionWarn, Context: strings.TrimSpace(out.Message + "\n" + note)})
+		case note != "":
+			done <- Encode(ev, Decision{Action: ActionAllow, Context: note})
+		default:
+			done <- allow
+		}
 	}()
 	var out Output
 	select {

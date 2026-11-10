@@ -3,8 +3,8 @@
 Status: accepted, 2026-11-09, by `claude-holzera-iris`. It rests on measurements by
 `codex-holzera-iris` in [the Codex attention record](../research/clients/codex-attention.md);
 that session challenged the drafts and signed off this design. Extends D7; the binding rung under
-"Amendments from the implementation" at the end changes D6. That rung and the hub's attention
-identity are implemented; the hooks' side and the wake are not yet.
+"Amendments from the implementation" at the end changes D6. That rung, the hub's attention
+identity and the hooks' side are implemented; the wake is not yet.
 
 ## Problem
 
@@ -349,3 +349,71 @@ a restored hub keeps its stream id and takes the event sequence back instead (AD
   though the counts include it and the inbox returns it. A monitor has the same limit. A backup
   could give its copy a new stream id, which would close the gap for restores from
   `iris admin backup`; that changes ADR 006's restore, and this amendment does not make it.
+
+**The hooks follow the identity** (decisions 3 to 6; amends them).
+- The told state. A session's attention file, beside its generation, keeps the counts as before
+  and, from a hub that names attention, the identity last told, when, whether it was said a second
+  time, and a revision that every change of that identity raises. The stream is written as hex, so
+  nothing a hub sends can split the line. With a file from before ADR 017, or with no identity
+  told yet, the counts decide once, as before, and the identity then counts as told.
+- A note is said when the hub's identity has another stream or a larger cursor than the told one.
+  Within a stream the told cursor goes down only after a restore the hub shows, so a slower
+  hook's older answer cannot reopen what was said. The restore rule above voids the told state
+  only when no other hook changed the told identity between this hook reading the told state,
+  before it asks the hub, and its decision: an older answer that arrives late is below a newer
+  telling too, and must not be taken for a restore. A touch answer is never taken as one either,
+  because the hub may replay an earlier call's answer to a retried call, attention and all.
+- The second note of decision 5 is said only by a prompt hook, when the same identity is still the
+  newest pending ten minutes after it was told. A note says everything pending, as counts, because
+  the identity, not the counts, said that something is new.
+- The SessionStart context counts as told, and a context that restates the identity already told,
+  as a resumed session's does, counts as its second telling. Where a monitor beats, it says the
+  note, and the told state stays as it was. A hub from before, which sends no `identity`, and a
+  reconcile answer without `attention` behave as before. The told state goes when the session
+  ends; a stale generation that the hook drops no longer takes it along.
+- The shell note of decision 6. A PostToolUse shell hook whose reconcile answer carries attention
+  adds the note to its context, for Claude Code and Codex, whose post-tool context reaches the
+  model. Before a command it says nothing.
+- The lock. Every read and every change of a told state or a wake file, and every removal by
+  pruning, holds an exclusive lock on `sessions/.lock`, `flock` on Unix and `LockFileEx` on
+  Windows, tried for at most 50 ms. Reads hold it too, because on Windows the rename used here
+  fails when another process holds the destination file open. An operation that cannot
+  take it leaves its state unchanged, and a told state that is not updated says no note; a
+  revision not read makes that answer no evidence of a restore. The hook records the failure at
+  the stage `session files` and goes on (D3); doctor counts such entries beside the row's status,
+  not as a failed hook, since the hook's allow or deny is unchanged. A write protects the
+  sessions directory before the lock is taken, never under it: on Windows that costs about 80 ms
+  for a thousand sessions' files, because Windows applies the directory's inheritable protection
+  to each, while another hook waits at most 50 ms. Pruning lists and judges the directory before
+  it takes the lock, and judges each stale entry again under it, so the lock is held only for
+  rechecks and removals. One pruning removes at most 64 entries: removing two thousand held the
+  lock for 305 ms on Windows and 9 ms on Linux; the rest go at later session starts. If the caller
+  has stopped waiting, as a shell reconcile past its budget has, when the attention check runs
+  under the lock, no note is decided and the told state is not written. The lock binds only
+  Iris's own processes; one that ignores it is not stopped. An Iris from before this change on the
+  same host, as after a rollback, takes no lock and drops the told identity when it writes the
+  counts. Its pruning removes a file untouched for 30 days, so every lock refreshes `.lock`'s
+  time, and that pruning does not remove it while hooks run.
+- Consumption of decision 3. A Codex prompt hook first compares its prompt with the newest attempt
+  in the session's wake file, before repository discovery and before any network call. Only a
+  prompt that is that attempt's whole message, byte for byte, marks it consumed, so the planned
+  runner must store the message it submits, the fixed text with the attempt's token. A session
+  without a wake file takes no lock. Any other prompt takes the lock for one read of the wake
+  file; only a match protects the directory, outside the lock, and takes it again to read and
+  write. Only Codex's prompt is read: Kimi sends its prompt as an array. A capture of
+  a queued turn's prompt hook, from the run in
+  [the queue record](../research/clients/codex-mcp-queue-2026-11-10.md), shows that the field
+  holds the queued text unchanged.
+- The wake file is JSON with `version` 1 and `attempts`, at `sessions/wake/<name>`; the planned
+  runner writes it. A hook sets only an attempt's `consumed_ms` and keeps every other field as it
+  finds it. When it writes the file, the token, message and answer of attempts consumed more than
+  30 days ago go from it, and nothing else does. The wake files sit apart from the files that
+  pruning reads: no hook lists their directory, and nothing removes one, because a file's spent
+  slots must outlast mail nobody fetches. The planned runner must make that directory with
+  protection of its own: on Windows a told-state write beside 20,000 wake files took 2.2 s when
+  the directory inherited the sessions directory's protection, and 1.9 ms when it had its own.
+- What this cannot do: show that a note reached the model (decision 2); say the second note from
+  an edit or shell hook; or keep the wake files few. Taking a wake file to be about 1 KB with its
+  attempts, a host where 50 sessions a day arm the runner keeps about 18,000 files and 18 MB a
+  year, and nothing removes them. The other session files still go 30 days after their last
+  change.

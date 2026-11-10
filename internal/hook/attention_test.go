@@ -132,28 +132,31 @@ func TestAPromptHookThatCannotReachTheHubStaysQuiet(t *testing.T) {
 	}
 }
 
-// The counts live next to the generation, and each write keeps the other.
-func TestMemoryKeepsCountsBesideTheGeneration(t *testing.T) {
+// The told state lives next to the generation, in its own file, so neither write can roll the
+// other back. Dropping a stale generation keeps it; the session's end removes it.
+func TestMemoryKeepsTheToldStateBesideTheGeneration(t *testing.T) {
 	m := fileMemory{dir: t.TempDir(), now: time.Now, restrict: func(string) error { return nil }}
 	m.Remember("codex", "s", 5)
-	m.SetCounts("codex", "s", Counts{3, 1}, Counts{2, 1})
-	m.Remember("codex", "s", 6)
-	// The counts live in their own file, so neither write can roll the other back.
-	if _, err := os.Stat(m.counts("codex", "s")); err != nil {
+	if err := m.updateAttention("codex", "s", func(s *toldState) bool { s.Latest, s.Told = Counts{3, 1}, Counts{2, 1}; return true }); err != nil {
 		t.Fatal(err)
 	}
-	defer func() {
-		m.Forget("codex", "s")
-		if _, err := os.Stat(m.counts("codex", "s")); !os.IsNotExist(err) {
-			t.Fatalf("forget left the counts: %v", err)
-		}
-	}()
-	latest, told := m.Counts("codex", "s")
-	if m.Recall("codex", "s") != 6 || latest != (Counts{3, 1}) || told != (Counts{2, 1}) {
-		t.Fatal(m.Recall("codex", "s"), latest, told)
+	m.Remember("codex", "s", 6)
+	told := parseTold(m.read(m.counts("codex", "s")))
+	if m.Recall("codex", "s") != 6 || told.Latest != (Counts{3, 1}) || told.Told != (Counts{2, 1}) {
+		t.Fatal(m.Recall("codex", "s"), told)
 	}
-	if latest, told := m.Counts("codex", "other"); latest != (Counts{}) || told != (Counts{}) {
-		t.Fatal(latest, told)
+	if other := parseTold(m.read(m.counts("codex", "other"))); other != (toldState{}) {
+		t.Fatal(other)
+	}
+	m.Forget("codex", "s")
+	if _, err := os.Stat(m.counts("codex", "s")); err != nil {
+		t.Fatalf("dropping the generation took the told state: %v", err)
+	}
+	if err := m.forgetAttention("codex", "s"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(m.counts("codex", "s")); !os.IsNotExist(err) {
+		t.Fatalf("the session's end left the told state: %v", err)
 	}
 }
 

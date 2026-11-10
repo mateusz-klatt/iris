@@ -62,13 +62,13 @@ func TestWindowsKeepsNoBreakerAndSendsNoReducedSnapshot(t *testing.T) {
 	if calls := h.calls(); !slices.Equal(calls, []string{"register", "status full", "status full", "one-call"}) {
 		t.Fatalf("calls %v", calls)
 	}
-	// Only the session's own entries are kept.
+	// Only the session's own entries are kept, beside the sessions directory's lock (ADR 017).
 	entries, err := os.ReadDir(m.dir)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, e := range entries {
-		if name := filepath.Join(m.dir, e.Name()); name != m.name("claude", "s") && name != m.counts("claude", "s") {
+		if name := filepath.Join(m.dir, e.Name()); name != m.name("claude", "s") && name != m.counts("claude", "s") && e.Name() != sessionsLock {
 			t.Fatalf("kept %s", e.Name())
 		}
 	}

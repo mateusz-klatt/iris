@@ -6,10 +6,12 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-func lockFailureLog(f interface{ Fd() uintptr }) error {
+// tryLockFile takes f's exclusive lock if nobody holds it, and fails at once otherwise. The
+// failure log and the sessions directory's lock use it.
+func tryLockFile(f interface{ Fd() uintptr }) error {
 	return unix.Flock(int(f.Fd()), unix.LOCK_EX|unix.LOCK_NB)
 }
-func lockFailureLogShared(f interface{ Fd() uintptr }) error {
+func lockFileShared(f interface{ Fd() uintptr }) error {
 	return unix.Flock(int(f.Fd()), unix.LOCK_SH)
 }
-func unlockFailureLog(f interface{ Fd() uintptr }) { _ = unix.Flock(int(f.Fd()), unix.LOCK_UN) }
+func unlockFile(f interface{ Fd() uintptr }) { _ = unix.Flock(int(f.Fd()), unix.LOCK_UN) }

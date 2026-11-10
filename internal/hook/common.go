@@ -26,6 +26,8 @@ type commonPayload struct {
 	MCP            json.RawMessage `json:"mcp_server"`
 	SubagentID     string          `json:"subagentId"`
 	SubagentSnake  string          `json:"subagent_id"`
+	// Prompt is not always text: Kimi sends an array. Only Codex's is read (ADR 017).
+	Prompt json.RawMessage `json:"prompt"`
 }
 
 func decodeCommon(client Client, eventName string, payload []byte) (Event, error) {
@@ -46,6 +48,9 @@ func decodeCommon(client Client, eventName string, payload []byte) (Event, error
 			raw = p.ToolInputCamel
 		}
 		applyTool(&ev, name, raw, mcpPresent(p.MCP))
+	}
+	if client == ClientCodex && ev.Kind == KindPrompt {
+		_ = json.Unmarshal(p.Prompt, &ev.Prompt) // a prompt that is not text matches no wake
 	}
 	if sub := first(p.SubagentID, p.SubagentSnake); ev.Kind == KindSubagentStart && sub != "" && sub != ev.SessionID {
 		ev.ParentSessionID = ev.SessionID

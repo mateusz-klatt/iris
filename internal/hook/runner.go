@@ -133,6 +133,9 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		return FallbackAllow(runner)
 	}
 	state.received(r.canaryReceipt(ev))
+	if ev.Client == ClientCodex && ev.Kind == KindPrompt {
+		r.consumeWake(ev)
+	}
 	// Some clients supply only a timestamp, not a tool call ID. Hash the raw
 	// bytes so a retry stays idempotent while distinct timestamped calls differ.
 	if ev.ToolCallID == "" {
@@ -160,6 +163,8 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 	switch ev.Kind {
 	case KindSessionStart, KindSubagentStart:
 		state.at("session")
+		// What the session was told is read before the hub answers; see attentionNote.
+		rev := r.toldRevision(ev)
 		sess, err := r.register(ctx, ev, repo)
 		if err != nil {
 			return state.fail(err, r.failOpen(state, ev, err, allow))
@@ -170,16 +175,17 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 			notes = append(notes, guard.Hint)
 		}
 		// The session context states the unread count, so those counts count as said.
-		r.attentionNote(ev, sess.Attention, true)
+		r.attentionNote(ctx, ev, sess.Attention, true, rev)
 		return r.finish(state, ev, Encode(ev, Decision{Action: ActionAllow, Context: SessionText(sess, notes...)}))
 	case KindPrompt, KindPreInvocation:
 		// One registration per user turn: idempotent, hedged, and within the deadline.
 		state.at("session")
+		rev := r.toldRevision(ev)
 		sess, err := r.register(ctx, ev, repo)
 		if err != nil {
 			return state.fail(err, r.failOpen(state, ev, err, allow))
 		}
-		return r.finish(state, ev, Encode(ev, Decision{Action: ActionAllow, Context: r.attentionNote(ev, sess.Attention, false)}))
+		return r.finish(state, ev, Encode(ev, Decision{Action: ActionAllow, Context: r.attentionNote(ctx, ev, sess.Attention, false, rev)}))
 	case KindSessionEnd:
 		state.at("session")
 		sess, err := r.register(ctx, ev, repo)
@@ -193,6 +199,12 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		}
 		if m := r.memory(); m != nil {
 			m.Forget(string(ev.Client), ev.SessionID)
+		}
+		// What the session was told goes with it; its wake file stays (ADR 017, decision 3).
+		if am, ok := r.memory().(attentionMemory); ok {
+			if err := am.forgetAttention(string(ev.Client), ev.SessionID); err != nil {
+				r.recordFailure(stageSessionFiles, err, nil)
+			}
 		}
 		return r.finish(state, ev, Encode(ev, Decision{Action: ActionAllow}))
 	default: // needsNetwork leaves only an edit that is about to run.
@@ -236,7 +248,7 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		d := decisionFromTouch(touch)
 		if d.Action == ActionAllow && carriesToolContext(ev.Client) {
 			// The touch already brought the counts, so this costs no request.
-			if note := r.attentionNote(ev, touch.Attention, false); note != "" {
+			if note := r.attentionNote(ctx, ev, touch.Attention, false, fromReplay); note != "" {
 				d.Context = strings.TrimSpace(d.Context + "\n" + note)
 			}
 		}
@@ -284,11 +296,20 @@ func (r Runner) register(ctx context.Context, ev Event, repo gitinfo.Repo) (hubc
 		m.Remember(string(ev.Client), ev.SessionID, sess.Generation)
 		if ev.Kind == KindSessionStart {
 			if f, ok := m.(fileMemory); ok {
-				f.prune()
+				if err := f.prune(); err != nil {
+					r.recordFailure(stageSessionFiles, err, nil)
+				}
 			}
 		}
 	}
 	return sess, err
+}
+
+func (r Runner) now() time.Time {
+	if r.Now != nil {
+		return r.Now()
+	}
+	return time.Now()
 }
 
 func needsNetwork(ev Event) bool {
