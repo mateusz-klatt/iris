@@ -188,7 +188,7 @@ func TestConsoleRevisionMigrationBackfillsExistingAccountsWithoutAttributingPast
 	if _, err := s.ReplaceConsoleAccess(t.Context(), a.ID, 1, "member", false, []ConsoleGrant{{repo, "ro"}}); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.Exec(removeConsoleRevisionSchema + "PRAGMA user_version=17"); err != nil {
+	if _, err := s.db.Exec(removeAttentionIdentitySchema + removeConsoleRevisionSchema + "PRAGMA user_version=17"); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Close(); err != nil {

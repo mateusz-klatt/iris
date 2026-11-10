@@ -306,7 +306,13 @@ func (t *transaction) events(r Request) (map[string]any, error) {
 			return nil, err
 		}
 	}
-	return out, nil
+	// Only a read that asks for the attention block receives it, as planned for Codex's wake (ADR
+	// 017). A watch socket reads events on every wake but needs no attention block, so it pays
+	// nothing for one.
+	if r.Attention {
+		out["attention"], err = t.attention(e)
+	}
+	return out, err
 }
 
 // PruneEvents removes an acknowledged retention prefix. Reconnecting clients get a

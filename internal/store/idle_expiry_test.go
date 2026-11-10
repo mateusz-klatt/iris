@@ -360,7 +360,7 @@ func TestIdleIndexUpgradeClearsSettledLegacyReceiptDeadlines(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := s.db.Exec("PRAGMA user_version=20"); err != nil {
+	if _, err := s.db.Exec(removeAttentionIdentitySchema + "PRAGMA user_version=20"); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Close(); err != nil {

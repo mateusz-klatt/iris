@@ -15,7 +15,7 @@ func TestWriteFailuresAreAtomic(t *testing.T) {
 		{"Repository", "INSERT", "sessions"}, {"RepositoryAlias", "INSERT", "sessions"}, {"Agent", "INSERT", "sessions"}, {"Execution", "INSERT", "sessions"},
 		{"Execution", "UPDATE", "heartbeat"}, {"Execution", "UPDATE", "end"}, {"Claim", "INSERT", "claim"}, {"Claim", "UPDATE", "claim-reuse"},
 		{"Claim", "UPDATE", "touch"}, {"Claim", "UPDATE", "release"}, {"Message", "INSERT", "messages"}, {"Delivery", "INSERT", "messages"},
-		{"Event", "INSERT", "messages"}, {"Operation", "INSERT", "messages"}, {"Cursor", "INSERT", "events"}, {"Delivery", "UPDATE", "inbox"},
+		{"Event", "INSERT", "messages"}, {"Delivery", "UPDATE", "messages"}, {"Operation", "INSERT", "messages"}, {"Cursor", "INSERT", "events"}, {"Delivery", "UPDATE", "inbox"},
 		{"Ack", "INSERT", "ack"}, {"HostReport", "INSERT", "ui_doctor_put"}, {"ShellSnapshot", "INSERT", "reconcile"},
 		{"Claim", "UPDATE", "ui_revoke"}, {"Agent", "INSERT", "ui_messages"}, {"Execution", "INSERT", "ui_messages"},
 	} {

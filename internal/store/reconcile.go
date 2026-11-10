@@ -37,16 +37,29 @@ func (t *transaction) shellSession(r *Request) (map[string]any, error) {
 	return out, t.event("", "", "changed", "")
 }
 
+// reconcile compares a shell snapshot with the Execution's baseline. Every successful answer
+// carries the attention block. The planned shell hook change will use it to announce new
+// attention as an edit hook does (ADR 017, decision 6).
 func (t *transaction) reconcile(r Request) (map[string]any, error) {
 	e, err := t.live(r.ExecutionID, r.Generation)
 	if err != nil {
 		return nil, err
 	}
+	out, err := t.reconcileChanges(e, r)
+	if err != nil {
+		return nil, err
+	}
+	out["attention"], err = t.attention(e)
+	return out, err
+}
+
+func (t *transaction) reconcileChanges(e execution, r Request) (map[string]any, error) {
 	if r.Kind != "before" && r.Kind != "after" {
 		return nil, fail("bad_request", "reconciliation kind must be before or after")
 	}
 	empty := map[string]any{"message": "", "conflicts": []map[string]any{}}
 	var count int
+	var err error
 	if err = t.row("SELECT COUNT(*) FROM Execution WHERE repository_id=? AND host_id=? AND worktree=? AND state='active'", e.Repo, e.Host, e.Worktree).Scan(&count); err != nil {
 		return nil, err
 	}

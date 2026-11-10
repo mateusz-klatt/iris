@@ -22,6 +22,7 @@ func TestMalformedAuthenticatedRequests(t *testing.T) {
 		status             int
 	}{
 		{"GET", "/v1/events?limit=bad", "", 400}, {"GET", "/v1/events?limit=-1", "", 400}, {"GET", "/v1/events?limit=1", "", 409},
+		{"GET", "/v1/events?generation=bad", "", 400}, {"GET", "/v1/events?generation=-1", "", 400},
 		{"POST", "/v1/tokens", "{", 400}, {"POST", "/v1/tokens", `{"host":"../bad"}`, 400}, {"DELETE", "/v1/tokens/missing", "", 404},
 		{"POST", "/v1/wake-tickets", "{", 400}, {"POST", "/v1/wake-tickets", `{}`, 400}, {"POST", "/v1/wake-tickets", `{"generation":1,"execution_id":"missing"}`, 409},
 		{"GET", "/v1/watch?after=bad", "", 400}, {"GET", "/v1/watch", "", 400},

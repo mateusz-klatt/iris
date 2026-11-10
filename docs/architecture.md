@@ -429,7 +429,10 @@ Changes from the reference schema:
    it. `attention` says the recipient still needs a wake. An `Ack` row means it is settled. A new
    delivery needs attention, and a fetch clears it. When the Execution that fetched it is no
    longer active, the delivery is freed, needs attention again, and one `inbox_changed` event
-   wakes the recipient: the mail was fetched, but nobody may have read it (gap review A10).
+   wakes the recipient: the mail was fetched, but nobody may have read it (gap review A10). A
+   delivery also keeps `attention_seq`, the cursor of the newest `inbox_changed` event for it. A
+   trigger in the database sets it as the event is inserted, so the session's attention identity
+   outlives the event, which retention deletes (ADR 017).
 
    Deliveries are recovered like claims. A hub restart no longer frees them: a recovering
    Execution keeps what it fetched, can acknowledge it after reattaching, and wakes no one for

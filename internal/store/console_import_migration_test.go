@@ -79,6 +79,11 @@ func TestConsoleAssignmentMigrationFromPopulatedVersion19PreservesHistory(t *tes
 	if err := s.db.QueryRow("SELECT stream_id,boot_epoch,(SELECT user_version FROM pragma_user_version) FROM Meta").Scan(&stream, &epoch, &version); err != nil || version != 19 {
 		t.Fatal("fixture is not version 19")
 	}
+	// Today's code filled the fixture, so it still has migration 023's column. Take it out now,
+	// so the deliveries have version 19's shape too.
+	if _, err := s.db.Exec(removeAttentionIdentitySchema); err != nil {
+		t.Fatal("could not reconstruct version 19 deliveries")
+	}
 	before := consoleMigrationState(t, s)
 	for _, table := range []string{"ConsoleAccount", "ConsoleRepositoryAccess", "ConsoleSession", "ConsoleImport", "ConsoleOperation", "ConsoleAction", "ConsoleRevision", "Claim", "Message", "Delivery", "Event", "Operation", "Cursor"} {
 		if len(before[table]) == 0 {
@@ -94,6 +99,11 @@ func TestConsoleAssignmentMigrationFromPopulatedVersion19PreservesHistory(t *tes
 		t.Fatal("could not upgrade populated version 19 fixture")
 	}
 	defer func() { _ = reopened.Close() }()
+	// Migration 023 adds the deliveries' attention cursor, which its own tests check. Without it,
+	// the upgrade must have changed nothing else.
+	if _, err := reopened.db.Exec(removeAttentionIdentitySchema); err != nil {
+		t.Fatal("could not set the attention cursor aside")
+	}
 	after := consoleMigrationState(t, reopened)
 	if !reflect.DeepEqual(before, after) {
 		// Never print row contents: credentials, session digests and fingerprints
@@ -107,7 +117,7 @@ func TestConsoleAssignmentMigrationFromPopulatedVersion19PreservesHistory(t *tes
 	}
 	var nextStream string
 	var nextEpoch, assignments int64
-	if err = reopened.db.QueryRow("SELECT stream_id,boot_epoch,(SELECT user_version FROM pragma_user_version),(SELECT COUNT(*) FROM ConsoleAssignmentImport) FROM Meta").Scan(&nextStream, &nextEpoch, &version, &assignments); err != nil || version != 22 || assignments != 0 || nextStream != stream || nextEpoch != epoch+1 {
+	if err = reopened.db.QueryRow("SELECT stream_id,boot_epoch,(SELECT user_version FROM pragma_user_version),(SELECT COUNT(*) FROM ConsoleAssignmentImport) FROM Meta").Scan(&nextStream, &nextEpoch, &version, &assignments); err != nil || version != 23 || assignments != 0 || nextStream != stream || nextEpoch != epoch+1 {
 		t.Fatal("upgrade lost stream identity, boot recovery or the new empty ledger")
 	}
 	for execution, want := range map[string]int64{first.ExecutionID: clock.Now().Add(120 * time.Second).UnixMilli(), second.ExecutionID: priorRecovery} {

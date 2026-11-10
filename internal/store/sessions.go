@@ -77,6 +77,9 @@ type Request struct {
 	Limit          int      `json:"limit"`
 	ConsumerID     string   `json:"consumer_id"`
 	Stream         string   `json:"stream"`
+	// Attention asks an events read for the attention block (ADR 017). Codex's planned wake will
+	// ask; a watch socket's own reads never do.
+	Attention bool `json:"attention"`
 
 	// RetryGeneration is an optional client diagnostic claim. Unlike Generation,
 	// it never participates in registration, recovery or authority decisions.
@@ -472,7 +475,7 @@ func (t *transaction) bind(r Request) (map[string]any, error) {
 		if e.Client != r.Client || e.Host != r.Host {
 			return nil, fail("unbound", "handle does not match this client and host")
 		}
-		return bound(e), nil
+		return t.boundWithHooks(e)
 	}
 	query := executionSelect + "WHERE e.client=? AND e.host_id=? AND e.state='active' AND e.recovery_deadline IS NULL AND e.boot_epoch=? AND e.deadline_tick_ms>?"
 	args := []any{r.Client, r.Host, t.s.epoch, t.s.clock.Tick()}
@@ -513,7 +516,20 @@ func (t *transaction) bind(r Request) (map[string]any, error) {
 	if len(matches) > 1 {
 		return nil, fail("ambiguous", "multiple sessions match; provide an explicit execution handle")
 	}
-	return bound(matches[0]), nil
+	return t.boundWithHooks(matches[0])
+}
+
+// boundWithHooks is a bind answer: the binding, and whether any hook has reached the hub for that
+// Execution. ADR 017 requires Codex's wake to arm only on that evidence, because only the
+// session's prompt hook can release the wake's reservation.
+func (t *transaction) boundWithHooks(e execution) (map[string]any, error) {
+	var seen int64
+	if err := t.row("SELECT hook_seen_ms FROM Execution WHERE id=?", e.ID).Scan(&seen); err != nil {
+		return nil, err
+	}
+	out := bound(e)
+	out["hook_seen"] = seen > 0
+	return out, nil
 }
 func (t *transaction) heartbeat(r Request) (map[string]any, error) {
 	if r.Source != "hook" && r.Source != "shim" && r.Source != "watch" {

@@ -200,7 +200,8 @@ func decode(w http.ResponseWriter, r *http.Request) (store.Request, error) {
 		req.Stream = q.Get("stream")
 		req.ConsumerID = q.Get("consumer_id")
 		req.All = q.Get("all") == "1"
-		req.Receipt = q.Get("receipt") == "1" // ADR 010: keep attention until the receipt
+		req.Receipt = q.Get("receipt") == "1"     // ADR 010: keep attention until the receipt
+		req.Attention = q.Get("attention") == "1" // ADR 017: an events read that wants the block
 		req.Host = q.Get("host")
 		req.Q = q.Get("q")
 		req.Before = q.Get("before")
@@ -215,6 +216,15 @@ func decode(w http.ResponseWriter, r *http.Request) (store.Request, error) {
 			req.Limit, err = strconv.Atoi(q.Get("limit"))
 			if err != nil || req.Limit < 0 {
 				return req, &store.Error{Code: "bad_request", Message: "invalid limit"}
+			}
+		}
+		// A read may name the generation it expects, as planned for Codex's wake (ADR 017). If
+		// that generation is stale, the hub answers lost. Without one a read is unqualified, as it
+		// always was: iris watch and older shims send none.
+		if q.Has("generation") {
+			req.Generation, err = strconv.ParseInt(q.Get("generation"), 10, 64)
+			if err != nil || req.Generation < 0 {
+				return req, &store.Error{Code: "bad_request", Message: "invalid generation"}
 			}
 		}
 		return req, nil
