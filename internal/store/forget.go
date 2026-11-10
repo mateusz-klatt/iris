@@ -61,6 +61,7 @@ func (t *transaction) forget(r Request) (map[string]any, error) {
 		{"Waiter", join2(executions.wrap("execution_id IN (%s)"), set{"?<>'' AND repository_id=?", []any{repo, repo}})},
 		{"Cursor", executions.wrap("execution_id IN (%s)")},
 		{"ShellSnapshot", executions.wrap("execution_id IN (%s)")},
+		{"ReducedShellSnapshot", executions.wrap("execution_id IN (%s)")},
 		{"Operation", agents.wrap("principal_agent_id IN (%s)")},
 		{"Event", join2(agents.wrap("agent_id IN (%s)"), executions.wrap("execution_id IN (%s)"))},
 		{"Execution", executions.wrap("id IN (%s)")},

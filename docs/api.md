@@ -48,8 +48,12 @@ Response:
  "peers":[{"name":"...","client":"...","state":"active","worktree":"...","branch":"..."}],
  "claims":[{"fence":1,"path":"...","kind":"exact","holder":"...","origin":"auto",
             "expires_at":"..."}],
- "unread":0}
+ "capabilities":["shell_scope"],"unread":0}
 ```
+
+`capabilities` names what this hub accepts beyond the rest of version one. `shell_scope` means
+that it takes reduced shell snapshots on `POST /v1/shell/scoped` (below). A hook sends one only
+to a hub whose last registration answer named it.
 
 For recovery after a hub restart, reattach with the same `session_id` and the last returned
 `generation`. A recovering session without that generation returns `lost`; an expired
@@ -651,9 +655,28 @@ Instead of `execution_id`, a reconcile may carry the session's registration fiel
 `POST /v1/sessions` with `session_id` and the remembered `generation`. The hub then registers
 the session exactly as `POST /v1/sessions` would, recovery proof included, and reconciles for
 the Execution it gives, in one transaction. A shell hook therefore makes one round trip instead
-of two. The response adds `"session":{"execution_id":"ex_...","generation":4}`, whose generation
-the hook remembers as its next proof. A hub from before this form answers it with an error,
-and the hook then registers and reconciles in two calls.
+of two. The response adds
+`"session":{"execution_id":"ex_...","generation":4,"capabilities":["shell_scope"]}`, whose
+generation the hook remembers as its next proof. A hub from before this form answers it with an
+error, and the hook then registers and reconciles in two calls.
+
+`POST /v1/shell/scoped` takes a reduced snapshot (ADR 018), in either form, with the same fields
+plus `scope`:
+
+```json
+{"mode":"dirty","submodules":["modules/data","modules/tools"]}
+```
+
+The snapshot's status ran with `--ignore-submodules=dirty`, and `submodules` names the gitlink
+paths in the index that status read: relative, clean, sorted, unique, and at most 500. The plain
+route refuses a request with a scope, and this route one without. A hub from before this route
+answers `not_found`, so a hub that does not understand scope never reads a reduced map as full.
+
+A snapshot is compared only with a baseline of the same scope, the submodule paths included.
+Any other baseline is replaced and nothing is attributed. In reduced scope a named submodule
+path that the status does not report is unknown, not clean: nothing is released or renewed for
+it. The hub clears reduced baselines whenever it starts, so the first reduced snapshot after a
+restart only records its baseline. A hub from before this route never reads them.
 
 Session registration also accepts `common_dir`, a host-scoped alias for linked
 worktrees without a globally unambiguous remote. It never joins paths across hosts.

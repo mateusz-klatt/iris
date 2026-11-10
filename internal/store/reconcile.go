@@ -9,9 +9,10 @@ import (
 	"time"
 )
 
-// shellSession is whether a shell reconcile names its session rather than an Execution.
+// shellSession is whether a shell reconcile names its session rather than an Execution. The
+// scoped route takes both forms, as the plain one does.
 func shellSession(operation string, r Request) bool {
-	return operation == "reconcile" && r.ExecutionID == "" && r.SessionID != ""
+	return (operation == "reconcile" || operation == "reconcile_scoped") && r.ExecutionID == "" && r.SessionID != ""
 }
 
 // shellSession registers the session as /v1/sessions does, recovery proof included (D9, #127),
@@ -32,7 +33,7 @@ func (t *transaction) shellSession(r *Request) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	out["session"] = map[string]any{"execution_id": r.ExecutionID, "generation": r.Generation}
+	out["session"] = map[string]any{"execution_id": r.ExecutionID, "generation": r.Generation, "capabilities": shellCapabilities()}
 	return out, t.event("", "", "changed", "")
 }
 
@@ -51,43 +52,34 @@ func (t *transaction) reconcile(r Request) (map[string]any, error) {
 	}
 	if count > 1 {
 		// Another live Execution shares the filesystem: attributing changes is impossible.
-		_, err = t.exec("DELETE FROM ShellSnapshot WHERE execution_id IN (SELECT id FROM Execution WHERE repository_id=? AND host_id=? AND worktree=?)", e.Repo, e.Host, e.Worktree)
-		return empty, err
+		for _, table := range []string{"ShellSnapshot", "ReducedShellSnapshot"} {
+			if _, err = t.exec("DELETE FROM "+table+" WHERE execution_id IN (SELECT id FROM Execution WHERE repository_id=? AND host_id=? AND worktree=?)", e.Repo, e.Host, e.Worktree); err != nil {
+				return nil, err
+			}
+		}
+		return empty, nil
 	}
 	for p := range r.Status {
 		if _, err = cleanPath(p, "exact", false); err != nil {
 			return nil, err
 		}
 	}
-	previous := map[string]string{}
-	var raw string
-	err = t.row("SELECT status_json FROM ShellSnapshot WHERE execution_id=?", e.ID).Scan(&raw)
-	found := err == nil
-	if err != nil && err != sql.ErrNoRows {
+	previous, scope, found, err := t.shellBaseline(e.ID)
+	if err != nil {
 		return nil, err
 	}
-	if found {
-		if err = json.Unmarshal([]byte(raw), &previous); err != nil {
-			return nil, err
-		}
-	}
-	encoded, _ := json.Marshal(r.Status) // a map of strings is always JSON encodable
-	if _, err = t.exec("INSERT INTO ShellSnapshot VALUES(?,?) ON CONFLICT(execution_id) DO UPDATE SET status_json=excluded.status_json", e.ID, string(encoded)); err != nil {
+	if err = t.keepShellSnapshot(e.ID, r.Status, r.Scope); err != nil {
 		return nil, err
 	}
-	if r.Kind == "before" || !found {
+	// A snapshot is compared only with a baseline of the same scope, its submodule paths
+	// included. Any other baseline is replaced and nothing is attributed (ADR 018 decision 2).
+	if r.Kind == "before" || !found || scope != scopeKey(r.Scope) {
 		return empty, nil
 	}
 	// Only paths still changed after the command count. One that left the status was committed,
 	// stashed or restored by git in this worktree, which changes nothing in a holder's worktree,
 	// so it is neither warned about nor claimed.
-	changed := []string{}
-	for p, status := range r.Status {
-		if previous[p] != status {
-			changed = append(changed, p)
-		}
-	}
-	sort.Strings(changed)
+	changed, left := shellChanges(previous, r.Status, r.Scope)
 	out, err := t.checkPaths(e.Repo, e.Host, e.Worktree, changed)
 	if err != nil {
 		return nil, err
@@ -102,12 +94,6 @@ func (t *transaction) reconcile(r Request) (map[string]any, error) {
 	// An auto claim means this session has uncommitted changes at its path (D10). One whose path
 	// left the status was committed, stashed or restored, so it is released, and its waiters are
 	// woken as by a release. Explicit claims, and every other session's, stay.
-	var left []string
-	for p := range previous {
-		if _, still := r.Status[p]; !still {
-			left = append(left, p)
-		}
-	}
 	if err = t.releaseLeft(e, left); err != nil {
 		return nil, err
 	}
@@ -122,6 +108,42 @@ func (t *transaction) reconcile(r Request) (map[string]any, error) {
 		out["message"] = "Shell edit detected. " + text + " Iris detects these changes and cannot undo them."
 	}
 	return out, nil
+}
+
+// shellBaseline is what an Execution's next snapshot is compared with: a full one from
+// ShellSnapshot, whose scope key is empty, or a reduced one with its scope key. Writing one kind
+// deletes the other, and a start clears the reduced kind, so an Execution has at most one.
+func (t *transaction) shellBaseline(id string) (map[string]string, string, bool, error) {
+	var raw, scope string
+	err := t.row("SELECT status_json,'' FROM ShellSnapshot WHERE execution_id=? UNION ALL SELECT status_json,scope_json FROM ReducedShellSnapshot WHERE execution_id=?", id, id).Scan(&raw, &scope)
+	if err == sql.ErrNoRows {
+		return nil, "", false, nil
+	}
+	if err != nil {
+		return nil, "", false, err
+	}
+	previous := map[string]string{}
+	if err = json.Unmarshal([]byte(raw), &previous); err != nil {
+		return nil, "", false, err
+	}
+	return previous, scope, true, nil
+}
+
+// keepShellSnapshot makes a snapshot the Execution's baseline. A full one goes to ShellSnapshot,
+// which an older hub reads too; a reduced one goes to ReducedShellSnapshot, which an older hub
+// never reads, so it never takes a reduced map for a full one. Each write deletes the other
+// kind's row in the same transaction.
+func (t *transaction) keepShellSnapshot(id string, status map[string]string, scope *ShellScope) error {
+	encoded, _ := json.Marshal(status) // a map of strings is always JSON encodable
+	drop, keep, args := "ReducedShellSnapshot", "INSERT INTO ShellSnapshot VALUES(?,?) ON CONFLICT(execution_id) DO UPDATE SET status_json=excluded.status_json", []any{id, string(encoded)}
+	if scope != nil {
+		drop, keep, args = "ShellSnapshot", "INSERT INTO ReducedShellSnapshot VALUES(?,?,?) ON CONFLICT(execution_id) DO UPDATE SET status_json=excluded.status_json,scope_json=excluded.scope_json", []any{id, string(encoded), scopeKey(scope)}
+	}
+	if _, err := t.exec("DELETE FROM "+drop+" WHERE execution_id=?", id); err != nil {
+		return err
+	}
+	_, err := t.exec(keep, args...)
+	return err
 }
 
 // maxClaims is claimLimit's bound on the live claims of one Execution.

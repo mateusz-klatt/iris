@@ -107,7 +107,7 @@ func installFaultDriver(t *testing.T, s *Store, file string) *storageFault {
 }
 
 func TestStorageFailuresRollBackAndRetry(t *testing.T) {
-	for _, op := range []string{"sessions", "session-resume", "session-resume-learns-root", "session-remote-learns-root", "session-checkout-continuity", "session-checkout-rewrite", "heartbeat-recovery", "session-new-slot", "session-learns-root", "touch-cached", "touch-conflict", "claim-conflict", "check-known", "policy", "bind", "heartbeat", "end", "end-handover", "touch", "claim", "claim-reuse", "claim-cached", "release", "claims", "messages", "message-repo", "contact", "message-cached", "inbox", "ack", "ack-handled", "inbox-receipt", "receipt-sweep", "receipts", "read_body", "agents", "agents-all", "hooks_seen", "events", "events-reset", "status", "validate", "monitor_cursor", "check", "check-alias", "session-alias", "reconcile", "reconcile-release", "reconcile-session", "ui_overview", "ui_deliveries", "ui_threads", "ui_threads-human", "ui_thread", "ui_read", "ui_messages", "ui_messages-existing-human", "ui_messages-cached", "ui_messages-merged-cached", "ui_messages-retired-cached", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_events", "expire", "sweep", "forget", "forget-repository", "history", "thread", "read_message_body", "merge", "merge-dry-run"} {
+	for _, op := range []string{"sessions", "session-resume", "session-resume-learns-root", "session-remote-learns-root", "session-checkout-continuity", "session-checkout-rewrite", "heartbeat-recovery", "session-new-slot", "session-learns-root", "touch-cached", "touch-conflict", "claim-conflict", "check-known", "policy", "bind", "heartbeat", "end", "end-handover", "touch", "claim", "claim-reuse", "claim-cached", "release", "claims", "messages", "message-repo", "contact", "message-cached", "inbox", "ack", "ack-handled", "inbox-receipt", "receipt-sweep", "receipts", "read_body", "agents", "agents-all", "hooks_seen", "events", "events-reset", "status", "validate", "monitor_cursor", "check", "check-alias", "session-alias", "reconcile", "reconcile-release", "reconcile-session", "reconcile-scoped", "reconcile-scoped-compare", "reconcile-full-after-scoped", "reconcile-shared", "ui_overview", "ui_deliveries", "ui_threads", "ui_threads-human", "ui_thread", "ui_read", "ui_messages", "ui_messages-existing-human", "ui_messages-cached", "ui_messages-merged-cached", "ui_messages-retired-cached", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_events", "expire", "sweep", "forget", "forget-repository", "history", "thread", "read_message_body", "merge", "merge-dry-run"} {
 		t.Run(op, func(t *testing.T) {
 			s, clock, file := testStore(t)
 			a, ar := session(t, s, 1)
@@ -304,6 +304,35 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 				route = "reconcile"
 				r.Kind = "after"
 				r.Status = map[string]string{}
+			case "reconcile-scoped":
+				// A reduced snapshot replaces a's full one, row for row, and attributes nothing.
+				route = "reconcile_scoped"
+				r.Kind, r.Scope = "after", &ShellScope{Mode: "dirty", Submodules: []string{"lib"}}
+				r.Status = map[string]string{"file": "MM"}
+			case "reconcile-scoped-compare":
+				// Two reduced snapshots of one scope compare: dir/x is renewed, file leaves and is
+				// released, and lib, unreported, is unknown and stays.
+				route = "reconcile_scoped"
+				scope := &ShellScope{Mode: "dirty", Submodules: []string{"lib"}}
+				before := a
+				before.Kind, before.Scope, before.Status = "before", scope, map[string]string{"file": " M", "lib": " M"}
+				call(t, s, "reconcile_scoped", before)
+				call(t, s, "touch", touchRequest(a, "file-a", "file"))
+				r.Kind, r.Scope, r.Status = "after", scope, map[string]string{"dir/x": " M"}
+			case "reconcile-full-after-scoped":
+				// A full snapshot replaces a reduced one, row for row.
+				route = "reconcile"
+				reduced := a
+				reduced.Kind, reduced.Scope, reduced.Status = "before", &ShellScope{Mode: "dirty", Submodules: []string{"lib"}}, map[string]string{"file": " M"}
+				call(t, s, "reconcile_scoped", reduced)
+				r.Kind = "after"
+				r.Status = map[string]string{"file": "MM"}
+			case "reconcile-shared":
+				// A second live Execution in a's worktree clears both kinds of baseline.
+				route = "reconcile"
+				call(t, s, "sessions", Request{Client: "claude", Host: "host", Cwd: "/repo/w1", Worktree: "/repo/w1", RemoteURL: "https://example.com/team/project.git", RootCommit: "root", SessionID: "shared"})
+				r.Kind = "after"
+				r.Status = map[string]string{"file": "MM"}
 			case "ui_threads":
 				r = Request{RepositoryID: repo, Agent: name, Q: "persisted", Before: "9999999999999"}
 			case "ui_threads-human":

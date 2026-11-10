@@ -51,7 +51,7 @@ func (s *Store) Sweep(ctx context.Context) (map[string]int64, error) {
  AND NOT EXISTS (SELECT 1 FROM Claim WHERE execution_id=x.id)
  AND NOT EXISTS (SELECT 1 FROM Execution c WHERE c.parent_id=x.id)`
 		cutoff := ms(finishedHorizon)
-		for _, table := range []string{"Cursor", "Waiter", "ShellSnapshot", "Event"} {
+		for _, table := range []string{"Cursor", "Waiter", "ShellSnapshot", "ReducedShellSnapshot", "Event"} {
 			if _, err := t.exec("DELETE FROM "+table+" WHERE execution_id IN ("+gone+")", cutoff); err != nil {
 				return err
 			}

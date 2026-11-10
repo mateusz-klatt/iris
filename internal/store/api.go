@@ -39,7 +39,7 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 		}
 		var err error
 		switch operation {
-		case "touch", "claim", "release", "messages", "ack", "end", "heartbeat", "reconcile", "inbox_receipt":
+		case "touch", "claim", "release", "messages", "ack", "end", "heartbeat", "reconcile", "reconcile_scoped", "inbox_receipt":
 			// A shell reconcile that names its session registers it first, and a first
 			// registration has no generation to give.
 			if r.Generation <= 0 && !shellSession(operation, r) {
@@ -68,7 +68,10 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 			if err == nil && t.console != nil && (operation == "ui_read" || operation == "ui_revoke") {
 				err = t.consoleAction(t.console.ID, "", operation)
 			}
-		case "reconcile":
+		case "reconcile", "reconcile_scoped":
+			if err = scopeFits(operation, r); err != nil {
+				return err
+			}
 			if shellSession(operation, r) {
 				out, err = t.shellSession(&r)
 			} else {
@@ -168,7 +171,7 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 		}
 		// Only hooks register with source hook, claim automatically or reconcile a shell, so
 		// these say when this client's hooks last reached the hub. A heartbeat does not.
-		if err == nil && (operation == "touch" || operation == "reconcile" || (operation == "sessions" && r.Source == "hook")) {
+		if err == nil && (operation == "touch" || operation == "reconcile" || operation == "reconcile_scoped" || (operation == "sessions" && r.Source == "hook")) {
 			ex := r.ExecutionID
 			if operation == "sessions" {
 				ex, _ = out["execution_id"].(string)

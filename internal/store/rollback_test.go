@@ -96,7 +96,7 @@ func TestWriteFailuresAreAtomic(t *testing.T) {
 func databaseState(t *testing.T, s *Store) string {
 	t.Helper()
 	out := map[string][][]any{}
-	for _, table := range strings.Fields("Meta sqlite_sequence Repository RepositoryAlias Agent Execution Claim Message Delivery Event Operation Cursor Ack HostReport ShellSnapshot Waiter WorktreeAlias ConsoleAccount ConsoleRepositoryAccess ConsoleSession ConsoleImport ConsoleAssignmentImport ConsoleOperation ConsoleAction ConsoleRevision") {
+	for _, table := range strings.Fields("Meta sqlite_sequence Repository RepositoryAlias Agent Execution Claim Message Delivery Event Operation Cursor Ack HostReport ShellSnapshot ReducedShellSnapshot Waiter WorktreeAlias ConsoleAccount ConsoleRepositoryAccess ConsoleSession ConsoleImport ConsoleAssignmentImport ConsoleOperation ConsoleAction ConsoleRevision") {
 		rows, err := s.db.Query("SELECT * FROM " + table + " ORDER BY rowid")
 		if err != nil {
 			t.Fatal(err)
