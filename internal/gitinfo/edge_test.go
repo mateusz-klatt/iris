@@ -272,13 +272,15 @@ func TestStatusReportsGitFailure(t *testing.T) {
 	}
 }
 
+// The cap fails the write that would pass it and says so in the attempt, so the breaker never
+// takes a capped status for a slow one (ADR 018).
 func TestStatusStopsAtItsLimit(t *testing.T) {
-	var out limitedStatus
-	if n, err := out.Write(make([]byte, statusLimit)); err != nil || n != statusLimit {
-		t.Fatal(n, err)
+	out := limitedStatus{attempt: &Attempt{}}
+	if n, err := out.Write(make([]byte, statusLimit)); err != nil || n != statusLimit || out.attempt.Capped() {
+		t.Fatal(n, err, out.attempt.Capped())
 	}
-	if _, err := out.Write([]byte{0}); err == nil || !strings.Contains(err.Error(), "limit") {
-		t.Fatal(err)
+	if _, err := out.Write([]byte{0}); err == nil || !strings.Contains(err.Error(), "limit") || !out.attempt.Capped() {
+		t.Fatal(err, out.attempt.Capped())
 	}
 	if out.kept.Len() != statusLimit {
 		t.Fatalf("kept %s bytes", strconv.Itoa(out.kept.Len()))
@@ -290,7 +292,7 @@ func TestStatusStopsAtItsLimit(t *testing.T) {
 // a single Write, so the limit never applied. The source here ends after 1 MiB, so a limit
 // that fails again costs this test a megabyte and no more.
 func TestTheStatusLimitHoldsForTheCopyExecMakes(t *testing.T) {
-	var out limitedStatus
+	out := limitedStatus{attempt: &Attempt{}}
 	copied, err := io.Copy(&out, io.LimitReader(repeating('a'), 1<<20))
 	if err == nil || copied > statusLimit || out.kept.Len() > statusLimit {
 		t.Fatalf("copied %d bytes and kept %d: %v", copied, out.kept.Len(), err)
