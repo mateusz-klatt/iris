@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/mateusz-klatt/iris/internal/gitinfo"
@@ -46,6 +47,24 @@ type Resolver struct {
 	// pending keeps an unconfirmed handover's original source and destination.
 	// Its /end may have committed even when the response never arrived.
 	pending *handover
+
+	// Observe receives an observation's fixed text for doctor. cmd/iris wires it to the hook
+	// package's bounded writer; nil drops it. It is called outside every lock.
+	Observe func(string)
+	// decided is what the first tool call that reached binding without a live override decided
+	// (ADR 017), nil until then. It never changes once set, so a call reads it without mu.
+	decided atomic.Pointer[callMode]
+	// decideMu lets one undecided call at a time check the override and decide. A call that
+	// found the process undecided reads decided again under it, before it takes mu, so it never
+	// waits for mu if another call decided meanwhile and is now holding mu for its first bind.
+	decideMu sync.Mutex
+	// seenMu guards the first session a call named, apart from mu, which a first bind holds
+	// while it waits: a call is noted before it waits.
+	seenMu  sync.Mutex
+	seen    string
+	twoSeen bool
+	// unusable is set once a call has been observed naming a session without a usable Execution.
+	unusable atomic.Bool
 }
 
 type handover struct {
@@ -102,13 +121,13 @@ func (e *LostError) Unwrap() []error { return []error{errLost, e.Cause} }
 func (r *Resolver) Resolve(ctx context.Context, handle string) (Bound, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	return r.resolveHeld(ctx, handle)
+}
+
+// resolveHeld is Resolve with mu held.
+func (r *Resolver) resolveHeld(ctx context.Context, handle string) (Bound, error) {
 	if r.bound.ExecutionID != "" && (handle == "" || handle == r.bound.ExecutionID) {
-		b := r.bound
-		if err := r.Hub.Do(ctx, "POST", "/v1/bind", map[string]any{"execution": b.ExecutionID, "client": r.Client, "host": r.Host}, &b); err != nil {
-			return Bound{}, err
-		}
-		r.bound = b
-		return b, nil
+		return r.refresh(ctx)
 	}
 	b, err := r.resolve(ctx, handle, "")
 	b, err = r.orRegister(ctx, handle, b, err)
@@ -122,6 +141,18 @@ func (r *Resolver) Resolve(ctx context.Context, handle string) (Bound, error) {
 		r.lost = false
 	}
 	return b, err
+}
+
+// refresh checks the bound Execution at the hub, with mu held, and keeps what the hub says of it:
+// a repository merge can change its repository without changing the Execution. A refusal leaves
+// the binding as it was; only a heartbeat confirms a loss.
+func (r *Resolver) refresh(ctx context.Context) (Bound, error) {
+	b := r.bound
+	if err := r.Hub.Do(ctx, "POST", "/v1/bind", map[string]any{"execution": b.ExecutionID, "client": r.Client, "host": r.Host}, &b); err != nil {
+		return Bound{}, err
+	}
+	r.bound = b
+	return b, nil
 }
 
 // orRegister is the last resort when no rung finds the session: a session whose hooks never
