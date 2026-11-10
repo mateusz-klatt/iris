@@ -104,7 +104,8 @@ packet on any of them outlasted the deadline, and the edit went through without 
 requests in one measurement took over 1.3 s, while the hub answered in milliseconds. A hook
 therefore sends a second request at 300 ms, on its own connection and resolver, and uses whichever
 answers first. Measured the same way, none took over 1.3 s. This is safe because session
-registration, `touch` and session end can be repeated. Reconcile is not repeated. A network that is
+registration, `touch` and session end can be repeated. Reconcile is not repeated, full or reduced:
+a second copy of a snapshot would find nothing changed and could answer first. A network that is
 down for the whole 1.5 s still fails open, and that is recorded as above.
 
 A shell or Code Mode call is reconciled within its own budget, inside the 1.5 s: 300 ms when the
@@ -547,16 +548,18 @@ renewed for it, and an automatic claim there keeps its expiry. Reduced baselines
 apart from the full ones, which are all that an older hub reads, and this version clears them
 whenever it starts. The first reduced snapshot after a start therefore only sets a baseline.
 
-A hook runs reduced scope only while its worktree's breaker says so. The breaker is a file beside
-the session memory. It trips when a full status that started with at least half the budget
-left, and had not passed the output cap, is still running at the reconcile's own deadline. The
-worktree then runs reduced for a minute, doubled after each full attempt that fails again, up to
-ten minutes, and a full status that finishes returns it to full. Hooks running at once keep it
-only approximately. A hook sends a reduced snapshot only when the index read before its gitlinks
-and after the status is one generation, by device, inode, size, both times and the checksum at
-its end. It sends one only to a hub that said in an answer that it takes them, and a failed
-scoped call is never resent on the plain route. `iris doctor` shows each worktree's scope.
-Windows takes no reduced snapshot and keeps no breaker.
+A worktree's breaker, a file beside the session memory, suggests the scope. It trips on four
+facts: a full status started with at least half the budget left, had not passed the output cap,
+and was still running when the reconcile's own deadline passed, the hook itself not cancelled.
+A git that has just exited while its output is still being read can trip it falsely. The breaker
+then suggests reduced scope for a minute, doubled after each full attempt that fails again, up to
+ten minutes, and a full status that finishes resets it. Hooks running at once keep it only
+approximately. A hook takes the suggestion only when its hub said in an answer that it takes
+reduced snapshots, nothing in its environment points git at another repository or index, and the
+index exists. It sends the snapshot only when the index read before its gitlinks and after the
+status is one generation, by device, inode, size, both times and the checksum at its end, and
+never resends a failed scoped call on the plain route. `iris doctor` shows what each breaker
+suggests. Windows takes no reduced snapshot and keeps no breaker.
 
 `iris guard` is a pre-commit check, installed per repository on request. It refuses a commit
 of paths held by another Execution. It is the strongest check Iris has, and it is cooperative.

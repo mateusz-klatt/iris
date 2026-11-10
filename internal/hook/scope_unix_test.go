@@ -309,9 +309,13 @@ func TestReducedScopeIsChosenOnlyWhenItCanBeVouchedFor(t *testing.T) {
 // read that fails, sends nothing and records why (ADR 018).
 func TestAReducedSnapshotNeedsOneIndexGeneration(t *testing.T) {
 	one := gitinfo.IndexID{Device: 1, Inode: 2, Size: 100, Modified: 3, Changed: 4, Tail: [32]byte{9}}
-	replaced, rewritten, skipHash := one, one, one
-	replaced.Inode = 5
-	rewritten.Tail[0] = 8
+	device, inode, size, modified, changed, rewritten, skipHash := one, one, one, one, one, one, one
+	device.Device++
+	inode.Inode++
+	size.Size++
+	modified.Modified++
+	changed.Changed++
+	rewritten.Tail[31] = 8
 	skipHash.Tail = [32]byte{}
 	unreadable := errors.New("unreadable")
 	cases := []struct {
@@ -323,7 +327,11 @@ func TestAReducedSnapshotNeedsOneIndexGeneration(t *testing.T) {
 	}{
 		{name: "one generation", first: one, second: one, sent: true},
 		{name: "one generation without a checksum, by its five fields", first: skipHash, second: skipHash, sent: true},
-		{name: "replaced by another file", first: one, second: replaced},
+		{name: "another device", first: one, second: device},
+		{name: "another inode", first: one, second: inode},
+		{name: "another size", first: one, second: size},
+		{name: "another modification time", first: one, second: modified},
+		{name: "another change time", first: one, second: changed},
 		{name: "rewritten with the same five fields", first: one, second: rewritten},
 		{name: "unreadable before", errs: [2]error{unreadable, nil}},
 		{name: "unreadable after", first: one, errs: [2]error{nil, unreadable}},
@@ -339,13 +347,15 @@ func TestAReducedSnapshotNeedsOneIndexGeneration(t *testing.T) {
 				if path != filepath.Join(f.repo.GitDir, "index") {
 					t.Errorf("read %s", path)
 				}
+				f.hub.note("index")
 				if reads.Add(1) == 1 {
 					return tc.first, tc.errs[0]
 				}
 				return tc.second, tc.errs[1]
 			}
-			if tc.linksErr != nil {
-				f.r.Gitlinks = func(context.Context, string) ([]string, error) { return nil, tc.linksErr }
+			f.r.Gitlinks = func(context.Context, string) ([]string, error) {
+				f.hub.note("gitlinks")
+				return []string{"lib"}, tc.linksErr
 			}
 			out, state := f.run(f.quickGit(map[string]string{"a.txt": "??"}), time.Hour)
 			if !isAllow(out) {
@@ -360,6 +370,11 @@ func TestAReducedSnapshotNeedsOneIndexGeneration(t *testing.T) {
 			}
 			if len(f.hub.scopedOneCall) != 1 || err != nil {
 				t.Fatalf("sent %d: %v", len(f.hub.scopedOneCall), err)
+			}
+			// The index is read before the gitlinks and again after the status, so both reads
+			// lie between the two.
+			if calls := f.hub.calls(); !slices.Equal(calls, []string{"index", "gitlinks", "status reduced", "index", "scoped one-call"}) {
+				t.Fatalf("calls %v", calls)
 			}
 			got := f.hub.scopedOneCall[0]
 			if got.Kind != "before" || got.Status["a.txt"] != "??" || got.Scope.Mode != "dirty" || !slices.Equal(got.Scope.Submodules, []string{"lib"}) {
@@ -431,15 +446,6 @@ func TestAColdCacheRegistersBeforeChoosingTheScope(t *testing.T) {
 	if stage, err := state.snapshot(); stage != "shell status" || failureText(err) != shellOverBudget {
 		t.Fatalf("stage %q: %v", stage, err)
 	}
-	// An older hub refusing the request in time is only learned at the next registration.
-	failing := newScopeFixture(t)
-	failing.reduced(time.Minute)
-	failing.hub.scopedErrs = []error{&hubclient.Error{Code: "not_found"}}
-	failing.run(failing.quickGit(nil), time.Hour)
-	if calls := failing.hub.calls(); !slices.Equal(calls, []string{"register", "status reduced", "scoped"}) || failing.m.Capable(scopeHubURL) {
-		t.Fatalf("calls %v, capable %t", calls, failing.m.Capable(scopeHubURL))
-	}
-
 	refused := newScopeFixture(t)
 	refused.reduced(time.Minute)
 	refused.hub.registerErrs = []error{errors.New("connection refused")}
@@ -453,42 +459,55 @@ func TestAColdCacheRegistersBeforeChoosingTheScope(t *testing.T) {
 }
 
 // A scoped request that fails is never sent again on a plain route, which would read the reduced
-// map as a full one. A refusal like an older hub's forgets the capability; any other failure
-// keeps it (ADR 018).
+// map as a full one, in either form: the one call of a hook that knows the hub takes reduced
+// snapshots, or the Execution's request after a registration said so. A refusal like an older
+// hub's forgets the capability, lost repairs the proof and drops the snapshot, and any other
+// failure keeps the capability (ADR 018).
 func TestAFailedScopedRequestIsNeverResentAsFull(t *testing.T) {
 	cases := []struct {
-		name    string
-		err     error
-		wait    bool
-		forgets bool
+		name                   string
+		err                    error
+		wait, forgets, repairs bool
 	}{
 		{name: "not_found", err: &hubclient.Error{Code: "not_found"}, forgets: true},
 		{name: "a bare 404", err: &hubclient.StatusError{Path: "/v1/shell/scoped", Code: 404, Status: "404 Not Found"}, forgets: true},
 		{name: "bad_request", err: &hubclient.Error{Code: "bad_request"}, forgets: true},
+		{name: "lost", err: &hubclient.Error{Code: "lost"}, repairs: true},
 		{name: "another failure", err: errors.New("connection refused")},
 		{name: "past the budget", wait: true},
 	}
-	for _, tc := range cases {
-		t.Run(tc.name, func(t *testing.T) {
-			f := newScopeFixture(t)
-			f.reduced(time.Minute)
-			f.warm()
-			f.hub.scopedErrs, f.hub.waitScoped = []error{tc.err}, tc.wait
-			budget := time.Hour
-			if tc.wait {
-				budget = tripBudget
-			}
-			out, state := f.run(f.quickGit(map[string]string{"a.txt": "??"}), budget)
-			if calls := f.hub.calls(); !isAllow(out) || !slices.Equal(calls, []string{"status reduced", "scoped one-call"}) {
-				t.Fatalf("calls %v: %s", calls, out.Stdout)
-			}
-			if f.m.Capable(scopeHubURL) == tc.forgets {
-				t.Fatalf("capable %t", f.m.Capable(scopeHubURL))
-			}
-			if stage, err := state.snapshot(); stage != "shell session" || err == nil {
-				t.Fatalf("stage %q: %v", stage, err)
-			}
-		})
+	for _, form := range []string{"one call", "after a registration"} {
+		for _, tc := range cases {
+			t.Run(form+"/"+tc.name, func(t *testing.T) {
+				f := newScopeFixture(t)
+				f.reduced(time.Minute)
+				want, stage := []string{"status reduced", "scoped one-call"}, "shell session"
+				if form == "one call" {
+					f.warm()
+				} else {
+					want, stage = []string{"register", "status reduced", "scoped"}, "shell reconcile"
+				}
+				if tc.repairs {
+					want = append(want, "register")
+				}
+				f.hub.scopedErrs, f.hub.waitScoped = []error{tc.err}, tc.wait
+				budget := time.Hour
+				if tc.wait {
+					budget = tripBudget
+				}
+				out, state := f.run(f.quickGit(map[string]string{"a.txt": "??"}), budget)
+				if calls := f.hub.calls(); !isAllow(out) || !slices.Equal(calls, want) {
+					t.Fatalf("calls %v: %s", calls, out.Stdout)
+				}
+				if f.m.Capable(scopeHubURL) == tc.forgets {
+					t.Fatalf("capable %t", f.m.Capable(scopeHubURL))
+				}
+				got, err := state.snapshot()
+				if tc.repairs && err != nil || !tc.repairs && (got != stage || err == nil) {
+					t.Fatalf("stage %q: %v", got, err)
+				}
+			})
+		}
 	}
 }
 
@@ -637,6 +656,37 @@ func TestConcurrentHooksLeaveABreakerTheNextHookFollows(t *testing.T) {
 		}
 	})
 
+	t.Run("a trip written after a full success", func(t *testing.T) {
+		f := newScopeFixture(t)
+		f.m.SetBreaker(f.key(), breaker{V: 1, Worktree: f.repo.Worktree, Scope: scopeReduced, NextFullMS: f.now().UnixMilli(), CooldownMS: time.Minute.Milliseconds()})
+		started, succeeded := make(chan struct{}), make(chan struct{})
+		slow := f.r
+		slow.ShellDeadline = 500 * time.Millisecond
+		// This hook's full status starts first, and is still running at its deadline, which
+		// passes only after the other hook's full status has finished and reset the breaker.
+		slow.Status = func(ctx context.Context, _ string, scope gitinfo.Scope, a *gitinfo.Attempt) (map[string]string, error) {
+			f.hub.note(statusEntry(scope))
+			a.Begin(ctx, time.Now())
+			close(started)
+			<-succeeded
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		var wg sync.WaitGroup
+		wg.Go(func() { slow.reconcile(context.Background(), f.ev, &runState{}) })
+		<-started
+		f.run(f.quickGit(map[string]string{"a.txt": "??"}), time.Hour)
+		if b, _ := f.breaker(); b.Scope != scopeFull {
+			t.Fatalf("no reset: %+v", b)
+		}
+		close(succeeded)
+		wg.Wait()
+		// The trip landed last, so it stands, counted from a full breaker: one minute.
+		if b, _ := f.breaker(); b.Scope != scopeReduced || b.CooldownMS != time.Minute.Milliseconds() || !f.r.reducedDue(f.repo) {
+			t.Fatalf("breaker %+v", b)
+		}
+	})
+
 	t.Run("a reduced snapshot sent after a full success", func(t *testing.T) {
 		f := newScopeFixture(t)
 		f.reduced(time.Minute)
@@ -771,26 +821,29 @@ func TestScopeHintsAreWhatTheNextHookActsOn(t *testing.T) {
 	}
 }
 
-// stallMemory never finishes writing a breaker.
+// stallMemory holds a breaker write until it is released, then makes it.
 type stallMemory struct {
 	fileMemory
 	entered chan<- time.Time
 	release <-chan struct{}
+	wrote   chan<- struct{}
 }
 
-func (s stallMemory) SetBreaker(string, breaker) {
+func (s stallMemory) SetBreaker(worktree string, b breaker) {
 	s.entered <- time.Now()
 	<-s.release
+	s.fileMemory.SetBreaker(worktree, b)
+	close(s.wrote)
 }
 
-// A breaker write that stalls cannot hold the hook past its own deadline: the output is still
-// valid, and only the trip is lost (ADR 018, D3).
+// A breaker write that stalls cannot hold the hook past its own deadline: the output is valid,
+// and returns before the trip is written. In a hook process, which exits right after, the trip
+// is then lost (ADR 018, D3).
 func TestAStalledBreakerWriteStillReturnsValidOutput(t *testing.T) {
 	f := newScopeFixture(t)
-	entered, release := make(chan time.Time), make(chan struct{})
-	defer close(release)
+	entered, release, wrote := make(chan time.Time), make(chan struct{}), make(chan struct{})
 	r := f.r
-	r.Memory = stallMemory{fileMemory: f.m, entered: entered, release: release}
+	r.Memory = stallMemory{fileMemory: f.m, entered: entered, release: release, wrote: wrote}
 	r.ClientName, r.EventName = "claude", "PreToolUse"
 	r.Stdin = strings.NewReader(fmt.Sprintf(`{"session_id":"s","cwd":%q,"tool_name":"Bash","tool_input":{"command":"make"}}`, f.repo.Worktree))
 	r.Status, r.ShellDeadline = f.slowGit(tripBudget), tripBudget
@@ -799,7 +852,57 @@ func TestAStalledBreakerWriteStillReturnsValidOutput(t *testing.T) {
 	r.logAfter = never
 	assertAllow(t, ClientClaude, r.Run())
 	if _, found := f.breaker(); found {
-		t.Fatal("a stalled write was kept")
+		t.Fatal("the hook waited for the stalled write")
+	}
+	// The write that was held is the trip.
+	close(release)
+	<-wrote
+	if b, _ := f.breaker(); b.Scope != scopeReduced {
+		t.Fatalf("the held write: %+v", b)
+	}
+}
+
+// slowResetMemory takes its first breaker write past the reconcile's deadline, as a stalled disk
+// would, and records every write.
+type slowResetMemory struct {
+	fileMemory
+	stall  time.Duration
+	mu     sync.Mutex
+	writes []breaker
+	done   chan struct{}
+}
+
+func (s *slowResetMemory) SetBreaker(worktree string, b breaker) {
+	s.mu.Lock()
+	first := len(s.writes) == 0
+	s.writes = append(s.writes, b)
+	s.mu.Unlock()
+	if first {
+		defer close(s.done)
+		time.Sleep(s.stall)
+	}
+	s.fileMemory.SetBreaker(worktree, b)
+}
+
+// A full status that finished is no trip, even when the write that returns the worktree to full
+// stalls past the deadline: git was done. Once the write lands, the worktree is full.
+func TestAStalledResetAfterAFullStatusIsNoTrip(t *testing.T) {
+	f := newScopeFixture(t)
+	f.m.SetBreaker(f.key(), breaker{V: 1, Worktree: f.repo.Worktree, Scope: scopeReduced, NextFullMS: f.now().UnixMilli(), CooldownMS: time.Minute.Milliseconds()})
+	slow := &slowResetMemory{fileMemory: f.m, stall: 3 * tripBudget, done: make(chan struct{})}
+	// The two-call form registers before the status, so nothing is written to the memory after
+	// the reset, which the worker may still be finishing when the test ends.
+	f.r.Memory, f.r.Hub = slow, reconcileHub{}
+	f.run(f.quickGit(map[string]string{"a.txt": "??"}), tripBudget)
+	<-slow.done
+	slow.mu.Lock()
+	writes := slices.Clone(slow.writes)
+	slow.mu.Unlock()
+	if len(writes) != 1 || writes[0].Scope != scopeFull {
+		t.Fatalf("writes %+v", writes)
+	}
+	if b, _ := f.breaker(); b.Scope != scopeFull {
+		t.Fatalf("breaker %+v", b)
 	}
 }
 

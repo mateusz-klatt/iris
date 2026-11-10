@@ -20,6 +20,6 @@ func (r Runner) shell(ctx context.Context, hub shellHub, ev Event, repo gitinfo.
 
 func (Runner) learnScope([]string) {}
 
-func (Runner) fullSucceeded(gitinfo.Repo) {}
+func (Runner) fullSucceeded(*runState, gitinfo.Repo) {}
 
 func (Runner) tripIfSlow(context.Context, context.Context, time.Duration, *runState, *shellRun) {}

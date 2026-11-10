@@ -129,9 +129,10 @@ func TestAHookThatTripsLeavesTheNextOneReduced(t *testing.T) {
 		return string(raw)
 	}
 
-	// The cold trip: the full status passes the loopback budget and is killed.
+	// The cold trip: the full status passes the loopback budget and is killed. The time includes
+	// starting the test binary, so it allows a second beyond the hook's own deadline.
 	out, took := runChild("PreToolUse")
-	if out != "{}\n" || took > hook.DefaultDeadline+5*time.Second {
+	if out != "{}\n" || took > hook.DefaultDeadline+time.Second {
 		t.Fatalf("first hook: %q in %v", out, took)
 	}
 	if calls := readGitLog(); !strings.Contains(calls, "--ignore-submodules=untracked") || strings.Contains(calls, "--ignore-submodules=dirty") {

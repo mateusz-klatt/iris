@@ -178,7 +178,7 @@ func (r Runner) shellFull(ctx context.Context, hub shellHub, ev Event, repo giti
 		if taken, err = r.status(ctx, repo.Worktree, gitinfo.FullScope, &run.attempt); err != nil {
 			return out, true, err
 		}
-		r.fullSucceeded(repo)
+		r.fullSucceeded(state, repo)
 		state.at("shell session")
 		out, err = r.reconcileSession(ctx, combined, ev, repo, phase, taken)
 		// A lost answer may also be an older hub's to a request with no Execution, so the
@@ -197,7 +197,7 @@ func (r Runner) shellFull(ctx context.Context, hub shellHub, ev Event, repo giti
 		if taken, err = r.status(ctx, repo.Worktree, gitinfo.FullScope, &run.attempt); err != nil {
 			return out, true, err
 		}
-		r.fullSucceeded(repo)
+		r.fullSucceeded(state, repo)
 	}
 	state.at("shell reconcile")
 	out, err = hub.Reconcile(ctx, hubclient.ReconcileRequest{ExecutionID: sess.ExecutionID, Generation: sess.Generation, Kind: phase, Status: taken})

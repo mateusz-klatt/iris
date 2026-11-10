@@ -107,20 +107,21 @@ func (b breaker) reducedAt(now time.Time) bool {
 // ScopeHint is one worktree's breaker, as doctor reports it (ADR 018 decision 6).
 type ScopeHint struct {
 	Worktree string
-	// Reduced says the breaker tripped and no full status has finished since. While Due, a
-	// hook there runs reduced scope; once the cooldown is over, the next one tries full.
+	// Reduced says the breaker tripped and no full status has finished since. While Due, it
+	// suggests reduced scope; once the cooldown is over, the next hook tries full.
 	Reduced, Due bool
 	Reason       string
 	// NextFull is when a reduced worktree's next hook tries full again; zero when it is full.
 	NextFull time.Time
-	// LastFullOK is when a full status last finished there after a trip; zero when none did.
+	// LastFullOK is when a full status that ended a trip finished; zero when none has. It is
+	// written only then, so later full statuses do not move it.
 	LastFullOK time.Time
 }
 
 // ScopeHints reads every worktree's breaker in the session memory beside the token file at
-// tokenPath, sorted by worktree. A file a hook would not read is left out, so the hints are
-// what the next hook in each worktree acts on, apart from what only that hook sees: its
-// environment and whether the index is there.
+// tokenPath, sorted by worktree. A file a hook would not read is left out. A hook takes the
+// suggestion only where its hub takes reduced snapshots, nothing in its environment points git
+// elsewhere and the index exists, which only that hook can see.
 func ScopeHints(tokenPath string, now time.Time) []ScopeHint {
 	dir := filepath.Join(filepath.Dir(tokenPath), "sessions")
 	entries, _ := os.ReadDir(dir) // a missing directory has no breakers
@@ -224,8 +225,11 @@ func (r Runner) reducedDue(repo gitinfo.Repo) bool {
 	return ok && b.reducedAt(r.now())
 }
 
-// fullSucceeded returns a reduced worktree to full scope once a full status has finished.
-func (r Runner) fullSucceeded(repo gitinfo.Repo) {
+// fullSucceeded returns a reduced worktree to full scope once a full status has finished. It
+// leaves the status stage first: git is done, so a deadline that passes during this write is
+// not git's and must not trip the breaker again.
+func (r Runner) fullSucceeded(state *runState, repo gitinfo.Repo) {
+	state.at("shell scope")
 	m, ok := r.scopeMemory()
 	if !ok {
 		return
@@ -309,7 +313,7 @@ func (r Runner) shellReduced(ctx context.Context, hub scopedShellHub, plain shel
 			if err != nil {
 				return out, true, err
 			}
-			r.fullSucceeded(repo)
+			r.fullSucceeded(state, repo)
 			state.at("shell reconcile")
 			out, err = plain.Reconcile(ctx, hubclient.ReconcileRequest{ExecutionID: s.ExecutionID, Generation: s.Generation, Kind: phase, Status: taken})
 			return out, false, err

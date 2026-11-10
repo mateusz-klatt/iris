@@ -73,7 +73,7 @@ func (l *gitlinkListing) Write(p []byte) (int, error) {
 func (l *gitlinkListing) take(record []byte) error {
 	header, path, ok := bytes.Cut(record, []byte{'\t'})
 	fields := bytes.Split(header, []byte{' '})
-	if !ok || len(path) == 0 || len(fields) != 3 || !digits(fields[0], 6, "01234567") || !object(fields[1]) || !digits(fields[2], 1, "0123") {
+	if !ok || len(path) == 0 || len(fields) != 3 || !indexModes[string(fields[0])] || !object(fields[1]) || !digits(fields[2], 1, "0123") {
 		return errGitlinkRecord
 	}
 	if string(fields[0]) != "160000" {
@@ -87,6 +87,11 @@ func (l *gitlinkListing) take(record []byte) error {
 	}
 	return nil
 }
+
+// indexModes are the modes an index entry can have: a file, an executable file, a symbolic link
+// and a gitlink. Any other, such as the sparse directory that ls-files prints only with --sparse,
+// means the listing is not one this reads, and a mode it skipped could have hidden a gitlink.
+var indexModes = map[string]bool{"100644": true, "100755": true, "120000": true, "160000": true}
 
 // paths is the set once git has finished. Output that does not end with a NUL was cut short.
 func (l *gitlinkListing) paths() ([]string, error) {

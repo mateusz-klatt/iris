@@ -157,20 +157,32 @@ type closeNotice struct {
 
 func (c closeNotice) Close() error { close(c.closed); return nil }
 
+// Neither reconcile route is repeated, full or reduced: a second copy of a snapshot would find
+// nothing changed, and answering first it would cost the hook the first copy's warning.
 func TestReconcileIsNeverRepeated(t *testing.T) {
-	var backups atomic.Int32
-	res, err := hedged(t,
-		func(*http.Request) (*http.Response, error) {
-			time.Sleep(40 * time.Millisecond)
-			return answer("first"), nil
-		},
-		func(*http.Request) (*http.Response, error) { backups.Add(1); return answer("second"), nil },
-		reconcilePath)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got := read(t, res); got != "first" || backups.Load() != 0 {
-		t.Fatal(got, backups.Load())
+	for _, path := range []string{reconcilePath, scopedPath} {
+		var backups atomic.Int32
+		res, err := hedged(t,
+			func(*http.Request) (*http.Response, error) {
+				time.Sleep(40 * time.Millisecond)
+				return answer("first"), nil
+			},
+			func(*http.Request) (*http.Response, error) { backups.Add(1); return answer("second"), nil },
+			path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := read(t, res); got != "first" || backups.Load() != 0 {
+			t.Fatal(path, got, backups.Load())
+		}
+		// A copy the hub may have stored already is not sent again after a failure either.
+		lost := errors.New("connection reset after the request was sent")
+		if _, err = hedged(t,
+			func(*http.Request) (*http.Response, error) { return nil, lost },
+			func(*http.Request) (*http.Response, error) { backups.Add(1); return answer("second"), nil },
+			path); !errors.Is(err, lost) || backups.Load() != 0 {
+			t.Fatal(path, err, backups.Load())
+		}
 	}
 }
 

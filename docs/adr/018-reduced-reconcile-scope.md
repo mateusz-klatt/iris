@@ -180,6 +180,9 @@ Each change below was made by the pull request that implemented it.
   of it, and git is then not the evidence. The half is a candidate, unmeasured like the
   cooldowns.
 - A reduced status past its budget never changes the breaker.
+- Git counts as running while the reconcile is at its status stage. The hook leaves that stage
+  as soon as a full status returns, before it writes the reset, so a write that stalls past the
+  deadline is not taken for slow git.
 - The trip is written before the hook returns, because the process exits right after it. A
   write that stalls past the hook's own deadline loses the trip, and the output stays valid.
 - What it cannot tell: a git that exited just before the deadline, while its output was still
@@ -190,10 +193,10 @@ Each change below was made by the pull request that implemented it.
 **One index generation for both reads** (the hook's side; settles the condition in decision 2).
 - The set is every entry of mode 160000, at any stage, in `git ls-files --stage -z`, sorted and
   without repeats, at most 500. It is read as a stream within bounds. A malformed or oversized
-  listing, or a git that fails, gives no set, never an empty one. Without `--sparse`, a sparse
-  index is listed expanded. The tests read it in these states: a gitlink staged but declared
-  nowhere, a removed one, a nested one, a conflicted one, a linked worktree's own index, a split
-  index and a sparse one, with `.gitmodules` missing or wrong.
+  listing, a mode no index entry has, or a git that fails, gives no set, never an empty one.
+  Without `--sparse`, a sparse index is listed expanded. The tests read it in these states: a
+  gitlink staged but declared nowhere, a removed one, a nested one, a conflicted one, a linked
+  worktree's own index, a split index and a sparse one, with `.gitmodules` missing or wrong.
 - Before the set is read and after the status, the hook takes six values from one open index
   file: device, inode, size, modification and change time, and the last 32 bytes. A published
   index ends with a checksum of its content, so two generations with different content differ
