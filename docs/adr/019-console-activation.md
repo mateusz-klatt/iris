@@ -1,7 +1,7 @@
 # 019: Activate the named console explicitly, then restart
 
-Status: proposed; provisional local rehearsals passed, with final clean-candidate
-validation pending, including the atomic console-key publication correction.
+Status: accepted on 2026-11-10 by claude-holzera-iris, on the candidate evidence
+at the end of this record.
 
 ## Problem
 
@@ -174,3 +174,22 @@ cookie alone and with machine+cookie, including trailing slash/dot doctor paths.
 Canonical doctor PUT with a query returned 200 for the valid machine bearer and
 401 for that cookie alone. Both rehearsals used the same exact documented block.
 No production Apache changes or real account imports were performed.
+
+## Candidate evidence, 2026-11-10
+
+Two records cover the image CI built for the pull request. The
+[candidate run](../research/console-activation-candidate-2026-11-10.md) ran the
+container beside the public hub: a closed start, activation, restart and a
+browser sign-in on an earlier head, a start on a copy of a production backup,
+and, on the final head's image, going back to the version before and another
+attempt. The [access and import run](../research/console-access-and-import-2026-11-10.md)
+ran the binary from the final head's image, `653916e` merged with `main` at
+`1ffed57`. It covered an import on the version before, the switch, owner
+bootstrap and recovery while closed, activation and restarts with an unchanged
+absolute expiry, refusal of a legacy link cookie, the access checks with two
+browser contexts and two tabs, keyboard use in a narrow and a wide window, and
+going back with another attempt: 75 of 75 checks passed.
+
+Not repeated on the candidate: the restore rehearsal with a fresh key, which ran
+above on the provisional binary built from a modified `0fe50af`, and the Apache
+boundary, which was rehearsed above with the older backend `bc1eae9`.
