@@ -100,17 +100,20 @@ func New(resolver *binding.Resolver) *mcp.Server {
 			schema["required"] = spec.required
 		}
 		server.AddTool(&mcp.Tool{Name: spec.name, Description: spec.description, InputSchema: schema, Annotations: spec.hints}, func(ctx context.Context, req *mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+			// The call's ids are noted before anything else, so a call that then fails still counts.
+			session, thread := callIDs(resolver.Client, req.Params.Meta)
+			resolver.Note(session)
 			var in Input
 			if err := json.Unmarshal(req.Params.Arguments, &in); err != nil {
 				return toolError(&hubclient.Error{Code: "bad_request", Message: "invalid tool arguments"}), nil
 			}
 			ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
 			defer cancel()
-			b, err := resolver.Resolve(ctx, in.Execution)
+			b, primary, err := resolver.ResolveCall(ctx, in.Execution, session, thread)
 			if err != nil {
 				return toolError(err), nil
 			}
-			out, err := call(ctx, resolver.Hub, b, spec.name, in)
+			out, err := call(ctx, resolver.Hub, b, primary, spec.name, in)
 			if err != nil {
 				return toolError(err), nil
 			}
@@ -120,6 +123,19 @@ func New(resolver *binding.Resolver) *mcp.Server {
 	}
 	return server
 }
+
+// callIDs is the session and thread a Codex tool call names at the top of its _meta (ADR 017):
+// sessionId and threadId, each taken as it comes. Iris uses no other client's ids, nor a value
+// that is not a non-empty string, nor ids nested deeper in the metadata.
+func callIDs(client string, meta mcp.Meta) (session, thread string) {
+	if client != "codex" {
+		return "", ""
+	}
+	session, _ = meta["sessionId"].(string)
+	thread, _ = meta["threadId"].(string)
+	return session, thread
+}
+
 func toolError(err error) *mcp.CallToolResult {
 	var typed *hubclient.Error
 	if !errors.As(err, &typed) {
@@ -133,12 +149,16 @@ func toolError(err error) *mcp.CallToolResult {
 // receiptDeadline bounds the receipt a fetch posts before its tool result goes back (ADR 010).
 const receiptDeadline = 2 * time.Second
 
-func call(ctx context.Context, h *hubclient.Client, b binding.Bound, name string, in Input) (map[string]any, error) {
+func call(ctx context.Context, h *hubclient.Client, b binding.Bound, primary bool, name string, in Input) (map[string]any, error) {
 	if name == "whoami" {
 		// Prove liveness and use the hub's current binding after a repository
 		// merge. Legacy lease-only replies leave the resolved binding intact.
-		if err := h.Do(ctx, "POST", "/v1/executions/"+url.PathEscape(b.ExecutionID)+"/heartbeat", map[string]any{"generation": b.Generation, "source": "shim"}, &b); err != nil {
-			return nil, err
+		// Only this process's own binding is renewed: a shim's heartbeat puts an
+		// Execution on a 60-second lease that only its maintainer keeps.
+		if primary {
+			if err := h.Do(ctx, "POST", "/v1/executions/"+url.PathEscape(b.ExecutionID)+"/heartbeat", map[string]any{"generation": b.Generation, "source": "shim"}, &b); err != nil {
+				return nil, err
+			}
 		}
 		raw, _ := json.Marshal(b)
 		out := map[string]any{}

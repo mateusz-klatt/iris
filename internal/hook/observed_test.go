@@ -5,6 +5,7 @@ import (
 	"os"
 	"strings"
 	"testing"
+	"time"
 )
 
 // An unknown tool reached only stderr, which nobody keeps (gap review C4). It is now in the
@@ -23,6 +24,59 @@ func TestAnUnknownToolIsObservedForDoctor(t *testing.T) {
 	if !got.Observed() || got.Degraded() || got.Error != "unknown tool iris-probe-probe" || got.Client != "copilot" {
 		t.Fatalf("%+v", got)
 	}
+}
+
+// iris mcp records what a tool call's ids showed in the same log, as the client's event "mcp".
+// The write is best effort and may finish after Observer returns, so the test waits for it.
+func TestTheMCPServerObservesInTheHooksLog(t *testing.T) {
+	env := failureEnv(t)
+	Observer(env, "codex")("calls of two sessions")
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		if seen, _ := ReadRecentObservations(env("IRIS_TOKEN_FILE"), 1); len(seen) == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the write never finished")
+		}
+	}
+	got := observedOnly(t, env("IRIS_TOKEN_FILE"))
+	if !got.Observed() || got.Client != "codex" || got.Event != "mcp" || got.Error != "calls of two sessions" {
+		t.Fatalf("%+v", got)
+	}
+}
+
+// An observation never holds the MCP server's call: a write that cannot go ahead is left to finish
+// later, past the budget, and one that panics is recovered.
+func TestAnObservationNeverHoldsItsCaller(t *testing.T) {
+	token := failureEnv(t)("IRIS_TOKEN_FILE")
+	release := make(chan struct{})
+	blocked := func(k string) string {
+		<-release
+		if k == "IRIS_TOKEN_FILE" {
+			return token
+		}
+		return ""
+	}
+	done := make(chan struct{})
+	go func() {
+		Observer(blocked, "codex")("calls of two sessions")
+		close(done)
+	}()
+	select {
+	case <-done:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the caller waited for a blocked write")
+	}
+	close(release)
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		if seen, _ := ReadRecentObservations(token, 1); len(seen) == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("the write never finished")
+		}
+	}
+	Observer(func(string) string { panic("a broken environment") }, "codex")("calls of two sessions")
 }
 
 // A cross-load, this client's hook running in another client's session, is observed too.

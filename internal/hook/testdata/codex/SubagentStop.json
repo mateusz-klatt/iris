@@ -1,0 +1,14 @@
+{
+  "session_id": "01a1c616-e474-73a1-9c54-d71509806f1a",
+  "turn_id": "01a1c616-e503-7751-bcdc-1f9378daaf48",
+  "transcript_path": "/home/user/.codex/sessions/2026/11/10/rollout-2026-11-10T16-32-31-01a1c616-e474-73a1-9c54-d71509806f1a.jsonl",
+  "agent_transcript_path": "/home/user/.codex/sessions/2026/11/10/rollout-2026-11-10T16-32-31-01a1c616-e4db-7483-a519-c9a52c1093fd.jsonl",
+  "cwd": "/workspace/project",
+  "hook_event_name": "SubagentStop",
+  "model": "gpt-6-luna",
+  "permission_mode": "bypassPermissions",
+  "stop_hook_active": false,
+  "agent_id": "01a1c616-e4db-7483-a519-c9a52c1093fd",
+  "agent_type": "default",
+  "last_assistant_message": "IRIS_B_CHILD_DONE"
+}

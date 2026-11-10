@@ -1,0 +1,38 @@
+{
+  "jsonrpc": "2.0",
+  "id": 2,
+  "method": "tools/call",
+  "params": {
+    "_meta": {
+      "callId": "exec-059e8aa8-ddaa-4933-9fad-09d0294b5873",
+      "x-codex-turn-metadata": {
+        "session_id": "01a1c5fb-ea8a-7842-b3cd-68cb0e300fd9",
+        "thread_id": "01a1c5fb-ea8a-7842-b3cd-68cb0e300fd9",
+        "reasoning_effort": "low",
+        "turn_id": "01a1c5fb-eb7f-7fd2-80fb-b50796518029",
+        "model": "gpt-6-luna",
+        "thread_source": "user",
+        "turn_trigger": "queue",
+        "sandbox": "seccomp",
+        "sandbox_mode": "read-only",
+        "auto_review_enabled": false,
+        "node_repl_auto_review_required": false,
+        "node_repl_disabled": false,
+        "workspaces": {
+          "/workspace/project": {
+            "has_changes": false
+          }
+        },
+        "turn_started_at_unix_ms": 1794322983808,
+        "codex_version": "0.167.0"
+      },
+      "threadId": "01a1c5fb-ea8a-7842-b3cd-68cb0e300fd9",
+      "sessionId": "01a1c5fb-ea8a-7842-b3cd-68cb0e300fd9",
+      "windowId": "01a1c5fb-ea8a-7842-b3cd-68cb0e300fd9:0",
+      "itemId": "ctc_01a1c5fb-ebbc-7ab3-96d0-f0d5b663887f",
+      "progressToken": 1
+    },
+    "name": "arm",
+    "arguments": {}
+  }
+}

@@ -8,6 +8,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mateusz-klatt/iris/internal/binding"
 	"github.com/mateusz-klatt/iris/internal/guard"
 	"github.com/mateusz-klatt/iris/internal/hook"
 	"github.com/mateusz-klatt/iris/internal/integrate"
@@ -123,7 +124,7 @@ func bareVersion(text string) string {
 // observationKind keeps an observation's kind and drops what follows it, a tool name or a
 // client, which comes from the client: "unknown tool view" is "unknown tool".
 func observationKind(text string) string {
-	for _, kind := range []string{"unknown tool", "cross-load"} {
+	for _, kind := range []string{"unknown tool", "cross-load", binding.ObservedTwoSessions, binding.ObservedUnusable} {
 		if strings.HasPrefix(text, kind) {
 			return kind
 		}

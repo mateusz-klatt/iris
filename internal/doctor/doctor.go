@@ -19,6 +19,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/mateusz-klatt/iris/internal/binding"
 	"github.com/mateusz-klatt/iris/internal/gitinfo"
 	"github.com/mateusz-klatt/iris/internal/guard"
 	"github.com/mateusz-klatt/iris/internal/hook"
@@ -56,6 +57,9 @@ type ClientReport struct {
 	// missing configuration or human step, or its reason. It is not published.
 	readinessStatus string
 	readinessDetail string
+	// unusable says a call of this client named a session without a usable Execution in the
+	// last 24 hours (ADR 017), which unusableHint explains from the hub's evidence.
+	unusable bool
 }
 
 // Result is the human-readable outcome plus the stored report.
@@ -176,12 +180,18 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 	res.Guard = guardLine(ctx, opt.Dir)
 	res.LineEndings = lineEndingsLine(ctx, opt.Dir)
 	res.Scope = scopeReport(tokenFile, opt.Now())
+	var seen map[string]string // nil when doctor could not ask the hub
 	if probe.up && probe.tokenOK {
 		res.Case = caseLine(ctx, hubURL, token, opt.host(), opt.Dir, opt.HTTP)
-		seen := lastHooks(ctx, hubURL, token, opt.host(), opt.HTTP)
+		seen = lastHooks(ctx, hubURL, token, opt.host(), opt.HTTP)
 		for i := range res.Report.Clients {
 			res.Report.Clients[i].LastHookAt = seen[res.Report.Clients[i].Client]
 		}
+	}
+	for i := range res.Report.Clients {
+		unusableHint(&res.Report.Clients[i], seen, opt.Now())
+	}
+	if probe.up && probe.tokenOK {
 		if err := storeReport(ctx, hubURL, token, res.Report, opt.HTTP); err != nil {
 			res.StoreError = err.Error()
 		} else {
@@ -456,8 +466,35 @@ func applyFailures(res *Result, tokenFile string, now time.Time) error {
 		if seen := observed[row.Client]; len(seen) > 0 {
 			row.Detail = joinDetail(row.Detail, "observed in 24 h: "+observedText(seen))
 		}
+		row.unusable = observed[row.Client][binding.ObservedUnusable] > 0
 	}
 	return nil
+}
+
+// unusableHint says what doctor's own evidence makes of calls that named a session without a
+// usable Execution (ADR 017). The hub knows when a hook of this client from this host last
+// reached it, and seen is that answer, or nil when doctor could not ask. Hooks that never ran
+// call for the review in /hooks. A hook that did run on this host makes the review an unlikely
+// fix, so doctor names the other causes instead: the hub restarted and the session had not
+// reattached, or the client named a session its hooks did not register, which the shim cannot
+// bind. The hub's evidence is per host and client, not per session, so doctor also says that a
+// session whose own hooks did not run while other sessions' hooks did looks the same.
+func unusableHint(row *ClientReport, seen map[string]string, now time.Time) {
+	if !row.unusable {
+		return
+	}
+	last := seen[row.Client]
+	at, err := time.Parse(time.RFC3339Nano, last)
+	var hint string
+	switch {
+	case seen == nil || last != "" && err != nil:
+		hint = "doctor could not learn when a Codex hook from this host last reached the hub. It cannot tell whether the hooks need review in /hooks, or whether they run and the cause is a hub restart or calls that name a session the hooks did not register"
+	case last == "" || now.Sub(at) > failureWindow:
+		hint = "no Codex hook from this host reached the hub in those 24 h, so the hooks may not run: review them once in /hooks"
+	default:
+		hint = "a Codex hook from this host reached the hub at " + last + ", so hooks run here. Either the hub restarted and that session had not reattached, or this Codex gives its tool calls a different session id from the one it gives its hooks; in that case this version of Iris cannot bind the session the calls name. A session whose own hooks did not run while other sessions' hooks did looks the same to doctor"
+	}
+	row.Detail = joinDetail(row.Detail, hint)
 }
 
 // failureGroups is how many kinds of failure one doctor line names before it says how many more.

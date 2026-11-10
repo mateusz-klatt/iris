@@ -2,8 +2,9 @@
 
 Status: accepted, 2026-11-09, by `claude-holzera-iris`. It rests on measurements by
 `codex-holzera-iris` in [the Codex attention record](../research/clients/codex-attention.md);
-that session challenged the drafts and signed off this design. Extends D7. Nothing here is
-implemented yet.
+that session challenged the drafts and signed off this design. Extends D7; the binding rung under
+"Amendments from the implementation" at the end changes D6. That rung is implemented, and the
+wake is not yet.
 
 ## Problem
 
@@ -208,3 +209,86 @@ For the pull requests that implement this:
   the woken turn. This spends a real model turn, so it stays opt-in as the rest of `--live`.
 - Before the wake becomes a default, the research record gains the three measurements of
   decision 7.
+
+## Amendments from the implementation
+
+Each change below was made by the pull request that implemented it.
+
+**A binding rung from the tool call** (changes D6; gives decision 1 the binding it relies on).
+`claude-holzera-iris` accepted it on 2026-11-10.
+- Decision 1 wakes a session once its `iris mcp` is bound. On the daemon a thread's MCP child has
+  the daemon for a parent, D6 skips the nearest-process rung for app-server, and Codex gives an MCP
+  child no session id in its environment
+  ([the MCP child record](../research/clients/codex-mcp-queue-2026-11-10.md)). So the shim of a
+  session the daemon hosted was bound only by `IRIS_EXECUTION` or by a handle the model passed,
+  and a handle copied from elsewhere rebound it.
+- In the runs measured, on Codex 0.167.0, every tool call named its session in `_meta.sessionId`
+  and its thread in `_meta.threadId`. The tool call's session id matched the session id of the
+  hooks of the same turn in nine runs: five threads the daemon loaded, `codex exec resume`,
+  `codex exec fork`, a thread loaded on a restarted daemon, and a sub-agent, whose call named the
+  root's session and its own thread. The attention record describes the ids as matching for a new
+  TUI thread. Not looked at: a thread resumed or forked in the TUI, a thread that stays loaded
+  while its daemon restarts, a sub-agent on the daemon, other app-server clients, other Codex
+  versions, macOS and Windows. No message the MCP child received before the first tool call
+  carried the id.
+- A live `IRIS_EXECUTION` binds every call, as before, whatever session the call names. Otherwise
+  the first call to reach binding decides the process's mode for its life. If that call names no
+  session, the process keeps D6's chain, which uses no call's id. If it names one, the process is
+  in id mode: it binds only by the session each call names, as rung 2, never through the client
+  process or a handle, and it registers, adopts and hands over nothing. In id mode the `execution`
+  argument is ignored.
+- If that first call's thread id is its session id, the process is a root thread's MCP child. It
+  keeps and renews its session's binding. Its first bind waits up to the 15 s grace period for the
+  session's hook to register the session; the binding is then refreshed by its Execution and
+  renewed by the heartbeat, as before. After a loss the session is looked up again at once, and an
+  Execution found lost is never bound again. A different or missing thread id makes Iris treat
+  the process as a sub-agent's MCP child, which looks each call up and renews nothing. A shim's
+  heartbeat puts the Execution on a 60-second lease, and a sub-agent's MCP child, whose lifetime
+  was not measured, could then let the root's Execution lapse while the root is idle. A call that
+  names a session other than its process's is also attributed by a lookup, and that binding is
+  never renewed. No lookup waits behind a first bind's grace period.
+- A Codex sub-agent is its root session to Iris: it shares the root's mailbox, claims and
+  generation. Iris installs no SubagentStart or SubagentStop hook for Codex, and the decoder reads
+  `subagentId` and `subagent_id`, not the `agent_id` Codex sends, so the captured payloads decode
+  to the root session.
+- A call whose session has no single usable Execution gets a typed `unbound` error: "No single
+  usable Iris Execution matches the session Codex names on this call, on this host. Its hooks may
+  not have run, or the hub may have restarted and the session not reattached yet. Run `iris
+  doctor`, which says whether the hooks need review in /hooks when the hub can tell, then send any
+  prompt and retry. A call that names its session is never bound by an execution handle." It names
+  no cause, because the hub answers alike for a session never registered and for one recovering,
+  expired or ended.
+- The call never falls through to a handle. A handle reaches the shim through the model, which can
+  copy it from another session's context or from a message body. In every path compared, the
+  call's session id matched the hooks'. A session whose hooks never ran has no handle of its own.
+  The cost: if a Codex version, or a path not looked at, gave a session's calls a session id its
+  hooks did not register, as Claude Code does on `--continue`, that session would have no Iris
+  tools, where today it can pass the handle from its own SessionStart context. And a `codex exec`
+  session whose hooks never ran no longer gets an MCP-only Execution. `IRIS_EXECUTION` stays the
+  explicit override.
+- For a session the daemon hosts, the root's shim now binds at the first Iris tool call, and its
+  heartbeat moves the Execution to the 60-second lease a bound Claude session has. SessionEnd still
+  ends it. If that never comes, it lapses about a minute after its last heartbeat or hook, instead
+  of up to 15 minutes after its last hook. Lookups leave the lease mode as they find it.
+- `iris doctor` counts two observations, each written once per process: calls of two sessions,
+  and calls of a session without a usable Execution, when a root's grace period ran out or a
+  lookup found none. For the second, its hint follows the hub's word on when a Codex hook from this
+  host last reached it. If none did in the last 24 hours, doctor advises the review in `/hooks`.
+  If one did, doctor says the hooks run here. Either the hub restarted and that session had not
+  reattached, or this Codex gives its tool calls a different session id from the one it gives its
+  hooks; in that case this version of Iris cannot bind the session the calls name. Doctor also says
+  that a session whose own hooks did not run while other sessions' hooks did looks the same.
+  Without the hub's word, doctor says it cannot tell. That evidence is per host and client, not per
+  session.
+- Left for the wake: it may arm only in a root's process, or a session would be woken once per
+  sub-agent, and a call's thread id never authorizes waking a sub-agent. It still checks UUID syntax
+  before it builds a command (decision 1), and it takes the hub's hook evidence, not this binding,
+  as proof that a hook registered the Execution.
+- What this cannot do: bind before the model's first Iris tool call, so until then there is no
+  wake; tell why a session has no usable Execution; verify the id, which is the client's word as
+  a session variable is for other clients (D12); tell whether the native thread is alive, since the
+  hub knows only the Iris lease and when a hook last ran; give a sub-agent an identity of its own;
+  or check an override against the session a call names. A process in legacy mode keeps D6's
+  limits.
+- The tests replay the captured calls and hooks through the decoder and the MCP server, and one
+  runs against the real hub and store, across a restart.

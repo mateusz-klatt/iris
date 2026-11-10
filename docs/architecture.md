@@ -173,7 +173,7 @@ Hooks always receive a session id. The problem is the stdio MCP process, which o
 | Cursor | no | yes, through a shell |
 | Antigravity | no | yes, through a shell |
 | Kimi | no | yes, through a shell |
-| Codex | no | yes for `exec`; **no** for app-server, where threads share one pid |
+| Codex | no; each tool call measured (0.167.0) names its session in `_meta` | yes for `exec`; **no** for app-server, where threads share one pid |
 
 `iris mcp` resolves its Execution at the first tool call, by this chain:
 
@@ -194,6 +194,17 @@ Hooks always receive a session id. The problem is the stdio MCP process, which o
    tool accepts an optional `execution` argument.
 5. Otherwise the tool returns a typed `unbound` error that says how to proceed. Iris never guesses.
 
+In the runs measured on Codex 0.167.0, each tool call named its session in `_meta.sessionId` and
+its thread in `_meta.threadId`, and in every path compared the call's session id matched the
+hooks' session id (ADR 017). Unless a live `IRIS_EXECUTION` binds it, the first call decides the shim's
+mode for its life. If that call names a session, the shim enters id mode: it binds every call by
+the session the call names, as rung 2, and never by the client process or a handle. If it names
+none, the shim keeps the chain above. A root thread's shim keeps and renews its session's binding.
+A sub-agent's calls name the root's session and the sub-agent's thread, so the sub-agent's shim
+looks each call up and renews nothing: a Codex sub-agent is its root session to Iris. In id mode,
+a call that names a session without a single usable Execution gets a typed `unbound` error that
+names no cause and points to `iris doctor`.
+
 None of this is authority. Across a host the boundary is the OS user (D12), so binding gives
 correct attribution, not a security property.
 
@@ -206,6 +217,9 @@ the hook registers later after all, the shim's heartbeat finds the hook's Execut
 client process, moves to it and ends its own, handing over the mail its stray mailbox received
 meanwhile, so a slow hook cannot leave the session split either. A first tool call that ends
 while the grace period runs is told Iris is still binding the session and to retry. After a loss the shim never registers; it waits for the hook to reattach (D9).
+A Codex root thread's shim in id mode waits the same grace period on its first bind. No shim in
+id mode registers, adopts or hands over anything, so this fallback and the adoption below belong
+to the chain above alone.
 
 Adoption keeps the original handover source, generation and destination until the hub confirms
 the end. Failed calls retry that same idempotent end, including when it committed but its response
@@ -308,7 +322,9 @@ Notifications and digests carry the `kind` only.
 ### D8. Liveness comes from the MCP process
 
 A stdio MCP server normally follows the client process that launched it. `iris mcp` sends a
-heartbeat every 20 s for its positively bound Execution generation.
+heartbeat every 20 s for its positively bound Execution generation. In id mode (ADR 017), a Codex
+sub-agent's `iris mcp` renews nothing, and neither does a call that names a session other than its
+shim's.
 Before renewing a fallback Execution, the client may look for the hook's Execution and hand over
 to it (D6). That attempt has a five-second deadline, separate from the heartbeat's five seconds,
 so a stalled lookup or handover cannot prevent lease renewal. An outage that also prevents the
@@ -939,7 +955,10 @@ was measured, the tool was unknown to Iris, so its writes went unreconciled and 
   need real runs before any claim of support.
 - Whether plugin monitors survive `--resume` and `/clear`, and at what rate monitors are stopped.
 - Whether `SessionStart` context on Grok and Kimi reaches the model at all.
-- The nearest-process rung has not been tried on a Codex TUI session or a Cursor IDE session.
+- The nearest-process rung has not been tried on a Cursor IDE session. A Codex session binds by
+  the session its tool calls name (ADR 017). The session ids from tool calls and hooks were
+  compared for `exec` and for threads the daemon loaded. The attention record describes them as
+  matching for a new TUI thread. No comparison was made for a thread resumed or forked in the TUI.
 - A tool result the client drops after the MCP server confirmed the fetch leaves that mail quiet
   until something else makes the model look (ADR 010). A response lost before the MCP server
   holds it is recovered.
@@ -981,7 +1000,8 @@ On `modernc.org/sqlite`, with real concurrency:
 - Clock skew on clients cannot extend a lease.
 - Repeated restarts cannot extend recovery. An unattached Execution is lost at its deadline.
 - An orphaned heartbeat cannot preserve ownership. A second, unregistered session in one process
-  cannot bind to the first.
+  cannot bind to the first. In id mode, a tool call that names its session binds only that
+  session's Execution, never through a handle.
 - An ambiguous URL cannot join a repository automatically.
 - A policy a client cannot express never becomes an allow.
 - For every client, a crash, a timeout and a missing binary all leave the tool usable.

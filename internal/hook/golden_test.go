@@ -261,6 +261,10 @@ const (
 	// ScheduleWakeup tools.
 	claudeToolsSession  = "76d28899-a30f-4b4f-9598-1fce6bc60152"
 	claudeWakeupSession = "af647fc5-1139-4ada-b6da-902ec2615848"
+	// Captured from Codex 0.167.0 on Linux on 2026-11-10 (ADR 017's measurement B): a thread
+	// the app-server daemon loaded, and the root of a session that spawned a sub-agent.
+	codexDaemonRoot   = "01a1c5fb-ea8a-7842-b3cd-68cb0e300fd9"
+	codexSubagentRoot = "01a1c616-e474-73a1-9c54-d71509806f1a"
 )
 
 var fixtureWant = map[string]decoded{
@@ -302,8 +306,13 @@ var fixtureWant = map[string]decoded{
 	"codex/PostToolUse-node_repl_js.json": {kind: KindPostTool, session: codexJS, cwd: proj, tool: "mcp__node_repl__js", class: ClassShell, command: "const fs = await import(\"node:fs/promises\"); await fs.appendFile(\"free.txt\", \"viajs\\n\"); nodeRepl.write(\"appended\");", call: "exec-6efe95d3-edeb-434f-a54f-98108426ad80"},
 	"codex/SessionEnd.json":               {kind: KindSessionEnd, session: codexSession, cwd: proj},
 	"codex/SessionStart.json":             {kind: KindSessionStart, session: codexSession, cwd: proj},
+	"codex/SessionStart-resume.json":      {kind: KindSessionStart, session: codexDaemonRoot, cwd: proj},
 	"codex/Stop.json":                     {kind: KindStop, session: codexSession, cwd: proj},
 	"codex/UserPromptSubmit.json":         {kind: KindPrompt, session: codexSession, cwd: proj},
+	// A sub-agent's hooks carry the root's session id and name the sub-agent as agent_id, which
+	// the decoder does not read: they decode to the root session, with no parent (ADR 017).
+	"codex/SubagentStart.json": {kind: KindSubagentStart, session: codexSubagentRoot, cwd: proj},
+	"codex/SubagentStop.json":  {kind: KindSubagentStop, session: codexSubagentRoot, cwd: proj},
 
 	"copilot/agentStop.json":                           {kind: KindStop, session: copilotA, cwd: proj},
 	"copilot/postToolUse-apply_patch.json":             {kind: KindPostTool, session: copilotA, cwd: proj, tool: "apply_patch", class: ClassEdit, paths: []string{"allowed.txt"}},

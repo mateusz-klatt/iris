@@ -319,6 +319,17 @@ func (r Runner) record(stage, text string, shape *PayloadShape) {
 	case <-after(failureLogBudget):
 	}
 }
+
+// Observer is how iris mcp records what a tool call's ids showed (ADR 017). Each text goes to the
+// observation log doctor reads, as client's event "mcp", within the same small budget as a hook
+// run's entry. Recording is best effort and reports no failure to its caller, and a slow or
+// blocked write never holds the caller longer.
+func Observer(getenv func(string) string, client string) func(string) {
+	return func(text string) {
+		Runner{ClientName: client, EventName: "mcp", Getenv: getenv}.record(stageObserved, text, nil)
+	}
+}
+
 func boundedLabel(label string) string {
 	if len(label) > 128 {
 		return label[:128]

@@ -27,6 +27,12 @@ The [Codex attention measurement](clients/codex-attention.md) records how Codex
 an app-server and through `codex queue`, with the lifetime of a thread's MCP child.
 [ADR 017](../adr/017-wake-codex-by-queue.md) rests on it.
 
+The [MCP child queue record](clients/codex-mcp-queue-2026-11-10.md) measures whether a Codex
+thread's MCP child can itself queue a turn for its session, with the default home and with
+another. It also sets each tool call's session id beside the session id of the hooks of the same
+turn, in nine runs that include `codex exec resume`, `codex exec fork` and a sub-agent. ADR 017's
+binding rung rests on it.
+
 The [gap re-audit of 2026-11-09](gap-reaudit-2026-11-09.md) checks every finding of the
 [gap review of 2026-11-07](gap-review-2026-11-07.md) again, against `main` at `4840765`: 28 closed,
 7 partly addressed, 1 open.
