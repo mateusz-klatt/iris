@@ -70,11 +70,14 @@ func StatusScope(ctx context.Context, root string, scope Scope, a *Attempt) (map
 	cmd := gitCommand(ctx, root, "--no-optional-locks", "status", "--porcelain", "-z", "--untracked-files=all", ignore)
 	out := limitedStatus{attempt: a}
 	cmd.Stdout = &out
-	if err := cmd.Start(); err != nil {
+	finish, err := start(ctx, cmd)
+	if err != nil {
 		return nil, err
 	}
 	a.Begin(ctx, time.Now())
-	if err := cmd.Wait(); err != nil {
+	err = cmd.Wait()
+	finish()
+	if err != nil {
 		return nil, err
 	}
 	return ParseStatus(out.kept.Bytes())

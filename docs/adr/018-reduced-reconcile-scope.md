@@ -250,3 +250,25 @@ after any hook exited.
   measured. A rename, which replaces the breaker file, is not documented as atomic there.
 - So on Windows a checkout whose full status does not fit its budget still detects nothing for
   each shell command.
+
+**The kill is sent before the hook returns** (the hook's side; adds to "Measured on WSL").
+- A hook that gave up on a status at its budget left the kill to a goroutine of os/exec's, and
+  the hook process could exit before that goroutine ran; git then went on after the hook. On WSL,
+  with every core kept busy, 6 of 100 hook runs left the git stand-in used for the full status
+  still sleeping three seconds later. In the other runs it was gone, or present only for a moment,
+  killed but not yet reaped. The measurement above ran on an idle machine and found no git
+  process alive 100 ms after any hook exited.
+- A hook now sends the kill itself, from the path that gave up and before it returns, to every
+  git started under the shell budget: the status and, in reduced scope, the gitlinks listing. A
+  git that would start after that does not start. The hook waits for a start already under way,
+  never for git to exit, so it keeps its deadline unless a start stalls. Under the same load, 200
+  runs left no git running.
+- The test of a hook that trips waits up to 5 s for the killed git to go, and counts a zombie as
+  gone, since a killed git stays one until its new parent reaps it.
+- Stop and os/exec may both cancel a git, and only the first sends the signal. A second, sent
+  after git was killed and reaped, could reach another process group that took the same number.
+- What this cannot do: reach a process that left git's process group, or, on Windows, what the
+  process Go started started itself, as before. A start that stalls delays the kill for as long as
+  it stalls. When the hook's own deadline of 1.5 s ends the run first, the hook returns before the
+  shell path can send the kill. And the one signal os/exec sends can still come after git was
+  reaped, as before.
