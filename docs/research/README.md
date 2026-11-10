@@ -46,6 +46,11 @@ record what a build of the activation change showed in two browsers, after a res
 an Apache that closes the console for an older backend, and what a candidate is checked for.
 They ran on a modified checkout. [ADR 019](../adr/019-console-activation.md) refers to them.
 
+The [candidate run of 2026-11-10](console-activation-candidate-2026-11-10.md) records the image CI
+built for the activation change: started closed, activated with the password on standard input,
+restarted, signed in to from a browser, and started once on a copy of a production backup. It does
+not repeat the access checks.
+
 ## Review of the architecture
 
 The synthesis then went back to the clients as a plan review. Antigravity was left out of this

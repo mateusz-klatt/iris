@@ -9,8 +9,9 @@ These rehearsals ran before the change was finished. The Iris binary was built
 from a modified checkout, and the temporary directories named below were on a
 host whose temporary files have since been removed, so the reports can no longer
 be read. Treat the results as what was observed then, not as validation of a
-released binary. A rehearsal of the final candidate is recorded separately when
-it is made.
+released binary. The image CI built for the pull request was run on 2026-11-10:
+see [the candidate record](console-activation-candidate-2026-11-10.md). That run
+repeated the activation steps, not the access checks below.
 
 ## What a candidate is checked for
 

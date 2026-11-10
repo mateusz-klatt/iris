@@ -62,7 +62,9 @@ On the day the owner is present. The steps take about 15 minutes; set aside 30.
    [Deploying the public hub from an image CI built](deploy.md#deploying-the-public-hub-from-an-image-ci-built).
    That procedure takes backup 2 just before it replaces the running hub, and
    keeps the previous image under its commit. From now on the console is closed
-   and the hub's log says `Iris console closed`. Agents keep working.
+   and the hub's log says `Iris console closed`. A browser that opens the hub's
+   address shows `Console sign-in is unavailable. Contact the hub owner.` Agents
+   keep working.
 6. The owner, in his own terminal on the hub's machine, runs this with the
    operator's username in place of `<username>`, and types the password:
 
@@ -71,10 +73,11 @@ On the day the owner is present. The steps take about 15 minutes; set aside 30.
    ```
 
    The password is not shown and is not stored. Expected: the answer contains
-   `"restart_required":true`. If the owner mistypes, he tries again. The hub
-   allows five tries in 15 minutes; after the fifth wrong try he waits
-   15 minutes, counted from that try. If two careful tries in a row are refused,
-   he stops trying: that is a fault, see below.
+   the line `"restart_required": true`. A wrong password gives
+   `unauthorized: Invalid username or password` instead, and the owner tries
+   again. The hub allows five tries in 15 minutes; after the fifth wrong try he
+   waits 15 minutes, counted from that try. If two careful tries in a row are
+   refused, he stops trying: that is a fault, see below.
 7. The coordinator restarts the hub with `docker restart iris`. Deploying again
    would do nothing here, because the image has not changed. Expected: the hub's
    log says `Iris console open`.
