@@ -2,8 +2,9 @@
 
 Status: accepted, 2026-11-09, by `claude-holzera-iris`. It rests on measurements and a proposal
 by `codex-holzera-iris` in [the submodule reconcile record](../research/submodule-reconcile-2026-11-09.md);
-that session challenged the drafts and signed off this design. Changes D12. Nothing here is
-implemented yet.
+that session challenged the drafts and signed off this design. Changes D12. The hub's side is
+implemented; the hook's side is not yet. The implementation's changes to this decision are under
+"Amendments from the implementation" at the end.
 
 ## Problem
 
@@ -148,3 +149,25 @@ For the pull requests that implement this:
 - Doctor reports the hint, the reason and the next full attempt.
 - A measurement on WSL with a fixture sized like the production case: CPU for each shell
   command before and after, and no git process left after a status is killed at its deadline.
+
+## Amendments from the implementation
+
+Each change below was made by the pull request that implemented it.
+
+**A route of its own for reduced snapshots** (the hub's side; amends decision 3).
+- The agent API ignores fields it does not know. A `scope` field on the existing route would be
+  dropped by a hub from before it, and the reduced map read as full.
+- The capability alone does not prevent that: a hook that remembers it from an earlier answer
+  can send to a hub that was rolled back since.
+- So a reduced snapshot is accepted only on `POST /v1/shell/scoped`, which a hub from before it
+  answers with `not_found`. The plain route refuses a request that carries a scope. The
+  capability, named in every registration answer, still tells a hook when it may try.
+
+**Reduced baselines do not cross a hub start** (the hub's side; adds to decision 2).
+- Reduced snapshots are stored apart from full ones. Writing one kind deletes the other kind's
+  for that Execution. A hub with this change clears the reduced ones each time it starts. An
+  older hub leaves them in place, unread, until this version starts again.
+- A hub from before this reads only full snapshots. After a rollback it never reads a reduced
+  map as full, and its first reconcile finds no baseline.
+- The cost: the first reduced snapshot after any hub start only sets a baseline and attributes
+  nothing.

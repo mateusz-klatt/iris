@@ -16,6 +16,7 @@ import (
 type Request struct {
 	CommonDir string            `json:"common_dir"`
 	Status    map[string]string `json:"status"`
+	Scope     *ShellScope       `json:"scope,omitempty"`
 	ReplyTo   string            `json:"reply_to"`
 	Q         string            `json:"q"`
 	Agent     string            `json:"agent"`
@@ -441,6 +442,7 @@ func (t *transaction) sessionResponse(e execution, lease int64) (map[string]any,
 	out["handle"] = e.ID
 	out["repository_id"] = e.Repo
 	out["lease_ms"] = lease
+	out["capabilities"] = shellCapabilities()
 	peers, err := t.agents(e.Repo)
 	if err != nil {
 		return nil, err

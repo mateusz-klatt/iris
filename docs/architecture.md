@@ -536,6 +536,18 @@ for them took one measured repository from 20 ms to 5.5 s, far past the budget, 
 reconcile past its budget detects nothing at all. A command run inside the submodule is
 reconciled against the submodule's own repository, untracked files included.
 
+[ADR 018](adr/018-reduced-reconcile-scope.md) adds a reduced snapshot, for a worktree whose full
+status does not fit its budget. Its status runs with `--ignore-submodules=dirty`, which also
+hides tracked edits inside submodules, and the snapshot names the gitlink paths in the index
+that status read. The hub takes one only on `POST /v1/shell/scoped`, which a hub from before it
+refuses, and compares two snapshots only when their scopes are equal, the submodule paths
+included. Any other baseline is replaced and nothing is attributed. In reduced scope a named
+submodule path that the status does not report is unknown, not clean. Nothing is released or
+renewed for it, and an automatic claim there keeps its expiry. Reduced baselines are stored
+apart from the full ones, which are all that an older hub reads, and this version clears them
+whenever it starts. The first reduced snapshot after a start therefore only sets a baseline. No
+hook sends a reduced snapshot yet.
+
 `iris guard` is a pre-commit check, installed per repository on request. It refuses a commit
 of paths held by another Execution. It is the strongest check Iris has, and it is cooperative.
 

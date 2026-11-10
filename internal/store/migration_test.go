@@ -34,7 +34,7 @@ func TestUpgradeBackfillsNamesAndPreservesTokens(t *testing.T) {
 		}
 	}
 	var version int
-	if err = s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 21 {
+	if err = s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 22 {
 		t.Fatal(version, err)
 	}
 	if _, err = s.AddToken(context.Background(), "after-upgrade"); err != nil {
