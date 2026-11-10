@@ -2,8 +2,8 @@
 
 Status: accepted, 2026-11-09, by `claude-holzera-iris`. It rests on measurements and a proposal
 by `codex-holzera-iris` in [the submodule reconcile record](../research/submodule-reconcile-2026-11-09.md);
-that session challenged the drafts and signed off this design. Changes D12. The hub's side is
-implemented; the hook's side is not yet. The implementation's changes to this decision are under
+that session challenged the drafts and signed off this design. Changes D12. The hub's side and
+the hook's side are implemented. The implementation's changes to this decision are under
 "Amendments from the implementation" at the end.
 
 ## Problem
@@ -171,3 +171,82 @@ Each change below was made by the pull request that implemented it.
   map as full, and its first reconcile finds no baseline.
 - The cost: the first reduced snapshot after any hub start only sets a baseline and attributes
   nothing.
+
+**The trip, from four facts** (the hook's side; amends decision 4).
+- A trip needs all four: a full status whose git started; the reconcile's own deadline passed
+  while its parent was not cancelled; the output cap was not passed; and at least half the
+  budget was left when git started.
+- Less than half does not mean the budget was spent before git started. Earlier stages took most
+  of the budget, so this is not evidence that git was slow. The half-budget threshold is a
+  candidate, unmeasured like the cooldowns.
+- A reduced status past its budget never changes the breaker.
+- Git counts as running while the reconcile is at its status stage. The hook leaves that stage
+  as soon as a full status returns successfully, before it writes the reset, so a write that
+  stalls past the deadline is not taken for slow git.
+- The trip is written before the hook returns, because the process exits right after it. A
+  write that stalls past the hook's own deadline loses the trip, and the output stays valid.
+- What it cannot tell: a git that exited just before the deadline, while its output was still
+  being copied, looks like one still running, since Go's `Wait` waits for that copy. It then
+  trips falsely, which costs one cooldown of reduced scope. `gpt-6.1-sol` found this in the
+  source of Go 1.27.3 and no outcome worse than a false or a missed trip.
+
+**One index generation for both reads** (the hook's side; settles the condition in decision 2).
+- The set is every entry of mode 160000, at any stage, in `git ls-files --stage -z`, sorted and
+  without repeats, at most 500. It is read as a stream within bounds. A malformed or oversized
+  listing, a mode no index entry has, or a git that fails, gives no set, never an empty one.
+  Without `--sparse`, a sparse index is listed in expanded form. The tests read it in these
+  states: a gitlink staged but declared nowhere, a removed one, a nested one, a conflicted one, a
+  linked worktree's own index, a split index and a sparse one, with `.gitmodules` missing or
+  wrong.
+- Before the set is read and after the status, the hook takes six values from one open index
+  file: device, inode, size, modification and change time, and the last 32 bytes. A published
+  index ends with a checksum of its content, so two generations with different content differ
+  there even when the other five values are equal. Any difference, or a value that cannot be
+  read, means no reduced snapshot.
+- Both commands run in the same way as the full status. Nothing is written in the git directory,
+  and `GIT_INDEX_FILE` is not set.
+- The hook declines, and runs full scope as before, when `GIT_DIR`, `GIT_WORK_TREE`,
+  `GIT_COMMON_DIR` or `GIT_INDEX_FILE` is set in its environment, when it does not know the git
+  directory, or when the index file does not exist.
+- What it cannot tell: with `index.skipHash` the checksum is zeros, and only the five other
+  values remain. Then a replacement that restores all five within one clock tick is not seen,
+  and neither is an in-place rewrite within one tick that keeps the size. The known case is a
+  sequence that `gpt-6.1-sol` inferred from the source of Linux 6.6 and Git 2.53 but did not
+  reproduce. On ext4 with a 10 ms tick, a script publishes the index three times within one
+  tick. The hook's first read and the listing fall between the first and second publications,
+  and the third reuses the first one's freed inode at an equal size. Its cost would be one
+  automatic claim released early.
+- The check covers the index file only. HEAD and the files the status reads are read as git
+  finds them. A filesystem whose inode numbers change gives a false difference, which only skips
+  that snapshot.
+- This replaced a copy of the index linked into the git directory, which the plan had proposed.
+  The choice, made on 2026-11-10, and the remaining risk are `claude-holzera-iris`'s.
+
+**What a hook keeps of the capability** (the hook's side; adds to decision 3).
+- A hook keeps what each registration answer, or answer to the one-call form, says about the
+  capability, in a file per hub URL beside the session memory. An answer that does not name the
+  capability clears what the hook kept.
+- A hook whose breaker says reduced, but which does not know whether its hub takes a reduced
+  snapshot, registers first and lets that answer decide the scope.
+- A scoped request that fails is never sent again on the plain route. On `not_found`, a bare 404
+  or `bad_request`, the hook also forgets the capability. On `lost` it repairs the session's proof
+  as a registration does, and drops that snapshot.
+- A scoped request is sent once, as a plain reconcile is: the second copy that a hook sends of a
+  slow hub call is never sent for either. A second copy of a snapshot would find nothing changed,
+  and if it answered first the hook would lose the first copy's warning.
+
+**Measured on WSL** (adds to Verification). The
+[reduced scope record](../research/adr018-reduced-scope-wsl-2026-11-10.md) has a run of the
+measurement Verification asks for, on a synthetic fixture whose full status takes about 0.9 s.
+It does not establish that the fixture is sized like the production case, which is slow for
+another reason. In reduced scope a command cost 19 ms of CPU, against 614 ms on a binary without
+the hook's side. An edit of a held file was warned about, and no git process was alive 100 ms
+after any hook exited.
+
+**No reduced scope on Windows** (the hook's side; amends decisions 1 and 4).
+- On Windows a hook takes no reduced snapshot and keeps no breaker. Every reconcile there runs
+  full scope as before, and doctor shows no shell scope.
+- When the deadline stops git there, what git started can outlive it, which has not been
+  measured. A rename, which replaces the breaker file, is not documented as atomic there.
+- So on Windows a checkout whose full status does not fit its budget still detects nothing for
+  each shell command.

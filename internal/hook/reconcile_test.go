@@ -36,7 +36,9 @@ func (h reconcileHub) Reconcile(ctx context.Context, r hubclient.ReconcileReques
 func TestShellContextEveryClient(t *testing.T) {
 	for _, client := range Clients {
 		t.Run(string(client), func(t *testing.T) {
-			r := Runner{Find: func(string) (gitinfo.Repo, error) { return gitinfo.Repo{Worktree: "/repo"}, nil }, Hub: reconcileHub{}, Status: func(context.Context, string) (map[string]string, error) { return map[string]string{"path": "??"}, nil }, ShellDeadline: time.Hour}
+			r := Runner{Find: func(string) (gitinfo.Repo, error) { return gitinfo.Repo{Worktree: "/repo"}, nil }, Hub: reconcileHub{}, Status: func(context.Context, string, gitinfo.Scope, *gitinfo.Attempt) (map[string]string, error) {
+				return map[string]string{"path": "??"}, nil
+			}, ShellDeadline: time.Hour}
 			ev := Event{Client: client, Kind: KindPostTool, ToolClass: ClassShell, SessionID: "shell", CWD: "/repo"}
 			out := r.reconcile(context.Background(), ev, &runState{})
 			if out.Exit != 0 || !strings.Contains(string(out.Stdout), "cannot undo") {
@@ -46,7 +48,9 @@ func TestShellContextEveryClient(t *testing.T) {
 	}
 }
 func TestShellDeadlineAndNonShellCost(t *testing.T) {
-	r := Runner{ClientName: "claude", EventName: "PostToolUse", Hub: reconcileHub{wait: true}, Find: func(string) (gitinfo.Repo, error) { return gitinfo.Repo{Worktree: "/repo"}, nil }, Status: func(context.Context, string) (map[string]string, error) { return map[string]string{}, nil }}
+	r := Runner{ClientName: "claude", EventName: "PostToolUse", Hub: reconcileHub{wait: true}, Find: func(string) (gitinfo.Repo, error) { return gitinfo.Repo{Worktree: "/repo"}, nil }, Status: func(context.Context, string, gitinfo.Scope, *gitinfo.Attempt) (map[string]string, error) {
+		return map[string]string{}, nil
+	}}
 	r.Stdin = strings.NewReader(`{"session_id":"shell","cwd":"/repo","tool_name":"Bash","tool_input":{"command":"echo ok"}}`)
 	// The hub never answers and the hook's own deadline never fires, so only the shell
 	// budget can end this call. If it did not, the test would hang until the binary's timeout.
@@ -54,7 +58,7 @@ func TestShellDeadlineAndNonShellCost(t *testing.T) {
 	out := r.Run()
 	assertAllow(t, ClientClaude, out)
 	r.after = nil
-	r.Status = func(context.Context, string) (map[string]string, error) {
+	r.Status = func(context.Context, string, gitinfo.Scope, *gitinfo.Attempt) (map[string]string, error) {
 		t.Error("non-shell scanned Git status")
 		return nil, nil
 	}

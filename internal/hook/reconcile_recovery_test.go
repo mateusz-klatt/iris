@@ -77,7 +77,9 @@ func TestShellReconciliationRecordsEveryFailOpen(t *testing.T) {
 		{"panic", "shell repository", func(r *Runner) { r.Find = func(string) (gitinfo.Repo, error) { panic("dependency") } }, scriptHub{}},
 		{"hub", "shell session", func(*Runner) {}, scriptHub{regErr: errors.New("down")}},
 		{"git", "shell status", func(r *Runner) {
-			r.Status = func(context.Context, string) (map[string]string, error) { return nil, errors.New("git") }
+			r.Status = func(context.Context, string, gitinfo.Scope, *gitinfo.Attempt) (map[string]string, error) {
+				return nil, errors.New("git")
+			}
 		}, scriptHub{}},
 		{"reconcile", "shell reconcile", func(*Runner) {}, scriptHub{reconcileErr: errors.New("refused")}},
 	}
@@ -96,7 +98,7 @@ func TestShellReconciliationRecordsEveryFailOpen(t *testing.T) {
 	t.Run("deadline", func(t *testing.T) {
 		r, ev := shellRunner(scriptHub{}, root)
 		r.ShellDeadline = time.Millisecond
-		r.Status = func(ctx context.Context, _ string) (map[string]string, error) {
+		r.Status = func(ctx context.Context, _ string, _ gitinfo.Scope, _ *gitinfo.Attempt) (map[string]string, error) {
 			<-ctx.Done()
 			time.Sleep(10 * time.Millisecond)
 			return nil, ctx.Err()
@@ -122,7 +124,7 @@ func TestShellReconciliationRecordsEveryFailOpen(t *testing.T) {
 				r, ev := shellRunner(scriptHub{}, root)
 				r.ShellDeadline = time.Millisecond
 				release, returned := make(chan struct{}), make(chan struct{})
-				r.Status = func(ctx context.Context, _ string) (map[string]string, error) {
+				r.Status = func(ctx context.Context, _ string, _ gitinfo.Scope, _ *gitinfo.Attempt) (map[string]string, error) {
 					defer close(returned)
 					<-ctx.Done()
 					if late {
@@ -169,7 +171,9 @@ func TestABudgetSpentBeforeTheReconcileRunsIsStillDegraded(t *testing.T) {
 		r, ev := shellRunner(scriptHub{}, root)
 		// git status honours its context, as the real one does: a spent budget kills it. A stub
 		// that ignored it could finish first and succeed, which records nothing, correctly.
-		r.Status = func(ctx context.Context, _ string) (map[string]string, error) { return nil, ctx.Err() }
+		r.Status = func(ctx context.Context, _ string, _ gitinfo.Scope, _ *gitinfo.Attempt) (map[string]string, error) {
+			return nil, ctx.Err()
+		}
 		ctx, cancel := context.WithDeadline(context.Background(), time.Now().Add(-time.Second))
 		state := &runState{}
 		out := r.reconcile(ctx, ev, state)

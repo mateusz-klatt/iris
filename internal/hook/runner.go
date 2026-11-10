@@ -29,7 +29,11 @@ type Hub interface {
 
 // Runner executes one hook invocation.
 type Runner struct {
-	Status     func(context.Context, string) (map[string]string, error)
+	// Status, Gitlinks and IndexID stand in for gitinfo's in tests; nil means git itself.
+	Status     func(context.Context, string, gitinfo.Scope, *gitinfo.Attempt) (map[string]string, error)
+	Gitlinks   func(context.Context, string) ([]string, error)
+	IndexID    func(string) (gitinfo.IndexID, error)
+	Now        func() time.Time
 	ClientName string
 	EventName  string
 	Stdin      io.Reader
@@ -272,6 +276,9 @@ func (r Runner) register(ctx context.Context, ev Event, repo gitinfo.Repo) (hubc
 		req.RetryGeneration = req.Generation
 		req.Generation = 0
 		sess, err = r.Hub.RegisterSession(ctx, req)
+	}
+	if err == nil {
+		r.learnScope(sess.Capabilities)
 	}
 	if err == nil && m != nil {
 		m.Remember(string(ev.Client), ev.SessionID, sess.Generation)

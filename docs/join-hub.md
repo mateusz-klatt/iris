@@ -210,6 +210,16 @@ or a slow network. Such entries leave the row `ok` with a `degraded` note. More 
 status refuses it, so doctor sends such a hub the row as `silent`, with a detail starting `slow:`,
 and that is how its console shows it.
 
+When it is a full `git status` that keeps running past the budget, the hook records a hint for that
+worktree to use a reduced scope for a while (ADR 018). A reduced status leaves tracked edits inside
+submodules out, so the rest of the worktree can be reconciled again, if the hub takes reduced
+snapshots and the reduced status itself fits the budget. Doctor then prints a `shell scope:` line
+for the worktree: the scope its breaker suggests and why, and the last recorded full status that
+succeeded. A last `shell scope: limits:` line says what reduced scope does not see and when a hook
+runs full scope anyway. A reduced snapshot the hook could not take, because the index changed
+while it was read, is graded like a reconcile past its budget. On Windows every reconcile runs
+full scope.
+
 `iris doctor --live` can run ready clients graded `ok`, `silent` or `slow` when their binaries
 are available. It keeps current readiness separate from the historical grade: recent failures
 never erase a `needs_human` or `not_configured` result. Without `--client`, both are skipped

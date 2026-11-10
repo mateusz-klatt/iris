@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mateusz-klatt/iris/internal/gitinfo"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 )
 
@@ -48,7 +49,7 @@ func TestAShellCallRegistersAndReconcilesInOneCall(t *testing.T) {
 	hub := newOneCallHub()
 	r, ev := shellRunner(hub, root)
 	statuses := 0
-	r.Status = func(context.Context, string) (map[string]string, error) {
+	r.Status = func(context.Context, string, gitinfo.Scope, *gitinfo.Attempt) (map[string]string, error) {
 		statuses++
 		return map[string]string{"a.txt": "??"}, nil
 	}
@@ -88,7 +89,10 @@ func TestAShellCallFallsBackToTwoCalls(t *testing.T) {
 			hub := newOneCallHub(&hubclient.Error{Code: code})
 			r, ev := shellRunner(hub, root)
 			statuses := 0
-			r.Status = func(context.Context, string) (map[string]string, error) { statuses++; return map[string]string{}, nil }
+			r.Status = func(context.Context, string, gitinfo.Scope, *gitinfo.Attempt) (map[string]string, error) {
+				statuses++
+				return map[string]string{}, nil
+			}
 			phase := ""
 			hub.phase = &phase
 			if out := r.reconcile(context.Background(), ev, &runState{}); !isAllow(out) || *hub.registered != 1 || phase != "before" || statuses != 1 {
@@ -109,7 +113,9 @@ func TestAShellCallFallsBackToTwoCalls(t *testing.T) {
 	// A git status that fails before the one call fails open with nothing sent.
 	hub = newOneCallHub()
 	r, ev = shellRunner(hub, root)
-	r.Status = func(context.Context, string) (map[string]string, error) { return nil, errors.New("git") }
+	r.Status = func(context.Context, string, gitinfo.Scope, *gitinfo.Attempt) (map[string]string, error) {
+		return nil, errors.New("git")
+	}
 	state = &runState{}
 	if out := r.reconcile(context.Background(), ev, state); !isAllow(out) || len(*hub.sent) != 0 {
 		t.Fatalf("sent %d: %s", len(*hub.sent), out.Stdout)
