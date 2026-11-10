@@ -7,17 +7,19 @@ last summarized on 2026-11-08, from `main` at `efe0af6` before the repository hi
 Their commit hashes and PR numbers, including the Windows diagnostic at `993e545`, are retained as
 historical evidence labels; they refer to the history before the rewrite, not revisions of the
 current `main`. The deployment, CI, account and translation notes were updated on 2026-11-09 on
-`main` at `655526a`.
+`main` at `655526a`. The deployment paragraph and the hub's idle CPU were updated on 2026-11-10 on
+`main` at `ef67498`.
 
 The hub runs at https://iris.klatt.ie behind Apache and Cloudflare (`docs/deploy.md`). It was last
-deployed from `4840765` on 2026-11-09 at 17:22 UTC, according to the Holzera operator's record. The
-image and the host CLI were built on that machine by the old procedure, after a cold copy of the
-database with the hub stopped. The container and the host CLI then reported that commit with a clean
-source and no restarts, and `/v1/status` answered locally and through the public origin. This
-refresh did not inspect the container independently. The procedure that deploys an image CI built
-(#243, #248) is documented in `docs/deploy.md` and has not yet run on the public hub. Agents on macOS,
-Linux under WSL, and Windows 11 use the hub every day. Evidence and its limits are identified below.
-Anything not measured is listed under "Not done or not measured".
+deployed from `ef67498` on 2026-11-10 at 01:55 UTC, by the procedure that deploys an image CI built
+(#243, #248). That procedure has run three times on the public hub: for `cfcd86a` and `6d555c7` on
+2026-11-09 at 19:32 and 19:52 UTC, and for `ef67498`. Each run took a backup before it replaced the
+container. After the last one the container and the host CLI reported that commit with a clean
+source, the container had not restarted, and `/v1/status` answered locally and through the public
+origin. The host itself was restarted on 2026-11-09 at 22:14 UTC; the container stopped with exit
+status 0 and Docker started it again when the host came back. Agents on macOS, Linux under WSL, and
+Windows 11 use the hub every day. Evidence and its limits are identified below. Anything not
+measured is listed under "Not done or not measured".
 
 ## First milestone
 
@@ -115,11 +117,14 @@ Against the production hub, over TLS:
   system must cover every statement it builds, and so must the merged profile. On #246's head `1f183a1` that was
   10343 of 10343 on Linux, 10306 of 10306 on macOS, 10414 of 10414 on Windows and 10657 of 10657
   merged. The console's gate requires 100% of statements, branches, functions and lines.
-- **Hub CPU while idle, before the stream change.** On the public hub at `4840765`, by the Holzera
-  operator's measurement: `iris serve` at 35 to 52 percent of one core with about 15 connections,
-  and tables of 148 Agents, 468 Executions, 3227 Claims, 2583 Deliveries and 1900 Messages. The
-  change that removes per-socket polling (#245) was not merged at this writing, so there is no
-  measurement after it on that hub.
+- **Hub CPU while idle, before and after the stream change.** On the public hub at `4840765`, by the
+  Holzera operator's measurement: `iris serve` at 35 to 52 percent of one core with about 15
+  connections, and tables of 148 Agents, 468 Executions, 3227 Claims, 2583 Deliveries and 1900
+  Messages. Over 60-second windows the process then used 25 to 34 CPU seconds a minute before the
+  change that removes per-socket polling (#245) and about 0.3 after it, with 14 to 15 and 11 to 12
+  connections. In the 3.29 hours after the host's restart that night it used 18.5 CPU seconds, which
+  is 0.09 a minute. This is not a controlled comparison: the WSL sessions ended seconds after the
+  deploy ([record](research/hub-idle-cpu.md#public-hub-before-and-after-the-deploy)).
 
 ## Not done or not measured
 
