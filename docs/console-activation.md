@@ -38,16 +38,19 @@ needs `sudo` and his password.
 
 Before the day, without the owner: the activation version is merged with every
 check green and CI has built its image; a rehearsal on that image is recorded;
-and this section has been read by two simpler models that both restated it
-correctly.
+and a second model, acting only as a reviewer, has checked this section and
+restated it correctly. From that merge until step 5 the coordinator deploys
+nothing from `main`: any deploy of it closes the console, so it would be the
+cutover.
 
 On the day the owner is present. The steps take about 15 minutes; set aside 30.
 
 1. The owner writes "start the login cutover" in the coordinator's session.
    Nothing below happens before that.
-2. The coordinator takes backup 1 of the hub's database and copies it off the
-   hub's volume, as in
-   [Backup, review and apply](accounts-import.md#backup-review-and-apply), step 1.
+2. The coordinator takes backup 1 of the hub's database, copies it off the
+   hub's volume and checks that the copy can be restored, as in
+   [Backup, review and apply](accounts-import.md#backup-review-and-apply),
+   steps 1 and 2. If the backup or the check fails: stop. Nothing has changed.
 3. The coordinator runs the import's dry run, with the source file and the
    manifest that the owner has already reviewed, and shows the result to the
    owner. Expected: every account in that source is listed as created, none
@@ -64,30 +67,36 @@ On the day the owner is present. The steps take about 15 minutes; set aside 30.
    keeps the previous image under its commit. From now on the console is closed
    and the hub's log says `Iris console closed`. A browser that opens the hub's
    address shows `Console sign-in is unavailable. Contact the hub owner.` Agents
-   keep working.
-6. The owner, in his own terminal on the hub's machine, runs this with the
+   keep working: the coordinator's Iris `peers` tool still answers.
+6. The owner, in his own Bash terminal on the hub's machine, runs this with the
    operator's username in place of `<username>`, and types the password:
 
-   ```sh
-   IFS= read -rs -p 'Password: ' p && echo && printf '%s' "$p" | IRIS_HUB_URL=http://127.0.0.1:7878 IRIS_TOKEN_FILE="$HOME/.config/iris/hub.token" iris admin console activate <username>; unset p
+   ```bash
+   ( set +x +a; unset p; IFS= read -rs -p 'Password: ' p && echo && printf '%s' "$p" | IRIS_HUB_URL=http://127.0.0.1:7878 IRIS_TOKEN_FILE="$HOME/.config/iris/hub.token" iris admin console activate <username> )
    ```
 
-   The password is not shown and is not stored. Expected: the answer contains
-   the line `"restart_required": true`. A wrong password gives
+   The password is not shown and is not stored. The parentheses run the line
+   in a shell of its own, which switches command tracing off, keeps the
+   password out of every program's environment and forgets it when the line
+   ends. Expected: the answer contains the line `"restart_required": true`.
+   The owner then writes "activated" in the coordinator's session; the
+   coordinator cannot see his terminal. A wrong password gives
    `unauthorized: Invalid username or password` instead, and the owner tries
    again. The hub allows five tries in 15 minutes; after the fifth wrong try he
    waits 15 minutes, counted from that try. If two careful tries in a row are
-   refused, he stops trying: that is a fault, see below.
-7. The coordinator restarts the hub with `docker restart iris`. Deploying again
-   would do nothing here, because the image has not changed. Expected: the hub's
-   log says `Iris console open`.
+   refused, he stops trying and says so in the coordinator's session: that is
+   a fault, see below.
+7. After the owner's "activated", the coordinator restarts the hub with
+   `docker restart iris`. Deploying again would do nothing here, because the
+   image has not changed. Expected: the hub's log says `Iris console open`.
 8. The owner opens the hub's address in a browser and signs in with the
    username and the password.
 9. Three checks. The owner reloads the page and says whether he still sees his
    inbox. The coordinator checks with its Iris `peers` tool that the other
    sessions are still listed as active. Five minutes after step 7 the
    coordinator checks that `docker inspect --format '{{.RestartCount}}' iris`
-   prints 0.
+   prints 0. The cutover has succeeded when all three checks have passed, and
+   not before.
 10. The coordinator adds the commit and the time to the deploy log on the hub's
     machine, and sends the other agents one Iris message: sign-in is by password
     now, and login links are gone.
@@ -96,26 +105,39 @@ If something goes wrong:
 
 - In steps 2 to 4 the console is not closed. Stop and report. Nothing needs to
   be undone, because imported accounts cannot be used before activation.
-- In steps 5 to 8 a fault is one of three things: the hub does not start;
-  activation refuses two careful tries; or the sign-in page does not load or
-  refuses the username and password that activation accepted. The coordinator
-  tells the owner in its session what it sees. The fault is fixed when the step
-  that failed has given its expected result. If that has not happened
-  10 minutes after the failure, the coordinator proposes to go back, and the
-  owner decides.
+- In steps 5 to 9 a fault is any command that fails and any expected result
+  that does not appear. Examples: the hub does not start; activation refuses
+  two careful tries; the log does not say `Iris console open` after step 7;
+  the sign-in page does not load or refuses the username and password that
+  activation accepted; a check of step 9 fails. The coordinator stops and
+  tells the owner in its session what it sees, without secrets. The fault is
+  fixed when the step that failed has given its expected result. If that has
+  not happened 10 minutes after the failure, the coordinator proposes to go
+  back, and the owner decides. If step 5 failed before it replaced the running
+  hub, the old version is still serving with links; going back then only makes
+  the previous image the one that the next start would use.
 - Going back means exactly this: start the previous image again, as the
   paragraph "To roll back" in
   [deploy.md](deploy.md#deploying-the-public-hub-from-an-image-ci-built) says.
   The database stays as it is, because the activation version adds no
   migration. Nothing is restored and no message is lost. Link login works
-  again, and the imported accounts stay, unused.
+  again, as before the cutover began. The imported accounts stay, unused, and
+  so does the key if step 6 had succeeded.
+- Another attempt after going back starts at step 1 again, on a day the owner
+  chooses, with two differences. If the import was applied before, the dry run
+  of step 3 lists every account as skipped, none created and none quarantined;
+  that is the expected result then, and step 4 is left out. If step 6 had
+  succeeded before, the key is still there and startup opens the console
+  whenever the key and an enabled operator exist: the hub's log says
+  `Iris console open` as soon as step 5 has deployed, steps 6 and 7 are left
+  out, and the five minutes of step 9 count from step 5.
 - After a cutover that succeeded, a version from before it must never serve the
   public address as it is, because it would bring login links back.
   [Rollback while preserving the browser boundary](#rollback-while-preserving-the-browser-boundary)
   says what has to happen first and who can do it.
 
 Who may do what. Only the owner: say "start the login cutover"; say "import";
-type the password; decide to go back; change the web server. The coordinator:
+type the password; say "activated"; decide to go back; change the web server. The coordinator:
 the backups, the dry runs, the import after the owner's word, the deploy, the
 restart, the checks of the sessions and of the restart count, and going back
 after the owner's decision. Nobody: skip a step, or continue after a result this
@@ -242,8 +264,12 @@ procedure; on the public hub that is the coordinator.
    publication policy creates a private temporary file in the same directory,
    protects it before writing any key bytes, then writes, syncs and closes it
    before atomically linking it at the final path without replacing an existing
-   file. An existing final file is loaded and validated. Validation of
-   that publication correction is still pending for the final candidate.
+   file. An existing final file is loaded and validated. On the candidate
+   image, activation published the key this way, with mode 0600 and the hub's
+   user as its owner
+   ([candidate record](research/console-activation-candidate-2026-11-10.md)).
+   An interrupted publication and two competing ones were exercised only by the
+   tests, with injected failures, not on the hub's volume.
    If an existing file is incomplete or malformed, keep the console closed and
    have the owner review and privately quarantine it before choosing fresh material;
    activation must not overwrite or silently repair it. If persistence
@@ -321,6 +347,12 @@ a fresh backup of current state and review those losses first. The agent-only
    verification of its actual backup, grants and deployment.
 
 ## Rollback while preserving the browser boundary
+
+This section applies once a cutover has succeeded. A first cutover that fails
+goes back to the previous image as
+[the first section](#first-cutover-on-the-public-hub) says: that image served
+with login links when the cutover began, so going back to it restores the state
+the cutover began from.
 
 Use a supported backend that retains named authentication, its reviewed database
 and console key. A version has named authentication when its commit is the

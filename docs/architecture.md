@@ -576,9 +576,10 @@ For create/reset/activate, the CLI removes exactly one final LF or CRLF as input
 line framing before the password bounds; every other byte is preserved, without
 general trimming or normalization. The server still verifies submitted password
 bytes exactly. Before the first deployment closes browser access, the owner
-confirms readiness in their own terminal and remains present to activate,
-perform the second restart and sign in after the backup and approved import
-review. Agents prepare and rehearse; real owner activation is not delegated.
+confirms readiness in their own terminal and remains present to activate and
+sign in after the backup and approved import review; whoever deployed performs
+the second restart. Agents prepare and rehearse; real owner activation is not
+delegated.
 Legacy link/cookie grants were process maps, not SQLite rows: restart discards
 them, while activation clears named `ConsoleSession` rows. Restoring a database
 can revive named credentials/grants/sessions, not those legacy maps. An older

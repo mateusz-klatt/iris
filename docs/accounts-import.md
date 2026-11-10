@@ -12,10 +12,10 @@ rollback use the separate [console runbook](console-activation.md).
 Before commands for a first named-console cutover, the owner explicitly confirms
 readiness in their own terminal and remains present. Take the backup before
 deployment: the new binary immediately closes browser access until the owner
-activates a verified operator and performs the second restart; agents continue
-working. After an approved import apply, repeat the original dry-run before
-owner activation. Agents may prepare or rehearse, but do not activate real
-accounts on the owner's behalf or receive passwords in chat.
+activates a verified operator and the hub is restarted a second time; agents
+continue working. After an approved import apply, repeat the original dry-run
+before owner activation. Agents may prepare or rehearse, but do not activate
+real accounts on the owner's behalf or receive passwords in chat.
 
 ## Source and manifest
 
@@ -156,8 +156,9 @@ Never modify a captured private dump just to make an import succeed.
    report skips. Retain the reviewed manifest and safe report privately. Never
    retain request-body traces. Import does not activate sign-in. Continue with
    [explicit password verification, activation and restart](console-activation.md#owner-setup-and-activation)
-   only when that separate owner operation is approved and the owner is present
-   to perform activation, the second restart and sign-in checks in their own terminal.
+   only when that separate owner operation is approved and the owner is present.
+   The owner performs activation in their own terminal and the sign-in checks;
+   whoever deployed performs the second restart.
 
 Exact re-runs use an internal versioned SHA-256 fingerprint independent of the
 console key. A later Iris password/profile/role change is preserved, including

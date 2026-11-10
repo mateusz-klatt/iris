@@ -5,10 +5,10 @@ explicitly confirm in their own terminal that they are present and ready to
 complete activation, the second restart and sign-in checks. Take the backup
 before deploying: the first replacement of the legacy binary immediately closes
 browser access while agent coordination continues. An approved import apply and
-its repeated dry-run precede owner activation; then the owner runs
-`docker restart iris`, signs in and completes the checks. Agents may prepare and
-rehearse but must not activate real accounts on the owner's behalf. Passwords
-and machine credentials stay out of chat.
+its repeated dry-run precede owner activation; then whoever deployed restarts
+the hub with `docker restart iris`, and the owner signs in and stays for the
+checks. Agents may prepare and rehearse but must not activate real accounts on
+the owner's behalf. Passwords and machine credentials stay out of chat.
 
 The intended path is client HTTPS → Cloudflare HTTPS → Apache → HTTP on
 127.0.0.1:7878. Use Cloudflare Full (strict), a valid origin certificate, and
@@ -21,10 +21,11 @@ The browser console uses named accounts. Follow
 [console activation and recovery](console-activation.md) before opening browser
 access. The owner creates an operator or performs a separately approved
 [account import](accounts-import.md), verifies its password with
-`iris admin console activate <username> < /private/password`, then personally
-performs the second restart. Create/reset/activate remove exactly one final LF
-or CRLF from stdin as line framing before password validation; all other bytes
-are preserved and HTTP password verification remains exact.
+`iris admin console activate <username> < /private/password`, and whoever
+deployed then restarts the hub a second time. Create/reset/activate remove
+exactly one final LF or CRLF from stdin as line framing before password
+validation; all other bytes are preserved and HTTP password verification
+remains exact.
 Deploying this code does not authorize a real import or activate a missing key.
 Old login links and cookies grant no browser authority, and `iris ui` opens the
 ordinary sign-in URL without reading a machine token.
@@ -110,10 +111,12 @@ To deploy, in one shell on the hub's machine, from a checkout of that commit (fo
    ID for the same image.
 
 3. Back up the database, as in [Retention and restore](#retention-and-restore-adr-006), and copy
-   the file off the volume:
+   the file off the volume. The name carries the time, because the backup refuses a destination
+   that exists and the same commit can be deployed a second time:
 
    ```sh
-   docker exec iris /iris admin backup /data/iris.db "/data/before-$commit.db"
+   backup="before-$commit-$(date -u +%Y%m%dT%H%M%SZ).db"
+   docker exec iris /iris admin backup /data/iris.db "/data/$backup"
    ```
 
 4. Replace the container. `--no-build` and `--pull never` make a missing or misnamed image an error
@@ -151,7 +154,10 @@ To deploy, in one shell on the hub's machine, from a checkout of that commit (fo
    identifies the loaded image on this host. None of them is a registry digest: `docker save` and
    `docker load` produce none.
 
-Before rolling back, verify the previous image retains supported named authentication.
+To roll back, first decide whether the previous image may serve the public address. That depends
+on the console. Until a first cutover to named accounts has succeeded, the previous image is the
+one that served with login links, and going back to it restores that state and nothing more. Once
+a cutover has succeeded, verify that the previous image retains named authentication.
 For an older backend, first close public browser/login/UI API access using the
 [Apache rollback boundary](console-activation.md#rollback-while-preserving-the-browser-boundary),
 preserving agent routes and authenticated doctor PUT. Do this before the old backend starts;
@@ -161,8 +167,9 @@ can install/reload the live filter and drain existing browser connections. Agent
 can prepare and rehearse it. While the owner is unavailable, keep a supported
 named-authentication image, or stop/move the hub off the proxied port; the latter
 makes agent coordination unavailable too. Do not start an exposed old backend.
-Then return the tag to the reviewed previous image, replace the container the same way, and take
-the command-line `iris` from that image with step 5:
+Then return the tag to the previous image, replace the container the same way, and take
+the command-line `iris` from that image with step 5, with `iris-iris:$previous` where step 5 says
+`iris-iris:$commit`:
 
 ```sh
 docker tag "iris-iris:$previous" iris-iris:latest
@@ -181,7 +188,8 @@ What ties the image to the source is that it came from the CI run of that commit
 of the run. Nothing signs it, and anyone who can push to `main` or change the workflow decides what
 CI builds. The version string is an assertion made by the build: the checks above catch the wrong
 file, not a dishonest build. CI runs only `iris version` from this image; its non-root run on a
-fresh volume uses the release image, so step 4 is the first time this image serves.
+fresh volume uses the release image, so step 4 is the first time this image serves, unless it was
+rehearsed first on a scratch database, as the first cutover to named accounts requires.
 
 ### Building on the host
 

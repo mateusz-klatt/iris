@@ -482,8 +482,9 @@ hot activation. Restart with the prepared key opens named authentication.
 An already active console returns 409 `conflict` without clearing sessions.
 Normal restarts preserve original absolute session expiry. Before the first
 deployment closes the browser, the owner confirms readiness in their own
-terminal and remains present to activate, perform the second restart and sign
-in. Agents do not perform real owner activation or receive passwords in chat.
+terminal and remains present to activate and sign in; whoever deployed performs
+the second restart. Agents do not perform real owner activation or receive
+passwords in chat.
 See the [activation and recovery procedure](console-activation.md).
 
 All owner account setup, recovery, activation and import endpoints require

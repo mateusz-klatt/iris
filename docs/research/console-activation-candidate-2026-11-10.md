@@ -60,3 +60,41 @@ During both runs the public hub kept its image and its restart count of 0.
 - It is one run on one host, with one window size.
 - A later `main` or a rebased head gives a different image. This record is about
   the image named above.
+
+## Going back, and another attempt
+
+The runbook's first section says what going back leaves in place and what
+another attempt then finds. A second run on the same machine measured that, on a
+later image of the same pull request and the version the public hub runs.
+
+| | |
+|---|---|
+| Image | CI artifact `iris-rehearsal-image-pr250-653916ea2c150d880393bc91b9074a91ba4a11c0`, run 42796592117 |
+| Archive SHA-256 | `a61ae3c479f275a70cb8a9331494f7a5bb774e7f842e1710788b87c2391bffe6` |
+| Image ID | `sha256:1fa4ac32e02dabea5a336f1f85d64cea4fe7a2320e944a7af38385ab6527da1c` |
+| `iris version` | `dev (commit 174c12ce0c4a6df897c3c8f49f6c5d7e963ecf06; source clean; console unverified)` |
+| The version before it | The image the public hub runs, commit `ef67498`, started by its commit tag |
+| Where | `127.0.0.1:17878`, host network, a Docker volume of its own, one synthetic operator |
+
+Commit `174c12c` is GitHub's merge of head `653916e` into `main` at `1ffed57`.
+There was no browser: the sign-ins were HTTP requests with a cookie jar.
+
+| Step | Observed |
+|---|---|
+| `ef67498` on an empty volume | Status 200. The session read answered 401 with `X-Iris-Console-Mode: links`. `iris admin console create` answered `not_found: unknown API route`: that version serves the import, not account creation |
+| The candidate on that volume, as in step 5 | Log: `Iris console closed: console key unavailable or not independent`. Session read 401 with the closed header. `create` made the operator |
+| The line of step 6 as the runbook prints it, with the scratch address and token in place of the public hub's and the password on standard input | Wrong password: `unauthorized: Invalid username or password`, exit status 1. Right password: the account and `"restart_required": true`, exit status 0. The session read still answered 401 closed |
+| `docker restart`, as in step 7 | Log: `Iris console open` |
+| Sign-in over HTTP, as in step 8 | 200, and the session read 200 |
+| Going back: `ef67498` started on the same volume, with the key and the account in place | Status 200. Session read 401 with the links header, with the cookie from that sign-in and without it. Its log said nothing about the console |
+| Another attempt: the candidate started on the same volume again | Log: `Iris console open` at once. The cookie from before going back read its session again, 200. A new sign-in answered 200. `activate` answered `conflict: console is already active`, exit status 1 |
+| At the end | The last container's restart count was 0. The public hub kept its image, its `latest` tag and its restart count of 0 |
+
+So going back does not end a session that was made before it. The older version
+does not accept it, and the next start of the activation version accepts it
+again until its twelve-hour limit.
+
+This run does not show: the import, because the account was created; a browser;
+a login link used on `ef67498` after going back; Compose and the tag switch that
+a real going back uses, because each start here named its image; or the
+five-minute wait.

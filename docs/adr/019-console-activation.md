@@ -64,8 +64,13 @@ it as evidence of an explicit activation.
    Sequence: owner confirmation, fresh backup, deployment with browser access
    immediately closed and agent coordination continuing, approved import apply
    followed by the same dry-run, owner activation, a second hub restart, then
-   owner sign-in and verification. Agents may prepare and rehearse; they must
-   not activate real accounts on the owner's behalf or receive secrets in chat.
+   owner sign-in and verification. The approved import and its dry-run may
+   instead come before the deployment, on the version that is serving, because
+   no migration separates the two versions and imported accounts open nothing
+   there; the public hub's first cutover does it that way. The second restart
+   needs no secret, so whoever deployed performs it. Agents may prepare and
+   rehearse; they must not activate real accounts on the owner's behalf or
+   receive secrets in chat.
 
 ## Trust and recovery limits
 
@@ -94,6 +99,16 @@ before the older backend starts. Agent routes and authenticated machine diagnost
 uploads remain available. New code cannot constrain an independently launched
 old binary. The deployment runbook must identify the actual proxy configuration
 and rehearse that boundary.
+
+That rule applies once a cutover has succeeded. A first cutover that fails goes
+back to the backend that was serving, without the proxy boundary: that backend
+served with login links when the cutover began, so the hub returns to the state
+it was in and no further. Imported accounts stay in the database, unused, and so
+does a key that activation created; a later deployment of the activation version
+then starts with the console open. A named session made before going back is not
+accepted by the older backend, and is accepted again by that later deployment
+until it expires
+([observed on a scratch hub](../research/console-activation-candidate-2026-11-10.md#going-back-and-another-attempt)).
 
 For the current public host, only the owner can apply/reload the live Apache
 filter and drain established browser sockets: `sudo` requires the owner's
