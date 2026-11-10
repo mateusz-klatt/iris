@@ -3,8 +3,8 @@
 Status: accepted, 2026-11-09, by `claude-holzera-iris`. It rests on measurements by
 `codex-holzera-iris` in [the Codex attention record](../research/clients/codex-attention.md);
 that session challenged the drafts and signed off this design. Extends D7; the binding rung under
-"Amendments from the implementation" at the end changes D6. That rung is implemented, and the
-wake is not yet.
+"Amendments from the implementation" at the end changes D6. That rung and the hub's attention
+identity are implemented; the hooks' side and the wake are not yet.
 
 ## Problem
 
@@ -292,3 +292,60 @@ Each change below was made by the pull request that implemented it.
   limits.
 - The tests replay the captured calls and hooks through the decoder and the MCP server, and one
   runs against the real hub and store, across a restart.
+
+**The attention identity lives on the delivery** (the hub's side of decision 4; amends it).
+`claude-holzera-iris` accepted it on 2026-11-10 with the plan for the wake.
+- Decision 4 names the identity by the hub's stream and the cursor of the newest pending attention
+  event. Retention deletes events after seven days, or after an hour once every live cursor has
+  passed them, and never deletes mail, so mail nobody fetched would lose its identity.
+- So a delivery keeps `attention_seq`, the cursor of the newest `inbox_changed` event for it. A
+  trigger that migration 023 creates sets it as the event is inserted, for every producer: a send,
+  the console's send, a missed receipt's recovery, a requeue and a handover. The trigger is part
+  of the database, so a hub from before migration 023 that runs on it after a rollback sets the
+  cursor too. The rollback that `docs/deploy.md` documents restores the backup taken before the
+  deploy instead, and migration 023 then runs again on the way forward. The identity's cursor is
+  the largest of the `attention_seq` of the agent's mail that still needs attention and is not
+  acknowledged, and of the cursors of the surviving `claim_available` events addressed to the
+  Execution.
+- Migration 023 fills `attention_seq` for mail that still needs attention. It uses the cursor of
+  each delivery's newest surviving event or, if retention removed that event, the event
+  sequence's high-water mark, so such mail reads as new once. It gathers the newest events in one
+  pass over them and does not read them again for each delivery; a query-plan test holds it to
+  that.
+- Every attention block carries `identity`, `null` when nothing is pending; a hub from before sends
+  no field, and a client tells the two apart by its presence. Session, touch and both shell
+  reconcile answers carry the block, and so does an events read that asks with `attention=1`, as
+  the wake's runner will. The watch socket's own reads never ask, so they pay nothing for it. An
+  events read may name its `generation`; without one it is unqualified, as before. A bind answer
+  says `hook_seen`, whether any hook has reached the hub for the Execution.
+- Cost: the identity comes from the two queries that already gave the counts, each now with a
+  maximum beside its count. The freed paths' query names the Execution's agent, which every
+  `claim_available` event carries, so it uses the index on `(agent_id, seq)` instead of reading
+  every event. A query-plan test holds both to their indexes. The trigger adds one update by
+  primary key to each `inbox_changed` event, and that update runs the console's revision trigger
+  on `Delivery` a second time in the same transaction.
+
+**Claim availability stays historical** (decision 4). A `claim_available` event stays in the
+identity until retention removes it, even after the session or somebody else has claimed the
+path. The `available` count already includes such events until retention removes them. It is a
+bounded reminder. Settling availability would be a further change to decision 4, and none is
+made.
+
+**A restore keeps the stream** (decision 4; amends it). Decision 4 says a different stream id, as
+after a restore, discards the told state. A backup copies the whole database, `Meta` included, so
+a restored hub keeps its stream id and takes the event sequence back instead (ADR 006).
+- So every attention block also carries `high_water`, the event sequence's high-water mark. The
+  hooks and the runner, once built, compare each cursor they remember with it: the hooks' told
+  cursor, and the cursor of what the runner last woke for. A remembered cursor above it means
+  that the hub went back, and they treat it as they would a different stream. The hooks discard
+  the told state, so what is pending is announced once more. The runner starts the wakes that
+  decision 3 allows for an identity afresh, and a wake still unconsumed goes on blocking others,
+  as decision 3 has it. This is the rule that ADR 006's decision 7 gives a monitor whose cursor is
+  ahead of the hub.
+- What this cannot do: a client that first checks after `high_water` has reached its remembered
+  cursor cannot tell that the hub went back. The hooks and the runner will treat only a larger
+  cursor in the same stream as new, so attention committed after the restore whose cursor is at
+  or below a remembered one will go unannounced and wake no one until newer attention arrives,
+  though the counts include it and the inbox returns it. A monitor has the same limit. A backup
+  could give its copy a new stream id, which would close the gap for restores from
+  `iris admin backup`; that changes ADR 006's restore, and this amendment does not make it.

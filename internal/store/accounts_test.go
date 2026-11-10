@@ -14,6 +14,11 @@ import (
 // inspect a source account database.
 const consoleTestHash = "scrypt$16384$8$1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 
+// removeAttentionIdentitySchema undoes migration 023, which a fixture that reconstructs an older
+// version must do first: SQLite cannot add a column that is already there, nor drop one that a
+// trigger names.
+const removeAttentionIdentitySchema = "DROP TRIGGER delivery_attention_seq;\nALTER TABLE Delivery DROP COLUMN attention_seq;\n"
+
 // Old-schema fixtures undo only this migration before reconstructing their
 // historical version. Fresh-migration tests remain backed by captured old SQL.
 const removeConsoleRevisionSchema = `
@@ -412,7 +417,7 @@ func TestConsoleMigrationPreservesLegacyMailAndRetryNamespaces(t *testing.T) {
 	repo := registered["repository_id"].(string)
 	r := Request{RepositoryID: repo, Key: "legacy-retry", To: []string{registered["agent"].(map[string]any)["id"].(string)}, Body: "unattributed shared mail"}
 	accepted := call(t, s, "ui_messages", r)
-	if _, err := s.db.Exec(removeConsoleSchema + "PRAGMA user_version=16"); err != nil {
+	if _, err := s.db.Exec(removeAttentionIdentitySchema + removeConsoleSchema + "PRAGMA user_version=16"); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Close(); err != nil {

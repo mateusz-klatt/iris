@@ -48,12 +48,26 @@ Response:
  "peers":[{"name":"...","client":"...","state":"active","worktree":"...","branch":"..."}],
  "claims":[{"fence":1,"path":"...","kind":"exact","holder":"...","origin":"auto",
             "expires_at":"..."}],
- "capabilities":["shell_scope"],"unread":0}
+ "capabilities":["shell_scope"],"unread":0,
+ "attention":{"unread":0,"available":0,"monitored":false,"identity":null,"high_water":17}}
 ```
 
 `capabilities` names what this hub accepts beyond the rest of version one. `shell_scope` means
 that it takes reduced shell snapshots on `POST /v1/shell/scoped` (below). A hook sends one only
 to a hub whose last registration answer named it.
+
+`attention` is what is pending for the session. `unread` counts its mail that still needs a wake,
+`available` counts the paths freed for this Execution, and `monitored` says its `iris watch` beat
+recently. `identity` names the newest event still pending, `{"stream":"<uuid>","cursor":124}`, or
+is `null` when nothing is. A hub that knows identities always sends the field, `null` included; a
+hub from before sends none, so a client tells the two apart by the field's presence. Mail keeps
+its identity after retention deletes its event. A freed path stays in the identity until
+retention deletes its event, even after the path was taken. `high_water` is the event sequence's
+high-water mark. A restore keeps the stream and takes the sequence back, so a cursor that a client
+remembers above `high_water` means that the hub went back (ADR 006, decision 7). A client that
+first checks after `high_water` has reached its remembered cursor cannot tell. Responses to
+touch and shell reconcile requests, and to events reads with `attention=1`, carry the same block
+(ADR 017).
 
 For recovery after a hub restart, reattach with the same `session_id` and the last returned
 `generation`. A recovering session without that generation returns `lost`; an expired
@@ -78,7 +92,9 @@ session needs a new generation.
  "client_pid":123,"client_pid_start_ms":1793917887311,"cwd":"..."}
 ```
 
-It returns `{"execution_id":"...","generation":1,"agent":{...}}`, or `unbound`, or `ambiguous`.
+It returns `{"execution_id":"...","generation":1,"agent":{...},"hook_seen":true}`, or `unbound`,
+or `ambiguous`. `hook_seen` says whether any hook has reached the hub for that Execution. ADR 017
+requires Codex's planned wake to arm only when `hook_seen` is true.
 
 `POST /v1/executions/{id}/heartbeat` takes `{"generation":1,"source":"shim"}`, where `source` is
 `shim`, `watch` or `hook`. It returns `{"lease_ms":60000}`, or `lost`.
@@ -112,6 +128,7 @@ Response, always 200 when the request is valid:
  "message":"text shown to the user and the agent"}
 ```
 
+The response also carries the `attention` block described under `POST /v1/sessions`.
 `action` is `allow`, `deny`, `ask` or `warn`. Paths are repository-relative with forward slashes.
 In a conflict, `path` is the path as requested and `claimed_path` is the holder's claim as written.
 Claims compare by a key that ignores case and Unicode form, as `docs/adr/003-path-identity.md`
@@ -283,8 +300,11 @@ on the hub. Missing build metadata is reported as unknown.
 
 Persisted consumer cursors advance monotonically and an unchanged cursor is not rewritten.
 Wake-ticket streams check the ticket's generation in the same transaction as each event
-snapshot. The bearer-authenticated HTTP event read retains its unqualified-generation
-behavior.
+snapshot. The bearer-authenticated HTTP event read may name the generation it expects with
+`generation`. If that generation is stale, the hub answers `lost`. Without `generation`, the read
+remains unqualified, as before; `iris watch` and older shims rely on this. `attention=1` adds the
+attention block described under `POST /v1/sessions`; a read that does not ask, and a watch
+socket's own reads, carry none.
 
 If `after` is older than the log keeps, it returns `{"reset":true,"high_water":200,...}`, and the
 client must take a snapshot. The response includes `snapshot` with live `claims` and
@@ -649,7 +669,10 @@ source and destination are both checked by the CLI.
 snapshot per Execution. `before` establishes the baseline; `after` compares and
 replaces it, returning the same response shape. The first post without a baseline
 only records it. Multiple live Executions in the same host/worktree suppress
-warnings and clear their baselines. Status strings are observations, never commands.
+warnings and clear their baselines. Status strings are observations, never commands. Every
+successful answer on this route and on `POST /v1/shell/scoped` carries the `attention` block
+described under `POST /v1/sessions`. The planned shell hook change will use it to announce new
+attention as an edit hook does (ADR 017).
 
 Instead of `execution_id`, a reconcile may carry the session's registration fields, those of
 `POST /v1/sessions` with `session_id` and the remembered `generation`. The hub then registers

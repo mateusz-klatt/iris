@@ -87,6 +87,9 @@ var idleExpirySchema string
 //go:embed migrations/022.sql
 var reducedShellSchema string
 
+//go:embed migrations/023.sql
+var attentionIdentitySchema string
+
 // Clock separates lease ticks from persisted wall-clock expiries. Tick must be monotonic
 // within a Store's lifetime; client timestamps never participate in lease decisions.
 type Clock interface {
@@ -354,6 +357,13 @@ func openDatabase(filename string, clock Clock, driverName string) (*Store, erro
 		if version < 22 {
 			if _, err := t.exec(reducedShellSchema); err != nil {
 				return err
+			}
+		}
+		if version < 23 {
+			for _, q := range []string{attentionIdentitySchema, attentionHighWaterSQL, attentionNewestEventSQL} {
+				if _, err := t.exec(q); err != nil {
+					return err
+				}
 			}
 		}
 		// A reduced shell baseline does not cross a hub start (ADR 018). An older hub that ran

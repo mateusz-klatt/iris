@@ -6,6 +6,53 @@ import (
 	"testing"
 )
 
+// queryPlan is SQLite's plan for query, one detail per step.
+func queryPlan(t *testing.T, s *Store, query string, args ...any) []string {
+	t.Helper()
+	rows, err := s.db.Query("EXPLAIN QUERY PLAN "+query, args...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var details []string
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		details = append(details, detail)
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	return details
+}
+
+// Migration 023 reads Event once, however many events and pending deliveries there are. One pass
+// gathers each delivery's newest inbox_changed event, and each delivery then finds its own by
+// key; no delivery reads the events again.
+func TestTheAttentionMigrationReadsTheEventsOnce(t *testing.T) {
+	s, _, _ := testStore(t)
+	for _, query := range []string{attentionHighWaterSQL, attentionNewestEventSQL} {
+		details := queryPlan(t, s, query)
+		plan := strings.Join(details, "; ")
+		t.Log(plan)
+		scans := 0
+		for _, detail := range details {
+			if strings.Contains(detail, "CORRELATED") {
+				t.Errorf("a step runs once per row: %s", plan)
+			}
+			if strings.HasPrefix(detail, "SCAN Event") {
+				scans++
+			}
+		}
+		if scans > 1 {
+			t.Errorf("Event is read %d times: %s", scans, plan)
+		}
+	}
+}
+
 func TestIdleCoordinationPlansAvoidScanningHistoricalRows(t *testing.T) {
 	for _, history := range []int{200, 2000} {
 		t.Run(fmt.Sprint(history), func(t *testing.T) {
@@ -52,25 +99,11 @@ func TestIdleCoordinationPlansAvoidScanningHistoricalRows(t *testing.T) {
 				{"missed receipt", missedReceiptsSQL, []any{clock.Now().UnixMilli()}, []string{"DeliveryReceiptDue"}},
 				{"console expiry", expireConsoleSessionsSQL, []any{clock.Now().UnixMilli()}, []string{"console_session_expiry"}},
 				{"attention count", pendingDeliveriesSQL, []any{agent}, []string{"delivery_attention_recipient"}},
+				{"pending mail and its identity", pendingMailSQL, []any{agent}, []string{"delivery_attention_recipient"}},
+				{"freed paths and their identity", freedPathsSQL, []any{agent, r.ExecutionID}, []string{"event_recipient_cursor"}},
 				{"event page", agentEventsSQL, []any{int64(0), agent, r.ExecutionID, 100}, []string{"event_recipient_cursor", "delivery_attention_recipient"}},
 			} {
-				rows, err := s.db.Query("EXPLAIN QUERY PLAN "+query.sql, query.args...)
-				if err != nil {
-					t.Fatal(query.name, err)
-				}
-				var details []string
-				for rows.Next() {
-					var id, parent, unused int
-					var detail string
-					if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
-						t.Fatal(err)
-					}
-					details = append(details, detail)
-				}
-				if err := rows.Err(); err != nil {
-					t.Fatal(err)
-				}
-				_ = rows.Close()
+				details := queryPlan(t, s, query.sql, query.args...)
 				plan := strings.Join(details, "; ")
 				t.Logf("%s with %d historical rows: %s", query.name, history, plan)
 				for _, index := range query.indexes {
