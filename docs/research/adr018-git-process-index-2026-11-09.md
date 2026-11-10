@@ -223,3 +223,23 @@ clone, hosted model call, shared-checkout change, production measurement or proj
 suite was performed. All experiment processes ended. Retained fixtures are not
 product test coverage, and none of these observations substitutes for the normal
 PR validation required by AGENTS.md.
+
+## One observation on a production checkout
+
+Added on 2026-11-10, after the record above was written. It is one trial, not a benchmark.
+
+The session that works in the checkout with the market-data submodule ran this once, in that
+checkout, at a load average of 15.5 on four cores:
+
+```sh
+timeout --foreground -s KILL 0.3 git --no-optional-locks status --porcelain -z --untracked-files=all --ignore-submodules=untracked
+```
+
+It then looked in `/proc` every 50 ms for a `git status` that had not been running before the
+trial. `timeout` killed the git it started after 300 ms and nothing else, as the hook did at
+the time. A `git status` whose working directory was the market-data submodule ran on until
+1.02 s after the trial began, and had used 1.30 s of CPU at the last sample before it ended.
+
+Limits: one trial on one host. Another session shares that checkout, so the process could have
+come from its hook, although none was running before the trial and the directory and the timing
+match the trial. The hook itself was not run, and `timeout` here was the uutils implementation.

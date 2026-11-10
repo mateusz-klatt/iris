@@ -3,7 +3,6 @@ package gitinfo
 import (
 	"bytes"
 	"context"
-	"os/exec"
 	"strings"
 )
 
@@ -20,9 +19,7 @@ func LineEndings(ctx context.Context, root string) (crlf, text int, err error) {
 	if conversion(ctx, root) {
 		return 0, 0, nil
 	}
-	cmd := exec.CommandContext(ctx, "git", "--no-optional-locks", "ls-files", "--eol", "-z")
-	cmd.Dir = root
-	out, err := cmd.Output()
+	out, err := gitCommand(ctx, root, "--no-optional-locks", "ls-files", "--eol", "-z").Output()
 	if err != nil {
 		return 0, 0, err
 	}
@@ -33,9 +30,7 @@ func LineEndings(ctx context.Context, root string) (crlf, text int, err error) {
 // conversion reports whether this git turns CRLF into LF when it reads the worktree:
 // core.autocrlf set to true or input. Then no file is affected.
 func conversion(ctx context.Context, root string) bool {
-	cmd := exec.CommandContext(ctx, "git", "config", "--get", "core.autocrlf")
-	cmd.Dir = root
-	out, _ := cmd.Output() // unset exits 1, which means no conversion
+	out, _ := gitCommand(ctx, root, "config", "--get", "core.autocrlf").Output() // unset exits 1, which means no conversion
 	value := strings.ToLower(strings.TrimSpace(string(out)))
 	return value == "true" || value == "input"
 }
