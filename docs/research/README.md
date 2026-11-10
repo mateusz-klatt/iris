@@ -41,6 +41,11 @@ measures descendant lifetime after cancellation and index inventory across small
 sparse, split, linked-worktree and nested-submodule fixtures. It distinguishes the Linux
 measurements from unverified concurrency, portability and production-cost assumptions.
 
+The [reduced scope run on WSL](adr018-reduced-scope-wsl-2026-11-10.md) measures real shell hooks
+in a superproject whose full status takes about 0.9 s: the cold trip, 30 commands in reduced scope,
+the full attempt after the cooldown, and 30 commands on the binary from before the hook's side. It
+records wall time, CPU including killed git processes, attribution and what was left running.
+
 The [console activation rehearsals of 2026-11-09](console-activation-rehearsal-2026-11-09.md)
 record what a build of the activation change showed in two browsers, after a restore and behind
 an Apache that closes the console for an older backend, and what a candidate is checked for.

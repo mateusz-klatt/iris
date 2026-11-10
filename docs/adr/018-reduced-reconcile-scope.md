@@ -234,6 +234,11 @@ Each change below was made by the pull request that implemented it.
   slow hub call is never sent for either. A second copy of a snapshot would find nothing changed,
   and if it answered first the hook would lose the first copy's warning.
 
+**Measured on WSL** (adds to Verification). [The reduced scope record](../research/adr018-reduced-scope-wsl-2026-11-10.md)
+has the run that Verification asks for, on a synthetic fixture whose full status takes about 0.9 s.
+In reduced scope a command cost 19 ms of CPU against 614 ms before the hook's side, an edit of a
+held file was warned about, and no git process was alive 100 ms after any hook exited.
+
 **No reduced scope on Windows** (the hook's side; amends decisions 1 and 4).
 - On Windows a hook takes no reduced snapshot and keeps no breaker. Every reconcile there runs
   full scope as before, and doctor shows no shell scope.
