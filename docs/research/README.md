@@ -52,6 +52,11 @@ restarted, signed in to from a browser, and started once on a copy of a producti
 second run went back to the version before it on the same database and then started the candidate
 again. It does not repeat the access checks.
 
+The [access and import run of 2026-11-10](console-access-and-import-2026-11-10.md) ran the binary
+from the final head's image: an import on the version before, the switch, owner setup and
+activation, the access checks in two browser contexts and by keyboard in a narrow and a wide
+window, and going back with another attempt.
+
 ## Review of the architecture
 
 The synthesis then went back to the clients as a plan review. Antigravity was left out of this

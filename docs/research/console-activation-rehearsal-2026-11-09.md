@@ -11,7 +11,9 @@ host whose temporary files have since been removed, so the reports can no longer
 be read. Treat the results as what was observed then, not as validation of a
 released binary. The image CI built for the pull request was run on 2026-11-10:
 see [the candidate record](console-activation-candidate-2026-11-10.md). That run
-repeated the activation steps, not the access checks below.
+repeated the activation steps, not the access checks below. The
+[access and import run](console-access-and-import-2026-11-10.md) repeated them on
+the final head's image.
 
 ## What a candidate is checked for
 
