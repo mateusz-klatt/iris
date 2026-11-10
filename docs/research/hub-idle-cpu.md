@@ -1,7 +1,7 @@
 # Idle hub work and event-driven streams
 
 The production observations below were reported by the Holzera operator on
-2026-11-09. Local reproductions use synthetic WSL databases and loopback sockets;
+2026-11-09 and 2026-11-10. Local reproductions use synthetic WSL databases and loopback sockets;
 no production database or account data was used by the implementer.
 
 ## Operator report
@@ -246,9 +246,38 @@ or session cleanup. Authentication checks absolute expiry at use and never treat
 an expired retained row as authority. Ordinary domain calls, including forget
 dry-runs, do not perform this unrelated housekeeping.
 
+## Public hub before and after the deploy
+
+The Holzera operator read the hub process's CPU time, user plus system, from
+`/proc/<pid>/stat` over 60-second windows, and counted the established TCP
+connections to port 7878 with each window. No profiler was attached, and the
+load was whatever the fleet was doing at the time.
+
+| Commit | Windows began, UTC | CPU seconds in each window | Connections |
+|---|---|---|---|
+| `4840765`, before the change | 2026-11-09 19:27:40, 19:28:40, 19:29:41 | 31.26, 24.82, 30.73 | 15 |
+| `cfcd86a`, before the change | 19:34:07, 19:35:08, 19:36:08 | 32.71, 34.02, 31.86 | 14 |
+| `6d555c7`, with the change | 19:54:11, 19:55:11, 19:56:11, 19:57:11 | 0.34, 0.27, 0.32, 0.32 | 11 to 12 |
+| `6d555c7`, with the change | 2026-11-10 01:32 | 0.14 | 10 at the start, 8 at the end |
+| `ef67498`, with the change | 01:55:58, after its deploy at 01:55:37 | 0.15 | 9 |
+
+The host was restarted on 2026-11-09 at 22:14 UTC. From the container's start at
+22:15:02 until 01:32 the process used 18.5 CPU seconds in 3.29 hours: 0.09 CPU
+seconds a minute, or 0.16 percent of one core.
+
+What these readings do not show:
+
+- They are not a controlled comparison. The WSL sessions ended seconds after the
+  19:52 deploy of `6d555c7`, so fewer agent streams were attached afterwards,
+  though the number of connections was close. A connection is a socket, most of
+  them through the reverse proxy, not a session.
+- They say nothing about hook latency, wake latency or many more sockets. The
+  minute benchmark above compares equal numbers of sockets on synthetic data.
+- Each reading is the process time of one machine. Disk writes were not read.
+
 ## What was not measured
 
-This work does not measure a production redeploy, native Windows/macOS CPU,
+This work does not measure the public hub under a controlled load, native Windows/macOS CPU,
 reverse-proxy/TLS delays, a full agent hook under the benchmark load, or real
 model-turn wake latency. Named-console correctness is tested with the gated
 account path, but the minute benchmark uses the currently deployed legacy

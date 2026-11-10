@@ -1,6 +1,6 @@
 # 016: Wake streams on committed changes
 
-Status: proposed; implementation and measurements are under review.
+Status: accepted. Implemented by #245 and running on the public hub since 2026-11-09.
 
 ## Problem
 
@@ -77,3 +77,8 @@ history measure CPU time, transaction rate and registration RPC latency for 1, 5
 sockets plus two console sockets. The before and after environments, measured
 durations and unmeasured cases are recorded in `docs/research/hub-idle-cpu.md`.
 No production account data is used for those measurements.
+
+On the public hub the change was observed, not benchmarked. Over 60-second windows
+the hub process used 25 to 34 CPU seconds before it and about 0.3 after it, with 14
+to 15 and 11 to 12 connections. Over the following hours it averaged 0.09 CPU
+seconds a minute. The same record has the readings and what they cannot show.
