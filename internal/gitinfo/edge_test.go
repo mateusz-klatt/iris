@@ -5,6 +5,7 @@ import (
 	"compress/zlib"
 	"context"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -273,14 +274,65 @@ func TestStatusReportsGitFailure(t *testing.T) {
 
 func TestStatusStopsAtItsLimit(t *testing.T) {
 	var out limitedStatus
-	if n, err := out.Write(make([]byte, 48<<10)); err != nil || n != 48<<10 {
+	if n, err := out.Write(make([]byte, statusLimit)); err != nil || n != statusLimit {
 		t.Fatal(n, err)
 	}
 	if _, err := out.Write([]byte{0}); err == nil || !strings.Contains(err.Error(), "limit") {
 		t.Fatal(err)
 	}
-	if out.Len() != 48<<10 {
-		t.Fatalf("kept %s bytes", strconv.Itoa(out.Len()))
+	if out.kept.Len() != statusLimit {
+		t.Fatalf("kept %s bytes", strconv.Itoa(out.kept.Len()))
+	}
+}
+
+// os/exec copies git's output with io.Copy, and io.Copy gives the whole copy to a writer that
+// has ReadFrom. An embedded bytes.Buffer has one, and it read git's output to the end without
+// a single Write, so the limit never applied. The source here ends after 1 MiB, so a limit
+// that fails again costs this test a megabyte and no more.
+func TestTheStatusLimitHoldsForTheCopyExecMakes(t *testing.T) {
+	var out limitedStatus
+	copied, err := io.Copy(&out, io.LimitReader(repeating('a'), 1<<20))
+	if err == nil || copied > statusLimit || out.kept.Len() > statusLimit {
+		t.Fatalf("copied %d bytes and kept %d: %v", copied, out.kept.Len(), err)
+	}
+}
+
+type repeating byte
+
+func (r repeating) Read(p []byte) (int, error) {
+	for i := range p {
+		p[i] = byte(r)
+	}
+	return len(p), nil
+}
+
+// A status above the limit is refused, not accepted whole. The first call is the control: the
+// same worktree is read while its status is below the limit.
+func TestStatusRefusesAWorktreeAboveItsLimit(t *testing.T) {
+	root := t.TempDir()
+	cmd := exec.Command("git", "init", "-q", root)
+	cmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	// Each untracked file is one record of 108 bytes: "?? ", a 104-byte name and a NUL.
+	untracked := func(from, to int) {
+		t.Helper()
+		for i := from; i < to; i++ {
+			name := strings.Repeat("n", 100) + strconv.Itoa(1000+i)
+			if err := os.WriteFile(filepath.Join(root, name), nil, 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	untracked(0, 100)
+	got, err := Status(context.Background(), root)
+	if err != nil || len(got) != 100 {
+		t.Fatalf("below the limit: %d paths, %v", len(got), err)
+	}
+	untracked(100, 600)
+	if got, err = Status(context.Background(), root); err == nil {
+		t.Fatalf("accepted %d paths, %d bytes of status, above the limit of %d", len(got), 600*108, statusLimit)
 	}
 }
 

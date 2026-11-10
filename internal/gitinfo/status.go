@@ -21,17 +21,24 @@ func Status(ctx context.Context, root string) (map[string]string, error) {
 	if err := cmd.Run(); err != nil {
 		return nil, err
 	}
-	return ParseStatus(out.Bytes())
+	return ParseStatus(out.kept.Bytes())
 }
 
-// Avoid allocating unbounded output in large generated trees.
-type limitedStatus struct{ bytes.Buffer }
+// statusLimit bounds what a status may hold, so a large generated tree cannot make the hook
+// allocate without limit or send the hub a snapshot it refuses.
+const statusLimit = 48 << 10
+
+// limitedStatus keeps git's output up to statusLimit and fails the write that would pass it.
+// Its buffer is a named field on purpose. os/exec copies with io.Copy, which gives the whole
+// copy to a writer that has ReadFrom, and an embedded bytes.Buffer has one that reads to the
+// end without calling Write: with it, the limit never applied.
+type limitedStatus struct{ kept bytes.Buffer }
 
 func (b *limitedStatus) Write(p []byte) (int, error) {
-	if b.Len()+len(p) > 48<<10 {
+	if b.kept.Len()+len(p) > statusLimit {
 		return 0, errors.New("git status exceeds reconciliation limit")
 	}
-	return b.Buffer.Write(p)
+	return b.kept.Write(p)
 }
 
 func ParseStatus(raw []byte) (map[string]string, error) {
