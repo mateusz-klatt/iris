@@ -270,7 +270,8 @@ rehearsal, with two real browser contexts for live revocation and prepared stale
 requests. Also check shared-cookie account replacement across tabs, narrow/wide
 layouts, keyboard operation, restart expiry, fresh-key restoration and the proxy
 rollback boundary. The [activation runbook](console-activation.md) defines this
-sequence and [provisional local evidence](console-activation.md#provisional-rehearsal-evidence).
+sequence, and [the rehearsal record](research/console-activation-rehearsal-2026-11-09.md)
+holds what was observed.
 Real-binary/browser/restore checks passed 44/44 and expanded local Apache checks 73/73;
 the modified build does not establish readiness of a final clean candidate or
 the production proxy. No real source export or account import was used.

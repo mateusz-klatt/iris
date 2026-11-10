@@ -5,22 +5,118 @@ Deploying a binary does not authorize an account import or a production cutover.
 This runbook describes owner operations; perform a real import only after its
 source, manifest, backup and apply have been explicitly approved.
 
-**Before any deployment command**, the owner must explicitly confirm in their
-own terminal that they are present and ready to complete activation, the second
-restart and sign-in checks. On the first cutover from the legacy binary,
-deployment closes browser access immediately; it stays closed until the owner
-activates a named operator and restarts the hub again. Agent coordination keeps
-working during that closed-console stage. Agents may prepare and rehearse this
-procedure; they must not activate real accounts in place of the owner. Keep
-passwords and machine credentials out of chat.
+**Before any deployment command**, the owner tells whoever will deploy, in that
+session, that he is present and ready for activation, the second restart and the
+sign-in checks. On the first cutover from the legacy binary, deployment closes
+browser access immediately; it stays closed until the owner activates a named
+operator and the hub is restarted again. Agent coordination keeps working during
+that closed-console stage. Agents may prepare and rehearse this procedure; they
+must not activate real accounts in place of the owner. Keep passwords and
+machine credentials out of chat.
 
-Local rehearsal results are recorded [below](#provisional-rehearsal-evidence):
-44 real-binary/browser/restore checks and 73 Apache rollback checks passed.
-The binary was built from a modified checkout. Release validation must be recorded
-separately at the exact PR head, including the atomic key-publication correction,
-a clean rebuilt binary and complete local checks. The historical results below
-do not substitute for that validation or authorize production activation or import.
-No production configuration or real account data was changed for the rehearsals.
+Rehearsals of this procedure are recorded in
+[the rehearsal record](research/console-activation-rehearsal-2026-11-09.md), with
+their limits. A rehearsal is evidence about the binary it ran; it authorizes no
+production import or activation.
+
+## First cutover on the public hub
+
+This is the whole first cutover, in order. The sections after it are the
+reference for each step.
+
+Words used here. "The console" is the hub's web page for people; agents do not
+use it and keep working through every step. "The coordinator" is the agent
+session on the hub's machine that deploys the hub. "The activation version" is
+the first version with password login. It has no login links, so from the moment
+it is deployed the console is closed to everyone until activation and one more
+restart. "A dry run" is an import that reports what it would do and writes
+nothing.
+
+Only the owner knows the password. No agent may see it, type it or ask for it.
+Only the owner can change the web server on the hub's machine, because that
+needs `sudo` and his password.
+
+Before the day, without the owner: the activation version is merged with every
+check green and CI has built its image; a rehearsal on that image is recorded;
+and this section has been read by two simpler models that both restated it
+correctly.
+
+On the day the owner is present. The steps take about 15 minutes; set aside 30.
+
+1. The owner writes "start the login cutover" in the coordinator's session.
+   Nothing below happens before that.
+2. The coordinator takes backup 1 of the hub's database and copies it off the
+   hub's volume, as in
+   [Backup, review and apply](accounts-import.md#backup-review-and-apply), step 1.
+3. The coordinator runs the import's dry run, with the source file and the
+   manifest that the owner has already reviewed, and shows the result to the
+   owner. Expected: every account in that source is listed as created, none
+   skipped, none quarantined. Any other result: stop, and tell the owner what
+   the dry run printed. The hub is unchanged; only the backup file was added.
+4. The owner writes "import" in the coordinator's session. The coordinator runs
+   the import with `--apply`, then the same dry run again. Expected now: none
+   created, every account skipped, none quarantined. Any other result: stop, and
+   tell the owner what was printed. The accounts exist but cannot be used yet,
+   and the console still works with links.
+5. The coordinator deploys the activation version, as in
+   [Deploying the public hub from an image CI built](deploy.md#deploying-the-public-hub-from-an-image-ci-built).
+   That procedure takes backup 2 just before it replaces the running hub, and
+   keeps the previous image under its commit. From now on the console is closed
+   and the hub's log says `Iris console closed`. Agents keep working.
+6. The owner, in his own terminal on the hub's machine, runs this with the
+   operator's username in place of `<username>`, and types the password:
+
+   ```sh
+   IFS= read -rs -p 'Password: ' p && echo && printf '%s' "$p" | IRIS_HUB_URL=http://127.0.0.1:7878 IRIS_TOKEN_FILE="$HOME/.config/iris/hub.token" iris admin console activate <username>; unset p
+   ```
+
+   The password is not shown and is not stored. Expected: the answer contains
+   `"restart_required":true`. If the owner mistypes, he tries again. The hub
+   allows five tries in 15 minutes; after the fifth wrong try he waits
+   15 minutes, counted from that try. If two careful tries in a row are refused,
+   he stops trying: that is a fault, see below.
+7. The coordinator restarts the hub with `docker restart iris`. Deploying again
+   would do nothing here, because the image has not changed. Expected: the hub's
+   log says `Iris console open`.
+8. The owner opens the hub's address in a browser and signs in with the
+   username and the password.
+9. Three checks. The owner reloads the page and says whether he still sees his
+   inbox. The coordinator checks with its Iris `peers` tool that the other
+   sessions are still listed as active. Five minutes after step 7 the
+   coordinator checks that `docker inspect --format '{{.RestartCount}}' iris`
+   prints 0.
+10. The coordinator adds the commit and the time to the deploy log on the hub's
+    machine, and sends the other agents one Iris message: sign-in is by password
+    now, and login links are gone.
+
+If something goes wrong:
+
+- In steps 2 to 4 the console is not closed. Stop and report. Nothing needs to
+  be undone, because imported accounts cannot be used before activation.
+- In steps 5 to 8 a fault is one of three things: the hub does not start;
+  activation refuses two careful tries; or the sign-in page does not load or
+  refuses the username and password that activation accepted. The coordinator
+  tells the owner in its session what it sees. The fault is fixed when the step
+  that failed has given its expected result. If that has not happened
+  10 minutes after the failure, the coordinator proposes to go back, and the
+  owner decides.
+- Going back means exactly this: start the previous image again, as the
+  paragraph "To roll back" in
+  [deploy.md](deploy.md#deploying-the-public-hub-from-an-image-ci-built) says.
+  The database stays as it is, because the activation version adds no
+  migration. Nothing is restored and no message is lost. Link login works
+  again, and the imported accounts stay, unused.
+- After a cutover that succeeded, a version from before it must never serve the
+  public address as it is, because it would bring login links back.
+  [Rollback while preserving the browser boundary](#rollback-while-preserving-the-browser-boundary)
+  says what has to happen first and who can do it.
+
+Who may do what. Only the owner: say "start the login cutover"; say "import";
+type the password; decide to go back; change the web server. The coordinator:
+the backups, the dry runs, the import after the owner's word, the deploy, the
+restart, the checks of the sessions and of the restart count, and going back
+after the owner's decision. Nobody: skip a step, or continue after a result this
+section does not expect.
 
 ## Startup and credentials
 
@@ -51,23 +147,33 @@ There is no hot key reload.
 
 ## Owner setup and activation
 
-1. After the owner's terminal confirmation, take a fresh consistent database
-   backup **before replacing the running image**. Protect the owner credential
-   separately and preserve any existing console key privately. Keep public
-   browser access isolated during cutover.
-2. Deploy the selected validated CI image using
+These are the same steps for any hub, with the detail the first section leaves
+out. "Whoever deploys" is the person or the session that runs the deploy
+procedure; on the public hub that is the coordinator.
+
+1. After the owner's confirmation, whoever deploys takes a fresh consistent
+   database backup **before replacing the running image**, and keeps a copy off
+   the hub's volume. Protect the owner credential separately and preserve any
+   existing console key privately. On a first cutover nothing has to be closed
+   at the proxy: the new binary keeps the console closed by itself until
+   activation and the second restart.
+2. Whoever deploys installs the selected validated CI image using
    [deploy.md](deploy.md#deploying-the-public-hub-from-an-image-ci-built).
    On this first cutover the new process has no activated console key, so the
    browser is immediately closed while agent routes and authenticated doctor
-   uploads continue. Confirm those machine paths still work. Do not replace a
-   working Apache vhost merely to change the backend image.
+   uploads continue. Confirm both: an agent's status call answers, and
+   `iris doctor` on a host still uploads its report. Do not replace a working
+   Apache vhost merely to change the backend image.
 3. Configure the CLI for the intended hub and its protected owner-token file.
-   The present owner creates an operator or performs the separately approved
-   import from [accounts-import.md](accounts-import.md). For an import, review
-   its dry-run, run the approved apply, then repeat the same dry-run and require
-   the expected skips before activation. A deployment never implicitly approves
-   importing real accounts. Owner creation and recovery work while the browser
-   gate is closed:
+   The owner creates an operator, or approves the import described in
+   [accounts-import.md](accounts-import.md#backup-review-and-apply). That section
+   gives the expected results: the dry run lists every account it would create;
+   the apply creates them; the same dry run afterwards reports each of them as
+   skipped and none as created. An approved import can also run before step 2,
+   on the version that is running: no migration separates the two versions, and
+   an import that stops there closes nothing. The public hub's first cutover
+   does it that way. A deployment never implicitly approves importing real
+   accounts. Owner creation and recovery work while the browser gate is closed:
 
    ```sh
    iris admin console create ReviewedOperator < /private/new-password
@@ -82,8 +188,9 @@ There is no hot key reload.
    password. A bare CR, embedded line endings, spaces and any additional final
    newline remain password bytes. It performs no general trimming or
    normalization. Never put passwords in argv, URLs, logs, chat or reports.
-4. The owner personally verifies possession of the enabled operator's password
-   and prepares the key from their own private terminal:
+4. The owner types the enabled operator's password into `activate`, in his own
+   terminal. That is the proof that he knows it, and it is what prepares the
+   key. No agent sees the password or runs this for him:
 
    ```sh
    iris admin console activate ReviewedOperator < /private/operator-password
@@ -137,9 +244,10 @@ There is no hot key reload.
    and a safe account result. It issues no cookie and does not open this process's
    gate. Activation on an already active named console returns HTTP 409
    (`conflict`) without clearing sessions.
-5. After `restart_required: true`, the owner performs the **second restart** with
-   the same database and prepared key path. The selected image is already
-   deployed; repeating an unchanged `compose up -d` does not ensure a restart.
+5. After `restart_required: true`, whoever deployed performs the **second
+   restart** with the same database and prepared key path. It need not be the
+   owner. The selected image is already deployed; repeating an unchanged
+   `compose up -d` does not ensure a restart.
 
    ```sh
    docker restart iris
@@ -152,17 +260,16 @@ There is no hot key reload.
    and validates the origin, prints it and opens the sign-in page best-effort.
    It does not read the machine token (`Token()`), mint a link or authenticate a
    person.
-7. Verify the intended capabilities, a subsequent authenticated session GET,
-   agent status and authenticated doctor uploads. The owner remains present
-   through these checks and any recovery needed before public reopening.
+7. Three checks close a cutover, the same three as in the first section. The
+   owner reloads the page and still sees his inbox, which is a second
+   authenticated read of his session. Whoever deployed checks that agents are
+   still listed as active and, five minutes after the second restart, that the
+   hub has not restarted by itself. The owner stays until these are done.
 
-Before reopening public browser access, use two separate browser contexts to
-check member default denial, explicit `ro` then `rw` grants, stale access edits,
-last-operator refusal, live revocation and a prepared send/retry after downgrade.
-Also replace the account in another tab sharing cookies: the old tab's next
-authenticated read must discard its previous console state. Check narrow/wide
-layouts and keyboard operation. The local browser results below are provisional;
-repeat the required checks on the final clean candidate and target deployment.
+What a candidate has to show before it is released, such as access edits seen
+from two browsers, is not part of a cutover. It is listed, with what each check
+must show, in
+[the rehearsal record](research/console-activation-rehearsal-2026-11-09.md#what-a-candidate-is-checked-for).
 
 ## Restore a database with browser access isolated
 
@@ -208,7 +315,9 @@ a fresh backup of current state and review those losses first. The agent-only
 ## Rollback while preserving the browser boundary
 
 Use a supported backend that retains named authentication, its reviewed database
-and console key. Migration compatibility and lost writes still require the
+and console key. A version has named authentication when its commit is the
+activation change or a later one on `main`; `iris version` prints the commit, and
+`docs/status.md` records the commit of the cutover. Migration compatibility and lost writes still require the
 backup review in [deploy.md](deploy.md#deploying-the-public-hub-from-an-image-ci-built).
 An arbitrary older Iris binary can reopen legacy browser authority on a newer
 database; the newer binary cannot constrain a separately launched old process.
@@ -284,90 +393,3 @@ and reload, then sign in and require the next authenticated `GET /v1/ui/session`
 to return 200. Leaving Cookie removal in place allows the login response to set
 a cookie, but strips that cookie from later requests, so the next session GET
 returns 401. No production Apache change has been applied by this runbook.
-
-## Provisional rehearsal evidence
-
-Both rehearsals ran on 2026-11-09 with temporary synthetic accounts/databases and
-literal-loopback listeners. Reports contain safe checks and identities, not
-credentials. Paths below are local evidence locations, not shipped release assets.
-
-| Rehearsal | Observed result | Limits |
-|---|---|---|
-| Rebuilt Iris and real browser contexts | 44/44 checks passed | Modified source `0fe50af`; final clean candidate and atomic key-publication correction remain unvalidated |
-| Actual Apache 2.4.69 and old Iris `bc1eae9676c3a9f6cb96b1ae08233026f8b8e4e9` | 73/73 checks passed with the corrected raw doctor condition and Cookie stripping | Rendered local vhost, self-signed TLS, HTTP/1.1; no installed production configuration changes |
-
-The real-binary report is `/tmp/iris-real-console-bdGopY/report.json`:
-
-| Identity | SHA-256 |
-|---|---|
-| Report | `7e09a427327606b87ae934bc70b438f63fee50cd007a95bd18a1c20eaaba3cef` |
-| Executed Iris binary | `f407697c4bf93c99759c34b60d75c1dfc3ef947372166ac2fbe1125e2b793211` |
-| Embedded UI manifest | `488a2c470e170b9204a4c360e515b0dca83e7a7cf9094d12ee886a42a23238b8` |
-| UI patch, `/tmp/iris-console-activation-ui.patch` | `c4037d8f08c389b9a1fa4c5c388c0397cc49cd98a67559807172a215b24a4c8e` |
-| Browser driver, `v4-observed-read-restored-cache-authorization` | `78d81a7a79f5e62c7063b53c40223806bf27922edc1a5318893985ab62cde47d` |
-
-The binary reports source `0fe50af` with `source_modified: true`; the embedded UI
-includes uncommitted changes. Its observed workflows included actual owner
-create/reset/import CLI calls, real KDF verification and upgrade of a short
-synthetic imported scrypt password, activation without hot opening, restart and
-unchanged absolute session expiry. Two browser contexts exercised operator-to-member
-access editing, a live member stream and a prepared draft. `rw` to `ro` downgrade
-closed the session and cleared the draft; stale prepared sends and cached retries
-returned 401, and a newly authenticated `ro` send returned 403. An actual next read
-with the old mounted CSRF and a replacement shared cookie returned 401.
-
-The actual backup CLI captured named sessions. With the old key withheld, the
-restored hub stayed closed; fresh-key activation cleared all restored sessions,
-and tested old cookies were rejected after restart. Through the private UI the
-owner reviewed a resurrected `rw` grant and reduced it to `ro` before reopening.
-A fresh restored `ro` session could read the message but received 403 replaying a
-previously successful cached `rw` send. These are observed synthetic flows, not
-proof about a production backup or every historical credential.
-
-Initial 50-case Apache evidence is `/tmp/iris-apache-rollback-w578u1xj/`: `report.md`,
-`metadata.json`, rendered `httpd.conf`, `rollback-block.conf`, `configtest.txt`,
-sanitized logs and independent cleanup verification. The old binary SHA-256 was
-`b0cb7dd39e7d99f612edbca06a73ca1446972e159f62a5857a458a045076f58f`.
-Apache used pinned image
-`httpd@sha256:f6a86043744215e4be90cf8804375d90022a711d892c9aa2d7085c089ee2cb54`.
-The follow-up `/tmp/iris-apache-rollback-paths-5qq8yavj/metadata.json` replayed
-those checks and added raw-path cases, passing 73/73. Its recorded outbound
-request-line bytes match the supplied raw targets, so the client did not normalize
-away the double slashes or dot segments. The documented Apache block SHA-256 is
-`21a003def78e3012537af069fdbed56feb04344273d60c44bb21ecd3f40ec0d3`,
-matching both rehearsals exactly.
-
-| Actual request/control | Observed status |
-|---|---|
-| Root, assets, login links, plain/encoded UI paths and actual UI WebSocket Upgrade | 503 |
-| Doctor GET, HEAD, POST, PATCH, DELETE, OPTIONS and TRACE; PUT with a trailing slash or encoded doctor spelling | 503 |
-| Literal doctor PUT, including an optional query, with valid owner/host bearer | 200 |
-| Doctor PUT with no bearer or invalid bearer, including a valid old cookie | 401 |
-| Agent status and actual registration | 200 |
-| HTTP and HTTPS local ACME proof | 200 |
-| Normal HTTP redirect to fixed HTTPS origin | 308 |
-| Status over separately negotiated TLS 1.2 and TLS 1.3 | 200 |
-| Encoded separators `/v1%2fui/overview` and `/v1/ui%2fdoctor` | 404 before the backend |
-| Raw UI GET `//v1/ui/overview`, `/v1//ui/overview`, `/v1/./ui/overview`, `/v1/x/../ui/overview`, each with cookie-only and machine+cookie | 503 in all eight cases |
-| Raw doctor PUT `//v1/ui/doctor`, `/v1//ui/doctor`, `/v1/./ui/doctor`, `/v1/x/../ui/doctor`, `/v1/ui/doctor/`, `/v1/ui/doctor/.`, each with cookie-only and machine+cookie | 503 in all twelve cases |
-
-All twenty noncanonical UI/doctor cases were denied without redirects or
-successful authentication. A normal literal doctor query returned 200 with a
-valid machine bearer and 401 with the same valid legacy cookie alone.
-Production certificate trust, issuance and
-renewal, external DNS/networking, HTTP/2, rejection of older TLS versions and
-draining established WebSockets across reload were not tested. The new Upgrade
-was blocked, but an existing connection still requires explicit closure. Owned
-temporary processes and containers were stopped/removed; no other service was
-restarted. Record final clean-candidate local gates in the associated PR and verify
-target-deployment readiness before owner activation.
-
-A separate nine-request named-console control is recorded in
-`/tmp/iris-named-cookie-strip-ir2vzzqq/metadata.json`. With the preliminary
-`f407697c` binary, normal proxy login returned 200 and `Set-Cookie`; the same
-session survived a restart. Retaining only request `Cookie` removal caused the
-next session read to return 401, while the same cookie worked directly. A login
-challenge still set a response cookie, but its submission returned 403 because
-the request cookie was stripped. Removing that single directive restored the
-original session to 200. This validates the leave-closed-mode check without
-claiming anything about the final release binary or installed production vhost.

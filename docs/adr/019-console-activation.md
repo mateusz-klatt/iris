@@ -125,7 +125,7 @@ No real account import or deployment is implied by those rehearsals.
 
 ## Provisional evidence, 2026-11-09
 
-The [activation runbook](../console-activation.md#provisional-rehearsal-evidence)
+The [rehearsal record](../research/console-activation-rehearsal-2026-11-09.md)
 records identities, checks and limits. The real rebuilt binary and real browser
 contexts passed 44/44 checks, including actual owner/import CLI use and KDF work,
 short imported scrypt verification/upgrade, restart expiry, live downgrade,

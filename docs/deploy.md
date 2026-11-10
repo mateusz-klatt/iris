@@ -45,7 +45,7 @@ private literal-loopback named UI before public reopening. See the exact
 [restore and rollback boundary](console-activation.md#restore-a-database-with-browser-access-isolated).
 Local real-binary/browser/restore checks passed 44/44 on a modified checkout;
 the expanded actual local Apache rollback rehearsal passed 73/73. See the
-[provisional evidence and limits](console-activation.md#provisional-rehearsal-evidence).
+[provisional evidence and limits](research/console-activation-rehearsal-2026-11-09.md).
 Final clean-candidate validation and target-deployment checks remain pending.
 
 The files in `deploy/` are written for this topology. No release binary is needed:
