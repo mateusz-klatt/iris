@@ -59,44 +59,6 @@ func TestWatchRetainsACommitBetweenItsObservationAndWait(t *testing.T) {
 	})
 }
 
-func TestLegacyUIRetainsACommitBetweenItsObservationAndWait(t *testing.T) {
-	synctest.Test(t, func(t *testing.T) {
-		h, server := idleMemoryHub(t)
-		from, to := register(t, server, 1), register(t, server, 2)
-		real := h.call
-		var injected atomic.Bool
-		finished := make(chan struct{})
-		h.call = func(ctx context.Context, operation string, req store.Request) (map[string]any, error) {
-			result, err := real(ctx, operation, req)
-			if err == nil && operation == "ui_events" && injected.CompareAndSwap(false, true) {
-				defer close(finished)
-				if err := wakeOrderMessage(ctx, h, from, to, "legacy-ui-read-gap"); err != nil {
-					return nil, err
-				}
-				time.Sleep(2 * streamCoalesce)
-			}
-			return result, err
-		}
-		socket := idleLegacyConsole(t, server)
-		synctest.Wait()
-		time.Sleep(3 * streamCoalesce)
-		synctest.Wait()
-		select {
-		case <-finished:
-		default:
-			t.Fatal("UI observation did not return after the committed change")
-		}
-		latest, err := real(t.Context(), "ui_events", store.Request{})
-		if err != nil {
-			t.Fatal(err)
-		}
-		frames, closed, err := socket.snapshot()
-		if closed || len(frames) != 2 || frames[1]["cursor"] != float64(latest["cursor"].(int64)) || frames[1]["cursor"].(float64) <= frames[0]["cursor"].(float64) {
-			t.Fatalf("UI missed the revision committed between observation and wait: %v, closed %v, error %v", frames, closed, err)
-		}
-	})
-}
-
 func TestNamedUIRetainsACommitBetweenAdmissionAndWait(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		h, server := idleMemoryHub(t)

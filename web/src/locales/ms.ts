@@ -53,6 +53,7 @@ const translation = {
   },
   globalRole: { admin: "Pentadbir", member: "Ahli" },
   accountUi: {
+    consoleClosed: "Log masuk ke konsol tidak tersedia. Hubungi pemilik hab.",
     sendUncertain: "Hasilnya tidak diketahui. Percubaan semula dalam masa sepuluh minit menggunakan penghantaran yang sama.",
     retryExpired: "Tempoh untuk mencuba semula telah tamat. Semak perbualan dan draf sebelum menghantar semula.",
     messages: "Mesej",

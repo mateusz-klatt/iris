@@ -10,16 +10,15 @@ import (
 	"strings"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/mateusz-klatt/iris/internal/config"
 	"github.com/mateusz-klatt/iris/internal/consoleauth"
 	"github.com/mateusz-klatt/iris/internal/store"
 )
 
-// This is a rehearsal of the private account gate, not production activation.
-// Every database, key, token, account and browser belongs to this test.
-func TestStagedAccessCutoverAndRecoveryRehearsal(t *testing.T) {
+// This handler-level access/recovery rehearsal uses synthetic state. Real-binary
+// activation, browser and restore evidence is recorded separately.
+func TestNamedAccessCutoverAndRecoveryRehearsal(t *testing.T) {
 	dir := t.TempDir()
 	database := filepath.Join(dir, "rehearsal.db")
 	keyPath := filepath.Join(dir, "console.key")
@@ -141,10 +140,8 @@ func TestStagedAccessCutoverAndRecoveryRehearsal(t *testing.T) {
 	for _, rejected := range []map[string]any{accessBody(1, "operator", true, ""), accessBody(1, "member", false, ""), accessBody(1, "none", true, "")} {
 		consoleDo(t, h, server.URL, "PUT", "/v1/ui/accounts/"+operator.ID+"/access", rejected, operatorBrowser, 409)
 	}
-	// A cutover must keep both old entry points and the old cookie namespace out.
-	// These are live grants under legacy validation, not merely unknown values.
-	h.links["synthetic-retired-link"] = loginGrant{expires: h.now().Add(time.Minute)}
-	h.cookies["synthetic-retired-cookie"] = loginGrant{expires: h.now().Add(time.Hour)}
+	// Retired entry points and cookies cannot mint named-account authority. The
+	// backend no longer stores legacy link or cookie grants.
 	for _, path := range []string{"/ui/login?code=synthetic-retired-link", "/v1/ui/overview"} {
 		want := 401
 		if strings.HasPrefix(path, "/ui/login") {
@@ -155,11 +152,8 @@ func TestStagedAccessCutoverAndRecoveryRehearsal(t *testing.T) {
 			t.Fatal("retired login route or cookie minted account authority")
 		}
 	}
-	request(t, server, "POST", "/v1/ui/links", map[string]any{}, 403)
+	request(t, server, "POST", "/v1/ui/links", map[string]any{}, 404)
 	request(t, server, "GET", "/v1/ui/session", nil, 403)
-	if len(h.links) != 1 || len(h.cookies) != 1 {
-		t.Fatal("account gate processed a legacy grant or minted another")
-	}
 	stop()
 	reloaded, err := config.ConsoleKey(keyPath)
 	if err != nil || !bytes.Equal(reloaded, key) {

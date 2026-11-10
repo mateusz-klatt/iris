@@ -53,6 +53,7 @@ const translation = {
   },
   globalRole: { admin: "Administrateur", member: "Membre" },
   accountUi: {
+    consoleClosed: "La connexion à la console est indisponible. Contactez le propriétaire du hub.",
     sendUncertain: "Le résultat est inconnu. Réessayer dans les dix minutes utilise la même livraison.",
     retryExpired: "Le délai pour réessayer est écoulé. Vérifiez la conversation et relisez le brouillon avant d’envoyer à nouveau.",
     messages: "Messages",

@@ -53,6 +53,7 @@ const translation = {
   },
   globalRole: { admin: "Administrador", member: "Membro" },
   accountUi: {
+    consoleClosed: "O início de sessão na consola não está disponível. Contacte o proprietário do hub.",
     sendUncertain: "O resultado é desconhecido. Tentar novamente dentro de dez minutos utiliza a mesma entrega.",
     retryExpired: "O prazo para tentar novamente terminou. Verifique a conversa e reveja o rascunho antes de voltar a enviar.",
     messages: "Mensagens",

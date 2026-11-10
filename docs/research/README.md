@@ -41,6 +41,22 @@ measures descendant lifetime after cancellation and index inventory across small
 sparse, split, linked-worktree and nested-submodule fixtures. It distinguishes the Linux
 measurements from unverified concurrency, portability and production-cost assumptions.
 
+The [console activation rehearsals of 2026-11-09](console-activation-rehearsal-2026-11-09.md)
+record what a build of the activation change showed in two browsers, after a restore and behind
+an Apache that closes the console for an older backend, and what a candidate is checked for.
+They ran on a modified checkout. [ADR 019](../adr/019-console-activation.md) refers to them.
+
+The [candidate run of 2026-11-10](console-activation-candidate-2026-11-10.md) records the image CI
+built for the activation change: started closed, activated with the password on standard input,
+restarted, signed in to from a browser, and started once on a copy of a production backup. A
+second run went back to the version before it on the same database and then started the candidate
+again. It does not repeat the access checks.
+
+The [access and import run of 2026-11-10](console-access-and-import-2026-11-10.md) ran the binary
+from the final head's image: an import on the version before, the switch, owner setup and
+activation, the access checks in two browser contexts and by keyboard in a narrow and a wide
+window, and going back with another attempt.
+
 ## Review of the architecture
 
 The synthesis then went back to the clients as a plan review. Antigravity was left out of this

@@ -53,6 +53,7 @@ const translation = {
   },
   globalRole: { admin: "Administrator", member: "Membru" },
   accountUi: {
+    consoleClosed: "Autentificarea în consolă nu este disponibilă. Contactați proprietarul hubului.",
     sendUncertain: "Rezultatul este necunoscut. O nouă încercare în decurs de zece minute folosește aceeași livrare.",
     retryExpired: "Intervalul pentru reîncercare s-a încheiat. Verificați conversația și ciorna înainte de a trimite din nou.",
     messages: "Mesaje",

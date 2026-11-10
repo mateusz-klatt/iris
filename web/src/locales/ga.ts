@@ -53,6 +53,7 @@ const translation = {
   },
   globalRole: { admin: "Riarthóir", member: "Ball" },
   accountUi: {
+    consoleClosed: "Níl logáil isteach sa chonsól ar fáil. Déan teagmháil le húinéir an mhoil.",
     sendUncertain: "Ní fios an toradh. Úsáidtear an seachadadh céanna má bhaineann tú triail eile as laistigh de dheich nóiméad.",
     retryExpired: "Tá an tréimhse chun triail eile a bhaint as thart. Seiceáil an comhrá agus athbhreithnigh an dréacht sula seolann tú arís é.",
     messages: "Teachtaireachtaí",

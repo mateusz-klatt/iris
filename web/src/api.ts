@@ -9,7 +9,7 @@ export interface Repository {
   id: string;
   name: string;
   aliases: string[];
-  /** Current account capability; absent on the legacy console. The store enforces it. */
+  /** Current account capability, checked again by the store. */
   console_access?: "ro" | "rw";
 }
 
@@ -315,10 +315,8 @@ export function watchUi(
     onStatus?.(reconnect ? "reconnecting" : "connecting");
     const url = new URL("/v1/ui/watch", window.location.href);
     url.protocol = url.protocol === "https:" ? "wss:" : "ws:";
-    let opened = false;
     socket = new WebSocket(url.toString());
     socket.onopen = () => {
-      opened = true;
       failures = 0;
       onStatus?.("live");
     };
@@ -339,12 +337,8 @@ export function watchUi(
       if (closed) {
         return;
       }
-      if (opened && consoleCsrf === "") {
-        retry();
-        return;
-      }
-      // Never opened: the hub may be down, or it may have refused the session. Only an HTTP
-      // request can tell, and a refused session ends the watch rather than knocking forever.
+      // Every close revalidates authority before reconnecting. The browser cannot
+      // distinguish refusal from a network failure by the socket alone.
       check().then(
         () => {
           if (!closed) {

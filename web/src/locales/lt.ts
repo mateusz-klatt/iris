@@ -53,6 +53,7 @@ const translation = {
   },
   globalRole: { admin: "Administratorius", member: "Narys" },
   accountUi: {
+    consoleClosed: "Prisijungimas prie konsolės nepasiekiamas. Susisiekite su centro savininku.",
     sendUncertain: "Rezultatas nežinomas. Bandant dar kartą per dešimt minučių naudojamas tas pats pristatymas.",
     retryExpired: "Pakartotinio bandymo laikas baigėsi. Prieš siųsdami iš naujo patikrinkite pokalbį ir peržiūrėkite juodraštį.",
     messages: "Žinutės",

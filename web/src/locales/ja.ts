@@ -53,6 +53,7 @@ const translation = {
   },
   globalRole: { admin: "管理者", member: "メンバー" },
   accountUi: {
+    consoleClosed: "コンソールへのサインインは利用できません。ハブの所有者にお問い合わせください。",
     sendUncertain: "結果を確認できません。10分以内に再試行すると、同じ配信が使用されます。",
     retryExpired: "再試行できる期間が終了しました。もう一度送信する前に、会話と下書きを確認してください。",
     messages: "メッセージ",

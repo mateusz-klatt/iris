@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
-	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -13,7 +12,8 @@ import (
 func TestPublicLogin(t *testing.T) {
 	for _, public := range []bool{false, true} {
 		t.Run(map[bool]string{false: "local", true: "public"}[public], func(t *testing.T) {
-			h, _ := setup(t)
+			h, server, _ := consoleSetup(t)
+			consoleAccount(t, h, "Public", "operator")
 			h.hosts["iris.klatt.ie"] = true // an allowed Host alone never opts into proxy trust
 			now := time.Now()
 			h.now = func() time.Time { return now }
@@ -22,24 +22,24 @@ func TestPublicLogin(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			call := func(method, host, path, proto string, bearer bool, cookie *http.Cookie) *httptest.ResponseRecorder {
-				r := httptest.NewRequest(method, "http://"+host+path, nil)
-				r.RemoteAddr = "127.0.0.1:1234"
+			call := func(method, host, path, proto, remote string, browser consoleBrowser) *httptest.ResponseRecorder {
+				r := httptest.NewRequest(method, "http://"+host+path, strings.NewReader(`{"username":"Public","password":"`+consoleTestPassword+`"}`))
+				r.RemoteAddr = remote
 				r.Header.Set("X-Forwarded-Proto", proto)
-				if bearer {
-					r.Header.Set("Authorization", "Bearer test-secret")
+				if method != http.MethodGet {
+					r.Header.Set("Origin", "https://"+host)
 				}
-				if cookie != nil {
-					r.AddCookie(cookie)
+				if browser.cookie != nil {
+					r.AddCookie(browser.cookie)
+				}
+				if browser.csrf != "" {
+					r.Header.Set("X-Iris-CSRF", browser.csrf)
 				}
 				w := httptest.NewRecorder()
 				h.ServeHTTP(w, r)
 				return w
 			}
-			if w := call("POST", "iris.klatt.ie", "/v1/ui/links", "https", false, nil); w.Code != 401 {
-				t.Fatal(w.Code)
-			}
-			w := call("POST", "iris.klatt.ie", "/v1/ui/links", "https", true, nil)
+			w := call("GET", "iris.klatt.ie", "/v1/ui/login", "https", "127.0.0.1:1234", consoleBrowser{})
 			if !public {
 				if w.Code != 401 {
 					t.Fatal("forwarded header enabled login", w.Code)
@@ -49,31 +49,36 @@ func TestPublicLogin(t *testing.T) {
 			if w.Code != 200 {
 				t.Fatal(w.Code, w.Body.String())
 			}
-			h.mu.Lock()
-			var code string
-			for k := range h.links {
-				code = k
-			}
-			h.mu.Unlock()
-			path := "/ui/login?code=" + url.QueryEscape(code)
-			for _, tc := range []struct{ host, proto string }{{"iris.klatt.ie", ""}, {"iris.klatt.ie", "http"}, {"127.0.0.1:7878", "https"}, {"evil.example", "https"}} {
-				if w := call("GET", tc.host, path, tc.proto, false, nil); w.Code != 401 {
+			challenge := consoleBrowser{cookie: w.Result().Cookies()[0], csrf: consoleJSON(t, w)["csrf"].(string)}
+			for _, tc := range []struct{ host, proto, remote string }{
+				{"iris.klatt.ie", "", "127.0.0.1:1234"},
+				{"iris.klatt.ie", "http", "127.0.0.1:1234"},
+				{strings.TrimPrefix(server.URL, "http://"), "https", "127.0.0.1:1234"},
+				{"evil.example", "https", "127.0.0.1:1234"},
+				{"iris.klatt.ie", "https", "198.51.100.1:1234"},
+			} {
+				if w := call("GET", tc.host, "/v1/ui/login", tc.proto, tc.remote, consoleBrowser{}); w.Code != 401 {
 					t.Fatal(tc, w.Code)
 				}
 			}
-			w = call("GET", "iris.klatt.ie", path, "https", false, nil)
-			if w.Code != 303 {
+			w = call("POST", "iris.klatt.ie", "/v1/ui/login", "https", "127.0.0.1:1234", challenge)
+			if w.Code != 200 {
 				t.Fatal(w.Code, w.Body.String())
 			}
-			c := w.Result().Cookies()[0]
-			if !c.Secure || !c.HttpOnly || c.SameSite != http.SameSiteStrictMode {
+			var c *http.Cookie
+			for _, cookie := range w.Result().Cookies() {
+				if cookie.Name == consoleCookieName {
+					c = cookie
+				}
+			}
+			if c == nil || !c.Secure || !c.HttpOnly || c.SameSite != http.SameSiteStrictMode {
 				t.Fatal(c)
 			}
-			if w := call("GET", "iris.klatt.ie", path, "https", false, nil); w.Code != 401 {
-				t.Fatal("reused code", w.Code)
+			if w := call("POST", "iris.klatt.ie", "/v1/ui/login", "https", "127.0.0.1:1234", challenge); w.Code != 403 {
+				t.Fatal("reused challenge", w.Code)
 			}
 			for _, proto := range []string{"", "http", "https"} {
-				w := call("GET", "iris.klatt.ie", "/v1/ui/overview", proto, false, c)
+				w := call("GET", "iris.klatt.ie", "/v1/ui/session", proto, "127.0.0.1:1234", consoleBrowser{cookie: c})
 				want := 401
 				if proto == "https" {
 					want = 200
@@ -82,15 +87,14 @@ func TestPublicLogin(t *testing.T) {
 					t.Fatal(proto, w.Code)
 				}
 			}
-			call("POST", "iris.klatt.ie", "/v1/ui/links", "https", true, nil)
-			h.mu.Lock()
-			for k := range h.links {
-				code = k
+			w = call("GET", "iris.klatt.ie", "/v1/ui/login", "https", "127.0.0.1:1234", consoleBrowser{})
+			if w.Code != 200 {
+				t.Fatal(w.Code, w.Body.String())
 			}
-			h.mu.Unlock()
+			challenge = consoleBrowser{cookie: w.Result().Cookies()[0], csrf: consoleJSON(t, w)["csrf"].(string)}
 			now = now.Add(2 * time.Minute)
-			if w := call("GET", "iris.klatt.ie", "/ui/login?code="+code, "https", false, nil); w.Code != 401 {
-				t.Fatal("expired code", w.Code)
+			if w := call("POST", "iris.klatt.ie", "/v1/ui/login", "https", "127.0.0.1:1234", challenge); w.Code != 403 {
+				t.Fatal("expired challenge", w.Code)
 			}
 		})
 	}
@@ -104,26 +108,40 @@ func TestPublicURLValidation(t *testing.T) {
 	}
 }
 
-func TestPublicLinksOriginsAndTickets(t *testing.T) {
-	h, s := setup(t)
+func TestPublicConsoleOriginsAndTickets(t *testing.T) {
+	h, s, _ := consoleSetup(t)
+	consoleAccount(t, h, "Public", "operator")
 	if err := h.SetPublicURL("https://iris.klatt.ie"); err != nil {
 		t.Fatal(err)
 	}
 	a := register(t, s, 1)
-	call := func(method, path, origin string, body string) *httptest.ResponseRecorder {
+	call := func(method, path, origin, body string, bearer bool, browser consoleBrowser) *httptest.ResponseRecorder {
 		r := httptest.NewRequest(method, "http://iris.klatt.ie"+path, strings.NewReader(body))
 		r.RemoteAddr = "127.0.0.1:4321"
-		r.Header.Set("Authorization", "Bearer test-secret")
+		if bearer {
+			r.Header.Set("Authorization", "Bearer test-secret")
+		}
+		if browser.cookie != nil {
+			r.AddCookie(browser.cookie)
+		}
+		if browser.csrf != "" {
+			r.Header.Set("X-Iris-CSRF", browser.csrf)
+		}
 		r.Header.Set("X-Forwarded-Proto", "https")
 		r.Header.Set("Origin", origin)
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, r)
 		return w
 	}
-	for _, origin := range []string{"https://iris.klatt.ie", "http://iris.klatt.ie", "https://evil.example"} {
-		w := call("POST", "/v1/ui/links", origin, "{}")
+	w := call("GET", "/v1/ui/login", "https://iris.klatt.ie", "", false, consoleBrowser{})
+	if w.Code != 200 {
+		t.Fatal(w.Code, w.Body.String())
+	}
+	challenge := consoleBrowser{cookie: w.Result().Cookies()[0], csrf: consoleJSON(t, w)["csrf"].(string)}
+	for _, origin := range []string{"http://iris.klatt.ie", "https://evil.example", "https://iris.klatt.ie"} {
+		w := call("POST", "/v1/ui/login", origin, `{"username":"Public","password":"`+consoleTestPassword+`"}`, false, challenge)
 		if origin == "https://iris.klatt.ie" {
-			if w.Code != 200 || !strings.Contains(w.Body.String(), "https://iris.klatt.ie/ui/login?code=") {
+			if w.Code != 200 || !strings.Contains(w.Body.String(), `"authenticated":true`) {
 				t.Fatal(w.Code, w.Body.String())
 			}
 		} else if w.Code != 401 {
@@ -131,34 +149,28 @@ func TestPublicLinksOriginsAndTickets(t *testing.T) {
 		}
 	}
 	raw, _ := json.Marshal(authority(a))
-	w := call("POST", "/v1/wake-tickets", "https://iris.klatt.ie", string(raw))
+	w = call("POST", "/v1/wake-tickets", "https://iris.klatt.ie", string(raw), true, consoleBrowser{})
 	if w.Code != 200 || !strings.Contains(w.Body.String(), "wss://iris.klatt.ie/v1/watch?") {
 		t.Fatal(w.Code, w.Body.String())
 	}
 }
 
 func TestLocalLoginExpiryAndForwarding(t *testing.T) {
-	h, s := setup(t)
+	h, s, _ := consoleSetup(t)
+	consoleAccount(t, h, "Local", "operator")
 	now := time.Now()
 	h.now = func() time.Time { return now }
-	link := request(t, s, "POST", "/v1/ui/links", map[string]any{}, 200)["url"].(string)
-	r := httptest.NewRequest("GET", link, nil)
+	r := httptest.NewRequest("GET", s.URL+"/v1/ui/login", nil)
 	r.RemoteAddr = "127.0.0.1:4321"
 	r.Header.Set("X-Forwarded-Proto", "https")
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, r)
-	if w.Code != 303 || w.Result().Cookies()[0].Secure {
+	if w.Code != 200 || w.Result().Cookies()[0].Secure {
 		t.Fatal("forwarded header changed local cookie", w.Code, w.Header())
 	}
-	link = request(t, s, "POST", "/v1/ui/links", map[string]any{}, 200)["url"].(string)
+	challenge := consoleBrowser{cookie: w.Result().Cookies()[0], csrf: consoleJSON(t, w)["csrf"].(string)}
 	now = now.Add(2 * time.Minute)
-	r = httptest.NewRequest("GET", link, nil)
-	r.RemoteAddr = "127.0.0.1:4321"
-	w = httptest.NewRecorder()
-	h.ServeHTTP(w, r)
-	if w.Code != 401 {
-		t.Fatal("expired local code accepted", w.Code)
-	}
+	consoleDo(t, h, s.URL, "POST", "/v1/ui/login", map[string]any{"username": "Local", "password": consoleTestPassword}, challenge, 403)
 }
 
 // Browsers send a lower-case Host without the default port, whatever the flag said.

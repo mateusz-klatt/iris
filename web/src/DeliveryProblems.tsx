@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import { ApiError, getDeliveryProblems, type DeliveryProblems as Problems } from "./api";
+import { getDeliveryProblems, type DeliveryProblems as Problems } from "./api";
 
 interface Props {
   /** The repository being viewed, or "" for the whole hub. */
@@ -9,7 +9,6 @@ interface Props {
   /** Changes whenever the hub reports a change, so the list is read again. */
   revision: number;
   onOpenThread: (id: string, trigger: HTMLButtonElement) => void;
-  onUnauthorized: () => void;
 }
 
 /**
@@ -17,7 +16,7 @@ interface Props {
  * thresholds it returns. Nothing here sends anything: a stored message stays queued for its
  * recipient, and sending it again would only make a second copy.
  */
-export function DeliveryProblems({ repositoryId, revision, onOpenThread, onUnauthorized }: Props) {
+export function DeliveryProblems({ repositoryId, revision, onOpenThread }: Props) {
   const { t, i18n } = useTranslation();
   const [problems, setProblems] = useState<Problems | null>(null);
   const [failed, setFailed] = useState(false);
@@ -29,19 +28,15 @@ export function DeliveryProblems({ repositoryId, revision, onOpenThread, onUnaut
         setProblems(value);
         setFailed(false);
       },
-      (error: unknown) => {
+      () => {
         if (controller.signal.aborted) {
-          return;
-        }
-        if (error instanceof ApiError && error.status === 401) {
-          onUnauthorized();
           return;
         }
         setFailed(true);
       },
     );
     return () => controller.abort();
-  }, [repositoryId, revision, onUnauthorized]);
+  }, [repositoryId, revision]);
 
   if (failed) {
     return (

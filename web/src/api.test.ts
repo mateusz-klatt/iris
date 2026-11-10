@@ -114,7 +114,7 @@ describe("operator watch", () => {
     expect(unauthorized).toHaveBeenCalledOnce();
     window.removeEventListener("iris:unauthorized", unauthorized);
   });
-  it("refetches from a content-free frame and reconnects until stopped", () => {
+  it("refetches from a content-free frame and reconnects until stopped", async () => {
     vi.useFakeTimers();
     vi.stubGlobal("WebSocket", FakeSocket);
     const frames: WatchFrame[] = [];
@@ -122,6 +122,7 @@ describe("operator watch", () => {
     const stop = watchUi(
       (frame) => frames.push(frame),
       (status) => statuses.push(status),
+      { check: async () => undefined, random: () => 1 },
     );
 
     const socket = FakeSocket.latest;
@@ -134,7 +135,7 @@ describe("operator watch", () => {
     expect(statuses).toEqual(["connecting", "live"]);
 
     socket?.close();
-    vi.advanceTimersByTime(1000);
+    await vi.advanceTimersByTimeAsync(1000);
     expect(statuses).toContain("reconnecting");
     expect(FakeSocket.latest).not.toBe(socket);
 
@@ -171,7 +172,7 @@ describe("operator watch", () => {
     expect(checks).toBe(7);
     FakeSocket.latest?.onopen?.();
     await reconnectsAfter(1000);
-    expect(checks).toBe(7);
+    expect(checks).toBe(8);
     expect(statuses.filter((status) => status === "reconnecting")).toHaveLength(8);
     stop();
   });

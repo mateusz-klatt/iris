@@ -37,7 +37,7 @@ beforeEach(async () => {
 
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); });
 
-describe("staged named console", () => {
+describe("named console", () => {
   it("opens the access editor only for a named operator and returns to the account view", async () => {
     const session = serveAccount("rw", "operator");
     const lists = vi.fn();
@@ -58,8 +58,8 @@ describe("staged named console", () => {
     expect(screen.queryByRole("heading", { name: "Access" })).toBeNull();
   });
 
-  it.each(["member", "legacy"])("does not expose or load account access from the %s console", async (role) => {
-    if (role === "member") serveAccount();
+  it("does not expose or load account access from the member console", async () => {
+    serveAccount();
     const lists = vi.fn(() => HttpResponse.json({ accounts: [] }));
     server.use(http.get("*/v1/ui/accounts", lists));
     render(<App connect={() => () => {}} />);
@@ -78,6 +78,34 @@ describe("staged named console", () => {
     await userEvent.click(screen.getByRole("button", { name: "Try again" }));
     expect(await screen.findByRole("heading", { name: "Messages" })).toBeVisible();
     expect(connect).toHaveBeenCalledOnce();
+  });
+
+  it("shows closed-console guidance without a login form or stream, and retries after setup", async () => {
+    const connect = vi.fn(() => () => {});
+    server.use(http.get("*/v1/ui/session", () => new HttpResponse(null, { status: 401, headers: { "X-Iris-Console-Mode": "closed" } })));
+    render(<App connect={connect} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Console sign-in is unavailable. Contact the hub owner.");
+    expect(screen.queryByLabelText("Username")).toBeNull();
+    expect(screen.queryByRole("navigation")).toBeNull();
+    expect(connect).not.toHaveBeenCalled();
+    serveAccount();
+    await userEvent.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByRole("heading", { name: "Messages" })).toBeVisible();
+    expect(connect).toHaveBeenCalledOnce();
+  });
+
+  it("never opens anonymous operator views after an unknown session route", async () => {
+    const connect = vi.fn(() => () => {});
+    const overview = vi.fn(() => HttpResponse.json(sessionOverview));
+    server.use(
+      http.get("*/v1/ui/session", () => new HttpResponse(null, { status: 404 })),
+      http.get("*/v1/ui/overview", overview),
+    );
+    render(<App connect={connect} />);
+    expect(await screen.findByRole("alert")).toHaveTextContent("Could not check your session. Try again.");
+    expect(screen.queryByRole("navigation")).toBeNull();
+    expect(overview).not.toHaveBeenCalled();
+    expect(connect).not.toHaveBeenCalled();
   });
 
   it("shows login on an initial 401 and preserves the signed-out browser language", async () => {

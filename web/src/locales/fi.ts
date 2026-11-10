@@ -53,6 +53,7 @@ const translation = {
   },
   globalRole: { admin: "Järjestelmänvalvoja", member: "Jäsen" },
   accountUi: {
+    consoleClosed: "Konsoliin kirjautuminen ei ole käytettävissä. Ota yhteyttä keskittimen omistajaan.",
     sendUncertain: "Tulos ei ole tiedossa. Uusi yritys kymmenen minuutin kuluessa käyttää samaa toimitusta.",
     retryExpired: "Uudelleenyrityksen aikaraja on umpeutunut. Tarkista keskustelu ja luonnos ennen kuin lähetät uudelleen.",
     messages: "Viestit",

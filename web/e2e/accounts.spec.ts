@@ -11,7 +11,7 @@ test.afterEach(async ({ page }, info) => {
 });
 
 // Account/profile interaction scenarios adapted from the owner's permitted UI export,
-// using Iris's staged session, CSRF and shared-mail contracts (ADR 014 step 5).
+// using Iris's named session, CSRF and shared-mail contracts (ADR 014).
 const csrf = "iris-browser-test-csrf";
 const account = {
   id: "ca_first",
@@ -369,6 +369,27 @@ test("session lookup errors expose no stale console data and can be retried", as
   await page.getByRole("button", { name: "Try again", exact: true }).click();
   await expect(page.getByRole("heading", { name: "Messages", exact: true })).toBeVisible();
   await fitsScreen(page);
+});
+
+test("a closed console explains who can restore sign-in and retries without anonymous access", async ({ page }) => {
+  const state = await installAccounts(page, false);
+  let closed = true;
+  await page.route("**/v1/ui/session", async (route) => {
+    if (closed) await route.fulfill({ status: 401, headers: { "X-Iris-Console-Mode": "closed" } });
+    else await route.fulfill({ status: 401 });
+  });
+  await page.goto("/");
+  await expect(page.getByRole("alert")).toHaveText("Console sign-in is unavailable. Contact the hub owner.");
+  await expect(page.getByLabel("Username", { exact: true })).toHaveCount(0);
+  await expect(page.getByRole("navigation")).toHaveCount(0);
+  expect(state.sockets).toEqual([]);
+  expect(state.mutations).toEqual([]);
+  await fitsScreen(page);
+  closed = false;
+  await page.getByRole("button", { name: "Try again", exact: true }).click();
+  await expect(page.getByLabel("Username", { exact: true })).toBeVisible();
+  await expect(page.getByLabel("Password", { exact: true })).toBeVisible();
+  expect(state.sockets).toEqual([]);
 });
 
 test("a profile response arriving after logout cannot restore the prior account", async ({ page }) => {

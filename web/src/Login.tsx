@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useTranslation } from "react-i18next";
 
 import { ApiError } from "./api";
-import { login, type AccountSession } from "./accountApi";
+import { ConsoleClosedError, login, type AccountSession } from "./accountApi";
 import LocalePicker from "./LocalePicker";
 import { loadLocale, type SupportedLocale } from "./i18n";
 import { readUiLocale, writeUiLocale } from "./preferences";
@@ -33,7 +33,7 @@ export default function Login({ onLogin }: { onLogin: (session: AccountSession) 
       onLogin(await login(username, password));
     } catch (failure) {
       setPassword("");
-      setError(failure instanceof ApiError && failure.status === 401
+      setError(failure instanceof ConsoleClosedError ? "accountUi.consoleClosed" : failure instanceof ApiError && failure.status === 401
         ? "accountUi.invalidLogin"
         : failure instanceof ApiError && failure.status === 429
           ? "accountUi.rateLimited"

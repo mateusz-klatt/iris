@@ -53,6 +53,7 @@ const translation = {
   },
   globalRole: { admin: "Administrator", member: "Član" },
   accountUi: {
+    consoleClosed: "Prijava na konzolu nije dostupna. Obratite se vlasniku čvorišta.",
     sendUncertain: "Rezultat nije poznat. Ponovni pokušaj unutar deset minuta koristi istu dostavu.",
     retryExpired: "Rok za ponovni pokušaj je istekao. Provjerite razgovor i pregledajte skicu prije ponovnog slanja.",
     messages: "Poruke",

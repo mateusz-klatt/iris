@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -110,11 +109,6 @@ func idleWatch(t *testing.T, server *httptest.Server, execution any, after int64
 	return idleDial(t, server, watchURL(server, execution, after), http.Header{"Authorization": {"Bearer test-secret"}}, []string{"iris.v1"})
 }
 
-func idleLegacyConsole(t *testing.T, server *httptest.Server) *idleMemorySocket {
-	t.Helper()
-	return idleDial(t, server, "ws"+strings.TrimPrefix(server.URL, "http")+"/v1/ui/watch", http.Header{"Authorization": {"Bearer test-secret"}}, nil)
-}
-
 func idleNamedConsole(t *testing.T, server *httptest.Server, cookie *http.Cookie) *idleMemorySocket {
 	t.Helper()
 	return idleDial(t, server, "wss://127.0.0.1/v1/ui/watch", http.Header{
@@ -142,12 +136,12 @@ func TestIdleStreamsDoNotQueryForPollingOrPings(t *testing.T) {
 					return realPing(ctx, conn)
 				}
 				session := register(t, server, 1)
+				h.console = newConsoleAuth(make([]byte, 32))
+				_, cookie, _ := routeConsoleAccount(t, h, "Idle operator", "operator")
 				for range count {
 					idleWatch(t, server, session["execution_id"], 0)
 				}
-				for range 2 {
-					idleLegacyConsole(t, server)
-				}
+				consoles := []*idleMemorySocket{idleNamedConsole(t, server, cookie), idleNamedConsole(t, server, cookie)}
 				synctest.Wait()
 				beforeCalls, beforeTransactions := calls.snapshot(), h.store.TransactionCount()
 				beforePings := pings.Load()
@@ -165,6 +159,11 @@ func TestIdleStreamsDoNotQueryForPollingOrPings(t *testing.T) {
 				}
 				if delta > 3 {
 					t.Errorf("%d idle watches plus two consoles made %d transactions; only one maintenance transaction per second is allowed", count, delta)
+				}
+				for _, socket := range consoles {
+					if frames, closed, err := socket.snapshot(); closed || len(frames) != 1 || len(frames[0]) != 2 || frames[0]["kind"] != "changed" {
+						t.Fatalf("named idle console did not retain its content-free initial revision: %v %v %v", frames, closed, err)
+					}
 				}
 			})
 		})
@@ -203,14 +202,14 @@ func TestStreamWakeCoalescesACommittedBurst(t *testing.T) {
 		const watches, messages = 5, 12
 		h, server := idleMemoryHub(t)
 		a, b := register(t, server, 1), register(t, server, 2)
+		h.console = newConsoleAuth(make([]byte, 32))
+		_, cookie, _ := routeConsoleAccount(t, h, "Burst operator", "operator")
 		calls := idleCountCalls(h)
 		var sockets []*idleMemorySocket
 		for range watches {
 			sockets = append(sockets, idleWatch(t, server, b["execution_id"], 0))
 		}
-		for range 2 {
-			idleLegacyConsole(t, server)
-		}
+		consoles := []*idleMemorySocket{idleNamedConsole(t, server, cookie), idleNamedConsole(t, server, cookie)}
 		synctest.Wait()
 		beforeCalls, beforeTransactions := calls.snapshot(), h.store.TransactionCount()
 		for i := range messages {
@@ -232,6 +231,11 @@ func TestStreamWakeCoalescesACommittedBurst(t *testing.T) {
 		}
 		if delta := h.store.TransactionCount() - beforeTransactions; delta > messages+watches+2 {
 			t.Fatalf("%d commits and %d sockets made %d transactions", messages, watches+2, delta)
+		}
+		for _, socket := range consoles {
+			if frames, closed, err := socket.snapshot(); closed || len(frames) != 2 || len(frames[1]) != 2 || frames[1]["kind"] != "changed" || frames[1]["cursor"].(float64) <= frames[0]["cursor"].(float64) {
+				t.Fatalf("named console did not receive one coalesced scoped revision: %v %v %v", frames, closed, err)
+			}
 		}
 	})
 }

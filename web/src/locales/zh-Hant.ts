@@ -53,6 +53,7 @@ const translation = {
   },
   globalRole: { admin: "管理員", member: "成員" },
   accountUi: {
+    consoleClosed: "無法登入主控台。請聯絡中樞擁有者。",
     sendUncertain: "結果未知。在十分鐘內重試會使用同一筆投遞。",
     retryExpired: "重試期限已過。請先檢查對話並檢閱草稿，再重新傳送。",
     messages: "訊息",

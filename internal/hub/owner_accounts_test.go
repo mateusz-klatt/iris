@@ -29,14 +29,10 @@ func ownerAccountRequest(t *testing.T, h *Hub, server *httptest.Server, path, bo
 	return w
 }
 
-func TestOwnerProvisioningAndRecoveryRemainGatedAndOwnerOnly(t *testing.T) {
+func TestOwnerProvisioningAndRecoveryRemainOwnerOnlyWhileConsoleIsClosed(t *testing.T) {
 	h, server := setup(t)
 	const path = "/v1/admin/console/accounts"
 	const body = `{"username":"Owner","password":"a new operator password"}`
-	ownerAccountRequest(t, h, server, path, body, "test-secret", http.StatusNotFound)
-	h.console = newConsoleAuth(nil)
-	ownerAccountRequest(t, h, server, path, body, "test-secret", http.StatusUnauthorized)
-	h.console = newConsoleAuth(make([]byte, 32))
 	host, err := h.store.AddToken(context.Background(), "another-host")
 	if err != nil {
 		t.Fatal(err)
@@ -51,7 +47,6 @@ func TestOwnerProvisioningAndRecoveryRemainGatedAndOwnerOnly(t *testing.T) {
 
 func TestOwnerCreateAndRecoverNamedOperatorWithoutReturningSecrets(t *testing.T) {
 	h, server := setup(t)
-	h.console = newConsoleAuth(make([]byte, 32))
 	var logs bytes.Buffer
 	h.Log = log.New(&logs, "", 0)
 	h.AccessLog = true

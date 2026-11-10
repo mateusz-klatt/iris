@@ -128,11 +128,14 @@ Against the production hub, over TLS:
 
 ## Not done or not measured
 
-- **Password login is not active.** The account schema (#223), authorization (#225), sessions (#226),
-  the importer (#228), the login and profile forms (#229) and the operator access editor (#242) are
-  on `main`, but `iris serve` cannot enable them, so the public hub still uses login links. Activation is a separate change and is not merged. The
-  importer's dry run for the owner's two accounts ran on the public hub and reported that it would
-  create one operator and one member, writing nothing. No account has been imported.
+- **Password login is not active on the public hub.** The account schema (#223), authorization
+  (#225), sessions (#226), the importer (#228), the login and profile forms (#229), the operator
+  access editor (#242) and activation (#250, [ADR 019](adr/019-console-activation.md)) are on
+  `main`. The public hub still runs a version from before the activation change and uses login
+  links: deploying the activation version closes the console until the owner activates an operator,
+  so that deploy waits for him ([the cutover steps](console-activation.md#first-cutover-on-the-public-hub)).
+  The importer's dry run for the owner's two accounts ran on the public hub and reported that it
+  would create one operator and one member, writing nothing. No account has been imported.
 - **Other clients on real hosts.** Codex has run with Claude in the bounded macOS and WSL
   shared-worktree experiments above; that does not validate every integration path. Cursor,
   Antigravity, Grok and Kimi do not have equivalent end-to-end evidence in this status record.

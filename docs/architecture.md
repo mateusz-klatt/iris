@@ -541,7 +541,7 @@ of paths held by another Execution. It is the strongest check Iris has, and it i
 
 ### D13. Security
 
-ADR 014's authorization stage adds a separate typed account path in the store.
+ADR 014's named console uses a separate typed account path in the store.
 It rechecks the persisted session, authentication version, enabled role and
 repository predicates in the same transaction as the object operation. Members
 default to no access; strict `ro` grants read, and `rw` adds send/reply with `rw`
@@ -549,16 +549,41 @@ on the explicit origin and every immutable agent recipient. Operators retain
 global console authority but gain no owner-token powers. Access edits revoke
 sessions atomically and cannot remove the last enabled operator. The named
 transport boundary refuses mixed bearer/session credentials and bearer-only
-console sends. This path is staged: active HTTP routes still use the legacy
-authentication below until the ordered account cutover. The gated account path
-now issues opaque, hashed database sessions with a twelve-hour absolute expiry,
+browser requests. The named path issues opaque, hashed database sessions with a
+twelve-hour absolute expiry,
 bound CSRF challenges, password-attempt limits and owner provisioning/recovery.
 Password work runs outside the store lock; issuance and password changes recheck
 the verified account snapshot inside their committing transaction. Password and
-access changes revoke every session. The staged frontend now has login, logout,
+access changes revoke every session. The frontend has login, logout,
 profile and password forms, and an operator access editor for roles, disabled
-state and explicit repository grants. Production cutover remains a separate
-step; ordinary deployments still use the login link.
+state and explicit repository grants.
+
+[ADR 019](adr/019-console-activation.md) makes browser authentication named-only.
+Startup loads an existing independent protected console key from
+`<database>.console.key` or `--console-key-file`; a missing, unreadable, malformed
+or owner-token-reusing key closes the browser gate while agents, authenticated
+doctor uploads and owner setup/recovery/import continue. An enabled operator is
+also required. Explicit owner activation verifies that operator's bounded
+password, rechecks its snapshot transactionally and clears console sessions
+before preparing key material. Success requires a restart and issues no cookie;
+an already active process refuses activation without clearing sessions. Ordinary
+restarts retain absolute expiry. Imported-password verification does not impose
+the fifteen-code-point minimum used for new passwords. Old links/cookies and
+bearers grant no browser authority; `iris ui` opens the ordinary origin without
+reading the machine token. Restore and rollback must preserve that boundary;
+see [the operational procedure](console-activation.md).
+For create/reset/activate, the CLI removes exactly one final LF or CRLF as input
+line framing before the password bounds; every other byte is preserved, without
+general trimming or normalization. The server still verifies submitted password
+bytes exactly. Before the first deployment closes browser access, the owner
+confirms readiness in their own terminal and remains present to activate and
+sign in after the backup and approved import review; whoever deployed performs
+the second restart. Agents prepare and rehearse; real owner activation is not
+delegated.
+Legacy link/cookie grants were process maps, not SQLite rows: restart discards
+them, while activation clears named `ConsoleSession` rows. Restoring a database
+can revive named credentials/grants/sessions, not those legacy maps. An older
+binary can mint fresh legacy grants and must remain behind the rollback filter.
 
 ADR 014's importer is an owner-only CLI/API path independent of that account
 gate. The CLI reads an explicitly described table from a closed, fixed,
@@ -572,8 +597,8 @@ collision checks in one immediate transaction with an internal versioned source
 fingerprint ledger. Exact replays preserve later Iris edits; changed inputs
 refuse instead of overwriting. Imported members have no grants. A separate
 reviewed transfer accepts only explicit viewer-to-`ro` repository mappings,
-never source project operators or inferred `rw` authority. It does not activate
-account login or replace the legacy console.
+never source project operators or inferred `rw` authority. Import does not
+activate account login; that requires separate owner verification and restart.
 
 The trust boundary is the OS user on a host, plus a token per host across hosts. The token
 separates users and hosts, nothing finer. Any process running as that user, including a hook
@@ -589,7 +614,10 @@ relies on leases, delimited bodies and text-free wake frames.
   Otherwise a host could mint itself more tokens or lock other hosts out.
 - **Network.** Bind to loopback by default, and see D1 for remote hubs. Check `Host` and `Origin`
   on every route, against DNS rebinding and cross-site requests from browsers. No CORS. The web
-  UI signs in by one-time link and uses an `HttpOnly`, `SameSite=Strict` cookie, on loopback only.
+  UI signs in with a named password and uses an `HttpOnly`, `SameSite=Strict`
+  opaque session cookie, also `Secure` for HTTPS. Plain HTTP named authentication
+  requires literal loopback; a public origin requires the trusted loopback TLS
+  proxy configuration in ADR 002.
 - **Repository-supplied configuration.** Project-level hooks and MCP servers are code. `iris
   integrate` writes user-level files only and never grants trust on a user's behalf. `iris doctor`
   reports trust state instead.
@@ -776,20 +804,22 @@ upgrades, and the binary never replaces itself.
 
 ### D16. Web UI
 
-The staged ADR 014 account path applies repository visibility before search,
+The ADR 014 named account path applies repository visibility before search,
 grouping, counts and pagination. Cross-repository envelopes retain the sender
 name and body while hiding outside recipient state and repository metadata.
 Authorship is immutable message metadata, not a continuing access grant. Named
 sends retain account-scoped retry results for 24 hours and reauthorize current
 objects before replay; repository repair refuses member grants of either mode.
 Per-account persisted revisions exclude hidden repository activity and global
-event cursors. Gated account sockets validate their session before each frame;
+event cursors. Account sockets validate their session before each frame;
 frame admission serializes with revocation, and access changes wake idle sockets
-to close. A previously admitted frame may already be in transit. The current
-frontend discovers the staged account path through the session endpoint. Legacy
-session probes carry `X-Iris-Console-Mode: links`, including their unsigned 401,
-so deploying the frontend keeps the existing login-link flow. No production
-account gate is enabled by the UI transfer.
+to close. A previously admitted frame may already be in transit. The frontend
+distinguishes an ordinary signed-out named session from
+`X-Iris-Console-Mode: closed`, which reports unavailable account authentication.
+The closed state can also reflect an untrusted browser transport; the frontend
+asks the user to contact the owner without assuming activation is the cause.
+ADR 019 removes link creation/exchange and the old cookie authority. Explicit
+owner activation prepares a key for the next process; it never hot-opens a console.
 
 The transferred account forms retain the owner's export provenance (ADR 014's
 inventory). Named-account locale choices are saved with profile revisions and
@@ -803,14 +833,14 @@ replacing the shared cookie causes the old console's next read to reset its
 state even while its socket is live. Responses overtaken by a local session
 change are discarded. Password validation counts Unicode code points and UTF-8 bytes.
 
-The staged access editor is available only to named operators. Its account list
+The access editor is available only to named operators. Its account list
 includes explicit empty or `ro`/`rw` grants with the same transaction's edit
 revision, never credential fields. Access saves return the canonical updated
 snapshot. Conflicts reload current state and discard stale edits for review;
 the console and store both protect the last enabled operator, with the store
 remaining authoritative under concurrent changes. Editing one's own access ends
-that browser session. These controls do not activate account authentication in
-ordinary deployments; the separate cutover must retire anonymous links atomically.
+that browser session. These controls do not change the startup gate; use the
+separate owner activation/restart procedure in ADR 019.
 
 The account overview describes each visible repository with `console_access`:
 `ro` or `rw`. Member compose/reply requires a selected writable origin, explicit

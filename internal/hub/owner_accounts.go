@@ -12,7 +12,7 @@ import (
 // Production shares consoleauth's two slots with login and password changes.
 var createOwnerPassword = consoleauth.CreatePassword
 
-// The owner setup routes are staged with account authentication. Neither a host
+// Owner setup remains available while browser authentication is closed. Neither a host
 // token nor any browser account can create or recover accounts. Recovery always
 // restores a named operator, never an anonymous console session.
 func (h *Hub) ownerAccountsRoutes() {
@@ -22,18 +22,11 @@ func (h *Hub) ownerAccountsRoutes() {
 	h.mux.HandleFunc("POST /v1/admin/console/accounts/reset", func(w http.ResponseWriter, r *http.Request) {
 		h.ownerConsoleAccount(w, r, true)
 	})
+	h.mux.HandleFunc("POST /v1/admin/console/activate", h.activateConsole)
 }
 
 func (h *Hub) ownerConsoleAccount(w http.ResponseWriter, r *http.Request, reset bool) {
-	if h.console == nil {
-		writeError(w, &store.Error{Code: "not_found", Message: "unknown API route"})
-		return
-	}
-	if len(h.console.key) != 32 {
-		writeError(w, &store.Error{Code: "unauthorized", Message: "console authentication unavailable"})
-		return
-	}
-	if !h.ownerOnly(w, r) {
+	if !h.consoleOwnerOnly(w, r) {
 		return
 	}
 	var input struct {

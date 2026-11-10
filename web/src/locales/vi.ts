@@ -53,6 +53,7 @@ const translation = {
   },
   globalRole: { admin: "Quản trị viên", member: "Thành viên" },
   accountUi: {
+    consoleClosed: "Đăng nhập vào bảng điều khiển không khả dụng. Hãy liên hệ với chủ sở hữu hub.",
     sendUncertain: "Chưa biết kết quả. Thử lại trong vòng mười phút sẽ sử dụng cùng một lượt chuyển tin.",
     retryExpired: "Đã hết thời gian thử lại. Kiểm tra cuộc trò chuyện và xem lại bản nháp trước khi gửi lại.",
     messages: "Tin nhắn",

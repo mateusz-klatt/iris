@@ -6,7 +6,7 @@ import (
 )
 
 func TestAgentHistoryHTTPRoutes(t *testing.T) {
-	_, s := setup(t)
+	h, s := setup(t)
 	a, b, c := register(t, s, 1), register(t, s, 2), register(t, s, 3)
 	first := send(t, s, a, b, "first")
 	second := send(t, s, b, a, "second")
@@ -34,11 +34,15 @@ func TestAgentHistoryHTTPRoutes(t *testing.T) {
 	if page := request(t, s, "GET", "/v1/messages/history"+query+"&q=%22", nil, 200); len(page["messages"].([]any)) != 0 {
 		t.Fatal(page)
 	}
-	for _, route := range []string{"/v1/messages/history" + query, "/v1/ui/threads?repository_id=" + a["repository_id"].(string)} {
-		out := request(t, s, "GET", route+"&q=%00", nil, 400)
-		if out["error"].(map[string]any)["code"] != "bad_request" {
-			t.Fatal(out)
-		}
+	out := request(t, s, "GET", "/v1/messages/history"+query+"&q=%00", nil, 400)
+	if out["error"].(map[string]any)["code"] != "bad_request" {
+		t.Fatal(out)
+	}
+	h.console = newConsoleAuth(make([]byte, 32))
+	_, cookie, csrf := routeConsoleAccount(t, h, "History operator", "operator")
+	out = consoleRoute(t, h, s, cookie, csrf, "GET", "/v1/ui/threads?repository_id="+a["repository_id"].(string)+"&q=%00", "", 400)
+	if out["error"].(map[string]any)["code"] != "bad_request" {
+		t.Fatal(out)
 	}
 	request(t, s, "GET", "/v1/messages/history?execution_id=missing", nil, 409)
 	for _, message := range []string{id, second["message_id"].(string)} {

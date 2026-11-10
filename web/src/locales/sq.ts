@@ -53,6 +53,7 @@ const translation = {
   },
   globalRole: { admin: "Administrator", member: "Anëtar" },
   accountUi: {
+    consoleClosed: "Hyrja në konsolë nuk është e disponueshme. Kontaktoni pronarin e qendrës.",
     sendUncertain: "Rezultati nuk dihet. Riprovimi brenda dhjetë minutash përdor të njëjtin dorëzim.",
     retryExpired: "Afati për riprovim ka përfunduar. Kontrolloni bisedën dhe rishikoni draftin para se ta dërgoni përsëri.",
     messages: "Mesazhe",

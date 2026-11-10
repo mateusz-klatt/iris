@@ -1,5 +1,5 @@
-// Package consoleauth defines the bounded credential formats for the staged
-// account console. It does not authenticate HTTP requests or enable account routes.
+// Package consoleauth defines the bounded credential formats for console
+// accounts. The hub owns HTTP authentication and account-route availability.
 package consoleauth
 
 import (

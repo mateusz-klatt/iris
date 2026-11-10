@@ -29,7 +29,8 @@ type ticket struct {
 	used       bool
 }
 type Hub struct {
-	console *consoleAuth
+	console         *consoleAuth
+	consoleActivate func() error
 	// These seams are the database and WebSocket I/O boundaries; production uses
 	// the real store and transport, and tests can report their actual failure modes.
 	call              func(context.Context, string, store.Request) (map[string]any, error)
@@ -55,8 +56,6 @@ type Hub struct {
 	publicURL     *url.URL
 	monitors      map[string]bool
 	ui            http.Handler
-	links         map[string]loginGrant
-	cookies       map[string]loginGrant
 	store         *store.Store
 	token         string
 	hosts         map[string]bool
@@ -70,11 +69,11 @@ type Hub struct {
 }
 
 func New(s *store.Store, token string, allowedHosts []string) *Hub {
-	h := &Hub{call: s.Call, admitConsoleFrame: s.AdmitConsoleFrame, acceptSocket: websocket.Accept,
+	h := &Hub{console: newConsoleAuth(nil), call: s.Call, admitConsoleFrame: s.AdmitConsoleFrame, acceptSocket: websocket.Accept,
 		writeSocket: func(ctx context.Context, c *websocket.Conn, raw []byte) error {
 			return c.Write(ctx, websocket.MessageText, raw)
 		},
-		pingSocket: func(ctx context.Context, c *websocket.Conn) error { return c.Ping(ctx) }, rates: map[string]window{}, socketCounts: map[string]int{}, sockets: map[string]map[*websocket.Conn]bool{}, monitors: map[string]bool{}, links: map[string]loginGrant{}, cookies: map[string]loginGrant{}, store: s, token: token, hosts: map[string]bool{}, mux: http.NewServeMux(), tickets: map[string]ticket{}, used: map[string]bool{}, now: time.Now}
+		pingSocket: func(ctx context.Context, c *websocket.Conn) error { return c.Ping(ctx) }, rates: map[string]window{}, socketCounts: map[string]int{}, sockets: map[string]map[*websocket.Conn]bool{}, monitors: map[string]bool{}, store: s, token: token, hosts: map[string]bool{}, mux: http.NewServeMux(), tickets: map[string]ticket{}, used: map[string]bool{}, now: time.Now}
 	h.ticketChanged = make(chan struct{})
 	for _, host := range allowedHosts {
 		h.hosts[strings.ToLower(host)] = true
@@ -167,15 +166,10 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	// The staged frontend must distinguish an unsigned legacy browser from an
-	// expired named session without changing either authentication mechanism.
-	if h.console == nil && r.Method == http.MethodGet && r.URL.Path == "/v1/ui/session" {
-		w.Header().Set("X-Iris-Console-Mode", "links")
-	}
 	if h.serveConsole(w, r) {
 		return
 	}
-	if strings.HasPrefix(r.URL.Path, "/v1/") && r.URL.Path != "/v1/status" && r.URL.Path != "/v1/watch" && !h.authorized(r) && (!strings.HasPrefix(r.URL.Path, "/v1/ui/") || r.URL.Path == "/v1/ui/links" || !h.cookieAuthorized(r)) {
+	if strings.HasPrefix(r.URL.Path, "/v1/") && r.URL.Path != "/v1/status" && r.URL.Path != "/v1/watch" && !h.authorized(r) {
 		h.reject(w, r, h.refusal(r))
 		return
 	}

@@ -1,7 +1,23 @@
 import { expect, test, type Page } from "@playwright/test";
 
 test.beforeEach(async ({ page }) => {
-  await page.route("**/v1/ui/session", (route) => route.fulfill({ status: 404 }));
+  let account = {
+    id: "ca_operator", username: "iris-operator", display_name: "Iris operator", role: "operator", disabled: false,
+    ui_locale: "en", correspondence_locale: "en", edit_revision: 1, auth_version: 1,
+  };
+  const csrf = "iris-operator-browser-csrf";
+  await page.route("**/v1/ui/session", (route) => route.fulfill({ json: {
+    account, csrf, created_ms: 1, expires_ms: 99_999_999_999_999,
+  } }));
+  await page.route("**/v1/ui/profile", async (route) => {
+    const request = route.request();
+    expect(request.method()).toBe("PATCH");
+    expect(request.headers()["x-iris-csrf"]).toBe(csrf);
+    const edit = request.postDataJSON() as { edit_revision: number; display_name: string; ui_locale: string; correspondence_locale: string };
+    expect(edit.edit_revision).toBe(account.edit_revision);
+    account = { ...account, display_name: edit.display_name, ui_locale: edit.ui_locale, correspondence_locale: edit.correspondence_locale, edit_revision: account.edit_revision + 1 };
+    await route.fulfill({ json: { account } });
+  });
 });
 
 const silentCodex = {
@@ -146,6 +162,7 @@ test("a busy hub fits the screen", async ({ page }) => {
   const repositories = Array.from({ length: 4 }, (_, i) => ({
     id: `rp_${i}`,
     name: `repository-${i}`,
+    console_access: "rw",
     aliases: [`gitdir:holzera:/mnt/d/projects/repository-${i}/.git`, `local:home:/home/someone/projects/repository-${i}-wt-a-long-worktree-name`],
   }));
   const agents = Array.from({ length: 6 }, (_, i) => ({
@@ -227,7 +244,7 @@ test("a busy hub fits the screen", async ({ page }) => {
 
 test("mailbox navigation opens the reader, returns focus, and separates team activity", async ({ page }) => {
   const agents = [{ id: "ag_claude", name: "claude-laptop", client: "claude", host: "laptop", repository_id: "rp_iris", worktree: "/work/iris", branch: "main", state: "active", last_seen: new Date().toISOString(), unread: 0 }];
-  await serve(page, { repositories: [{ id: "rp_iris", name: "iris", aliases: [] }], agents, claims: [], human_unread: 1 }, []);
+  await serve(page, { repositories: [{ id: "rp_iris", name: "iris", aliases: [], console_access: "rw" }], agents, claims: [], human_unread: 1 }, []);
   const queries: URL[] = [];
   const myThread = { id: "ms_human", subject: "Ready for your review: src/application/portfolio/a_rather_long_module_name.py", participants: ["claude-laptop-iris-latency-20261107-224019", "human"], count: 1, last_at: "2026-11-08T10:00:00Z", unread: 1 };
   const teamThread = { id: "ms_team", subject: "Review handoff between agents", participants: ["claude-laptop", "codex-desk"], count: 3, last_at: "2026-11-08T09:00:00Z", unread: 0 };

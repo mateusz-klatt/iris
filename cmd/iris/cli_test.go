@@ -471,25 +471,16 @@ func TestGuardTreatsADeletedWorkingDirectoryAsNoRepository(t *testing.T) {
 	}
 }
 
-func TestUIPrintsTheLinkEvenWhenTheBrowserCannotStart(t *testing.T) {
+func TestUIPrintsTheSignInPageWithoutCallingTheHubOrReadingAToken(t *testing.T) {
 	if err := runUI([]string{"extra"}); err == nil {
 		t.Fatal("usage")
 	}
-	if err := runUI(nil); err == nil {
-		t.Fatal("no hub")
-	}
-
-	token := filepath.Join(t.TempDir(), "token")
-	if err := os.WriteFile(token, []byte("secret\n"), 0600); err != nil {
-		t.Fatal(err)
-	}
+	// A directory cannot be read as a bearer credential. Opening sign-in does
+	// not need one, and must not mint a session through the machine API.
+	token := t.TempDir()
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/ui/links" || r.Header.Get("Authorization") != "Bearer secret" {
-			http.Error(w, "no", http.StatusUnauthorized)
-			return
-		}
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"url":"http://127.0.0.1:7878/"}`))
+		t.Error("iris ui contacted the hub", r.URL.Path)
+		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()
 	t.Setenv("IRIS_HUB_URL", srv.URL)
@@ -500,13 +491,12 @@ func TestUIPrintsTheLinkEvenWhenTheBrowserCannotStart(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	if !strings.Contains(out, "http://127.0.0.1:7878/") {
+	if out != srv.URL+"/\n" {
 		t.Fatal(out)
 	}
 
 	bin := t.TempDir()
-	script := filepath.Join(bin, "xdg-open")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nexit 0\n"), 0755); err != nil {
+	if _, err := integrate.PlaceFake(bin, browserCommand("unused")[0]); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("PATH", bin)

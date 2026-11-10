@@ -4,7 +4,9 @@ The contract between `iris serve` and its clients: `iris hook`, `iris mcp`, `iri
 `iris guard` and the web UI. Behaviour is defined in `docs/architecture.md`. This file fixes the
 names so that independently built parts meet.
 
-Requests and responses are JSON. Authentication is `Authorization: Bearer <token>`. Retryable message and explicit-claim creation carry a client-chosen `key` (D9). Touch uses
+Requests and responses are JSON. Machine APIs use `Authorization: Bearer <token>`;
+browser APIs use the named account session and CSRF contract below. Retryable
+message and explicit-claim creation carry a client-chosen `key` (D9). Touch uses
 `tool_call_id`; lifecycle calls are idempotent by session/generation, and release and ack
 are idempotent by fence and delivery attempt respectively.
 
@@ -342,15 +344,15 @@ reaches the operator through the web UI, not through a session.
 
 ## Operator API, for the web UI
 
-ADR 014 steps 1–3 provide storage, authorization and gated authentication without
-enabling account HTTP routes in `iris serve` or changing the legacy authentication
-described here. `Store.CallConsole` accepts only a trusted typed console principal and
+The browser console uses named accounts under ADR 014 and
+[explicit startup activation](console-activation.md) under ADR 019.
+`Store.CallConsole` accepts only a trusted typed console principal and
 rechecks its persisted session, enabled account/authentication version, operation
 and object scope within one transaction. Profile/access methods use the same
 checks; only operators list accounts or change access. Revision conflicts refuse
 stale edits, and the last enabled operator cannot be disabled or demoted.
 
-In that staged path members have no default repository access. `ro` and `rw` read
+Members have no default repository access. `ro` and `rw` read
 only the granted union when the filter is omitted. Explicit inaccessible objects
 return `not_found`; prohibited operations return `forbidden`. Search matches,
 titles, counts, participants and pagination use visible messages only. Received
@@ -359,7 +361,7 @@ recipient names/states and session metadata. Authorship never grants access.
 Only operators acknowledge shared mail, revoke claims or view diagnostics.
 
 Named sends require an account session; bearers and mixed credentials are
-refused by the staged boundary. Members supply `repository_id` with current
+refused by the console boundary. Members supply `repository_id` with current
 `rw`, explicit non-human Agent IDs with current `rw` on every destination, and
 a reply parent visible in that origin. The batch commits atomically. Both
 operators and members use `(account ID, retry key)` across sessions/restarts;
@@ -376,18 +378,19 @@ Old shared human messages have no named author. Human envelopes include
 `reply_address: "human:<current repository ID>"`; this shared address and
 `reply_to` never add recipients automatically. Per-account refresh revisions
 advance only for authorized changes, independently of the global event sequence.
-No named login/session, profile, access or scoped watch route is activated here.
-The following account contract is implemented behind the private account gate
-and tested independently of the deployed legacy routes:
+Ordinary startup loads an independent protected console key from
+`<database>.console.key`, or `--console-key-file`. Missing, unreadable, malformed or
+owner-token-reusing key material, or absence of an enabled operator, keeps the
+browser namespace closed: requests return 401 with
+`X-Iris-Console-Mode: closed`. Agent routes, authenticated doctor PUT and owner
+create/reset/import/activation remain available. No key is created by ordinary
+startup. An active console's unsigned session 401 shows the named login form;
+CSRF tokens stay in memory and each login retry obtains a fresh challenge.
+The closed response can also reflect an untrusted browser transport; the UI
+reports unavailability and directs the user to the owner rather than diagnosing
+activation from that header alone.
 
-ADR 014 step 5 adds the staged browser forms without enabling that gate. A legacy
-`GET /v1/ui/session` response includes `X-Iris-Console-Mode: links`, even when the
-browser is unsigned and receives 401. The frontend retains the `iris ui` sign-in
-instruction in that mode. A named-session 401 shows the account login form. CSRF
-tokens stay in memory; login obtains a new single-use challenge on every retry.
-
-The first part of step 6 adds the operator access editor within that same private
-gate. `GET /v1/ui/accounts` returns `{ "accounts": [...] }` with each account's
+`GET /v1/ui/accounts` returns `{ "accounts": [...] }` with each account's
 safe profile, role, disabled state, authentication/edit versions and `grants`.
 Grants are an explicit array of `{ "repository_id": "rp_...", "mode": "ro" }`
 or `rw`; `[]` means no repository grants. Account revisions and grants come from
@@ -401,8 +404,8 @@ disabled. A stale revision, removal of the last enabled operator or a repository
 that no longer exists returns `conflict` without changing access. The editor
 reloads current state for review before another save. Every accepted `PUT` ends
 all of the target's sessions, even one that changes nothing; the editor therefore
-offers Save only after an edit. These endpoints expose no password record or login key. They do
-not activate account authentication or change `iris ui` in ordinary deployments.
+offers Save only after an edit. These endpoints expose no password record or login
+key and do not change the process's startup gate.
 
 - `GET /v1/ui/login` creates a short-lived single-use challenge bound to an
   HttpOnly pre-login cookie. `POST /v1/ui/login` consumes it, requires exact
@@ -445,20 +448,49 @@ not activate account authentication or change `iris ui` in ordinary deployments.
 Owner-authenticated `iris admin console create <username>` and
 `iris admin console reset <username>` create or recover a named operator through
 `POST /v1/admin/console/accounts` and `POST /v1/admin/console/accounts/reset`,
-never a browser session. Host tokens cannot invoke those paths. Passwords are
-read exactly from bounded standard input, including any final newline, never
-command arguments, URLs or logs. Malformed UTF-8 and unpaired surrogate escapes
+never a browser session. Host tokens cannot invoke those paths. For create,
+reset and activate, the CLI reads at most 1,027 stdin bytes and removes exactly
+one optional final LF or CRLF before validating the 1,024-byte/UTF-8 password
+bound. Bare CR, embedded line endings, spaces and additional final newlines are
+preserved; there is no general trimming or normalization. Passwords never enter
+command arguments, URLs or logs. The server verifies JSON password bytes exactly
+and does not apply CLI line framing. Malformed UTF-8 and unpaired surrogate escapes
 in account JSON are rejected before decoding can replace credential characters.
-The commands require the gated owner endpoints, which remain inactive in ordinary
-`iris serve` until the later cutover. A failed
-console-key load refuses account authentication without stopping coordination.
-Account cookies use a separate namespace from legacy links/cookies, with
-HttpOnly, Path=/, SameSite=Strict and Secure outside literal-loopback HTTP.
+The owner endpoints work while browser authentication is closed. Create/reset
+passwords require at least fifteen Unicode code points and at most 1,024 UTF-8
+bytes. A failed console-key load refuses browser authentication without stopping
+coordination. Account cookies use `iris_console_session` and the pre-login
+`iris_console_login` namespace, with HttpOnly, Path=/, SameSite=Strict and Secure
+outside literal-loopback HTTP. The retired `iris_session` cookie grants no authority.
 The ADR 002 exact public-origin/trusted-loopback-proxy requirements still apply.
+Legacy links/cookies existed only in process maps, not SQLite session rows.
+Deploy/restart discards those maps; activation's session deletion applies to
+named `ConsoleSession` rows. An older binary can mint fresh legacy grants after
+restart, so its rollback still requires the proxy boundary.
 
-ADR 014 step 4 adds two active owner-only endpoints independently of the gated
-account console. Both require exactly one owner bearer credential and refuse
-browser cookies, including mixed credentials. Host tokens cannot invoke them.
+`iris admin console activate <username> < /private/password` calls
+`POST /v1/admin/console/activate` with `{ "username": "...", "password": "..." }`.
+It uses the one-ending CLI line framing above, with valid UTF-8 and a
+1,024-byte bound after framing. Imported bounded scrypt passwords need not meet
+the new-password fifteen-code-point minimum. The hub verifies the password outside the store lock,
+then transactionally rechecks the enabled operator snapshot/authentication
+version, clears every console session and records `activation_verified`.
+Only afterward does it create/load the independent key; malformed existing
+material is refused. The record does not prove key persistence. Success returns
+`{ "account": {...}, "restart_required": true }`, without a browser cookie or
+hot activation. Restart with the prepared key opens named authentication.
+An already active console returns 409 `conflict` without clearing sessions.
+Normal restarts preserve original absolute session expiry. Before the first
+deployment closes the browser, the owner confirms readiness in their own
+terminal and remains present to activate and sign in; whoever deployed performs
+the second restart. Agents do not perform real owner activation or receive
+passwords in chat.
+See the [activation and recovery procedure](console-activation.md).
+
+All owner account setup, recovery, activation and import endpoints require
+exactly one owner bearer credential without a Cookie header. Host tokens and
+browser sessions cannot invoke them. These import endpoints remain available
+independently of the browser gate:
 
 | Endpoint | Bounded JSON request |
 |---|---|
@@ -487,22 +519,24 @@ always gives members zero grants; the separate assignment endpoint accepts only
 reviewed viewer-to-`ro` mappings to existing repositories and refuses source
 project `operator` roles even though Iris has `rw`.
 
-The currently active operator routes below accept a bearer token or the legacy
-web UI session cookie. Agents use their machine APIs.
+Browser routes below require named account authentication. The sole machine
+exception is authenticated `PUT /v1/ui/doctor`, which works even while the console
+is closed. Agents use their machine APIs. `/v1/ui/links` and `/ui/login` return
+404; old links, old cookies and machine bearers cannot establish browser sessions.
 
-`iris ui` calls `POST /v1/ui/links` with the bearer token, gets
-`{"url":"http://127.0.0.1:7878/ui/login?code=..."}` and opens it. `GET /ui/login?code=...` works
-once, sets an `HttpOnly`, `SameSite=Strict` cookie and redirects to `/`. Cookie login is refused
-off loopback unless `serve --public-url https://host` explicitly enables a trusted loopback
-reverse proxy. In that mode login and cookie authentication require the exact public Host and
-`X-Forwarded-Proto: https`, and the cookie is also `Secure`. The proxy must strip incoming
-forwarding headers before setting its own. Links expire after one minute and work once;
-creating a link always requires the bearer token. Everything else under `/` serves the embedded web UI.
+`iris ui` resolves and validates the configured ordinary console origin, prints
+it and opens it best-effort. It never calls `Token()`, reads a credential file or
+requests a login link. The root serves the embedded sign-in UI. Public named
+authentication requires `serve --public-url https://host` behind a trusted
+loopback reverse proxy, with the exact public Host and `X-Forwarded-Proto: https`.
+The proxy must strip incoming forwarding headers before setting its own.
+Without that trusted-proxy mode, plain HTTP browser authentication is restricted
+to literal loopback.
 
 `GET /v1/ui/overview` returns everything the first screen needs:
 
-On the gated account path each visible repository also has `console_access`,
-either `ro` or `rw` (`rw` for an operator). The legacy response omits this field.
+Each visible repository also has `console_access`,
+either `ro` or `rw` (`rw` for an operator).
 It is presentation metadata, not authorization supplied by the browser. Member
 queries remain scoped by current grants in the store transaction.
 
@@ -689,8 +723,9 @@ Every authenticated HTTP request logs its token name, method, path and peer, wit
 credentials or request bodies. Named token usage counts and last-use timestamps are
 persisted. Revocation refuses new requests and closes existing bearer streams and
 wake-ticket streams issued by that token. Already authenticated HTTP operations may
-finish. Previously issued UI login links and cookies remain valid until their own
-expiry; bearer revocation does not revoke those separate UI sessions.
+finish. Named account sessions have independent revocation and absolute expiry;
+bearer revocation does not revoke them. Retired UI login links and cookies have
+no authority.
 
 Request quotas are in-memory fixed one-minute windows. A valid bearer token is
 limited only by its credential digest; anonymous traffic cannot consume that quota.

@@ -53,6 +53,7 @@ const translation = {
   },
   globalRole: { admin: "관리자", member: "구성원" },
   accountUi: {
+    consoleClosed: "콘솔 로그인을 사용할 수 없습니다. 허브 소유자에게 문의하세요.",
     sendUncertain: "결과를 알 수 없습니다. 10분 이내에 다시 시도하면 동일한 전달을 사용합니다.",
     retryExpired: "재시도 가능 시간이 지났습니다. 다시 보내기 전에 대화와 초안을 확인하세요.",
     messages: "메시지",

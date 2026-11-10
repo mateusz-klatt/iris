@@ -53,6 +53,7 @@ const translation = {
   },
   globalRole: { admin: "管理员", member: "成员" },
   accountUi: {
+    consoleClosed: "控制台登录不可用。请联系中枢所有者。",
     sendUncertain: "结果未知。在十分钟内重试会使用同一次投递。",
     retryExpired: "重试期限已过。请先检查对话并审阅草稿，再重新发送。",
     messages: "消息",

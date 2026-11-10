@@ -13,6 +13,7 @@ import { uiLocalePreferenceKey } from "./preferences";
 import {
   doctorReport,
   emptyOverview,
+  operatorSession,
   server,
   sessionOverview,
   setHumanUnread,
@@ -123,27 +124,35 @@ describe("console send retries", () => {
     const view = await fillCompose(user, "Are you there?");
     await reviewAndSend(user, view, "Send");
     // The response was lost, so the message may be stored: the person is told a retry is safe.
-    expect(await screen.findByRole("alert")).toHaveTextContent("within a day of the first attempt is safe");
+    expect(await screen.findByRole("alert")).toHaveTextContent("Retrying within ten minutes uses the same delivery.");
     await reviewAndSend(user, view, "Send");
     expect(await screen.findByText("Sent.")).toBeVisible();
     expect(keys).toHaveLength(2);
     expect(keys[1]).toBe(keys[0]);
   }, 20000);
 
-  it("promises a safe retry only within a day of the first attempt", async () => {
+  it("requires another review and key after the ten-minute account retry window", async () => {
     const user = userEvent.setup({ delay: null });
     let now = Date.parse("2026-11-08T10:00:00Z");
     const clock = vi.spyOn(Date, "now").mockImplementation(() => now);
     try {
-      server.use(http.post("*/v1/ui/messages", () => HttpResponse.error()));
+      const keys: string[] = [];
+      server.use(http.post("*/v1/ui/messages", async ({ request }) => {
+        keys.push(((await request.json()) as { key: string }).key);
+        return HttpResponse.error();
+      }));
       await showSession();
       const view = await fillCompose(user, "Still there?");
       await reviewAndSend(user, view, "Send");
-      expect(await screen.findByRole("alert")).toHaveTextContent("within a day of the first attempt");
-      // The hub forgets a key a day after it stored it, so the same retry then promises nothing.
-      now += 24 * 60 * 60 * 1000 + 1;
+      expect(await screen.findByRole("alert")).toHaveTextContent("Retrying within ten minutes");
+      now += 10 * 60 * 1000;
       await reviewAndSend(user, view, "Send");
-      expect(await screen.findByRole("alert")).toHaveTextContent("Iris could not load this view.");
+      expect(await screen.findByRole("alert")).toHaveTextContent("The retry window has ended.");
+      expect(keys).toHaveLength(1);
+      await reviewAndSend(user, view, "Send");
+      expect(await screen.findByRole("alert")).toHaveTextContent("Retrying within ten minutes");
+      expect(keys).toHaveLength(2);
+      expect(keys[1]).not.toBe(keys[0]);
     } finally {
       clock.mockRestore();
     }
@@ -156,7 +165,7 @@ describe("console send retries", () => {
     await showSession();
     const view = await fillCompose(user, "Anyone?");
     await reviewAndSend(user, view, "Send");
-    expect(await screen.findByRole("alert")).toHaveTextContent("Iris could not tell whether this message was sent.");
+    expect(await screen.findByRole("alert")).toHaveTextContent("The result is unknown.");
     status = 400;
     await reviewAndSend(user, view, "Send");
     expect(await screen.findByRole("alert")).toHaveTextContent("Iris could not load this view.");
@@ -267,7 +276,7 @@ describe("Iris operator console", () => {
     act(() => report?.("live"));
     expect(screen.getByText("Live updates connected")).toBeVisible();
     act(() => report?.("unauthorized"));
-    expect(await screen.findByText(/run iris ui and open the link/)).toBeVisible();
+    expect(await screen.findByLabelText("Username")).toBeVisible();
   });
 
   it("shows repositories, agents, and claims from the overview", async () => {
@@ -297,15 +306,15 @@ describe("Iris operator console", () => {
     expect(screen.getByText("Needs a human step")).toBeVisible();
   });
 
-  it("points an unsigned browser at iris ui", async () => {
+  it("returns an unauthorized browser to the username and password form", async () => {
     server.use(
       http.get("*/v1/ui/overview", () => new HttpResponse(null, { status: 401 })),
       http.get("*/v1/ui/doctor", () => new HttpResponse(null, { status: 401 })),
     );
     render(<App connect={() => () => {}} />);
 
-    expect(await screen.findByRole("heading", { name: "Iris" })).toBeVisible();
-    expect(screen.getByText(/run iris ui and open the link/)).toBeVisible();
+    expect(await screen.findByLabelText("Username")).toBeVisible();
+    expect(screen.getByLabelText("Password")).toBeVisible();
     expect(screen.queryByRole("heading", { name: "Clients" })).toBeNull();
   });
 
@@ -485,7 +494,7 @@ describe("Iris operator console", () => {
     };
     render(<App connect={connect} />);
     expect(await screen.findByText("Live updates connected")).toBeVisible();
-    expect(screen.getAllByText("1 unread").length).toBeGreaterThan(0);
+    expect((await screen.findAllByText("1 unread")).length).toBeGreaterThan(0);
 
     setHumanUnread(3);
     onFrame?.({ cursor: 124, kind: "changed" });
@@ -650,7 +659,7 @@ describe("Iris operator console", () => {
     expect(screen.getByText(/Run iris doctor on this computer to refresh it/)).toBeVisible();
   });
 
-  it("remembers the interface language and the notification sound on this computer", async () => {
+  it("saves interface language with the account and notification sound on this computer", async () => {
     const user = userEvent.setup();
     const stored = memoryStorage();
     vi.stubGlobal("localStorage", stored);
@@ -674,22 +683,25 @@ describe("Iris operator console", () => {
     await user.click(screen.getByRole("button", { name: /Choose language/ }));
     await user.click(screen.getByRole("option", { name: "Use Polski" }));
     await waitFor(() => {
-      expect(stored.read(uiLocalePreferenceKey)).toBe("pl");
+      expect(stored.read(uiLocalePreferenceKey)).toBeNull();
       expect(document.documentElement.lang).toBe("pl");
     });
     vi.unstubAllGlobals();
     await i18n.changeLanguage("en");
   });
 
-  it("restores a saved language and still opens when storage is blocked", async () => {
+  it("uses the account's saved language and still opens when browser storage is blocked", async () => {
     const stored = memoryStorage({ [uiLocalePreferenceKey]: "pl" });
     vi.stubGlobal("localStorage", stored);
+    server.use(http.get("*/v1/ui/session", () => HttpResponse.json({ ...operatorSession, account: { ...operatorSession.account, ui_locale: "pl" } })));
     const saved = render(<App connect={() => () => {}} />);
     await waitFor(() => expect(document.documentElement.lang).toBe("pl"));
     expect(await screen.findByRole("button", { name: /Polski/ })).toBeVisible();
     saved.unmount();
     vi.unstubAllGlobals();
     await i18n.changeLanguage("en");
+
+    server.use(http.get("*/v1/ui/session", () => HttpResponse.json(operatorSession)));
 
     const restore = blockLocalStorage();
     try {
@@ -885,7 +897,7 @@ describe("Iris operator console", () => {
       }),
     );
     render(<App connect={() => () => {}} />);
-    expect(await screen.findByText(/run iris ui and open the link/)).toBeVisible();
+    expect(await screen.findByLabelText("Username")).toBeVisible();
   });
 
   it("reports a thread list failure and ignores an aborted list", async () => {
@@ -1043,7 +1055,7 @@ describe("Iris operator console", () => {
     server.use(http.get("*/v1/ui/threads/:id", () => new HttpResponse(null, { status: 401 })));
     const expired = render(<App connect={() => () => {}} />);
     await user.click(await screen.findByRole("button", { name: /Rollout check/ }));
-    expect(await screen.findByText(/run iris ui and open the link/)).toBeVisible();
+    expect(await screen.findByLabelText("Username")).toBeVisible();
     expired.unmount();
 
     rejectFetch((url) => url.includes("/v1/ui/threads/"), abortError());
@@ -1116,7 +1128,7 @@ describe("Iris operator console", () => {
     await screen.findByRole("heading", { name: "My messages" });
     const failedView = await compose();
     // A 5xx may have come after the hub stored the message, so a retry is offered as safe.
-    expect(await screen.findByRole("alert")).toHaveTextContent("Iris could not tell whether this message was sent.");
+    expect(await screen.findByRole("alert")).toHaveTextContent("The result is unknown. Retrying within ten minutes uses the same delivery.");
     expect(failedView.getByRole("textbox", { name: "Message" })).toHaveValue("Are you there?");
     failed.unmount();
 
@@ -1124,7 +1136,7 @@ describe("Iris operator console", () => {
     render(<App connect={() => () => {}} />);
     await screen.findByRole("heading", { name: "My messages" });
     await compose();
-    expect(await screen.findByText(/run iris ui and open the link/)).toBeVisible();
+    expect(await screen.findByLabelText("Username")).toBeVisible();
   }, 20000);
 
   it("leaves a claim in place when revocation fails and signs out when it is refused", async () => {
@@ -1142,6 +1154,6 @@ describe("Iris operator console", () => {
     render(<App connect={() => () => {}} />);
     await user.click(await screen.findByRole("button", { name: /^Claims/ }));
     await user.click(screen.getByRole("button", { name: "Revoke" }));
-    expect(await screen.findByText(/run iris ui and open the link/)).toBeVisible();
+    expect(await screen.findByLabelText("Username")).toBeVisible();
   });
 });

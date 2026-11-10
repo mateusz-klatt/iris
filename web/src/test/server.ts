@@ -2,6 +2,12 @@ import { http, HttpResponse } from "msw";
 import { setupServer } from "msw/node";
 
 import type { Claim, DeliveryProblems, DoctorReport, DoctorReports, Overview, ThreadDetail, ThreadsPage } from "../api";
+import type { AccountSession } from "../accountApi";
+
+export const operatorSession: AccountSession = {
+  account: { id: "ca_operator", username: "operator", display_name: "Iris operator", role: "operator", disabled: false, ui_locale: "en", correspondence_locale: "en", edit_revision: 1, auth_version: 1 },
+  csrf: "synthetic-operator-csrf", created_ms: 1, expires_ms: 9999999999999,
+};
 
 export const sessionOverview: Overview = {
   repositories: [{ id: "rp_iris", name: "iris", aliases: ["iris-wt"] }],
@@ -116,10 +122,12 @@ export const threadDetail: ThreadDetail = {
 
 let claims: Claim[] = sessionOverview.claims.map((claim) => ({ ...claim }));
 let humanUnread = sessionOverview.human_unread;
+let profile = { ...operatorSession.account };
 
 export function resetFixtures(): void {
   claims = sessionOverview.claims.map((claim) => ({ ...claim }));
   humanUnread = sessionOverview.human_unread;
+  profile = { ...operatorSession.account };
 }
 
 export function setHumanUnread(value: number): void {
@@ -135,7 +143,12 @@ function overview(): Overview {
 }
 
 export const server = setupServer(
-  http.get("*/v1/ui/session", () => new HttpResponse(null, { status: 404 })),
+  http.get("*/v1/ui/session", () => HttpResponse.json({ ...operatorSession, account: profile })),
+  http.patch("*/v1/ui/profile", async ({ request }) => {
+    const input = await request.json() as { display_name: string; ui_locale: string; correspondence_locale: string };
+    profile = { ...profile, ...input, edit_revision: profile.edit_revision + 1 };
+    return HttpResponse.json({ account: profile });
+  }),
   http.get("*/v1/ui/overview", () => HttpResponse.json(overview())),
   http.get("*/v1/ui/doctor", () => HttpResponse.json({ hosts: [doctorReport] } satisfies DoctorReports)),
   http.get("*/v1/ui/deliveries", () => HttpResponse.json({ messages: [], more: false, window_s: 604800, wait_s: 900 } satisfies DeliveryProblems)),
