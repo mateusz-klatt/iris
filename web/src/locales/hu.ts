@@ -53,7 +53,7 @@ const translation = {
   },
   globalRole: { admin: "Rendszergazda", member: "Tag" },
   accountUi: {
-    consoleClosed: "A konzolba való bejelentkezés nem érhető el. Lépjen kapcsolatba a központ tulajdonosával.",
+    consoleClosed: "A konzolba való bejelentkezés nem érhető el. Lépjen kapcsolatba a hub tulajdonosával.",
     sendUncertain: "Az eredmény nem ismert. A tíz percen belüli újrapróbálkozás ugyanazt a kézbesítést használja.",
     retryExpired: "Az újrapróbálkozás határideje lejárt. Újabb küldés előtt ellenőrizze a beszélgetést és tekintse át a piszkozatot.",
     messages: "Üzenetek",

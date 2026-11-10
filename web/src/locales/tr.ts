@@ -53,7 +53,7 @@ const translation = {
   },
   globalRole: { admin: "Yönetici", member: "Üye" },
   accountUi: {
-    consoleClosed: "Konsolda oturum açma kullanılamıyor. Hub sahibine başvurun.",
+    consoleClosed: "Konsolda oturum açma kullanılamıyor. Merkezin sahibine başvurun.",
     sendUncertain: "Sonuç bilinmiyor. On dakika içinde yeniden denemek aynı teslimatı kullanır.",
     retryExpired: "Yeniden deneme süresi doldu. Tekrar göndermeden önce konuşmayı kontrol edin ve taslağı gözden geçirin.",
     messages: "Mesajlar",

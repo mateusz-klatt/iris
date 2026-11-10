@@ -53,7 +53,7 @@ const translation = {
   },
   globalRole: { admin: "Msimamizi", member: "Mwanachama" },
   accountUi: {
-    consoleClosed: "Huduma ya kuingia kwenye dashibodi haipatikani. Wasiliana na mmiliki wa seva.",
+    consoleClosed: "Huduma ya kuingia kwenye dashibodi haipatikani. Wasiliana na mmiliki wa kitovu.",
     sendUncertain: "Matokeo hayajulikani. Kujaribu tena ndani ya dakika kumi hutumia uwasilishaji uleule.",
     retryExpired: "Muda wa kujaribu tena umekwisha. Kagua mazungumzo na rasimu kabla ya kutuma tena.",
     messages: "Ujumbe",
