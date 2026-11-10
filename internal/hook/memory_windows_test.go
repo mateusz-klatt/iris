@@ -58,7 +58,9 @@ func TestFileMemoryIsOwnerOnlyOnWindows(t *testing.T) {
 	if m.Recall("claude", "s") != 0 {
 		t.Fatal("forget failed")
 	}
-	m.prune()
+	if err := m.prune(); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func TestFileMemoryKeepsProofWhenItsDirectoryIsReplacedByAFile(t *testing.T) {

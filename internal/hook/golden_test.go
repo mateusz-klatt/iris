@@ -309,6 +309,9 @@ var fixtureWant = map[string]decoded{
 	"codex/SessionStart-resume.json":      {kind: KindSessionStart, session: codexDaemonRoot, cwd: proj},
 	"codex/Stop.json":                     {kind: KindStop, session: codexSession, cwd: proj},
 	"codex/UserPromptSubmit.json":         {kind: KindPrompt, session: codexSession, cwd: proj},
+	// A queued turn's prompt hook, from the run in docs/research/clients/codex-mcp-queue-2026-11-10.md:
+	// its prompt is the queued text, unchanged.
+	"codex/UserPromptSubmit-queued.json": {kind: KindPrompt, session: codexDaemonRoot, cwd: proj},
 	// A sub-agent's hooks carry the root's session id and name the sub-agent as agent_id, which
 	// the decoder does not read: they decode to the root session, with no parent (ADR 017).
 	"codex/SubagentStart.json": {kind: KindSubagentStart, session: codexSubagentRoot, cwd: proj},

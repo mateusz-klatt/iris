@@ -96,7 +96,9 @@ Hard rules for `iris hook`, because failure semantics differ between clients:
    client downtime or identify which edits went unclaimed. A silent fail-open once hid a real bypass:
    Copilot sends no tool call id, the hub refused the request, and the edit went through a live claim.
    Unknown tools and cross-loads are not failures, but doctor reports them too, from
-   `hook-observed.log` (gap review C4).
+   `hook-observed.log` (gap review C4). Neither is a session-file operation a hook skipped, such
+   as a told state its lock budget kept it from writing: the hook's allow or deny is unaffected,
+   and doctor counts them beside the row's status (ADR 017).
 7. A client that provides no tool call id gets one derived from a hash of the raw payload.
 
 A hook is a new process, so every call starts with DNS, TCP and TLS. Against the public hub a lost
@@ -288,6 +290,12 @@ Every wake costs a model turn, so `iris watch` coalesces events and reports only
 attention: new mail, and a claim someone is waiting for. The session context tells the model
 what an Iris notification means, because without it the model correctly declines to act on an
 unexplained background line (measured).
+
+The next-turn tier says counts, never content. A hub that names attention gives the newest
+pending event an identity. A hook says its note when that identity is newer than the one the
+session was last told, and a prompt hook says it once more if it is still the newest ten minutes
+later (ADR 017, decisions 4 and 5). What a session was told lives in a file beside its
+generation and changes only under the sessions directory's lock.
 
 A release wakes only a session that was waiting for it. When the hub refuses an Execution's
 touch or claim because another Execution holds the path, it records that Execution as a

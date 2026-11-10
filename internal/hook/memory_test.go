@@ -94,7 +94,9 @@ func TestFileMemoryFailsQuietly(t *testing.T) {
 	m := fileMemory{dir: filepath.Join(file, "sessions"), now: time.Now, restrict: config.OwnerOnly}
 	m.Remember("claude", "s", 1)
 	m.Forget("claude", "s")
-	m.prune()
+	if err := m.prune(); err != nil {
+		t.Fatalf("a directory that cannot be listed has nothing to prune: %v", err)
+	}
 	if m.Recall("claude", "s") != 0 {
 		t.Fatal("nothing could have been stored")
 	}
@@ -133,7 +135,9 @@ func TestFileMemoryPrunesOnlyStaleEntries(t *testing.T) {
 	if err := os.Chtimes(m.name("claude", "old"), old, old); err != nil {
 		t.Fatal(err)
 	}
-	m.prune()
+	if err := m.prune(); err != nil {
+		t.Fatal(err)
+	}
 	if m.Recall("claude", "old") != 0 || m.Recall("claude", "new") != 2 {
 		t.Fatal("prune removed the wrong entry")
 	}

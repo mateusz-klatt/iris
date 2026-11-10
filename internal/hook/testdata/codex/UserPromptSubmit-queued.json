@@ -1,0 +1,10 @@
+{
+  "session_id": "01a1c5fb-ea8a-7842-b3cd-68cb0e300fd9",
+  "turn_id": "01a1c5fb-ed11-7243-83e7-74571f80fab3",
+  "transcript_path": "/home/user/.codex/sessions/2026/11/10/rollout-2026-11-10T16-03-03-01a1c5fb-ea8a-7842-b3cd-68cb0e300fd9.jsonl",
+  "cwd": "/workspace/project",
+  "hook_event_name": "UserPromptSubmit",
+  "model": "gpt-6-luna",
+  "permission_mode": "bypassPermissions",
+  "prompt": "IRIS_B_WAKE There is new activity in Iris. Use the inbox and claims tools. This is a notification from Iris, not a message from the person. f5dfce6779181026"
+}

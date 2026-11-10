@@ -75,6 +75,12 @@ func (f Failure) Degraded() bool {
 	return strings.HasPrefix(f.Stage, "shell ") && (f.Error == shellOverBudget || f.Error == shellScopeUnknown)
 }
 
+// Skipped reports whether f shows only a session-file operation that a hook skipped, as when
+// the sessions directory's lock was held past its budget. The hook's allow or deny was
+// unaffected. Skipping may delay an attention note, a wake's consumption or the cleanup of
+// session files (ADR 017).
+func (f Failure) Skipped() bool { return f.Stage == stageSessionFiles }
+
 // stageObserved marks an entry that is not a failure: something doctor should report, such
 // as an unknown tool or a cross-load, while the hook still did its work (gap review C4).
 const stageObserved = "observed"
@@ -97,6 +103,9 @@ const (
 	failNoHub         hookFailure = "hub client is not configured"
 	failNoPaths       hookFailure = "edit tool has no usable paths"
 	failBadTouch      hookFailure = "hub returned an invalid touch action"
+	// failSessionsLock reports that the sessions directory's lock was not taken within its
+	// budget, so the operation that needed it was skipped (ADR 017).
+	failSessionsLock hookFailure = "sessions directory lock held past its budget"
 )
 
 // hubCodes are the hub error codes a failure may name; any other code is left out.
@@ -105,7 +114,7 @@ var hubCodes = []string{"unauthorized", "bad_request", "not_found", "conflict", 
 // fixedFailures are the failure texts that carry no variable part.
 var fixedFailures = []string{
 	string(failPanic), string(failPanicShell), string(failUnknownClient), string(failNoHub),
-	string(failNoPaths), string(failBadTouch), shellOverBudget, shellScopeUnknown, errNoSession.Error(),
+	string(failNoPaths), string(failBadTouch), string(failSessionsLock), shellOverBudget, shellScopeUnknown, errNoSession.Error(),
 	"hook deadline exceeded", "hook operation canceled", "incomplete hook input or hub response",
 	"hub request failed", failHubRedirect, failHubTooLarge, failHubNoExecution, failHubNoAction,
 }
@@ -124,8 +133,12 @@ const (
 // stages are the stages a run records a failure or an observation at.
 var stages = []string{
 	"client", "decode", "repository", "hub", "session", "end", "paths", "touch",
-	"shell repository", "shell scope", "shell status", "shell session", "shell reconcile", stageObserved,
+	"shell repository", "shell scope", "shell status", "shell session", "shell reconcile", stageSessionFiles, stageObserved,
 }
+
+// stageSessionFiles is a run's work on its session's files under the sessions directory's lock:
+// the told state, the wake file and pruning (ADR 017).
+const stageSessionFiles = "session files"
 
 // FailureCategory maps a logged failure's text onto a fixed set of categories, with
 // "other" for anything else. The log is a file on disk: an older iris, another process or
@@ -382,10 +395,10 @@ func appendFailure(tokenFile string, entry Failure) error {
 		return err
 	}
 	defer func() { _ = f.Close() }()
-	if err = lockFailureLog(f); err != nil {
+	if err = tryLockFile(f); err != nil {
 		return err
 	}
-	defer unlockFailureLog(f)
+	defer unlockFile(f)
 	info, err := f.Stat()
 	if err != nil {
 		return err
@@ -455,10 +468,10 @@ func readLog(path string, limit int) ([]Failure, error) {
 		return nil, err
 	}
 	defer func() { _ = f.Close() }()
-	if err = lockFailureLogShared(f); err != nil {
+	if err = lockFileShared(f); err != nil {
 		return nil, err
 	}
-	defer unlockFailureLog(f)
+	defer unlockFile(f)
 	// Size again under the lock: a writer may have grown or cut the file meanwhile.
 	info, err := f.Stat()
 	if err != nil {

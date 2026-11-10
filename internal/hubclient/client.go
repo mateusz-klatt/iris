@@ -51,13 +51,43 @@ type SessionResponse struct {
 	Capabilities []string `json:"capabilities"`
 }
 
-// Attention is what the session has not been told yet: unacknowledged deliveries and paths
-// it was refused that are now free. Monitored means its iris watch beat recently, so the
-// monitor, not a hook, tells it.
+// Attention is what still needs the session's attention: deliveries that still need a wake, and
+// recorded claim-availability events, which stay until retention removes them. Monitored means
+// its iris watch beat recently, so the monitor, not a hook, tells it. Identity names the newest
+// pending event, and HighWater is the hub's event high-water mark, which a restore takes back
+// (ADR 017, decision 4 and its amendments).
 type Attention struct {
-	Unread    int  `json:"unread"`
-	Available int  `json:"available"`
-	Monitored bool `json:"monitored"`
+	Unread    int      `json:"unread"`
+	Available int      `json:"available"`
+	Monitored bool     `json:"monitored"`
+	Identity  Identity `json:"identity"`
+	HighWater int64    `json:"high_water"`
+}
+
+// Identity is an attention identity. Known says the hub sent the field, as every hub that names
+// attention does, null included; a hub from before sends none. Pending says it named an event.
+type Identity struct {
+	Known   bool
+	Pending bool
+	Stream  string
+	Cursor  int64
+}
+
+// UnmarshalJSON is called for null too, so a hub's null is Known and not Pending.
+func (i *Identity) UnmarshalJSON(raw []byte) error {
+	*i = Identity{Known: true}
+	if string(bytes.TrimSpace(raw)) == "null" {
+		return nil
+	}
+	var named struct {
+		Stream string `json:"stream"`
+		Cursor int64  `json:"cursor"`
+	}
+	if err := json.Unmarshal(raw, &named); err != nil {
+		return err
+	}
+	i.Pending, i.Stream, i.Cursor = true, named.Stream, named.Cursor
+	return nil
 }
 
 // Agent is the mailbox named in a session response.
@@ -302,6 +332,9 @@ type CheckResponse struct {
 	Conflicts []Claim `json:"conflicts"`
 	// CasePolicy is the repository's case policy, folded or sensitive (ADR 003).
 	CasePolicy string `json:"case_policy,omitempty"`
+	// Attention is in every successful shell reconcile answer from a hub that names attention,
+	// and nil from one before it (ADR 017, decision 6).
+	Attention *Attention `json:"attention,omitempty"`
 }
 
 func (c *Client) CheckPaths(ctx context.Context, req CheckRequest) (CheckResponse, error) {

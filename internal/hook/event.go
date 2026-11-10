@@ -67,6 +67,9 @@ type Event struct {
 	UnknownTool     bool
 	// Workspaces are extra roots. Antigravity's process cwd is not the repository.
 	Workspaces []string
+	// Prompt is a prompt event's whole prompt, for one comparison only: whether it is the message
+	// of the session's own wake (ADR 017, decision 3). It is never logged and decides nothing else.
+	Prompt string
 }
 
 // Action is the canonical decision.

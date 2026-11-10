@@ -202,6 +202,13 @@ cross-load, where this client's hook ran inside another client's session, are ke
 status and adds "observed in 24 h: …" with a count for each. A tool name is reduced to letters,
 digits and `_-.:/` there, because it comes from the client.
 
+A session-file operation that a hook skipped is not a failure of the hook either. When the
+sessions directory's lock was held past the hook's 50 ms budget, or a session file could not be
+written, the hook goes on without that operation, and its allow or deny is unchanged. That may
+delay an attention note, a wake's consumption or the cleanup of session files (ADR 017). The row
+keeps its status and adds "skipped in 24 h: …" with the count, and `iris doctor` does not exit 1
+for them.
+
 A shell command whose reconciliation ran past its budget is graded differently. The budget is 1 s,
 or 300 ms when the hub runs on the same machine. The hook still worked; that command's changes only
 went unclaimed, because `git status` or the hub was slow: a big or cold worktree, a loaded machine
