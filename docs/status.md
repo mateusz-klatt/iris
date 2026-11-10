@@ -175,6 +175,9 @@ SonarCloud's quality gate reported every condition passing on 2026-11-09, `new_s
 included, which was the one that had been red. These findings were reviewed and kept on purpose:
 
 - `PATH` lookups for `git`, `xdg-open` and the clients' binaries are how those commands are found.
+  The `git` call in `internal/gitinfo/command.go` carries a `NOSONAR` line comment for `go:S4036`,
+  because SonarCloud raised it as a new finding when three accepted calls became that one. The
+  comment hides every SonarCloud finding on that line, so a change to that call needs review.
 - The session cookie has no `Secure` flag on loopback, where the console is served over HTTP and
   Safari would refuse a `Secure` cookie. Behind the public origin it is `Secure`.
 - HTTP and WebSocket URLs on loopback, for the local hub and the console.
