@@ -14,7 +14,7 @@ import (
 	"github.com/mateusz-klatt/iris/internal/restorecheck"
 )
 
-const adminUsage = "usage: iris admin forget (--repository <id> | --agent <name>) [--dry-run]\n       iris admin merge --from <id> --into <id> [--dry-run]\n       iris admin contact --repository <id> (<agent> | --clear)\n       iris admin backup <hub database> <new backup file>\n       iris admin restore-check <backup file> <empty scratch directory>\n       iris admin console (create | reset | activate) <username> < password-file\n       iris admin console import --source <SQLite file> --manifest <JSON file> [--apply]\n       iris admin console import-grants --manifest <JSON file> [--apply]"
+const adminUsage = "usage: iris admin forget (--repository <id> | --agent <name>) [--dry-run]\n       iris admin merge --from <id> --into <id> [--dry-run]\n       iris admin contact --repository <id> (<agent> | --clear)\n       iris admin backup <hub database> <new backup file>\n       iris admin restore-check <backup file> <empty scratch directory>\n       iris admin console (create | reset | activate) <username> < password-file"
 
 func runAdmin(args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)

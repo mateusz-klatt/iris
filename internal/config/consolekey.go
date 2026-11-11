@@ -19,8 +19,9 @@ var (
 
 // ConsoleKey creates or loads the independent 256-bit console key in a protected
 // hub-local file. The caller supplies a separate path from the machine token.
-// Only explicit owner activation calls this creation path. Ordinary serve startup
-// uses LoadConsoleKey, so a missing key cannot silently activate the console.
+// Fresh owner provisioning and explicit owner activation call this creation
+// path. Ordinary serve startup uses LoadConsoleKey, so a missing key cannot
+// silently activate the console.
 // The final name is published only after a protected temporary file is written,
 // synced and closed. Publication requires filesystem hard-link support and never
 // replaces an existing file. This does not promise directory-entry durability

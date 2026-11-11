@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -46,6 +47,31 @@ func TestAdminConsoleRemovesOneFramingEndingAndPrintsSafeAccount(t *testing.T) {
 	}
 }
 
+func TestAdminConsoleCreatePrintsExactlyWhetherItPreparedAKeyAndNeedsRestart(t *testing.T) {
+	for _, result := range []struct{ prepared, restart bool }{{false, false}, {false, true}, {true, true}} {
+		want := map[string]any{
+			"account":         map[string]any{"id": "ca_synthetic", "role": "operator"},
+			"account_created": true, "key_prepared": result.prepared, "restart_required": result.restart,
+		}
+		client := tokenClient(t, func(w http.ResponseWriter, r *http.Request) {
+			if r.Method != http.MethodPost || r.URL.Path != "/v1/admin/console/accounts" {
+				t.Error("create did not call its owner account route")
+			}
+			if err := json.NewEncoder(w).Encode(want); err != nil {
+				t.Error(err)
+			}
+		})
+		var out bytes.Buffer
+		if err := adminConsoleCommand(t.Context(), client, []string{"create", "Synthetic"}, strings.NewReader("a sufficiently long password\n"), &out); err != nil {
+			t.Fatal(err)
+		}
+		var got map[string]any
+		if err := json.Unmarshal(out.Bytes(), &got); err != nil || !reflect.DeepEqual(got, want) {
+			t.Fatal("create output changed the account/key/restart result", got, err)
+		}
+	}
+}
+
 type consoleBrokenReader struct{}
 
 func (consoleBrokenReader) Read([]byte) (int, error) { return 0, errors.New("read failed") }
@@ -73,6 +99,28 @@ func TestAdminConsoleRefusesInvalidInputBeforeCallingHub(t *testing.T) {
 	}
 	if err := adminCommand(context.Background(), nil, []string{"console"}, io.Discard); err == nil || err.Error() != adminConsoleUsage {
 		t.Fatal("console command not dispatched")
+	}
+}
+
+func TestRemovedConsoleImportCommandsRefuseBeforeReadingInputOrCallingHub(t *testing.T) {
+	requests := 0
+	client := tokenClient(t, func(http.ResponseWriter, *http.Request) { requests++ })
+	for _, command := range []string{"import", "import-grants"} {
+		for _, args := range [][]string{{command}, {command, "Owner"}, {command, "--manifest", "unused", "--apply"}} {
+			var out bytes.Buffer
+			if err := adminConsoleCommand(t.Context(), client, args, consoleBrokenReader{}, &out); err == nil || err.Error() != adminConsoleUsage {
+				t.Fatalf("removed command did not return native console usage: %v", err)
+			}
+			if err := adminCommand(t.Context(), client, append([]string{"console"}, args...), &out); err == nil || err.Error() != adminConsoleUsage {
+				t.Fatalf("admin dispatcher accepted removed command: %v", err)
+			}
+			if out.Len() != 0 || requests != 0 {
+				t.Fatal("removed command printed a result or called the hub")
+			}
+		}
+	}
+	if strings.Contains(adminUsage, "console import") || strings.Contains(adminConsoleUsage, "console import") {
+		t.Fatal("usage still advertises a removed import command")
 	}
 }
 

@@ -178,10 +178,10 @@ func run(args []string) error {
 }
 
 // consoleConfiguration is the immutable hub setup boundary, before serving any
-// request. Explicit owner activation prepares the key for the next process; its
-// callback never changes the key or opens the running console.
+// request. Fresh owner provisioning or explicit activation prepares the key for
+// the next process; its callback never opens the running console.
 type consoleConfiguration interface {
-	ConfigureConsole([]byte, func() error) error
+	ConfigureConsole([]byte, func() bool, func() bool, func() error) error
 }
 
 func configureConsole(handler consoleConfiguration, keyFile, ownerFile, ownerToken string, logs io.Writer) {
@@ -189,7 +189,13 @@ func configureConsole(handler consoleConfiguration, keyFile, ownerFile, ownerTok
 	if err != nil {
 		_, _ = fmt.Fprintln(logs, "Iris console closed: console key unavailable or not independent")
 	}
-	if err = handler.ConfigureConsole(key, func() error {
+	if err = handler.ConfigureConsole(key, func() bool {
+		_, err := os.Lstat(keyFile)
+		return errors.Is(err, os.ErrNotExist)
+	}, func() bool {
+		_, err := consoleKeyForHub(keyFile, ownerFile, ownerToken, false)
+		return err == nil
+	}, func() error {
 		_, err := consoleKeyForHub(keyFile, ownerFile, ownerToken, true)
 		return err
 	}); err != nil {
@@ -203,7 +209,7 @@ func configureConsole(handler consoleConfiguration, keyFile, ownerFile, ownerTok
 // consoleKeyForHub refuses file aliases before protecting or creating a key, and
 // copied owner credentials after decoding. The owner token has already passed
 // config.Token validation. No file path, key or filesystem diagnostic is returned
-// in a failure message. Only the explicit activation callback requests creation.
+// in a failure message. Only the owner setup callback requests creation.
 func consoleKeyForHub(keyFile, ownerFile, ownerToken string, create bool) ([]byte, error) {
 	ownerInfo, err := os.Stat(ownerFile)
 	if err != nil {

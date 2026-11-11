@@ -153,7 +153,7 @@ func TestMailOfASessionThatNeverRecoversIsRequeuedAtTheDeadline(t *testing.T) {
 // A version 7 database gains Delivery.attention, set only on deliveries nobody has fetched.
 // A fault at any step of that migration leaves the database at version 7 without the column.
 func TestAttentionMigrationBackfillsAndRollsBackAtEveryStep(t *testing.T) {
-	s, _, file := testStore(t)
+	s, _, file := historicalStore(t, 23)
 	a, _ := session(t, s, 1)
 	b, br := session(t, s, 2)
 	cs, cr := session(t, s, 3)

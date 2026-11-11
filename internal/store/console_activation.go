@@ -6,12 +6,30 @@ import (
 	"github.com/mateusz-klatt/iris/internal/consoleauth"
 )
 
+// activationRead never calls expiry bookkeeping or commits a write transaction. Its
+// deferred rollback also releases a snapshot after cancellation or an error.
+func (s *Store) activationRead(ctx context.Context, f func(*transaction) error) error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	c, err := s.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = c.Close() }()
+	defer func() { _, _ = c.ExecContext(context.Background(), "ROLLBACK") }()
+	if _, err = c.ExecContext(ctx, "BEGIN"); err != nil {
+		return err
+	}
+	s.transactions.Add(1)
+	return f(&transaction{conn: c, ctx: ctx, s: s})
+}
+
 // HasEnabledConsoleOperator checks the persisted operator role without expiry
 // bookkeeping, writes or notifications. It does not prove possession of an
 // operator password; explicit owner activation performs that separate check.
 func (s *Store) HasEnabledConsoleOperator(ctx context.Context) (bool, error) {
 	var enabled bool
-	err := s.importRead(ctx, func(t *transaction) error {
+	err := s.activationRead(ctx, func(t *transaction) error {
 		return t.row("SELECT EXISTS(SELECT 1 FROM ConsoleAccount WHERE role='operator' AND disabled=0)").Scan(&enabled)
 	})
 	if err != nil {

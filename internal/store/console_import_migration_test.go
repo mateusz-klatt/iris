@@ -11,7 +11,7 @@ import (
 )
 
 func TestConsoleAssignmentMigrationFromPopulatedVersion19PreservesHistory(t *testing.T) {
-	s, clock, file := testStore(t)
+	s, clock, _ := historicalStore(t, 23)
 	// Version 20 only adds the assignment ledger. Remove it before populating
 	// the fixture so every retained table and record has the actual v19 shape.
 	if _, err := s.db.Exec("DROP TABLE ConsoleAssignmentImport; PRAGMA user_version=19"); err != nil {
@@ -29,7 +29,7 @@ func TestConsoleAssignmentMigrationFromPopulatedVersion19PreservesHistory(t *tes
 		{Username: "Migration disabled", Role: "member", Disabled: true},
 		{Username: "Migration quarantined", Role: "none"},
 	} {
-		input.PasswordHash = importPassword(byte(i + 1))
+		input.PasswordHash = consoleTestHash
 		account, err := s.CreateConsoleAccount(t.Context(), input)
 		if err != nil {
 			t.Fatal("could not populate historical account")
@@ -90,20 +90,15 @@ func TestConsoleAssignmentMigrationFromPopulatedVersion19PreservesHistory(t *tes
 			t.Fatal("historical fixture lacks required records", table)
 		}
 	}
-	if err := s.Close(); err != nil {
-		t.Fatal("could not close populated version 19 fixture")
+	// Exercise migration 020 itself. Opening through the current store would
+	// also apply 024 and remove the ledger whose original contract this test checks.
+	if err := s.transact(t.Context(), func(tx *transaction) error {
+		_, err := tx.exec(consoleAssignmentImportSchema)
+		return err
+	}); err != nil {
+		t.Fatal("could not upgrade populated version 19 fixture", err)
 	}
-	s.lock = nil
-	reopened, err := Open(file, clock)
-	if err != nil {
-		t.Fatal("could not upgrade populated version 19 fixture")
-	}
-	defer func() { _ = reopened.Close() }()
-	// Migration 023 adds the deliveries' attention cursor, which its own tests check. Without it,
-	// the upgrade must have changed nothing else.
-	if _, err := reopened.db.Exec(removeAttentionIdentitySchema); err != nil {
-		t.Fatal("could not set the attention cursor aside")
-	}
+	reopened := s
 	after := consoleMigrationState(t, reopened)
 	if !reflect.DeepEqual(before, after) {
 		// Never print row contents: credentials, session digests and fingerprints
@@ -115,17 +110,11 @@ func TestConsoleAssignmentMigrationFromPopulatedVersion19PreservesHistory(t *tes
 		}
 		t.Fatal("version 20 did not preserve version 19 records")
 	}
+	var err error
 	var nextStream string
 	var nextEpoch, assignments int64
-	if err = reopened.db.QueryRow("SELECT stream_id,boot_epoch,(SELECT user_version FROM pragma_user_version),(SELECT COUNT(*) FROM ConsoleAssignmentImport) FROM Meta").Scan(&nextStream, &nextEpoch, &version, &assignments); err != nil || version != 23 || assignments != 0 || nextStream != stream || nextEpoch != epoch+1 {
-		t.Fatal("upgrade lost stream identity, boot recovery or the new empty ledger")
-	}
-	for execution, want := range map[string]int64{first.ExecutionID: clock.Now().Add(120 * time.Second).UnixMilli(), second.ExecutionID: priorRecovery} {
-		var state string
-		var deadline int64
-		if err = reopened.db.QueryRow("SELECT state,recovery_deadline FROM Execution WHERE id=?", execution).Scan(&state, &deadline); err != nil || state != "active" || deadline != want {
-			t.Fatal("normal startup recovery changed during migration")
-		}
+	if err = reopened.db.QueryRow("SELECT stream_id,boot_epoch,(SELECT user_version FROM pragma_user_version),(SELECT COUNT(*) FROM ConsoleAssignmentImport) FROM Meta").Scan(&nextStream, &nextEpoch, &version, &assignments); err != nil || version != 20 || assignments != 0 || nextStream != stream || nextEpoch != epoch {
+		t.Fatal("migration changed stream identity or failed to add the empty ledger")
 	}
 	var author string
 	if err = reopened.db.QueryRow("SELECT sender_account_id FROM Message WHERE id=?", accepted.MessageID).Scan(&author); err != nil || author != accounts[0].ID {
@@ -152,9 +141,8 @@ func TestConsoleAssignmentMigrationFromPopulatedVersion19PreservesHistory(t *tes
 	}
 }
 
-// Every v19 table, including credential-bearing and search storage, is compared
-// without exposing it. Only normal startup recovery's nullable deadline is
-// normalized here; its exact values and the Meta epoch are asserted above.
+// Every historical table, including credential-bearing and search storage,
+// is compared without exposing it. The added assignment ledger is set aside.
 func consoleMigrationState(t *testing.T, s *Store) map[string][][]any {
 	t.Helper()
 	names := consoleMigrationRows(t, s.db, "SELECT name FROM sqlite_schema WHERE type='table' AND name NOT IN ('Meta','ConsoleAssignmentImport') ORDER BY name")

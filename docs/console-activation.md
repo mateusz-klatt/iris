@@ -1,146 +1,28 @@
 # Activate, recover and restore the named console
 
-The console uses named accounts under [ADR 019](adr/019-console-activation.md).
-Deploying a binary does not authorize an account import or a production cutover.
-This runbook describes owner operations; perform a real import only after its
-source, manifest, backup and apply have been explicitly approved.
+The console uses named accounts under [ADR 019](adr/019-console-activation.md)
+and [ADR 020](adr/020-named-login-only.md). On a fresh hub, owner `create`
+prepares sign-in in one action; a restart opens it. A restored database without
+its key, or a hub whose key was lost, uses explicit owner activation.
 
-**Before any deployment command**, the owner tells whoever will deploy, in that
-session, that he is present and ready for activation, the second restart and the
-sign-in checks. On the first cutover from the legacy binary, deployment closes
-browser access immediately; it stays closed until the owner activates a named
-operator and the hub is restarted again. Agent coordination keeps working during
-that closed-console stage. Agents may prepare and rehearse this procedure; they
-must not activate real accounts in place of the owner. Keep passwords and
-machine credentials out of chat.
+The owner performs account setup and any required activation in their own
+terminal and signs in personally. Agents may prepare and rehearse this
+procedure; they must not receive passwords or activate real accounts in the
+owner's place. Keep passwords and machine credentials out of chat. Before a
+deployment that needs setup or recovery, agree who will restart the hub and
+keep the owner present through the sign-in checks.
 
-Rehearsals of this procedure are recorded in
+Rehearsals are recorded in
 [the rehearsal record](research/console-activation-rehearsal-2026-11-09.md), with
 their limits. A rehearsal is evidence about the binary it ran; it authorizes no
-production import or activation.
+production activation.
 
 ## First cutover on the public hub
 
-This is the whole first cutover, in order. The sections after it are the
-reference for each step.
-
-Words used here. "The console" is the hub's web page for people; agents do not
-use it and keep working through every step. "The coordinator" is the agent
-session on the hub's machine that deploys the hub. "The activation version" is
-the first version with password login. From the moment it is deployed the
-console is closed to everyone until activation and one more restart. "A dry run"
-is an import that reports what it would do and writes nothing.
-
-Only the owner knows the password. No agent may see it, type it or ask for it.
-Only the owner can change the web server on the hub's machine, because that
-needs `sudo` and his password.
-
-Before the day, without the owner: the activation version is merged with every
-check green and CI has built its image; a rehearsal on that image is recorded;
-and a second model, acting only as a reviewer, has checked this section and
-restated it correctly. From that merge until step 5 the coordinator deploys
-nothing from `main`: any deploy of it closes the console, so it would be the
-cutover.
-
-On the day the owner is present. The steps take about 15 minutes; set aside 30.
-
-1. The owner writes "start the login cutover" in the coordinator's session.
-   Nothing below happens before that.
-2. The coordinator takes backup 1 of the hub's database, copies it off the
-   hub's volume and checks that the copy can be restored, as in
-   [Backup, review and apply](accounts-import.md#backup-review-and-apply),
-   steps 1 and 2. If the backup or the check fails: stop. Nothing has changed.
-3. The coordinator runs the import's dry run, with the source file and the
-   manifest that the owner has already reviewed, and shows the result to the
-   owner. Expected: every account in that source is listed as created, none
-   skipped, none quarantined. Any other result: stop, and tell the owner what
-   the dry run printed. The hub is unchanged; only the backup file was added.
-4. The owner writes "import" in the coordinator's session. The coordinator runs
-   the import with `--apply`, then the same dry run again. Expected now: none
-   created, every account skipped, none quarantined. Any other result: stop, and
-   tell the owner what was printed. The accounts exist but cannot be used yet,
-   and the console still uses its previous authentication.
-5. The coordinator deploys the activation version, as in
-   [Deploying the public hub from an image CI built](deploy.md#deploying-the-public-hub-from-an-image-ci-built).
-   That procedure takes backup 2 just before it replaces the running hub, and
-   keeps the previous image under its commit. From now on the console is closed
-   and the hub's log says `Iris console closed`. A browser that opens the hub's
-   address shows `Console sign-in is unavailable. Contact the hub owner.` Agents
-   keep working: the coordinator's Iris `peers` tool still answers.
-6. The owner, in his own Bash terminal on the hub's machine, runs this with the
-   operator's username in place of `<username>`, and types the password:
-
-   ```bash
-   ( set +x +a; unset p; IFS= read -rs -p 'Password: ' p && echo && printf '%s' "$p" | IRIS_HUB_URL=http://127.0.0.1:7878 IRIS_TOKEN_FILE="$HOME/.config/iris/hub.token" iris admin console activate <username> )
-   ```
-
-   The password is not shown and is not stored. The parentheses run the line
-   in a shell of its own, which switches command tracing off, keeps the
-   password out of every program's environment and forgets it when the line
-   ends. Expected: the answer contains the line `"restart_required": true`.
-   The owner then writes "activated" in the coordinator's session; the
-   coordinator cannot see his terminal. A wrong password gives
-   `unauthorized: Invalid username or password` instead, and the owner tries
-   again. The hub allows five tries in 15 minutes; after the fifth wrong try he
-   waits 15 minutes, counted from that try. If two careful tries in a row are
-   refused, he stops trying and says so in the coordinator's session: that is
-   a fault, see below.
-7. After the owner's "activated", the coordinator restarts the hub with
-   `docker restart iris`. Deploying again would do nothing here, because the
-   image has not changed. Expected: the hub's log says `Iris console open`.
-8. The owner opens the hub's address in a browser and signs in with the
-   username and the password.
-9. Three checks. The owner reloads the page and says whether he still sees his
-   inbox. The coordinator checks with its Iris `peers` tool that the other
-   sessions are still listed as active. Five minutes after step 7 the
-   coordinator checks that `docker inspect --format '{{.RestartCount}}' iris`
-   prints 0. The cutover has succeeded when all three checks have passed, and
-   not before.
-10. The coordinator adds the commit and the time to the deploy log on the hub's
-    machine, and sends the other agents one Iris message: sign-in is by username
-    and password now.
-
-If something goes wrong:
-
-- In steps 2 to 4 the console is not closed. Stop and report. Nothing needs to
-  be undone, because imported accounts cannot be used before activation.
-- In steps 5 to 9 a fault is any command that fails and any expected result
-  that does not appear. Examples: the hub does not start; activation refuses
-  two careful tries; the log does not say `Iris console open` after step 7;
-  the sign-in page does not load or refuses the username and password that
-  activation accepted; a check of step 9 fails. The coordinator stops and
-  tells the owner in its session what it sees, without secrets. The fault is
-  fixed when the step that failed has given its expected result. If that has
-  not happened 10 minutes after the failure, the coordinator proposes to go
-  back, and the owner decides. If step 5 failed before it replaced the running
-  hub, the old version is still serving; going back then only makes
-  the previous image the one that the next start would use.
-- Going back means exactly this: start the previous image again, as the
-  paragraph "To roll back" in
-  [deploy.md](deploy.md#deploying-the-public-hub-from-an-image-ci-built) says.
-  The database stays as it is, because the activation version adds no
-  migration. Nothing is restored and no message is lost. The previous browser
-  authentication works again. The imported accounts stay, unused, and
-  so does the key if step 6 had succeeded.
-- Another attempt after going back starts at step 1 again, on a day the owner
-  chooses, with two differences. If the import was applied before, the dry run
-  of step 3 lists every account as skipped, none created and none quarantined;
-  that is the expected result then, and step 4 is left out. If step 6 had
-  succeeded before, the key is still there and startup opens the console
-  whenever the key and an enabled operator exist: the hub's log says
-  `Iris console open` as soon as step 5 has deployed, steps 6 and 7 are left
-  out, and the five minutes of step 9 count from step 5.
-- After a cutover that succeeded, a version from before it must never serve the
-  public address as it is, because it would restore earlier browser authority.
-  [Rollback while preserving the browser boundary](#rollback-while-preserving-the-browser-boundary)
-  says what has to happen first and who can do it.
-
-Who may do what. Only the owner: say "start the login cutover"; say "import";
-type the password; say "activated"; decide to go back; change the web server. The coordinator:
-the backups, the dry runs, the import after the owner's word, the deploy, the
-restart, the checks of the sessions and of the restart count, and going back
-after the owner's decision. Nobody: skip a step, or continue after a result this
-section does not expect.
+The first cutover to named login is complete. Its deployed commit, import,
+activation, restart and sign-in checks are recorded in
+[the public-hub cutover record](status.md). Use the procedures below for current
+setup, recovery and rollback.
 
 ## Startup and credentials
 
@@ -151,13 +33,13 @@ another hub-local path. At every start the hub sets the key file to mode 0600 on
 Unix, or to the owner-only Windows DACL, as it does for the owner token: a key with
 wider permissions is tightened and loaded, not refused, and Iris cannot tell
 whether it was read while they were wider. Keep this key separate from the owner
-bearer and source-system keys.
+bearer.
 
 A missing, unreadable or malformed key, a key file that is not a regular file or
 cannot be protected (on Unix, one owned by another user), reuse of owner-token
 material, or absence of an enabled operator leaves browser authentication
 closed. Startup never creates the key. Agent coordination, authenticated
-`PUT /v1/ui/doctor`, and owner account create/reset/import remain available.
+`PUT /v1/ui/doctor`, and owner account create/reset/activate remain available.
 Only a missing console key produces `X-Iris-Console-Mode: closed`; an untrusted
 browser transport does not. The frontend reports that the console is unavailable
 and asks the user to contact the owner. An owner or host bearer cannot create a
@@ -171,54 +53,80 @@ There is no hot key reload.
 
 ## Owner setup and activation
 
-These are the same steps for any hub, with the detail the first section leaves
-out. "Whoever deploys" is the person or the session that runs the deploy
-procedure; on the public hub that is the coordinator.
+Configure the CLI for the intended hub and its protected owner-token file. The
+owner can create and recover accounts while browser authentication is closed.
+Do not let saved client configuration select a different hub.
 
-1. After the owner's confirmation, whoever deploys takes a fresh consistent
-   database backup **before replacing the running image**, and keeps a copy off
-   the hub's volume. Protect the owner credential separately and preserve any
-   existing console key privately. On a first cutover nothing has to be closed
-   at the proxy: the new binary keeps the console closed by itself until
-   activation and the second restart.
-2. Whoever deploys installs the selected validated CI image using
-   [deploy.md](deploy.md#deploying-the-public-hub-from-an-image-ci-built).
-   On this first cutover the new process has no activated console key, so the
-   browser is immediately closed while agent routes and authenticated doctor
-   uploads continue. Confirm both: an agent's status call answers, and
-   `iris doctor` on a host still uploads its report. Do not replace a working
-   Apache vhost merely to change the backend image.
-3. Configure the CLI for the intended hub and its protected owner-token file.
-   The owner creates an operator, or approves the import described in
-   [accounts-import.md](accounts-import.md#backup-review-and-apply). That section
-   gives the expected results: the dry run lists every account it would create;
-   the apply creates them; the same dry run afterwards reports each of them as
-   skipped and none as created. An approved import can also run before step 2,
-   on the version that is running: no migration separates the two versions, and
-   an import that stops there closes nothing. For the public hub's first
-   cutover, the import ran on 2026-11-10 before step 2. A deployment never
-   implicitly approves importing real accounts. Owner creation and recovery
-   work while the browser gate is closed:
+1. Before replacing a running image, take a fresh consistent database backup and
+   keep a copy off the hub's volume. Protect the owner credential separately and
+   preserve any existing console key privately. Install the selected validated
+   image using [deploy.md](deploy.md#deploying-the-public-hub-from-an-image-ci-built).
+   Confirm that agent coordination and authenticated `iris doctor` uploads still
+   work if the browser console is closed.
+2. To create a new account, the owner uses a fresh password. If the account
+   already exists, skip to step 3:
 
    ```sh
-   iris admin console create ReviewedOperator < /private/new-password
-   iris admin console reset ReviewedOperator < /private/recovery-password
+   iris admin console create USERNAME < /private/new-password
    ```
 
-   `reset` recovers that named account as an enabled operator and revokes all its
-   sessions. Use it deliberately; it changes authority. New create/reset passwords
-   need at least fifteen Unicode code points and at most 1,024 UTF-8 bytes.
-   Protect password files. For create, reset and activate, the CLI removes
-   exactly one final LF or CRLF as line framing, then validates the remaining
-   password. A bare CR, embedded line endings, spaces and any additional final
-   newline remain password bytes. It performs no general trimming or
-   normalization. Never put passwords in argv, URLs, logs, chat or reports.
-4. The owner types the enabled operator's password into `activate`, in his own
-   terminal. That is the proof that he knows it, and it is what prepares the
-   key. No agent sees the password or runs this for him:
+   Only when the database has no console account at all and the hub has no console
+   key does `create` also prepare the key. The check and operator creation share
+   one transaction with the owner audit records `owner_provision` and
+   `activation_prepared`. Key preparation happens only after that transaction
+   commits. The response reports `account_created: true`, `key_prepared: true`
+   and `restart_required: true`: the operator was made, the key was prepared and
+   a restart is needed. Continue at step 5; no separate `activate` is needed.
+
+   On every other hub `create` only makes an enabled operator and reports
+   `account_created: true`, `key_prepared: false`. A hub with a valid existing
+   key but no accounts needs a restart after account creation: the response
+   reports `restart_required: true`, even though no key was prepared. Continue
+   at step 5, then sign in with the new operator. On a hub with an account but no
+   key, `create` reports `restart_required: false`; activation at step 4 is still
+   needed. Creating another account on an already open console also reports
+   `restart_required: false` and needs no activation or restart.
+
+   The CLI prints operator creation, key preparation and restart readiness
+   independently. `restart_required` is true when the console is closed now and
+   a valid key and an enabled operator are available after creation, so a restart
+   would open named login. For a member or disabled account, save the intended
+   role, disabled state and grants in the access editor and read them back before
+   giving its password to anyone.
+
+   If key preparation fails after the transaction commits, the operator remains
+   without a key and the running console stays closed. Resolve the key failure
+   through trusted owner review, then use `activate` with that operator at step 4;
+   do not retry `create` for the same account.
+3. If an existing account needs password recovery, use owner `reset`
+   deliberately. Otherwise continue at step 4:
 
    ```sh
-   iris admin console activate ReviewedOperator < /private/operator-password
+   iris admin console reset USERNAME < /private/recovery-password
+   ```
+
+   `reset` replaces the password, makes that account an enabled operator,
+   deletes its repository grants and revokes all its sessions. It changes
+   authority. Record any intended role, disabled state and grants before a
+   recovery reset, and restore and read them back in the access editor before
+   handing out the new password. It does not recover a lost owner credential
+   or bypass named password login.
+
+   New create/reset passwords need at least fifteen Unicode code points and at
+   most 1,024 UTF-8 bytes. Protect password files. For create, reset and activate,
+   the CLI removes exactly one final LF or CRLF as line framing, then validates
+   the remaining password. A bare CR, embedded line endings, spaces and any
+   additional final newline remain password bytes. It performs no general
+   trimming or normalization. Never put passwords in argv, URLs, logs, chat or
+   reports.
+4. For a closed hub that did not prepare its key through `create`, including a
+   restored database without its key, key loss, or failed fresh-hub key
+   preparation, the owner types the enabled operator's password into `activate`
+   in their own terminal. This verifies possession of the password and prepares
+   the key. No agent sees the password or runs this for them:
+
+   ```sh
+   iris admin console activate USERNAME < /private/operator-password
    ```
 
    For a private Bash prompt instead of a file, keep the variable unexported and
@@ -231,7 +139,7 @@ procedure; on the public hub that is the coordinator.
      set -o pipefail
      if IFS= read -rs -p 'Password: ' iris_password; then
        printf '\n' >&2
-       if printf '%s' "$iris_password" | iris admin console activate ReviewedOperator; then
+       if printf '%s' "$iris_password" | iris admin console activate USERNAME; then
          iris_status=0
        else
          iris_status=$?
@@ -254,48 +162,96 @@ procedure; on the public hub that is the coordinator.
    version, clears every console session, and records `activation_verified`.
    This record proves password verification, not later key persistence.
 
-   Only then does activation create or load the independent protected key. It
-   refuses malformed existing material instead of overwriting it. The required
-   publication policy creates a private temporary file in the same directory,
-   protects it before writing any key bytes, then writes, syncs and closes it
-   before atomically linking it at the final path without replacing an existing
-   file. An existing final file is loaded and validated. On the candidate
-   image, activation published the key this way, with mode 0600 and the hub's
-   user as its owner
+   Only then does activation create or load the independent protected key.
+   Account creation on a fresh hub uses the same key preparation after its
+   creation transaction commits. Key preparation refuses malformed existing
+   material instead of overwriting it. The required publication policy creates
+   a private temporary file in the same directory, protects it before writing
+   any key bytes, then writes, syncs and closes it before atomically linking
+   it at the final path without replacing an existing file. An existing final
+   file is loaded and validated. On the candidate image, activation published
+   the key this way, with mode 0600 and the hub's user as its owner
    ([candidate record](research/console-activation-candidate-2026-11-10.md)).
-   An interrupted publication and two competing ones were exercised only by the
-   tests, with injected failures, not on the hub's volume.
-   If an existing file is incomplete or malformed, keep the console closed and
-   have the owner review and privately quarantine it before choosing fresh material;
-   activation must not overwrite or silently repair it. If persistence
-   fails, the running browser gate stays closed; resolve the key failure through
-   trusted owner review before retrying. Success returns `restart_required: true`
-   and a safe account result. It issues no cookie and does not open this process's
-   gate. Activation on an already active named console returns HTTP 409
-   (`conflict`) without clearing sessions.
-5. After `restart_required: true`, whoever deployed performs the **second
-   restart** with the same database and prepared key path. It need not be the
-   owner. The selected image is already deployed; repeating an unchanged
+   An interrupted publication and two competing ones were exercised only by
+   the tests, with injected failures, not on the hub's volume. If an existing
+   file is incomplete or malformed, keep the console closed and have the owner
+   review and privately quarantine it before choosing fresh material;
+   activation must not overwrite or silently repair it. If persistence fails,
+   the running browser gate stays closed; resolve the key failure through
+   trusted owner review before retrying. Success returns `restart_required:
+   true` and a safe account result. It issues no cookie and does not open this
+   process's gate. Activation on an already active named console returns HTTP
+   409 (`conflict`) without clearing sessions.
+5. After `restart_required: true` from `create` or `activate`, whoever deployed
+   restarts the hub with the same database and prepared key path. It need not be
+   the owner. The selected image is already deployed; repeating an unchanged
    `compose up -d` does not ensure a restart.
 
    ```sh
    docker restart iris
    ```
 
-   Normal later restarts retain the key, database and each session's original twelve-hour absolute
-   expiry; they do not extend the deadline.
+   Normal later restarts retain the key, database and each session's original
+   twelve-hour absolute expiry; they do not extend the deadline.
 6. The owner opens the hub's URL in a browser (`http://127.0.0.1:7878/` by default
    for a local hub) and personally signs in using the reviewed named operator.
-7. Three checks close a cutover, the same three as in the first section. The
-   owner reloads the page and still sees his inbox, which is a second
-   authenticated read of his session. Whoever deployed checks that agents are
-   still listed as active and, five minutes after the second restart, that the
-   hub has not restarted by itself. The owner stays until these are done.
+7. The owner reloads the page and still sees their inbox, which is a second
+   authenticated read of the session. Whoever deployed checks that agents are
+   still listed as active and, five minutes after the restart, that the hub has
+   not restarted by itself. The owner stays until these checks are done.
 
 What a candidate has to show before it is released, such as access edits seen
 from two browsers, is not part of a cutover. It is listed, with what each check
 must show, in
 [the rehearsal record](research/console-activation-rehearsal-2026-11-09.md#what-a-candidate-is-checked-for).
+
+## Profiles, locales and access review
+
+The native profile, password, logout and account-language forms retain the
+owner-provided UI export provenance recorded in
+[ADR 014's adaptation inventory](adr/014-operator-accounts.md#export-inventory-and-adaptation-boundaries).
+They use Iris account identities, revisions and authorization. A signed-in
+account's UI locale takes precedence over browser preferences; browser
+preferences apply while signed out. Correspondence locale remains stored, with
+its editor hidden until Iris defines its use. Locale values are data and do not
+request translation or carry instructions. Profile and locale changes preserve
+sessions; password and access changes revoke them.
+
+After setup and restart, an enabled operator opens Access, selects an account
+by its immutable Iris identity, and reviews its role, disabled state and each
+repository's access. Members have no grants by default. Choose no grant, `ro` or
+`rw` for each existing repository, then save using the displayed account revision.
+`ro` permits scoped reading. `rw` also permits sending/replying to agents, with
+`rw` required on the sending repository and every destination repository. Neither
+mode permits shared-mail acknowledgement, claim changes or administration.
+Operators have global console authority without per-repository grants; `none`
+is always disabled. A disabled account cannot sign in even when grants exist.
+
+Every accepted access edit revokes all target sessions, so the editor offers Save
+only once something has changed. Editing your own access requires signing in
+again. A stale revision returns `conflict`: reload the account list, compare the
+current saved permissions and deliberately reapply the intended edit. Do not
+retry an old revision or overwrite someone else's update. Removing or disabling
+the last enabled operator is refused; have the owner provision and verify another
+named operator before removing that role. An absent account row is not a reason
+to grant access by a similar display name. Save, reload and read access back
+before handing out a newly created or recovered account's password.
+
+Use temporary synthetic databases, protected scratch keys and passwords for
+rehearsal, with two real browser contexts for live revocation and prepared stale
+requests. Also check shared-cookie account replacement across tabs, narrow/wide
+layouts, keyboard operation, restart expiry, fresh-key restoration and the proxy
+rollback boundary. The
+[rehearsal record](research/console-activation-rehearsal-2026-11-09.md) holds what
+was observed: real-binary/browser/restore checks passed 44/44 and expanded local
+Apache checks 73/73. Those modified builds do not establish readiness of a final
+clean candidate or the production proxy.
+
+If login or key loading fails, keep the console closed while agent
+coordination continues. Follow owner recovery above and the rollback boundary
+below; restoring old login links alongside named accounts is not a supported
+recovery path. The owner token and hub OS administrator remain trusted. These
+controls cannot contain a compromised browser, hub or trusted host process.
 
 ## Restore a database with browser access isolated
 
@@ -334,22 +290,23 @@ a fresh backup of current state and review those losses first. The agent-only
    before installing that backup in the target; do not copy a live main file alone.
    Preserve the new key with that database, start one named-authentication hub,
    repeat readiness/sign-in/revocation checks, and only then reopen public browser
-   access. Do not copy the withheld old key back. The local synthetic restore
-   rehearsal below passed; a production restore still requires owner review and
+   access. Do not copy the withheld old key back. The recorded local synthetic
+   restore rehearsal passed; a production restore still requires owner review and
    verification of its actual backup, grants and deployment.
 
 ## Rollback while preserving the browser boundary
 
-This section applies once a cutover has succeeded. A first cutover that fails
-goes back to the previous image as
-[the first section](#first-cutover-on-the-public-hub) says: going back to that
-image restores the browser authentication used before the cutover.
+Migration 024 drops the two import ledgers. Rollback across it requires the
+matching pre-deploy database backup and loses writes made since that backup.
+A binary from before 024 can still open a version-24 database: there is no
+maximum-version fence, and it fails only where it touches a dropped table.
+This procedure cannot enforce the rollback choice made by the hub's OS owner.
 
 Use a supported backend that retains named authentication, its reviewed database
 and console key. A version has named authentication when its commit is the
 activation change or a later one on `main`; `iris version` prints the commit, and
-`docs/status.md` records the commit of the cutover. Migration compatibility and lost writes still require the
-backup review in [deploy.md](deploy.md#deploying-the-public-hub-from-an-image-ci-built).
+`docs/status.md` records the commit of the cutover. Migration compatibility and
+lost writes still require the backup review in [deploy.md](deploy.md#deploying-the-public-hub-from-an-image-ci-built).
 An arbitrary older Iris binary can reopen legacy browser authority on a newer
 database; the newer binary cannot constrain a separately launched old process.
 

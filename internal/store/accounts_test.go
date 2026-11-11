@@ -380,7 +380,7 @@ func TestConsoleMessageAuthorshipIsCompleteImmutableAndHistorical(t *testing.T) 
 }
 
 func TestConsoleSessionAndImportSchemaPreserveIndependentRecords(t *testing.T) {
-	s, _, _ := testStore(t)
+	s, _, _ := historicalStore(t, 23)
 	a := createTestConsoleAccount(t, s, "One", "member")
 	b := createTestConsoleAccount(t, s, "Two", "member")
 	insert := "INSERT INTO ConsoleImport VALUES(?,?,?,1,zeroblob(32),0)"
@@ -412,7 +412,7 @@ func TestConsoleSessionAndImportSchemaPreserveIndependentRecords(t *testing.T) {
 }
 
 func TestConsoleMigrationPreservesLegacyMailAndRetryNamespaces(t *testing.T) {
-	s, clock, file := testStore(t)
+	s, clock, file := historicalStore(t, 23)
 	_, registered := session(t, s, 1)
 	repo := registered["repository_id"].(string)
 	r := Request{RepositoryID: repo, Key: "legacy-retry", To: []string{registered["agent"].(map[string]any)["id"].(string)}, Body: "unattributed shared mail"}

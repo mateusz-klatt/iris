@@ -90,6 +90,9 @@ var reducedShellSchema string
 //go:embed migrations/023.sql
 var attentionIdentitySchema string
 
+//go:embed migrations/024.sql
+var removeConsoleImportSchema string
+
 // Clock separates lease ticks from persisted wall-clock expiries. Tick must be monotonic
 // within a Store's lifetime; client timestamps never participate in lease decisions.
 type Clock interface {
@@ -369,6 +372,11 @@ func openDatabase(filename string, clock Clock, driverName string) (*Store, erro
 				if _, err := t.exec(q); err != nil {
 					return err
 				}
+			}
+		}
+		if version < 24 {
+			if _, err := t.exec(removeConsoleImportSchema); err != nil {
+				return err
 			}
 		}
 		// A reduced shell baseline does not cross a hub start (ADR 018). An older hub that ran

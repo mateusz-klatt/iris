@@ -11,7 +11,7 @@ that gate opens. A missing key must close the console while agents keep working.
 The existing key helper creates a missing file, so ordinary startup cannot use
 it as evidence of an explicit activation.
 
-The fresh-hub verification step is superseded by [ADR 020](020-named-login-only.md); PR 2 is decided but not yet implemented.
+The fresh-hub verification step is superseded by [ADR 020](020-named-login-only.md); PR 2 implements fresh-hub setup through `create`.
 
 ## Decision
 
@@ -21,7 +21,7 @@ The fresh-hub verification step is superseded by [ADR 020](020-named-login-only.
    Authenticated machine diagnostic uploads and agent routes keep their existing
    authority. The owner may create, recover or import accounts while the console
    is closed.
-   Import independent of the gate is superseded by [ADR 020](020-named-login-only.md); PR 2 is not yet implemented.
+   Import independent of the gate is superseded by [ADR 020](020-named-login-only.md); PR 2 implements this removal.
 2. Startup only loads the independent protected console key. By default it is
    `<database>.console.key`; `--console-key-file` selects another hub-local file.
    Missing, unreadable, malformed or reused owner-token material leaves the
@@ -76,7 +76,7 @@ The fresh-hub verification step is superseded by [ADR 020](020-named-login-only.
    needs no secret, so whoever deployed performs it. Agents may prepare and
    rehearse; they must not activate real accounts on the owner's behalf or
    receive secrets in chat.
-   The import steps are superseded by [ADR 020](020-named-login-only.md); PR 2 is not yet implemented.
+   The import steps are superseded by [ADR 020](020-named-login-only.md); PR 2 implements this removal.
 
 ## Trust and recovery limits
 

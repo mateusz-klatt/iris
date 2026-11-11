@@ -63,14 +63,28 @@ func (h *Hub) ownerConsoleAccount(w http.ResponseWriter, r *http.Request, reset 
 		return
 	}
 	var account store.ConsoleAccount
+	prepareKey := false
 	if reset {
 		account, err = h.store.RecoverConsoleOperator(r.Context(), before, hash)
 	} else {
-		account, err = h.store.ProvisionConsoleOperator(r.Context(), store.ConsoleAccountInput{Username: input.Username, PasswordHash: hash})
+		account, prepareKey, err = h.store.ProvisionConsoleOperatorWithActivation(r.Context(), store.ConsoleAccountInput{Username: input.Username, PasswordHash: hash}, h.consoleKeyMissing)
 	}
 	if err != nil {
 		writeError(w, err)
 		return
 	}
-	writeJSON(w, map[string]any{"account": account})
+	if reset {
+		writeJSON(w, map[string]any{"account": account})
+		return
+	}
+	if prepareKey {
+		if h.consoleActivate == nil || h.consoleActivate() != nil {
+			writeError(w, &store.Error{Code: "bad_request", Message: "operator created; console key could not be prepared; console remains closed; use activate to retry"})
+			return
+		}
+	}
+	// Creation committed an enabled operator. An existing usable key can make
+	// the next startup ready even when this command prepared no key.
+	restartRequired := len(h.console.key) == 0 && (prepareKey || (h.consoleKeyAvailable != nil && h.consoleKeyAvailable()))
+	writeJSON(w, map[string]any{"account": account, "account_created": true, "key_prepared": prepareKey, "restart_required": restartRequired})
 }
