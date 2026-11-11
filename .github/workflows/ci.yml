@@ -470,6 +470,183 @@ jobs:
               raise AssertionError("Proof guard accepted extra signing secrets")
           print("signing-proof.yml: extra-signing-secrets mutation rejected")
           PY
+      - name: The macOS proof is manual, confines Apple secrets and verifies both binaries
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from copy import deepcopy
+          import re
+          import yaml
+
+          pins = {
+              "actions/checkout": "3d3c42e5aac5ba805825da76410c181273ba90b1",
+              "actions/setup-node": "949feb2413d6458794dcd2491c4babbbce0c15c1",
+              "actions/setup-go": "40f1582b2485089dde7abd97c1529aa768e1baff",
+              "actions/upload-artifact": "ea165f8d65b6e75b540449e92b4886f43607fa02",
+              "actions/download-artifact": "9000827ccba6bdab643e8b6fd33ac0654aef8333",
+              "goreleaser/goreleaser-action": "a4f02ab5355a589de60d917a659ce617ed19b3de",
+          }
+          secret_names = ["MACOS_SIGN_P12", "MACOS_SIGN_PASSWORD", "MACOS_NOTARY_ISSUER_ID", "MACOS_NOTARY_KEY_ID", "MACOS_NOTARY_KEY"]
+          def expression(value):
+              return "$" + "{{ " + value + " }}"
+
+          def named(job, name):
+              matches = [s for s in job["steps"] if s.get("name") == name]
+              assert len(matches) == 1, name
+              return matches[0]
+
+          def check(proof):
+              assert proof[True] == {"workflow_dispatch": None}
+              assert proof["permissions"] == {"contents": "read"}
+              assert proof["concurrency"] == {"group": "macos-signing-proof", "cancel-in-progress": False}
+              jobs = proof["jobs"]
+              assert set(jobs) == {"web", "sign", "verify"}
+              assert jobs["sign"]["needs"] == "web"
+              assert jobs["verify"]["needs"] == "sign"
+              dumped = yaml.safe_dump(proof)
+              assert "certum_" not in dumped.casefold()
+              assert not re.search(r"^\s*(environment|continue-on-error):", dumped, re.M)
+              assert "always()" not in dumped
+              for name, job in jobs.items():
+                  assert job["if"] == "github.repository == 'mateusz-klatt/iris' && github.ref == 'refs/heads/main'"
+                  assert job["runs-on"] == ("macos-latest" if name == "verify" else "ubuntu-latest")
+                  assert job["permissions"] == ({} if name == "verify" else {"contents": "read"})
+                  for step in job["steps"]:
+                      if "uses" in step:
+                          action, revision = step["uses"].split("@")
+                          assert revision == pins[action]
+                      if step.get("uses", "").startswith("actions/checkout@"):
+                          assert step["with"]["persist-credentials"] is False
+                          assert step["with"]["ref"] == expression("github.sha")
+                  if name != "verify":
+                      assert job["outputs"] == {"artifact-id": expression("steps.upload.outputs.artifact-id")}
+                      uploads = [s for s in job["steps"] if s.get("uses", "").startswith("actions/upload-artifact@")]
+                      assert len(uploads) == 1
+                      assert uploads[0] == job["steps"][-1]
+                      assert uploads[0]["id"] == "upload"
+                      assert uploads[0]["with"]["name"].endswith(expression("github.run_id") + "-" + expression("github.run_attempt"))
+                      assert uploads[0]["with"]["retention-days"] == 1
+                      assert uploads[0]["with"]["if-no-files-found"] == "error"
+              assert jobs["web"]["steps"][1]["with"] == {"node-version": 26, "cache": "npm", "cache-dependency-path": "web/package-lock.json"}
+              assert jobs["web"]["steps"][2]["run"] == "make web"
+              assert jobs["web"]["steps"][-1]["with"]["path"] == "internal/webui/dist"
+              sign = jobs["sign"]
+              assert sign["steps"][0]["with"]["fetch-depth"] == 0
+              assert sign["steps"][2]["with"] == {"go-version-file": "go.mod"}
+              assert sign["steps"][3]["with"] == {"version": "v2.20.0", "install-only": True}
+              signing = named(sign, "Build, sign and notarize the snapshot")
+              assert signing["env"] == {**{n: expression("secrets." + n) for n in secret_names}, "WEB_DIST": expression("runner.temp") + "/webui-dist"}
+              assert "set -euo pipefail" in signing["run"]
+              assert "for credential in " + " ".join(secret_names) + "; do" in signing["run"]
+              assert 'if [ -z "${!credential}" ]; then' in signing["run"]
+              assert "exit 1" in signing["run"]
+              assert signing["run"].splitlines()[-1] == 'goreleaser release --snapshot --clean --skip=docker,sbom,sign,publish 2>&1 | tee "$RUNNER_TEMP/macos-signing-proof.log"'
+              outside_signing = deepcopy(proof)
+              named(outside_signing["jobs"]["sign"], "Build, sign and notarize the snapshot").pop("env")
+              assert "secrets" not in yaml.safe_dump(outside_signing).casefold(), "Secrets outside signing step env"
+              acceptance = named(sign, "Require Apple acceptance for both binaries")["run"]
+              for policy in [
+                  '("iris_darwin_amd64_v1", "iris_darwin_arm64_v8.0")',
+                  'binary = f"dist/{target}/iris"',
+                  r'if not re.search(r"\bnotarized\s+binary=" + re.escape(binary) + r"(?:\s|$)", log):',
+                  'raise SystemExit',
+                  'GITHUB_STEP_SUMMARY',
+              ]:
+                  assert policy in acceptance, policy
+              assert sign["steps"][-1]["with"]["path"].splitlines() == ["dist/iris_darwin_amd64_v1/iris", "dist/iris_darwin_arm64_v8.0/iris"]
+              for name, source, path in [("sign", "web", "webui-dist"), ("verify", "sign", "macos-proof")]:
+                  downloads = [s["with"] for s in jobs[name]["steps"] if s.get("uses", "").startswith("actions/download-artifact@")]
+                  assert downloads == [{"artifact-ids": expression(f"needs.{source}.outputs.artifact-id"), "path": expression("runner.temp") + "/" + path}]
+              verify = jobs["verify"]
+              assert len(verify["steps"]) == 2
+              native = named(verify, "Verify both signatures and run the arm64 binary")["run"]
+              for policy in [
+                  'set -euo pipefail',
+                  'test "$(uname -m)" = arm64',
+                  'test "$(find . -type f | LC_ALL=C sort)" = "$(printf \'%s\\n\' ./iris_darwin_amd64_v1/iris ./iris_darwin_arm64_v8.0/iris)"',
+                  'for target in iris_darwin_amd64_v1 iris_darwin_arm64_v8.0; do',
+                  'binary="./$target/iris"',
+                  'chmod +x "$binary"',
+                  'codesign --verify --strict --verbose=2 "$binary" 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"',
+                  'codesign -dv --verbose=4 "$binary" 2>&1 | tee "$RUNNER_TEMP/macos-signature.txt" | tee -a "$GITHUB_STEP_SUMMARY"',
+                  "grep -Fx 'Authority=Developer ID Application: Mateusz Klatt (26MP7QQP95)'",
+                  "grep -Fx 'TeamIdentifier=26MP7QQP95'",
+                  r"grep -E '^CodeDirectory .*flags=.*\(.*runtime.*\)'",
+                  "grep -E '^Timestamp=.+$'",
+                  'spctl -a -vvv -t install "$binary" 2>&1 | tee "$RUNNER_TEMP/macos-assessment.txt" | tee -a "$GITHUB_STEP_SUMMARY"',
+                  'grep -Fx "$binary: accepted"',
+                  "grep -Fx 'source=Notarized Developer ID'",
+                  './iris_darwin_arm64_v8.0/iris version 2>&1 | tee -a "$GITHUB_STEP_SUMMARY"',
+              ]:
+                  assert policy in native, policy
+
+          proof = yaml.safe_load(open(".github/workflows/macos-signing-proof.yml"))
+          check(proof)
+          mutations = [
+              ((True,), {"push": None}),
+              (("permissions",), {"contents": "write"}),
+              (("concurrency", "cancel-in-progress"), True),
+              (("jobs", "sign", "needs"), []),
+              (("jobs", "verify", "needs"), "web"),
+              (("jobs", "verify", "runs-on"), "ubuntu-latest"),
+              (("jobs", "sign", "continue-on-error"), True),
+              (("jobs", "sign", "environment"), "signing"),
+              (("jobs", "web", "steps", -1, "with", "path"), "dist/*"),
+              (("jobs", "sign", "steps", -1, "with", "path"), "dist/*"),
+              (("jobs", "sign", "steps", 3, "with", "version"), "latest"),
+              (("jobs", "sign", "steps", 3, "with", "install-only"), False),
+          ]
+          for name, job in proof["jobs"].items():
+              mutations += [(("jobs", name, "if"), "always()"), (("jobs", name, "permissions"), {"contents": "read", "id-token": "write"})]
+              for i, step in enumerate(job["steps"]):
+                  path = ("jobs", name, "steps", i)
+                  if "uses" in step:
+                      mutations.append((path + ("uses",), step["uses"].split("@")[0] + "@main"))
+                  if step.get("uses", "").startswith("actions/checkout@"):
+                      mutations.append((path + ("with", "persist-credentials"), True))
+                  if step.get("uses", "").startswith("actions/download-artifact@"):
+                      mutations.append((path + ("with", "artifact-ids"), "1,2"))
+                  if step.get("uses", "").startswith("actions/upload-artifact@"):
+                      mutations += [(path + ("with", "retention-days"), 90), (path + ("with", "name"), "proof")]
+          for path, reference in [
+              (("env",), "secrets.MACOS_NOTARY_KEY"),
+              (("jobs", "web", "env"), "secrets.macos_sign_p12"),
+              (("jobs", "sign", "env"), "toJSON(secrets)"),
+              (("jobs", "verify", "env"), "secrets[format('MACOS_{0}', 'NOTARY_KEY')]"),
+              (("jobs", "sign", "steps", 0, "env"), "secrets.MACOS_SIGN_PASSWORD"),
+              (("jobs", "verify", "steps", 0, "env"), "toJSON(secrets)"),
+          ]:
+              mutations.append((path, {"LEAK": expression(reference)}))
+          signing_path = ("jobs", "sign", "steps", 4)
+          signing = proof["jobs"]["sign"]["steps"][4]
+          mutations += [
+              (signing_path + ("env", "LEAK"), expression("secrets.CERTUM_OTP")),
+              (signing_path + ("env", "LEAK"), expression("secrets.GITHUB_TOKEN")),
+              (signing_path + ("env", "LEAK"), expression("toJSON(secrets)")),
+          ]
+          for original, replacement in [("--snapshot ", ""), ("docker,sbom,sign,publish", "docker,sbom,sign,publish,notarize"), ("set -euo pipefail", "set -eu"), ('if [ -z "${!credential}" ]; then', 'if false; then')]:
+              mutations.append((signing_path + ("run",), signing["run"].replace(original, replacement)))
+          acceptance = proof["jobs"]["sign"]["steps"][5]["run"]
+          for original in ["iris_darwin_arm64_v8.0", "notarized", "raise SystemExit"]:
+              mutations.append((("jobs", "sign", "steps", 5, "run"), acceptance.replace(original, "omitted")))
+          native = proof["jobs"]["verify"]["steps"][-1]["run"]
+          for original in ["set -euo pipefail", 'test "$(uname -m)" = arm64', "for target in iris_darwin_amd64_v1 iris_darwin_arm64_v8.0; do", 'chmod +x "$binary"', "--strict", "codesign -dv --verbose=4", "Authority=Developer ID Application: Mateusz Klatt (26MP7QQP95)", "TeamIdentifier=26MP7QQP95", "runtime", "Timestamp", "spctl -a -vvv -t install", "$binary: accepted", "source=Notarized Developer ID", "./iris_darwin_arm64_v8.0/iris version", "GITHUB_STEP_SUMMARY"]:
+              mutations.append((("jobs", "verify", "steps", -1, "run"), native.replace(original, "omitted")))
+          for path, value in mutations:
+              mutated = deepcopy(proof)
+              target = mutated
+              for key in path[:-1]:
+                  target = target[key]
+              target[path[-1]] = value
+              try:
+                  check(mutated)
+              except (AssertionError, KeyError):
+                  pass
+              else:
+                  raise AssertionError(f"macOS proof guard accepted mutation at {path}")
+          print(f"macos-signing-proof.yml: real workflow passed; all {len(mutations)} mutations rejected")
+          PY
       - name: Run the image as non-root on a fresh named volume
         shell: bash
         run: |
