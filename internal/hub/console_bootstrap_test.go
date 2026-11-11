@@ -2,14 +2,87 @@ package hub
 
 import (
 	"bytes"
+	"database/sql"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/mateusz-klatt/iris/internal/config"
 	"github.com/mateusz-klatt/iris/internal/consoleauth"
 )
+
+func TestFreshOwnerCreateAuditsOnlyAfterKeyPublication(t *testing.T) {
+	for _, outcome := range []string{"success", "key-failure", "audit-failure"} {
+		t.Run(outcome, func(t *testing.T) {
+			h, server, filename := consoleSetup(t)
+			db, err := sql.Open("sqlite", filename)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = db.Close() }()
+			assertAudit := func(action string, want int) {
+				t.Helper()
+				var count int
+				if err := db.QueryRow(`SELECT COUNT(*) FROM ConsoleAction WHERE actor_kind='owner' AND actor_account_id IS NULL AND target_account_id=(SELECT id FROM ConsoleAccount WHERE username='fresh operator') AND action=? AND outcome='accepted'`, action).Scan(&count); err != nil || count != want {
+					t.Fatalf("%s audit count = %d, want %d: %v", action, count, want, err)
+				}
+			}
+			if outcome == "audit-failure" {
+				if _, err = db.Exec(`CREATE TRIGGER fail_prepared_audit BEFORE INSERT ON ConsoleAction WHEN NEW.action='activation_prepared' BEGIN SELECT RAISE(ABORT,'private audit diagnostic'); END`); err != nil {
+					t.Fatal(err)
+				}
+			}
+			keyPath := filepath.Join(t.TempDir(), "console.key")
+			if err = h.ConfigureConsole(nil, func() bool { return true }, nil, func() error {
+				// An independent connection sees the committed provisioning audit,
+				// but no preparation record while the key still does not exist.
+				assertAudit("owner_provision", 1)
+				assertAudit("activation_prepared", 0)
+				if _, err := os.Stat(keyPath); !errors.Is(err, os.ErrNotExist) {
+					t.Fatal("key existed before publication")
+				}
+				if outcome == "key-failure" {
+					return errors.New("private key diagnostic")
+				}
+				_, err := config.ConsoleKey(keyPath)
+				return err
+			}); err != nil {
+				t.Fatal(err)
+			}
+			status, wantPrepared := http.StatusBadRequest, 0
+			if outcome == "success" {
+				status, wantPrepared = http.StatusOK, 1
+			}
+			w := ownerAccountRequest(t, h, server, "/v1/admin/console/accounts", activationPayload("fresh operator", consoleTestPassword), "test-secret", status)
+			assertAudit("owner_provision", 1)
+			assertAudit("activation_prepared", wantPrepared)
+			if len(h.console.key) != 0 || strings.Contains(w.Body.String(), "private") {
+				t.Fatal("create hot-opened the console or exposed private diagnostics")
+			}
+			if outcome == "success" {
+				if result := consoleJSON(t, w); result["key_prepared"] != true || result["restart_required"] != true {
+					t.Fatal("published and audited key was not reported")
+				}
+			} else if !strings.Contains(w.Body.String(), "operator created;") || strings.Contains(w.Body.String(), `"key_prepared":true`) {
+				t.Fatal("failed preparation or audit reported success or hid the committed operator")
+			}
+			if outcome == "key-failure" {
+				if _, err := os.Stat(keyPath); !errors.Is(err, os.ErrNotExist) {
+					t.Fatal("failed key creation left a key")
+				}
+			} else if key, err := config.LoadConsoleKey(keyPath); err != nil || len(key) != 32 {
+				t.Fatal("successful publication did not retain a usable key", err)
+			}
+			if outcome == "audit-failure" && !strings.Contains(w.Body.String(), "console key prepared; activation audit could not be recorded; restart required") {
+				t.Fatal("audit failure hid the published key and required restart")
+			}
+		})
+	}
+}
 
 func createFreshOperator(t *testing.T, h *Hub, name string, status int) *httptest.ResponseRecorder {
 	t.Helper()

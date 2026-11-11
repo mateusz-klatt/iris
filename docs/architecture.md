@@ -615,10 +615,13 @@ state and explicit repository grants.
 [ADR 020](adr/020-named-login-only.md) removes the account importer and scrypt
 verification. Only Argon2id passwords are accepted; stored hashes are never
 converted. Owner `create` on a hub with no console account and no console key
-makes an operator and records `owner_provision` and `activation_prepared` in one
-transaction. It prepares the key only after commit and reports the account
+makes an operator and records `owner_provision` in one transaction. It prepares
+the key only after commit, then records `activation_prepared` in a separate
+transaction only after key publication succeeds, and reports the account
 creation, key preparation and required restart. A key preparation failure leaves
-the operator without a key for recovery through `activate`. On every other hub `create` only
+the operator without a key for recovery through `activate` and no preparation
+audit row. Key publication and its audit are not atomic: an audit failure or
+process exit can leave a usable key without that row. On every other hub `create` only
 makes an account; an account without a key and a key without an account do not
 trigger key preparation. Migration 024 drops only the two import ledgers;
 accounts, grants, sessions and historical owner audit rows remain.

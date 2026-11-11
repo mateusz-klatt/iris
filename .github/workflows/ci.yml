@@ -733,7 +733,7 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          fetch-depth: 0 # gitleaks reads the whole history
+          fetch-depth: 0 # both PR endpoints and main's full history must be present
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
@@ -741,6 +741,8 @@ jobs:
       # so each is named.
       - run: go test -cover ./.github/covermerge ./.github/pincheck
       - run: make check-all
+        env:
+          GITLEAKS_LOG_OPTS: ${{ github.event_name == 'pull_request' && format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || '--all' }}
   goreleaser-check:
     runs-on: ubuntu-latest
     steps:

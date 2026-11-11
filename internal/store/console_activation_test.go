@@ -148,7 +148,7 @@ func TestPrepareConsoleActivationRefusesUnusableOrChangedOperator(t *testing.T) 
 }
 
 func TestConsoleActivationStorageFailuresRollbackAndRetry(t *testing.T) {
-	for _, operation := range []string{"inspect", "prepare"} {
+	for _, operation := range []string{"inspect", "prepare", "record-prepared"} {
 		t.Run(operation, func(t *testing.T) {
 			s, _, file := testStore(t)
 			operator := newSessionAccount(t, s, "operator", "operator")
@@ -160,13 +160,16 @@ func TestConsoleActivationStorageFailuresRollbackAndRetry(t *testing.T) {
 					enabled, err := s.HasEnabledConsoleOperator(t.Context())
 					return ConsoleAccount{}, enabled, err
 				}
+				if operation == "record-prepared" {
+					return ConsoleAccount{}, false, s.RecordConsoleActivationPrepared(t.Context(), operator.ID)
+				}
 				account, err := s.PrepareConsoleActivation(t.Context(), operator)
 				return account, false, err
 			}
 			fault := installFaultDriver(t, s, file)
 			fault.discover = true
 			_, _, err := invoke()
-			if (operation == "prepare" && !errors.Is(err, errStorageFault)) || (operation == "inspect" && err != nil) {
+			if (operation != "inspect" && !errors.Is(err, errStorageFault)) || (operation == "inspect" && err != nil) {
 				t.Fatal("storage discovery lost the intended transaction boundary", err)
 			}
 			trace := append([]string(nil), fault.trace...)
@@ -186,6 +189,9 @@ func TestConsoleActivationStorageFailuresRollbackAndRetry(t *testing.T) {
 			account, enabled, err := invoke()
 			if err != nil || (operation == "inspect" && !enabled) || (operation == "prepare" && (account.ID != operator.ID || account.PasswordHash != "" || account.LoginKey != "" || rowCount(t, s, "SELECT COUNT(*) FROM ConsoleSession") != 0)) {
 				t.Fatal("storage retry did not safely complete", err)
+			}
+			if operation == "record-prepared" && (rowCount(t, s, "SELECT COUNT(*) FROM ConsoleAction WHERE actor_kind='owner' AND actor_account_id IS NULL AND target_account_id=? AND action='activation_prepared' AND outcome='accepted'", operator.ID) != 1 || rowCount(t, s, "SELECT COUNT(*) FROM ConsoleSession") != 2) {
+				t.Fatal("preparation audit retry omitted attribution or changed sessions")
 			}
 		})
 	}

@@ -80,8 +80,8 @@ func (s *Store) createConsoleAccount(ctx context.Context, input ConsoleAccountIn
 
 // ProvisionConsoleOperatorWithActivation checks for an empty account database
 // and a missing key within the creation transaction. keyMissing only inspects
-// the key's presence; the hub prepares it after a successful commit. The audit
-// records preparation eligibility, not successful key publication or activation.
+// the key's presence; the hub prepares it after a successful commit, then records
+// successful preparation separately. This transaction audits only provisioning.
 func (s *Store) ProvisionConsoleOperatorWithActivation(ctx context.Context, input ConsoleAccountInput, keyMissing func() bool) (ConsoleAccount, bool, error) {
 	if !consoleNewHash(input.PasswordHash) {
 		return ConsoleAccount{}, false, fail("bad_request", "unsupported new password record")
@@ -135,12 +135,7 @@ func (s *Store) createConsoleAccountWithActivation(ctx context.Context, input Co
 			return err
 		}
 		if owner {
-			if err = t.consoleOwnerAction(accountID, "owner_provision"); err != nil {
-				return err
-			}
-			if prepareKey {
-				return t.consoleOwnerAction(accountID, "activation_prepared")
-			}
+			return t.consoleOwnerAction(accountID, "owner_provision")
 		}
 		return nil
 	})

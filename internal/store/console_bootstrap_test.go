@@ -32,10 +32,8 @@ func TestFreshConsoleProvisioningRollsBackEveryBoundaryAndRetries(t *testing.T) 
 	if err != nil || !prepare || account.Role != "operator" || !account.Enabled() {
 		t.Fatal("retry did not provision the fresh operator", err)
 	}
-	for _, action := range []string{"owner_provision", "activation_prepared"} {
-		if rowCount(t, s, "SELECT COUNT(*) FROM ConsoleAction WHERE actor_kind='owner' AND actor_account_id IS NULL AND target_account_id=? AND action=? AND outcome='accepted'", account.ID, action) != 1 {
-			t.Fatal("fresh provisioning omitted owner audit", action)
-		}
+	if rowCount(t, s, "SELECT COUNT(*) FROM ConsoleAction WHERE actor_kind='owner' AND actor_account_id IS NULL AND target_account_id=? AND action='owner_provision' AND outcome='accepted'", account.ID) != 1 || rowCount(t, s, "SELECT COUNT(*) FROM ConsoleAction WHERE action='activation_prepared'") != 0 {
+		t.Fatal("fresh provisioning omitted its audit or claimed key preparation")
 	}
 }
 
@@ -53,8 +51,8 @@ func TestFreshConsoleProvisioningRechecksAccountsUnderConcurrency(t *testing.T) 
 		})
 	}
 	wg.Wait()
-	if first, second := <-prepared, <-prepared; first == second || rowCount(t, s, "SELECT COUNT(*) FROM ConsoleAccount") != 2 || rowCount(t, s, "SELECT COUNT(*) FROM ConsoleAction WHERE action='activation_prepared'") != 1 {
-		t.Fatal("concurrent creates prepared more or fewer than one activation")
+	if first, second := <-prepared, <-prepared; first == second || rowCount(t, s, "SELECT COUNT(*) FROM ConsoleAccount") != 2 || rowCount(t, s, "SELECT COUNT(*) FROM ConsoleAction WHERE action='activation_prepared'") != 0 {
+		t.Fatal("concurrent creates misreported eligibility or claimed key preparation")
 	}
 }
 
