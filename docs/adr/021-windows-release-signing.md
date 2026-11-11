@@ -1,6 +1,7 @@
-# 021: Prove Certum Windows signing before release integration
+# 021: Prove and integrate Certum Windows signing
 
-Status: accepted by fleet vote 4; the owner's decisions of 2026-11-11 are recorded below.
+Status: accepted by fleet vote 4, amended by vote 7 on 2026-11-11 (four of four,
+1A and 2A); the owner's decisions of 2026-11-11 are recorded below.
 
 ## Problem
 
@@ -11,10 +12,10 @@ couple that uncertainty to the first release.
 
 ## Decision
 
-Use two pull requests. The first adds the separate `signing-proof.yml` workflow,
-ADR and CI guards. It leaves `release.yml` and `.goreleaser.yaml` unchanged. Only
-after a successful proof and a further vote does the second integrate signing
-with the existing GoReleaser draft release. This supersedes D15's SignPath-first
+Use two pull requests. The first added the separate `signing-proof.yml` workflow,
+ADR and CI guards, leaving `release.yml` and `.goreleaser.yaml` unchanged. After a
+successful proof and vote 7, the second integrates signing with the existing
+GoReleaser draft release, as amended below. This supersedes D15's SignPath-first
 order and its placement of the TOTP seed in environment secrets.
 
 `CERTUM_EMAIL` and `CERTUM_OTP` stay at repository level. The proof accepts only
@@ -35,8 +36,9 @@ The jobs have three responsibilities:
    checked-out Iris commit, with `CGO_ENABLED=0`. There is no separate unsigned-input
    check because the inputs are fresh `go build` outputs of the same job.
    The job declares no environment. There is no environment gate. Only the signing
-   step receives the two Certum secrets. One invocation passes both file paths
-   positionally, submitting each once. `XDG_RUNTIME_DIR` points the signer's cache at a fixed directory
+   step receives the two Certum secrets. It runs `iris-release-tools sign-windows`
+   twice, once per file in separate processes, submitting each once. The helper
+   is built from the same Iris checkout. `XDG_RUNTIME_DIR` points the signer's cache at a fixed directory
    under the runner's temporary directory. There is no cleanup step because the
    hosted VM is discarded after the job and the owner's rule bars deletion through
    variable paths. The two signed files are
@@ -58,8 +60,8 @@ The jobs have three responsibilities:
 At the pinned revision ssign accepts positional file paths, has no `sign`
 subcommand or certificate-inspection command, and chooses the first cloud card.
 It can follow absolute task links with its bearer token, and authentication
-errors can contain sensitive response material. Therefore the stock proof
-discards all ssign stdout and stderr and prints only a fixed failure message.
+errors can contain sensitive response material. Therefore the Go helper
+discards all ssign stdout and stderr and prints only fixed messages.
 Verification checks the certificate after signing, so choosing a wrong card can
 already have spent quota.
 
@@ -70,8 +72,8 @@ The preferred hardened upstream revision checks the expected certificate's DER
 SHA-256 after loading either a fresh or cached session, before a signing request;
 restricts authenticated task links to Certum's HTTPS origin; and sanitizes
 authentication errors. It must be selected by full commit SHA from upstream or
-an owner-controlled fork, with the same revision proved before release
-integration. A carried patch is forbidden. A review must identify exactly what
+an owner-controlled fork, with the same revision proved before replacing the
+pinned signer. A carried patch is forbidden. A review must identify exactly what
 was read: ssign's own code and the locked dependencies that handle networking or
 secrets. Preparation read the pinned signer's CLI, manifests and lockfile,
 authentication, session/cache, card, task, signing, OTP and timestamp paths;
@@ -79,6 +81,83 @@ selected client, redirect, retry, cookie, body and multipart paths in locked
 `reqwest` 0.13.5; and the `zeroize` 1.9.0 implementation. This was a targeted
 review, not an exhaustive audit of transitive dependencies. Review of a hardened
 revision must state its own coverage of signer code and locked dependencies.
+
+## Release integration amendment, vote 7
+
+Run 43028728881 on main 658cfc8 passed all three proof jobs: the signer was built
+with Rust 1.99.1 and `--locked`, and Windows accepted both timestamped signatures
+from the pinned certificate. The stock ssign revision above is accepted as the
+interim for release integration. That run passed both paths to one ssign process.
+It did not measure the helper or cached-session reuse across processes. Vote 7
+requires the revised proof to run once after merge, spending two signatures,
+before any rc1 tag. It exercises two separate helper processes with the
+allowlisted child environment. A passing run alone does not establish that both
+signs happened within one TOTP window. The acceptance record must include the
+signing step's UTC start and end from the run's job-step timestamps, converted
+to Unix seconds as `startUnix` and `endUnix`, and demonstrate
+`floor(startUnix/30) == floor(endUnix/30)`. A step crossing a 30-second boundary
+is inconclusive for this condition. There is no automatic retry. This
+measurement is pending.
+
+The tag workflow shares `certum-signing` concurrency with the proof, with
+`cancel-in-progress: false`, and keeps the existing repository and tag checks.
+Its jobs have these responsibilities:
+
+1. `web` builds the console, and `signer` builds the pinned stock ssign with Rust
+   1.99.1 and `cargo build --release --locked`. Both have read-only tokens and no
+   secrets. The signer hash goes to the summary. Attempt-specific artifacts
+   transfer the console and executable by artifact id, outside the release checkout.
+2. `release` builds `cmd/iris-release-tools` with `CGO_ENABLED=0` once, then runs
+   GoReleaser v2.20.0 with `--parallelism=1`. The `iris` post-build hook invokes
+   `sign-windows` for each Windows tag target, before archives, checksums and
+   cosign. Non-Windows builds and all snapshots render an empty hook. A Windows
+   tag build with a missing helper or credentials fails closed. The existing
+   macOS notarization configuration and `release.draft: true` stay unchanged.
+3. `verify-windows` runs on Windows with a read-only token and no secrets after
+   `release` succeeds. Its handoff contains only the two configured Windows ZIPs
+   and the untouched `checksums.txt` signed by cosign, retained for one day. It
+   downloads one artifact id with the action's digest verification. The Go helper
+   requires exactly those three files and one SHA-256 entry for each ZIP, compares
+   both ZIP hashes before extraction, rejects unsafe, duplicate or unexpected
+   members, requires `iris.exe`, `LICENSE` and `docs/guard.md`, and extracts only
+   `iris.exe` to fixed per-architecture paths. It checks PE machine types and
+   records the manifest, ZIP and executable hashes in the summary. Native checks
+   then require the same signtool exit-0, Authenticode, timestamp and certificate
+   pin policy as the proof. A failure is visible after the draft already exists.
+
+Only the GoReleaser step receives `GITHUB_TOKEN`, the two `CERTUM_*` secrets and
+the five `MACOS_*` secrets. GoReleaser, its hooks and the compiler inherit that
+step environment. The helper starts an absolute ssign path with an explicitly
+built environment containing only `CERTUM_EMAIL`, `CERTUM_OTP`, `XDG_RUNTIME_DIR`,
+`HOME` and `PATH`. Release-write and OIDC tokens, Apple secrets and GitHub
+command-file paths are absent from ssign's environment. The helper validates
+the target, credentials, signer path and input file, chmods the signer, and
+creates the cache directory with mode 0700. ssign keeps its session at
+`$XDG_RUNTIME_DIR/ssign/session.json`. Each helper invocation has a five-minute
+deadline, calls ssign once, discards both output streams and never retries.
+No cleanup step is added; the hosted runner is discarded after the job.
+
+The allowlist protects ssign's own environment, not the runner. Malicious code
+sharing the user and filesystem is not contained, and ssign still receives the
+long-lived TOTP seed. Serial hooks normally reuse the cached session; a cache
+failure can fail the second invocation. A failing GoReleaser target does not
+cancel the other targets, so a failed release can spend two signatures.
+Rerunning `release` signs again; rerunning only `verify-windows` signs nothing.
+There is no automatic retry.
+
+The tag, Rekor records, attestations and final Windows ZIP bytes in the handoff
+artifact are public before the owner publishes. Same-run verification checks
+those transferred bytes; it cannot prove that mutable draft assets remain the
+same. Under vote 7, holzera compares the draft's Windows ZIP hashes with the
+`verify-windows` record in #271's acceptance record; only the owner publishes.
+#271 derives its Windows procedure again after this integration merges.
+Publication, withdrawal, reviewers and rerun authorization stay in #271.
+
+Renew the thumbprint in both `signing-proof.yml` and `release.yml`, and update
+the CI guard's expected pin, when the certificate is renewed, by its expiry on
+2027-11-10. A wrong card, trust failure
+or timestamp failure is detected by native verification, after signing has
+already spent quota and, for a release, after the draft upload.
 
 ## Alternatives
 
@@ -96,7 +175,7 @@ revision must state its own coverage of signer code and locked dependencies.
 ## What this cannot do
 
 - The whole signing job is trusted. Step-scoped secrets are not process isolation.
-  In the planned release integration, GoReleaser, hooks and toolchains share a
+  In the release integration, GoReleaser, hooks and toolchains share a
   job with Certum and Apple secrets, OIDC identity and the release-write token.
 - A stolen TOTP seed can sign outside Actions until the owner revokes it at
   Certum. Deleting a GitHub secret does not revoke the seed.
@@ -112,6 +191,7 @@ revision must state its own coverage of signer code and locked dependencies.
   `release.draft: true`, so the run makes a draft release, and publishing it is
   the owner's step. The tag, the signatures in Rekor and the build attestation
   are public as soon as the run makes them, before anyone publishes the draft.
+  The verification handoff also exposes the final Windows ZIP bytes before publication.
 - rustup downloads the pinned toolchain version at run time from the Rust project's
   servers. Its integrity rests on rustup's own checks; no checksum is committed here.
 - Certum availability and quota can stop signing. A successful run costs two
@@ -162,7 +242,7 @@ revision must state its own coverage of signer code and locked dependencies.
    limit.
 8. Answered on 2026-11-11: allowing fleet dispatch accepted the stock ssign interim
    described above. A hardened replacement still requires review and another proof
-   before release integration.
+   before replacing the pinned signer.
 
 It is not known whether the account holds more than one cloud certificate. The stock
 signer picks the first one, and in run 43023491609 that was the open-source

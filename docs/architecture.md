@@ -829,33 +829,38 @@ reserve for any channel that needs a bare name.
 
 Stage 1 is prepared but inert. `.github/workflows/release.yml` runs only when the owner pushes a
 version tag in this repository, and builds a draft release with cosign keyless signatures of the
-checksums, an SBOM per archive and GitHub build provenance. Nothing is public until the owner
-publishes the draft, no image is pushed, and Homebrew, Scoop and winget stay skipped. CI checks the
-configuration and the SBOMs on every pull request; keyless signing needs a release's OIDC identity,
-so its first real run is the first tag.
+checksums, an SBOM per archive and GitHub build provenance. Only the owner publishes the draft.
+The tag, Rekor entries, attestations and the final Windows ZIP bytes in the verification handoff
+artifact are public before publication. No image is pushed, and Homebrew, Scoop and winget stay
+skipped. CI checks the configuration and the SBOMs on every pull request; keyless signing needs
+a release's OIDC identity, so its first real run is the first tag.
 
 Private release assets cannot serve package managers. The source repository need not be public
 for stage 1 if the assets are public somewhere, but GitHub attestations on this plan need a public
 attesting repository that truthfully built the artifact. Azure Artifact Signing is closed to
 individuals in the EU, and Iris has no company behind it.
 
-Windows signing tries SignPath Foundation first, after the first public release, because it is
-free. The certificate then names SignPath Foundation as publisher, and approval is a review that
-Iris may not pass while it has no users. The fallback is Certum Open Source Code Signing in the
-cloud, issued to the maintainer as "Open Source Developer" and limited to non-commercial
-distribution. CI would then hold a long-lived TOTP seed, so it stays in a GitHub environment with
-manual approval. Neither removes SmartScreen warnings at once, because reputation builds over
-time. A private key can no longer be delivered as a file, so a `.p12` in Azure Key Vault is not an
-option.
+[ADR 021](adr/021-windows-release-signing.md) adopts the owner's Certum cloud certificate,
+issued as "Open Source Developer", and repository-level secrets with no environment gate.
+Proof run 43028728881 on 658cfc8 verified both timestamped Windows signatures. Vote 7 adopts
+release integration and requires another proof after merge, through the Go helper in two
+separate signing processes, before an rc1 tag. Windows tag builds fail closed on missing signing
+configuration; Windows snapshots remain unsigned. GoReleaser signs before making archives,
+checksums and cosign signatures, with all targets serialized. A secret-free Windows job checks
+the handoff's original checksums, ZIP members, PE architectures, certificate pin and timestamps
+after the draft exists. Same-run evidence cannot establish that the mutable draft assets stay
+unchanged; holzera compares their Windows ZIP hashes with that evidence before the owner
+publishes, under #271.
 
-[ADR 021](adr/021-windows-release-signing.md) supersedes this Windows signing order and
-credential placement: first prove the owner's Certum cloud certificate in a separate,
-manually dispatched workflow, with repository-level secrets, before release integration.
+The helper gives ssign only the Certum email and TOTP seed, its cache directory, HOME and PATH.
+This environment allowlist does not isolate malicious code sharing the runner's user and
+filesystem. The release job, including GoReleaser, hooks and toolchains, is trusted as a whole.
+Signing does not remove SmartScreen warnings at once, because reputation builds over time.
 
-Until macOS binaries are notarized, Homebrew ships a prebuilt formula through GoReleaser's `brews`
-key, which v2.20 supports but deprecates, so it must be replaced before upgrading to v3. A cask is
-quarantined, and Gatekeeper would refuse an unsigned one. A formula avoids that mechanism but is
-not a substitute for notarization, and this is to be checked on a clean Mac. Package managers own
+Homebrew is configured through GoReleaser's `homebrew_casks`, with `skip_upload: true`.
+Keep uploads disabled until a real tag's CI run has signed and notarized the binaries and
+verification has passed. A cask quarantines its binary, so the local notarization measurement
+does not establish how a published download behaves on a clean Mac. Package managers own
 upgrades, and the binary never replaces itself.
 
 ### D16. Web UI
