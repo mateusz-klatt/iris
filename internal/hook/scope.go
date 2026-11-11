@@ -22,5 +22,7 @@ func (s *shellRun) setFull()                  { s.mu.Lock(); s.full = true; s.mu
 
 // shellScopeUnknown is what a reduced reconcile records when it sends nothing because the index
 // changed between its reads, or it or its gitlinks could not be read whole. Like a status past
-// its budget, it only skips that one reconciliation.
+// its budget, it only skips that one reconciliation; once the budget has passed, settle records
+// shellOverBudget instead. The text names only the index and stays as written, because saved
+// failures in hook-failures.log are graded by this exact text.
 const shellScopeUnknown = "reduced snapshot not taken: the index could not be read as one generation"

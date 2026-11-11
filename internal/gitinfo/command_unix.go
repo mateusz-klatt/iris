@@ -29,8 +29,9 @@ func stopDescendants(cmd *exec.Cmd) {
 // git's is refused instead of negated.
 //
 // The number stays that group's while git or anything in the group lives, so the signal
-// reaches that group or, once it is empty, nothing. Only a pid recycled between git's reaping
-// and this call, which os/exec makes at most once, could make it another group's.
+// reaches that group or, once it is empty, nothing. os/exec or a Stopper sends it, at most
+// once in all. Either can send it after git was reaped. Only a pid recycled between the reap
+// and this call could make it another group's.
 func stopGroup(pid int) error {
 	if pid <= 1 {
 		return errors.New("gitinfo: no process group to stop")

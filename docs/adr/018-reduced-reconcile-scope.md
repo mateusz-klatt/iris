@@ -270,5 +270,8 @@ after any hook exited.
 - What this cannot do: reach a process that left git's process group, or, on Windows, what the
   process Go started started itself, as before. A start that stalls delays the kill for as long as
   it stalls. When the hook's own deadline of 1.5 s ends the run first, the hook returns before the
-  shell path can send the kill. And the one signal os/exec sends can still come after git was
-  reaped, as before.
+  shell path can send the kill. The one signal can still come after git was reaped, whether
+  sent by os/exec or Stop. A git that ended by itself stays registered until it is removed after
+  Wait returns. Wait reaps git, then waits for its output to be copied. If the budget ends in
+  between, Stop can send the first and only signal to a group whose leader is already reaped.
+  It reaches another process group only if the number was recycled before that signal.

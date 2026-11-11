@@ -60,6 +60,12 @@ func (h *Hub) subscribeStreams() (*streamWakes, func()) {
 	}
 }
 
+// runStreamWakes connects two levels of change channel. Each notifying commit
+// closes and replaces the channel from Store.Changes. Only this worker waits
+// on it and takes its replacement at once, so commits during coalescing are
+// not lost. signal closes and replaces streamWakes.changed once per window
+// and on maintenance failure. Streams take streamWakes.Changes before reading,
+// so a signal between their read and wait is not lost (ADR 016, decision 4).
 func (h *Hub) runStreamWakes(ctx context.Context, w *streamWakes, changes <-chan struct{}) {
 	defer close(w.done)
 	ticks := time.NewTicker(time.Second)
