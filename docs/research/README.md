@@ -16,7 +16,9 @@ binary. Each one also reviewed the design from one assigned angle.
 | Kimi Code | 2.5.1 | Adapter architecture | [kimi.md](clients/kimi.md) |
 
 Reports are kept as written, apart from anonymised paths and a correction note at the top where
-a later measurement overruled a claim. Captured payloads are in `internal/hook/testdata/`.
+a later measurement overruled a claim. A commit hash in a report, or in an ADR that cites one,
+names the version that was measured. Some of those commits are no longer kept in the repository,
+such as `bc1eae9` and `df1d873`, so such a hash is a label, not a revision to check out. Captured payloads are in `internal/hook/testdata/`.
 `reference-schema.sql` is Codex's proposed model, on which `docs/architecture.md` D9 is based.
 
 The [shared-worktree experiment](shared-worktree.md) measures Claude and Codex running
