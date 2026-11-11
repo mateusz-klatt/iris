@@ -407,7 +407,7 @@ The owner decisions below are dated 2026-11-11; their implementation is **not ve
   Name presence does not validate values (`docs/release.md:239–248`; Windows use is **expected**, pending PR 2).
 - Inspect effective tag creation, update and deletion permissions, including legacy protection and bypass actors; record what is actually restricted. This is an inspection, not a request to change protections. Holzera-only cutting and main/deployment approval are fleet rules, not workflow enforcement (`.github/workflows/release.yml:6–17,37–44`).
 - Re-read `.github/workflows/release.yml` and `.goreleaser.yaml` at the approved SHA. Re-derive Windows steps, signer subject, pinned thumbprint, timestamp policy, jobs and asset inventory from merged PR 2.
-  Record a named verifier for every OS/architecture. Stop if signing is absent, skipped or unverifiable.
+  Record a named verifier for every OS/architecture. Stop if signing is absent or skipped. Unverifiable signing also blocks the cut, except for unavailable arm64 darwin measurements as described below.
 - Windows is **expected** in two steps: PR #268 adds `signing-proof.yml`, dispatched from main, building ssign from a pinned commit in a job without secrets; an Ubuntu sign job exposes the two Certum secrets in one step; a Windows verify job uses signtool, `Get-AuthenticodeSignature` and a pinned thumbprint.
   PR 2 later adds GoReleaser `--parallelism=1`, a Windows post-build signing hook and dependent `verify-windows` to the release workflow.
 - Neither Windows step is on this baseline (`.github/workflows/release.yml:1–77`, `.goreleaser.yaml:11–88`); PR #268 and PR 2 implementation are **not verified** here.
@@ -456,7 +456,8 @@ Expect 18 uploaded assets; GitHub source archive links are separate ([upload typ
 **Acceptance and evidence record**
 
 Record literal tag, approved SHA, merge/deployment evidence, release ID, run ID/attempt, console producer run/artifact ID/digest, installed tool versions, full asset inventory and each result below.
-Each platform has a named verifier. Unavailable measurements stay **not measured** and block acceptance; never report them as passed.
+Each platform has a named verifier. Unavailable measurements stay **not measured**; never report them as passed.
+Unavailable arm64 darwin `codesign`, `spctl` and `iris version` results do not by themselves block acceptance; the owner weighs that gap before publication. Other unavailable measurements block acceptance.
 Use Bash with `set -euo pipefail`, jq and an authenticated account with draft access. Record `gh version` and `cosign version`; these commands target gh 2.103.3 and cosign v3.1.4.
 Use a fresh download directory and stop on any failure. Operator versions are **not verified** until recorded; candidate verification is **not measured** ([gh flags](https://github.com/cli/cli/blob/63837fb778d6a39f02be0ce76ff89f2bc8d74bdc/pkg/cmd/attestation/verify/verify.go#L260-L268)).
 At cut time holzera uses the hand-filled approved SHA, after the stop/go record passes. First confirm `git remote get-url --push origin` names `mateusz-klatt/iris`:
@@ -514,7 +515,9 @@ done < checksums.txt
 
 Compare the complete inventory and prerelease flag with the approved configuration; require 18 assets/16 subjects only if still derived after PR 2.
 On Linux use `sha256sum -c checksums.txt` instead. Record signature, checksum and every provenance result; signatures do not establish that the source was approved.
-Extract each darwin archive separately. On native Intel and Apple silicon hosts run the commands below against each extracted binary. Require Developer ID Application: Mateusz Klatt (26MP7QQP95), TeamIdentifier `26MP7QQP95`, secure timestamp, hardened runtime and accepted Notarized Developer ID assessment (`docs/release.md:226–237`).
+Extract each darwin archive separately. Run the commands below against the amd64 binary on the owner's Intel Mac (x86_64).
+For arm64, run them on a GitHub `macos-latest` runner (Apple silicon), or record them as **not measured** for the owner to weigh before publishing the rc ([runner specifications](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#standard-github-hosted-runners-for-public-repositories)). No runner execution is measured here.
+For measured results, require Developer ID Application: Mateusz Klatt (26MP7QQP95), TeamIdentifier `26MP7QQP95`, secure timestamp, hardened runtime and accepted Notarized Developer ID assessment (`docs/release.md:226–237`).
 
 ```sh
 codesign -dv --verbose=4 ./iris
@@ -523,7 +526,7 @@ spctl -a -vvv -t install ./iris
 ./iris version
 ```
 
-For Gatekeeper, use a separate authenticated browser download. **Before extraction or execution**, compare that archive's SHA-256 with the already cosign-verified `checksums.txt`.
+For Gatekeeper, use a separate authenticated browser download of the darwin amd64 archive on the owner's Intel Mac. **Before extraction or execution**, compare that archive's SHA-256 with the already cosign-verified `checksums.txt`.
 Preserve quarantine; check `xattr -p com.apple.quarantine ./iris` before first execution. Record host, OS/architecture, network, assessment, prompts, output and any hang. A download without quarantine proves no quarantined-startup result (`docs/release.md:158–173,235–237`).
 Inspect all four Linux packages using explicit filenames; expected Debian Version `0.1.0~rc1`, RPM Version `0.1.0~rc1` and Release `1`, correct architectures, package `iris` and `/usr/bin/iris` ([deb metadata](https://github.com/goreleaser/nfpm/blob/db22372bfbddb6b2968ff71e9c25e6bb1a2355c2/deb/deb.go#L774-L783), [rpm version](https://github.com/goreleaser/nfpm/blob/db22372bfbddb6b2968ff71e9c25e6bb1a2355c2/rpm/rpm.go#L134-L145), [rpm release](https://github.com/goreleaser/nfpm/blob/db22372bfbddb6b2968ff71e9c25e6bb1a2355c2/rpm/builder.go#L44-L51)).
 
@@ -538,8 +541,8 @@ done
 
 On Windows, verify both extracted binaries with PR 2's re-derived signtool commands and `Get-AuthenticodeSignature .\iris.exe | Format-List Status,StatusMessage,SignerCertificate,TimeStamperCertificate`. Require `Valid`, the recorded signer subject/pinned thumbprint and timestamp for each.
 Missing/skipped/unverifiable signing blocks acceptance; the implementation and certificate identity are **not verified** on this baseline.
-Run `iris version` from each native binary (`.\iris.exe version` on Windows). Expect `0.1.0-rc1 (commit <approved-40-char-sha>; source clean; console unverified)`; record actual output. The console field proves neither freshness nor completeness (`.goreleaser.yaml:19–20`, `internal/buildinfo/buildinfo.go:47–61`, `docs/release.md:61–67`).
-Before publishing, the owner reviews the complete acceptance record: approved SHA/run, one complete draft, prerelease flag, tool verification, console artifact, all assets/checksums/provenance, both Apple notarizations/Gatekeeper measurements, both Windows signatures/verify job, package metadata and six native executions.
+Run `iris version` from each native binary (`.\iris.exe version` on Windows), with the arm64 darwin option above. Expect `0.1.0-rc1 (commit <approved-40-char-sha>; source clean; console unverified)`; record actual output. The console field proves neither freshness nor completeness (`.goreleaser.yaml:19–20`, `internal/buildinfo/buildinfo.go:47–61`, `docs/release.md:61–67`).
+Before publishing, the owner reviews the complete acceptance record: approved SHA/run, one complete draft, prerelease flag, tool verification, console artifact, all assets/checksums/provenance, both Apple notarizations, Intel Mac Gatekeeper measurements, both Windows signatures/verify job, package metadata and native execution results, including any **not measured** arm64 darwin checks.
 Only he publishes; a draft nobody publishes remains a draft until deleted.
 
 **Failure handling and take-back**
