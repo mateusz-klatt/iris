@@ -1,0 +1,128 @@
+name: Windows signing proof
+# Before any credentialed run, the owner must name a reviewed hardened upstream
+# revision or explicitly accept the stock interim in ADR 021. No session dispatches
+# this workflow or approves/bypasses its environment gate.
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency: {group: certum-signing, cancel-in-progress: false}
+jobs:
+  signer:
+    if: github.repository == 'mateusz-klatt/iris' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Le-Syl21/ssign
+          ref: f7ba7b2360a3e40bb8aa062d244d95c62a743b90 # v0.1.8, MIT
+          path: ssign
+          persist-credentials: false
+      - name: Build the pinned signer without credentials
+        working-directory: ssign
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal
+          cargo +1.99.1 build --release --locked
+          sha256sum target/release/ssign >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: certum-signer
+          path: ssign/target/release/ssign
+          if-no-files-found: error
+          retention-days: 1
+  sign:
+    if: github.repository == 'mateusz-klatt/iris' && github.ref == 'refs/heads/main'
+    needs: signer
+    runs-on: ubuntu-latest
+    # Owner step: add main to this environment's tag-only deployment policy.
+    environment: signing
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: certum-signer
+          path: ${{ runner.temp }}/signer
+      - name: Build two disposable Windows binaries
+        env:
+          CGO_ENABLED: "0"
+          GOOS: windows
+        # Fresh Go outputs are unsigned by construction; no separate unsigned check.
+        run: |
+          for arch in amd64 arm64; do
+            mkdir -p "$RUNNER_TEMP/windows/$arch"
+            GOARCH="$arch" go build -trimpath -o "$RUNNER_TEMP/windows/$arch/iris.exe" ./cmd/iris
+          done
+      - name: Sign each binary once
+        env:
+          CERTUM_EMAIL: ${{ secrets.CERTUM_EMAIL }}
+          CERTUM_OTP: ${{ secrets.CERTUM_OTP }}
+          XDG_RUNTIME_DIR: ${{ runner.temp }}/certum-signing
+        # ssign caches its session under this fixed temp directory. No cleanup step:
+        # the GitHub-hosted VM, including that directory, is discarded after the job.
+        # Stock ssign can expose authentication errors; discard both output streams.
+        run: |
+          umask 077
+          mkdir -p "$XDG_RUNTIME_DIR"
+          chmod 700 "$RUNNER_TEMP/signer/ssign"
+          if ! "$RUNNER_TEMP/signer/ssign" \
+            "$RUNNER_TEMP/windows/amd64/iris.exe" \
+            "$RUNNER_TEMP/windows/arm64/iris.exe" >/dev/null 2>&1; then
+            echo "::error::Certum signing failed; signer output withheld."
+            exit 1
+          fi
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: signed-windows-proof
+          path: |
+            ${{ runner.temp }}/windows/amd64/iris.exe
+            ${{ runner.temp }}/windows/arm64/iris.exe
+          if-no-files-found: error
+          retention-days: 1
+  verify:
+    if: github.repository == 'mateusz-klatt/iris' && github.ref == 'refs/heads/main'
+    needs: sign
+    runs-on: windows-latest
+    permissions: {}
+    env:
+      # Owner: commit the Thumbprint of the public signing certificate before a run.
+      EXPECTED_SIGNER_THUMBPRINT: ''
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: signed-windows-proof
+          path: ${{ runner.temp }}/windows
+      - name: Verify both signatures on Windows
+        shell: pwsh
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:EXPECTED_SIGNER_THUMBPRINT)) {
+            throw "Set EXPECTED_SIGNER_THUMBPRINT in signing-proof.yml from the owner's public certificate before running the proof."
+          }
+          $root = Join-Path $env:RUNNER_TEMP 'windows'
+          $expected = 'amd64/iris.exe', 'arm64/iris.exe'
+          $files = @(Get-ChildItem -LiteralPath $root -Recurse -File -Force | ForEach-Object {
+            [IO.Path]::GetRelativePath($root, $_.FullName).Replace('\', '/')
+          })
+          if ($files.Count -ne 2 -or @($files | Where-Object { $_ -cnotin $expected }).Count -ne 0) {
+            throw "Signing proof artifact must contain only amd64/iris.exe and arm64/iris.exe."
+          }
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}/Windows Kits/10/bin/*/x64/signtool.exe" |
+            Sort-Object { [version]$_.Directory.Parent.Name } -Descending |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $signtool) { throw "Windows SDK signtool.exe was not found." }
+          foreach ($arch in 'amd64', 'arm64') {
+            $file = Join-Path $env:RUNNER_TEMP "windows/$arch/iris.exe"
+            & $signtool verify /pa /all /v /tw $file
+            if ($LASTEXITCODE -ne 0) { throw "signtool verification failed for $arch (exit $LASTEXITCODE)." }
+            $signature = Get-AuthenticodeSignature -FilePath $file
+            if ($signature.Status -ne 'Valid' -or
+                $null -eq $signature.TimeStamperCertificate -or
+                $signature.SignerCertificate.Thumbprint -ne $env:EXPECTED_SIGNER_THUMBPRINT) {
+              throw "Authenticode verification failed for ${arch}: expected a valid, timestamped signature from the committed certificate."
+            }
+          }

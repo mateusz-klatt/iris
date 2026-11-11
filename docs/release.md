@@ -88,6 +88,36 @@ with keyless cosign using its OIDC identity, and creates GitHub build provenance
 release steps are configured; their first real tag run is still pending. Apple signing
 and notarization are separate and stay disabled without `MACOS_SIGN_P12`.
 
+## Windows signing proof
+
+[ADR 021](adr/021-windows-release-signing.md) adopts a separate Certum proof before
+release integration. Complete its owner prerequisites before a credentialed run, including
+committing the public certificate's `EXPECTED_SIGNER_THUMBPRINT` in the `verify`
+job of `.github/workflows/signing-proof.yml`, describing only the `CERTUM_OTP`
+format, and choosing a reviewed hardened signer revision or explicitly accepting
+the stock revision's interim limits. No credentialed run precedes that decision.
+The `signing` environment currently admits only tags `v[0-9]*`; the owner must
+add branch `main` while retaining the required reviewer. Secrets stay at
+repository level.
+
+Once the workflow and expected thumbprint are on `main` and those prerequisites
+are met, the owner opens Actions, selects **Windows signing proof**, chooses
+**Run workflow** on `main`, and approves `sign` in **Review deployments**. Only
+the owner dispatches or approves. Each successful run spends two signatures,
+one per architecture; failed requests may also count. There is no automatic
+retry. Rerunning `sign` or the whole workflow signs again and can consume two
+further signatures; rerunning only `verify` does not sign.
+
+A passing run proves that this signer revision can sign disposable Windows
+amd64 and arm64 Go builds unattended with this account, and that Windows accepts
+both timestamped signatures from the committed certificate. The signer hash is
+in the job summary; the signer and signed executable artifacts are retained for
+one day and are not private in a public repository. The hosted signing VM is
+discarded after the job. This does not prove SmartScreen reputation, program
+execution, console assets, release ZIPs, checksums or publication. It changes
+neither the tag release workflow nor GoReleaser; integration needs a successful
+proof and a further vote.
+
 The commit identifiers in the 2026-11-07 artifact measurements below predate the repository's
 history rewrite. They are retained as historical evidence, not current checkout references.
 
