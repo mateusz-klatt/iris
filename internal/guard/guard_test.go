@@ -3,6 +3,8 @@ package guard
 import (
 	"bytes"
 	"context"
+	"fmt"
+	"github.com/mateusz-klatt/iris/internal/gitinfo"
 	"github.com/mateusz-klatt/iris/internal/hub"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 	"github.com/mateusz-klatt/iris/internal/store"
@@ -12,6 +14,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 )
 
@@ -191,6 +194,77 @@ func TestCheckStagedRenameAndHubFailure(t *testing.T) {
 	server.Close()
 	if _, err = Check(ctx, dir, client); err == nil {
 		t.Fatal("unreachable hub not reported")
+	}
+}
+
+func TestCheckLinkedWorktreeCannotClaimTheHoldersSession(t *testing.T) {
+	dir := realPath(t, t.TempDir())
+	git(t, dir, "init")
+	git(t, dir, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "init")
+	linked := filepath.Join(realPath(t, t.TempDir()), "linked")
+	git(t, dir, "worktree", "add", "-b", "linked", linked)
+	for _, worktree := range []string{dir, linked} {
+		if err := os.WriteFile(filepath.Join(worktree, "held"), []byte("staged"), 0600); err != nil {
+			t.Fatal(err)
+		}
+		git(t, worktree, "add", "held")
+	}
+	repo, err := gitinfo.Find(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, err := os.Hostname()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := store.Open(filepath.Join(t.TempDir(), "hub.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	ctx := context.Background()
+	holder, err := s.Call(ctx, "sessions", store.Request{Client: "claude", Host: host, SessionID: "holder-session", Cwd: dir, Worktree: repo.Worktree, WorktreeID: repo.WorktreeID, CommonDir: repo.CommonDir, RootCommit: repo.RootCommit, Source: "hook"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proof := store.Request{ExecutionID: holder["execution_id"].(string), Generation: holder["generation"].(int64), Key: "held", Path: "held", Kind: "exact"}
+	claim, err := s.Call(ctx, "claim", proof)
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := httptest.NewUnstartedServer(nil)
+	u, _ := url.Parse("http://" + server.Listener.Addr().String())
+	server.Config.Handler = hub.New(s, "test-token", []string{u.Host})
+	server.Start()
+	defer server.Close()
+	client := &hubclient.Client{Config: config{server.URL}}
+	if message, err := Check(ctx, dir, client); err != nil || message != "" {
+		t.Fatalf("same checkout was refused: %q %v", message, err)
+	}
+	// Inherited or copied session markers cannot turn another checkout into the holder.
+	t.Setenv("IRIS_EXECUTION", proof.ExecutionID)
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "holder-session")
+	message, err := Check(ctx, linked, client)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, want := range []string{
+		"held is held by ",
+		"The guard cannot identify the committing session.",
+		"If this is your session in another worktree",
+		fmt.Sprintf(`call the release tool with {"fence":%v} from that session, then retry the commit.`, claim["fence"]),
+		"Otherwise message the holder with the send tool",
+	} {
+		if !strings.Contains(message, want) {
+			t.Errorf("refusal %q does not contain %q", message, want)
+		}
+	}
+	proof.Fence = claim["fence"].(int64)
+	if _, err := s.Call(ctx, "release", proof); err != nil {
+		t.Fatal(err)
+	}
+	if message, err := Check(ctx, linked, client); err != nil || message != "" {
+		t.Fatalf("retry after the holder released the claim was refused: %q %v", message, err)
 	}
 }
 

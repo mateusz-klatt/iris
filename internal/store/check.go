@@ -18,7 +18,17 @@ func (t *transaction) check(r Request) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	return t.checkPaths(repo, r.Host, r.Worktree, r.Paths)
+	out, err := t.checkPaths(repo, r.Host, r.Worktree, r.Paths)
+	if err != nil {
+		return nil, err
+	}
+	if conflicts := out["conflicts"].([]map[string]any); len(conflicts) > 0 {
+		c := conflicts[0]
+		// Checkout identity cannot establish who started git commit. Keep the refusal even
+		// when the holder might be the same session working from another checkout.
+		out["message"] = fmt.Sprintf("Iris: %s %s until %v (%s claim). The guard cannot identify the committing session. If this is your session in another worktree, call the release tool with {\"fence\":%v} from that session, then retry the commit. Otherwise message the holder with the send tool, or ask the human to help resolve the claim.", heldBy(c), where(c), c["expires_at"], c["origin"], c["fence"])
+	}
+	return out, nil
 }
 
 func (t *transaction) checkPaths(repo, host, worktree string, paths []string) (map[string]any, error) {

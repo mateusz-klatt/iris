@@ -1,6 +1,7 @@
 package store
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -48,6 +49,60 @@ func TestCheckLinkedWorktreesWithoutRemote(t *testing.T) {
 	r.Host = "different-host"
 	if out := call(t, s, "check", r); out["message"] != "" {
 		t.Fatal("machine-relative path crossed hosts", out)
+	}
+}
+
+func TestCheckOwnSessionInAnotherWorktreeExplainsRelease(t *testing.T) {
+	s, _, _ := testStore(t)
+	r := Request{Client: "codex", Host: "host", Cwd: "/repo/w1", Worktree: "/repo/w1", CommonDir: "/repo/w1/.git", SessionID: "holder", Source: "hook"}
+	first := call(t, s, "sessions", r)
+	holder := Request{ExecutionID: first["execution_id"].(string), Generation: first["generation"].(int64)}
+	held := call(t, s, "claim", claimRequest(holder, "held", "src", "prefix"))
+	// A hook in a second checkout keeps this active session's Execution and mailbox,
+	// but the guard has only the committing checkout's identity.
+	r.Cwd, r.Worktree = "/repo/w2", "/repo/w2"
+	again := call(t, s, "sessions", r)
+	if first["execution_id"] != again["execution_id"] || first["agent"].(map[string]any)["id"] != again["agent"].(map[string]any)["id"] {
+		t.Fatalf("same session split across worktrees: %v and %v", first, again)
+	}
+	r.Paths = []string{"src/file.go"}
+	// Supplied session and Execution fields do not prove who made a commit.
+	r.ExecutionID, r.Execution, r.Generation = holder.ExecutionID, holder.ExecutionID, holder.Generation
+	out := call(t, s, "check", r)
+	message := out["message"].(string)
+	for _, want := range []string{
+		"worktree /repo/w1 on host",
+		"The guard cannot identify the committing session.",
+		fmt.Sprintf("If this is your session in another worktree, call the release tool with {\"fence\":%v} from that session, then retry the commit.", held["fence"]),
+		"Otherwise message the holder with the send tool",
+	} {
+		if !strings.Contains(message, want) {
+			t.Fatalf("refusal %q missing %q", message, want)
+		}
+	}
+	conflicts := out["conflicts"].([]map[string]any)
+	if len(conflicts) != 1 || conflicts[0]["fence"] != held["fence"] || conflicts[0]["claimed_path"] != "src" {
+		t.Fatalf("wrong claim to release: %v", conflicts)
+	}
+	// A different session cannot release the named fence, and the guard still refuses it.
+	r.SessionID = "peer"
+	r.ExecutionID, r.Execution, r.Generation = "", "", 0
+	peerInfo := call(t, s, "sessions", r)
+	peer := Request{ExecutionID: peerInfo["execution_id"].(string), Generation: peerInfo["generation"].(int64), Fence: number(held["fence"])}
+	expectError(t, s, "release", peer, "conflict")
+	if got := call(t, s, "check", r)["message"]; got != message {
+		t.Fatalf("another session changed the refusal: %v", got)
+	}
+	call(t, s, "claim", claimRequest(peer, "peer-claim", "peer.go", "exact"))
+	holder.Fence = number(held["fence"])
+	call(t, s, "release", holder)
+	if out := call(t, s, "check", r); out["message"] != "" {
+		t.Fatalf("holder's release did not permit retry: %v", out)
+	}
+	// Releasing that one fence preserves claims held by other sessions.
+	r.Worktree, r.Paths = "/repo/w3", []string{"peer.go"}
+	if out := call(t, s, "check", r); len(out["conflicts"].([]map[string]any)) != 1 {
+		t.Fatalf("release removed another session's claim: %v", out)
 	}
 }
 
