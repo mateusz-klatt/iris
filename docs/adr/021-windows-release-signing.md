@@ -126,14 +126,21 @@ revision must state its own coverage of signer code and locked dependencies.
    provisioning URI's `secret` parameter, not the whole URI. ssign needs only the
    email and that secret and fetches the certificate from the cloud itself. The
    secret's value stays in GitHub.
-3. Obtain the thumbprint from the first credentialed run, which spends two
-   signatures and intentionally fails verification while `EXPECTED_SIGNER_THUMBPRINT`
-   is empty. Confirm that the printed public certificate is the owner's, then
-   commit its thumbprint as
-   `EXPECTED_SIGNER_THUMBPRINT` in the `verify` job of `signing-proof.yml`.
-   Discovery costs four signatures in all: two in the discovery run and two in a
-   new verifying run after the confirmed thumbprint is committed.
-   Alternatively, obtain the thumbprint from SimplySign if available and commit it there.
+3. Done on 2026-11-11. Run 43023491609 was dispatched on `main` at 7912e19. It
+   signed both files and then failed `verify` on purpose, because
+   `EXPECTED_SIGNER_THUMBPRINT` was empty. It printed the same certificate for both
+   files:
+   - Subject: CN=Open Source Developer Mateusz Klatt, O=Open Source Developer,
+     L=Warszawa, S=mazowieckie, C=PL
+   - Issuer: CN=Certum Code Signing 2021 CA, O=Asseco Data Systems S.A., C=PL
+   - Thumbprint: 9C837C68415187A72D88612BDF14FCB0D6623D67
+   - Validity: 2026-11-10 to 2027-11-10
+   - Timestamp signer: CN=Certum Timestamp 2026, O=Asseco Data Systems S.A., C=PL
+
+   The coordinator confirmed that this is the owner's certificate, and its
+   thumbprint is pinned in the `verify` job. The pin must change when the
+   certificate is renewed, by 2027-11-10. Finding the thumbprint costs four
+   signatures in all: two in that run, and two in the verifying run after the pin.
 4. Answered on 2026-11-11: Certum's terms allow automated use of the seed.
 5. Answered on 2026-11-11: the owner chose no environment gate. The existing
    `signing` environment stays unused. No session changes or deletes it. The
@@ -157,6 +164,7 @@ revision must state its own coverage of signer code and locked dependencies.
    described above. A hardened replacement still requires review and another proof
    before release integration.
 
-It is not known whether the account holds more than one cloud certificate, and the
-stock signer picks the first one. The first proof run shows which certificate
-signed, through the thumbprint that `verify` prints.
+It is not known whether the account holds more than one cloud certificate. The stock
+signer picks the first one, and in run 43023491609 that was the open-source
+code-signing certificate above. If a renewal or a second certificate changes which
+one comes first, `verify` fails on the pin, but only after both signatures are spent.
