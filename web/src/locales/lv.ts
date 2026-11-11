@@ -399,7 +399,6 @@ const translation = {
   },
   // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
-    signIn: "Šī pārlūkprogramma nav pieteikusies. Šajā datorā palaidiet {{command}} un atveriet parādīto saiti.",
     waiting: "Gaida pirmo sesiju.",
     doctorTitle: "Klienti",
     doctorHint: "Katra klienta statuss nāk no pēdējā doctor pārskata. Lai to atsvaidzinātu, šajā datorā palaidiet {{command}}.",

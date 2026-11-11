@@ -399,7 +399,6 @@ const translation = {
   },
   // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
-    signIn: "Dieser Browser ist nicht angemeldet. Führen Sie auf diesem Computer {{command}} aus und öffnen Sie den ausgegebenen Link.",
     waiting: "Warten auf die erste Sitzung.",
     doctorTitle: "Clients",
     doctorHint: "Der Status jedes Clients stammt aus dem letzten doctor-Bericht. Führen Sie {{command}} auf diesem Computer aus, um ihn zu aktualisieren.",

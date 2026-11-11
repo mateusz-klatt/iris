@@ -45,6 +45,8 @@ Checked against commit `72308ccfa3aa574e207208c5409757864ce538ff`:
 
 ### 1. Accounts are separate from machine credentials and human mailboxes
 
+The import ledger parts are superseded by [ADR 020](020-named-login-only.md); PR 2 is not yet implemented.
+
 Add Iris-owned `ConsoleAccount`, `ConsoleRepositoryAccess`, `ConsoleSession` and
 `ConsoleImport` records, plus `ConsoleOperation` for account-scoped send retries,
 through the store's migration mechanism. These are intended, not existing tables.
@@ -94,6 +96,8 @@ first console release. Display names are bounded to 128 code points and rendered
 as text. Role/permission data never comes from profile updates.
 
 ### 2. Two useful roles, with per-repository ro/rw and default denial
+
+Imported role and grant mappings are superseded by [ADR 020](020-named-login-only.md); PR 2 is not yet implemented.
 
 | Source/global role | Iris role and console authority |
 |---|---|
@@ -284,6 +288,8 @@ restoring it can restore both, requiring owner review before reopening the conso
 
 ### 4. Password formats and bounded verification
 
+Scrypt acceptance and upgrade are superseded by [ADR 020](020-named-login-only.md); PR 3 is not yet implemented.
+
 The accepted imported format is exactly
 `scrypt$n$r$p$salt_base64$hash_base64`, without a leading dollar sign. The supplied
 profile is `n=16384`, `r=8`, `p=1`, a 16-byte salt and a 32-byte derived key, both
@@ -376,6 +382,9 @@ as `unauthorized`, `forbidden`, `not_found`, `conflict` and `rate_limited`.
 
 ### 6. Replace the login link at cutover without weakening D13
 
+The ordinary-origin `iris ui` command has been removed under
+[ADR 020](020-named-login-only.md).
+
 Stage schema and tests first. Before activating named authentication, the owner
 provisions/imports and verifies at least one enabled named operator through an
 owner-authenticated setup/recovery path. Then cut over the console atomically:
@@ -397,6 +406,8 @@ is promised. Claims stay advisory outside mediated actions; account and message
 text remains untrusted data and never chooses authority, execution or priority.
 
 ### 7. A separate, transactional import tool
+
+The importer is superseded by [ADR 020](020-named-login-only.md); PR 2 is not yet implemented.
 
 Implement later in Go as an owner-authenticated CLI tool, with a source SQLite
 connection opened read-only and a consistent snapshot. The hub alone writes its

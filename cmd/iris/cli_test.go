@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -74,7 +75,7 @@ func TestMainReportsTheVersionAndRejectsAnUnknownCommand(t *testing.T) {
 	if !strings.Contains(errText, "usage: iris serve") {
 		t.Fatal(errText)
 	}
-	for _, command := range []string{"setup", "doctor", "service", "ui", "token", "admin", "guard", "hook", "mcp", "watch", "integrate", "version"} {
+	for _, command := range []string{"setup", "doctor", "service", "token", "admin", "guard", "hook", "mcp", "watch", "integrate", "version"} {
 		if !strings.Contains(errText, "| "+command) {
 			t.Fatalf("usage does not name %s: %s", command, errText)
 		}
@@ -358,27 +359,6 @@ func TestServeExitsCleanlyWhenItsContextEnds(t *testing.T) {
 	}
 }
 
-func TestOpenBrowserIsBestEffort(t *testing.T) {
-	dir := t.TempDir()
-	if openBrowser([]string{filepath.Join(dir, "absent")}) {
-		t.Fatal("started a program that does not exist")
-	}
-	bad := filepath.Join(dir, "not-a-program.exe")
-	if err := os.WriteFile(bad, []byte{0}, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if openBrowser([]string{bad}) {
-		t.Fatal("started a file that cannot run")
-	}
-	fake, err := integrate.PlaceFake(dir, "browser")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if !openBrowser([]string{fake, "https://hub.example/ui"}) {
-		t.Fatal("did not start the browser")
-	}
-}
-
 func TestWatchStopsWhenItCannotReportTheRejectedToken(t *testing.T) {
 	token := filepath.Join(t.TempDir(), "token")
 	if err := os.WriteFile(token, []byte("secret\n"), 0o600); err != nil {
@@ -471,39 +451,49 @@ func TestGuardTreatsADeletedWorkingDirectoryAsNoRepository(t *testing.T) {
 	}
 }
 
-func TestUIPrintsTheSignInPageWithoutCallingTheHubOrReadingAToken(t *testing.T) {
-	if err := runUI([]string{"extra"}); err == nil {
-		t.Fatal("usage")
+func TestRemovedUIIsAnUnknownCommandWithoutSideEffects(t *testing.T) {
+	dir := t.TempDir()
+	t.Chdir(dir)
+	configPath := filepath.Join(dir, "client.json")
+	const originalConfig = "invalid configuration\n"
+	if err := os.WriteFile(configPath, []byte(originalConfig), 0600); err != nil {
+		t.Fatal(err)
 	}
-	// A directory cannot be read as a bearer credential. Opening sign-in does
-	// not need one, and must not mint a session through the machine API.
-	token := t.TempDir()
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Error("iris ui contacted the hub", r.URL.Path)
+	var requests atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
 		w.WriteHeader(http.StatusInternalServerError)
 	}))
 	defer srv.Close()
 	t.Setenv("IRIS_HUB_URL", srv.URL)
-	t.Setenv("IRIS_TOKEN_FILE", token)
-	t.Setenv("PATH", t.TempDir())
-	out, _ := capture(t, func() {
-		if err := runUI(nil); err != nil {
-			t.Fatal(err)
+	t.Setenv("IRIS_TOKEN_FILE", filepath.Join(dir, "missing.token"))
+	t.Setenv("PATH", dir)
+	_, unknown := capture(t, func() {
+		if code := dispatch([]string{"nope"}); code != 1 {
+			t.Fatalf("unknown command exit = %d", code)
 		}
 	})
-	if out != srv.URL+"/\n" {
-		t.Fatal(out)
+	for _, args := range [][]string{{"ui"}, {"ui", "extra"}} {
+		out, errText := capture(t, func() {
+			if code := dispatch(args); code != 1 {
+				t.Fatalf("removed command exit = %d", code)
+			}
+		})
+		if out != "" || errText != unknown || strings.Contains(errText, "| ui") {
+			t.Fatalf("removed command output = %q, %q; want only unknown-command usage %q", out, errText, unknown)
+		}
 	}
-
-	bin := t.TempDir()
-	if _, err := integrate.PlaceFake(bin, browserCommand("unused")[0]); err != nil {
-		t.Fatal(err)
+	entries, err := os.ReadDir(dir)
+	if err != nil || len(entries) != 1 || entries[0].Name() != "client.json" {
+		t.Fatalf("removed command changed local files: %v, %v", entries, err)
 	}
-	t.Setenv("PATH", bin)
-	if err := runUI(nil); err != nil {
-		t.Fatal(err)
+	got, err := os.ReadFile(configPath)
+	if err != nil || string(got) != originalConfig {
+		t.Fatalf("removed command changed configuration: %q, %v", got, err)
 	}
-	time.Sleep(50 * time.Millisecond)
+	if got := requests.Load(); got != 0 {
+		t.Fatalf("removed command contacted the hub %d times", got)
+	}
 }
 
 func TestWatchAndMCPRejectBadArgumentsAndAMissingParent(t *testing.T) {

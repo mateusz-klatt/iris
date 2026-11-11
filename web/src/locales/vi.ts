@@ -390,7 +390,6 @@ const translation = {
   },
   // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
-    signIn: "Trình duyệt này chưa đăng nhập. Trên máy tính này, hãy chạy {{command}} và mở liên kết mà lệnh in ra.",
     waiting: "Đang chờ phiên đầu tiên.",
     doctorTitle: "Ứng dụng khách",
     doctorHint: "Trạng thái của mỗi ứng dụng khách lấy từ báo cáo doctor gần nhất. Chạy {{command}} trên máy tính này để làm mới.",

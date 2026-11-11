@@ -399,7 +399,6 @@ const translation = {
   },
   // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
-    signIn: "이 브라우저는 로그인되어 있지 않습니다. 이 컴퓨터에서 {{command}}을(를) 실행하고 출력된 링크를 여세요.",
     waiting: "첫 세션을 기다리는 중입니다.",
     doctorTitle: "클라이언트",
     doctorHint: "각 클라이언트의 상태는 마지막 doctor 보고서에서 가져옵니다. 새로 고치려면 이 컴퓨터에서 {{command}}을(를) 실행하세요.",

@@ -390,7 +390,6 @@ const translation = {
   },
   // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
-    signIn: "Bu tarayıcıda oturum açılmamış. Bu bilgisayarda {{command}} komutunu çalıştırın ve yazdırdığı bağlantıyı açın.",
     waiting: "İlk oturum bekleniyor.",
     doctorTitle: "İstemciler",
     doctorHint: "Her istemcinin durumu son doctor raporundan gelir. Yenilemek için bu bilgisayarda {{command}} komutunu çalıştırın.",

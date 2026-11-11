@@ -399,7 +399,6 @@ const translation = {
   },
   // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
-    signIn: "Ovaj preglednik nije prijavljen. Na ovom računalu pokrenite {{command}} i otvorite poveznicu koju ispiše.",
     waiting: "Čeka se prva sesija.",
     doctorTitle: "Klijenti",
     doctorHint: "Status svakog klijenta dolazi iz posljednjeg doctor izvješća. Pokrenite {{command}} na ovom računalu da ga osvježite.",

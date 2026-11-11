@@ -399,7 +399,6 @@ const translation = {
   },
   // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
-    signIn: "Níl an brabhsálaí seo sínithe isteach. Ar an ríomhaire seo, rith {{command}} agus oscail an nasc a phriontálann sé.",
     waiting: "Ag fanacht leis an gcéad seisiún.",
     doctorTitle: "Cliaint",
     doctorHint: "Tagann stádas gach cliaint ón tuarascáil doctor is déanaí. Rith {{command}} ar an ríomhaire seo chun í a athnuachan.",

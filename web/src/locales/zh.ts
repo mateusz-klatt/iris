@@ -390,7 +390,6 @@ const translation = {
   },
   // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
-    signIn: "此浏览器尚未登录。请在这台电脑上运行 {{command}}，然后打开它输出的链接。",
     waiting: "正在等待第一个会话。",
     doctorTitle: "客户端",
     doctorHint: "每个客户端的状态来自最近一次 doctor 报告。在这台电脑上运行 {{command}} 即可刷新。",

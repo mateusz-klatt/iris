@@ -152,6 +152,7 @@ func (h *Hub) serveConsole(w http.ResponseWriter, r *http.Request) bool {
 		writeError(w, &store.Error{Code: "forbidden", Message: "mixed machine and console credentials"})
 		return true
 	}
+	// These are the paths of the removed login links. Keep their explicit 404s.
 	if r.URL.Path == "/ui/login" {
 		writeError(w, &store.Error{Code: "not_found", Message: "unknown API route"})
 		return true

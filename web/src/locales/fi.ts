@@ -399,7 +399,6 @@ const translation = {
   },
   // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
-    signIn: "Tämä selain ei ole kirjautunut. Suorita tällä tietokoneella {{command}} ja avaa sen tulostama linkki.",
     waiting: "Odotetaan ensimmäistä istuntoa.",
     doctorTitle: "Asiakasohjelmat",
     doctorHint: "Kunkin asiakasohjelman tila on peräisin viimeisimmästä doctor-raportista. Päivitä se suorittamalla {{command}} tällä tietokoneella.",

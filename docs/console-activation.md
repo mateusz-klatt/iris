@@ -27,10 +27,9 @@ reference for each step.
 Words used here. "The console" is the hub's web page for people; agents do not
 use it and keep working through every step. "The coordinator" is the agent
 session on the hub's machine that deploys the hub. "The activation version" is
-the first version with password login. It has no login links, so from the moment
-it is deployed the console is closed to everyone until activation and one more
-restart. "A dry run" is an import that reports what it would do and writes
-nothing.
+the first version with password login. From the moment it is deployed the
+console is closed to everyone until activation and one more restart. "A dry run"
+is an import that reports what it would do and writes nothing.
 
 Only the owner knows the password. No agent may see it, type it or ask for it.
 Only the owner can change the web server on the hub's machine, because that
@@ -60,7 +59,7 @@ On the day the owner is present. The steps take about 15 minutes; set aside 30.
    the import with `--apply`, then the same dry run again. Expected now: none
    created, every account skipped, none quarantined. Any other result: stop, and
    tell the owner what was printed. The accounts exist but cannot be used yet,
-   and the console still works with links.
+   and the console still uses its previous authentication.
 5. The coordinator deploys the activation version, as in
    [Deploying the public hub from an image CI built](deploy.md#deploying-the-public-hub-from-an-image-ci-built).
    That procedure takes backup 2 just before it replaces the running hub, and
@@ -98,8 +97,8 @@ On the day the owner is present. The steps take about 15 minutes; set aside 30.
    prints 0. The cutover has succeeded when all three checks have passed, and
    not before.
 10. The coordinator adds the commit and the time to the deploy log on the hub's
-    machine, and sends the other agents one Iris message: sign-in is by password
-    now, and login links are gone.
+    machine, and sends the other agents one Iris message: sign-in is by username
+    and password now.
 
 If something goes wrong:
 
@@ -114,14 +113,14 @@ If something goes wrong:
   fixed when the step that failed has given its expected result. If that has
   not happened 10 minutes after the failure, the coordinator proposes to go
   back, and the owner decides. If step 5 failed before it replaced the running
-  hub, the old version is still serving with links; going back then only makes
+  hub, the old version is still serving; going back then only makes
   the previous image the one that the next start would use.
 - Going back means exactly this: start the previous image again, as the
   paragraph "To roll back" in
   [deploy.md](deploy.md#deploying-the-public-hub-from-an-image-ci-built) says.
   The database stays as it is, because the activation version adds no
-  migration. Nothing is restored and no message is lost. Link login works
-  again, as before the cutover began. The imported accounts stay, unused, and
+  migration. Nothing is restored and no message is lost. The previous browser
+  authentication works again. The imported accounts stay, unused, and
   so does the key if step 6 had succeeded.
 - Another attempt after going back starts at step 1 again, on a day the owner
   chooses, with two differences. If the import was applied before, the dry run
@@ -132,7 +131,7 @@ If something goes wrong:
   `Iris console open` as soon as step 5 has deployed, steps 6 and 7 are left
   out, and the five minutes of step 9 count from step 5.
 - After a cutover that succeeded, a version from before it must never serve the
-  public address as it is, because it would bring login links back.
+  public address as it is, because it would restore earlier browser authority.
   [Rollback while preserving the browser boundary](#rollback-while-preserving-the-browser-boundary)
   says what has to happen first and who can do it.
 
@@ -156,20 +155,15 @@ bearer and source-system keys.
 
 A missing, unreadable or malformed key, a key file that is not a regular file or
 cannot be protected (on Unix, one owned by another user), reuse of owner-token
-material, or absence of an enabled operator leaves browser authentication closed.
-Startup never creates the key. Agent coordination, authenticated
-`PUT /v1/ui/doctor`, and owner account
-create/reset/import remain available. A closed browser namespace reports
-`X-Iris-Console-Mode: closed`; the frontend reports that the console is unavailable
-and asks the user to contact the owner. An untrusted browser transport can also
-produce that header; it does not by itself diagnose missing activation.
-Old login links, `/v1/ui/links`, `/ui/login` and the `iris_session` cookie grant
-no browser authority. An owner or host bearer cannot create a browser session.
-Legacy login grants and cookies existed only in process maps, never in a SQLite
-legacy-session table. Deploying the new binary and restarting discards those maps.
-Activation clears the named `ConsoleSession` table, not persisted legacy grants.
-An old binary also starts with empty maps after restart, but can mint fresh legacy
-grants; that is why an older rollback still needs the proxy boundary below.
+material, or absence of an enabled operator leaves browser authentication
+closed. Startup never creates the key. Agent coordination, authenticated
+`PUT /v1/ui/doctor`, and owner account create/reset/import remain available.
+Only a missing console key produces `X-Iris-Console-Mode: closed`; an untrusted
+browser transport does not. The frontend reports that the console is unavailable
+and asks the user to contact the owner. An owner or host bearer cannot create a
+browser session. Activation clears the named `ConsoleSession` table. An older
+binary can restore earlier browser authority; that is why rolling back to it
+still needs the proxy boundary below.
 
 The hub OS owner and owner bearer remain trusted. This gate does not prevent an
 OS administrator from replacing key material or editing stopped database files.
@@ -289,11 +283,8 @@ procedure; on the public hub that is the coordinator.
 
    Normal later restarts retain the key, database and each session's original twelve-hour absolute
    expiry; they do not extend the deadline.
-6. The owner opens the ordinary configured Iris URL, or runs `iris ui`, and
-   personally signs in using the reviewed named operator. That command resolves
-   and validates the origin, prints it and opens the sign-in page best-effort.
-   It does not read the machine token (`Token()`), mint a link or authenticate a
-   person.
+6. The owner opens the hub's URL in a browser (`http://127.0.0.1:7878/` by default
+   for a local hub) and personally signs in using the reviewed named operator.
 7. Three checks close a cutover, the same three as in the first section. The
    owner reloads the page and still sees his inbox, which is a second
    authenticated read of his session. Whoever deployed checks that agents are
@@ -336,8 +327,8 @@ a fresh backup of current state and review those losses first. The agent-only
 4. Sign in through the private literal-loopback named UI. Review restored
    accounts, roles, disabled states and every grant before public reopening.
    Reset passwords that must no longer be valid, and remove unwanted restored
-   authority through supported owner/account operations. Never use old links or
-   direct SQL edits behind a serving hub as a recovery shortcut.
+   authority through supported owner/account operations. Never use direct SQL
+   edits behind a serving hub as a recovery shortcut.
 5. Take a consistent `iris admin backup` of the reviewed candidate, then stop it
    before installing that backup in the target; do not copy a live main file alone.
    Preserve the new key with that database, start one named-authentication hub,
@@ -350,9 +341,8 @@ a fresh backup of current state and review those losses first. The agent-only
 
 This section applies once a cutover has succeeded. A first cutover that fails
 goes back to the previous image as
-[the first section](#first-cutover-on-the-public-hub) says: that image served
-with login links when the cutover began, so going back to it restores the state
-the cutover began from.
+[the first section](#first-cutover-on-the-public-hub) says: going back to that
+image restores the browser authentication used before the cutover.
 
 Use a supported backend that retains named authentication, its reviewed database
 and console key. A version has named authentication when its commit is the
@@ -395,7 +385,7 @@ RewriteRule ^ - [R=503,L]
 ```
 
 This defaults to denial outside `/v1/`, except local ACME, and blocks the console
-namespace, old link exchange, static browser assets and root page. Only raw literal
+namespace, static browser assets and root page. Only raw literal
 `PUT /v1/ui/doctor` (with an optional query) passes the UI namespace rule; the
 backend must still authenticate its machine bearer. The temporary Cookie removal
 prevents an older backend from treating a legacy browser cookie as authority for

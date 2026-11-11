@@ -399,7 +399,6 @@ const translation = {
   },
   // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
-    signIn: "Այս դիտարկիչում մուտք չեք գործել։ Այս համակարգչում գործարկեք {{command}}-ը և բացեք դրա արտածած հղումը։",
     waiting: "Սպասում ենք առաջին նստաշրջանին։",
     doctorTitle: "Կլիենտներ",
     doctorHint: "Յուրաքանչյուր կլիենտի կարգավիճակը վերցվում է վերջին doctor հաշվետվությունից։ Այն թարմացնելու համար այս համակարգչում գործարկեք {{command}}-ը։",

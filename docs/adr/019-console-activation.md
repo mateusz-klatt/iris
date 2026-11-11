@@ -11,6 +11,8 @@ that gate opens. A missing key must close the console while agents keep working.
 The existing key helper creates a missing file, so ordinary startup cannot use
 it as evidence of an explicit activation.
 
+The fresh-hub verification step is superseded by [ADR 020](020-named-login-only.md); PR 2 is decided but not yet implemented.
+
 ## Decision
 
 1. The browser console is named-account-only. Remove link creation, link exchange,
@@ -19,6 +21,7 @@ it as evidence of an explicit activation.
    Authenticated machine diagnostic uploads and agent routes keep their existing
    authority. The owner may create, recover or import accounts while the console
    is closed.
+   Import independent of the gate is superseded by [ADR 020](020-named-login-only.md); PR 2 is not yet implemented.
 2. Startup only loads the independent protected console key. By default it is
    `<database>.console.key`; `--console-key-file` selects another hub-local file.
    Missing, unreadable, malformed or reused owner-token material leaves the
@@ -55,10 +58,12 @@ it as evidence of an explicit activation.
    accepts the supported bounded scrypt profile and the normal Argon2id profile,
    with the existing UTF-8/1,024-byte verification bounds. It does not apply the
    fifteen-code-point policy for newly created passwords to imported passwords.
+   Scrypt acceptance is superseded by [ADR 020](020-named-login-only.md); PR 3 is not yet implemented.
 6. `iris ui` resolves and validates the ordinary console origin, prints it and
    opens it best-effort. It does not read a credential file or request a login
    link. The frontend distinguishes a closed console from an ordinary signed-out
-   named session.
+   named session. The URL opener has been removed under
+   [ADR 020](020-named-login-only.md).
 7. Before a real first cutover, the owner explicitly confirms readiness in their
    own terminal and remains present through activation and sign-in checks.
    Sequence: owner confirmation, fresh backup, deployment with browser access
@@ -71,6 +76,7 @@ it as evidence of an explicit activation.
    needs no secret, so whoever deployed performs it. Agents may prepare and
    rehearse; they must not activate real accounts on the owner's behalf or
    receive secrets in chat.
+   The import steps are superseded by [ADR 020](020-named-login-only.md); PR 2 is not yet implemented.
 
 ## Trust and recovery limits
 
