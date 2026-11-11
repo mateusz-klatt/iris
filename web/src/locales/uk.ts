@@ -390,7 +390,6 @@ const translation = {
   },
   // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
-    signIn: "У цьому браузері не виконано вхід. На цьому комп'ютері запустіть {{command}} і відкрийте посилання, яке виведе команда.",
     waiting: "Очікування першого сеансу.",
     doctorTitle: "Клієнти",
     doctorHint: "Стан кожного клієнта береться з останнього звіту doctor. Щоб оновити його, запустіть {{command}} на цьому комп'ютері.",

@@ -390,7 +390,6 @@ const translation = {
   },
   // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
-    signIn: "Ky shfletues nuk është i identifikuar. Në këtë kompjuter, ekzekutoni {{command}} dhe hapni lidhjen që shfaq.",
     waiting: "Në pritje të seancës së parë.",
     doctorTitle: "Klientët",
     doctorHint: "Gjendja e çdo klienti vjen nga raporti i fundit doctor. Ekzekutoni {{command}} në këtë kompjuter për ta rifreskuar.",

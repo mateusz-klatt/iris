@@ -390,7 +390,6 @@ const translation = {
   },
   // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
-    signIn: "Kivinjari hiki hakijaingia. Kwenye kompyuta hii, endesha {{command}} kisha ufungue kiungo kinachoonyeshwa na amri hiyo.",
     waiting: "Inasubiri kipindi cha kwanza.",
     doctorTitle: "Wateja",
     doctorHint: "Hali ya kila mteja inatoka kwenye ripoti ya mwisho ya doctor. Endesha {{command}} kwenye kompyuta hii ili kuisasisha.",

@@ -53,6 +53,10 @@ that binary reports `console missing` in `iris version` and serves build instruc
 with HTTP 503 at console routes. If an index was built earlier, plain Go builds embed it
 and report `console unverified`: this does not prove its assets are complete or current.
 
+Open the hub's URL in a browser to use the console (`http://127.0.0.1:7878/` by
+default for a local hub), then sign in with a named account. The owner must first
+[activate the console and restart the hub](docs/console-activation.md#owner-setup-and-activation).
+
 ## Documentation
 
 - [Requirements](docs/spec/requirements.md): what Iris must do, and why

@@ -423,9 +423,8 @@ browser namespace closed: requests return 401 with
 create/reset/import/activation remain available. No key is created by ordinary
 startup. An active console's unsigned session 401 shows the named login form;
 CSRF tokens stay in memory and each login retry obtains a fresh challenge.
-The closed response can also reflect an untrusted browser transport; the UI
-reports unavailability and directs the user to the owner rather than diagnosing
-activation from that header alone.
+Only a missing console key sets the closed marker; an untrusted browser
+transport does not. The UI reports unavailability and directs the user to the owner.
 
 `GET /v1/ui/accounts` returns `{ "accounts": [...] }` with each account's
 safe profile, role, disabled state, authentication/edit versions and `grants`.
@@ -491,19 +490,19 @@ one optional final LF or CRLF before validating the 1,024-byte/UTF-8 password
 bound. Bare CR, embedded line endings, spaces and additional final newlines are
 preserved; there is no general trimming or normalization. Passwords never enter
 command arguments, URLs or logs. The server verifies JSON password bytes exactly
-and does not apply CLI line framing. Malformed UTF-8 and unpaired surrogate escapes
-in account JSON are rejected before decoding can replace credential characters.
-The owner endpoints work while browser authentication is closed. Create/reset
-passwords require at least fifteen Unicode code points and at most 1,024 UTF-8
-bytes. A failed console-key load refuses browser authentication without stopping
-coordination. Account cookies use `iris_console_session` and the pre-login
-`iris_console_login` namespace, with HttpOnly, Path=/, SameSite=Strict and Secure
-outside literal-loopback HTTP. The retired `iris_session` cookie grants no authority.
-The ADR 002 exact public-origin/trusted-loopback-proxy requirements still apply.
-Legacy links/cookies existed only in process maps, not SQLite session rows.
-Deploy/restart discards those maps; activation's session deletion applies to
-named `ConsoleSession` rows. An older binary can mint fresh legacy grants after
-restart, so its rollback still requires the proxy boundary.
+and does not apply CLI line framing. Malformed UTF-8 and unpaired surrogate
+escapes in account JSON are rejected before decoding can replace credential
+characters. The owner endpoints work while browser authentication is closed.
+Create/reset passwords require at least fifteen Unicode code points and at most
+1,024 UTF-8 bytes. A failed console-key load refuses browser authentication
+without stopping coordination. Account cookies use `iris_console_session` and
+the pre-login `iris_console_login` namespace, with HttpOnly, Path=/,
+SameSite=Strict and Secure outside literal-loopback HTTP. The retired
+`iris_session` cookie grants no authority. The ADR 002 exact
+public-origin/trusted-loopback-proxy requirements still apply. Activation's
+session deletion applies to named `ConsoleSession` rows. An older binary can
+restore earlier browser authority, so rolling back to it still requires the
+proxy boundary.
 
 `iris admin console activate <username> < /private/password` calls
 `POST /v1/admin/console/activate` with `{ "username": "...", "password": "..." }`.
@@ -559,11 +558,10 @@ project `operator` roles even though Iris has `rw`.
 Browser routes below require named account authentication. The sole machine
 exception is authenticated `PUT /v1/ui/doctor`, which works even while the console
 is closed. Agents use their machine APIs. `/v1/ui/links` and `/ui/login` return
-404; old links, old cookies and machine bearers cannot establish browser sessions.
+404. The retired cookie and machine bearers cannot establish browser sessions.
 
-`iris ui` resolves and validates the configured ordinary console origin, prints
-it and opens it best-effort. It never calls `Token()`, reads a credential file or
-requests a login link. The root serves the embedded sign-in UI. Public named
+Open the hub's URL in a browser (`http://127.0.0.1:7878/` by default for a local
+hub). The root serves the embedded sign-in UI. Public named
 authentication requires `serve --public-url https://host` behind a trusted
 loopback reverse proxy, with the exact public Host and `X-Forwarded-Proto: https`.
 The proxy must strip incoming forwarding headers before setting its own.
@@ -783,8 +781,7 @@ credentials or request bodies. Named token usage counts and last-use timestamps 
 persisted. Revocation refuses new requests and closes existing bearer streams and
 wake-ticket streams issued by that token. Already authenticated HTTP operations may
 finish. Named account sessions have independent revocation and absolute expiry;
-bearer revocation does not revoke them. Retired UI login links and cookies have
-no authority.
+bearer revocation does not revoke them. The retired browser cookie has no authority.
 
 Request quotas are in-memory fixed one-minute windows. A valid bearer token is
 limited only by its credential digest; anonymous traffic cannot consume that quota.

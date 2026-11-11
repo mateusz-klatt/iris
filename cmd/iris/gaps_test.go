@@ -30,9 +30,6 @@ func TestRunDispatchesTheRemainingCommands(t *testing.T) {
 	if err := run([]string{"watch"}); err == nil {
 		t.Fatal("watch without a client")
 	}
-	if err := run([]string{"ui", "extra"}); err == nil {
-		t.Fatal("ui usage")
-	}
 	if err := run([]string{"mcp", "--bogus"}); err == nil {
 		t.Fatal("mcp flag")
 	}

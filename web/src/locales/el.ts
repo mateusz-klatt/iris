@@ -399,7 +399,6 @@ const translation = {
   },
   // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
-    signIn: "Αυτό το πρόγραμμα περιήγησης δεν είναι συνδεδεμένο. Σε αυτόν τον υπολογιστή, εκτελέστε {{command}} και ανοίξτε τον σύνδεσμο που εμφανίζει.",
     waiting: "Αναμονή για την πρώτη συνεδρία.",
     doctorTitle: "Πελάτες",
     doctorHint: "Η κατάσταση κάθε πελάτη προέρχεται από την τελευταία αναφορά doctor. Εκτελέστε {{command}} σε αυτόν τον υπολογιστή για ανανέωση.",

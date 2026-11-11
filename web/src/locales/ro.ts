@@ -399,7 +399,6 @@ const translation = {
   },
   // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
-    signIn: "Nu v-ați autentificat în acest browser. Pe acest computer, rulați {{command}} și deschideți linkul afișat.",
     waiting: "Se așteaptă prima sesiune.",
     doctorTitle: "Clienți",
     doctorHint: "Starea fiecărui client provine din ultimul raport doctor. Rulați {{command}} pe acest computer pentru a-l actualiza.",

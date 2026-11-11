@@ -621,9 +621,9 @@ password, rechecks its snapshot transactionally and clears console sessions
 before preparing key material. Success requires a restart and issues no cookie;
 an already active process refuses activation without clearing sessions. Ordinary
 restarts retain absolute expiry. Imported-password verification does not impose
-the fifteen-code-point minimum used for new passwords. Old links/cookies and
-bearers grant no browser authority; `iris ui` opens the ordinary origin without
-reading the machine token. Restore and rollback must preserve that boundary;
+the fifteen-code-point minimum used for new passwords. Machine bearers grant no
+browser authority. Open the hub's URL in a browser (`http://127.0.0.1:7878/` by
+default for a local hub). Restore and rollback must preserve that boundary;
 see [the operational procedure](console-activation.md).
 For create/reset/activate, the CLI removes exactly one final LF or CRLF as input
 line framing before the password bounds; every other byte is preserved, without
@@ -633,10 +633,9 @@ confirms readiness in their own terminal and remains present to activate and
 sign in after the backup and approved import review; whoever deployed performs
 the second restart. Agents prepare and rehearse; real owner activation is not
 delegated.
-Legacy link/cookie grants were process maps, not SQLite rows: restart discards
-them, while activation clears named `ConsoleSession` rows. Restoring a database
-can revive named credentials/grants/sessions, not those legacy maps. An older
-binary can mint fresh legacy grants and must remain behind the rollback filter.
+Activation clears named `ConsoleSession` rows. Restoring a database can revive
+named credentials, grants and sessions. An older binary can restore earlier
+browser authority and must remain behind the rollback filter.
 
 ADR 014's importer is an owner-only CLI/API path independent of that account
 gate. The CLI reads an explicitly described table from a closed, fixed,
@@ -864,15 +863,15 @@ Authorship is immutable message metadata, not a continuing access grant. Named
 sends retain account-scoped retry results for 24 hours and reauthorize current
 objects before replay; repository repair refuses member grants of either mode.
 Per-account persisted revisions exclude hidden repository activity and global
-event cursors. Account sockets validate their session before each frame;
-frame admission serializes with revocation, and access changes wake idle sockets
-to close. A previously admitted frame may already be in transit. The frontend
+event cursors. Account sockets validate their session before each frame; frame
+admission serializes with revocation, and access changes wake idle sockets to
+close. A previously admitted frame may already be in transit. The frontend
 distinguishes an ordinary signed-out named session from
-`X-Iris-Console-Mode: closed`, which reports unavailable account authentication.
-The closed state can also reflect an untrusted browser transport; the frontend
-asks the user to contact the owner without assuming activation is the cause.
-ADR 019 removes link creation/exchange and the old cookie authority. Explicit
-owner activation prepares a key for the next process; it never hot-opens a console.
+`X-Iris-Console-Mode: closed`, which is set only when the console key is
+missing. The frontend reports that sign-in is unavailable and asks the user to
+contact the owner. An untrusted browser transport does not set that marker.
+Browser authentication uses named accounts only. Explicit owner activation
+prepares a key for the next process; it never hot-opens a console.
 
 The transferred account forms retain the owner's export provenance (ADR 014's
 inventory). Named-account locale choices are saved with profile revisions and

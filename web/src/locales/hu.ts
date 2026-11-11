@@ -399,7 +399,6 @@ const translation = {
   },
   // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
-    signIn: "Ez a böngésző nincs bejelentkezve. Ezen a számítógépen futtassa a(z) {{command}} parancsot, és nyissa meg a kiírt hivatkozást.",
     waiting: "Várakozás az első munkamenetre.",
     doctorTitle: "Kliensek",
     doctorHint: "Minden kliens állapota a legutóbbi doctor-jelentésből származik. A frissítéshez futtassa a(z) {{command}} parancsot ezen a számítógépen.",

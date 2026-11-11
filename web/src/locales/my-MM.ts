@@ -399,7 +399,6 @@ const translation = {
   },
   // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
-    signIn: "ဤဘရောက်ဇာသည် ဝင်ရောက်ထားခြင်း မရှိပါ။ ဤကွန်ပျူတာတွင် {{command}} ကို လုပ်ဆောင်ပြီး ၎င်းပြသသော လင့်ခ်ကို ဖွင့်ပါ။",
     waiting: "ပထမဆုံး session ကို စောင့်နေသည်။",
     doctorTitle: "Client များ",
     doctorHint: "Client တစ်ခုစီ၏ အခြေအနေသည် နောက်ဆုံး doctor အစီရင်ခံစာမှ လာသည်။ ပြန်လည်ဆန်းသစ်ရန် ဤကွန်ပျူတာတွင် {{command}} ကို လုပ်ဆောင်ပါ။",

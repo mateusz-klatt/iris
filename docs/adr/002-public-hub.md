@@ -7,6 +7,7 @@ Only a loopback peer with that exact public Host and `X-Forwarded-Proto: https` 
 create or use a UI session. Without the flag, the loopback peer and loopback Host
 requirements remain. Public cookies are Secure as well as HttpOnly and SameSite=Strict.
 Bearer authentication still gates creation of the short-lived, single-use login link.
+Superseded for bearer-created login links by [ADR 020](020-named-login-only.md).
 This trusts the operator's proxy configuration; it cannot verify the outer TLS hop.
 
 D14 also gains a user-level client.json beside the default token location, allowing

@@ -27,8 +27,8 @@ exactly one final LF or CRLF from stdin as line framing before password
 validation; all other bytes are preserved and HTTP password verification
 remains exact.
 Deploying this code does not authorize a real import or activate a missing key.
-Old login links and cookies grant no browser authority, and `iris ui` opens the
-ordinary sign-in URL without reading a machine token.
+Open the hub's URL in a browser (`http://127.0.0.1:7878/` by default for a local
+hub) and sign in with a named account. Machine tokens grant no browser authority.
 
 `iris serve` loads a separate protected 256-bit console key from
 `<database>.console.key`, or the path selected by `--console-key-file`.
@@ -154,22 +154,20 @@ To deploy, in one shell on the hub's machine, from a checkout of that commit (fo
    identifies the loaded image on this host. None of them is a registry digest: `docker save` and
    `docker load` produce none.
 
-To roll back, first decide whether the previous image may serve the public address. That depends
-on the console. Until a first cutover to named accounts has succeeded, the previous image is the
-one that served with login links, and going back to it restores that state and nothing more. Once
-a cutover has succeeded, verify that the previous image retains named authentication.
-For an older backend, first close public browser/login/UI API access using the
+To roll back, first decide whether the previous image may serve the public address. That depends on
+the console. Until a first cutover to named accounts has succeeded, going back to the previous image
+restores the browser authentication used before the cutover. Once a cutover has succeeded, verify
+that the previous image retains named authentication. For an older backend, first close public
+browser/login/UI API access using the
 [Apache rollback boundary](console-activation.md#rollback-while-preserving-the-browser-boundary),
-preserving agent routes and authenticated doctor PUT. Do this before the old backend starts;
-a binary or database rollback alone can restore legacy browser authority.
-The current host requires the owner's password for Apache `sudo`; only the owner
-can install/reload the live filter and drain existing browser connections. Agents
-can prepare and rehearse it. While the owner is unavailable, keep a supported
-named-authentication image, or stop/move the hub off the proxied port; the latter
-makes agent coordination unavailable too. Do not start an exposed old backend.
-Then return the tag to the previous image, replace the container the same way, and take
-the command-line `iris` from that image with step 5, with `iris-iris:$previous` where step 5 says
-`iris-iris:$commit`:
+preserving agent routes and authenticated doctor PUT. Do this before the old backend starts; a
+binary or database rollback alone can restore legacy browser authority. The current host requires
+the owner's password for Apache `sudo`; only the owner can install/reload the live filter and drain
+existing browser connections. Agents can prepare and rehearse it. While the owner is unavailable,
+keep a supported named-authentication image, or stop/move the hub off the proxied port; the latter
+makes agent coordination unavailable too. Do not start an exposed old backend. Then return the tag
+to the previous image, replace the container the same way, and take the command-line `iris` from
+that image with step 5, with `iris-iris:$previous` where step 5 says `iris-iris:$commit`:
 
 ```sh
 docker tag "iris-iris:$previous" iris-iris:latest
@@ -404,8 +402,8 @@ before the generic HTTP rule. Their distinct backend paths avoid worker sharing 
 the catch-all. Iris sends protocol pings every 25 seconds, below the approximately
 100-second Cloudflare idle cutoff, and closes a socket without a pong in 10 seconds.
 A proxy or network restart can still disconnect clients; both CLI and console reconnect.
-The custom access-log format omits query strings. Login links are retired;
-credentials and request bodies must remain absent from Cloudflare and global logs too.
+The custom access-log format omits query strings. Credentials and request bodies
+must remain absent from Cloudflare and global logs too.
 
 Apache directive details: [proxying and upgrades](https://httpd.apache.org/docs/2.4/mod/mod_proxy.html)
 and [request/response headers](https://httpd.apache.org/docs/2.4/mod/mod_headers.html).
@@ -421,10 +419,9 @@ Setup shows the exact configuration and token paths, saves client.json, skips th
 local service for this remote HTTPS URL, and reports missing credentials honestly.
 Place the privately obtained hub token at the displayed path with user-only access
 (0600 on Unix or an owner-only DACL on Windows). Then use `iris doctor` to check
-connectivity, authentication and the source of the URL. `iris ui` opens the ordinary
-named sign-in page without reading that machine credential. After explicit owner
-activation, sign in with a named account; the public session cookie is Secure,
-HttpOnly and SameSite=Strict.
+connectivity, authentication and the source of the URL. Open the configured hub's
+URL in a browser. After explicit owner activation, sign in with a named account;
+the public session cookie is Secure, HttpOnly and SameSite=Strict.
 
 Every client command resolves environment, then client.json, then defaults. Discovery
 looks beside IRIS_TOKEN_FILE if it is set, otherwise beside the platform's default

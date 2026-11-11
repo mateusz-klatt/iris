@@ -73,9 +73,6 @@ func run(args []string) error {
 	if len(args) > 0 && args[0] == "watch" {
 		return runWatch(args[1:])
 	}
-	if len(args) > 0 && args[0] == "ui" {
-		return runUI(args[1:])
-	}
 	if len(args) > 0 && args[0] == "mcp" {
 		return runMCP(args[1:])
 	}
@@ -84,7 +81,7 @@ func run(args []string) error {
 		return nil
 	}
 	if len(args) == 0 || args[0] != "serve" {
-		return errors.New("usage: iris serve [--listen address] [--db path] [--token-file path] [--console-key-file path] [--tls-cert path --tls-key path] [--allowed-hosts host:port,...] | setup | doctor | status | service | ui | token | admin | guard | hook | mcp | watch | integrate | version")
+		return errors.New("usage: iris serve [--listen address] [--db path] [--token-file path] [--console-key-file path] [--tls-cert path --tls-key path] [--allowed-hosts host:port,...] | setup | doctor | status | service | token | admin | guard | hook | mcp | watch | integrate | version")
 	}
 	cfg, err := config.Default()
 	if err != nil {

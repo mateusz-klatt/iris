@@ -510,7 +510,6 @@ const resources = {
         unauthorized: "Your session expired. Redirecting to sign in.",
       },
       operator: {
-        signIn: "This browser is not signed in. On this computer, run {{command}} and open the link it prints.",
         waiting: "Waiting for the first session.",
         doctorTitle: "Clients",
         doctorHint: "Each client's status comes from the last doctor report. Run {{command}} on this computer to refresh it.",

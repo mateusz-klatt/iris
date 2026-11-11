@@ -399,7 +399,6 @@ const translation = {
   },
   // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
-    signIn: "Ši naršyklė neprisijungusi. Šiame kompiuteryje paleiskite {{command}} ir atidarykite pateiktą nuorodą.",
     waiting: "Laukiama pirmosios sesijos.",
     doctorTitle: "Klientai",
     doctorHint: "Kiekvieno kliento būsena gaunama iš paskutinės doctor ataskaitos. Norėdami ją atnaujinti, šiame kompiuteryje paleiskite {{command}}.",

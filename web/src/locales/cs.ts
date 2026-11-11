@@ -399,7 +399,6 @@ const translation = {
   },
   // Machine-translated by Claude and reviewed by Codex (gpt-6.1-sol, then gpt-6-astra) on 2026-11-07; not yet reviewed by a native speaker.
   operator: {
-    signIn: "Tento prohlížeč není přihlášen. Na tomto počítači spusťte {{command}} a otevřete odkaz, který vypíše.",
     waiting: "Čeká se na první relaci.",
     doctorTitle: "Klienti",
     doctorHint: "Stav každého klienta pochází z poslední zprávy doctor. Obnovte ji spuštěním {{command}} na tomto počítači.",
