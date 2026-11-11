@@ -73,16 +73,22 @@ handing out its password. Import history and assignments are not recreated.
 Vote 1B applies only when the database has no console account at all and the hub
 has no console key. In that case `iris admin console create <username>` creates
 the operator and prepares the independent console key in the same owner action.
-It records `owner_provision` and `activation_prepared` in the owner audit and
+It records `owner_provision` with account creation and `activation_prepared`
+only after the independent key has been successfully published, then
 answers `account_created: true`, `key_prepared: true`, `restart_required: true`.
-The preparation record does not claim separate password verification or key
-persistence. Output states exactly what happened: operator made, key prepared,
+The preparation record does not claim separate password verification or an open
+running console. Output states exactly what happened: operator made, key prepared,
 restart needed. One restart opens named login.
 
 The no-account/no-key check and account creation are one transaction. Key
-preparation happens only after commit, as with activation. If it fails, the
-operator remains without a key; `activate` followed by a restart can then open
-the console. On every other hub `create` only creates an enabled operator and
+preparation happens only after commit, as with activation. A separate transaction
+records `activation_prepared` after successful key publication. If key preparation
+fails, the operator and `owner_provision` remain without a preparation success row;
+`activate` followed by a restart can then open the console. Key publication and
+the later audit transaction cannot be atomic. An audit failure or process exit
+can leave a usable key without `activation_prepared`; an audit failure reports
+the created operator, prepared key and required restart without returning success.
+On every other hub `create` only creates an enabled operator and
 answers `account_created: true`, `key_prepared: false`. Neither an account
 without a key nor a key without an account triggers key preparation through
 `create`.

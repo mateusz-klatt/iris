@@ -82,6 +82,10 @@ func (h *Hub) ownerConsoleAccount(w http.ResponseWriter, r *http.Request, reset 
 			writeError(w, &store.Error{Code: "bad_request", Message: "operator created; console key could not be prepared; console remains closed; use activate to retry"})
 			return
 		}
+		if err = h.store.RecordConsoleActivationPrepared(r.Context(), account.ID); err != nil {
+			writeError(w, &store.Error{Code: "bad_request", Message: "operator created; console key prepared; activation audit could not be recorded; restart required"})
+			return
+		}
 	}
 	// Creation committed an enabled operator. An existing usable key can make
 	// the next startup ready even when this command prepared no key.

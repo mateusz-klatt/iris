@@ -68,9 +68,12 @@ lint:
 vuln:
 	$(GO) run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
 
-# Scans the full git history, so a shallow clone checks less.
+# Scan history reachable from this checkout, not unrelated fetched branches.
+# CI overrides this with the PR's base..head or --all on a push to main.
+# Git history scans do not check uncommitted changes; a shallow clone checks less history.
+GITLEAKS_LOG_OPTS ?= HEAD
 secrets:
-	$(GO) run github.com/zricethezav/gitleaks/v8@$(GITLEAKS_VERSION) git --redact --no-banner .
+	$(GO) run github.com/zricethezav/gitleaks/v8@$(GITLEAKS_VERSION) git --redact --no-banner --log-opts="$(GITLEAKS_LOG_OPTS)" .
 
 pins:
 	$(GO) run ./.github/pincheck .github/workflows

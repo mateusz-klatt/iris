@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -67,5 +68,52 @@ func TestRunRefusals(t *testing.T) {
 	}
 	if code := run([]string{dir}, &out); code != 2 {
 		t.Fatal(code)
+	}
+}
+
+func TestSecretsScanScope(t *testing.T) {
+	root := filepath.Join("..", "..")
+	ci, err := os.ReadFile(filepath.Join(root, ".github", "workflows", "ci.yml"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, job, found := strings.Cut(strings.ReplaceAll(string(ci), "\r\n", "\n"), "  check-all:\n")
+	if !found {
+		t.Fatal("CI has no check-all job")
+	}
+	job, _, _ = strings.Cut(job, "  goreleaser-check:\n")
+	for _, want := range []string{
+		"fetch-depth: 0",
+		"- run: make check-all\n        env:\n          GITLEAKS_LOG_OPTS: ${{ github.event_name == 'pull_request' && format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || '--all' }}",
+	} {
+		if !strings.Contains(job, want) {
+			t.Errorf("CI check-all must retain %q", want)
+		}
+	}
+	for _, tc := range []struct{ name, override, want string }{
+		{"local history", "", "HEAD"},
+		{"pull request", "base..head", "base..head"},
+		{"main full history", "--all", "--all"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			args := []string{"--no-print-directory", "--dry-run", "secrets", "GO=go"}
+			if tc.override != "" {
+				args = append(args, "GITLEAKS_LOG_OPTS="+tc.override)
+			}
+			cmd := exec.Command("make", args...)
+			cmd.Dir = root
+			for _, value := range os.Environ() {
+				if !strings.HasPrefix(value, "GITLEAKS_LOG_OPTS=") {
+					cmd.Env = append(cmd.Env, value)
+				}
+			}
+			out, err := cmd.CombinedOutput()
+			if err != nil {
+				t.Fatalf("make secrets dry-run: %v\n%s", err, out)
+			}
+			if !strings.Contains(string(out), ` git --redact --no-banner --log-opts="`+tc.want+`" .`) {
+				t.Fatalf("secrets command did not select %q: %s", tc.want, out)
+			}
+		})
 	}
 }

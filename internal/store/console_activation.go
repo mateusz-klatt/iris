@@ -38,6 +38,15 @@ func (s *Store) HasEnabledConsoleOperator(ctx context.Context) (bool, error) {
 	return enabled, nil
 }
 
+// RecordConsoleActivationPrepared is a trusted owner audit primitive. The hub
+// calls it only after fresh provisioning and successful key publication. It does
+// not create or inspect the key, or change the running console's startup gate.
+func (s *Store) RecordConsoleActivationPrepared(ctx context.Context, accountID string) error {
+	return s.transact(ctx, func(t *transaction) error {
+		return t.consoleOwnerAction(accountID, "activation_prepared")
+	})
+}
+
 // PrepareConsoleActivation is a trusted owner setup primitive. The hub must
 // authenticate the owner and verify before's password outside the store lock
 // before calling it. This transaction rechecks the verified snapshot and enabled
