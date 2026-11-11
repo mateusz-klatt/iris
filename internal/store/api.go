@@ -21,6 +21,12 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 				return err
 			}
 		}
+		// Expiry runs before every operation except merge, so each one decides on
+		// current leases, claims and receipts in its own snapshot. The named operation
+		// "expire" runs it too: the hub's stream worker calls it once a second so
+		// time-driven changes wake streams when no client calls. With no stream
+		// connected, this sweep stops; those transitions wait for another operation.
+		// Within Call, only "expire" also cleans up console sessions by their expiry time.
 		// A merge plan and a refused merge must leave even expired leases and
 		// delivery attempts untouched. The merge checks liveness without expiring.
 		if operation != "merge" {

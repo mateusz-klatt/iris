@@ -154,6 +154,11 @@ type transaction struct {
 	generationChange *GenerationChange
 }
 
+// exec runs a write that streams can observe. A commit in which an exec changed a row
+// wakes every connected stream: the hub coalesces commits for 10 ms from the first change
+// into one wake, and each woken stream reads the store in its own transaction. Even a
+// heartbeat of another Execution can make every connected stream read again (ADR 016).
+// execQuiet keeps cursor and bearer-use bookkeeping from waking streams.
 func (t *transaction) exec(q string, a ...any) (sql.Result, error) {
 	result, err := t.execQuiet(q, a...)
 	if err == nil {
@@ -473,6 +478,10 @@ func (t *transaction) expire() error {
 	}
 	// A lost session changes what the console shows even when it held no claims, so it moves
 	// the event cursor the console refreshes on. Its claims, if any, are announced below.
+	// This one event, not one per Execution, is also how a stream learns that its
+	// Execution is lost. The UPDATE above runs through rows, which does not notify.
+	// The event wakes the stream; its next read fails the liveness check and closes
+	// the socket.
 	if len(lost) > 0 {
 		if err = t.event("", "", "changed", ""); err != nil {
 			return err

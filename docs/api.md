@@ -300,11 +300,24 @@ on the hub. Missing build metadata is reported as unknown.
 
 Persisted consumer cursors advance monotonically and an unchanged cursor is not rewritten.
 Wake-ticket streams check the ticket's generation in the same transaction as each event
-snapshot. The bearer-authenticated HTTP event read may name the generation it expects with
-`generation`. If that generation is stale, the hub answers `lost`. Without `generation`, the read
-remains unqualified, as before; `iris watch` and older shims rely on this. `attention=1` adds the
-attention block described under `POST /v1/sessions`; a read that does not ask, and a watch
-socket's own reads, carry none.
+snapshot.
+
+The bearer-authenticated GET routes listed below accept `generation` in the query and reject
+malformed or negative values. A positive value is checked by `GET /v1/events`,
+`GET /v1/watch` and `GET /v1/messages/{id}/status`, and by `GET /v1/claims` and `GET /v1/agents`
+when they name `execution_id` (but not `GET /v1/agents` with `all=1`); if it is stale, the hub
+answers `lost`.
+
+The following reads check Execution liveness but ignore a valid `generation`:
+`GET /v1/inbox`, `GET /v1/messages/history`, `GET /v1/threads/{id}`,
+`GET /v1/messages/{id}/body` and `GET /v1/deliveries/{id}/body`.
+`GET /v1/status`, `GET /v1/hooks/seen`, `GET /v1/agents?all=1`, and claims or agents reads
+without `execution_id` also ignore a valid `generation`. Without `generation`, or with
+`generation=0`, these bearer-authenticated reads remain unqualified, as before; `iris watch`
+and older shims rely on this.
+
+`attention=1` adds the attention block described under `POST /v1/sessions` to an events read; a
+read that does not ask carries none. Watch frames never include the block.
 
 If `after` is older than the log keeps, it returns `{"reset":true,"high_water":200,...}`, and the
 client must take a snapshot. The response includes `snapshot` with live `claims` and
