@@ -851,7 +851,7 @@ option.
 
 [ADR 021](adr/021-windows-release-signing.md) supersedes this Windows signing order and
 credential placement: first prove the owner's Certum cloud certificate in a separate,
-manually approved workflow, with repository-level secrets, before release integration.
+manually dispatched workflow, with repository-level secrets, before release integration.
 
 Until macOS binaries are notarized, Homebrew ships a prebuilt formula through GoReleaser's `brews`
 key, which v2.20 supports but deprecates, so it must be replaced before upgrading to v3. A cask is

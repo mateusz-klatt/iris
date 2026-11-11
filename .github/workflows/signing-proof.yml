@@ -1,7 +1,8 @@
 name: Windows signing proof
-# Before any credentialed run, the owner must name a reviewed hardened upstream
-# revision or explicitly accept the stock interim in ADR 021. No session dispatches
-# this workflow or approves/bypasses its environment gate.
+# No environment gate exists. Certum secrets are used at repository level.
+# On 2026-11-11 the owner allowed fleet sessions to dispatch this proof.
+# Each run spends two signatures. It uses the stock ssign revision described
+# as the interim in ADR 021.
 on:
   workflow_dispatch:
 permissions:
@@ -34,8 +35,6 @@ jobs:
     if: github.repository == 'mateusz-klatt/iris' && github.ref == 'refs/heads/main'
     needs: signer
     runs-on: ubuntu-latest
-    # Owner step: add main to this environment's tag-only deployment policy.
-    environment: signing
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -90,7 +89,7 @@ jobs:
     runs-on: windows-latest
     permissions: {}
     env:
-      # Owner: commit the Thumbprint of the public signing certificate before a run.
+      # Owner: confirm the printed public certificate and commit its Thumbprint.
       EXPECTED_SIGNER_THUMBPRINT: ''
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -100,9 +99,6 @@ jobs:
       - name: Verify both signatures on Windows
         shell: pwsh
         run: |
-          if ([string]::IsNullOrWhiteSpace($env:EXPECTED_SIGNER_THUMBPRINT)) {
-            throw "Set EXPECTED_SIGNER_THUMBPRINT in signing-proof.yml from the owner's public certificate before running the proof."
-          }
           $root = Join-Path $env:RUNNER_TEMP 'windows'
           $expected = 'amd64/iris.exe', 'arm64/iris.exe'
           $files = @(Get-ChildItem -LiteralPath $root -Recurse -File -Force | ForEach-Object {
@@ -110,6 +106,20 @@ jobs:
           })
           if ($files.Count -ne 2 -or @($files | Where-Object { $_ -cnotin $expected }).Count -ne 0) {
             throw "Signing proof artifact must contain only amd64/iris.exe and arm64/iris.exe."
+          }
+          if ([string]::IsNullOrWhiteSpace($env:EXPECTED_SIGNER_THUMBPRINT)) {
+            foreach ($arch in 'amd64', 'arm64') {
+              $signature = Get-AuthenticodeSignature -FilePath (Join-Path $root "$arch/iris.exe")
+              [pscustomobject]@{
+                Subject = $signature.SignerCertificate.Subject
+                Issuer = $signature.SignerCertificate.Issuer
+                Thumbprint = $signature.SignerCertificate.Thumbprint
+                NotBefore = $signature.SignerCertificate.NotBefore
+                NotAfter = $signature.SignerCertificate.NotAfter
+                TimeStamperSubject = $signature.TimeStamperCertificate.Subject
+              } | Format-List | Out-Host
+            }
+            throw "Confirm that the printed public certificate is yours, then commit its Thumbprint as EXPECTED_SIGNER_THUMBPRINT in signing-proof.yml."
           }
           $signtool = Get-ChildItem "${env:ProgramFiles(x86)}/Windows Kits/10/bin/*/x64/signtool.exe" |
             Sort-Object { [version]$_.Directory.Parent.Name } -Descending |

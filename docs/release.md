@@ -91,22 +91,30 @@ and notarization are separate and stay disabled without `MACOS_SIGN_P12`.
 ## Windows signing proof
 
 [ADR 021](adr/021-windows-release-signing.md) adopts a separate Certum proof before
-release integration. Complete its owner prerequisites before a credentialed run, including
-committing the public certificate's `EXPECTED_SIGNER_THUMBPRINT` in the `verify`
-job of `.github/workflows/signing-proof.yml`, describing only the `CERTUM_OTP`
-format, and choosing a reviewed hardened signer revision or explicitly accepting
-the stock revision's interim limits. No credentialed run precedes that decision.
-The `signing` environment currently admits only tags `v[0-9]*`; the owner must
-add branch `main` while retaining the required reviewer. Secrets stay at
-repository level.
+release integration. On 2026-11-11 the owner allowed fleet sessions to dispatch
+the proof and accepted the stock ssign interim. `CERTUM_OTP` holds the Base32 value
+of the provisioning URI's `secret` parameter, not the whole URI. ssign needs only
+the email and that secret and fetches the certificate from the cloud itself.
+There is no environment gate. Secrets stay at repository level.
 
-Once the workflow and expected thumbprint are on `main` and those prerequisites
-are met, the owner opens Actions, selects **Windows signing proof**, chooses
-**Run workflow** on `main`, and approves `sign` in **Review deployments**. Only
-the owner dispatches or approves. Each successful run spends two signatures,
-one per architecture; failed requests may also count. There is no automatic
-retry. Rerunning `sign` or the whole workflow signs again and can consume two
-further signatures; rerunning only `verify` does not sign.
+Once the workflow is on `main`, the owner or a fleet session may dispatch it, with
+the owner's leave of 2026-11-11. In Actions, select **Windows signing proof** and
+**Run workflow** on `main`. macOS dispatches the first run after merge. Each run
+spends two signatures, one per architecture; failed requests may also count.
+There is no automatic retry. Rerunning `sign` or the whole workflow signs again
+and can consume two further signatures; rerunning only `verify` does not sign.
+
+The first run can leave `EXPECTED_SIGNER_THUMBPRINT` empty. After checking the
+artifact contains exactly the two expected files, `verify` prints each signer's
+public Subject, Issuer, Thumbprint, NotBefore and NotAfter, and the timestamp
+signer's Subject, then fails closed. This discovery run spends two signatures.
+The owner confirms that the printed certificate is theirs and commits its
+thumbprint in the `verify` job of `.github/workflows/signing-proof.yml`.
+Discovery costs four signatures in all: two in the discovery run and two in a
+new verifying run after the confirmed thumbprint is committed.
+Alternatively, obtain the thumbprint from SimplySign if available and commit it
+there. With a non-empty expected thumbprint, verification still requires both
+valid, timestamped signatures to match it.
 
 A passing run proves that this signer revision can sign disposable Windows
 amd64 and arm64 Go builds unattended with this account, and that Windows accepts
