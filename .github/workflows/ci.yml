@@ -247,6 +247,49 @@ jobs:
           assert list(on["push"]) == ["tags"], on
           print("release.yml triggers:", on)
           PY
+      - name: The signing proof is manual and confines Certum secrets to sign
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from copy import deepcopy
+          import yaml
+
+          def check(proof):
+              assert list(proof[True]) == ["workflow_dispatch"], proof[True]
+              outside_sign = deepcopy(proof)
+              sign = outside_sign["jobs"].pop("sign")
+              dumped = yaml.safe_dump(outside_sign)
+              assert "CERTUM_" not in dumped, "Certum credentials outside sign"
+              assert "secrets" not in dumped.casefold(), "Secrets outside sign"
+              signing = [step for step in sign["steps"] if step.get("name") == "Sign each binary once"]
+              assert len(signing) == 1, "Expected one signing step"
+              signing[0].pop("env", None)
+              assert "secrets" not in yaml.safe_dump(sign).casefold(), "Secrets outside signing step env"
+
+          proof = yaml.safe_load(open(".github/workflows/signing-proof.yml"))
+          check(proof)
+          for path, reference in [
+              (("jobs", "verify", "env"), "secrets.certum_otp"),
+              (("jobs", "signer", "env"), "secrets[format('certum_{0}', 'otp')]"),
+              (("jobs", "verify", "env"), "toJSON(secrets)"),
+              (("env",), "secrets.certum_otp"),
+              (("jobs", "sign", "env"), "secrets.CERTUM_OTP"),
+              (("jobs", "sign", "steps", 0, "env"), "secrets.CERTUM_OTP"),
+          ]:
+              mutated = deepcopy(proof)
+              target = mutated
+              for key in path[:-1]:
+                  target = target[key]
+              target[path[-1]] = {"LEAK": "$" + "{{ " + reference + " }}"}
+              try:
+                  check(mutated)
+              except AssertionError:
+                  pass
+              else:
+                  raise AssertionError(f"Guard accepted secret reference at {path}")
+          print("signing-proof.yml: real workflow passed; all six secret-scope mutations rejected")
+          PY
       - name: Run the image as non-root on a fresh named volume
         shell: bash
         run: |
