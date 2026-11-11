@@ -414,10 +414,10 @@ The owner decisions below are dated 2026-11-11; their implementation is **not ve
   Fleet vote 3 makes PR 2 a prerequisite for rc1 unless a new vote explicitly chooses rc1 without Windows signing.
 - No session publishes the draft or makes a final, non-rc tag. Only the owner publishes after the acceptance record below passes. These stop/go records do not authorize publication by a session.
 
-**Decision needed before rc1**
+**Prerelease configuration**
 
-Recommend adding `prerelease: auto` to `.goreleaser.yaml`. With the current configuration an rc draft is expected to have `prerelease=false`; if published it can become Latest.
-Record the decision before tagging, and check the resulting flag before owner publication. `make_latest: false` alone does not control the draft-creation path (`.goreleaser.yaml:5–6`; [prerelease handling](https://github.com/goreleaser/goreleaser/blob/b8f79e0399c46895220e8479e24d599576b563a8/internal/pipe/release/release.go#L74-L84), [draft path](https://github.com/goreleaser/goreleaser/blob/b8f79e0399c46895220e8479e24d599576b563a8/internal/client/github.go#L520-L596), [GitHub Latest defaults](https://github.com/github/rest-api-description/blob/e59da575720241498e75762a659b7ccb86e512fa/descriptions/api.github.com/api.github.com.json#L94108-L94120)).
+`prerelease: auto` is configured in `.goreleaser.yaml`, decided by fleet vote 6 on 2026-11-11. Expect `isPrerelease=true` for `v0.1.0-rc1` (`prerelease=true` in REST); check the flag before owner publication ([pinned prerelease handling](https://github.com/goreleaser/goreleaser/blob/b8f79e0399c46895220e8479e24d599576b563a8/internal/pipe/release/release.go#L74-L84)).
+GoReleaser v2.20.0 creates the draft with that flag and does not set Latest on its draft path. GitHub excludes drafts and prereleases from Latest, so an rc published with the prerelease flag retained cannot become Latest ([draft path](https://github.com/goreleaser/goreleaser/blob/b8f79e0399c46895220e8479e24d599576b563a8/internal/client/github.go#L537-L597), [GitHub REST documentation](https://docs.github.com/en/rest/releases/releases#create-a-release)). This is documented behaviour; rc1 publication is **not measured**.
 
 **What pushing the tag does — expected, not measured**
 
@@ -539,7 +539,7 @@ done
 On Windows, verify both extracted binaries with PR 2's re-derived signtool commands and `Get-AuthenticodeSignature .\iris.exe | Format-List Status,StatusMessage,SignerCertificate,TimeStamperCertificate`. Require `Valid`, the recorded signer subject/pinned thumbprint and timestamp for each.
 Missing/skipped/unverifiable signing blocks acceptance; the implementation and certificate identity are **not verified** on this baseline.
 Run `iris version` from each native binary (`.\iris.exe version` on Windows). Expect `0.1.0-rc1 (commit <approved-40-char-sha>; source clean; console unverified)`; record actual output. The console field proves neither freshness nor completeness (`.goreleaser.yaml:19–20`, `internal/buildinfo/buildinfo.go:47–61`, `docs/release.md:61–67`).
-Before publishing, the owner reviews the complete acceptance record: approved SHA/run, one complete draft, prerelease decision/flag, tool verification, console artifact, all assets/checksums/provenance, both Apple notarizations/Gatekeeper measurements, both Windows signatures/verify job, package metadata and six native executions.
+Before publishing, the owner reviews the complete acceptance record: approved SHA/run, one complete draft, prerelease flag, tool verification, console artifact, all assets/checksums/provenance, both Apple notarizations/Gatekeeper measurements, both Windows signatures/verify job, package metadata and six native executions.
 Only he publishes; a draft nobody publishes remains a draft until deleted.
 
 **Failure handling and take-back**
