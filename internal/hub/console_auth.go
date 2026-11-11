@@ -41,11 +41,10 @@ type consoleAuth struct {
 	aggregate  passwordAttempt
 	verify     func(string, string) (bool, error)
 	create     func(string) (string, error)
-	upgrade    func(string) (string, error)
 }
 
 func newConsoleAuth(key []byte) *consoleAuth {
-	return &consoleAuth{key: append([]byte(nil), key...), challenges: map[string]time.Time{}, attempts: map[string]passwordAttempt{}, verify: consoleauth.VerifyPassword, create: consoleauth.CreatePassword, upgrade: consoleauth.UpgradePassword}
+	return &consoleAuth{key: append([]byte(nil), key...), challenges: map[string]time.Time{}, attempts: map[string]passwordAttempt{}, verify: consoleauth.VerifyPassword, create: consoleauth.CreatePassword}
 }
 
 func (c *consoleAuth) mac(domain, value string) []byte {
@@ -319,20 +318,8 @@ func (h *Hub) consoleLogin(w http.ResponseWriter, r *http.Request) {
 		consoleFailure(w)
 		return
 	}
-	upgrade := ""
-	if strings.HasPrefix(account.PasswordHash, "scrypt$") {
-		upgrade, err = c.upgrade(input.Password)
-		if errors.Is(err, consoleauth.ErrBusy) {
-			rateLimited(w, 1)
-			return
-		}
-		if err != nil {
-			consoleFailure(w)
-			return
-		}
-	}
 	token := secret()
-	if _, err = h.store.IssueConsoleSession(r.Context(), account, c.mac("session", token), upgrade); err != nil {
+	if _, err = h.store.IssueConsoleSession(r.Context(), account, c.mac("session", token)); err != nil {
 		consoleFailure(w)
 		return
 	}

@@ -5,14 +5,13 @@ import (
 	"testing"
 )
 
-// These sweeps interrupt real SQLite at every persistence/read boundary. Login,
-// upgrades and password recovery must leave no partial credential or session.
+// These sweeps interrupt real SQLite at every persistence/read boundary. Login
+// and password recovery must leave no partial credential or session.
 func TestConsoleSessionStorageFailuresRollbackAndRetry(t *testing.T) {
-	for _, operation := range []string{"login", "upgrade", "inspect", "inspect-account", "logout", "logout-absent", "password", "provision", "recovery", "frame", "send"} {
+	for _, operation := range []string{"login", "inspect", "inspect-account", "logout", "logout-absent", "password", "provision", "recovery", "frame", "send"} {
 		t.Run(operation, func(t *testing.T) {
 			s, _, file := testStore(t)
 			a := newSessionAccount(t, s, "existing", "member")
-			legacy := createTestConsoleAccount(t, s, "legacy", "member")
 			p := issueTestSession(t, s, a, 1)
 			_, sr := session(t, s, 1)
 			grantNamed(t, s, a, sr["repository_id"].(string), "rw")
@@ -22,11 +21,7 @@ func TestConsoleSessionStorageFailuresRollbackAndRetry(t *testing.T) {
 				case "login":
 					digest := make([]byte, 32)
 					digest[0] = 2
-					_, err = s.IssueConsoleSession(t.Context(), a, digest, "")
-				case "upgrade":
-					digest := make([]byte, 32)
-					digest[0] = 3
-					_, err = s.IssueConsoleSession(t.Context(), legacy, digest, consoleArgonTestHash)
+					_, err = s.IssueConsoleSession(t.Context(), a, digest)
 				case "inspect":
 					_, err = s.ConsoleSessionInfo(t.Context(), p.SessionDigest)
 				case "inspect-account":
@@ -71,11 +66,6 @@ func TestConsoleSessionStorageFailuresRollbackAndRetry(t *testing.T) {
 				t.Fatal("retry failed", err)
 			}
 			switch operation {
-			case "upgrade":
-				current, err := s.GetConsoleAccount(t.Context(), legacy.ID)
-				if err != nil || current.PasswordHash != consoleArgonTestHash || current.AuthVersion != legacy.AuthVersion+1 || sessionCount(t, s, legacy) != 1 {
-					t.Fatal("upgrade retry failed atomically", err)
-				}
 			case "password", "recovery", "logout":
 				if sessionCount(t, s, a) != 0 {
 					t.Fatal("retry failed to revoke sessions")

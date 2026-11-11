@@ -12,7 +12,8 @@ import (
 
 // Synthetic syntax-valid record. These storage tests never run a KDF and never
 // inspect a source account database.
-const consoleTestHash = "scrypt$16384$8$1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+const consoleTestHash = consoleArgonTestHash
+const consoleLegacyScryptHash = "scrypt$16384$8$1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 
 // removeAttentionIdentitySchema undoes migration 023, which a fixture that reconstructs an older
 // version must do first: SQLite cannot add a column that is already there, nor drop one that a
@@ -128,6 +129,7 @@ func TestConsoleCreationRefusesInvalidRecordsAndDefaultsToDisabledNone(t *testin
 	for _, mutate := range []func(*ConsoleAccountInput){
 		func(i *ConsoleAccountInput) { i.Username = " leading" },
 		func(i *ConsoleAccountInput) { i.PasswordHash = "invalid" },
+		func(i *ConsoleAccountInput) { i.PasswordHash = consoleLegacyScryptHash },
 		func(i *ConsoleAccountInput) { i.DisplayName = strings.Repeat("x", 129) },
 		func(i *ConsoleAccountInput) { i.UILocale = "en-US" },
 		func(i *ConsoleAccountInput) { i.CorrespondenceLocale = "ar bn" },

@@ -71,7 +71,7 @@ func TestOwnerCreateAndRecoverNamedOperatorWithoutReturningSecrets(t *testing.T)
 	}
 	ownerAccountRequest(t, h, server, path, body, "test-secret", http.StatusConflict)
 	digest := bytes.Repeat([]byte{7}, 32)
-	if _, err = h.store.IssueConsoleSession(context.Background(), account, digest, ""); err != nil {
+	if _, err = h.store.IssueConsoleSession(context.Background(), account, digest); err != nil {
 		t.Fatal(err)
 	}
 	before, err := h.store.ReplaceConsoleAccess(context.Background(), account.ID, account.EditRevision, "none", true, nil)

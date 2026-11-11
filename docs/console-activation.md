@@ -155,11 +155,15 @@ Do not let saved client configuration select a different hub.
    Activation accepts valid UTF-8 input bounded to 1,024 bytes **after** removing
    one optional final LF or CRLF. The server verifies those submitted password
    bytes exactly; it does not remove line endings or normalize passwords.
-   It verifies supported Argon2id or imported bounded scrypt credentials. The
-   fifteen-code-point minimum for new passwords does not apply to verification
-   of an imported password. Verification runs outside the store lock; a
-   transaction rechecks the account, enabled operator role and authentication
-   version, clears every console session, and records `activation_verified`.
+   It verifies Argon2id credentials only. The fifteen-code-point minimum for
+   new passwords does not apply to verification: a short Argon2id password
+   retained through an earlier upgrade still activates a restored hub. An
+   unreadable stored hash is refused with owner advice: this version does not
+   read the stored password format; recover the operator with
+   `iris admin console reset <username>`, then activate. Browser login returns
+   only the generic invalid-credentials failure. Verification runs outside the
+   store lock; a transaction rechecks the account, enabled operator role and
+   authentication version, clears every console session, and records `activation_verified`.
    This record proves password verification, not later key persistence.
 
    Only then does activation create or load the independent protected key.
@@ -260,6 +264,19 @@ grants, and loses mail and coordination writes made after the backup. Preserve
 a fresh backup of current state and review those losses first. The agent-only
 `iris admin restore-check` is useful but does not verify account authentication.
 
+A backup from before 2026-11-11 10:06 UTC, including older public hub backups,
+or a database with imported accounts can hold scrypt hashes. This version accepts
+Argon2id only; it never converts stored hashes. It cannot sign in with a scrypt
+hash or recover its password. Existing sessions are not revoked merely because
+the account has a scrypt hash; withholding the key and activating with fresh key
+material prevents restored sessions from retaining browser authority.
+
+Every password set during recovery is fresh and unpredictable and known only to
+the person performing recovery. Keep it private until recovery finishes. After
+restart, loopback accepts sign-ins; another user of the hub's host could reach
+it with a password they already know. Keep the public proxy closed to the
+console until all access has been restored and checked.
+
 1. Work on an isolated copy, never the live volume. Keep the **old console key
    withheld**: do not copy it to the restore's default or explicit key path.
    Stop the target hub before replacing its database/WAL/SHM files, as described
@@ -277,16 +294,32 @@ a fresh backup of current state and review those losses first. The agent-only
    and scratch owner-token file for every administrative CLI call; do not let
    saved client configuration select the production hub. Missing key material
    keeps the candidate's browser gate closed while setup works.
-3. Review the restored operator identity. Recover its password with owner `reset`
-   if required, then run `activate` with a password the owner has verified. This
-   creates fresh independent key material and clears all restored console sessions
-   in the activation transaction. Restart the candidate with that fresh key.
+3. Choose and review the recovery operator. If its hash is scrypt or its
+   password needs recovery, use `iris admin console reset <username>`. Then run `activate` with a password
+   the owner has verified. This creates fresh independent key material and clears
+   all restored console sessions in the activation transaction. Restart the
+   candidate with that fresh key.
 4. Sign in through the private literal-loopback named UI. Review restored
-   accounts, roles, disabled states and every grant before public reopening.
+   accounts, roles, disabled states and every grant. Before resetting any other
+   scrypt account, including a member or disabled account, record its role,
+   disabled state and grants outside the console. The access editor includes
+   disabled members' grants. Reset makes the account an enabled operator,
+   deletes its grants and revokes its sessions; it does not preserve access.
+   In the access editor, click Reload, select the account again, apply its
+   recorded role, state and grants, save, reload and check that they read back
+   as recorded. A form left open before the reset holds stale access, and saving
+   it returns a conflict.
+
    Reset passwords that must no longer be valid, and remove unwanted restored
    authority through supported owner/account operations. Never use direct SQL
-   edits behind a serving hub as a recovery shortcut.
-5. Take a consistent `iris admin backup` of the reviewed candidate, then stop it
+   edits behind a serving hub as a recovery shortcut. There is no separate reset
+   command that preserves role and grants.
+5. Hand out passwords or reopen access to anyone else only after every account's
+   access reads back as recorded. If a save fails or a check differs, keep the
+   isolation and the record taken before reset unchanged. Repeat only these
+   steps: click Reload, apply that record, save and read back. Never record the
+   account again after reset: its temporary state is operator with no grants.
+6. Take a consistent `iris admin backup` of the reviewed candidate, then stop it
    before installing that backup in the target; do not copy a live main file alone.
    Preserve the new key with that database, start one named-authentication hub,
    repeat readiness/sign-in/revocation checks, and only then reopen public browser

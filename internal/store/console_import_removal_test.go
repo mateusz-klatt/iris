@@ -78,7 +78,11 @@ func populateVersion23(t *testing.T) (*Store, *fakeClock, string) {
 		t.Fatal(err)
 	}
 	for i, account := range []ConsoleAccount{operator, member, disabled} {
-		if _, err = s.db.Exec("UPDATE ConsoleAccount SET created_ms=1000,last_login_ms=2000,auth_version=3,edit_revision=7 WHERE id=?", account.ID); err != nil {
+		hash := consoleTestHash
+		if i > 0 {
+			hash = consoleLegacyScryptHash
+		}
+		if _, err = s.db.Exec("UPDATE ConsoleAccount SET password_hash=?,created_ms=1000,last_login_ms=2000,auth_version=3,edit_revision=7 WHERE id=?", hash, account.ID); err != nil {
 			t.Fatal(err)
 		}
 		now := clock.Now().UnixMilli()

@@ -288,7 +288,8 @@ restoring it can restore both, requiring owner review before reopening the conso
 
 ### 4. Password formats and bounded verification
 
-Scrypt acceptance and upgrade are superseded by [ADR 020](020-named-login-only.md); PR 3 is not yet implemented.
+Scrypt acceptance and upgrade are superseded by [ADR 020](020-named-login-only.md);
+PR 3 implements Argon2id-only verification and removes the upgrade.
 
 The accepted imported format is exactly
 `scrypt$n$r$p$salt_base64$hash_base64`, without a leading dollar sign. The supplied
@@ -594,6 +595,9 @@ Do not follow export test references to login templates or server files outside
 `ui/`; they were not inspected and are outside this transfer's scope.
 
 ## Owner decisions accepted
+
+These are the original decisions. [ADR 020](020-named-login-only.md) supersedes
+the import and scrypt items below; native accounts use Argon2id only.
 
 - Operators have global console/access-management authority; members default to
   no repository access and receive explicit `ro`/`rw` grants. `rw` adds send/reply

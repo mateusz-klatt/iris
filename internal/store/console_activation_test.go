@@ -37,75 +37,68 @@ func TestHasEnabledConsoleOperatorReadsOnlyCurrentEnabledRole(t *testing.T) {
 }
 
 func TestPrepareConsoleActivationRevokesAllSessionsWithoutChangingAccounts(t *testing.T) {
-	for _, profile := range []string{"argon2id", "scrypt"} {
-		t.Run(profile, func(t *testing.T) {
-			s, clock, file := testStore(t)
-			operator := newSessionAccount(t, s, "operator", "operator")
-			if profile == "scrypt" {
-				operator = createTestConsoleAccount(t, s, "imported operator", "operator")
-			}
-			other := newSessionAccount(t, s, "other", "member")
-			// Include an expired session and sessions for unrelated accounts. Owner
-			// activation clears all of them, not only the verifying operator's.
-			now := clock.Now().UnixMilli()
-			for i, account := range []ConsoleAccount{operator, other, other} {
-				digest := make([]byte, 32)
-				digest[0] = byte(i + 1)
-				if _, err := s.db.Exec("INSERT INTO ConsoleSession VALUES(?,?,?,?,?)", digest, account.ID, account.AuthVersion, now-(2*time.Hour).Milliseconds(), now+(time.Duration(i-1)*time.Hour).Milliseconds()); err != nil {
-					t.Fatal(err)
-				}
-			}
-			beforeOther, err := s.GetConsoleAccount(t.Context(), other.ID)
-			if err != nil {
-				t.Fatal(err)
-			}
-			changes := s.Changes()
-			got, err := s.PrepareConsoleActivation(t.Context(), operator)
-			if err != nil {
-				t.Fatal(err)
-			}
-			want := operator
-			want.LoginKey, want.PasswordHash = "", ""
-			if !reflect.DeepEqual(got, want) {
-				t.Fatal("activation returned credentials or changed the account")
-			}
-			select {
-			case <-changes:
-			default:
-				t.Fatal("activation did not wake revoked session watchers")
-			}
-			if rowCount(t, s, "SELECT COUNT(*) FROM ConsoleSession") != 0 {
-				t.Fatal("activation retained an old or unrelated session")
-			}
-			current, err := s.GetConsoleAccount(t.Context(), operator.ID)
-			if err != nil || !reflect.DeepEqual(current, operator) {
-				t.Fatal("verification changed operator credentials, versions or login time", err)
-			}
-			currentOther, err := s.GetConsoleAccount(t.Context(), other.ID)
-			if err != nil || !reflect.DeepEqual(currentOther, beforeOther) {
-				t.Fatal("verification changed another account", err)
-			}
-			if rowCount(t, s, "SELECT COUNT(*) FROM ConsoleAction WHERE actor_kind='owner' AND actor_account_id IS NULL AND target_account_id=? AND action='activation_verified' AND outcome='accepted'", operator.ID) != 1 {
-				t.Fatal("verification was not attributed to the owner")
-			}
-			if err = s.Close(); err != nil {
-				t.Fatal(err)
-			}
-			s.lock = nil
-			reopened, err := Open(file, clock)
-			if err != nil {
-				t.Fatal(err)
-			}
-			defer func() { _ = reopened.Close() }()
-			if rowCount(t, reopened, "SELECT COUNT(*) FROM ConsoleSession") != 0 || rowCount(t, reopened, "SELECT COUNT(*) FROM ConsoleAction WHERE action='activation_verified'") != 1 {
-				t.Fatal("restart lost the session clearing or verification record")
-			}
-		})
+	s, clock, file := testStore(t)
+	operator := newSessionAccount(t, s, "operator", "operator")
+	other := newSessionAccount(t, s, "other", "member")
+	// Include an expired session and sessions for unrelated accounts. Owner
+	// activation clears all of them, not only the verifying operator's.
+	now := clock.Now().UnixMilli()
+	for i, account := range []ConsoleAccount{operator, other, other} {
+		digest := make([]byte, 32)
+		digest[0] = byte(i + 1)
+		if _, err := s.db.Exec("INSERT INTO ConsoleSession VALUES(?,?,?,?,?)", digest, account.ID, account.AuthVersion, now-(2*time.Hour).Milliseconds(), now+(time.Duration(i-1)*time.Hour).Milliseconds()); err != nil {
+			t.Fatal(err)
+		}
+	}
+	beforeOther, err := s.GetConsoleAccount(t.Context(), other.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	changes := s.Changes()
+	got, err := s.PrepareConsoleActivation(t.Context(), operator)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := operator
+	want.LoginKey, want.PasswordHash = "", ""
+	if !reflect.DeepEqual(got, want) {
+		t.Fatal("activation returned credentials or changed the account")
+	}
+	select {
+	case <-changes:
+	default:
+		t.Fatal("activation did not wake revoked session watchers")
+	}
+	if rowCount(t, s, "SELECT COUNT(*) FROM ConsoleSession") != 0 {
+		t.Fatal("activation retained an old or unrelated session")
+	}
+	current, err := s.GetConsoleAccount(t.Context(), operator.ID)
+	if err != nil || !reflect.DeepEqual(current, operator) {
+		t.Fatal("verification changed operator credentials, versions or login time", err)
+	}
+	currentOther, err := s.GetConsoleAccount(t.Context(), other.ID)
+	if err != nil || !reflect.DeepEqual(currentOther, beforeOther) {
+		t.Fatal("verification changed another account", err)
+	}
+	if rowCount(t, s, "SELECT COUNT(*) FROM ConsoleAction WHERE actor_kind='owner' AND actor_account_id IS NULL AND target_account_id=? AND action='activation_verified' AND outcome='accepted'", operator.ID) != 1 {
+		t.Fatal("verification was not attributed to the owner")
+	}
+	if err = s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s.lock = nil
+	reopened, err := Open(file, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reopened.Close() }()
+	if rowCount(t, reopened, "SELECT COUNT(*) FROM ConsoleSession") != 0 || rowCount(t, reopened, "SELECT COUNT(*) FROM ConsoleAction WHERE action='activation_verified'") != 1 {
+		t.Fatal("restart lost the session clearing or verification record")
 	}
 }
 
 func TestPrepareConsoleActivationRefusesUnusableOrChangedOperator(t *testing.T) {
-	for _, change := range []string{"malformed-hash", "unsupported-hash", "missing", "password-reset", "version", "hash", "member", "none", "disabled"} {
+	for _, change := range []string{"malformed-hash", "unsupported-hash", "scrypt", "missing", "password-reset", "version", "hash", "member", "none", "disabled"} {
 		t.Run(change, func(t *testing.T) {
 			s, _, _ := testStore(t)
 			operator := newSessionAccount(t, s, "operator", "operator")
@@ -118,6 +111,12 @@ func TestPrepareConsoleActivationRefusesUnusableOrChangedOperator(t *testing.T) 
 				code = "bad_request"
 			case "unsupported-hash":
 				operator.PasswordHash = "$argon2id$v=19$m=999999999,t=3,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+				code = "bad_request"
+			case "scrypt":
+				operator.PasswordHash = consoleLegacyScryptHash
+				if _, err := s.db.Exec("UPDATE ConsoleAccount SET password_hash=? WHERE id=?", operator.PasswordHash, operator.ID); err != nil {
+					t.Fatal(err)
+				}
 				code = "bad_request"
 			case "missing":
 				operator.ID = "ca_missing"

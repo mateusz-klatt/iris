@@ -58,7 +58,8 @@ The fresh-hub verification step is superseded by [ADR 020](020-named-login-only.
    accepts the supported bounded scrypt profile and the normal Argon2id profile,
    with the existing UTF-8/1,024-byte verification bounds. It does not apply the
    fifteen-code-point policy for newly created passwords to imported passwords.
-   Scrypt acceptance is superseded by [ADR 020](020-named-login-only.md); PR 3 is not yet implemented.
+   Scrypt acceptance is superseded by [ADR 020](020-named-login-only.md);
+   PR 3 implements Argon2id-only activation.
 6. `iris ui` resolves and validates the ordinary console origin, prints it and
    opens it best-effort. It does not read a credential file or request a login
    link. The frontend distinguishes a closed console from an ordinary signed-out
@@ -134,6 +135,10 @@ authenticated session GET to return 200. Leaving Cookie removal permits a login
 response to set a cookie but strips it on that subsequent request, causing 401.
 
 ## Required evidence
+
+[ADR 020](020-named-login-only.md) replaces the scrypt acceptance requirement
+below with rejection and retained short Argon2id verification. The measured
+evidence remains historical.
 
 Use temporary synthetic accounts and the real rebuilt binary to prove closed
 startup, owner bootstrap, imported short scrypt verification, activation followed

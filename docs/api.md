@@ -470,11 +470,14 @@ key and do not change the process's startup gate.
 - Login attempts are limited before password work to five per normalized login
   key in fifteen minutes and thirty aggregate per minute, with bounded expiring
   digest-keyed buckets. Unknown names consume the same quotas. Across login,
-  change, reset and upgrade, at most two KDF jobs run concurrently with no queue.
+  change, create, reset and activation, at most two KDF jobs run concurrently
+  with no queue.
   Refusal returns `rate_limited` and `Retry-After`; the limits reset on restart.
   Missing/disabled/unusable accounts and incorrect passwords return the same
   `unauthorized` status and `Invalid username or password`, with bounded dummy
-  work after admission. Different accepted hash profiles can still differ in timing.
+  work after admission. Only Argon2id hashes are accepted. Stored scrypt hashes
+  take the same dummy-verification path as unknown, disabled or unreadable accounts;
+  login never converts a stored hash.
 - Old sessions become `unauthorized` after an `rw` downgrade. Reauthenticated
   `ro` accounts can read but cannot send, reply or replay a cached send result.
   Authorization runs inside the write transaction. Socket frame admission shares
@@ -534,10 +537,15 @@ access editor and read them back before handing out its password.
 `iris admin console activate <username> < /private/password` calls
 `POST /v1/admin/console/activate` with `{ "username": "...", "password": "..." }`.
 It uses the one-ending CLI line framing above, with valid UTF-8 and a
-1,024-byte bound after framing. Imported bounded scrypt passwords need not meet
-the new-password fifteen-code-point minimum. The hub verifies the password outside the store lock,
-then transactionally rechecks the enabled operator snapshot/authentication
-version, clears every console session and records `activation_verified`.
+1,024-byte bound after framing. It accepts Argon2id credentials only, without
+applying the new-password fifteen-code-point minimum: a short Argon2id password
+retained through an earlier upgrade still verifies. An unreadable stored hash
+is refused with fixed owner advice: this version does not read the stored
+password format; recover the operator with `iris admin console reset <username>`,
+then activate. Browser login receives no format-specific advice. The hub verifies
+the password outside the store lock, then transactionally rechecks the enabled
+operator snapshot/authentication version, clears every console session and records
+`activation_verified`.
 Only afterward does it create/load the independent key; malformed existing
 material is refused. The record does not prove key persistence. Success returns
 `{ "account": {...}, "restart_required": true }`, without a browser cookie or
