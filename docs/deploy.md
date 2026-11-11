@@ -1,14 +1,13 @@
 # Public Iris hub
 
-Before running commands for the first named-console deployment, the owner must
-explicitly confirm in their own terminal that they are present and ready to
-complete activation, the second restart and sign-in checks. Take the backup
-before deploying: the first replacement of the legacy binary immediately closes
-browser access while agent coordination continues. An approved import apply and
-its repeated dry-run precede owner activation; then whoever deployed restarts
-the hub with `docker restart iris`, and the owner signs in and stays for the
-checks. Agents may prepare and rehearse but must not activate real accounts on
-the owner's behalf. Passwords and machine credentials stay out of chat.
+Before a deployment that needs console setup or recovery, arrange for the
+owner to perform that operation in their own terminal and remain present
+through the restart and sign-in checks. Take the backup before deploying. On a
+fresh hub, owner `create` prepares a key and requires one restart; the owner
+uses `activate` for a restored database without its key or a lost key. Agents
+may prepare and rehearse but must not activate real accounts on the owner's
+behalf. Passwords and machine credentials stay out of chat. The completed
+public-hub cutover is recorded in [status.md](status.md).
 
 The intended path is client HTTPS → Cloudflare HTTPS → Apache → HTTP on
 127.0.0.1:7878. Use Cloudflare Full (strict), a valid origin certificate, and
@@ -17,24 +16,29 @@ Iris sends no-store and a CSP that permits only its own scripts. Cloudflare term
 TLS and can see credentials and message content. This is a shared-trust service for
 one developer or a small team, not a multi-tenant boundary (D13).
 
-The browser console uses named accounts. Follow
-[console activation and recovery](console-activation.md) before opening browser
-access. The owner creates an operator or performs a separately approved
-[account import](accounts-import.md), verifies its password with
-`iris admin console activate <username> < /private/password`, and whoever
-deployed then restarts the hub a second time. Create/reset/activate remove
-exactly one final LF or CRLF from stdin as line framing before password
-validation; all other bytes are preserved and HTTP password verification
-remains exact.
-Deploying this code does not authorize a real import or activate a missing key.
-Open the hub's URL in a browser (`http://127.0.0.1:7878/` by default for a local
-hub) and sign in with a named account. Machine tokens grant no browser authority.
+The browser console uses named accounts. Follow [console activation and
+recovery](console-activation.md) before opening browser access. The owner
+creates an operator with `iris admin console create <username>` and a new
+password on protected stdin. Only a hub with no console account at all and no
+console key prepares the key through `create`; its result states that the
+operator was made, the key was prepared and `restart_required` is true.
+Whoever deployed then restarts the hub. On every other hub `create` only makes
+an account. `create` prepares no key when an account exists without a key or a
+key exists without an account. For restore, key loss, or key preparation that
+failed after the account creation transaction committed, the owner verifies
+the operator's password with `iris admin console activate <username> <
+/private/password`, then restarts. Create/reset/activate remove exactly one
+final LF or CRLF from stdin as line framing before password validation; all
+other bytes are preserved and HTTP password verification remains exact.
+Deploying code does not prepare a missing key by itself. Open the hub's URL in
+a browser (`http://127.0.0.1:7878/` by default for a local hub) and sign in
+with a named account. Machine tokens grant no browser authority.
 
 `iris serve` loads a separate protected 256-bit console key from
 `<database>.console.key`, or the path selected by `--console-key-file`.
 It creates no key during ordinary startup. Missing, unreadable, malformed or
 owner-token-reusing material leaves browser authentication closed while agents,
-authenticated doctor uploads and owner setup/recovery/import remain available.
+authenticated doctor uploads and owner setup/recovery remain available.
 An enabled operator is also required. Normal restarts retain that key, database
 and each session's original twelve-hour absolute expiry; there is no hot reload.
 
@@ -181,6 +185,11 @@ Going back to the image alone is enough only when the deployment added no migrat
 `git log --oneline "$previous..$commit" -- internal/store/migrations`. Iris does not refuse an older
 hub on a newer database, and it is not safe there. After a migration, stop the hub and restore the
 backup from step 3, which also loses the mail and other writes made since.
+Migration 024 drops the account and assignment import ledgers. A pre-024 binary
+can open a version-24 database because the store has no maximum-version fence;
+it fails only where it touches a dropped table. Use the matching pre-deploy
+backup for that rollback. The procedure cannot enforce the choice made by the
+hub OS owner.
 
 What ties the image to the source is that it came from the CI run of that commit, by GitHub's record
 of the run. Nothing signs it, and anyone who can push to `main` or change the workflow decides what

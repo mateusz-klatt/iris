@@ -18,12 +18,14 @@ import (
 )
 
 type observedConsoleConfiguration struct {
-	key      []byte
-	activate func() error
-	err      error
+	key        []byte
+	activate   func() error
+	keyMissing func() bool
+	err        error
 }
 
-func (c *observedConsoleConfiguration) ConfigureConsole(key []byte, activate func() error) error {
+func (c *observedConsoleConfiguration) ConfigureConsole(key []byte, keyMissing, keyAvailable func() bool, activate func() error) error {
+	c.keyMissing = keyMissing
 	c.key, c.activate = append([]byte(nil), key...), activate
 	return c.err
 }
@@ -44,7 +46,7 @@ func TestConfigureConsoleRequiresExplicitActivationAndRestart(t *testing.T) {
 	var logs bytes.Buffer
 	first := &observedConsoleConfiguration{}
 	configureConsole(first, keyFile, ownerFile, ownerToken, &logs)
-	if first.key != nil || first.activate == nil || !strings.Contains(logs.String(), "Iris console closed") {
+	if first.key != nil || first.activate == nil || !first.keyMissing() || !strings.Contains(logs.String(), "Iris console closed") {
 		t.Fatal("missing key did not configure closed-console owner recovery")
 	}
 	if _, err := os.Stat(filepath.Dir(keyFile)); !errors.Is(err, os.ErrNotExist) {
@@ -60,7 +62,7 @@ func TestConfigureConsoleRequiresExplicitActivationAndRestart(t *testing.T) {
 	logs.Reset()
 	restarted := &observedConsoleConfiguration{}
 	configureConsole(restarted, keyFile, ownerFile, ownerToken, &logs)
-	if !bytes.Equal(restarted.key, want) || logs.String() != "Iris console open\n" {
+	if restarted.keyMissing() || !bytes.Equal(restarted.key, want) || logs.String() != "Iris console open\n" {
 		t.Fatal("restart did not load the persisted key")
 	}
 	if err = restarted.activate(); err != nil {
@@ -225,6 +227,66 @@ func TestServeConsoleKeyPathFollowsDatabaseOrExplicitFlag(t *testing.T) {
 			// refusal proves startup loaded the selected path without activating it.
 			if serveErr == nil || !strings.Contains(logs, "account authentication unavailable") || strings.Contains(logs, "console key unavailable") || strings.Contains(logs, keyFile) {
 				t.Fatal("serve ignored the selected key path or disclosed it", serveErr, logs)
+			}
+		})
+	}
+}
+
+func TestOwnerCreateChecksKeyFilePresenceEvenWhenStartupCouldNotOpenConsole(t *testing.T) {
+	for _, state := range []string{"missing", "key-without-account", "malformed-key"} {
+		t.Run(state, func(t *testing.T) {
+			ownerFile, ownerToken := consoleOwnerCredential(t)
+			keyFile := filepath.Join(filepath.Dir(ownerFile), "console.key")
+			switch state {
+			case "key-without-account":
+				if _, err := config.ConsoleKey(keyFile); err != nil {
+					t.Fatal(err)
+				}
+			case "malformed-key":
+				if err := os.WriteFile(keyFile, []byte("synthetic malformed key"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			before, _ := os.ReadFile(keyFile)
+			s, err := store.Open(filepath.Join(t.TempDir(), "hub.db"), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = s.Close() })
+			h := hub.New(s, ownerToken, []string{"127.0.0.1:7878"})
+			configureConsole(h, keyFile, ownerFile, ownerToken, io.Discard)
+			r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1:7878/v1/admin/console/accounts", strings.NewReader(`{"username":"synthetic operator","password":"correct synthetic password"}`))
+			r.Header.Set("Authorization", "Bearer "+ownerToken)
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, r)
+			if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"account_created":true`) {
+				t.Fatal("owner create did not provision an operator", w.Code)
+			}
+			after, err := os.ReadFile(keyFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if state == "missing" {
+				if !strings.Contains(w.Body.String(), `"key_prepared":true`) || !strings.Contains(w.Body.String(), `"restart_required":true`) {
+					t.Fatal("fresh create omitted key preparation or restart")
+				}
+				if _, err = config.LoadConsoleKey(keyFile); err != nil {
+					t.Fatal("fresh create did not persist a usable key", err)
+				}
+			} else {
+				wantRestart := `"restart_required":false`
+				if state == "key-without-account" {
+					wantRestart = `"restart_required":true`
+				}
+				if !bytes.Equal(before, after) || !strings.Contains(w.Body.String(), `"key_prepared":false`) || !strings.Contains(w.Body.String(), wantRestart) {
+					t.Fatal("existing key was prepared again, changed, or restart readiness was misreported")
+				}
+			}
+			login := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:7878/v1/ui/login", nil)
+			w = httptest.NewRecorder()
+			h.ServeHTTP(w, login)
+			if w.Code != http.StatusUnauthorized {
+				t.Fatal("create opened the running console")
 			}
 		})
 	}

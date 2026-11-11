@@ -10,11 +10,16 @@ import (
 )
 
 // ConfigureConsole loads immutable startup authority. Call before serving. The
-// callback persists an independent protected key only after owner activation has
-// verified an enabled operator. It never changes this process's browser gate.
-func (h *Hub) ConfigureConsole(key []byte, activate func() error) error {
+// keyMissing callback only inspects presence, including a key this process could
+// not load. keyAvailable checks existing usable material for restart reporting.
+// The activate callback persists an independent protected key after
+// fresh owner provisioning or verified activation commits. These callbacks never
+// change this process's browser gate.
+func (h *Hub) ConfigureConsole(key []byte, keyMissing, keyAvailable func() bool, activate func() error) error {
 	h.console = newConsoleAuth(nil)
 	h.consoleActivate = activate
+	h.consoleKeyMissing = keyMissing
+	h.consoleKeyAvailable = keyAvailable
 	if len(key) == 0 {
 		return nil
 	}

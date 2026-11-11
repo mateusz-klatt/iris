@@ -263,7 +263,7 @@ func TestNewRepositoriesFoldByDefault(t *testing.T) {
 // The last claim is released, because the backfill covers history too.
 func oldDatabase(t *testing.T) (file string, held []string) {
 	t.Helper()
-	s, _, file := testStore(t)
+	s, _, file := historicalStore(t, 23)
 	a, _ := fixtureSession(t, s, 1)
 	held = []string{"SRC/A.GO", "café/Dir", "src/free.go"}
 	call(t, s, "claim", claimRequest(a, "exact", held[0], "exact"))
@@ -295,7 +295,7 @@ func TestMigrationBackfillsEveryClaimAndFoldsEveryRepository(t *testing.T) {
 		t.Fatal(err)
 	}
 	var version int
-	if err = s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 23 {
+	if err = s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 24 {
 		t.Fatal(version, err)
 	}
 	for _, p := range held {

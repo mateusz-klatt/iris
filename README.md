@@ -54,8 +54,10 @@ with HTTP 503 at console routes. If an index was built earlier, plain Go builds 
 and report `console unverified`: this does not prove its assets are complete or current.
 
 Open the hub's URL in a browser to use the console (`http://127.0.0.1:7878/` by
-default for a local hub), then sign in with a named account. The owner must first
-[activate the console and restart the hub](docs/console-activation.md#owner-setup-and-activation).
+default for a local hub), then sign in with a named account. The owner first
+[creates the initial operator and restarts the hub](docs/console-activation.md#owner-setup-and-activation).
+On a fresh hub `create` also prepares the console key; restoring a database
+without its key or recovering a lost key uses `activate`.
 
 ## Documentation
 

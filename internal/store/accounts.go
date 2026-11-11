@@ -53,8 +53,8 @@ func consoleRole(role string) bool {
 	return role == "operator" || role == "member" || role == "none"
 }
 
-// Locale values are the exact web/src/i18n.ts catalog, or unset. An importer must
-// explicitly resolve other source values; storage never guesses a replacement.
+// Locale values are the exact web/src/i18n.ts catalog, or unset. Storage never
+// guesses a replacement for unsupported values.
 func consoleLocale(locale string) bool {
 	return consoleauth.ValidLocale(locale)
 }
@@ -74,28 +74,53 @@ func (s *Store) CreateConsoleAccount(ctx context.Context, input ConsoleAccountIn
 }
 
 func (s *Store) createConsoleAccount(ctx context.Context, input ConsoleAccountInput, owner bool) (ConsoleAccount, error) {
+	account, _, err := s.createConsoleAccountWithActivation(ctx, input, owner, nil)
+	return account, err
+}
+
+// ProvisionConsoleOperatorWithActivation checks for an empty account database
+// and a missing key within the creation transaction. keyMissing only inspects
+// the key's presence; the hub prepares it after a successful commit. The audit
+// records preparation eligibility, not successful key publication or activation.
+func (s *Store) ProvisionConsoleOperatorWithActivation(ctx context.Context, input ConsoleAccountInput, keyMissing func() bool) (ConsoleAccount, bool, error) {
+	if !consoleNewHash(input.PasswordHash) {
+		return ConsoleAccount{}, false, fail("bad_request", "unsupported new password record")
+	}
+	input.Role, input.Disabled = "operator", false
+	return s.createConsoleAccountWithActivation(ctx, input, true, keyMissing)
+}
+
+func (s *Store) createConsoleAccountWithActivation(ctx context.Context, input ConsoleAccountInput, owner bool, keyMissing func() bool) (ConsoleAccount, bool, error) {
 	key, err := consoleauth.LoginKey(input.Username)
 	if err != nil {
-		return ConsoleAccount{}, fail("bad_request", "invalid console username")
+		return ConsoleAccount{}, false, fail("bad_request", "invalid console username")
 	}
 	if err = consoleauth.ValidateHash(input.PasswordHash); err != nil {
-		return ConsoleAccount{}, fail("bad_request", "unsupported console password record")
+		return ConsoleAccount{}, false, fail("bad_request", "unsupported console password record")
 	}
 	if err = consoleProfile(input.DisplayName, input.UILocale, input.CorrespondenceLocale); err != nil {
-		return ConsoleAccount{}, err
+		return ConsoleAccount{}, false, err
 	}
 	if input.Role == "" {
 		input.Role = "none"
 	}
 	if !consoleRole(input.Role) {
-		return ConsoleAccount{}, fail("bad_request", "invalid console role")
+		return ConsoleAccount{}, false, fail("bad_request", "invalid console role")
 	}
 	if input.Role == "none" {
 		input.Disabled = true
 	}
 	accountID := id("ca_")
 	var account ConsoleAccount
+	prepareKey := false
 	err = s.transact(ctx, func(t *transaction) error {
+		if keyMissing != nil {
+			var hasAccounts bool
+			if err := t.row("SELECT EXISTS(SELECT 1 FROM ConsoleAccount)").Scan(&hasAccounts); err != nil {
+				return err
+			}
+			prepareKey = !hasAccounts && keyMissing()
+		}
 		result, err := t.exec(`INSERT INTO ConsoleAccount(id,username,login_key,password_hash,role,disabled,display_name,ui_locale,correspondence_locale,created_ms)
  VALUES(?,?,?,?,?,?,?,?,?,?) ON CONFLICT(login_key) DO NOTHING`, accountID, input.Username, key, input.PasswordHash, input.Role, input.Disabled, input.DisplayName, input.UILocale, input.CorrespondenceLocale, s.clock.Now().UnixMilli())
 		if err != nil {
@@ -110,11 +135,19 @@ func (s *Store) createConsoleAccount(ctx context.Context, input ConsoleAccountIn
 			return err
 		}
 		if owner {
-			return t.consoleOwnerAction(accountID, "owner_provision")
+			if err = t.consoleOwnerAction(accountID, "owner_provision"); err != nil {
+				return err
+			}
+			if prepareKey {
+				return t.consoleOwnerAction(accountID, "activation_prepared")
+			}
 		}
 		return nil
 	})
-	return account, err
+	if err != nil {
+		return ConsoleAccount{}, false, err
+	}
+	return account, prepareKey, nil
 }
 
 func (t *transaction) consoleAccount(column, value string) (ConsoleAccount, error) {

@@ -45,7 +45,7 @@ Checked against commit `72308ccfa3aa574e207208c5409757864ce538ff`:
 
 ### 1. Accounts are separate from machine credentials and human mailboxes
 
-The import ledger parts are superseded by [ADR 020](020-named-login-only.md); PR 2 is not yet implemented.
+The import ledger parts are superseded by [ADR 020](020-named-login-only.md); PR 2 implements this removal.
 
 Add Iris-owned `ConsoleAccount`, `ConsoleRepositoryAccess`, `ConsoleSession` and
 `ConsoleImport` records, plus `ConsoleOperation` for account-scoped send retries,
@@ -97,7 +97,7 @@ as text. Role/permission data never comes from profile updates.
 
 ### 2. Two useful roles, with per-repository ro/rw and default denial
 
-Imported role and grant mappings are superseded by [ADR 020](020-named-login-only.md); PR 2 is not yet implemented.
+Imported role and grant mappings are superseded by [ADR 020](020-named-login-only.md); PR 2 implements this removal.
 
 | Source/global role | Iris role and console authority |
 |---|---|
@@ -407,7 +407,7 @@ text remains untrusted data and never chooses authority, execution or priority.
 
 ### 7. A separate, transactional import tool
 
-The importer is superseded by [ADR 020](020-named-login-only.md); PR 2 is not yet implemented.
+The importer is superseded by [ADR 020](020-named-login-only.md); PR 2 implements this removal.
 
 Implement later in Go as an owner-authenticated CLI tool, with a source SQLite
 connection opened read-only and a consistent snapshot. The hub alone writes its

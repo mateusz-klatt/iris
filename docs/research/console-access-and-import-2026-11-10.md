@@ -2,7 +2,7 @@
 
 Research record for [ADR 019](../adr/019-console-activation.md),
 [the activation runbook](../console-activation.md) and
-[the import procedure](../accounts-import.md). The
+[the import procedure](https://github.com/mateusz-klatt/iris/blob/658cfc81a0b5f2fe353ebd017d802c703ba3fa30/docs/accounts-import.md). The
 [candidate run](console-activation-candidate-2026-11-10.md) left out two checks:
 the access checks of
 [the rehearsals of 2026-11-09](console-activation-rehearsal-2026-11-09.md#what-a-candidate-is-checked-for),

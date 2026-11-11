@@ -60,14 +60,14 @@ func TestConsoleStartupRequiresKeyAndEnabledOperator(t *testing.T) {
 	h := activationHub(t)
 	key := bytes.Repeat([]byte{7}, 32)
 	for _, input := range [][]byte{nil, {1}, key} {
-		err := h.ConfigureConsole(input, func() error { return nil })
+		err := h.ConfigureConsole(input, nil, nil, func() error { return nil })
 		if (len(input) != 0) != (err != nil) {
 			t.Fatalf("startup gate error for %d key bytes: %v", len(input), err)
 		}
 		consoleDo(t, h, activationBase, "GET", "/v1/ui/session", nil, consoleBrowser{}, 401)
 	}
 	consoleAccount(t, h, "Bootstrap", "operator")
-	if err := h.ConfigureConsole(key, nil); err != nil {
+	if err := h.ConfigureConsole(key, nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	key[0]++
@@ -78,7 +78,7 @@ func TestConsoleStartupRequiresKeyAndEnabledOperator(t *testing.T) {
 	if err := h.store.Close(); err != nil {
 		t.Fatal(err)
 	}
-	if err := h.ConfigureConsole(key, nil); err == nil || len(h.console.key) != 0 {
+	if err := h.ConfigureConsole(key, nil, nil, nil); err == nil || len(h.console.key) != 0 {
 		t.Fatal("failed operator readiness opened the console")
 	}
 }
@@ -104,7 +104,7 @@ func TestOwnerActivationVerifiesThenPersistsKeyWithoutOpeningRunningConsole(t *t
 	}
 	consoleDo(t, h, activationBase, "GET", "/v1/ui/session", nil, consoleBrowser{}, 401)
 	// A fresh startup with the persisted key and same account opens named login.
-	if err := h.ConfigureConsole(bytes.Repeat([]byte{8}, 32), nil); err != nil {
+	if err := h.ConfigureConsole(bytes.Repeat([]byte{8}, 32), nil, nil, nil); err != nil {
 		t.Fatal(err)
 	}
 	activationRequest(t, h, activationPayload(a.Username, consoleTestPassword), 409, nil)

@@ -221,7 +221,7 @@ func TestHeartbeatsRegistrationsAndChangesLeaveTheIdentity(t *testing.T) {
 // Migration 023 gives mail that still needs attention the cursor of its newest surviving event, or
 // the event sequence's high-water mark when retention removed it; handled mail gets none.
 func TestTheMigrationStampsMailThatNeedsAttention(t *testing.T) {
-	s, clock, file := testStore(t)
+	s, clock, file := historicalStore(t, 23)
 	a, b, name := twoSessions(t, s)
 	deliveries := map[string]string{}
 	for _, key := range []string{"kept", "pruned", "handled"} {

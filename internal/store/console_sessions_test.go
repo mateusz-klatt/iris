@@ -471,7 +471,7 @@ func TestConsoleLegacyUpgradeInsertionFailureLeavesHashAndSessionsUnchanged(t *t
 }
 
 func TestConsoleOwnerAuditMigrationPreservesHistoryAndEnforcesActorKinds(t *testing.T) {
-	s, clock, file := testStore(t)
+	s, clock, file := historicalStore(t, 23)
 	a := newSessionAccount(t, s, "historical actor", "operator")
 	issueTestSession(t, s, a, 1)
 	// A version18 database has account actors only. Reconstruct that table instead

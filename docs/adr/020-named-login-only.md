@@ -2,7 +2,8 @@
 
 Status: accepted on 2026-11-11 by the fleet's vote 5, under the owner's direction.
 The vote at 10:46 UTC was 1B 2A 3A from all four voters: holzera, macOS, Windows
-and WSL. PR 1 implements the command and link cleanup. PR 2 and PR 3 are decided
+and WSL. PR 1 implements the command and link cleanup. PR 2 implements import
+removal, migration 024 and fresh-hub setup through `create`. PR 3 remains decided
 but not yet implemented.
 
 ## Problem
@@ -14,9 +15,9 @@ exclusion named a deleted frontend file. `iris ui` only printed the configured
 hub URL and asked the operating system to open it. It read no token, called no
 hub and authenticated no one.
 
-The account importer and bounded scrypt verification remain. Only the importer
-puts scrypt hashes into the database. Successful browser login upgrades those
-hashes to Argon2id; activation accepts them without upgrading. Both accounts on
+Before PR 2 the account importer was the only producer of scrypt hashes in the
+database. PR 2 removes it; bounded scrypt verification remains. Successful
+browser login upgrades those hashes to Argon2id; activation accepts them without upgrading. Both accounts on
 the public hub have Argon2id hashes after the owner's password changes on
 2026-11-11. Older backups can still hold scrypt hashes.
 
@@ -49,37 +50,51 @@ Vote 2A keeps the explicit 404 for `/ui/login` and `/v1/ui/links` and its tests.
 An old bookmarked link must not reach the console page. No schema or served
 response changes in PR 1. Shared fake-executable fixtures remain for other tests.
 
-**2. Remove the import in PR 2; decided, not yet implemented.** This follows the
-cutover record in pull request #265. Remove the account and grant import commands,
-their two owner routes, source adapter and store import code. Keep the shared
-read transaction used by activation readiness, under a name beside activation.
+**2. Remove the import in PR 2; implemented.** This follows the
+cutover record in pull request #265. The account and grant import commands,
+their two owner routes, source adapter and store import code are removed. The
+shared read transaction used by activation readiness remains beside activation,
+under a name that does not say import, with cancellation cleanup and no expiry
+writes.
 Migration 024 drops `ConsoleAssignmentImport` and `ConsoleImport` in the store's
 single migration transaction and sets schema version 24. Migrations 017 and 020
 remain unchanged; a fresh database replays them, and 017 also creates the account
 tables that stay. Existing accounts, grants, sessions and audit rows remain,
-including historical import actions. Adjust shared tests that assume the ledgers
-exist, while preserving historical migration assertions.
+including historical import actions. Shared tests no longer assume the ledgers
+exist in the latest schema; historical migration fixtures retain their assertions.
 
 The owner creates accounts with new passwords through the native CLI. `create`
 makes an enabled operator. For an intended member or disabled account, save its
 intended role, state and grants in the access editor and read them back before
 handing out its password. Import history and assignments are not recreated.
 
-**3. A fresh hub opens through `create` in PR 2; decided, not yet implemented.**
+**3. A fresh hub opens through `create` in PR 2; implemented.**
 Vote 1B applies only when the database has no console account at all and the hub
 has no console key. In that case `iris admin console create <username>` creates
 the operator and prepares the independent console key in the same owner action.
-It records the action in the owner audit as activation does and answers
-`restart_required`. Output states exactly what happened: operator made, key
-prepared, restart needed. One restart opens named login. The owner may overrule
-this choice.
+It records `owner_provision` and `activation_prepared` in the owner audit and
+answers `account_created: true`, `key_prepared: true`, `restart_required: true`.
+The preparation record does not claim separate password verification or key
+persistence. Output states exactly what happened: operator made, key prepared,
+restart needed. One restart opens named login.
 
 The no-account/no-key check and account creation are one transaction. Key
 preparation happens only after commit, as with activation. If it fails, the
 operator remains without a key; `activate` followed by a restart can then open
-the console. On every other hub `create` only creates an account. In particular,
-an account without a key or a key without an account must not trigger key
-preparation through `create`.
+the console. On every other hub `create` only creates an enabled operator and
+answers `account_created: true`, `key_prepared: false`. Neither an account
+without a key nor a key without an account triggers key preparation through
+`create`.
+
+`restart_required` is independent of `key_prepared`: it is true when the console
+is closed now and, after creation, a valid key and an enabled operator are
+available, so a restart would open named login. On a hub with a valid existing
+key but no accounts, `create` therefore returns `key_prepared: false`,
+`restart_required: true`; after restart the new operator can sign in. On a hub
+with an account but no key, `create` returns both flags as false; `activate` is
+still needed. Creating another account on an already open console also returns
+both flags as false. The CLI separately reports operator creation, key
+preparation and whether a restart is required.
 
 `activate` remains for a restored database without its key and for key loss.
 It verifies an enabled operator's password, clears all console sessions,
@@ -173,8 +188,8 @@ This decision supersedes:
   no-account/no-key condition above. Activation remains the restore and key
   recovery path, including verification-only password bounds.
 
-The superseded text remains as history with a note at each decision. The PR 2
-and PR 3 parts above describe accepted future work, not current behavior.
+The superseded text remains as history with a note at each decision. Only the
+PR 3 parts above describe accepted future work.
 
 ## What this cannot do
 
@@ -184,7 +199,7 @@ and PR 3 parts above describe accepted future work, not current behavior.
   Session checks do not read hash formats. Activation clears all sessions and
   restore isolation withholds the key. The public hub's password changes on
   2026-11-11 revoked its old sessions.
-- After PR 2, bring accounts, history or grants from another system. The owner
+- Bring accounts, history or grants from another system. The owner
   creates each account and reviews access before handing out its password.
 - Stop a pre-024 binary opening a version-24 database. The store has no maximum
   version check: it starts and fails only when it touches a dropped table. The

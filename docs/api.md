@@ -382,7 +382,7 @@ reaches the operator through the web UI, not through a session.
 ## Operator API, for the web UI
 
 The browser console uses named accounts under ADR 014 and
-[explicit startup activation](console-activation.md) under ADR 019.
+[owner setup and restart](console-activation.md) under ADR 019 and ADR 020.
 `Store.CallConsole` accepts only a trusted typed console principal and
 rechecks its persisted session, enabled account/authentication version, operation
 and object scope within one transaction. Profile/access methods use the same
@@ -420,7 +420,7 @@ Ordinary startup loads an independent protected console key from
 owner-token-reusing key material, or absence of an enabled operator, keeps the
 browser namespace closed: requests return 401 with
 `X-Iris-Console-Mode: closed`. Agent routes, authenticated doctor PUT and owner
-create/reset/import/activation remain available. No key is created by ordinary
+create/reset/activation remain available. No key is created by ordinary
 startup. An active console's unsigned session 401 shows the named login form;
 CSRF tokens stay in memory and each login retry obtains a fresh challenge.
 Only a missing console key sets the closed marker; an untrusted browser
@@ -504,6 +504,33 @@ session deletion applies to named `ConsoleSession` rows. An older binary can
 restore earlier browser authority, so rolling back to it still requires the
 proxy boundary.
 
+On a hub whose database has no console account at all and that has no console
+key, `create` also prepares sign-in. The no-account/no-key check and operator
+creation are one transaction, including owner audit records `owner_provision`
+and `activation_prepared`; the latter records preparation, not password
+verification or successful key persistence. Only after commit does the hub
+prepare the independent protected key. Success returns `{ "account": {...},
+"account_created": true, "key_prepared": true, "restart_required": true }`.
+The CLI prints this result: an operator was made, the key was prepared and a
+restart is needed. The current process remains closed; one restart opens named
+login. On every other hub `create` only makes an enabled operator and returns
+`account_created: true`, `key_prepared: false`. In particular, `create`
+prepares no key when an account exists without a key or a key exists without
+any account. Restart readiness is separate from key preparation:
+`restart_required` is true when the console is currently closed and a valid
+key and an enabled operator are available after creation, so restarting would
+open named login. On a hub with a valid key but no accounts, `create`
+therefore returns `key_prepared: false`, `restart_required: true`; restart to
+sign in with the new operator. On a hub with an account but no key, `create`
+returns both flags as false; `activate` is still needed. Creating another
+account on an already open console also returns both flags false. The CLI
+separately reports account creation, key preparation and whether a restart is
+required. If key preparation fails after commit, the error states that the
+operator was created and the key was not prepared; recover the key through
+owner review and use `activate` rather than creating that account again. For
+an intended member or disabled account, save its role, state and grants in the
+access editor and read them back before handing out its password.
+
 `iris admin console activate <username> < /private/password` calls
 `POST /v1/admin/console/activate` with `{ "username": "...", "password": "..." }`.
 It uses the one-ending CLI line framing above, with valid UTF-8 and a
@@ -516,44 +543,16 @@ material is refused. The record does not prove key persistence. Success returns
 `{ "account": {...}, "restart_required": true }`, without a browser cookie or
 hot activation. Restart with the prepared key opens named authentication.
 An already active console returns 409 `conflict` without clearing sessions.
-Normal restarts preserve original absolute session expiry. Before the first
-deployment closes the browser, the owner confirms readiness in their own
-terminal and remains present to activate and sign in; whoever deployed performs
-the second restart. Agents do not perform real owner activation or receive
-passwords in chat.
+Normal restarts preserve original absolute session expiry. The owner performs
+setup or recovery in their own terminal and stays through sign-in checks;
+whoever deployed restarts after key preparation. Agents do not perform real
+owner activation or receive passwords in chat.
 See the [activation and recovery procedure](console-activation.md).
 
-All owner account setup, recovery, activation and import endpoints require
-exactly one owner bearer credential without a Cookie header. Host tokens and
-browser sessions cannot invoke them. These import endpoints remain available
-independently of the browser gate:
-
-| Endpoint | Bounded JSON request |
-|---|---|
-| `POST /v1/admin/console/import` | `{"batch":{"manifest":{},"rows":[]},"dry_run":true}` |
-| `POST /v1/admin/console/import-grants` | `{"transfer":{"version":1,"source_id":"...","rows":[],"projects":{}},"dry_run":true}` |
-
-The sketches show the envelope only; use the CLI and complete reviewed manifests
-in [account import and recovery](accounts-import.md). `dry_run` must be explicitly
-present and boolean. Missing/mismatched payloads, duplicate keys, unknown fields,
-invalid Unicode and ambiguous field casing are refused. The usual hub body limit
-applies, and each transfer is limited to 32 rows. The CLI requires a closed,
-stable, checkpointed DELETE-mode export. It refuses WAL mode and journal sidecars
-before SQLite opens the source, then reads with immutable/read-only settings.
-Keeping the export fixed is an owner prerequisite, not a live-source snapshot
-guarantee. The CLI never writes the hub database directly.
-
-Dry-run uses dedicated validation without session/coordination expiry writes.
-Apply repeats validation inside one immediate transaction with accounts/grants,
-owner action records and the appropriate fingerprint ledger. Reports contain
-`dry_run`, `created`, `skipped`, `quarantined` and safe per-row ID/action/role and
-mapping indicators. They never contain password records, source payloads or
-fingerprints. Validation/refusal reasons are sanitized; persistence errors do not
-expose SQLite diagnostics. Exact replays skip without restoring later Iris edits;
-changed source rows/mappings and collisions refuse atomically. Account import
-always gives members zero grants; the separate assignment endpoint accepts only
-reviewed viewer-to-`ro` mappings to existing repositories and refuses source
-project `operator` roles even though Iris has `rw`.
+All owner account setup, recovery and activation endpoints require exactly one
+owner bearer credential without a Cookie header. Host tokens and browser
+sessions cannot invoke them. Account and grant import commands and routes have
+been removed.
 
 Browser routes below require named account authentication. The sole machine
 exception is authenticated `PUT /v1/ui/doctor`, which works even while the console

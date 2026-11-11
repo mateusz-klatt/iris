@@ -251,13 +251,13 @@ Notifications need an interactive session: plugin monitors do not run under `cla
 tools still work there.
 
 Open the hub's URL in a browser (`http://127.0.0.1:7878/` by default for a local
-hub) and sign in with a named account. The owner must first
-[activate the console and restart the hub](console-activation.md#owner-setup-and-activation).
-For the first cutover the owner confirms readiness in their own terminal before
-deployment and remains present: deployment closes browser access until owner
-activation and a second restart. Agents may prepare or rehearse that procedure,
-but do not activate real accounts in the owner's place. Never send a password
-or machine credential through chat.
+hub) and sign in with a named account. The owner first
+[creates the initial operator and restarts the hub](console-activation.md#owner-setup-and-activation).
+On a fresh hub with no console account and no key, `create` prepares the key
+and reports that a restart is required. For a restored database without its key
+or a lost key, the owner uses `activate` and restarts. Agents may prepare or
+rehearse that procedure, but do not activate real accounts in the owner's place.
+Never send a password or machine credential through chat.
 If the console is unavailable, contact the owner; do not use the machine token
 as a browser password.
 

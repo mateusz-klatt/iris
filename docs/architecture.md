@@ -612,10 +612,19 @@ profile and password forms, and an operator access editor for roles, disabled
 state and explicit repository grants.
 
 [ADR 019](adr/019-console-activation.md) makes browser authentication named-only.
+[ADR 020](adr/020-named-login-only.md) removes the account importer. Owner
+`create` on a hub with no console account and no console key makes an operator
+and records `owner_provision` and `activation_prepared` in one transaction. It
+prepares the key only after commit and reports the account creation, key
+preparation and required restart. A key preparation failure leaves the operator
+without a key for recovery through `activate`. On every other hub `create` only
+makes an account; an account without a key and a key without an account do not
+trigger key preparation. Migration 024 drops only the two import ledgers;
+accounts, grants, sessions and historical owner audit rows remain.
 Startup loads an existing independent protected console key from
 `<database>.console.key` or `--console-key-file`; a missing, unreadable, malformed
 or owner-token-reusing key closes the browser gate while agents, authenticated
-doctor uploads and owner setup/recovery/import continue. An enabled operator is
+doctor uploads and owner setup/recovery continue. An enabled operator is
 also required. Explicit owner activation verifies that operator's bounded
 password, rechecks its snapshot transactionally and clears console sessions
 before preparing key material. Success requires a restart and issues no cookie;
@@ -628,29 +637,12 @@ see [the operational procedure](console-activation.md).
 For create/reset/activate, the CLI removes exactly one final LF or CRLF as input
 line framing before the password bounds; every other byte is preserved, without
 general trimming or normalization. The server still verifies submitted password
-bytes exactly. Before the first deployment closes browser access, the owner
-confirms readiness in their own terminal and remains present to activate and
-sign in after the backup and approved import review; whoever deployed performs
-the second restart. Agents prepare and rehearse; real owner activation is not
-delegated.
+bytes exactly. The owner performs setup or recovery in their own terminal and
+remains present through sign-in checks; whoever deployed restarts after key
+preparation. Agents prepare and rehearse; real owner activation is not delegated.
 Activation clears named `ConsoleSession` rows. Restoring a database can revive
 named credentials, grants and sessions. An older binary can restore earlier
 browser authority and must remain behind the rollback filter.
-
-ADR 014's importer is an owner-only CLI/API path independent of that account
-gate. The CLI reads an explicitly described table from a closed, fixed,
-checkpointed DELETE-mode export; WAL headers and journal sidecars are refused
-before SQLite opens it. Immutable/read-only settings prevent SQLite shared-memory
-writes. The owner must keep that export fixed; Iris cannot enforce this or take
-a live-source snapshot with immutable locking/change detection disabled. Only
-the hub writes accounts. Dedicated dry-runs validate without
-expiry bookkeeping or any persisted change. Apply repeats validation and target
-collision checks in one immediate transaction with an internal versioned source
-fingerprint ledger. Exact replays preserve later Iris edits; changed inputs
-refuse instead of overwriting. Imported members have no grants. A separate
-reviewed transfer accepts only explicit viewer-to-`ro` repository mappings,
-never source project operators or inferred `rw` authority. Import does not
-activate account login; that requires separate owner verification and restart.
 
 The trust boundary is the OS user on a host, plus a token per host across hosts. The token
 separates users and hosts, nothing finer. Any process running as that user, including a hook
@@ -870,12 +862,12 @@ Per-account persisted revisions exclude hidden repository activity and global
 event cursors. Account sockets validate their session before each frame; frame
 admission serializes with revocation, and access changes wake idle sockets to
 close. A previously admitted frame may already be in transit. The frontend
-distinguishes an ordinary signed-out named session from
-`X-Iris-Console-Mode: closed`, which is set only when the console key is
-missing. The frontend reports that sign-in is unavailable and asks the user to
-contact the owner. An untrusted browser transport does not set that marker.
-Browser authentication uses named accounts only. Explicit owner activation
-prepares a key for the next process; it never hot-opens a console.
+distinguishes an ordinary signed-out named session from `X-Iris-Console-Mode:
+closed`, which is set only when the console key is missing. The frontend
+reports that sign-in is unavailable and asks the user to contact the owner. An
+untrusted browser transport does not set that marker. Browser authentication
+uses named accounts only. Account creation on a fresh hub or explicit owner
+activation prepares a key for the next process; neither hot-opens a console.
 
 The transferred account forms retain the owner's export provenance (ADR 014's
 inventory). Named-account locale choices are saved with profile revisions and
@@ -896,7 +888,7 @@ snapshot. Conflicts reload current state and discard stale edits for review;
 the console and store both protect the last enabled operator, with the store
 remaining authoritative under concurrent changes. Editing one's own access ends
 that browser session. These controls do not change the startup gate; use the
-separate owner activation/restart procedure in ADR 019.
+owner setup and restart procedure in ADR 020 and the console runbook.
 
 The account overview describes each visible repository with `console_access`:
 `ro` or `rw`. Member compose/reply requires a selected writable origin, explicit

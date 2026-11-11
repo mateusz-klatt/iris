@@ -19,11 +19,11 @@ func TestTransactionCountIncludesCommitAndRollbackWithoutTakingAStoreSnapshot(t 
 	if again := s.TransactionCount(); again != before+2 {
 		t.Fatal("reading the diagnostic counter itself opened a transaction")
 	}
-	if err := s.importRead(context.Background(), func(*transaction) error { return nil }); err != nil {
+	if err := s.activationRead(context.Background(), func(*transaction) error { return nil }); err != nil {
 		t.Fatal(err)
 	}
 	if got := s.TransactionCount(); got != before+3 {
-		t.Fatal("read-only import snapshots were missing from the transaction diagnostic")
+		t.Fatal("read-only activation snapshots were missing from the transaction diagnostic")
 	}
 }
 
@@ -346,7 +346,7 @@ func TestHandoverDropsReceiptsForMovedAndSettledMail(t *testing.T) {
 }
 
 func TestIdleIndexUpgradeClearsSettledLegacyReceiptDeadlines(t *testing.T) {
-	s, clock, file := testStore(t)
+	s, clock, file := historicalStore(t, 23)
 	_, recipient, delivery, _ := attentionSetup(t, s)
 	acked := recipient
 	acked.Key, acked.Attempt = delivery, 1

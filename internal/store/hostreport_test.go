@@ -52,7 +52,7 @@ func TestACorruptHostReportIsAnError(t *testing.T) {
 // The single report kept before ADR 007 came from a doctor that named no host, so the
 // migration keeps it under "unknown".
 func TestTheOldReportMovesToUnknown(t *testing.T) {
-	s, _, file := testStore(t)
+	s, _, file := historicalStore(t, 23)
 	for _, q := range []string{removeAttentionIdentitySchema, removeConsoleSchema, "DROP TABLE HostReport", "DROP TABLE WorktreeAlias", "DROP INDEX DeliveryReceiptDue", "ALTER TABLE Delivery DROP COLUMN receipt_due_ms", "CREATE TABLE DoctorReport(id INTEGER PRIMARY KEY CHECK(id=1),report TEXT NOT NULL)", `INSERT INTO DoctorReport VALUES(1,'{"checked_at":"x","clients":[]}')`, "PRAGMA user_version=13"} {
 		if _, err := s.db.Exec(q); err != nil {
 			t.Fatal(err)

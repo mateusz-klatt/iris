@@ -181,7 +181,7 @@ func TestConsoleRevisionsAreDurablePerAccountAndTransactional(t *testing.T) {
 }
 
 func TestConsoleRevisionMigrationBackfillsExistingAccountsWithoutAttributingPastActivity(t *testing.T) {
-	s, clock, file := testStore(t)
+	s, clock, file := historicalStore(t, 23)
 	_, registered := ended(t, s, "revision-migration")
 	repo := registered["repository_id"].(string)
 	a := createTestConsoleAccount(t, s, "Existing member", "member")

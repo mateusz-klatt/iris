@@ -29,8 +29,10 @@ type ticket struct {
 	used       bool
 }
 type Hub struct {
-	console         *consoleAuth
-	consoleActivate func() error
+	console             *consoleAuth
+	consoleActivate     func() error
+	consoleKeyMissing   func() bool
+	consoleKeyAvailable func() bool
 	// These seams are the database and WebSocket I/O boundaries; production uses
 	// the real store and transport, and tests can report their actual failure modes.
 	call              func(context.Context, string, store.Request) (map[string]any, error)
@@ -104,7 +106,6 @@ func New(s *store.Store, token string, allowedHosts []string) *Hub {
 	h.operatorRoutes()
 	h.tokenRoutes()
 	h.ownerAccountsRoutes()
-	h.consoleImportRoutes()
 	h.mux.HandleFunc("GET /v1/watch", h.watch)
 	h.mux.HandleFunc("POST /v1/wake-tickets", h.wakeTicket)
 	return h
