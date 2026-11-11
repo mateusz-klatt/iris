@@ -37,10 +37,10 @@ archives:
         info: &fixed {owner: root, group: root, mode: 0644, mtime: '{{ .CommitDate }}'}
       - src: docs/guard.md
         info: *fixed
-# D15, prepared and inert. Without MACOS_SIGN_P12 this step is skipped and the darwin
+# D15. Without MACOS_SIGN_P12 this step is skipped and the darwin
 # binaries ship as Go builds them: amd64 unsigned, arm64 ad-hoc signed by the linker.
-# With the certificate alone they would be signed, and with the notary key too, notarized.
-# Neither has run with a real Apple credential. docs/release.md records what was measured.
+# Both were signed and notarized in a local snapshot on 2026-11-11.
+# A real tag's CI run is not measured. docs/release.md records the evidence and limits.
 # docs/release.md names the secrets and the owner's steps.
 notarize:
   macos:

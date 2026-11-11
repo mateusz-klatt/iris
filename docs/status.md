@@ -2,7 +2,7 @@
 
 Release prerequisites updated 2026-11-11. Nothing is released.
 
-The hub latency, shared-worktree, recovery, service and release-rehearsal measurements below were
+The earlier hub latency, shared-worktree, recovery, service and release-rehearsal measurements below were
 last summarized on 2026-11-08, from `main` at `efe0af6` before the repository history rewrite.
 Their commit hashes and PR numbers, including the Windows diagnostic at `993e545`, are retained as
 historical evidence labels; they refer to the history before the rewrite, not revisions of the
@@ -106,6 +106,9 @@ Against the production hub, over TLS:
     (`docs/release.md`, #57). Archives record no builder, and two builds of one commit were identical
     (#60).
   - The release image runs as non-root in CI, amd64 only (#46).
+  - On 2026-11-11, a local snapshot at `c28c1a4` on an Intel Mac with macOS 26.7.3 signed and
+    notarized both darwin binaries in 1m17s. `spctl` accepted both as `Notarized Developer ID`.
+    Only amd64 was run ([record](release.md#signing-and-notarization)).
 - **Services.** launchd install, start, stop, crash loop and log were run for real on macOS under a
   scratch home (#25, #34). The Windows Run value started the hub with a minimal PATH (#48).
   `systemd --user` ran for real on WSL with systemd enabled and linger on, using a scratch port,
@@ -158,12 +161,13 @@ Against the production hub, over TLS:
   container or in a cloud sandbox changes files Iris neither claims nor checks: the hook sees only the
   machine it runs on (ADR 009). Detection waits for a captured remote payload.
 - **No release.** No package channel is published. Windows signing is chosen (#35) but not set up.
-  macOS signing and notarization are wired (#57), and the owner has a Developer ID Application
-  certificate. The App Store Connect API key and all five `MACOS_*` GitHub secrets listed in
-  [Snapshots and releases](release.md#signing-and-notarization) are still missing. Real signing
-  and notarization have not run. Keep cask upload disabled until notarization has actually succeeded.
-- **Not measured:** Defender, the SmartScreen window, Apple silicon, Gatekeeper's dialog and "Open
-  Anyway", and a Mac or PC whose policy forbids unsigned code.
+  All five `MACOS_*` GitHub secrets listed in
+  [Snapshots and releases](release.md#signing-and-notarization) are set as of 2026-11-11.
+  A real tag's `release.yml` run with them has not been measured. Keep cask upload disabled until
+  that CI run has notarized the binaries.
+- **Not measured:** Defender, the SmartScreen window, Apple silicon, a quarantined browser download
+  of a notarized binary starting under Gatekeeper, Gatekeeper's dialog and "Open Anyway", and a Mac
+  or PC whose policy forbids unsigned code.
 - **An internal/integrate test that fails under load.** One run of four failed on Windows with every
   CPU busy. It has not reproduced since, and its name was not captured. On 2026-11-08 about 470 runs
   of `go test -v ./internal/integrate/` under load on all 16 cores of WSL on the same PC passed, with
