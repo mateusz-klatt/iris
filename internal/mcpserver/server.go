@@ -136,10 +136,41 @@ func callIDs(client string, meta mcp.Meta) (session, thread string) {
 	return session, thread
 }
 
+// lostMessage applies to binding failures and hub operation failures alike. A lost claim
+// replay need not mean a lost session, and a recovery refusal need not mean a lost generation.
+// Keep the advice conditional rather than inferring either from the shared error code.
+const lostMessage = "This call's Execution or cached claim is not usable. " +
+	"After a hub restart, a recovering session reattaches only when the hub accepts its " +
+	"remembered generation within the 120 s recovery window. " +
+	"Resume the session that owns the Execution in its Git worktree to run an enabled Iris " +
+	"SessionStart hook, then retry. " +
+	"A prompt also registers through working Iris hooks on Claude Code, Codex, Copilot and Kimi, " +
+	"or through Antigravity's PreInvocation. Cursor and Grok prompts do not register. " +
+	"A recognized pre-edit hook with paths inside the worktree also registers. " +
+	"Hooks need hub access and the remembered generation. " +
+	"A shell command is not a reliable remedy: a reconcile that times out before registration " +
+	"reaches the hub does not reattach. " +
+	"An MCP tool retry first looks for a usable binding; that lookup does not reattach. " +
+	"A shim retaining its binding can reattach through its heartbeat. " +
+	"Without that binding, including after confirmed loss, the shim cannot reattach through a heartbeat. " +
+	"Codex id-mode sub-agents never renew the Execution. " +
+	"Waiting past the recovery deadline cannot revive the old Execution; " +
+	"a registering hook must obtain a new generation. " +
+	"For IRIS_EXECUTION, hooks must belong to the session whose Execution the override names. " +
+	"Another session's hooks do not reattach that Execution. " +
+	"Legacy binding may need the current SessionStart execution handle, or a shim restart with " +
+	"an updated IRIS_EXECUTION; Codex id mode binds by session id, never a handle. " +
+	"For a replayed claim that is no longer live, check claims and request a new claim with a fresh key. " +
+	"Run `iris doctor` if hooks or binding still fail."
+
 func toolError(err error) *mcp.CallToolResult {
 	var typed *hubclient.Error
 	if !errors.As(err, &typed) {
 		typed = &hubclient.Error{Code: "unavailable", Message: err.Error()}
+	}
+	if typed.Code == "lost" {
+		// Do not mutate a shared binding error or discard a mutation's retry key.
+		typed = &hubclient.Error{Code: typed.Code, Message: lostMessage, Details: typed.Details}
 	}
 	out := map[string]any{"error": typed}
 	raw, _ := json.Marshal(out)

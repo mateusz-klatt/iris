@@ -406,8 +406,10 @@ Changes from the reference schema:
    without a `recovery_deadline` gets one, persisted, 120 s ahead. A recovering Execution's
    claims still block others, but it may do nothing until it reattaches with the same session
    and generation, which clears the deadline and grants a lease in the new epoch. A heartbeat
-   from `iris mcp` or `iris watch` carries that proof, so idle sessions reattach too. At the
-   deadline it is lost. Repeated restarts cannot extend the window, because an existing deadline
+   from `iris mcp` or `iris watch` carries that proof if the sender retains the binding, so those
+   idle sessions can reattach too. An unbound shim has no generation to send, and Codex id-mode
+   sub-agent and foreign-session lookups renew nothing. At the deadline, the recovering
+   Execution is lost. Repeated restarts cannot extend the window, because an existing deadline
    is never moved, and an expired generation is never revived.
 
    A hook is a new process for every tool call, so it keeps the last generation for its session
@@ -423,13 +425,26 @@ Changes from the reference schema:
    call, and only a bound one heartbeats. A heartbeat that finds its generation lost, as after a
    laptop sleeps past the lease, drops the binding and the process keeps running: a client does
    not restart an MCP server or monitor that exits, so it showed the server as failed and the
-   session went deaf. Its tools answer `lost` until the next call binds afresh, through the usual
-   rungs, to the session's current Execution. An Execution found lost is never bound again, by
+   session went deaf. Legacy tools answer `lost` until a call binds afresh, through the usual
+   rungs, to the session's current Execution. A Codex id-mode root without a cached binding,
+   or a sub-agent lookup, answers `unbound` when its session has no single usable Execution.
+   An Execution found lost is never bound again, by
    whatever route it comes back, so no process speaks for a stale identity. `iris watch` says
    once that notifications stopped, keeps trying a fresh bind with backoff, says when they
    resume, and follows the new Execution from its own cursor. After the change, with and without `iris mcp`, all 16
    edits stayed claimed by the same Execution across the restart. With the file removed, the edit
    was refused and nothing went through unclaimed.
+
+   MCP `lost` answers give fixed, conditional recovery guidance at the shim boundary, without
+   changing the hub API or granting authority. They also cover a replayed claim whose cached
+   fence is no longer live, so they do not assert that every such answer proves session loss.
+   Reattachment needs a successful registering hook with remembered proof, or the heartbeat
+   of a shim retaining the binding, before the recovery deadline. `SessionStart` registers;
+   prompt registration depends on the client. A shell reconcile can register, but one whose
+   budget ends before registration reaches the hub does not; the ADR 018 breaker only changes
+   later hooks' scope. Binding lookups do not reattach. After the deadline, a registering hook
+   must obtain a new generation. The [API recovery guidance](api.md#mcp-tools-answering-lost)
+   lists the events and the binding-mode limits.
 3. A claim has `origin` (`explicit` or `auto`) and an optional expiry instead of a mandatory
    renewed deadline.
 4. A Delivery keeps four separate facts. `attempt` guards acknowledgements: each fetch raises it,
