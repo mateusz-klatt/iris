@@ -468,14 +468,11 @@ func TestExeName(t *testing.T) {
 
 func freshFake(t *testing.T) {
 	t.Helper()
-	if _, err := fakeBinary(); err != nil {
-		t.Fatal(err)
-	}
-	exe := fakeExe
-	fakeOnce, fakeExe, fakeErr = sync.Once{}, "", nil
+	CleanupFake()
+	fakeOnce, fakeExe, fakeDir, fakeErr = sync.Once{}, "", "", nil
 	t.Cleanup(func() {
-		fakeOnce, fakeExe, fakeErr = sync.Once{}, exe, nil
-		fakeOnce.Do(func() {})
+		CleanupFake()
+		fakeOnce, fakeExe, fakeDir, fakeErr = sync.Once{}, "", "", nil
 	})
 }
 
@@ -484,6 +481,11 @@ func TestPlaceFakeReportsABuildFailure(t *testing.T) {
 	t.Setenv("PATH", t.TempDir())
 	if _, err := PlaceFake(t.TempDir(), "x"); err == nil || !strings.Contains(err.Error(), "build fakebin") {
 		t.Fatal(err)
+	}
+	dir := fakeDir
+	CleanupFake()
+	if _, err := os.Stat(dir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed build directory remains: %v", err)
 	}
 }
 

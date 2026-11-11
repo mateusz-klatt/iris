@@ -24,7 +24,9 @@ func TestMain(m *testing.M) {
 	if mode := os.Getenv("IRIS_FAKE_LIVE_CLIENT"); mode != "" {
 		os.Exit(fakeLiveClient(mode, os.Args[1:]))
 	}
-	os.Exit(m.Run())
+	code := m.Run()
+	integrate.CleanupFake()
+	os.Exit(code)
 }
 
 var nonceInPrompt = regexp.MustCompile(`containing exactly ([0-9a-f]+) to`)

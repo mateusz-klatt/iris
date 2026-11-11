@@ -29,6 +29,19 @@ const scopeHubURL = "http://127.0.0.1:7878"
 // tripBudget is a reconcile budget short enough to pass while a stand-in for git waits.
 const tripBudget = 20 * time.Millisecond
 
+// gitStandIn is a Runner's stand-in for git status.
+type gitStandIn = func(context.Context, string, gitinfo.Scope, *gitinfo.Attempt) (map[string]string, error)
+
+func occurrences(calls []string, entry string) int {
+	n := 0
+	for _, c := range calls {
+		if c == entry {
+			n++
+		}
+	}
+	return n
+}
+
 // scopeFixture is a worktree with an index file, a memory, a fixed clock and stand-ins for git
 // that answer at once. A test changes only what it is about.
 type scopeFixture struct {

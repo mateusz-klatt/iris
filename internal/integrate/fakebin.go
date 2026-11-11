@@ -34,8 +34,16 @@ func PlaceFake(dir, name string) (string, error) {
 var (
 	fakeOnce sync.Once
 	fakeExe  string
+	fakeDir  string
 	fakeErr  error
 )
+
+// CleanupFake removes this process's stub build directory after its tests.
+func CleanupFake() {
+	if fakeDir != "" {
+		CleanupTestDir(fakeDir, "iris-fakebin-")
+	}
+}
 
 func fakeBinary() (string, error) {
 	fakeOnce.Do(func() {
@@ -44,6 +52,7 @@ func fakeBinary() (string, error) {
 			fakeErr = err
 			return
 		}
+		fakeDir = dir
 		out := filepath.Join(dir, exeName(runtime.GOOS, "fakebin"))
 		var msg []byte
 		goTool, err := exec.LookPath("go")
