@@ -80,10 +80,13 @@ An optional `retry_generation` reports the proof a hook discarded before retryin
 and is omitted by older clients. Resume and reattachment preserve the generation; a new
 Execution after loss or end advances it.
 
-A shim or `iris watch` reattaches by itself: a heartbeat with the current generation does the
-same work during the recovery window and returns the same response, so an idle session that
-fires no hook survives a hub restart. After the window the heartbeat returns `lost`, and the
-session needs a new generation.
+A shim or `iris watch` that retains the binding reattaches by heartbeat: a heartbeat with the
+current generation does the same work during the recovery window and returns the same response.
+This can keep an idle session attached without a hook. A shim binds on its first tool call;
+without a binding it has no generation to send. A heartbeat that confirms loss drops that
+binding and never renews that Execution again. Codex id-mode sub-agent and foreign-session
+lookups keep no binding and renew nothing. After the window the heartbeat returns `lost`, and
+the session needs a new generation.
 
 `POST /v1/bind` resolves a stdio MCP process to an Execution, following D6.
 
@@ -92,8 +95,11 @@ session needs a new generation.
  "client_pid":123,"client_pid_start_ms":1793917887311,"cwd":"..."}
 ```
 
-It returns `{"execution_id":"...","generation":1,"agent":{...},"hook_seen":true}`, or `unbound`,
-or `ambiguous`. `hook_seen` says whether any hook has reached the hub for that Execution. ADR 017
+It returns `{"execution_id":"...","generation":1,"agent":{...},"hook_seen":true}`, `unbound`,
+`ambiguous`, or `lost` for an explicit Execution that is unusable. Binding only looks up a usable
+Execution; it does not reattach one. A lookup by session id excludes recovering Executions, so
+Codex id mode without a cached binding answers `unbound` during recovery. `hook_seen` says
+whether any hook has reached the hub for that Execution. ADR 017
 requires Codex's planned wake to arm only when `hook_seen` is true.
 
 `POST /v1/executions/{id}/heartbeat` takes `{"generation":1,"source":"shim"}`, where `source` is
@@ -109,6 +115,40 @@ else is refused as `bad_request`. An MCP server uses it when it gives up an Exec
 register for the session's hook's (D6), so mail sent to the stray mailbox is not stranded. Ending
 again moves nothing. A client that loses the response retries the same source, generation and
 destination until the end is confirmed, renewing live Executions while the handover is pending.
+
+### MCP tools answering `lost`
+
+Every MCP tool's `lost` error has the same fixed recovery guidance, whether binding failed or
+the hub refused the operation. The MCP shim preserves the error code and details, including
+mutation retry keys; the HTTP API's messages and recovery rules are unchanged. `lost` alone
+does not prove permanent session loss: it can describe a recovering Execution, an unknown,
+ended or expired Execution, a wrong generation, a failed bind after confirmed loss, or a
+replayed claim whose saved fence is no longer live.
+
+In the Git worktree of the session owning the Execution, reattachment requires the hub to
+accept the remembered generation before the persisted 120 s recovery deadline:
+
+| Event | Recovery effect |
+|---|---|
+| An enabled `SessionStart` hook, including a resume of the same session | Registers with remembered proof. |
+| A prompt on Claude Code, Codex, Copilot or Kimi; Antigravity's `PreInvocation` | Registers with remembered proof. Cursor and Grok prompts do not register. |
+| A recognized pre-edit hook with paths inside the worktree | Registers before touching the paths. The edit is refused if recovery proof is missing. |
+| A shell reconcile | Can register with proof. A command is not a reliable recovery action: a budget spent before registration reaches the hub leaves the session recovering. Registration may already have succeeded before a later timeout. ADR 018's breaker changes later hooks' scope; it does not register in the background. |
+| A heartbeat from a shim retaining the binding | Reattaches with its generation. An unbound shim cannot send that proof; Codex id-mode sub-agent lookups never renew. |
+| Another MCP call | Binding lookups do not reattach. A call can discover a session a hook already registered; primary `whoami` also heartbeats after a successful bind. Initial legacy fallback registration carries no prior generation and cannot recover a recovering session. |
+| Waiting past the deadline | Loses the old Execution and its reservations. A later registering hook can obtain a new generation, never revive the old one. |
+
+Resume the session owning the Execution to fire its enabled `SessionStart` hook, or submit a
+prompt on a client whose Iris hook registers it, then retry the tool. Hooks must be working
+and reach the hub. A shell command is not a substitute when reconciliation keeps running
+past its budget. Run `iris doctor` if hooks or binding still fail.
+After generation replacement, legacy binding may need the current `SessionStart` execution
+handle, or a shim restart with an updated `IRIS_EXECUTION`. An override may name a different
+session: only that session's hooks reattach it, and a live override wins over call metadata.
+Otherwise Codex id mode binds by session id and never uses a handle; a root shim can use its
+remembered session when a call omits it.
+For a replayed claim whose saved fence is no longer live, check current claims and request a
+new claim with a fresh key; registering again does not restore that fence.
 
 ## Claims
 

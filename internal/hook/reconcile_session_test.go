@@ -79,6 +79,41 @@ func TestAShellCallRegistersAndReconcilesInOneCall(t *testing.T) {
 	}
 }
 
+// The combined API registers only after git status. If that status spends the budget,
+// the shell fails open without reattaching, even when the hook remembers valid proof.
+func TestAShellStatusPastItsBudgetDoesNotRegisterTheSession(t *testing.T) {
+	hub := newOneCallHub()
+	r, ev := shellRunner(hub, "/repo")
+	r.Find = func(string) (gitinfo.Repo, error) {
+		return gitinfo.Repo{Worktree: ev.CWD}, nil
+	}
+	r.ShellDeadline = 100 * time.Millisecond
+	statusReturned := make(chan struct{})
+	r.Status = func(ctx context.Context, _ string, _ gitinfo.Scope, _ *gitinfo.Attempt) (map[string]string, error) {
+		defer close(statusReturned)
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
+	m := newFileMemory(t)
+	m.Remember(string(ev.Client), ev.SessionID, 3)
+	r.Memory = m
+	phase := ""
+	hub.phase = &phase
+	state := &runState{}
+	out := r.reconcile(context.Background(), ev, state)
+	<-statusReturned
+	stage, err := state.snapshot()
+	if !isAllow(out) || stage != "shell status" || !(Failure{Stage: stage, Error: failureText(err)}).Degraded() {
+		t.Fatalf("stage %q err %v: %s", stage, err, out.Stdout)
+	}
+	if len(*hub.sent) != 0 || *hub.registered != 0 || phase != "" {
+		t.Fatalf("a status past its budget sent %d combined requests, %d registrations, phase %q", len(*hub.sent), *hub.registered, phase)
+	}
+	if got := m.Recall(string(ev.Client), ev.SessionID); got != 3 {
+		t.Fatalf("the unsent recovery proof changed to %d", got)
+	}
+}
+
 // A hub from before the one-call form refuses it. The hook then makes the two calls, from the
 // snapshot it already took; a lost answer, which an older hub also gives a request with no
 // Execution, goes the same way, where a real loss is handled as for an edit.
