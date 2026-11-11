@@ -389,8 +389,51 @@ values. For credential setup in the owner's Apple account:
    role. Download the `.p8` file: it can be downloaded only once. Note the key ID and the issuer ID.
    `base64 -i AuthKey_<id>.p8` gives `MACOS_NOTARY_KEY`.
 5. Add the five values as repository secrets under Settings, Secrets and variables, Actions.
-6. Push a test tag only after deciding what it publishes: the release is a draft, but notarization
-   submits the binaries to Apple.
+6. Use the manual proof below to check the Actions credentials without a tag. Push a test tag only
+   after deciding what it publishes: the release is a draft, but notarization submits binaries to Apple.
+
+### macOS signing proof in Actions, configured
+
+`.github/workflows/macos-signing-proof.yml` runs only by manual dispatch on `main` in
+`mateusz-klatt/iris`. In Actions, select **macOS signing proof** and **Run workflow** on
+`main`. No run is measured here. No tag is needed, and the workflow creates no release,
+publishes no package or image, and requests no OIDC or write permission.
+
+The `web` job builds the console without signing credentials. The Ubuntu `sign` job
+downloads that run's console by immutable artifact id and installs GoReleaser v2.20.0.
+Only its snapshot step receives the five `MACOS_*` secrets above and `WEB_DIST`:
+
+```sh
+goreleaser release --snapshot --clean --skip=docker,sbom,sign,publish
+```
+
+These four skip names are valid in [v2.20.0's release skip list](https://github.com/goreleaser/goreleaser/blob/v2.20.0/internal/skips/skips.go).
+`sign` skips checksum signing by cosign; macOS signing and notarization use the separate
+`notarize` stage, which remains enabled. Snapshots also [disable publishing themselves](https://github.com/goreleaser/goreleaser/blob/v2.20.0/cmd/release.go#L148-L153),
+and the Windows signing hook renders empty. All five credentials must be nonempty.
+The job requires a `notarized` log entry for each of `dist/iris_darwin_amd64_v1/iris`
+and `dist/iris_darwin_arm64_v8.0/iris`: [this GoReleaser version](https://github.com/goreleaser/goreleaser/blob/v2.20.0/internal/pipe/notary/macos.go#L132-L151)
+records no acceptance flag in artifact metadata and can return successfully after a
+timeout or pending result. GoReleaser, its hooks and the compiler share the signing
+step's environment; this is credential scoping, not a sandbox for untrusted code.
+
+Only those two darwin binaries are uploaded. The secret-free `verify` job downloads
+that artifact by id on `macos-latest`, requires an arm64 runner, and checks both binaries
+with `codesign --verify --strict --verbose=2` and `codesign -dv --verbose=4`. It requires
+Developer ID Application: Mateusz Klatt (26MP7QQP95), TeamIdentifier `26MP7QQP95`, hardened
+runtime and a secure timestamp. Each `spctl -a -vvv -t install` assessment must accept
+with `source=Notarized Developer ID`. Only the arm64 binary runs `iris version`.
+Acceptance, native verification output and the version output go to the job summaries.
+The console and binary artifacts have one-day retention and are downloadable in this
+public repository.
+
+Each signing run submits two binaries to Apple's notary service. Rerunning `sign` or
+the whole workflow submits again; rerunning only `verify` submits nothing. There is no
+automatic retry. A passing proof establishes signing, notarization, native assessment
+of both snapshot binaries and arm64 execution in these Actions jobs. It does not test
+`release.yml` itself, cask/Homebrew installation, a quarantined browser download under
+Gatekeeper, or amd64 execution. Its snapshot version string differs from a tag's.
+The Homebrew upload gate above still requires a real tag's signed and notarized CI run.
 
 ## Release candidate runbook
 
