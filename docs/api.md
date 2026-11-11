@@ -682,6 +682,13 @@ live claim overlaps a path in another host/worktree. Repository case policy and
 prefix boundaries apply. Same-worktree claims are excluded. Git's staged rename
 source and destination are both checked by the CLI.
 
+This endpoint identifies a checkout, not the committing session. Session or Execution fields
+do not exempt claims in another worktree. Each conflict includes the holder's `branch`,
+`worktree` and `host`, as well as the claim's `fence`. The message conditionally explains
+an own-session claim from another worktree and tells the holder to use the `release` MCP tool
+with that fence from the holding session before retrying. It does not assert that the committer
+is the holder. Release still checks generation and ownership; no new exemption is granted.
+
 `POST /v1/shell/reconcile` accepts `execution_id`, `generation`, `kind` (`before` or
 `after`), and `status`, a map of path to porcelain XY status. The hub stores a
 snapshot per Execution. `before` establishes the baseline; `after` compares and

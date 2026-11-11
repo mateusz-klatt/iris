@@ -37,6 +37,24 @@ Claims in the same host/worktree do not block it. An unreachable hub produces a 
 commit. This is cooperative: `git commit --no-verify` bypasses the hook. It neither
 prevents arbitrary writes nor resolves a conflict.
 
+The guard identifies the committing checkout, not the session that started `git commit`.
+An active session keeps its Execution and mailbox when its hooks run in another worktree,
+but the guard still compares that checkout with the holder's recorded worktree. It therefore
+refuses even that session's own claim from another checkout. The refusal explains this
+possibility conditionally and gives the exact fence to release: if the claim is yours, call
+the `release` MCP tool with `{"fence":12}` (using the number shown) from the holding session,
+then retry the commit. This releases only that claim; a prefix claim covers its entire prefix.
+For another session's claim, message the named holder with `send`, or ask the human to resolve it.
+
+Keeping the refusal preserves repository-wide claims (D10). Allowing a claimed session identity
+would require proof the guard does not have: inherited or copied session environment variables
+and Execution handles do not establish who started Git, and session memory records a generation
+for a named session rather than identifying the caller. MCP binding is attribution, not authority
+(D6); it cannot supply that missing proof. The guard cannot distinguish an own-session commit
+in another checkout from another session's commit there. It also cannot attribute commits among
+sessions sharing one host/worktree; their claims are all skipped. Iris does not isolate agents
+running as the same OS user (D13).
+
 On clients with shell pre/post hooks, Iris records porcelain status before the shell
 and compares the post-tool status with that hub-stored snapshot, within 300 ms.
 Post-tool failures also reconcile because a failed shell can have written files.

@@ -590,7 +590,10 @@ scoped call on the plain route. `iris doctor` shows what each breaker suggests. 
 reduced snapshot and keeps no breaker.
 
 `iris guard` is a pre-commit check, installed per repository on request. It refuses a commit
-of paths held by another Execution. It is the strongest check Iris has, and it is cooperative.
+of paths claimed from another host/worktree, even by the same session: the checkout does not
+prove who started Git. Same-host/worktree claims are skipped. A refusal explains the possible
+own-session case and gives the fence to release from the holding session before retrying.
+It is the strongest check Iris has, and it is cooperative.
 
 ### D13. Security
 
