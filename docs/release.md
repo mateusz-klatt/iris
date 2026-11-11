@@ -31,7 +31,7 @@ has not been tried from PowerShell alone.
 
 The configuration uses `homebrew_casks` instead of the deprecated `brews` key. `check`
 must exit 0 without the old deprecation warning. The cask is generated locally but its
-upload stays disabled until signing and notarization have really succeeded. `dist/` is
+upload stays disabled until a real tag's CI run has signed and notarized the binaries. `dist/` is
 ignored by Git; keep snapshot output out of commits.
 
 The before hook runs `make web`, requiring the Node version in `web/package.json`
@@ -88,7 +88,7 @@ with keyless cosign using its OIDC identity, and creates GitHub build provenance
 release steps are configured; their first real tag run is still pending. Apple signing
 and notarization are separate and stay disabled without `MACOS_SIGN_P12`.
 
-The commit identifiers in the measured artifact sections below predate the repository's
+The commit identifiers in the 2026-11-07 artifact measurements below predate the repository's
 history rewrite. They are retained as historical evidence, not current checkout references.
 
 To collect process-inclusive hook latency without a timing threshold:
@@ -194,8 +194,8 @@ homebrew_casks:
 ```
 
 A cask quarantines what it installs, which caused the held start above with the unnotarized
-binary. **Do not enable cask uploads before real signing and notarization have completed
-successfully.** Creating the certificate or adding secrets alone does not satisfy that gate.
+binary. **Keep `skip_upload: true` until a real tag's CI run has signed and notarized the
+binaries.** The local signing run below does not satisfy that gate.
 The local manifest does not create a published package channel. A cask hook that strips
 quarantine would work around Gatekeeper for every user, so it is not proposed.
 
@@ -203,18 +203,38 @@ quarantine would work around Gatekeeper for every user, so it is not proposed.
 
 `.goreleaser.yaml` has a `notarize.macos` entry, and `release.yml` passes it five secrets. With no
 `MACOS_SIGN_P12`, the step reports `skipped: disabled`. An unset GitHub secret arrives empty, and that
-also counts as unset. Measured with the snapshot, without any Apple credential:
+also counts as unset. Measured with local snapshots:
 
 | Secrets | Result |
 |---|---|
 | None, or all empty | The step is skipped and the binaries are unchanged |
 | A certificate that is not a PKCS #12 file | The release stops: `unable to decode p12 file` |
 | A self-signed code-signing certificate | The release stops: quill finds no chain to an Apple root |
+| A raw `.p8` PEM in `MACOS_NOTARY_KEY` instead of base64 | Signing succeeded, then notarization stopped: `unable to load JWT private key bytes: unable to base64 decode key: illegal base64 data at input byte 0` |
 
-Real signing and notarization have not been run. With the certificate alone the binaries would be
-signed but not notarized. With the API key as well, they are notarized, and GoReleaser waits up to 20
-minutes for Apple's answer. Apple does not staple a ticket to a bare binary, so Gatekeeper is expected
-to look it up online the first time it starts. That was not measured.
+On 2026-11-11, a Claude session ran a local snapshot at `c28c1a4` on the owner's Intel Mac
+(x86_64), with macOS 26.7.3 and all five `MACOS_*` values set in the environment:
+
+```sh
+go run github.com/goreleaser/goreleaser/v2@v2.20.0 release --snapshot --clean --skip=docker,sbom,sign
+```
+
+Nothing was published. Both darwin binaries, `dist/iris_darwin_amd64_v1` and
+`dist/iris_darwin_arm64_v8.0`, were signed and notarized. GoReleaser reported `notarized`
+for each. The whole release took 1m17s. The configured wait for Apple's answer is up to 20 minutes.
+
+- `codesign -dv --verbose=4` showed Developer ID Application: Mateusz Klatt (26MP7QQP95),
+  then Developer ID Certification Authority and Apple Root CA. `TeamIdentifier` was `26MP7QQP95`,
+  with a secure timestamp and `flags=0x10000(runtime)` (hardened runtime).
+- `spctl -a -vvv -t install` accepted each binary with `source=Notarized Developer ID`.
+  A ticket cannot be stapled to a bare binary. Whether this assessment fetched the ticket online
+  was not measured.
+- The amd64 binary ran: `iris version` reported `0.0.0-SNAPSHOT-c28c1a4 ...`.
+  The arm64 binary was not run on the Intel host.
+
+Not measured: `release.yml` in GitHub Actions with these secrets (it needs a tag; none was
+pushed), a quarantined browser download of a notarized binary starting under Gatekeeper,
+and Apple silicon.
 
 | Secret | Value |
 |---|---|
@@ -224,9 +244,8 @@ to look it up online the first time it starts. That was not measured.
 | `MACOS_NOTARY_KEY_ID` | The App Store Connect API key ID |
 | `MACOS_NOTARY_KEY` | The API key's `.p8` file, base64-encoded |
 
-The owner already has a Developer ID Application certificate. The App Store Connect API key
-and all five GitHub repository secrets above are still missing. The remaining setup is for
-the owner in the owner's Apple account; no credentials were created or configured here.
+All five GitHub repository secrets above are set as of 2026-11-11. The local run used the same
+values. For credential setup in the owner's Apple account:
 
 1. If no usable certificate is available, confirm Apple Developer Program membership. A Developer ID
    certificate needs a paid membership, and only the account holder can create one.
