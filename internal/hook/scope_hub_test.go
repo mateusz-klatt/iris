@@ -9,25 +9,12 @@ import (
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 )
 
-// gitStandIn is a Runner's stand-in for git status.
-type gitStandIn = func(context.Context, string, gitinfo.Scope, *gitinfo.Attempt) (map[string]string, error)
-
 // statusEntry is how a stand-in for git status logs itself in a scopeHub's calls.
 func statusEntry(s gitinfo.Scope) string {
 	if s == gitinfo.ReducedScope {
 		return "status reduced"
 	}
 	return "status full"
-}
-
-func occurrences(calls []string, entry string) int {
-	n := 0
-	for _, c := range calls {
-		if c == entry {
-			n++
-		}
-	}
-	return n
 }
 
 // scopeHub is a hub with every route a shell reconcile can take. It takes reduced snapshots

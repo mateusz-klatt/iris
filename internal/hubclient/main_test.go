@@ -3,6 +3,8 @@ package hubclient
 import (
 	"os"
 	"testing"
+
+	"github.com/mateusz-klatt/iris/internal/integrate"
 )
 
 // TestMain points every user directory at a temporary one. These tests inject hook
@@ -19,6 +21,6 @@ func TestMain(m *testing.M) {
 		}
 	}
 	code := m.Run()
-	_ = os.RemoveAll(dir)
+	integrate.CleanupTestDir(dir, "iris-test-home")
 	os.Exit(code)
 }
