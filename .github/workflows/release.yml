@@ -1,23 +1,23 @@
 name: release
-# D15 stage 1, prepared but inert. It runs only when the owner pushes a version tag,
-# and only in this repository. It builds a draft release, so nothing is public until
-# the owner publishes it. Homebrew, Scoop and winget stay skipped in .goreleaser.yaml,
-# and no image is pushed.
+# D15: a tag creates a draft for the owner to publish. The tag, Rekor entries,
+# attestations and final Windows ZIP handoff are public before publication.
+# Homebrew, Scoop and winget stay skipped, and no image is pushed.
 on:
   push:
     tags: ['v[0-9]+.[0-9]+.[0-9]+*']
 permissions:
   contents: read
+concurrency: {group: certum-signing, cancel-in-progress: false}
 jobs:
-  # The console is built here, with read-only access and no secrets. Its dependencies'
-  # build code never runs beside the release token, the OIDC token or the signing keys.
-  # That protects the credentials, not the output: a compromised dependency can still
-  # change the console that is embedded and signed. Provenance records what was built.
+  # Dependency build code runs without signing credentials. It can still change
+  # the console that is embedded and signed; provenance records what was built.
   web:
     if: github.repository == 'mateusz-klatt/iris'
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -29,44 +29,92 @@ jobs:
           cache-dependency-path: web/package-lock.json
       - run: make web
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        id: upload
         with:
-          name: webui-dist
+          name: webui-dist-${{ github.run_id }}-${{ github.run_attempt }}
           path: internal/webui/dist
           if-no-files-found: error
           retention-days: 1
+  signer:
+    if: github.repository == 'mateusz-klatt/iris'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          repository: Le-Syl21/ssign
+          ref: f7ba7b2360a3e40bb8aa062d244d95c62a743b90 # v0.1.8, MIT
+          path: ssign
+          persist-credentials: false
+      - name: Build the pinned signer without credentials
+        working-directory: ssign
+        run: |
+          rustup toolchain install 1.99.1 --profile minimal
+          cargo +1.99.1 build --release --locked
+          sha256sum target/release/ssign >> "$GITHUB_STEP_SUMMARY"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        id: upload
+        with:
+          name: certum-signer-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ssign/target/release/ssign
+          if-no-files-found: error
+          retention-days: 1
   release:
-    needs: web
+    needs: [web, signer]
     if: github.repository == 'mateusz-klatt/iris'
     runs-on: ubuntu-latest
     permissions:
       contents: write # create the draft release
       id-token: write # cosign keyless signing and build provenance
       attestations: write
+    outputs:
+      artifact-id: ${{ steps.upload.outputs.artifact-id }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
           persist-credentials: false
-      # Outside the checkout, so GoReleaser's clean-tree check still passes. Its before hook
-      # copies the console into place, as `make web` did.
+      # One immutable artifact id per download; the pinned action checks its digest.
+      # Outside the checkout, so GoReleaser's clean-tree check still passes.
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
-          name: webui-dist
+          artifact-ids: ${{ needs.web.outputs.artifact-id }}
           path: ${{ runner.temp }}/webui-dist
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.signer.outputs.artifact-id }}
+          path: ${{ runner.temp }}/signer
       - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
         with:
           go-version-file: go.mod
+      - name: Build the release helper
+        id: helper
+        env:
+          CGO_ENABLED: "0"
+        run: |
+          go build -trimpath -o "$RUNNER_TEMP/iris-release-tools" ./cmd/iris-release-tools
+          echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
       - uses: sigstore/cosign-installer@756fe2d284c7292c4e9b62c8a28f1e5629c59532 # v4.1.3
       - uses: anchore/sbom-action/download-syft@66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c # v0.24.3
       - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
           version: v2.20.0
-          args: release --clean
+          install-only: true
+      - name: Build and sign the draft release
+        run: goreleaser release --clean --parallelism=1
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           WEB_DIST: ${{ runner.temp }}/webui-dist
-          # macOS signing and notarization stay off until MACOS_SIGN_P12 exists. A missing
-          # secret arrives empty, which GoReleaser's isEnvSet treats as unset.
+          IRIS_RELEASE_HELPER: ${{ runner.temp }}/iris-release-tools
+          IRIS_WINDOWS_SIGNER: ${{ runner.temp }}/signer/ssign
+          XDG_RUNTIME_DIR: ${{ runner.temp }}/certum-signing
+          CERTUM_EMAIL: ${{ secrets.CERTUM_EMAIL }}
+          CERTUM_OTP: ${{ secrets.CERTUM_OTP }}
+          # The helper passes only Certum credentials, HOME, PATH and the cache
+          # directory to ssign. This is an environment filter, not a runner sandbox.
           MACOS_SIGN_P12: ${{ secrets.MACOS_SIGN_P12 }}
           MACOS_SIGN_PASSWORD: ${{ secrets.MACOS_SIGN_PASSWORD }}
           MACOS_NOTARY_ISSUER_ID: ${{ secrets.MACOS_NOTARY_ISSUER_ID }}
@@ -75,3 +123,66 @@ jobs:
       - uses: actions/attest-build-provenance@4d101475d8b20a2381f78447822ac1eab6504dd8 # v4.2.2
         with:
           subject-checksums: dist/checksums.txt
+      # Keep the original manifest: cosign signed these bytes. These final ZIPs
+      # are downloadable from the run even while the release is still a draft.
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        id: upload
+        with:
+          name: windows-release-${{ github.run_id }}-${{ github.run_attempt }}
+          path: |
+            dist/iris_${{ steps.helper.outputs.version }}_windows_amd64.zip
+            dist/iris_${{ steps.helper.outputs.version }}_windows_arm64.zip
+            dist/checksums.txt
+          if-no-files-found: error
+          retention-days: 1
+  verify-windows:
+    needs: release
+    if: github.repository == 'mateusz-klatt/iris'
+    runs-on: windows-latest
+    permissions:
+      contents: read
+    env:
+      # Renew this pin in both signing workflows by 2027-11-10.
+      EXPECTED_SIGNER_THUMBPRINT: '9C837C68415187A72D88612BDF14FCB0D6623D67'
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          artifact-ids: ${{ needs.release.outputs.artifact-id }}
+          path: ${{ runner.temp }}/windows-handoff
+      - name: Verify archive hashes and extract fixed Windows paths
+        shell: pwsh
+        env:
+          CGO_ENABLED: "0"
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          go build -trimpath -o "$env:RUNNER_TEMP/iris-release-tools.exe" ./cmd/iris-release-tools
+          if ($LASTEXITCODE -ne 0) { throw "Release helper build failed." }
+          $version = $env:RELEASE_TAG.Substring(1)
+          & "$env:RUNNER_TEMP/iris-release-tools.exe" verify-windows-archives "--version=$version" "--dir=$env:RUNNER_TEMP/windows-handoff" "--out=$env:RUNNER_TEMP/windows-verified" >> $env:GITHUB_STEP_SUMMARY
+          if ($LASTEXITCODE -ne 0) { throw "Windows archive verification failed." }
+      - name: Verify both signatures on Windows
+        shell: pwsh
+        run: |
+          $signtool = Get-ChildItem "${env:ProgramFiles(x86)}/Windows Kits/10/bin/*/x64/signtool.exe" |
+            Sort-Object { [version]$_.Directory.Parent.Name } -Descending |
+            Select-Object -First 1 -ExpandProperty FullName
+          if (-not $signtool) { throw "Windows SDK signtool.exe was not found." }
+          foreach ($arch in 'amd64', 'arm64') {
+            $file = Join-Path $env:RUNNER_TEMP "windows-verified/$arch/iris.exe"
+            & $signtool verify /pa /all /v /tw $file
+            if ($LASTEXITCODE -ne 0) { throw "signtool verification failed for $arch (exit $LASTEXITCODE)." }
+            $signature = Get-AuthenticodeSignature -FilePath $file
+            if ($signature.Status -ne 'Valid' -or
+                $null -eq $signature.TimeStamperCertificate -or
+                $signature.SignerCertificate.Thumbprint -ne $env:EXPECTED_SIGNER_THUMBPRINT) {
+              throw "Authenticode verification failed for ${arch}: expected a valid, timestamped signature from the committed certificate."
+            }
+            "${arch}: valid timestamped signature; signer $($signature.SignerCertificate.Thumbprint); timestamp signer $($signature.TimeStamperCertificate.Subject)" >> $env:GITHUB_STEP_SUMMARY
+          }

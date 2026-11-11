@@ -47,6 +47,10 @@ jobs:
         with:
           name: certum-signer
           path: ${{ runner.temp }}/signer
+      - name: Build the release helper
+        env:
+          CGO_ENABLED: "0"
+        run: go build -trimpath -o "$RUNNER_TEMP/iris-release-tools" ./cmd/iris-release-tools
       - name: Build two disposable Windows binaries
         env:
           CGO_ENABLED: "0"
@@ -61,20 +65,18 @@ jobs:
         env:
           CERTUM_EMAIL: ${{ secrets.CERTUM_EMAIL }}
           CERTUM_OTP: ${{ secrets.CERTUM_OTP }}
+          IRIS_WINDOWS_SIGNER: ${{ runner.temp }}/signer/ssign
           XDG_RUNTIME_DIR: ${{ runner.temp }}/certum-signing
         # ssign caches its session under this fixed temp directory. No cleanup step:
         # the GitHub-hosted VM, including that directory, is discarded after the job.
-        # Stock ssign can expose authentication errors; discard both output streams.
+        # Vote 7: exercise two separate helper processes. The acceptance record
+        # uses this signing step's UTC start/end from the run's job-step timestamps:
+        # floor(startUnix/30) == floor(endUnix/30) establishes the same window.
+        # Crossing a boundary is inconclusive; there is no automatic retry.
+        # The helper filters the child's environment and suppresses output.
         run: |
-          umask 077
-          mkdir -p "$XDG_RUNTIME_DIR"
-          chmod 700 "$RUNNER_TEMP/signer/ssign"
-          if ! "$RUNNER_TEMP/signer/ssign" \
-            "$RUNNER_TEMP/windows/amd64/iris.exe" \
-            "$RUNNER_TEMP/windows/arm64/iris.exe" >/dev/null 2>&1; then
-            echo "::error::Certum signing failed; signer output withheld."
-            exit 1
-          fi
+          "$RUNNER_TEMP/iris-release-tools" sign-windows --arch=amd64 --path="$RUNNER_TEMP/windows/amd64/iris.exe"
+          "$RUNNER_TEMP/iris-release-tools" sign-windows --arch=arm64 --path="$RUNNER_TEMP/windows/arm64/iris.exe"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: signed-windows-proof

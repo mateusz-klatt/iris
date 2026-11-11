@@ -236,16 +236,155 @@ jobs:
           echo "archives=$archives sboms=$sboms"
           test "$archives" -gt 0
           test "$archives" = "$sboms"
-      - name: The release workflow runs only for a version tag
+      - name: The release workflow confines signing and verifies its Windows handoff
         shell: bash
         run: |
           set -euo pipefail
           python3 - <<'PY'
+          from copy import deepcopy
+          import re
           import yaml
-          on = yaml.safe_load(open(".github/workflows/release.yml"))[True]
-          assert list(on) == ["push"], on
-          assert list(on["push"]) == ["tags"], on
-          print("release.yml triggers:", on)
+
+          pins = {
+              "actions/checkout": "3d3c42e5aac5ba805825da76410c181273ba90b1",
+              "actions/setup-node": "949feb2413d6458794dcd2491c4babbbce0c15c1",
+              "actions/setup-go": "40f1582b2485089dde7abd97c1529aa768e1baff",
+              "actions/upload-artifact": "ea165f8d65b6e75b540449e92b4886f43607fa02",
+              "actions/download-artifact": "9000827ccba6bdab643e8b6fd33ac0654aef8333",
+              "sigstore/cosign-installer": "756fe2d284c7292c4e9b62c8a28f1e5629c59532",
+              "anchore/sbom-action/download-syft": "66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c",
+              "goreleaser/goreleaser-action": "a4f02ab5355a589de60d917a659ce617ed19b3de",
+              "actions/attest-build-provenance": "4d101475d8b20a2381f78447822ac1eab6504dd8",
+          }
+          def expression(value):
+              return "$" + "{{ " + value + " }}"
+
+          hook = '{{ if and (eq .Os "windows") (not .IsSnapshot) }}"{{ .Env.IRIS_RELEASE_HELPER }}" sign-windows --arch={{ .Arch }} --path="{{ .Path }}"{{ end }}'
+          secret_names = ["GITHUB_TOKEN", "CERTUM_EMAIL", "CERTUM_OTP", "MACOS_SIGN_P12", "MACOS_SIGN_PASSWORD", "MACOS_NOTARY_ISSUER_ID", "MACOS_NOTARY_KEY_ID", "MACOS_NOTARY_KEY"]
+          def check(release, config, proof):
+              assert release[True] == {"push": {"tags": ["v[0-9]+.[0-9]+.[0-9]+*"]}}
+              assert release["permissions"] == {"contents": "read"}
+              assert release["concurrency"] == {"group": "certum-signing", "cancel-in-progress": False}
+              assert config["release"]["draft"] is True
+              assert config["builds"][0]["hooks"] == {"post": [{"cmd": hook}]}
+              jobs = release["jobs"]
+              assert set(jobs) == {"web", "signer", "release", "verify-windows"}
+              assert jobs["release"]["needs"] == ["web", "signer"]
+              assert jobs["verify-windows"]["needs"] == "release"
+              outside_signing = deepcopy(release)
+              for name, job in jobs.items():
+                  assert job["if"] == "github.repository == 'mateusz-klatt/iris'"
+                  assert job["runs-on"] == ("windows-latest" if name == "verify-windows" else "ubuntu-latest")
+                  assert job["permissions"] == ({"contents": "write", "id-token": "write", "attestations": "write"} if name == "release" else {"contents": "read"})
+                  for step in job["steps"]:
+                      if "uses" in step:
+                          action, revision = step["uses"].split("@")
+                          assert revision == pins[action]
+                      if step.get("uses", "").startswith("actions/checkout@"):
+                          assert step["with"]["persist-credentials"] is False
+              signing = [s for s in jobs["release"]["steps"] if s.get("name") == "Build and sign the draft release"]
+              assert len(signing) == 1
+              assert signing[0]["run"] == "goreleaser release --clean --parallelism=1"
+              for name in secret_names:
+                  assert signing[0]["env"][name] == expression("secrets." + name)
+              assert set(signing[0]["env"]) == set(secret_names + ["WEB_DIST", "IRIS_RELEASE_HELPER", "IRIS_WINDOWS_SIGNER", "XDG_RUNTIME_DIR"])
+              helper = [s for s in jobs["release"]["steps"] if s.get("id") == "helper"][0]
+              assert helper["env"] == {"CGO_ENABLED": "0"}
+              assert helper["run"].splitlines() == ['go build -trimpath -o "$RUNNER_TEMP/iris-release-tools" ./cmd/iris-release-tools', 'echo "version=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"']
+              for step in outside_signing["jobs"]["release"]["steps"]:
+                  if step.get("name") == "Build and sign the draft release":
+                      step.pop("env")
+              assert "secrets" not in yaml.safe_dump(outside_signing).casefold()
+              assert not re.search(r"^\s*(environment|continue-on-error):", yaml.safe_dump(release), re.M)
+              assert "always()" not in yaml.safe_dump(release)
+              signer = jobs["signer"]["steps"]
+              assert signer[0]["with"]["repository"] == "Le-Syl21/ssign"
+              assert signer[0]["with"]["ref"] == "f7ba7b2360a3e40bb8aa062d244d95c62a743b90"
+              assert signer[1]["run"].splitlines() == ["rustup toolchain install 1.99.1 --profile minimal", "cargo +1.99.1 build --release --locked", 'sha256sum target/release/ssign >> "$GITHUB_STEP_SUMMARY"']
+              installs = [s for s in jobs["release"]["steps"] if s.get("uses", "").startswith("goreleaser/")]
+              assert installs[0]["with"] == {"version": "v2.20.0", "install-only": True}
+              for name in ["web", "signer", "release"]:
+                  job = jobs[name]
+                  assert job["outputs"] == {"artifact-id": expression("steps.upload.outputs.artifact-id")}
+                  upload = [s for s in job["steps"] if s.get("id") == "upload"][0]
+                  assert upload["with"]["name"].endswith(expression("github.run_id") + "-" + expression("github.run_attempt"))
+                  assert upload["with"]["retention-days"] == 1
+                  assert upload["with"]["if-no-files-found"] == "error"
+              assert jobs["web"]["steps"][-1]["with"]["path"] == "internal/webui/dist"
+              assert signer[-1]["with"]["path"] == "ssign/target/release/ssign"
+              version = expression("steps.helper.outputs.version")
+              assert jobs["release"]["steps"][-1]["with"]["path"].splitlines() == [f"dist/iris_{version}_windows_amd64.zip", f"dist/iris_{version}_windows_arm64.zip", "dist/checksums.txt"]
+              downloads = [s["with"] for s in jobs["release"]["steps"] if s.get("uses", "").startswith("actions/download-artifact@")]
+              assert downloads == [{"artifact-ids": expression("needs.web.outputs.artifact-id"), "path": expression("runner.temp") + "/webui-dist"}, {"artifact-ids": expression("needs.signer.outputs.artifact-id"), "path": expression("runner.temp") + "/signer"}]
+              verify = jobs["verify-windows"]
+              assert verify["env"]["EXPECTED_SIGNER_THUMBPRINT"] == proof["jobs"]["verify"]["env"]["EXPECTED_SIGNER_THUMBPRINT"] == "9C837C68415187A72D88612BDF14FCB0D6623D67"
+              assert verify["steps"][0]["with"]["ref"] == expression("github.sha")
+              assert verify["steps"][2]["with"] == {"artifact-ids": expression("needs.release.outputs.artifact-id"), "path": expression("runner.temp") + "/windows-handoff"}
+              archive_check = verify["steps"][3]["run"]
+              assert 'verify-windows-archives "--version=$version" "--dir=$env:RUNNER_TEMP/windows-handoff" "--out=$env:RUNNER_TEMP/windows-verified"' in archive_check
+              assert "GITHUB_STEP_SUMMARY" in archive_check
+              native = verify["steps"][4]["run"]
+              for policy in ["foreach ($arch in 'amd64', 'arm64')", "windows-verified/$arch/iris.exe", "& $signtool verify /pa /all /v /tw $file", 'if ($LASTEXITCODE -ne 0) { throw', "$signature.Status -ne 'Valid'", "$null -eq $signature.TimeStamperCertificate", "$signature.SignerCertificate.Thumbprint -ne $env:EXPECTED_SIGNER_THUMBPRINT", "GITHUB_STEP_SUMMARY"]:
+                  assert policy in native, policy
+
+          release = yaml.safe_load(open(".github/workflows/release.yml"))
+          config = yaml.safe_load(open(".goreleaser.yaml"))
+          proof = yaml.safe_load(open(".github/workflows/signing-proof.yml"))
+          check(release, config, proof)
+          mutations = [
+              ((True,), {"workflow_dispatch": None}),
+              (("concurrency", "group"), "other"),
+              (("concurrency", "cancel-in-progress"), True),
+              (("permissions",), {"contents": "write"}),
+              (("environment",), "signing"),
+              (("env",), {"LEAK": expression("secrets.CERTUM_OTP")}),
+              (("jobs", "web", "if"), "always()"),
+              (("jobs", "signer", "if"), "always()"),
+              (("jobs", "release", "if"), "always()"),
+              (("jobs", "verify-windows", "if"), "always()"),
+              (("jobs", "web", "permissions"), {"contents": "write"}),
+              (("jobs", "verify-windows", "permissions"), {"contents": "write"}),
+              (("jobs", "release", "continue-on-error"), True),
+              (("jobs", "release", "env"), {"LEAK": expression("toJSON(secrets)")}),
+              (("jobs", "signer", "steps", 0, "with", "ref"), "main"),
+              (("jobs", "signer", "steps", 1, "run"), "cargo +stable build --release"),
+              (("jobs", "release", "needs"), ["web"]),
+              (("jobs", "verify-windows", "needs"), "signer"),
+              (("jobs", "release", "steps", 0, "uses"), "actions/checkout@main"),
+              (("jobs", "release", "steps", 1, "with", "artifact-ids"), "1,2"),
+              (("jobs", "release", "steps", -1, "with", "path"), "dist/*"),
+              (("jobs", "verify-windows", "env", "EXPECTED_SIGNER_THUMBPRINT"), "OTHER"),
+              (("jobs", "verify-windows", "steps", -1, "run"), "& $signtool verify /pa $file"),
+          ]
+          signing_index = next(i for i, s in enumerate(release["jobs"]["release"]["steps"]) if s.get("name") == "Build and sign the draft release")
+          mutations += [(("jobs", "release", "steps", signing_index, "run"), "goreleaser release --clean")]
+          for original, replacement in [("/pa /all /v /tw", "/pa /all /v"), ("$LASTEXITCODE -ne 0", "$LASTEXITCODE -eq 1"), ("$null -eq $signature.TimeStamperCertificate", "$false"), ("$signature.Status -ne 'Valid'", "$false"), ("$signature.SignerCertificate.Thumbprint -ne $env:EXPECTED_SIGNER_THUMBPRINT", "$false")]:
+              mutations.append((("jobs", "verify-windows", "steps", -1, "run"), release["jobs"]["verify-windows"]["steps"][-1]["run"].replace(original, replacement)))
+          for path, value in mutations:
+              mutated = deepcopy(release)
+              target = mutated
+              for key in path[:-1]:
+                  target = target[key]
+              target[path[-1]] = value
+              try:
+                  check(mutated, config, proof)
+              except (AssertionError, KeyError):
+                  pass
+              else:
+                  raise AssertionError(f"Release guard accepted mutation at {path}")
+          for path, value in [(("release", "draft"), False), (("builds", 0, "hooks", "post", 0, "cmd"), hook.replace("(not .IsSnapshot)", "true"))]:
+              mutated = deepcopy(config)
+              target = mutated
+              for key in path[:-1]:
+                  target = target[key]
+              target[path[-1]] = value
+              try:
+                  check(release, mutated, proof)
+              except AssertionError:
+                  pass
+              else:
+                  raise AssertionError(f"Release guard accepted config mutation at {path}")
+          print(f"release.yml: real workflow and config passed; all {len(mutations) + 2} mutations rejected")
           PY
       - name: The signing proof is manual and confines Certum secrets to sign
         shell: bash
@@ -264,6 +403,17 @@ jobs:
               assert "secrets" not in dumped.casefold(), "Secrets outside sign"
               signing = [step for step in sign["steps"] if step.get("name") == "Sign each binary once"]
               assert len(signing) == 1, "Expected one signing step"
+              assert signing[0]["env"] == {
+                  "CERTUM_EMAIL": "$" + "{{ secrets.CERTUM_EMAIL }}",
+                  "CERTUM_OTP": "$" + "{{ secrets.CERTUM_OTP }}",
+                  "IRIS_WINDOWS_SIGNER": "$" + "{{ runner.temp }}/signer/ssign",
+                  "XDG_RUNTIME_DIR": "$" + "{{ runner.temp }}/certum-signing",
+              }, "Expected only the signing step credentials and paths"
+              assert signing[0]["run"].splitlines() == [
+                  '"$RUNNER_TEMP/iris-release-tools" sign-windows --arch=amd64 --path="$RUNNER_TEMP/windows/amd64/iris.exe"',
+                  '"$RUNNER_TEMP/iris-release-tools" sign-windows --arch=arm64 --path="$RUNNER_TEMP/windows/arm64/iris.exe"',
+              ], "Expected two separate helper processes"
+              assert any(step.get("run") == 'go build -trimpath -o "$RUNNER_TEMP/iris-release-tools" ./cmd/iris-release-tools' and step.get("env") == {"CGO_ENABLED": "0"} for step in sign["steps"]), "Expected a native helper build"
               signing[0].pop("env", None)
               assert "secrets" not in yaml.safe_dump(sign).casefold(), "Secrets outside signing step env"
 
@@ -289,6 +439,36 @@ jobs:
               else:
                   raise AssertionError(f"Guard accepted secret reference at {path}")
           print("signing-proof.yml: real workflow passed; all six secret-scope mutations rejected")
+          mutated = deepcopy(proof)
+          step = next(s for s in mutated["jobs"]["sign"]["steps"] if s.get("name") == "Sign each binary once")
+          step["run"] = '"$RUNNER_TEMP/signer/ssign" "$RUNNER_TEMP/windows/amd64/iris.exe" "$RUNNER_TEMP/windows/arm64/iris.exe"'
+          try:
+              check(mutated)
+          except AssertionError:
+              pass
+          else:
+              raise AssertionError("Proof guard accepted direct signing in one process")
+          print("signing-proof.yml: direct-signing mutation rejected")
+          mutated = deepcopy(proof)
+          helper = next(s for s in mutated["jobs"]["sign"]["steps"] if s.get("name") == "Build the release helper")
+          helper["run"] = "echo helper omitted"
+          try:
+              check(mutated)
+          except AssertionError:
+              pass
+          else:
+              raise AssertionError("Proof guard accepted a missing helper build")
+          print("signing-proof.yml: missing-helper-build mutation rejected")
+          mutated = deepcopy(proof)
+          step = next(s for s in mutated["jobs"]["sign"]["steps"] if s.get("name") == "Sign each binary once")
+          step["env"]["LEAK"] = "$" + "{{ toJSON(secrets) }}"
+          try:
+              check(mutated)
+          except AssertionError:
+              pass
+          else:
+              raise AssertionError("Proof guard accepted extra signing secrets")
+          print("signing-proof.yml: extra-signing-secrets mutation rejected")
           PY
       - name: Run the image as non-root on a fresh named volume
         shell: bash
@@ -388,6 +568,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version-file: go.mod
       - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
           version: v2.20.0
@@ -406,3 +589,48 @@ jobs:
           else
             exit "$result"
           fi
+      - name: Exercise the real Windows hook with a synthetic signer
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          import subprocess
+          import tempfile
+          import yaml
+
+          root = Path(tempfile.mkdtemp(prefix="iris-signing-hook-", dir=os.environ["RUNNER_TEMP"]))
+          suffix = ".exe" if os.name == "nt" else ""
+          helper = root / ("iris-release-tools" + suffix)
+          signer = root / ("synthetic-signer" + suffix)
+          source = root / "signer.go"
+          source.write_text('package main\nimport "os"\nfunc main() { if len(os.Args) != 2 { os.Exit(2) }; marker, err := os.OpenFile(os.Args[1]+".signed", os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0600); if err != nil { os.Exit(3) }; if _, err := marker.WriteString("called once"); err != nil { os.Exit(4) }; if marker.Close() != nil { os.Exit(5) } }\n')
+          subprocess.run(["go", "build", "-trimpath", "-o", str(helper), "./cmd/iris-release-tools"], check=True, env=dict(os.environ, CGO_ENABLED="0"))
+          subprocess.run(["go", "build", "-trimpath", "-o", str(signer), str(source)], check=True, env=dict(os.environ, CGO_ENABLED="0"))
+          hook = yaml.safe_load(Path(".goreleaser.yaml").read_text())["builds"][0]["hooks"]
+          for name, snapshot, missing, succeeds in [("snapshot", True, None, True), ("missing-helper", False, "IRIS_RELEASE_HELPER", False), ("missing-credentials", False, "CERTUM_OTP", False), ("signed", False, None, True), ("repeated-hook", False, None, False)]:
+              dist = root / name
+              config = root / (name + ".yaml")
+              target_hook = {"post": hook["post"] * 2} if name == "repeated-hook" else hook
+              config.write_text(yaml.safe_dump({"version": 2, "project_name": "iris", "dist": str(dist), "builds": [{"id": "iris", "main": "./cmd/iris-release-tools", "binary": "iris", "env": ["CGO_ENABLED=0"], "goos": ["windows"], "goarch": ["amd64"], "hooks": target_hook}]}))
+              env = dict(os.environ, GOOS="windows", GOARCH="amd64", GORELEASER_CURRENT_TAG="v0.0.0-signing-test", IRIS_RELEASE_HELPER=str(helper), IRIS_WINDOWS_SIGNER=str(signer), XDG_RUNTIME_DIR=str(root / "runtime"), CERTUM_EMAIL="synthetic@example.invalid", CERTUM_OTP="synthetic")
+              if missing:
+                  env.pop(missing)
+              args = ["goreleaser", "build", "--config", str(config), "--single-target", "--skip=before,validate"]
+              if snapshot:
+                  args.append("--snapshot")
+              result = subprocess.run(args, env=env, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+              assert (result.returncode == 0) == succeeds, result.stdout
+              markers = list(dist.rglob("*.signed"))
+              assert len(markers) == (1 if name in ("signed", "repeated-hook") else 0), markers
+              for marker in markers:
+                  assert marker.read_text() == "called once", marker
+              if name == "missing-helper":
+                  assert "IRIS_RELEASE_HELPER" in result.stdout, result.stdout
+              if name == "missing-credentials":
+                  assert "release tools: signing configuration is incomplete" in result.stdout, result.stdout
+              if name == "repeated-hook":
+                  assert "release tools: Windows signing failed" in result.stdout, result.stdout
+              print(name + ": expected hook result and signer call count")
+          PY

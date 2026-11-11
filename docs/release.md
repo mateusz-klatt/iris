@@ -2,8 +2,9 @@
 
 The repository is public, and nothing is published yet: no release, no package-manager update
 and no image. A pushed version tag runs `.github/workflows/release.yml`, which makes a **draft**
-GitHub release (`release: draft: true`) that stays private until the owner publishes it. The tag
-itself is public as soon as it is pushed. Homebrew,
+GitHub release (`release: draft: true`) for the owner to publish. The tag,
+Rekor entries, attestations and final Windows ZIP bytes in the verification handoff artifact
+are public before publication. Homebrew,
 Scoop and winget are `skip_upload: true`. Docker builds are enabled only for snapshots, which never
 push. Do not enable publishing until D15's later stages are approved.
 The GoReleaser dependency is not part of the application module.
@@ -97,9 +98,18 @@ of the provisioning URI's `secret` parameter, not the whole URI. ssign needs onl
 the email and that secret and fetches the certificate from the cloud itself.
 There is no environment gate. Secrets stay at repository level.
 
-Once the workflow is on `main`, the owner or a fleet session may dispatch it, with
-the owner's leave of 2026-11-11. In Actions, select **Windows signing proof** and
-**Run workflow** on `main`. macOS dispatches the first run after merge. Each run
+The owner or a fleet session may dispatch it on `main`, with the owner's leave of
+2026-11-11. In Actions, select **Windows signing proof** and **Run workflow** on
+`main`. After PR 2 merges, run the revised proof once before any rc1 tag, as vote 7
+requires. Its `sign` job builds `iris-release-tools`, then one step holding the
+Certum secrets runs `sign-windows` twice, once per file in separate processes.
+This exercises two separate helper processes and the allowlisted child
+environment; the native `verify` policy is unchanged. The acceptance record
+must include the signing step's UTC start and end from the run's job-step
+timestamps. Convert them to Unix seconds as `startUnix` and `endUnix` and
+demonstrate `floor(startUnix/30) == floor(endUnix/30)` to accept the same-window
+condition. A passing run whose signing step crosses a 30-second boundary is
+inconclusive for that condition. Each run
 spends two signatures, one per architecture; failed requests may also count.
 There is no automatic retry. Rerunning `sign` or the whole workflow signs again
 and can consume two further signatures; rerunning only `verify` does not sign.
@@ -115,7 +125,13 @@ code-signing certificate: issuer Certum Code Signing 2021 CA, valid until
 9C837C68415187A72D88612BDF14FCB0D6623D67 was pinned in the `verify` job of
 `.github/workflows/signing-proof.yml`. With the pin, verification requires both
 signatures to be valid, timestamped and from that certificate. A run signed by any
-other certificate fails. The pin must change when the certificate is renewed.
+other certificate fails. The pin in both `signing-proof.yml` and `release.yml`,
+and the CI guard's expected pin, must change when the certificate is renewed,
+by 2027-11-10.
+
+Run 43028728881 on main 658cfc8 passed all three jobs with Rust 1.99.1 and
+`cargo build --release --locked`. That run signed both files in one stock ssign
+process. The revised two-process helper proof has not yet been measured.
 
 A passing run proves that this signer revision can sign disposable Windows
 amd64 and arm64 Go builds unattended with this account, and that Windows accepts
@@ -123,9 +139,82 @@ both timestamped signatures from the committed certificate. The signer hash is
 in the job summary; the signer and signed executable artifacts are retained for
 one day and are not private in a public repository. The hosted signing VM is
 discarded after the job. This does not prove SmartScreen reputation, program
-execution, console assets, release ZIPs, checksums or publication. It changes
-neither the tag release workflow nor GoReleaser; integration needs a successful
-proof and a further vote.
+execution, console assets, release ZIPs, checksums or publication. Vote 7 adopted
+release integration after the successful stock proof, conditional on the revised
+proof run described above.
+
+## Windows release signing, configured
+
+The following is configured behaviour. No tag run has yet measured the release
+helper, Windows ZIP handoff and native verification together. Keep that distinction
+in the first rc1 acceptance record; a successful stock proof is not a release rehearsal.
+
+`release.yml` shares the `certum-signing` concurrency group with the proof and
+does not cancel an active signing run. `web` and `signer` build without secrets
+and transfer attempt-specific artifacts by id. `signer` uses stock ssign at
+`f7ba7b2360a3e40bb8aa062d244d95c62a743b90`, Rust 1.99.1 and `--locked`, with its
+executable hash recorded in the summary. No ssign source enters Iris.
+
+`release` builds the standard-library Go helper once with `CGO_ENABLED=0` and runs
+GoReleaser v2.20.0 with `--parallelism=1`. All targets and their post-build hooks
+are serialized. For each Windows tag target, the hook runs:
+
+```text
+iris-release-tools sign-windows --arch=<amd64|arm64> --path=<iris.exe>
+```
+
+`IRIS_RELEASE_HELPER` and `IRIS_WINDOWS_SIGNER` name absolute helper and signer
+paths. Missing helper or credentials fails a Windows tag build; Windows snapshots
+stay unsigned even with credentials present. Signing happens before ZIP creation,
+checksums and cosign. The helper passes each input path positionally to ssign,
+once, with a five-minute deadline, suppressed stdout/stderr and fixed messages.
+There is no automatic retry or cleanup step. The signer's cached session is
+`$XDG_RUNTIME_DIR/ssign/session.json` on the disposable hosted runner.
+
+Only the GoReleaser step receives `GITHUB_TOKEN`, `CERTUM_EMAIL`, `CERTUM_OTP`
+and the five `MACOS_*` secrets. GoReleaser, hooks and the compiler inherit that
+environment. ssign's child environment contains only `CERTUM_EMAIL`, `CERTUM_OTP`,
+`XDG_RUNTIME_DIR`, `HOME` and `PATH`. The release token, OIDC values, Apple secrets
+and GitHub command-file paths do not reach ssign through its environment. This
+does not isolate malicious code sharing the runner's user and filesystem; the
+whole release job is trusted, and ssign still receives the TOTP seed.
+
+After GoReleaser creates the draft and build provenance, `release` uploads only
+`iris_<version>_windows_amd64.zip`, `iris_<version>_windows_arm64.zip` and the
+untouched `checksums.txt` that cosign signed. The artifact is retained for one day.
+The secret-free `verify-windows` job downloads that single artifact id with digest
+verification, then runs the helper:
+
+```text
+iris-release-tools verify-windows-archives --version=<tag without v> --dir=<handoff> --out=<verified>
+```
+
+It requires exactly those three files and exactly one SHA-256 entry for each ZIP,
+checks both ZIP hashes before extraction, and rejects unsafe, duplicate or
+unexpected members. Each ZIP must contain `iris.exe`, `LICENSE` and `docs/guard.md`.
+Only `iris.exe` is extracted, to `<verified>/amd64/iris.exe` or
+`<verified>/arm64/iris.exe`, with its PE machine type checked. Manifest, ZIP and
+executable hashes go to the job summary. Both executables must then pass
+`signtool verify /pa /all /v /tw` with exit 0, `Get-AuthenticodeSignature` status
+`Valid`, a timestamp certificate and the pinned signer thumbprint. Exit 2 fails.
+
+A wrong card, trust failure or timestamp failure is detected after the draft
+exists and after signatures may have been spent. A failing GoReleaser target does
+not cancel another target, so a failed release can spend two signatures. Rerunning
+`release` signs again; rerunning only `verify-windows` signs nothing. Serial hooks
+normally reuse the cached session, but a cache failure can stop the second sign.
+Before rc1, the revised proof must exercise the two processes and meet the
+same-window acceptance condition above. Crossing a boundary does not authorize
+an automatic retry.
+
+Same-run verification cannot show that mutable draft assets stay unchanged.
+Before the owner publishes, holzera compares the draft's Windows ZIP hashes with
+the `verify-windows` record and records the comparison in #271's acceptance
+record. The owner only publishes. #271 derives its Windows procedure again after
+PR 2 merges and retains publication, withdrawal, reviewers and rerun authorization.
+The tag, Rekor entries, attestations and the handoff's final ZIP bytes are already
+public at that point. This integration does not establish SmartScreen reputation
+or prove that either signed program runs.
 
 The commit identifiers in the 2026-11-07 artifact measurements below predate the repository's
 history rewrite. They are retained as historical evidence, not current checkout references.

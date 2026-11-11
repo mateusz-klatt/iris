@@ -15,6 +15,9 @@ builds:
     env: [CGO_ENABLED=0]
     goos: [linux, darwin, windows]
     goarch: [amd64, arm64]
+    hooks:
+      post:
+        - cmd: '{{ if and (eq .Os "windows") (not .IsSnapshot) }}"{{ .Env.IRIS_RELEASE_HELPER }}" sign-windows --arch={{ .Arch }} --path="{{ .Path }}"{{ end }}'
     flags: [-trimpath]
     ldflags:
       - -s -w -X github.com/mateusz-klatt/iris/internal/buildinfo.Version={{ .Version }} -X github.com/mateusz-klatt/iris/internal/buildinfo.Commit={{ .FullCommit }} -X github.com/mateusz-klatt/iris/internal/buildinfo.Modified={{ .IsGitDirty }}
