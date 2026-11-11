@@ -4,6 +4,7 @@ project_name: iris
 # .github/workflows/release.yml, which makes a draft for the owner to publish.
 release:
   draft: true
+  prerelease: auto
 before:
   hooks:
     # WEB_DIST is set only by the release workflow, to a console built without credentials.
