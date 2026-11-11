@@ -1,22 +1,27 @@
 # Status
 
-Release prerequisites updated 2026-11-09. Nothing is released.
+Release prerequisites updated 2026-11-11. Nothing is released.
 
 The hub latency, shared-worktree, recovery, service and release-rehearsal measurements below were
 last summarized on 2026-11-08, from `main` at `efe0af6` before the repository history rewrite.
 Their commit hashes and PR numbers, including the Windows diagnostic at `993e545`, are retained as
 historical evidence labels; they refer to the history before the rewrite, not revisions of the
-current `main`. The deployment, CI, account and translation notes were updated on 2026-11-09 on
-`main` at `655526a`. The deployment paragraph and the hub's idle CPU were updated on 2026-11-10 on
-`main` at `ef67498`.
+current `main`. The CI and translation notes were updated on 2026-11-09 on `main` at `655526a`.
+The hub's idle CPU note was updated on 2026-11-10 on `main` at `ef67498`. The deployment paragraph
+and console record were updated on 2026-11-11 on `main` at `427703f`.
 
 The hub runs at https://iris.klatt.ie behind Apache and Cloudflare (`docs/deploy.md`). It was last
-deployed from `ef67498` on 2026-11-10 at 01:55 UTC, by the procedure that deploys an image CI built
-(#243, #248). That procedure has run three times on the public hub: for `cfcd86a` and `6d555c7` on
-2026-11-09 at 19:32 and 19:52 UTC, and for `ef67498`. Each run took a backup before it replaced the
-container. After the last one the container and the host CLI reported that commit with a clean
-source, the container had not restarted, and `/v1/status` answered locally and through the public
-origin. The host itself was restarted on 2026-11-09 at 22:14 UTC; the container stopped with exit
+deployed from `main` at `427703f` (#266) on 2026-11-11 at 11:10:51 UTC, after a backup; it was ready
+1.4 s later, with the console open and a restart count of 0. That deploy brought the hub's side of
+the reduced shell scope (ADR 018, migration 022), the attention identity (migration 023) and Go
+1.27.4 for GO-2026-6859. Before it, `d4cae61` (#250) was deployed on 2026-11-10 at 16:49:18 UTC for
+the login cutover. Earlier deployments by the procedure that deploys an image CI built (#243,
+#248) were for `cfcd86a` and `6d555c7` on 2026-11-09 at 19:32 and 19:52 UTC, and for `ef67498` on
+2026-11-10 at 01:55 UTC.
+Each of those runs took a backup before it replaced the container. After the `ef67498` deployment,
+the container and the host CLI reported that commit with a clean source, the container had not
+restarted, and `/v1/status` answered locally and through the public origin.
+The host itself was restarted on 2026-11-09 at 22:14 UTC; the container stopped with exit
 status 0 and Docker started it again when the host came back. Agents on macOS, Linux under WSL, and
 Windows 11 use the hub every day. Evidence and its limits are identified below. Anything not
 measured is listed under "Not done or not measured".
@@ -125,17 +130,26 @@ Against the production hub, over TLS:
   connections. In the 3.29 hours after the host's restart that night it used 18.5 CPU seconds, which
   is 0.09 a minute. This is not a controlled comparison: the WSL sessions ended seconds after the
   deploy ([record](research/hub-idle-cpu.md#public-hub-before-and-after-the-deploy)).
+- **Public hub login cutover.** Password login is active on the public hub. It is made of the
+  account schema (#223), authorization (#225), sessions (#226), the importer (#228), the login and
+  profile forms (#229), the operator access editor (#242) and activation (#250,
+  [ADR 019](adr/019-console-activation.md)). The approved import created 2 accounts, one operator
+  and one member, on 2026-11-10 at about 16:48 UTC. The dry run before it listed 2 to create; the dry run after it
+  listed 2 skipped, none quarantined. The cutover deploy of `d4cae61` (#250) at 16:49:18 UTC that day
+  closed the console as [the runbook](console-activation.md#first-cutover-on-the-public-hub) expects;
+  agent coordination kept working.
+
+  On 2026-11-11 the owner activated the named console in his own terminal. Activation said a restart
+  was required. The coordinator restarted the hub at 10:02:30 UTC, and the hub's log said
+  "Iris console open". The owner signed in with both accounts and changed both passwords. Five
+  minutes after the restart the container's restart count was 0.
+
+  The console was closed for 17 hours 13 minutes. That was the wait for the owner, not the time the
+  procedure itself takes. Login links are gone on the public hub; the web console takes a username
+  and a password.
 
 ## Not done or not measured
 
-- **Password login is not active on the public hub.** The account schema (#223), authorization
-  (#225), sessions (#226), the importer (#228), the login and profile forms (#229), the operator
-  access editor (#242) and activation (#250, [ADR 019](adr/019-console-activation.md)) are on
-  `main`. The public hub still runs a version from before the activation change and uses login
-  links: deploying the activation version closes the console until the owner activates an operator,
-  so that deploy waits for him ([the cutover steps](console-activation.md#first-cutover-on-the-public-hub)).
-  The importer's dry run for the owner's two accounts ran on the public hub and reported that it
-  would create one operator and one member, writing nothing. No account has been imported.
 - **Other clients on real hosts.** Codex has run with Claude in the bounded macOS and WSL
   shared-worktree experiments above; that does not validate every integration path. Cursor,
   Antigravity, Grok and Kimi do not have equivalent end-to-end evidence in this status record.

@@ -201,9 +201,10 @@ procedure; on the public hub that is the coordinator.
    the apply creates them; the same dry run afterwards reports each of them as
    skipped and none as created. An approved import can also run before step 2,
    on the version that is running: no migration separates the two versions, and
-   an import that stops there closes nothing. The public hub's first cutover
-   does it that way. A deployment never implicitly approves importing real
-   accounts. Owner creation and recovery work while the browser gate is closed:
+   an import that stops there closes nothing. For the public hub's first
+   cutover, the import ran on 2026-11-10 before step 2. A deployment never
+   implicitly approves importing real accounts. Owner creation and recovery
+   work while the browser gate is closed:
 
    ```sh
    iris admin console create ReviewedOperator < /private/new-password
