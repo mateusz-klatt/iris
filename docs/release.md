@@ -104,17 +104,18 @@ spends two signatures, one per architecture; failed requests may also count.
 There is no automatic retry. Rerunning `sign` or the whole workflow signs again
 and can consume two further signatures; rerunning only `verify` does not sign.
 
-The first run can leave `EXPECTED_SIGNER_THUMBPRINT` empty. After checking the
-artifact contains exactly the two expected files, `verify` prints each signer's
-public Subject, Issuer, Thumbprint, NotBefore and NotAfter, and the timestamp
-signer's Subject, then fails closed. This discovery run spends two signatures.
-The owner confirms that the printed certificate is theirs and commits its
-thumbprint in the `verify` job of `.github/workflows/signing-proof.yml`.
-Discovery costs four signatures in all: two in the discovery run and two in a
-new verifying run after the confirmed thumbprint is committed.
-Alternatively, obtain the thumbprint from SimplySign if available and commit it
-there. With a non-empty expected thumbprint, verification still requires both
-valid, timestamped signatures to match it.
+When `EXPECTED_SIGNER_THUMBPRINT` is empty, `verify` first checks that the artifact
+holds exactly the two expected files. It then prints each signer's public Subject,
+Issuer, Thumbprint, NotBefore and NotAfter, and the timestamp signer's Subject, and
+fails closed. Such a discovery run spends two signatures.
+
+The first run, 43023491609 on 2026-11-11, showed the owner's Certum open-source
+code-signing certificate: issuer Certum Code Signing 2021 CA, valid until
+2027-11-10. After it was confirmed, its thumbprint
+9C837C68415187A72D88612BDF14FCB0D6623D67 was pinned in the `verify` job of
+`.github/workflows/signing-proof.yml`. With the pin, verification requires both
+signatures to be valid, timestamped and from that certificate. A run signed by any
+other certificate fails. The pin must change when the certificate is renewed.
 
 A passing run proves that this signer revision can sign disposable Windows
 amd64 and arm64 Go builds unattended with this account, and that Windows accepts
