@@ -27,7 +27,7 @@ Nothing is released yet, and no package channel is published. Build from source 
 release archives are the intended first installation route once a release is published.
 See [Snapshots and releases](docs/release.md) for the prepared artifacts and their limits.
 
-Building the binary with the web console needs Go 1.27.3 or newer, Node.js 26 and npm,
+Building the binary with the web console needs Go 1.27.4 or newer, Node.js 26 and npm,
 and Make with a POSIX shell and utilities (Git Bash on Windows). From the repository root:
 
 ```sh
