@@ -12,7 +12,7 @@ func operationAccount(t *testing.T, s *Store, username string) ConsoleAccount {
 	t.Helper()
 	a, err := s.CreateConsoleAccount(context.Background(), ConsoleAccountInput{
 		Username: username, Role: "member", DisplayName: "Person " + username,
-		PasswordHash: "scrypt$16384$8$1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+		PasswordHash: consoleTestHash,
 	})
 	if err != nil {
 		t.Fatal("create fixture account:", err)

@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -21,6 +22,11 @@ import (
 )
 
 const consoleTestPassword = "correct synthetic password"
+
+const legacyConsoleHash = "scrypt$16384$8$1$AAECAwQFBgcICQoLDA0ODw$5UJCybzgeNrUxZTV5mzrOYr8Aj1OlDXLrgTFXHxr1m4"
+
+// Independent argon2-cffi vector for password "x", using the approved profile.
+const shortConsoleHash = "$argon2id$v=19$m=65536,t=3,p=1$AAECAwQFBgcICQoLDA0ODw$h/bekxvFlzSTcN+YWUQEsQ0HPChzNY74xJtz/WE2x04"
 
 type consoleBrowser struct {
 	cookie *http.Cookie
@@ -200,6 +206,8 @@ func TestConsoleChallengeSingleUseAndSessionProtection(t *testing.T) {
 }
 func TestConsoleGenericLoginFailuresAndNoSensitiveOutput(t *testing.T) {
 	h, server, filename := consoleSetup(t)
+	now := time.Now()
+	h.now = func() time.Time { return now }
 	storedRecord, err := consoleauth.CreatePassword(consoleTestPassword)
 	if err != nil || storedRecord == dummyConsoleHash {
 		t.Fatal("could not create a distinct synthetic password record", err)
@@ -213,44 +221,100 @@ func TestConsoleGenericLoginFailuresAndNoSensitiveOutput(t *testing.T) {
 	}
 	malformed := consoleAccount(t, h, "Malformed", "member")
 	consoleDB(t, filename, "UPDATE ConsoleAccount SET password_hash='unusable-sensitive-record' WHERE id=?", malformed.ID)
+	legacy := consoleAccount(t, h, "Restored", "member")
+	consoleDB(t, filename, "UPDATE ConsoleAccount SET password_hash=? WHERE id=?", legacyConsoleHash, legacy.ID)
 	var logs bytes.Buffer
 	h.Log = log.New(&logs, "", 0)
-	expected := ""
-	for _, test := range []struct{ label, name, password, record string }{
-		{"missing", "Unknown", consoleTestPassword, dummyConsoleHash},
-		{"bad-password", enabled.Username, "wrong-sensitive-password", storedRecord},
-		{"disabled", disabled.Username, consoleTestPassword, dummyConsoleHash},
-		{"none", none.Username, consoleTestPassword, dummyConsoleHash},
-		{"unusable-hash", malformed.Username, consoleTestPassword, dummyConsoleHash},
-		{"invalid-name", " invalid name ", consoleTestPassword, dummyConsoleHash},
-	} {
-		t.Run(test.label, func(t *testing.T) {
-			count := 0
-			h.console.verify = func(password, record string) (bool, error) {
-				count++
-				if record != test.record || consoleauth.ValidateHash(record) != nil {
-					t.Error("password verifier did not receive the expected valid record")
+	for _, busy := range []bool{false, true} {
+		var expected []*httptest.ResponseRecorder
+		for _, test := range []struct{ label, name, password, record string }{
+			{"missing", "Unknown", consoleTestPassword, dummyConsoleHash},
+			{"bad-password", enabled.Username, "wrong-sensitive-password", storedRecord},
+			{"disabled", disabled.Username, consoleTestPassword, dummyConsoleHash},
+			{"none", none.Username, consoleTestPassword, dummyConsoleHash},
+			{"unusable-hash", malformed.Username, consoleTestPassword, dummyConsoleHash},
+			{"scrypt", legacy.Username, "x", dummyConsoleHash},
+			{"invalid-name", " invalid name ", consoleTestPassword, dummyConsoleHash},
+		} {
+			t.Run(fmt.Sprintf("%s/busy=%t", test.label, busy), func(t *testing.T) {
+				// Each account state gets the same fresh quota and the same sequence
+				// of admitted failures followed by a quota refusal.
+				h.console = newConsoleAuth(bytes.Repeat([]byte{9}, 32))
+				logs.Reset()
+				count := 0
+				h.console.verify = func(password, record string) (bool, error) {
+					count++
+					if record != test.record || consoleauth.ValidateHash(record) != nil {
+						t.Error("password verifier did not receive the expected valid record")
+					}
+					if busy {
+						return false, consoleauth.ErrBusy
+					}
+					return password == consoleTestPassword || password == "x", nil
 				}
-				return password == consoleTestPassword, nil
-			}
-			b := consoleChallengeBrowser(t, h, server.URL)
-			w := consoleDo(t, h, server.URL, "POST", "/v1/ui/login", map[string]any{"username": test.name, "password": test.password}, b, 401)
-			if count != 1 {
-				t.Fatal("login attempt did not perform exactly one password verification")
-			}
-			if expected == "" {
-				expected = w.Body.String()
-			}
-			if w.Body.String() != expected || !strings.Contains(w.Body.String(), "Invalid username or password") {
-				t.Fatal("login failure disclosed account state")
-			}
-			for _, sentinel := range []string{test.name, test.password, b.cookie.Value, b.csrf, storedRecord, dummyConsoleHash, "unusable-sensitive-record"} {
-				if sentinel != "" && (strings.Contains(logs.String(), sentinel) || strings.Contains(w.Body.String(), sentinel)) {
-					t.Fatal("authentication emitted sensitive input")
+				for attempt := range 6 {
+					b := consoleChallengeBrowser(t, h, server.URL)
+					status := http.StatusUnauthorized
+					if busy || attempt == 5 {
+						status = http.StatusTooManyRequests
+					}
+					w := consoleDo(t, h, server.URL, "POST", "/v1/ui/login", map[string]any{"username": test.name, "password": test.password}, b, status)
+					if len(expected) < 6 {
+						expected = append(expected, w)
+					}
+					want := expected[attempt]
+					if w.Code != want.Code || w.Body.String() != want.Body.String() || !reflect.DeepEqual(w.Header(), want.Header()) || !reflect.DeepEqual(w.Result().Cookies(), want.Result().Cookies()) {
+						t.Fatal("login status, body, headers or cookies disclosed account state")
+					}
+					cookies := w.Result().Cookies()
+					if len(cookies) != 1 || cookies[0].Name != consoleLoginCookieName || cookies[0].MaxAge != -1 {
+						t.Fatal("failed login did not only clear its challenge cookie")
+					}
+					if status == http.StatusUnauthorized && !strings.Contains(w.Body.String(), "Invalid username or password") {
+						t.Fatal("login failure lost its generic message")
+					}
+					for _, sentinel := range []string{test.name, consoleTestPassword, "wrong-sensitive-password", b.cookie.Value, b.csrf, storedRecord, dummyConsoleHash, legacyConsoleHash, "unusable-sensitive-record"} {
+						if strings.Contains(logs.String(), sentinel) || strings.Contains(w.Body.String(), sentinel) {
+							t.Fatal("authentication emitted sensitive input")
+						}
+					}
 				}
-			}
-		})
+				if count != 5 || h.console.aggregate.count != 5 || len(h.console.attempts) != 1 {
+					t.Fatal("account state changed password work or quota consumption")
+				}
+				for _, bucket := range h.console.attempts {
+					if bucket.count != 5 {
+						t.Fatal("failed login consumed a different account quota")
+					}
+				}
+				if logs.Len() != 0 {
+					t.Fatal("failed login emitted account-specific logs")
+				}
+			})
+		}
 	}
+	after, err := h.store.GetConsoleAccount(t.Context(), legacy.ID)
+	if err != nil || after.PasswordHash != legacyConsoleHash || after.AuthVersion != legacy.AuthVersion || after.EditRevision != legacy.EditRevision || after.LastLoginMS != nil {
+		t.Fatal("refused scrypt login changed the restored account")
+	}
+}
+
+func TestConsoleShortArgonPasswordSignsInWithoutChangingCredentials(t *testing.T) {
+	h, server, filename := consoleSetup(t)
+	a := consoleAccount(t, h, "Short", "member")
+	consoleDB(t, filename, "UPDATE ConsoleAccount SET password_hash=? WHERE id=?", shortConsoleHash, a.ID)
+	h.console.verify = consoleauth.VerifyPassword
+	b := consoleChallengeBrowser(t, h, server.URL)
+	w := consoleDo(t, h, server.URL, "POST", "/v1/ui/login", map[string]string{"username": a.Username, "password": "x"}, b, 200)
+	after, err := h.store.GetConsoleAccount(t.Context(), a.ID)
+	if err != nil || after.PasswordHash != shortConsoleHash || after.AuthVersion != a.AuthVersion || after.EditRevision != a.EditRevision || after.LastLoginMS == nil {
+		t.Fatal("Argon2id login changed credentials or failed to record login")
+	}
+	cookies := w.Result().Cookies()
+	if len(cookies) != 2 || cookies[1].Name != consoleCookieName {
+		t.Fatal("short Argon2id login did not issue a session")
+	}
+	consoleDo(t, h, server.URL, "GET", "/v1/ui/session", nil, consoleBrowser{cookie: cookies[1]}, 200)
 }
 func TestConsoleLoginRateQuotasExpireAndBoundMemory(t *testing.T) {
 	h, server, _ := consoleSetup(t)
@@ -327,7 +391,7 @@ func TestConsolePasswordChangeVerifiesCurrentAndEndsAllSessions(t *testing.T) {
 		t.Fatal("password change failed to revoke account version")
 	}
 }
-func TestConsoleKDFAndUpgradeErrorsFailClosed(t *testing.T) {
+func TestConsoleKDFErrorsFailClosed(t *testing.T) {
 	h, server, _ := consoleSetup(t)
 	a := consoleAccount(t, h, "Capacity", "member")
 	for _, failure := range []error{consoleauth.ErrBusy, errors.New("private derivation failure")} {
@@ -455,38 +519,6 @@ func TestConsoleMissingKeyAndRotationFailClosedWithoutStoppingCoordination(t *te
 	h.ServeHTTP(w, r)
 	if w.Code != 200 {
 		t.Fatal("failed console key stopped agent coordination")
-	}
-}
-func TestConsoleShortImportedPasswordUpgradesAtomically(t *testing.T) {
-	h, server, _ := consoleSetup(t)
-	const imported = "scrypt$16384$8$1$AAECAwQFBgcICQoLDA0ODw$5UJCybzgeNrUxZTV5mzrOYr8Aj1OlDXLrgTFXHxr1m4"
-	a, err := h.store.CreateConsoleAccount(context.Background(), store.ConsoleAccountInput{Username: "Imported", PasswordHash: imported, Role: "member"})
-	if err != nil {
-		t.Fatal("synthetic imported account refused")
-	}
-	h.console.verify = consoleauth.VerifyPassword
-	for _, failure := range []error{consoleauth.ErrBusy, errors.New("private upgrade failure")} {
-		h.console.upgrade = func(string) (string, error) { return "", failure }
-		b := consoleChallengeBrowser(t, h, server.URL)
-		want := 401
-		if errors.Is(failure, consoleauth.ErrBusy) {
-			want = 429
-		}
-		consoleDo(t, h, server.URL, "POST", "/v1/ui/login", map[string]any{"username": a.Username, "password": "x"}, b, want)
-		after, err := h.store.GetConsoleAccount(context.Background(), a.ID)
-		if err != nil || after.PasswordHash != imported || after.AuthVersion != a.AuthVersion {
-			t.Fatal("failed upgrade changed account")
-		}
-	}
-	h.console.upgrade = consoleauth.UpgradePassword
-	b := consoleChallengeBrowser(t, h, server.URL)
-	consoleDo(t, h, server.URL, "POST", "/v1/ui/login", map[string]any{"username": a.Username, "password": "x"}, b, 200)
-	after, err := h.store.GetConsoleAccount(context.Background(), a.ID)
-	if err != nil || !strings.HasPrefix(after.PasswordHash, "$argon2id$") || after.AuthVersion != a.AuthVersion+1 {
-		t.Fatal("short imported login did not upgrade atomically")
-	}
-	if good, err := consoleauth.VerifyPassword("x", after.PasswordHash); err != nil || !good {
-		t.Fatal("import upgrade changed password bytes")
 	}
 }
 func TestConsoleMaximumInputAndResetDuringVerificationCannotIssueSession(t *testing.T) {

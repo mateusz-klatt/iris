@@ -24,7 +24,7 @@ func issueTestSession(t *testing.T, s *Store, a ConsoleAccount, n byte) Principa
 	t.Helper()
 	digest := make([]byte, 32)
 	digest[0] = n
-	if _, err := s.IssueConsoleSession(t.Context(), a, digest, ""); err != nil {
+	if _, err := s.IssueConsoleSession(t.Context(), a, digest); err != nil {
 		t.Fatal("session issuance failed", err)
 	}
 	return Principal{Kind: ConsolePrincipal, SessionDigest: digest}
@@ -158,7 +158,7 @@ func TestConsoleSessionRefusalsAndIdempotentLogout(t *testing.T) {
 	}
 	_, err = s.ConsoleSessionInfo(t.Context(), p.SessionDigest)
 	consoleError(t, err, "unauthorized")
-	_, err = s.IssueConsoleSession(t.Context(), a, make([]byte, 32), "")
+	_, err = s.IssueConsoleSession(t.Context(), a, make([]byte, 32))
 	consoleError(t, err, "unauthorized")
 	var actions int
 	if err = s.db.QueryRow("SELECT COUNT(*) FROM ConsoleAction WHERE action='logout' AND actor_account_id=?", a.ID).Scan(&actions); err != nil || actions != 1 {
@@ -166,38 +166,23 @@ func TestConsoleSessionRefusalsAndIdempotentLogout(t *testing.T) {
 	}
 }
 
-func TestConsolePasswordUpgradeAndExplicitChangesRevokeEverySession(t *testing.T) {
+func TestConsolePasswordChangesRevokeEverySession(t *testing.T) {
 	s, _, _ := testStore(t)
-	legacy := createTestConsoleAccount(t, s, "legacy", "member")
-	old := consoleTestPrincipal(t, s, legacy)
-	if _, err := s.IssueConsoleSession(t.Context(), legacy, make([]byte, 32), ""); err == nil {
-		t.Fatal("legacy login issued without upgrade")
-	}
-	digest := make([]byte, 32)
-	digest[0] = 10
-	upgraded, err := s.IssueConsoleSession(t.Context(), legacy, digest, consoleArgonTestHash)
+	account := newSessionAccount(t, s, "member", "member")
+	p := issueTestSession(t, s, account, 10)
+	other := issueTestSession(t, s, account, 11)
+	edited, err := s.EditConsoleProfile(t.Context(), p, account.EditRevision, "Cosmetic", "en", "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if upgraded.PasswordHash != consoleArgonTestHash || upgraded.AuthVersion != legacy.AuthVersion+1 || upgraded.EditRevision != legacy.EditRevision+1 || sessionCount(t, s, legacy) != 1 {
-		t.Fatal("upgrade failed to replace only after verification")
-	}
-	_, err = s.ConsoleSessionInfo(t.Context(), old.SessionDigest)
-	consoleError(t, err, "unauthorized")
-	p := Principal{Kind: ConsolePrincipal, SessionDigest: digest}
-	other := issueTestSession(t, s, upgraded, 11)
-	edited, err := s.EditConsoleProfile(t.Context(), p, upgraded.EditRevision, "Cosmetic", "en", "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if edited.AuthVersion != upgraded.AuthVersion {
+	if edited.AuthVersion != account.AuthVersion {
 		t.Fatal("profile changed authority")
 	}
 	if _, err = s.ConsoleSessionInfo(t.Context(), other.SessionDigest); err != nil {
 		t.Fatal("profile revoked sessions", err)
 	}
 	changes := s.Changes()
-	if err = s.ChangeConsolePassword(t.Context(), p, upgraded, consoleOtherArgonTestHash); err != nil {
+	if err = s.ChangeConsolePassword(t.Context(), p, account, consoleOtherArgonTestHash); err != nil {
 		t.Fatal(err)
 	}
 	select {
@@ -209,15 +194,45 @@ func TestConsolePasswordUpgradeAndExplicitChangesRevokeEverySession(t *testing.T
 		_, err = s.ConsoleSessionInfo(t.Context(), session.SessionDigest)
 		consoleError(t, err, "unauthorized")
 	}
-	after, err := s.GetConsoleAccount(t.Context(), legacy.ID)
-	if err != nil || after.AuthVersion != upgraded.AuthVersion+1 || after.PasswordHash != consoleOtherArgonTestHash || sessionCount(t, s, legacy) != 0 {
+	after, err := s.GetConsoleAccount(t.Context(), account.ID)
+	if err != nil || after.AuthVersion != account.AuthVersion+1 || after.PasswordHash != consoleOtherArgonTestHash || sessionCount(t, s, account) != 0 {
 		t.Fatal("password change did not revoke all sessions", err)
 	}
-	_, err = s.IssueConsoleSession(t.Context(), upgraded, make([]byte, 32), "")
+	_, err = s.IssueConsoleSession(t.Context(), account, make([]byte, 32))
 	consoleError(t, err, "unauthorized")
-	if _, err = s.IssueConsoleSession(t.Context(), after, make([]byte, 32), ""); err != nil {
+	if _, err = s.IssueConsoleSession(t.Context(), after, make([]byte, 32)); err != nil {
 		t.Fatal("fresh authentication refused", err)
 	}
+}
+
+func TestConsoleScryptSessionRefusalPreservesStateUntilOwnerRecovery(t *testing.T) {
+	s, _, _ := testStore(t)
+	account := newSessionAccount(t, s, "restored member", "member")
+	p := issueTestSession(t, s, account, 1)
+	_, registered := session(t, s, 1)
+	grantNamed(t, s, account, registered["repository_id"].(string), "ro")
+	if _, err := s.db.Exec("UPDATE ConsoleAccount SET password_hash=? WHERE id=?", consoleLegacyScryptHash, account.ID); err != nil {
+		t.Fatal(err)
+	}
+	account, err := s.GetConsoleAccount(t.Context(), account.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, changes := databaseState(t, s), s.Changes()
+	_, err = s.IssueConsoleSession(t.Context(), account, make([]byte, 32))
+	consoleError(t, err, "bad_request")
+	if databaseState(t, s) != before || s.Changes() != changes {
+		t.Fatal("unreadable hash refusal changed credentials, sessions or audit")
+	}
+	if _, err = s.ConsoleSessionInfo(t.Context(), p.SessionDigest); err != nil {
+		t.Fatal("removing scrypt support revoked a previously issued session", err)
+	}
+	recovered, err := s.RecoverConsoleOperator(t.Context(), account, consoleOtherArgonTestHash)
+	if err != nil || !recovered.Enabled() || recovered.Role != "operator" || recovered.PasswordHash != consoleOtherArgonTestHash || recovered.AuthVersion != account.AuthVersion+1 || recovered.EditRevision != account.EditRevision+1 || sessionCount(t, s, account) != 0 || rowCount(t, s, "SELECT COUNT(*) FROM ConsoleRepositoryAccess WHERE account_id=?", account.ID) != 0 {
+		t.Fatal("owner recovery failed to replace unreadable credentials, authority or sessions", err)
+	}
+	_, err = s.ConsoleSessionInfo(t.Context(), p.SessionDigest)
+	consoleError(t, err, "unauthorized")
 }
 
 func TestConsoleCredentialCommitRejectsInvalidAndStaleSnapshots(t *testing.T) {
@@ -225,7 +240,7 @@ func TestConsoleCredentialCommitRejectsInvalidAndStaleSnapshots(t *testing.T) {
 	a := newSessionAccount(t, s, "current", "member")
 	p := issueTestSession(t, s, a, 1)
 	other := newSessionAccount(t, s, "someone else", "member")
-	for _, hash := range []string{"", consoleTestHash, "invalid"} {
+	for _, hash := range []string{"", consoleLegacyScryptHash, "invalid"} {
 		consoleError(t, s.ChangeConsolePassword(t.Context(), p, a, hash), "bad_request")
 		_, err := s.RecoverConsoleOperator(t.Context(), a, hash)
 		consoleError(t, err, "bad_request")
@@ -238,20 +253,16 @@ func TestConsoleCredentialCommitRejectsInvalidAndStaleSnapshots(t *testing.T) {
 	stale.PasswordHash = consoleOtherArgonTestHash
 	consoleError(t, s.ChangeConsolePassword(t.Context(), p, stale, consoleOtherArgonTestHash), "unauthorized")
 	for _, before := range []ConsoleAccount{stale, {ID: "missing", PasswordHash: consoleArgonTestHash, AuthVersion: 1}} {
-		_, err := s.IssueConsoleSession(t.Context(), before, make([]byte, 32), "")
+		_, err := s.IssueConsoleSession(t.Context(), before, make([]byte, 32))
 		consoleError(t, err, "unauthorized")
 	}
 	for _, input := range []struct {
-		before  ConsoleAccount
-		digest  []byte
-		upgrade string
-	}{{a, nil, ""}, {a, make([]byte, 32), consoleOtherArgonTestHash}, {ConsoleAccount{ID: a.ID, PasswordHash: "malformed"}, make([]byte, 32), ""}} {
-		_, err := s.IssueConsoleSession(t.Context(), input.before, input.digest, input.upgrade)
+		before ConsoleAccount
+		digest []byte
+	}{{a, nil}, {ConsoleAccount{ID: a.ID, PasswordHash: "malformed"}, make([]byte, 32)}, {ConsoleAccount{ID: a.ID, PasswordHash: consoleLegacyScryptHash}, make([]byte, 32)}} {
+		_, err := s.IssueConsoleSession(t.Context(), input.before, input.digest)
 		consoleError(t, err, "bad_request")
 	}
-	legacy := createTestConsoleAccount(t, s, "invalid upgrade", "member")
-	_, err := s.IssueConsoleSession(t.Context(), legacy, make([]byte, 32), consoleTestHash)
-	consoleError(t, err, "bad_request")
 }
 
 func TestOwnerProvisionAndRecoveryRecordAuthorityAndRecheckRevision(t *testing.T) {
@@ -345,7 +356,7 @@ func TestConcurrentConsoleLoginAndRecoveryNeverRestoreOldCredentials(t *testing.
 		go func() {
 			defer wg.Done()
 			<-start
-			_, loginErr = s.IssueConsoleSession(context.Background(), a, digest, "")
+			_, loginErr = s.IssueConsoleSession(context.Background(), a, digest)
 		}()
 		go func() {
 			defer wg.Done()
@@ -454,19 +465,19 @@ func TestConcurrentGrantDowngradeSerializesSendReplyAndCachedRetry(t *testing.T)
 	}
 }
 
-func TestConsoleLegacyUpgradeInsertionFailureLeavesHashAndSessionsUnchanged(t *testing.T) {
+func TestConsoleSessionInsertionFailureLeavesHashAndSessionsUnchanged(t *testing.T) {
 	s, _, _ := testStore(t)
-	legacy := createTestConsoleAccount(t, s, "legacy rollback", "member")
-	old := consoleTestPrincipal(t, s, legacy)
+	account := newSessionAccount(t, s, "login rollback", "member")
+	old := issueTestSession(t, s, account, 1)
 	other := newSessionAccount(t, s, "digest owner", "member")
 	collision := issueTestSession(t, s, other, 90)
 	before := databaseState(t, s)
-	_, err := s.IssueConsoleSession(t.Context(), legacy, collision.SessionDigest, consoleArgonTestHash)
+	_, err := s.IssueConsoleSession(t.Context(), account, collision.SessionDigest)
 	if err == nil || databaseState(t, s) != before {
-		t.Fatal("failed session insertion changed legacy credentials")
+		t.Fatal("failed session insertion changed credentials")
 	}
 	if _, err = s.ConsoleSessionInfo(t.Context(), old.SessionDigest); err != nil {
-		t.Fatal("failed upgrade revoked prior session", err)
+		t.Fatal("failed login revoked prior session", err)
 	}
 }
 

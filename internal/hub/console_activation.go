@@ -82,7 +82,8 @@ func (h *Hub) activateConsole(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 	}
-	eligible := err == nil && before.Enabled() && before.Role == "operator" && consoleauth.ValidateHash(before.PasswordHash) == nil
+	unreadable := err == nil && consoleauth.ValidateHash(before.PasswordHash) != nil
+	eligible := err == nil && before.Enabled() && before.Role == "operator" && !unreadable
 	record := dummyConsoleHash
 	if eligible {
 		record = before.PasswordHash
@@ -91,6 +92,10 @@ func (h *Hub) activateConsole(w http.ResponseWriter, r *http.Request) {
 	if errors.Is(err, consoleauth.ErrBusy) {
 		w.Header().Set("Retry-After", "1")
 		writeError(w, &store.Error{Code: "rate_limited", Message: "password work capacity reached"})
+		return
+	}
+	if unreadable {
+		writeError(w, &store.Error{Code: "bad_request", Message: "this version does not read the stored password format; recover the operator with iris admin console reset <username>, then activate"})
 		return
 	}
 	if err != nil || !verified || !eligible {

@@ -12,18 +12,22 @@ import (
 const syntheticScrypt = "scrypt$16384$8$1$AAECAwQFBgcICQoLDA0ODw$5UJCybzgeNrUxZTV5mzrOYr8Aj1OlDXLrgTFXHxr1m4"
 const emptyScrypt = "scrypt$16384$8$1$AAECAwQFBgcICQoLDA0ODw$0xv24VsXC2JG-Z8qF_PLNl4lrO4CjCW5okKsht1CLoY"
 
-func TestSyntheticScryptCompatibility(t *testing.T) {
+// Independent argon2-cffi vectors use salt bytes 0 through 15 and the approved
+// profile. Earlier upgrades could retain these passwords below today's minimum.
+const shortArgon = argonPrefix + "AAECAwQFBgcICQoLDA0ODw$h/bekxvFlzSTcN+YWUQEsQ0HPChzNY74xJtz/WE2x04"
+const emptyArgon = argonPrefix + "AAECAwQFBgcICQoLDA0ODw$yr2OtlrITpa5bhUEe12Ewh3PDTh976IiDH1Kbdv5Kmw"
+const syntheticArgon = argonPrefix + "AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
+
+func TestSyntheticScryptRecordsAreUnreadable(t *testing.T) {
+	// Retired records must fail validation before claiming password capacity.
+	occupyKDF(t)
 	for _, test := range []struct{ password, record string }{{"x", syntheticScrypt}, {"", emptyScrypt}} {
-		if err := ValidateHash(test.record); err != nil {
-			t.Fatal("synthetic supplied-format vector refused")
+		if !errors.Is(ValidateHash(test.record), ErrInvalidHash) {
+			t.Fatal("retired scrypt record passed validation")
 		}
 		ok, err := VerifyPassword(test.password, test.record)
-		if err != nil || !ok {
-			t.Fatal("independent scrypt vector did not verify")
-		}
-		ok, err = VerifyPassword(test.password+"!", test.record)
-		if err != nil || ok {
-			t.Fatal("incorrect imported password was accepted")
+		if !errors.Is(err, ErrInvalidHash) || ok {
+			t.Fatal("retired scrypt record reached password verification")
 		}
 	}
 }
@@ -53,22 +57,39 @@ func TestArgonCreationAndExactPasswordBytes(t *testing.T) {
 	}
 }
 
+func TestArgonVerificationKeepsExistingPasswordBounds(t *testing.T) {
+	for _, test := range []struct{ password, record string }{{"x", shortArgon}, {"", emptyArgon}} {
+		if !errors.Is(ValidateNewPassword(test.password), ErrInvalidPassword) {
+			t.Fatal("short existing password met the new-password minimum")
+		}
+		if ok, err := VerifyPassword(test.password, test.record); err != nil || !ok {
+			t.Fatal("short existing Argon2id password did not verify")
+		}
+		if ok, err := VerifyPassword(test.password+"!", test.record); err != nil || ok {
+			t.Fatal("incorrect existing Argon2id password was accepted")
+		}
+	}
+	if ok, err := VerifyPassword(strings.Repeat("x", MaxPasswordBytes), shortArgon); err != nil || ok {
+		t.Fatal("verification did not accept the maximum byte length as a mismatch")
+	}
+}
+
 func TestFixedLengthComparisonRejectsEveryChangedKeyPosition(t *testing.T) {
-	fields := strings.Split(syntheticScrypt, "$")
-	original, err := base64.RawURLEncoding.DecodeString(fields[5])
+	fields := strings.Split(shortArgon, "$")
+	original, err := base64.RawStdEncoding.DecodeString(fields[5])
 	if err != nil || len(original) != 32 {
 		t.Fatal("invalid synthetic vector fixture")
 	}
 	for _, index := range []int{0, 15, 31} {
 		changed := append([]byte{}, original...)
 		changed[index] ^= 1
-		fields[5] = base64.RawURLEncoding.EncodeToString(changed)
+		fields[5] = base64.RawStdEncoding.EncodeToString(changed)
 		if ok, err := VerifyPassword("x", strings.Join(fields, "$")); err != nil || ok {
 			t.Fatal("different 32-byte expected key was accepted")
 		}
 	}
 	for _, size := range []int{0, 1, 31, 33, 64} {
-		fields[5] = base64.RawURLEncoding.EncodeToString(make([]byte, size))
+		fields[5] = base64.RawStdEncoding.EncodeToString(make([]byte, size))
 		if ok, err := VerifyPassword("x", strings.Join(fields, "$")); !errors.Is(err, ErrInvalidHash) || ok {
 			t.Fatal("non-32-byte expected key reached password verification")
 		}
@@ -78,27 +99,21 @@ func TestFixedLengthComparisonRejectsEveryChangedKeyPosition(t *testing.T) {
 func TestMalformedHashesFailBeforeKDF(t *testing.T) {
 	// Saturation proves malformed input is refused before password admission.
 	occupyKDF(t)
-	fields := strings.Split(syntheticScrypt, "$")
+	fields := strings.Split(syntheticArgon, "$")
 	mutate := func(index int, value string) string {
 		copyFields := append([]string{}, fields...)
 		copyFields[index] = value
 		return strings.Join(copyFields, "$")
 	}
 	invalid := []string{
-		"", strings.Repeat("x", MaxHashBytes+1), "$" + syntheticScrypt,
-		syntheticScrypt + "$extra", strings.Replace(syntheticScrypt, "scrypt", "SCRYPT", 1),
-		mutate(1, ""), mutate(1, "+16384"), mutate(1, "-16384"), mutate(1, " 16384"),
-		mutate(1, "１６３８４"), mutate(1, "18446744073709551616"),
-		mutate(1, "0"), mutate(1, "1"), mutate(1, "3"), mutate(1, "8192"),
-		mutate(1, "32768"), mutate(1, "9223372036854775808"),
-		mutate(2, "0"), mutate(2, "4"), mutate(2, "16"), mutate(2, "18446744073709551615"),
-		mutate(3, "0"), mutate(3, "2"), mutate(3, "18446744073709551615"),
+		"", strings.Repeat("x", MaxHashBytes+1), "$" + syntheticArgon,
+		syntheticArgon + "$extra", mutate(0, "argon2id"), mutate(1, "ARGON2ID"),
 		mutate(4, "!"), mutate(4, "AAAAAAAAAAAAAAAAAAAAAA=="),
 		mutate(4, "AAAAAAAAAAAAAAAAAAAAAB"), // Nonzero unused base64 bits.
 		mutate(4, "AAAAAAAAAAAAAAAAAAAAAA\n"),
-		mutate(4, "/////////////////////w"), // Standard alphabet is not URL-safe.
-		mutate(4, base64.RawURLEncoding.EncodeToString(make([]byte, 15))),
-		mutate(4, base64.RawURLEncoding.EncodeToString(make([]byte, 17))),
+		mutate(4, "_____________________w"), // URL-safe alphabet is not standard.
+		mutate(4, base64.RawStdEncoding.EncodeToString(make([]byte, 15))),
+		mutate(4, base64.RawStdEncoding.EncodeToString(make([]byte, 17))),
 		mutate(5, "!"), mutate(5, fields[5]+"="),
 		argonPrefix + "AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAB",
 		"$argon2id$v=18$m=65536,t=3,p=1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
@@ -116,11 +131,11 @@ func TestMalformedHashesFailBeforeKDF(t *testing.T) {
 			t.Fatalf("malformed record %d reached password work", i)
 		}
 	}
-	// Canonical URL-safe input with both alphabet-specific characters is allowed.
-	fields[4] = base64.RawURLEncoding.EncodeToString(bytesOf(16, 0xfb))
-	fields[5] = base64.RawURLEncoding.EncodeToString(bytesOf(32, 0xff))
+	// Canonical standard base64 input with both alphabet-specific characters is allowed.
+	fields[4] = base64.RawStdEncoding.EncodeToString(bytesOf(16, 0xfb))
+	fields[5] = base64.RawStdEncoding.EncodeToString(bytesOf(32, 0xff))
 	if ValidateHash(strings.Join(fields, "$")) != nil {
-		t.Fatal("canonical URL-safe alphabet refused")
+		t.Fatal("canonical standard base64 alphabet refused")
 	}
 }
 
@@ -164,21 +179,12 @@ func TestPasswordPolicyAndAdmission(t *testing.T) {
 	if record, err := CreatePassword("fifteen characters"); record != "" || !errors.Is(err, ErrBusy) {
 		t.Fatal("saturated creation did not refuse immediately")
 	}
-	if ok, err := VerifyPassword("x", syntheticScrypt); ok || !errors.Is(err, ErrBusy) {
+	if ok, err := VerifyPassword("x", syntheticArgon); ok || !errors.Is(err, ErrBusy) {
 		t.Fatal("saturated verification did not refuse immediately")
 	}
 	for _, password := range []string{strings.Repeat("a", 1025), "\xff"} {
-		if ok, err := VerifyPassword(password, syntheticScrypt); ok || !errors.Is(err, ErrInvalidPassword) {
+		if ok, err := VerifyPassword(password, syntheticArgon); ok || !errors.Is(err, ErrInvalidPassword) {
 			t.Fatal("invalid verification input reached password admission")
-		}
-	}
-}
-
-func BenchmarkScryptVerify(b *testing.B) {
-	b.ReportAllocs()
-	for b.Loop() {
-		if ok, err := VerifyPassword("x", syntheticScrypt); err != nil || !ok {
-			b.Fatal("synthetic scrypt verification failed")
 		}
 	}
 }
@@ -189,22 +195,5 @@ func BenchmarkArgonCreate(b *testing.B) {
 		if _, err := CreatePassword("synthetic benchmark password"); err != nil {
 			b.Fatal("synthetic Argon2id creation failed")
 		}
-	}
-}
-
-func TestUpgradePreservesImportedPasswordLength(t *testing.T) {
-	record, err := UpgradePassword("x")
-	if err != nil {
-		t.Fatal("short imported password could not upgrade")
-	}
-	if ok, err := VerifyPassword("x", record); err != nil || !ok {
-		t.Fatal("upgraded imported password changed its bytes")
-	}
-	if _, err = UpgradePassword(strings.Repeat("x", MaxPasswordBytes+1)); !errors.Is(err, ErrInvalidPassword) {
-		t.Fatal("oversized upgrade input reached KDF")
-	}
-	occupyKDF(t)
-	if _, err = UpgradePassword("x"); !errors.Is(err, ErrBusy) {
-		t.Fatal("upgrade bypassed shared KDF capacity")
 	}
 }

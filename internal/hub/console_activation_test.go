@@ -110,17 +110,48 @@ func TestOwnerActivationVerifiesThenPersistsKeyWithoutOpeningRunningConsole(t *t
 	activationRequest(t, h, activationPayload(a.Username, consoleTestPassword), 409, nil)
 }
 
-func TestOwnerActivationAcceptsTheBoundedImportedScryptProfile(t *testing.T) {
+func TestOwnerActivationAcceptsShortArgonPassword(t *testing.T) {
 	h := activationHub(t)
-	// Independent synthetic vector from hashlib.scrypt, password "x". Imported
-	// verification must not apply the fifteen-code-point new-password policy.
-	const hash = "scrypt$16384$8$1$AAECAwQFBgcICQoLDA0ODw$5UJCybzgeNrUxZTV5mzrOYr8Aj1OlDXLrgTFXHxr1m4"
-	a, err := h.store.CreateConsoleAccount(context.Background(), store.ConsoleAccountInput{Username: "Imported", PasswordHash: hash, Role: "operator"})
+	a, err := h.store.CreateConsoleAccount(t.Context(), store.ConsoleAccountInput{Username: "Restored", PasswordHash: shortConsoleHash, Role: "operator"})
 	if err != nil {
 		t.Fatal(err)
 	}
 	h.console.verify = consoleauth.VerifyPassword
 	activationRequest(t, h, activationPayload(a.Username, "x"), 200, nil)
+	after, err := h.store.GetConsoleAccount(t.Context(), a.ID)
+	if err != nil || after.PasswordHash != shortConsoleHash || after.AuthVersion != a.AuthVersion {
+		t.Fatal("activation changed a retained short Argon2id password")
+	}
+}
+
+func TestOwnerActivationRefusesUnreadableHashWithRecoveryAdvice(t *testing.T) {
+	for _, hash := range []string{legacyConsoleHash, "unreadable-sensitive-record"} {
+		h, server, filename := consoleSetup(t)
+		a := consoleAccount(t, h, "Restored", "operator")
+		consoleDB(t, filename, "UPDATE ConsoleAccount SET password_hash=? WHERE id=?", hash, a.ID)
+		h.console = newConsoleAuth(nil)
+		created, calls := false, 0
+		h.consoleActivate = func() error { created = true; return nil }
+		h.console.verify = func(password, record string) (bool, error) {
+			calls++
+			if record != dummyConsoleHash {
+				t.Fatal("unreadable activation hash reached password work")
+			}
+			return consoleauth.VerifyPassword(password, record)
+		}
+		w := ownerAccountRequest(t, h, server, "/v1/admin/console/activate", activationPayload(a.Username, "x"), "test-secret", 400)
+		if len(w.Result().Cookies()) != 0 || w.Header().Get("Cache-Control") != "no-store" {
+			t.Fatal("refused owner activation issued browser authority or a cacheable response")
+		}
+		result := consoleJSON(t, w)["error"].(map[string]any)
+		if result["code"] != "bad_request" || result["message"] != "this version does not read the stored password format; recover the operator with iris admin console reset <username>, then activate" {
+			t.Fatal("unreadable operator did not receive the fixed owner recovery advice")
+		}
+		after, err := h.store.GetConsoleAccount(t.Context(), a.ID)
+		if err != nil || after.PasswordHash != hash || after.AuthVersion != a.AuthVersion || after.EditRevision != a.EditRevision || created || calls != 1 || len(h.console.key) != 0 {
+			t.Fatal("refused activation changed credentials, key or password work")
+		}
+	}
 }
 
 func TestOwnerActivationRejectsInvalidAuthorityAndInputBeforeKeyCreation(t *testing.T) {

@@ -3,8 +3,8 @@
 Status: accepted on 2026-11-11 by the fleet's vote 5, under the owner's direction.
 The vote at 10:46 UTC was 1B 2A 3A from all four voters: holzera, macOS, Windows
 and WSL. PR 1 implements the command and link cleanup. PR 2 implements import
-removal, migration 024 and fresh-hub setup through `create`. PR 3 remains decided
-but not yet implemented.
+removal, migration 024 and fresh-hub setup through `create`. PR 3 implements
+Argon2id-only verification and isolated restore recovery.
 
 ## Problem
 
@@ -16,9 +16,10 @@ hub URL and asked the operating system to open it. It read no token, called no
 hub and authenticated no one.
 
 Before PR 2 the account importer was the only producer of scrypt hashes in the
-database. PR 2 removes it; bounded scrypt verification remains. Successful
-browser login upgrades those hashes to Argon2id; activation accepts them without upgrading. Both accounts on
-the public hub have Argon2id hashes after the owner's password changes on
+database. PR 2 removed it. Through PR 2, successful browser login upgraded
+bounded scrypt hashes to Argon2id, while activation accepted them without
+upgrading. PR 3 removes that verification and upgrade. Both accounts on the
+public hub have Argon2id hashes after the owner's password changes on
 2026-11-11. Older backups can still hold scrypt hashes.
 
 On 2026-11-11 the owner directed:
@@ -106,12 +107,12 @@ console keeps the existing unavailable page and retry action, without public
 setup instructions. A binary without the console bundle still answers 503 with
 build instructions.
 
-**4. Remove scrypt in PR 3; decided, not yet implemented.** This follows PR 2,
+**4. Remove scrypt in PR 3; implemented.** This follows PR 2,
 which removes the only producer of scrypt hashes. Accept Argon2id only. Remove
 scrypt parsing, derivation and successful-login upgrade code. Do not convert
 stored hashes at startup, migration, backup or restore: passwords are unknown.
 
-A stored scrypt hash then follows the unreadable-hash login path. After rate
+A stored scrypt hash follows the unreadable-hash login path. After rate
 admission, verify against the Argon2id dummy hash and return the same generic
 failure as for an unknown user, disabled account or wrong password. Preserve
 status, body, cookies, retry headers, quota and safe logs; return no 500 or
@@ -129,16 +130,16 @@ for new passwords. Reset remains operator recovery: it replaces the hash without
 verifying the old one, makes the account an enabled operator, deletes its grants
 and revokes its sessions.
 
-Through PR 1 and PR 2, a wrong password for a scrypt account still costs scrypt
-work, while unknown, disabled and unreadable accounts take the Argon2id dummy
-path. Answers, quotas and logs match, but timing differs. This affects imported
-accounts that have not signed in since import and older restores; the public
-hub has none. PR 3 removes that difference. Vote 3A keeps these three pull
+Through PR 1 and PR 2, a wrong password for a scrypt account cost scrypt
+work, while unknown, disabled and unreadable accounts took the Argon2id dummy
+path. Answers, quotas and logs matched, but timing differed. This affected
+imported accounts that had not signed in since import and older restores; the
+public hub had none. PR 3 removes that difference. Vote 3A keeps these three pull
 requests separate and in this order.
 
-**5. Recover a restored database in isolation after PR 3; decided, not yet
-implemented.** A backup from before 2026-11-11 10:06 UTC, including older public
-hub backups, or a database with imported accounts can hold scrypt hashes.
+**5. Recover a restored database in isolation in PR 3; implemented.** A backup
+from before 2026-11-11 10:06 UTC, including older public hub backups, or a database
+with imported accounts can hold scrypt hashes.
 Restore with the console key withheld and the public proxy closed to the console,
 as the [restore procedure](../console-activation.md) requires. Keep that isolation
 until access has been restored and checked.
@@ -164,7 +165,8 @@ it with a password they already know.
    account again after reset: its temporary state is operator with no grants.
 
 No new reset command that preserves role and grants is added. Such a command
-would need a separate decision. PR 3 adds this recovery to the restore runbook.
+would need a separate decision. PR 3 adds this recovery to the
+[restore runbook](../console-activation.md#restore-a-database-with-browser-access-isolated).
 
 **6. No compatibility path.** No flag, alias, replacement command or grace period
 for `iris ui`, import or scrypt. Keep the public hub's existing Argon2id accounts.
@@ -188,12 +190,12 @@ This decision supersedes:
   no-account/no-key condition above. Activation remains the restore and key
   recovery path, including verification-only password bounds.
 
-The superseded text remains as history with a note at each decision. Only the
-PR 3 parts above describe accepted future work.
+The superseded text remains as history with a note at each decision. All three
+pull requests are implemented.
 
 ## What this cannot do
 
-- After PR 3, sign in with a stored scrypt hash or recover its password from the
+- Sign in with a stored scrypt hash or recover its password from the
   hash. Recovery sets a new password; role, state and grants return by hand.
 - End sessions issued before PR 3 merely because an account's hash is scrypt.
   Session checks do not read hash formats. Activation clears all sessions and

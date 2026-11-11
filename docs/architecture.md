@@ -612,12 +612,13 @@ profile and password forms, and an operator access editor for roles, disabled
 state and explicit repository grants.
 
 [ADR 019](adr/019-console-activation.md) makes browser authentication named-only.
-[ADR 020](adr/020-named-login-only.md) removes the account importer. Owner
-`create` on a hub with no console account and no console key makes an operator
-and records `owner_provision` and `activation_prepared` in one transaction. It
-prepares the key only after commit and reports the account creation, key
-preparation and required restart. A key preparation failure leaves the operator
-without a key for recovery through `activate`. On every other hub `create` only
+[ADR 020](adr/020-named-login-only.md) removes the account importer and scrypt
+verification. Only Argon2id passwords are accepted; stored hashes are never
+converted. Owner `create` on a hub with no console account and no console key
+makes an operator and records `owner_provision` and `activation_prepared` in one
+transaction. It prepares the key only after commit and reports the account
+creation, key preparation and required restart. A key preparation failure leaves
+the operator without a key for recovery through `activate`. On every other hub `create` only
 makes an account; an account without a key and a key without an account do not
 trigger key preparation. Migration 024 drops only the two import ledgers;
 accounts, grants, sessions and historical owner audit rows remain.
@@ -629,8 +630,9 @@ also required. Explicit owner activation verifies that operator's bounded
 password, rechecks its snapshot transactionally and clears console sessions
 before preparing key material. Success requires a restart and issues no cookie;
 an already active process refuses activation without clearing sessions. Ordinary
-restarts retain absolute expiry. Imported-password verification does not impose
-the fifteen-code-point minimum used for new passwords. Machine bearers grant no
+restarts retain absolute expiry. Password verification does not impose the
+fifteen-code-point minimum used for new passwords; short Argon2id credentials
+retained through earlier upgrades still verify. Machine bearers grant no
 browser authority. Open the hub's URL in a browser (`http://127.0.0.1:7878/` by
 default for a local hub). Restore and rollback must preserve that boundary;
 see [the operational procedure](console-activation.md).

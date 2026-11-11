@@ -21,7 +21,7 @@ func routeConsoleAccount(t *testing.T, h *Hub, username, role string) (store.Con
 		t.Fatal(err)
 	}
 	token := secret()
-	if _, err = h.store.IssueConsoleSession(context.Background(), a, h.console.mac("session", token), ""); err != nil {
+	if _, err = h.store.IssueConsoleSession(context.Background(), a, h.console.mac("session", token)); err != nil {
 		t.Fatal(err)
 	}
 	return a, &http.Cookie{Name: consoleCookieName, Value: token}, h.console.csrf("session-csrf", token)

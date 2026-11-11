@@ -83,7 +83,7 @@ func benchmarkHubCPU(b *testing.B, live bool) {
 						b.Fatal(err)
 					}
 					consoleToken := secret()
-					if _, err := fixture.store.IssueConsoleSession(context.Background(), operator, h.console.mac("session", consoleToken), ""); err != nil {
+					if _, err := fixture.store.IssueConsoleSession(context.Background(), operator, h.console.mac("session", consoleToken)); err != nil {
 						b.Fatal(err)
 					}
 					consoleCookie := &http.Cookie{Name: consoleCookieName, Value: consoleToken}
