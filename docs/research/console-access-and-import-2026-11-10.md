@@ -113,7 +113,8 @@ operator is left before it tries the demotion.
   runbook's five-minute wait.
 - The restore rehearsal with a fresh key, and the Apache boundary. On
   2026-11-09 the restore ran on the provisional binary built from a modified
-  `0fe50af`, and the boundary with the older backend `bc1eae9`. Neither was
+  `0fe50af`, and the boundary with an older backend build that the repository no
+  longer keeps. Neither was
   repeated on the candidate.
 - Sending the prepared draft. The console dropped it with the session, and its
   request was never submitted. The refused replays used the earlier send.

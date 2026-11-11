@@ -185,8 +185,9 @@ advance on heartbeat writes; their correctness has separate tests.
 
 The application fingerprint was
 `5963ffb6afd30711b39e6c74abbd05186ec774324c80b56104c9c47955c7ca9d`:
-`df1d873` plus the follow-up moving console-session deletion into the shared
-maintenance operation. The live binary SHA256 was
+a pre-merge checkpoint of the stream change (`df1d873`, a commit the repository no
+longer keeps; the change itself is on `main` as #245) plus the follow-up moving
+console-session deletion into the shared maintenance operation. The live binary SHA256 was
 `b21a6087791fd7132dd28567de9ad715508da8c7b63713c7bdc37f917579790a`,
 and the extended helper SHA256 was
 `89223bd35dc026d2e1874c16363f07a3e0e9be2a12db1a04d8e27f5e96b8506e`.

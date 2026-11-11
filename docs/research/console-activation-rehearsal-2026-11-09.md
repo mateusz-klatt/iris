@@ -39,7 +39,7 @@ credentials. Paths below are local evidence locations, not shipped release asset
 | Rehearsal | Observed result | Limits |
 |---|---|---|
 | Rebuilt Iris and real browser contexts | 44/44 checks passed | Modified source `0fe50af`; final clean candidate and atomic key-publication correction remain unvalidated |
-| Actual Apache 2.4.69 and old Iris `bc1eae9676c3a9f6cb96b1ae08233026f8b8e4e9` | 73/73 checks passed with the corrected raw doctor condition and Cookie stripping | Rendered local vhost, self-signed TLS, HTTP/1.1; no installed production configuration changes |
+| Actual Apache 2.4.69 and an older Iris build (`bc1eae9`, no longer kept in the repository) | 73/73 checks passed with the corrected raw doctor condition and Cookie stripping | Rendered local vhost, self-signed TLS, HTTP/1.1; no installed production configuration changes |
 
 The real-binary report is `/tmp/iris-real-console-bdGopY/report.json`:
 

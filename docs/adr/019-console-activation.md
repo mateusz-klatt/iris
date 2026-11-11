@@ -168,7 +168,8 @@ from modified source `0fe50af` with uncommitted UI changes. It is provisional
 evidence, not the final clean release candidate; atomic key publication and all
 final local gates still require validation.
 
-An actual Apache 2.4.69 rehearsal with old backend `bc1eae9` passed 50/50 checks
+An actual Apache 2.4.69 rehearsal with an older backend build (`bc1eae9`, a commit
+the repository no longer keeps) passed 50/50 checks
 after replacing the decoded doctor exception with the raw-request condition.
 Evidence is `/tmp/iris-apache-rollback-w578u1xj/`. It used rendered reference
 vhosts, literal loopback, temporary synthetic credentials/state, self-signed TLS
@@ -203,4 +204,4 @@ going back with another attempt: 75 of 75 checks passed.
 
 Not repeated on the candidate: the restore rehearsal with a fresh key, which ran
 above on the provisional binary built from a modified `0fe50af`, and the Apache
-boundary, which was rehearsed above with the older backend `bc1eae9`.
+boundary, which was rehearsed above with that older backend build.
