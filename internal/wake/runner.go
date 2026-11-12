@@ -79,10 +79,10 @@ func (r *Runner) Run(ctx context.Context) {
 			}
 			current = binding.WakeTarget{}
 			if eligible {
+				r.note("wake_root_eligible")
 				current = target
 				workerCtx, cancel := context.WithCancel(ctx)
 				stop, done = cancel, make(chan struct{})
-				r.note("wake_root_eligible")
 				go func() { defer close(done); r.runTarget(workerCtx, target) }()
 			}
 		}

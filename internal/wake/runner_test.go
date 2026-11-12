@@ -249,6 +249,34 @@ func TestRunnerNewAttentionSettlesBeforeAnOlderSecondNoteDeadline(t *testing.T) 
 	})
 }
 
+func TestRunnerObserverPanicBeforeLaunchCannotWaitForAnUnstartedWorker(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		target := runnerTarget()
+		resolver := &runnerResolver{target: target, eligible: true}
+		connections := 0
+		source := runnerSource{connect: func(context.Context, binding.WakeTarget, int64, string) (eventConnection, error) {
+			connections++
+			return nil, errors.New("no stream expected")
+		}}
+		r := runnerFixture(t, resolver, source)
+		panics := 0
+		r.observe = func(text string) {
+			if text == "wake_root_eligible" {
+				panic("observer failure")
+			}
+			if text == "wake_worker_panic" {
+				panics++
+			}
+		}
+		done := make(chan struct{})
+		go func() { defer close(done); r.Run(t.Context()) }()
+		runnerDone(t, done)
+		if connections != 0 || panics != 1 || t.Context().Err() != nil {
+			t.Fatalf("observer panic escaped isolation: connects=%d, panics=%d", connections, panics)
+		}
+	})
+}
+
 func TestRunnerRunSerializesEligibleTargetReplacementAndJoinsReaders(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		target := runnerTarget()
