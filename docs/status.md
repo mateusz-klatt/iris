@@ -1,6 +1,18 @@
 # Status
 
-Release prerequisites updated 2026-11-11. Nothing is released.
+Release status updated 2026-11-12. [v0.1.0](https://github.com/mateusz-klatt/iris/releases/tag/v0.1.0)
+was published at 06:07 UTC from `c4983205cb320a1b4313d114c1b2ab644023e59c`. Its signed release
+workflow [43117855817](https://github.com/mateusz-klatt/iris/actions/runs/43117855817) succeeded.
+Package-manager uploads remain disabled. The next intended `v0.1.1` is a final release on the
+owner's decision; this status does not create or authorize a tag.
+
+The Codex wake implementation merged after v0.1.0. Its
+[acceptance record](research/clients/codex-iris-idle-wake-2026-11-12.md) preserves Linux
+default/custom-home daemon evidence and owner-reported macOS TUI evidence for the original
+opt-in runner. [ADR 023](adr/023-default-codex-wake-after-idle-check.md) now changes the default,
+requires a positive native idle check and removes the automatic second native wake. Those
+earlier runs do not validate the new gate or defaults on every platform. Further native and
+cost claims must name their own evidence; implementing a policy is not a new measurement.
 
 The earlier hub latency, shared-worktree, recovery, service and release-rehearsal measurements below were
 last summarized on 2026-11-08, from `main` at `efe0af6` before the repository history rewrite.
@@ -160,11 +172,11 @@ Against the production hub, over TLS:
 - **Remote execution targets are unprotected.** A client whose tools run on a remote host, in a
   container or in a cloud sandbox changes files Iris neither claims nor checks: the hook sees only the
   machine it runs on (ADR 009). Detection waits for a captured remote payload.
-- **No release.** No package channel is published. Windows signing is chosen (#35) but not set up.
-  All five `MACOS_*` GitHub secrets listed in
-  [Snapshots and releases](release.md#signing-and-notarization) are set as of 2026-11-11.
-  A real tag's `release.yml` run with them has not been measured. Keep cask upload disabled until
-  that CI run has notarized the binaries.
+- **Distribution after v0.1.0.** Release archives are published and the signed release workflow
+  succeeded. Package-manager uploads remain disabled. The newer GHCR release-image path was
+  added after that tag's source commit; the earlier release does not prove that later path.
+  Each release must retain its own signatures and verification evidence. A published archive
+  is not evidence for a clean browser-download or package-manager installation on every host.
 - **Not measured:** Defender, the SmartScreen window, Apple silicon, a quarantined browser download
   of a notarized binary starting under Gatekeeper, Gatekeeper's dialog and "Open Anyway", and a Mac
   or PC whose policy forbids unsigned code.

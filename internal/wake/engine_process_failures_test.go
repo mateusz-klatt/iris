@@ -48,7 +48,7 @@ func TestWakeEngineActualStartFailuresRemainLimitedAcrossReconstructions(t *test
 		e.store = newStateStore(base.store.sessions, base.target.SessionID)
 		c := *command
 		c.path, c.now = binary, base.now
-		e.commands = &c
+		e.commands = engineIdle(&c)
 		e.store.io.syncDir = func(string) error {
 			// The real --version has succeeded. Make the queue's actual Start
 			// fail after its reservation is published, without faking an error.

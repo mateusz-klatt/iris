@@ -1,5 +1,11 @@
 # Snapshots and releases
 
+[v0.1.0](https://github.com/mateusz-klatt/iris/releases/tag/v0.1.0) was published on 2026-11-12
+at 06:07 UTC from `c4983205cb320a1b4313d114c1b2ab644023e59c`, after the signed release
+workflow [43117855817](https://github.com/mateusz-klatt/iris/actions/runs/43117855817) succeeded.
+The configuration below includes changes made after that commit, including ADR 022's image
+job; that earlier release does not validate the later job.
+
 A pushed `v*` tag runs `.github/workflows/release.yml`, which makes a **draft**
 GitHub release (`release: draft: true`) for the owner to publish. After the release and
 Windows verification jobs succeed, a separate job publishes a signed, attested
@@ -91,8 +97,8 @@ pass `--listen`, `--tls-cert` and `--tls-key` explicitly, as required by D1.
 Snapshot checksum signing and SBOM generation are skipped by the command above. The tag
 workflow already installs syft and cosign, generates an SBOM per archive, signs checksums
 with keyless cosign using its OIDC identity, and creates GitHub build provenance. These
-release steps are configured; their first real tag run is still pending. Apple signing
-and notarization are separate and stay disabled without `MACOS_SIGN_P12`.
+release steps ran in the successful v0.1.0 workflow named above. Later changes require their
+own tag-run evidence. Apple signing and notarization stay disabled without `MACOS_SIGN_P12`.
 
 ## Release container image
 
@@ -229,11 +235,11 @@ execution, console assets, release ZIPs, checksums or publication. Vote 7 adopte
 release integration after the successful stock proof, conditional on the revised
 proof run described above.
 
-## Windows release signing, configured
+## Windows release signing
 
-The following is configured behaviour. No tag run has yet measured the release
-helper, Windows ZIP handoff and native verification together. Keep that distinction
-in the first rc1 acceptance record; a successful stock proof is not a release rehearsal.
+The v0.1.0 release workflow exercised the Windows release path and succeeded. The following
+describes the current configuration; compare each tag's handoff and verification evidence
+before publication. A successful standalone stock proof does not substitute for that tag run.
 
 `release.yml` shares the `certum-signing` concurrency group with the proof and
 does not cancel an active signing run. `web` and `signer` build without secrets

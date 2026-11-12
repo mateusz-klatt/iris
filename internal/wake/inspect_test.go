@@ -111,6 +111,10 @@ func TestInspectFailureReasonsRecognizeOnlyExactPreSubmissionDiagnostics(t *test
 		"Codex version response exceeded its bound",
 		"Codex version response named no version",
 		"Codex executable and initialized client versions differ",
+		"Codex status proxy could not start",
+		"Codex status proxy did not establish its connection",
+		"Codex thread status could not be verified",
+		"Codex status proxy exceeded its bound or failed",
 		"Codex queue command could not start",
 		"Codex has no saved rollout for this thread",
 	} {

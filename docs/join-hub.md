@@ -35,8 +35,11 @@ and `XDG_CONFIG_HOME`. A token copied to the Linux path leaves `iris doctor` rep
 
 ### From a release
 
-No release is published yet. These steps were measured on a snapshot of the same archives, on an Intel
-Mac. Use `darwin_arm64` on Apple silicon; that archive was built but not run.
+[v0.1.0 is published](https://github.com/mateusz-klatt/iris/releases/tag/v0.1.0); substitute its
+version below, or use another published tag. These installation steps were originally measured
+on snapshot archives on an Intel Mac. That rehearsal did not run the Apple silicon archive;
+choose the archive matching your machine and verify the tag's artifacts as described in
+[Snapshots and releases](release.md).
 
 ```bash
 curl -fsSLO https://github.com/mateusz-klatt/iris/releases/download/v<version>/iris_<version>_darwin_arm64.tar.gz
@@ -51,23 +54,17 @@ iris setup --hub https://<hub> --clients claude --yes
 iris doctor
 ```
 
-Download with `curl`, not a browser. The binary is not notarized yet. A browser marks the archive
-with `com.apple.quarantine`, `tar` and Archive Utility copy the mark onto `iris`, and macOS then holds
-`iris` at start: it prints nothing and does not exit. To run a binary that came through a browser,
-clear the mark once:
-
-```bash
-xattr -d com.apple.quarantine ~/.local/bin/iris
-```
-
-A `curl` download carries no mark and runs at once.
+A browser adds quarantine metadata to a download; a command-line download does not exercise
+the same Gatekeeper path. The [earlier rehearsal](release.md#gatekeeper-and-an-unnotarized-binary)
+used an unnotarized snapshot and recorded that limitation. It does not describe every published
+archive. Check the selected release's signing and notarization evidence; neither a successful
+CI run nor the earlier snapshot proves its browser-download behavior on a clean Mac.
 
 No Homebrew channel is published. The release configuration generates a cask locally with
-uploads disabled. Do not enable cask uploads until real signing and notarization have
-completed successfully: Homebrew Cask sets quarantine, and the unnotarized binary was held
-at start in the [macOS rehearsal](release.md#gatekeeper-and-an-unnotarized-binary).
+uploads disabled. Homebrew Cask sets quarantine, so enabling that channel needs its own
+published-download validation rather than assuming a snapshot or signing job covers it.
 The formula that ran without quarantine was a historical local-tap measurement, not an
-available installation route. Build from source below until release archives are published.
+available installation route. Use a published release archive or build from source below.
 
 ### From source
 
@@ -109,8 +106,9 @@ about 10 seconds apart. `iris service uninstall` leaves the logs in place.
 
 ### From a release
 
-No release is published yet. These steps were measured on a snapshot of the same archives and
-manifests.
+[v0.1.0 is published](https://github.com/mateusz-klatt/iris/releases/tag/v0.1.0). These steps were
+originally measured on snapshot archives and manifests; use the selected release's verification
+evidence in [Snapshots and releases](release.md) for its actual artifact bytes.
 
 ```powershell
 Expand-Archive iris_<version>_windows_amd64.zip -DestinationPath "$env:LOCALAPPDATA\Programs\iris"
@@ -121,9 +119,10 @@ iris setup --hub https://<hub> --clients claude --yes
 iris doctor
 ```
 
-The PATH line lasts for this window. Add the folder to your user PATH to keep it. The binary is not
-signed yet. A zip extracted with Explorer keeps the download's Mark of the Web, so Windows may check
-it with SmartScreen on first start. `Expand-Archive` does not carry the mark over.
+The PATH line lasts for this window. Add the folder to your user PATH to keep it. Release
+signing does not remove SmartScreen's reputation checks. The earlier snapshot measurement
+found that Explorer preserved Mark of the Web and `Expand-Archive` did not; that observation
+does not establish every current policy or the selected release's first-start behavior.
 
 With Scoop, from the `mateusz-klatt/scoop-bucket` bucket once it is published:
 

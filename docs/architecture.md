@@ -276,6 +276,7 @@ Each client gets the strongest tier it has:
 | Tier | Mechanism | Clients |
 |---|---|---|
 | Instant, idle session | Plugin monitor running `iris watch` | Claude Code (measured: 0.3 s from line to model turn) |
+| Loaded idle root | Own queue command after a positive native idle check | Codex, enabled by default; [ADR 023](adr/023-default-codex-wake-after-idle-check.md) |
 | Instant, armed by the model | `Monitor` tool with a `ws` source | Claude Code |
 | Instant, Iris-owned session | App-server or ACP control of a session Iris started | Codex (measured), Copilot, Cursor, Antigravity, Grok, Kimi (later) |
 | Next turn | Hook context at prompt or post-tool | All, with client-specific limits |
@@ -285,6 +286,22 @@ On Claude Code the plugin monitor is the default. It needs no re-arming and fire
 session is idle, and it gets `CLAUDE_CODE_SESSION_ID`. The monitor event passes through
 `UserPromptSubmit`, so the same hook can add a bounded inbox digest at that moment. It does not
 run under `claude -p`.
+
+Codex's MCP child learns its own root thread from a tool call, follows that binding's attention
+stream and enables idle wake by default. It requires a positive read of that exact loaded
+thread's native idle status through `codex app-server proxy`, then rereads authoritative
+attention and told state before admission. Active, unloaded, failed or unknown status defers
+without consuming wake quota. This changes no other client's tier. `iris integrate codex
+--no-wake` writes `--wake=false`; setup and reintegration preserve it. Older bare MCP entries
+cannot distinguish the previous default-off state from an old explicit off choice, and take
+the new enabled default. The [Codex wake guide](codex-wake.md) explains that migration.
+
+The runner starts no automatic ten-minute second wake for unchanged attention. Hook reminders
+below remain. Native status and queue admission are not atomic: a person can start a turn or
+fetch mail between them, so the queue can still run later and find no work. Iris does not
+cancel it or promise zero billable empty turns. It keeps the existing unknown-outcome guards
+and does not add a listener for a closed or unloaded session. Earlier opt-in native research
+remains evidence for the earlier implementation, not proof of this idle gate on every platform.
 
 Every wake costs a model turn, so `iris watch` coalesces events and reports only what needs
 attention: new mail, and a claim someone is waiting for. The session context tells the model
@@ -743,6 +760,12 @@ the same position would also pass. So the ok row says "hash not verified" and na
 `iris doctor --live --client codex` as the proof that the hooks run. Iris never writes those
 tables, because they are Codex's. Doctor also reports an Iris MCP table written before
 `env_vars` and `default_tools_approval_mode` existed, and gives `iris integrate codex` as the fix.
+
+For Codex, fresh integration and bare MCP arguments enable idle wake. An explicit
+`--wake=false` argument survives setup and reintegration; `iris integrate codex --no-wake`
+records it. An old omitted flag cannot preserve an old off preference, because earlier Iris
+wrote identical arguments for default off and explicit off. This migration and the native
+idle requirement are defined in [ADR 023](adr/023-default-codex-wake-after-idle-check.md).
 
 Codex's `[mcp_servers.iris]` table carries two more keys, both measured on Codex 0.167.0 and both
 removed with the table:

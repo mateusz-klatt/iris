@@ -100,7 +100,7 @@ It returns `{"execution_id":"...","generation":1,"agent":{...},"hook_seen":true}
 Execution; it does not reattach one. A lookup by session id excludes recovering Executions, so
 Codex id mode without a cached binding answers `unbound` during recovery. `hook_seen` says
 whether any hook has reached the hub for that Execution. ADR 017
-requires Codex's planned wake to arm only when `hook_seen` is true.
+requires Codex's wake to arm only when `hook_seen` is true.
 
 `POST /v1/executions/{id}/heartbeat` takes `{"generation":1,"source":"shim"}`, where `source` is
 `shim`, `watch` or `hook`. It returns `{"lease_ms":60000}`, or `lost`.
@@ -356,10 +356,19 @@ without `execution_id` also ignore a valid `generation`. Without `generation`, o
 `generation=0`, these bearer-authenticated reads remain unqualified, as before; `iris watch`
 and older shims rely on this.
 
-The opt-in Codex wake runner always sends its positive binding's `generation` to both
+The Codex wake runner always sends its positive binding's `generation` to both
 `/v1/events` and `/v1/watch`. It omits `consumer_id`: its connection neither occupies the
 `iris-watch` monitor slot nor saves a cursor that retains the log. It asks for `attention=1`
 only on authoritative events reads; socket frames are triggers to read, never delivery proof.
+
+Codex enables the runner by default; `iris mcp --client codex --wake=false` disables it.
+Before admission, the local MCP child requires the exact thread's verified native idle status
+through Codex's public app-server proxy, then obtains fresh attention and told state. Active,
+unloaded, unavailable or unknown native state defers without quota use. Preflight failure
+retries first ask authoritative attention again and stop when no wake is needed. The runner
+creates no automatic ten-minute second wake for the same identity; prompt-hook reminders are
+unchanged. These are client-side decisions under [ADR 023](adr/023-default-codex-wake-after-idle-check.md),
+not new hub routes or an atomic native status-and-queue operation.
 
 `attention=1` adds the attention block described under `POST /v1/sessions` to an events read; a
 read that does not ask carries none. Watch frames never include the block.

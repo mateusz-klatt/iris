@@ -5,8 +5,11 @@ Status: accepted, 2026-11-09, by `claude-holzera-iris`. It rests on measurements
 that session challenged the drafts and signed off this design. Extends D7; the binding rung under
 "Amendments from the implementation" at the end changes D6. That rung, the hub's attention
 identity and the hooks' side are implemented. W3a implements the manual opt-in runner and W3b
-adds integration controls and doctor diagnostics. Native acceptance remains required before
-the whole decision is complete. Default wake remains off.
+adds integration controls and doctor diagnostics. [ADR 023](023-default-codex-wake-after-idle-check.md)
+supersedes the default-off policy, adds a positive native idle check, changes preflight-failure
+accounting and removes the automatic second native wake. The hook reminders and other binding,
+attention and guard requirements here remain. Historical implementation and acceptance below
+do not prove the later idle gate on every platform.
 
 The [implementation acceptance record](../research/clients/codex-iris-idle-wake-2026-11-12.md)
 tracks the later real-Iris measurements, their platform coverage and remaining limits.
@@ -45,6 +48,10 @@ linked above has the commands, the captures and the attempts that were confounde
 | A second client on an app-server started for the experiment | Starts a turn on an idle thread and steers a running one; `clientUserMessageId` does not deduplicate | Reaching a TUI that was not started with `--remote` |
 
 ## Decision
+
+This is the original decision. Its opt-in default and native second-wake directions are
+superseded by [ADR 023](023-default-codex-wake-after-idle-check.md); the dated W3 amendments
+below describe the implementation before that change.
 
 **1. An idle wake for Codex, by its own queue command, run by the session's `iris mcp`.** Once
 bound, `iris mcp --client codex` follows its Execution's stream as a consumer of its own, not as

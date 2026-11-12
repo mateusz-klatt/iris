@@ -25,7 +25,7 @@ func TestDoctorWakeConfigurationNeverClaimsArmingOrDelivery(t *testing.T) {
 		configured, enabled bool
 		err                 error
 		want                string
-	}{{"absent", false, false, nil, "no Codex Iris MCP entry"}, {"default off", true, false, nil, "hooks; idle wake off (default)"}, {"opt in", true, true, nil, "opt-in idle wake; current arming and delivery are unverified"}, {"unknown", false, false, errors.New("PRIVATE_ERROR"), "unknown; Codex configuration could not be read"}} {
+	}{{"absent", false, false, nil, "no Codex Iris MCP entry"}, {"explicitly disabled", true, false, nil, "hooks; idle wake explicitly disabled"}, {"default on", true, true, nil, "idle wake (default); current arming and delivery are unverified"}, {"unknown", false, false, errors.New("PRIVATE_ERROR"), "unknown; Codex configuration could not be read"}} {
 		wakeConfiguration = func(integrate.Layout) (bool, bool, error) { return tc.configured, tc.enabled, tc.err }
 		lines := wakeReport(integrate.Layout{}, "token", time.Now())
 		text := strings.Join(lines, "\n")
@@ -138,7 +138,7 @@ func TestDoctorWakeReadOnlyDiagnosticsAreLocalAndKeepOfflineExit(t *testing.T) {
 	}
 }
 
-func TestDoctorWakeReadsActualOptInAndRetainedGuardWithoutSecrets(t *testing.T) {
+func TestDoctorWakeReadsActualDefaultAndRetainedGuardWithoutSecrets(t *testing.T) {
 	home := t.TempDir()
 	token := filepath.Join(home, "hub.token")
 	layout := integrate.Layout{Home: home, Getenv: func(string) string { return "" }}
@@ -149,7 +149,7 @@ func TestDoctorWakeReadsActualOptInAndRetainedGuardWithoutSecrets(t *testing.T) 
 	if err := os.MkdirAll(filepath.Dir(config), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(config, []byte("[mcp_servers.iris]\ncommand = \"/expected/iris\"\nargs = [\"mcp\", \"--client\", \"codex\", \"--wake\"]\n"), 0600); err != nil {
+	if err := os.WriteFile(config, []byte("[mcp_servers.iris]\ncommand = \"/expected/iris\"\nargs = [\"mcp\", \"--client\", \"codex\"]\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	sessions := hook.NewSessions(token)
@@ -163,7 +163,7 @@ func TestDoctorWakeReadsActualOptInAndRetainedGuardWithoutSecrets(t *testing.T) 
 	}
 	lines := wakeReport(layout, token, time.Unix(1800000000, 0))
 	text := strings.Join(lines, "\n")
-	for _, want := range []string{"opt-in idle wake; current arming and delivery are unverified", strconv.Quote(guard), "old outstanding queue wake (unknown)", "permanently closing that session and stopping its MCP child"} {
+	for _, want := range []string{"idle wake (default); current arming and delivery are unverified", strconv.Quote(guard), "old outstanding queue wake (unknown)", "permanently closing that session and stopping its MCP child"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing actual wake evidence %q: %s", want, text)
 		}
@@ -177,5 +177,21 @@ func TestDoctorWakeReadsActualOptInAndRetainedGuardWithoutSecrets(t *testing.T) 
 	after, err := os.ReadFile(guard)
 	if err != nil || string(after) != string(body) {
 		t.Fatal("diagnostic changed retained guard")
+	}
+}
+
+func TestDoctorWakeReadsExplicitDisableAfterOrdinaryReintegration(t *testing.T) {
+	home := t.TempDir()
+	layout := integrate.Layout{Home: home, StateDir: filepath.Join(home, "state"), Getenv: func(string) string { return "" }}
+	if err := integrate.InstallCodexWake(layout, false); err != nil {
+		t.Fatal(err)
+	}
+	client, _ := integrate.ByName(integrate.Codex)
+	if err := client.Install(layout, nil); err != nil {
+		t.Fatal(err)
+	}
+	lines := wakeReport(layout, filepath.Join(home, "hub.token"), time.Now())
+	if len(lines) != 1 || !strings.Contains(lines[0], "idle wake explicitly disabled") {
+		t.Fatalf("doctor disagrees with the preserved MCP opt-out: %v", lines)
 	}
 }

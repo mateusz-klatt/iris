@@ -25,9 +25,9 @@ func wakeReport(layout integrate.Layout, tokenFile string, now time.Time) []stri
 	case !configured:
 		tier = "idle wake off; no Codex Iris MCP entry is configured"
 	case !enabled:
-		tier = "configured tier: hooks; idle wake off (default)"
+		tier = "configured tier: hooks; idle wake explicitly disabled"
 	default:
-		tier = "configured tier: hooks and opt-in idle wake; current arming and delivery are unverified"
+		tier = "configured tier: hooks and idle wake (default); current arming and delivery are unverified"
 	}
 	lines := []string{tier}
 	guards, err := inspectWakes(tokenFile)

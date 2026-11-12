@@ -105,6 +105,9 @@ func TestSetupIntegratesOnlyTheDetectedClient(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, ".codex", "hooks.json")); err != nil {
 		t.Fatal(err)
 	}
+	if configured, enabled, err := integrate.CodexWake(layout); err != nil || !configured || !enabled {
+		t.Fatalf("fresh setup did not enable Codex idle wake: configured/enabled %v/%v, %v", configured, enabled, err)
+	}
 	text := out.String()
 	if !strings.Contains(text, "codex: Review hooks once in /hooks") {
 		t.Fatal(text)
@@ -119,6 +122,51 @@ func TestSetupIntegratesOnlyTheDetectedClient(t *testing.T) {
 		if !strings.Contains(text, "Iris inactive on "+name+"\n") {
 			t.Fatalf("missing inactive %s\n%s", name, text)
 		}
+	}
+}
+
+func TestSetupPreservesExplicitCodexWakeDisable(t *testing.T) {
+	home := t.TempDir()
+	customHome := filepath.Join(home, "custom-codex")
+	layout := integrate.Layout{
+		Home: home, StateDir: filepath.Join(home, "state"),
+		Getenv: func(key string) string {
+			if key == "CODEX_HOME" {
+				return customHome
+			}
+			return ""
+		},
+		LookPath: func(string) (string, error) { return "", os.ErrNotExist },
+	}
+	if err := integrate.InstallCodexWake(layout, false); err != nil {
+		t.Fatal(err)
+	}
+	config, err := integrate.CodexConfig(layout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	before, err := os.ReadFile(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	code := setup([]string{"--yes", "--hub", "https://hub.example"}, setupEnv{
+		out: &out, errw: &out, layout: layout,
+		detect: func(func(string) (string, error)) []string { return []string{integrate.Codex} },
+		runDoctor: func(context.Context, doctor.Options) (doctor.Result, error) {
+			return doctor.Result{HubUp: true, TokenOK: true}, nil
+		},
+		tokenFile: filepath.Join(home, "hub.token"),
+	})
+	if code != 0 {
+		t.Fatalf("setup exit %d: %s", code, out.String())
+	}
+	after, err := os.ReadFile(config)
+	if err != nil || !bytes.Equal(after, before) || !bytes.Contains(after, []byte(`"--wake=false"`)) {
+		t.Fatalf("setup changed explicit wake preference: %s, %v", after, err)
+	}
+	if configured, enabled, err := integrate.CodexWake(layout); err != nil || !configured || enabled {
+		t.Fatalf("setup did not preserve disable: configured/enabled %v/%v, %v", configured, enabled, err)
 	}
 }
 
