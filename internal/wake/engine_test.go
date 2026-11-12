@@ -87,6 +87,11 @@ func newEngineTest(t *testing.T) (*engine, *engineResolver, *engineSource, *time
 	return e, r, source, &now
 }
 
+func engineIdle(c *commands) *commands {
+	c.idleRead = func(context.Context, string) (bool, string) { return true, "" }
+	return c
+}
+
 func engineDue(now time.Time, delay time.Duration) stepResult {
 	due := now.Add(delay)
 	return stepResult{Due: due, NotBefore: due}
@@ -220,7 +225,7 @@ func TestWakeEngineUnknownOrInconsistentIdentityNeverSubmits(t *testing.T) {
 	}
 }
 
-func TestWakeAdmissionSlotsIdentityBoundariesAndRestoreProof(t *testing.T) {
+func TestWakeAdmissionUsesOneAllowanceAndPreservesLegacyQuota(t *testing.T) {
 	now := time.Unix(1800000000, 0)
 	id := hubclient.Identity{Known: true, Pending: true, Stream: "stream", Cursor: 7}
 	consumed := testAttempt(1, "queue", "submitted")
@@ -228,59 +233,56 @@ func TestWakeAdmissionSlotsIdentityBoundariesAndRestoreProof(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		change   func(*stateSnapshot)
-		slot     int
-		due      time.Time
 		eligible bool
 		retained int
+		due      time.Time
 	}{
 		{name: "untold", eligible: true},
-		{name: "newer than told", change: func(s *stateSnapshot) { s.Told.Identity.Cursor = 6 }, eligible: true},
-		{name: "other told stream", change: func(s *stateSnapshot) { s.Told.Identity.Stream = "old" }, eligible: true},
-		{name: "older than told", change: func(s *stateSnapshot) { s.Told.Identity.Cursor = 8 }},
-		{name: "same told before deadline", change: func(s *stateSnapshot) { s.Told.ToldMS = now.UnixMilli() }, slot: 1, due: now.Add(hook.SecondNoteAfter)},
-		{name: "second note deadline", slot: 1, eligible: true},
-		{name: "already twice", change: func(s *stateSnapshot) { s.Told.Twice = true }},
-		{name: "missing telling time", change: func(s *stateSnapshot) { s.Told.ToldMS = 0 }},
-		{name: "spent mark", change: func(s *stateSnapshot) { s.Told.Identity = hubclient.Identity{}; s.Document = testDocument(consumed) }, retained: 1},
-		{name: "older than mark", change: func(s *stateSnapshot) {
-			s.Told.Identity = hubclient.Identity{}
-			a := consumed
-			a.Cursor = 8
-			s.Document = testDocument(a)
+		{name: "newer than told", change: func(s *stateSnapshot) { s.Told.Identity = id; s.Told.Identity.Cursor = 6 }, eligible: true},
+		{name: "other told stream", change: func(s *stateSnapshot) { s.Told.Identity = id; s.Told.Identity.Stream = "old" }, eligible: true},
+		{name: "same told just now", change: func(s *stateSnapshot) { s.Told.Identity = id; s.Told.ToldMS = now.UnixMilli() }},
+		{name: "same told after ten minutes", change: func(s *stateSnapshot) { s.Told.Identity = id; s.Told.ToldMS = now.Add(-time.Hour).UnixMilli() }},
+		{name: "same told missing timestamp", change: func(s *stateSnapshot) { s.Told.Identity = id }},
+		{name: "older than told", change: func(s *stateSnapshot) { s.Told.Identity = id; s.Told.Identity.Cursor = 8 }},
+		{name: "spent mark", change: func(s *stateSnapshot) { s.Document = testDocument(consumed) }, retained: 1},
+		{name: "consumed late abort", change: func(s *stateSnapshot) { a := consumed; a.Answer = "aborted"; s.Document = testDocument(a) }, retained: 1},
+		{name: "legacy spent repeat", change: func(s *stateSnapshot) { a := consumed; a.Slot = 1; s.Document = testDocument(a) }, retained: 1},
+		{name: "older than mark", change: func(s *stateSnapshot) { a := consumed; a.Cursor = 8; s.Document = testDocument(a) }, retained: 1},
+		{name: "newer than mark", change: func(s *stateSnapshot) { a := consumed; a.Cursor = 6; s.Document = testDocument(a) }, eligible: true},
+		{name: "other mark stream", change: func(s *stateSnapshot) { a := consumed; a.Stream = "old"; s.Document = testDocument(a) }, eligible: true},
+		{name: "mark proves restore", change: func(s *stateSnapshot) { a := consumed; a.Cursor = 21; s.Document = testDocument(a) }, eligible: true},
+		{name: "stale restored told cannot reset mark", change: func(s *stateSnapshot) {
+			s.Told.Identity = id
+			s.Told.Identity.Cursor = 21
+			s.Document = testDocument(consumed)
 		}, retained: 1},
-		{name: "newer than mark", change: func(s *stateSnapshot) { a := consumed; a.Cursor = 6; s.Document = testDocument(a) }, slot: 1, eligible: true},
-		{name: "other mark stream", change: func(s *stateSnapshot) { a := consumed; a.Stream = "old"; s.Document = testDocument(a) }, slot: 1, eligible: true},
-		{name: "mark proves restore", change: func(s *stateSnapshot) { a := consumed; a.Cursor = 21; s.Document = testDocument(a) }, slot: 1, eligible: true},
-		{name: "stale restored told cannot reset mark", change: func(s *stateSnapshot) { s.Told.Identity.Cursor = 21; s.Document = testDocument(consumed) }, retained: 1},
-		{name: "one failed retry deadline", change: func(s *stateSnapshot) {
-			s.Told.Identity = hubclient.Identity{}
+		{name: "known failure waits", change: func(s *stateSnapshot) {
 			a := testAttempt(1, "binary_check", "failed")
 			a.AnsweredMS = now.UnixMilli()
 			s.Document = testDocument(a)
-		}, due: now.Add(time.Minute), retained: 1},
-		{name: "one failed retry now", change: func(s *stateSnapshot) {
-			s.Told.Identity = hubclient.Identity{}
+		}, retained: 1, due: now.Add(time.Minute)},
+		{name: "legacy repeat failure shares retry", change: func(s *stateSnapshot) {
 			a := testAttempt(1, "binary_check", "failed")
+			a.Slot = 1
 			a.AnsweredMS = now.Add(-time.Minute).UnixMilli()
 			s.Document = testDocument(a)
-		}, eligible: true, retained: 1},
-		{name: "aborted retry no quota", change: func(s *stateSnapshot) {
-			s.Told.Identity = hubclient.Identity{}
-			s.Document = testDocument(testAttempt(1, "binary_check", "aborted"))
-		}, eligible: true, retained: 1},
+		}, eligible: true, retained: 1, due: now},
+		{name: "two legacy failures exhaust", change: func(s *stateSnapshot) {
+			a := testAttempt(1, "binary_check", "failed")
+			b := testAttempt(2, "binary_check", "failed")
+			b.Slot = 1
+			s.Document = testDocument(a, b)
+		}, retained: 2},
+		{name: "aborted retry is free", change: func(s *stateSnapshot) { s.Document = testDocument(testAttempt(1, "binary_check", "aborted")) }, eligible: true, retained: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			snapshot := stateSnapshot{Document: testDocument(), Told: hook.ToldSnapshot{Identity: id, ToldMS: now.Add(-hook.SecondNoteAfter).UnixMilli()}}
-			if tc.name == "untold" {
-				snapshot.Told = hook.ToldSnapshot{}
-			}
+			snapshot := stateSnapshot{Document: testDocument()}
 			if tc.change != nil {
 				tc.change(&snapshot)
 			}
-			next, slot, due, eligible := admission(snapshot, id, 20, now)
-			dueMismatch := !due.Equal(tc.due) && (!tc.eligible || due.After(now))
-			if slot != tc.slot || dueMismatch || eligible != tc.eligible || len(next.Attempts) != tc.retained {
-				t.Fatalf("admission: slot %d, due %v, eligible %t, retained %d; want %+v", slot, due, eligible, len(next.Attempts), tc)
+			next, due, eligible := admission(snapshot, id, 20, now)
+			if eligible != tc.eligible || len(next.Attempts) != tc.retained || !due.Equal(tc.due) {
+				t.Fatalf("admission due%v eligible%t records%d; want %+v", due, eligible, len(next.Attempts), tc)
 			}
 		})
 	}
@@ -332,7 +334,11 @@ func TestWakeEngineSnapshotRacesNeverSpendQuotaAndEventuallyProgress(t *testing.
 			}
 			source.duringRead = nil
 			*now = now.Add(10 * time.Second)
-			if got := e.step(context.Background()); got != engineDue(*now, 60*time.Second) || len(mustSnapshot(t, e.store).Document.Attempts) != 1 {
+			wantRecords := 0
+			if mutation == "wake bytes" {
+				wantRecords = 1 // A diagnostic update retains a legacy free abort.
+			}
+			if got := e.step(context.Background()); got != engineDue(*now, 60*time.Second) || len(mustSnapshot(t, e.store).Document.Attempts) != wantRecords || mustSnapshot(t, e.store).Document.LastFailure == nil {
 				t.Fatalf("settled writer could not progress: %+v", got)
 			}
 		})
@@ -378,15 +384,26 @@ func TestWakeEngineFileFailureRetryClassesAndPostReadFailure(t *testing.T) {
 }
 
 func TestWakeEngineTargetReplacementStopsEachAdmissionPhase(t *testing.T) {
-	for _, phase := range []string{"after hub", "after binary", "after publication"} {
+	binary := commandBinary(t)
+	for _, phase := range []string{"after hub", "after binary", "after idle", "after fresh hub", "after publication"} {
 		t.Run(phase, func(t *testing.T) {
 			e, r, source, _ := newEngineTest(t)
+			c, _, _ := commandSetup(t, binary, commandScenario{VersionOut: "codex-cli " + commandVersion + "\n", Out: commandAccept + "\n"})
+			e.commands = engineIdle(c)
 			replace := func() { r.target.Bound.Generation++ }
 			switch phase {
 			case "after hub":
 				source.duringRead = replace
 			case "after binary":
 				e.clientVersion = func() string { replace(); return commandVersion }
+			case "after idle":
+				c.idleRead = func(context.Context, string) (bool, string) { replace(); return true, "" }
+			case "after fresh hub":
+				source.duringRead = func() {
+					if source.reads == 2 {
+						replace()
+					}
+				}
 			case "after publication":
 				e.store.io.syncDir = func(string) error { replace(); return nil }
 			}
@@ -396,7 +413,7 @@ func TestWakeEngineTargetReplacementStopsEachAdmissionPhase(t *testing.T) {
 			d := mustSnapshot(t, e.store).Document
 			if phase == "after publication" {
 				if len(d.Attempts) != 1 || d.Attempts[0].Answer != "aborted" || d.quota(0) != 0 {
-					t.Fatalf("replaced binary reservation retained quota: %+v", d)
+					t.Fatalf("replaced queue reservation retained quota: %+v", d)
 				}
 			} else if len(d.Attempts) != 0 {
 				t.Fatal("replaced target published a reservation")
@@ -405,44 +422,36 @@ func TestWakeEngineTargetReplacementStopsEachAdmissionPhase(t *testing.T) {
 	}
 }
 
-func TestWakeEngineBinaryFailuresHaveUniqueIDsAndOneBoundedRetry(t *testing.T) {
+func TestWakeEngineBinaryFailuresKeepDiagnosticsWithoutSpendingQuota(t *testing.T) {
 	e, _, source, now := newEngineTest(t)
 	var observed []string
 	e.observe = func(reason string) { observed = append(observed, reason) }
-	if got := e.step(context.Background()); got != engineDue(*now, time.Minute) {
-		t.Fatalf("first binary failure retry: %+v", got)
+	for range 3 {
+		if got := e.step(context.Background()); got != engineDue(*now, time.Minute) {
+			t.Fatalf("binary preflight did not back off: %+v", got)
+		}
+		d := mustSnapshot(t, e.store).Document
+		if len(d.Attempts) != 0 || nativeQuota(d) != 0 || d.LastFailure == nil || d.LastFailure.Detail != "Codex executable is not available on PATH" {
+			t.Fatalf("binary check created quota or lost diagnosis: %+v", d)
+		}
+		*now = now.Add(time.Minute)
 	}
-	first := mustSnapshot(t, e.store).Document.Attempts[0]
-	if first.ID == "" || first.Kind != "binary_check" || first.Token != "" || first.Message != "" || first.Answer != "failed" || first.AnsweredMS != now.UnixMilli() {
-		t.Fatalf("binary failure was not a tokenless counted reservation: %+v", first)
-	}
-	*now = now.Add(59 * time.Second)
-	if got := e.step(context.Background()); got.Due != time.UnixMilli(first.AnsweredMS).Add(time.Minute) || len(mustSnapshot(t, e.store).Document.Attempts) != 1 {
-		t.Fatalf("binary failure retried early: %+v", got)
-	}
-	*now = now.Add(time.Second)
-	if got := e.step(context.Background()); got != (stepResult{}) {
-		t.Fatalf("second known failure granted more retries: %+v", got)
-	}
-	d := mustSnapshot(t, e.store).Document
-	if len(d.Attempts) != 2 || d.Attempts[0] != first || d.Attempts[1].ID == first.ID || d.quota(0) != 2 || d.LastFailure == nil || source.hooks != 1 {
-		t.Fatalf("binary failures were reused or over-admitted: %+v", d)
-	}
-	if !reflect.DeepEqual(observed, []string{"wake_failed", "wake_failed"}) {
-		t.Fatalf("non-fixed or extra observations: %q", observed)
+	if source.hooks != 1 || !reflect.DeepEqual(observed, []string{"wake_failed", "wake_failed", "wake_failed"}) {
+		t.Fatalf("preflight diagnostics were not bounded fixed observations: %v", observed)
 	}
 }
 
-func TestWakeEngineSecondNoteWaitsExactlyTenMinutes(t *testing.T) {
+func TestWakeEngineNeverSchedulesTenMinuteNativeReminder(t *testing.T) {
 	e, _, source, now := newEngineTest(t)
-	toldAt := now.Add(-hook.SecondNoteAfter + time.Millisecond)
-	engineTold(t, e.store, "stream", 7, toldAt, false)
-	if got := e.step(context.Background()); got != (stepResult{Due: toldAt.Add(hook.SecondNoteAfter)}) || mustSnapshot(t, e.store).Present {
-		t.Fatalf("second note ran before required due time: %+v", got)
+	engineTold(t, e.store, "stream", 7, now.Add(-time.Hour), false)
+	for range 3 {
+		if got := e.step(context.Background()); got != (stepResult{}) || mustSnapshot(t, e.store).Present {
+			t.Fatalf("already told identity admitted a native reminder: %+v", got)
+		}
+		*now = now.Add(time.Hour)
 	}
-	*now = now.Add(time.Millisecond)
-	if got := e.step(context.Background()); got != engineDue(*now, time.Minute) || mustSnapshot(t, e.store).Document.Attempts[0].Slot != 1 || source.hooks != 1 {
-		t.Fatalf("second-note deadline did not admit its slot: %+v", got)
+	if source.hooks != 1 {
+		t.Fatal("stable hook evidence was not retained")
 	}
 }
 
@@ -469,53 +478,18 @@ func TestWakeEnginePublishRechecksToldAfterBinaryAndRetriesPreparationFailure(t 
 	}
 }
 
-func TestWakeEngineBinaryPublicationAbortAddressesOnlyItsReservation(t *testing.T) {
-	for _, failAbort := range []bool{false, true} {
-		t.Run(fmt.Sprintf("abort_failure_%t", failAbort), func(t *testing.T) {
-			e, _, _, now := newEngineTest(t)
-			first := testAttempt(1, "binary_check", "failed")
-			first.AnsweredMS = now.Add(-time.Minute).UnixMilli()
-			writeState(t, e.store, testDocument(first))
-			syncs, renames := 0, 0
-			rename := e.store.io.rename
-			e.store.io.rename = func(from, to string) error {
-				renames++
-				if failAbort && renames > 1 {
-					return errors.New(commandSecret)
-				}
-				return rename(from, to)
-			}
-			e.store.io.syncDir = func(string) error {
-				syncs++
-				if syncs == 1 {
-					return errors.New(commandSecret)
-				}
-				return nil
-			}
-			if got := e.step(context.Background()); got != engineDue(*now, time.Minute) {
-				t.Fatalf("failed publication fallback: %+v", got)
-			}
-			d := mustSnapshot(t, e.store).Document
-			if len(d.Attempts) != 2 || d.Attempts[0] != first || d.Attempts[1].ID == first.ID || !d.valid() {
-				t.Fatalf("publication addressed the wrong binary failure: %+v", d)
-			}
-			wantAnswer, wantQuota := "aborted", 1
-			if failAbort {
-				wantAnswer, wantQuota = "failed", 2
-				if renames != 4 {
-					t.Fatalf("abort persistence was not bounded to three attempts: %d", renames-1)
-				}
-			}
-			if d.Attempts[1].Answer != wantAnswer || d.quota(0) != wantQuota {
-				t.Fatalf("binary abort fallback: %+v", d)
-			}
-			if !failAbort {
-				e.store.io.syncDir, e.store.io.rename = func(string) error { return nil }, rename
-				if got := e.step(context.Background()); got != (stepResult{}) || len(mustSnapshot(t, e.store).Document.Attempts) != 2 {
-					t.Fatalf("reopened tokenless abort could not progress: %+v", got)
-				}
-			}
-		})
+func TestWakeEngineDiagnosticPublicationNeverAbortsLegacyAttempt(t *testing.T) {
+	e, _, _, now := newEngineTest(t)
+	first := testAttempt(1, "binary_check", "failed")
+	first.AnsweredMS = now.Add(-time.Minute).UnixMilli()
+	writeState(t, e.store, testDocument(first))
+	e.store.io.syncDir = func(string) error { return errors.New(commandSecret) }
+	if got := e.step(context.Background()); got != engineDue(*now, time.Minute) {
+		t.Fatalf("diagnostic sync failure: %+v", got)
+	}
+	d := mustSnapshot(t, e.store).Document
+	if len(d.Attempts) != 1 || d.Attempts[0] != first || nativeQuota(d) != 1 {
+		t.Fatalf("uncertain diagnostic publication aborted or replaced old quota: %+v", d)
 	}
 }
 
@@ -562,7 +536,7 @@ func TestWakeEngineProcessAdmissionAndOutcomeMerging(t *testing.T) {
 			scenario.VersionOut = "codex-cli " + commandVersion + "\n"
 			c, _, _ := commandSetup(t, binary, scenario)
 			c.now = e.now
-			e.commands = c
+			e.commands = engineIdle(c)
 			// Queue uses the canonical UUID, but hub and file lookups keep the
 			// client's registered spelling throughout the same admission.
 			e.target.SessionID = strings.ToUpper(commandSession)
@@ -610,7 +584,7 @@ func TestWakeEngineProcessAdmissionAndOutcomeMerging(t *testing.T) {
 			t.Run(fmt.Sprintf("refuse_%t", refuse), func(t *testing.T) {
 				e, r, _, now := newEngineTest(t)
 				c, record, _ := commandSetup(t, binary, commandScenario{VersionOut: "codex-cli " + commandVersion + "\n", Out: commandAccept + "\n"})
-				e.commands = c
+				e.commands = engineIdle(c)
 				if refuse {
 					r.admit = func(func() error) (bool, error) { r.eligible = false; return false, nil }
 				} else {
@@ -635,7 +609,7 @@ func TestWakeEngineProcessAdmissionAndOutcomeMerging(t *testing.T) {
 	t.Run("consumption and newer record survive late answer", func(t *testing.T) {
 		e, r, _, now := newEngineTest(t)
 		c, _, _ := commandSetup(t, binary, commandScenario{VersionOut: "codex-cli " + commandVersion + "\n", Out: commandAccept + "\n"})
-		e.commands = c
+		e.commands = engineIdle(c)
 		var original, newer attempt
 		r.admit = func(start func() error) (bool, error) {
 			started, err := commandStarted(start)
@@ -664,7 +638,7 @@ func TestWakeEngineProcessAdmissionAndOutcomeMerging(t *testing.T) {
 			t.Run(fmt.Sprintf("write_recovers_%t", recoverWrite), func(t *testing.T) {
 				e, r, source, _ := newEngineTest(t)
 				c, _, _ := commandSetup(t, binary, commandScenario{VersionOut: "codex-cli " + commandVersion + "\n", Out: commandAccept + "\n"})
-				e.commands = c
+				e.commands = engineIdle(c)
 				attempts := 0
 				r.admit = func(start func() error) (bool, error) {
 					rename := e.store.io.rename
@@ -697,13 +671,11 @@ func TestWakeEngineProcessAdmissionAndOutcomeMerging(t *testing.T) {
 	})
 
 	t.Run("failed publication abort or binding loss preserves conservative guard", func(t *testing.T) {
-		for _, mode := range []string{"publication abort succeeds", "publication abort fails", "target lost abort succeeds", "target lost abort fails", "binary target lost abort fails"} {
+		for _, mode := range []string{"publication abort succeeds", "publication abort fails", "target lost abort succeeds", "target lost abort fails"} {
 			t.Run(mode, func(t *testing.T) {
 				e, r, _, now := newEngineTest(t)
 				c, record, _ := commandSetup(t, binary, commandScenario{VersionOut: "codex-cli " + commandVersion + "\n", Out: commandAccept + "\n"})
-				if !strings.HasPrefix(mode, "binary") {
-					e.commands = c
-				}
+				e.commands = engineIdle(c)
 				syncs := 0
 				e.store.io.syncDir = func(string) error {
 					syncs++
@@ -724,9 +696,6 @@ func TestWakeEngineProcessAdmissionAndOutcomeMerging(t *testing.T) {
 				if strings.HasSuffix(mode, "fails") {
 					outcome = ""
 					want = stepResult{Due: now.Add(15 * time.Second), FileWait: true}
-					if strings.HasPrefix(mode, "binary") {
-						want, outcome = engineDue(*now, time.Minute), "failed"
-					}
 				} else if strings.Contains(mode, "target lost") {
 					want = stepResult{}
 				}
@@ -734,11 +703,7 @@ func TestWakeEngineProcessAdmissionAndOutcomeMerging(t *testing.T) {
 					t.Fatalf("unsafe publication/start fallback: %+v, want %+v and %q", got, want, outcome)
 				}
 				body, err := os.ReadFile(record)
-				if strings.HasPrefix(mode, "binary") {
-					if !os.IsNotExist(err) {
-						t.Fatalf("binary failure launched a process: %v", err)
-					}
-				} else if err != nil || strings.Contains(string(body), `"queue"`) {
+				if err != nil || strings.Contains(string(body), `"queue"`) {
 					t.Fatalf("failed admission started queue process: %v", err)
 				}
 			})

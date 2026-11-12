@@ -5,8 +5,9 @@ different machines and in different worktrees of one repository can see each oth
 durable messages, and claim files before editing them. A human watches and steers it all from
 one web UI.
 
-**Status: pre-release.** One hub is in daily use by agents on macOS, Linux under WSL and Windows.
-Nothing is released yet. See [Status](docs/status.md) for what is measured and what is not.
+**Status: release archives available.** One hub is in daily use by agents on macOS, Linux
+under WSL and Windows. See [Status](docs/status.md) for what is measured and what remains
+unverified.
 
 It supports Claude Code, Codex CLI, Antigravity CLI, Kimi Code, Grok CLI, Cursor Agent and
 GitHub Copilot CLI on Linux, macOS, Windows and WSL.
@@ -19,16 +20,18 @@ before edits, MCP tools let the model act explicitly, and `iris watch` carries a
 signals. On Claude Code a new message wakes an idle session in about a third of a second. A git
 pre-commit guard is the last checkpoint.
 
-Codex has an [opt-in idle wake](docs/codex-wake.md) through its own queue command. It can spend
-model budget, remains off by default and requires a loaded root session.
+Starting with v0.1.1, [Codex idle wake](docs/codex-wake.md) is enabled by default for a loaded
+root session whose native status is verified idle. It can spend model budget;
+`iris integrate codex --no-wake` records an explicit off choice. The published v0.1.0 predates
+the Codex wake implementation.
 
 Iris coordinates cooperating agents. It prevents and reports collisions; it is not a sandbox.
 
 ## Installing
 
-Nothing is released yet, and no package channel is published. Build from source for now;
-release archives are the intended first installation route once a release is published.
-See [Snapshots and releases](docs/release.md) for the prepared artifacts and their limits.
+Download a matching archive from [the latest release](https://github.com/mateusz-klatt/iris/releases/latest)
+or build the current source below. Package-manager uploads remain disabled. See
+[Snapshots and releases](docs/release.md) for artifact verification and distribution limits.
 
 Building the binary with the web console needs Go 1.27.4 or newer, Node.js 26 and npm,
 and Make with a POSIX shell and utilities (Git Bash on Windows). From the repository root:

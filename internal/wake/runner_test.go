@@ -170,10 +170,10 @@ func TestRunnerScheduleKeepsEarliestHintAndRequiredRetry(t *testing.T) {
 	if !s.due.Equal(now.Add(time.Minute)) || !s.required.Equal(s.due) {
 		t.Fatal("event bypassed or postponed required retry")
 	}
-	s.result(stepResult{Due: now.Add(hook.SecondNoteAfter)})
+	s.result(stepResult{Due: now.Add(2 * time.Minute)})
 	s.hint(now.Add(time.Minute), 10*time.Second)
 	if !s.due.Equal(now.Add(time.Minute+10*time.Second)) || !s.required.IsZero() {
-		t.Fatal("an older identity's second-note timer delayed new attention")
+		t.Fatal("an optional later check delayed new attention")
 	}
 	s.result(stepResult{Due: now.Add(15 * time.Second), FileWait: true})
 	s.hint(now, 10*time.Second)
@@ -199,7 +199,7 @@ func TestRunnerScheduleKeepsEarliestHintAndRequiredRetry(t *testing.T) {
 	}
 }
 
-func TestRunnerNewAttentionSettlesBeforeAnOlderSecondNoteDeadline(t *testing.T) {
+func TestRunnerNewAttentionSettlesAfterAlreadyToldIdentity(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		target := runnerTarget()
 		resolver := &runnerResolver{target: target, eligible: true}
@@ -228,7 +228,7 @@ func TestRunnerNewAttentionSettlesBeforeAnOlderSecondNoteDeadline(t *testing.T) 
 		time.Sleep(10 * time.Second)
 		synctest.Wait()
 		if reads.Load() != 1 || mustSnapshot(t, state).Present {
-			t.Fatal("already told attention did not wait for its second note")
+			t.Fatal("already told attention created a native wake")
 		}
 		time.Sleep(50 * time.Second)
 		cursor.Store(2)
@@ -242,8 +242,8 @@ func TestRunnerNewAttentionSettlesBeforeAnOlderSecondNoteDeadline(t *testing.T) 
 		time.Sleep(time.Second)
 		synctest.Wait()
 		got := mustSnapshot(t, state)
-		if reads.Load() != 2 || len(got.Document.Attempts) != 1 || got.Document.mark().Cursor != 2 {
-			t.Fatalf("new attention waited for the old ten-minute timer: reads=%d, state=%+v", reads.Load(), got.Document)
+		if reads.Load() != 2 || len(got.Document.Attempts) != 0 || got.Document.LastFailure == nil {
+			t.Fatalf("new attention did not run its quota-free preflight after settlement: reads=%d, state=%+v", reads.Load(), got.Document)
 		}
 		cancel()
 		runnerDone(t, done)

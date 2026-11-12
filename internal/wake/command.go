@@ -68,7 +68,9 @@ type commands struct {
 	env            []string
 	versionTimeout time.Duration
 	queueTimeout   time.Duration
+	idleTimeout    time.Duration
 	waitDelay      time.Duration
+	idleRead       func(context.Context, string) (bool, string)
 	now            func() time.Time
 }
 
@@ -76,6 +78,7 @@ func newCommands() *commands {
 	c := &commands{
 		versionTimeout: 5 * time.Second,
 		queueTimeout:   30 * time.Second,
+		idleTimeout:    5 * time.Second,
 		waitDelay:      time.Second,
 		now:            time.Now,
 	}

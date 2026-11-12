@@ -99,9 +99,14 @@ func TestMCPWakeRejectsOtherClientsBeforeStartingAnything(t *testing.T) {
 
 func TestMCPWakeOptOutCreatesNoWorkerAndKeepsInitializationLazy(t *testing.T) {
 	for _, args := range [][]string{
-		{"--client", "codex"},
 		{"--client", "codex", "--wake=false"},
 		{"--client", "claude"},
+		{"--client", "copilot"},
+		{"--client", "cursor"},
+		{"--client", "antigravity"},
+		{"--client", "grok"},
+		{"--client", "kimi"},
+		{"--client", "claude", "--wake=false"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			token, requests := mcpWakeTrap(t)
@@ -129,7 +134,7 @@ func TestMCPWakeOptOutCreatesNoWorkerAndKeepsInitializationLazy(t *testing.T) {
 	}
 }
 
-func TestMCPWakeSharesTheInitializeVersionAndJoinsItsWorker(t *testing.T) {
+func TestMCPWakeDefaultsOnForCodexSharesInitializeVersionAndJoinsItsWorker(t *testing.T) {
 	token, requests := mcpWakeTrap(t)
 	original := newMCPWakeWorker
 	t.Cleanup(func() { newMCPWakeWorker = original })
@@ -161,7 +166,7 @@ func TestMCPWakeSharesTheInitializeVersionAndJoinsItsWorker(t *testing.T) {
 			}
 		})
 	}
-	session, done := connectMCPCommand(t, []string{"--client", "codex", "--wake"}, "0.167.0")
+	session, done := connectMCPCommand(t, []string{"--client", "codex"}, "0.167.0")
 	select {
 	case got := <-versionSeen:
 		if got != "0.167.0" {
@@ -250,7 +255,7 @@ func TestMCPWakeUnboundStdioEOFLeavesNoNetworkOrSessionFiles(t *testing.T) {
 	original := os.Stdin
 	os.Stdin = stdin
 	defer func() { os.Stdin = original }()
-	if err := runMCP([]string{"--client", "codex", "--wake"}); err != nil {
+	if err := runMCP([]string{"--client", "codex"}); err != nil {
 		t.Fatal(err)
 	}
 	if requests.Load() != 0 {

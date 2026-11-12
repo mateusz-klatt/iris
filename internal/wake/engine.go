@@ -33,60 +33,54 @@ func (e *engine) step(ctx context.Context) stepResult {
 		}
 		e.hookSeen = true
 	}
-	call, cancel := context.WithTimeout(ctx, 5*time.Second)
-	read, err := e.source.Attention(call, e.target, e.cursor, e.stream)
-	cancel()
-	if err != nil {
-		e.note("wake_failed")
-		return e.after(30 * time.Second)
-	}
-	if !e.current(ctx) {
-		return stepResult{}
-	}
-	current, err := e.store.snapshot()
-	if err != nil {
-		return e.fileFailure(err)
-	}
-	if !sameState(before, current) {
-		return e.after(10 * time.Second)
-	}
-	id := read.Attention.Identity
-	if !id.Known || read.Stream == "" || read.HighWater < 0 ||
-		(id.Pending && (id.Stream != read.Stream || id.Cursor <= 0 || id.Cursor > read.HighWater)) {
-		e.note("wake_invalid_state")
-		return e.after(30 * time.Second)
-	}
-	e.stream, e.cursor = read.Stream, read.HighWater
-	if !id.Pending {
-		return stepResult{}
-	}
-	next, slot, due, eligible := admission(current, id, read.HighWater, e.now())
+	next, current, id, result, eligible := e.candidate(ctx, before)
 	if !eligible {
-		result := stepResult{Due: due}
-		if !due.IsZero() {
-			result.NotBefore = retryAt(next, slot)
-		}
 		return result
 	}
 	info, detail := e.commands.check(ctx, e.clientVersion())
 	if !e.current(ctx) {
 		return stepResult{}
 	}
-	at := e.now().UnixMilli()
-	a := attempt{ID: attemptID(), Kind: "binary_check", Stream: id.Stream, Cursor: id.Cursor, Slot: slot, StartedMS: at}
-	next.Binary, next.LastFailure = info, nil
 	if detail != "" {
-		a.Answer, a.AnsweredMS, a.Detail = "failed", at, detail
-		next.LastFailure = &failure{AtMS: at, Detail: detail}
-	} else {
-		a.Kind, a.Token = "queue", attemptID()
-		a.Message = promptFor(a.Token)
+		// Without a validated binary the owning daemon's idle state is unknown.
+		// Retry the check without reserving a wake or spending its allowance.
+		return e.preflightFailure(current, info, detail)
 	}
+	idleCtx, idleCancel := context.WithTimeout(ctx, 5*time.Second)
+	idle, detail := e.commands.idle(idleCtx, session)
+	idleCancel()
+	if !e.current(ctx) {
+		return stepResult{}
+	}
+	if !idle {
+		if detail == "Codex thread is active" {
+			return e.after(15 * time.Second)
+		}
+		return e.preflightFailure(current, info, detail)
+	}
+	// A busy turn may have fetched its mail or emitted a hook note while the
+	// daemon check ran. Only a new authoritative read after verified idle may
+	// decide what is still untold, against a fresh complete file snapshot.
+	before, err = e.store.snapshot()
+	if err != nil {
+		return e.fileFailure(err)
+	}
+	if before.Document.outstanding() != nil {
+		return e.waitFile()
+	}
+	next, current, id, result, eligible = e.candidate(ctx, before)
+	if !eligible {
+		return result
+	}
+	at := e.now().UnixMilli()
+	a := attempt{ID: attemptID(), Kind: "queue", Stream: id.Stream, Cursor: id.Cursor, Slot: 0, StartedMS: at, Token: attemptID()}
+	a.Message = promptFor(a.Token)
+	next.Binary, next.LastFailure = info, nil
 	next = next.appendAttempt(a)
 	published, err := e.store.publish(current, next)
 	if err != nil {
 		if published.Published {
-			if mergeErr := e.merge(published.ID, "aborted", "Wake reservation was not ready for command start"); mergeErr != nil && a.Kind == "queue" {
+			if mergeErr := e.merge(published.ID, "aborted", "Wake reservation was not ready for command start"); mergeErr != nil {
 				e.note("wake_unknown")
 				return e.waitFile()
 			}
@@ -96,16 +90,9 @@ func (e *engine) step(ctx context.Context) stepResult {
 	if !e.current(ctx) {
 		if err := e.merge(a.ID, "aborted", "Root binding changed before command start"); err != nil {
 			e.note("wake_unknown")
-			if a.Kind == "queue" {
-				return e.waitFile()
-			}
-			return e.after(60 * time.Second)
+			return e.waitFile()
 		}
 		return stepResult{}
-	}
-	if a.Kind == "binary_check" {
-		e.note("wake_failed")
-		return e.failedRetry(next, slot)
 	}
 	answer := e.commands.queue(ctx, session, a.Message, func(start func() error) (bool, error) {
 		return e.resolver.StartIfPrimary(e.target, start)
@@ -119,17 +106,67 @@ func (e *engine) step(ctx context.Context) stepResult {
 		return stepResult{}
 	case "failed":
 		e.note("wake_failed")
-		return e.failedRetry(next, slot)
+		return e.failedRetry(next)
 	case "unknown":
 		e.note("wake_unknown")
 	}
 	return e.waitFile()
 }
 
+// A failed preflight can explain why a wake is deferred without creating a
+// reservation or spending quota. Its publication error must never abort an old
+// attempt: no new attempt exists, even when diagnostic read-back was uncertain.
+func (e *engine) preflightFailure(current stateSnapshot, info binaryInfo, detail string) stepResult {
+	// Only publishing a replacement reservation may retire an old identity's
+	// mark. An operational failure must retain it if attention later regresses.
+	next := current.Document
+	next.Binary, next.LastFailure = info, &failure{AtMS: e.now().UnixMilli(), Detail: detail}
+	if _, err := e.store.publish(current, next); err != nil {
+		return e.fileFailure(err)
+	}
+	e.note("wake_failed")
+	return e.after(60 * time.Second)
+}
+
+// candidate binds one authoritative attention read to the complete file bytes
+// sampled before it. It never advances quota or accepts an outstanding guard.
+func (e *engine) candidate(ctx context.Context, before stateSnapshot) (document, stateSnapshot, hubclient.Identity, stepResult, bool) {
+	call, cancel := context.WithTimeout(ctx, 5*time.Second)
+	read, err := e.source.Attention(call, e.target, e.cursor, e.stream)
+	cancel()
+	if err != nil {
+		e.note("wake_failed")
+		return document{}, stateSnapshot{}, hubclient.Identity{}, e.after(30 * time.Second), false
+	}
+	if !e.current(ctx) {
+		return document{}, stateSnapshot{}, hubclient.Identity{}, stepResult{}, false
+	}
+	current, err := e.store.snapshot()
+	if err != nil {
+		return document{}, stateSnapshot{}, hubclient.Identity{}, e.fileFailure(err), false
+	}
+	if !sameState(before, current) {
+		return document{}, stateSnapshot{}, hubclient.Identity{}, e.after(10 * time.Second), false
+	}
+	id := read.Attention.Identity
+	if !id.Known || read.Stream == "" || read.HighWater < 0 ||
+		(id.Pending && (id.Stream != read.Stream || id.Cursor <= 0 || id.Cursor > read.HighWater)) {
+		e.note("wake_invalid_state")
+		return document{}, stateSnapshot{}, hubclient.Identity{}, e.after(30 * time.Second), false
+	}
+	e.stream, e.cursor = read.Stream, read.HighWater
+	if !id.Pending {
+		return document{}, current, id, stepResult{}, false
+	}
+	next, due, eligible := admission(current, id, read.HighWater, e.now())
+	result := stepResult{Due: due, NotBefore: due}
+	return next, current, id, result, eligible
+}
+
 // admission never resets a retained outstanding attempt; step checked that
 // before asking the hub. An older cursor is not a new identity unless the same
 // full file snapshots and the hub's high-water mark prove a restore.
-func admission(snapshot stateSnapshot, id hubclient.Identity, highWater int64, now time.Time) (document, int, time.Time, bool) {
+func admission(snapshot stateSnapshot, id hubclient.Identity, highWater int64, now time.Time) (document, time.Time, bool) {
 	next, told := snapshot.Document, snapshot.Told
 	mark := next.mark()
 	// Only this runner's mark can prove its quota predates a restore. A hook's
@@ -140,40 +177,38 @@ func admission(snapshot stateSnapshot, id hubclient.Identity, highWater int64, n
 		case mark.Stream != id.Stream || id.Cursor > mark.Cursor || mark.Cursor > highWater:
 			next.Attempts, next.LastFailure = nil, nil
 		case id.Cursor < mark.Cursor:
-			return next, 0, time.Time{}, false
+			return next, time.Time{}, false
 		}
 	}
-	slot := 0
-	var due time.Time
 	if told.Identity.Pending && told.Identity.Stream == id.Stream && told.Identity.Cursor <= highWater && id.Cursor <= told.Identity.Cursor {
-		if id.Cursor < told.Identity.Cursor || told.Twice || told.ToldMS <= 0 {
-			return next, 0, time.Time{}, false
-		}
-		slot = 1
-		due = time.UnixMilli(told.ToldMS).Add(hook.SecondNoteAfter)
+		return next, time.Time{}, false
 	}
-	if next.quota(slot) >= 2 {
-		return next, slot, time.Time{}, false
+	if nativeQuota(next) >= 2 {
+		return next, time.Time{}, false
 	}
-	due = later(due, retryAt(next, slot))
-	return next, slot, due, !due.After(now)
+	due := retryAt(next)
+	return next, due, !due.After(now)
 }
 
-func retryAt(d document, slot int) time.Time {
-	var due time.Time
+// Legacy version-one documents may contain slot 1. Their consumed/submitted or
+// uncertain attempts still spend this identity, and their known failures share
+// its one retry. New attempts always use slot 0; no timer creates a second wake.
+func nativeQuota(d document) int {
+	if d.quota(0) >= 2 || d.quota(1) >= 2 {
+		return 2
+	}
+	return min(2, d.tries(0)+d.tries(1))
+}
+
+func retryAt(d document) time.Time {
+	// Admission calls this only when quota permits another try, so there can
+	// be at most one retained known failure across the legacy slots.
 	for _, a := range d.Attempts {
-		if a.Slot == slot && a.Answer == "failed" {
-			due = later(due, time.UnixMilli(a.AnsweredMS).Add(60*time.Second))
+		if a.Answer == "failed" {
+			return time.UnixMilli(a.AnsweredMS).Add(60 * time.Second)
 		}
 	}
-	return due
-}
-
-func later(a, b time.Time) time.Time {
-	if b.After(a) {
-		return b
-	}
-	return a
+	return time.Time{}
 }
 
 func (e *engine) current(ctx context.Context) bool {
@@ -205,10 +240,9 @@ func (e *engine) fileFailure(err error) stepResult {
 	return e.after(60 * time.Second)
 }
 
-// A persisted binary failure already counts in next. A queue failure replaces
-// its still-unanswered reservation, which next also counts; two tries exhaust it.
-func (e *engine) failedRetry(next document, slot int) stepResult {
-	if next.tries(slot) >= 2 {
+// A known queue failure grants one retry, shared with any legacy known failures.
+func (e *engine) failedRetry(next document) stepResult {
+	if next.tries(0)+next.tries(1) >= 2 {
 		return stepResult{}
 	}
 	return e.after(60 * time.Second)

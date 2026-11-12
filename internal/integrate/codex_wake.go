@@ -17,8 +17,9 @@ func InstallCodexWake(l Layout, enabled bool) error {
 	return (codexClient{}).install(l, &enabled)
 }
 
-// CodexWake reports the configured Iris Codex invocation and its wake preference. It never
-// starts a process or proves that a session is armed, a prompt ran or mail was delivered.
+// CodexWake reports the configured Iris Codex invocation and its effective wake preference.
+// An omitted --wake uses Codex's enabled default; --wake=false disables it. This never starts
+// a process or proves that a session is armed, a prompt ran or mail was delivered.
 func CodexWake(l Layout) (configured, enabled bool, err error) {
 	file, err := CodexConfig(l)
 	if err != nil {
@@ -68,7 +69,7 @@ func codexWake(raw []byte, expectedCommand string) (codexWakeState, error) {
 	flags := flag.NewFlagSet("Codex Iris MCP", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	client := flags.String("client", "", "")
-	wake := flags.Bool("wake", false, "")
+	wake := flags.Bool("wake", true, "")
 	if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 || *client != Codex {
 		return state, nil
 	}
@@ -109,13 +110,15 @@ func codexMCPConfig(existing []byte, iris string, preference *bool) ([]byte, err
 	if (strings.Contains(text, markerStart) || strings.Contains(text, markerEnd)) && !ownedCodexBlock(existing, state.table) {
 		return nil, ErrBroken
 	}
-	enabled := state.enabled
+	enabled := !state.configured || state.enabled
 	if preference != nil {
 		enabled = *preference
 	}
 	args := `"mcp", "--client", "codex"`
 	if enabled {
 		args += `, "--wake"`
+	} else {
+		args += `, "--wake=false"`
 	}
 	block := wrapBlock(fmt.Sprintf("[mcp_servers.iris]\ncommand = %s\nargs = [%s]\n%s", tomlString(iris), args, codexMCPPolicy))
 	next, err := upsertBlock(string(existing), block)

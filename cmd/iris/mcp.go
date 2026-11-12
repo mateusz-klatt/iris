@@ -30,14 +30,20 @@ var newMCPWakeWorker = func(resolver *binding.Resolver, sessions *hook.Sessions,
 func runMCP(args []string) error {
 	fs := flag.NewFlagSet("mcp", flag.ContinueOnError)
 	client := fs.String("client", "", "agent client")
-	wakeEnabled := fs.Bool("wake", false, "wake this Codex root session when attention is pending")
+	wakeFlag := fs.Bool("wake", false, "wake this Codex root session when attention is pending (default for Codex; --wake=false disables)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *client == "" || fs.NArg() != 0 {
-		return errors.New("usage: iris mcp --client <client> [--wake]")
+		return errors.New("usage: iris mcp --client <client> [--wake=true|false]")
 	}
-	if *wakeEnabled && *client != "codex" {
+	wakeEnabled := *client == "codex"
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "wake" {
+			wakeEnabled = *wakeFlag
+		}
+	})
+	if wakeEnabled && *client != "codex" {
 		return errors.New("--wake requires --client codex")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -55,7 +61,7 @@ func runMCP(args []string) error {
 	workers.Add(1)
 	go func() { defer workers.Done(); resolver.Maintain(ctx, "shim", 20*time.Second, parent.Alive, cancel) }()
 	var options []mcpserver.Option
-	if *wakeEnabled {
+	if wakeEnabled {
 		if tokenPath, err := config.TokenPath(); err != nil {
 			resolver.Observe("wake_invalid_state")
 		} else {

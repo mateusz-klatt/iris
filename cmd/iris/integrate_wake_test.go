@@ -27,12 +27,14 @@ func TestIntegrateCodexWakeFlagsWorkBeforeAndAfterTheClient(t *testing.T) {
 		args    []string
 		enabled bool
 	}{
-		{[]string{"codex"}, false},
+		{[]string{"codex"}, true},
 		{[]string{"codex", "--wake"}, true},
 		{[]string{"codex"}, true},
 		{[]string{"--no-wake", "codex"}, false},
+		{[]string{"codex"}, false},
 		{[]string{"--wake", "codex"}, true},
 		{[]string{"codex", "--no-wake"}, false},
+		{[]string{"codex"}, false},
 		{[]string{"codex", "--wake=false"}, false},
 		{[]string{"codex", "--no-wake=false"}, true},
 	} {
@@ -123,6 +125,35 @@ func TestIntegrateCodexWakeReportsBrokenTOMLBeforeHooksAreWritten(t *testing.T) 
 	for _, path := range []string{filepath.Join(home, "hooks.json"), state} {
 		if _, err := os.Stat(path); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("refused integration wrote %s: %v", path, err)
+		}
+	}
+}
+
+func TestIntegrateAllDefaultsCodexOnAndPreservesExplicitDisable(t *testing.T) {
+	fakeClaude(t)
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("CODEX_HOME", filepath.Join(home, "custom-codex"))
+	t.Setenv("IRIS_STATE_DIR", filepath.Join(home, "state"))
+	for _, tc := range []struct {
+		args    []string
+		enabled bool
+	}{
+		{[]string{"--all"}, true},
+		{[]string{"codex", "--no-wake"}, false},
+		{[]string{"--all"}, false},
+		{[]string{"codex", "--wake"}, true},
+		{[]string{"--all"}, true},
+	} {
+		capture(t, func() {
+			if code := runIntegrate(tc.args); code != 0 {
+				t.Fatalf("%v: exit %d", tc.args, code)
+			}
+		})
+		configured, enabled, err := integrate.CodexWake(integrate.Layout{})
+		if err != nil || !configured || enabled != tc.enabled {
+			t.Fatalf("%v: configured/enabled %v/%v, %v", tc.args, configured, enabled, err)
 		}
 	}
 }

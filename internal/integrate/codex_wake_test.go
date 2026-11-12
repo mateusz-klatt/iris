@@ -26,7 +26,7 @@ func TestCodexWakePreferenceSurvivesInstallDriftAndExplicitChanges(t *testing.T)
 	if err := c.Install(l, nil); err != nil {
 		t.Fatal(err)
 	}
-	assertCodexWake(t, l, true, false)
+	assertCodexWake(t, l, true, true)
 	if err := InstallCodexWake(l, true); err != nil {
 		t.Fatal(err)
 	}
@@ -59,6 +59,9 @@ func TestCodexWakePreferenceSurvivesInstallDriftAndExplicitChanges(t *testing.T)
 		t.Fatal(err)
 	}
 	assertCodexWake(t, l, true, false)
+	if got := string(mustRead(t, files[1])); !strings.Contains(got, `args = ["mcp", "--client", "codex", "--wake=false"]`) {
+		t.Fatalf("explicit disable was not retained in argv: %s", got)
+	}
 	if err := c.Install(l, nil); err != nil {
 		t.Fatal(err)
 	}
@@ -105,6 +108,30 @@ func TestCodexWakeDriftAndRemovalPreserveUserAdditions(t *testing.T) {
 	}
 }
 
+func TestCodexWakeUpgradesLegacyBareArgumentsWithoutChangingUserConfigOrHooks(t *testing.T) {
+	l := testLayout(t)
+	c := codexClient{}
+	files, _ := c.Files(l)
+	if err := c.Install(l, nil); err != nil {
+		t.Fatal(err)
+	}
+	hooks := string(mustRead(t, files[0]))
+	const userConfig = "model = 'user-model'\n\n[projects.'/trusted/repo']\ntrust_level = 'trusted'\n\n[mcp_servers.foreign]\ncommand = 'foreign'\n"
+	legacy := userConfig + wrapBlock("[mcp_servers.iris]\ncommand = "+tomlString(l.Iris())+"\nargs = ['mcp', '--client', 'codex']\n"+codexMCPPolicy)
+	seedFile(t, files[1], legacy)
+	assertCodexWake(t, l, true, true)
+	if err := c.Install(l, nil); err != nil {
+		t.Fatal(err)
+	}
+	assertCodexWake(t, l, true, true)
+	if got := string(mustRead(t, files[1])); !strings.HasPrefix(got, userConfig) || !strings.Contains(got, `args = ["mcp", "--client", "codex", "--wake"]`) {
+		t.Fatalf("legacy upgrade lost foreign config, trust or the enabled preference: %s", got)
+	}
+	if got := string(mustRead(t, files[0])); got != hooks {
+		t.Fatal("changing MCP wake arguments changed the reviewed hook definitions")
+	}
+}
+
 func TestCodexWakeReadsTOMLSyntaxAndOnlyAValidCodexInvocation(t *testing.T) {
 	for name, tc := range map[string]struct {
 		config              string
@@ -112,14 +139,14 @@ func TestCodexWakeReadsTOMLSyntaxAndOnlyAValidCodexInvocation(t *testing.T) {
 	}{
 		"empty":                              {},
 		"enabled":                            {"[mcp_servers.iris]\ncommand='iris'\nargs=['mcp','--client','codex','--wake']\n", true, true},
-		"disabled":                           {"[mcp_servers.iris]\ncommand='/opt/iris'\nargs=['mcp','--client','codex']\n", true, false},
+		"legacy bare defaults on":            {"[mcp_servers.iris]\ncommand='/opt/iris'\nargs=['mcp','--client','codex']\n", true, true},
 		"quoted and multiline":               {"[mcp_servers.\"iris\"]\ncommand='iris'\nargs=[\n'mcp', # a command\n'--wake',\n'--client',\n'codex',\n]\n", true, true},
 		"inline":                             {"mcp_servers={iris={command='iris',args=['mcp','--client','codex','--wake']}}\n", true, true},
 		"dotted":                             {"mcp_servers.iris.command='iris'\nmcp_servers.iris.args=['mcp','--client=codex','--wake']\n", true, true},
 		"windows path":                       {"[mcp_servers.iris]\ncommand='C:\\tools\\iris.exe'\nargs=['mcp','--client','codex','--wake']\n", true, true},
 		"explicit false":                     {"[mcp_servers.iris]\ncommand='iris'\nargs=['mcp','--client','codex','--wake=false']\n", true, false},
 		"explicit true":                      {"[mcp_servers.iris]\ncommand='iris'\nargs=['mcp','--client','codex','--wake=true']\n", true, true},
-		"wake text in another value":         {"note='--wake'\n[mcp_servers.iris]\ncommand='iris'\nargs=['mcp','--client','codex']\n", true, false},
+		"wake text in another value":         {"note='--wake=false'\n[mcp_servers.iris]\ncommand='iris'\nargs=['mcp','--client','codex']\n", true, true},
 		"table text inside a literal string": {"note='''\n[mcp_servers.iris]\ncommand='iris'\nargs=['mcp','--client','codex','--wake']\n'''\n", false, false},
 		"another server":                     {"[mcp_servers.other]\ncommand='iris'\nargs=['mcp','--client','codex','--wake']\n", false, false},
 		"wrong command":                      {"[mcp_servers.iris]\ncommand='another-program'\nargs=['mcp','--client','codex','--wake']\n", false, false},
@@ -237,6 +264,17 @@ func TestCodexWakePreservesManagedCustomBinaryAcrossItsMove(t *testing.T) {
 	assertCodexWake(t, l, true, true)
 	if got := string(mustRead(t, file)); !strings.Contains(got, `command = "/new/iris-dev"`) || strings.Contains(got, "/tools/iris-preview") {
 		t.Fatalf("reintegration did not move the managed binary while preserving wake: %s", got)
+	}
+	if err := InstallCodexWake(l, false); err != nil {
+		t.Fatal(err)
+	}
+	l.LookPath = func(string) (string, error) { return "/next/iris-local", nil }
+	if err := (codexClient{}).Install(l, nil); err != nil {
+		t.Fatal(err)
+	}
+	assertCodexWake(t, l, true, false)
+	if got := string(mustRead(t, file)); !strings.Contains(got, `command = "/next/iris-local"`) || !strings.Contains(got, `"--wake=false"`) {
+		t.Fatalf("moving a renamed binary lost its explicit disable: %s", got)
 	}
 }
 

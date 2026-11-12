@@ -25,15 +25,19 @@ func TestDoctorWakeConfigurationNeverClaimsArmingOrDelivery(t *testing.T) {
 		configured, enabled bool
 		err                 error
 		want                string
-	}{{"absent", false, false, nil, "no Codex Iris MCP entry"}, {"default off", true, false, nil, "hooks; idle wake off (default)"}, {"opt in", true, true, nil, "opt-in idle wake; current arming and delivery are unverified"}, {"unknown", false, false, errors.New("PRIVATE_ERROR"), "unknown; Codex configuration could not be read"}} {
+	}{{"absent", false, false, nil, "no Codex Iris MCP entry"}, {"explicitly disabled", true, false, nil, "hooks; idle wake explicitly disabled"}, {"default on", true, true, nil, "idle wake (default); current arming and delivery are unverified"}, {"unknown", false, false, errors.New("PRIVATE_ERROR"), "unknown; Codex configuration could not be read"}} {
 		wakeConfiguration = func(integrate.Layout) (bool, bool, error) { return tc.configured, tc.enabled, tc.err }
 		lines := wakeReport(integrate.Layout{}, "token", time.Now())
 		text := strings.Join(lines, "\n")
 		if !strings.Contains(text, tc.want) || strings.Contains(text, "PRIVATE_ERROR") {
 			t.Fatalf("%s: %s", tc.name, text)
 		}
-		if tc.enabled && !strings.Contains(text, "exec probes do not prove idle wake delivery") {
-			t.Fatal("exec live probe became an idle wake proof")
+		if tc.enabled {
+			for _, want := range []string{"one automatic wake per attention identity", "one shared retry after a known queue failure", "Retained legacy attempts count toward that same allowance", "exec probes do not prove idle wake delivery"} {
+				if !strings.Contains(text, want) {
+					t.Fatalf("wake limits omit %q: %s", want, text)
+				}
+			}
 		}
 	}
 	wakeConfiguration = func(integrate.Layout) (bool, bool, error) { return true, true, nil }
@@ -59,7 +63,7 @@ func TestDoctorWakeGuardSummariesAreBoundedAndRecoveryRequiresClosedSession(t *t
 		name   string
 		change func(*wake.Inspection)
 		want   string
-	}{{"old", func(*wake.Inspection) {}, "old outstanding queue wake"}, {"recent", func(g *wake.Inspection) { g.StartedMS = now.Add(-time.Minute).UnixMilli() }, "outstanding queue wake (unknown), age 1m0s"}, {"future clock", func(g *wake.Inspection) { g.StartedMS = now.Add(time.Minute).UnixMilli() }, "age 0s"}, {"consumed", func(g *wake.Inspection) { g.Outstanding = false; g.ConsumedMS = now.UnixMilli() }, "consumed queue wake; its slot remains spent"}, {"binary failure", func(g *wake.Inspection) {
+	}{{"old", func(*wake.Inspection) {}, "old outstanding queue wake"}, {"recent", func(g *wake.Inspection) { g.StartedMS = now.Add(-time.Minute).UnixMilli() }, "outstanding queue wake (unknown), age 1m0s"}, {"future clock", func(g *wake.Inspection) { g.StartedMS = now.Add(time.Minute).UnixMilli() }, "age 0s"}, {"consumed", func(g *wake.Inspection) { g.Outstanding = false; g.ConsumedMS = now.UnixMilli() }, "consumed queue wake; its automatic wake allowance remains spent"}, {"binary failure", func(g *wake.Inspection) {
 		g.Outstanding = false
 		g.Kind = "binary_check"
 		g.Outcome = "failed"
@@ -86,7 +90,7 @@ func TestDoctorWakeGuardSummariesAreBoundedAndRecoveryRequiresClosedSession(t *t
 	metadata.BinaryVersion = "version\nvalue"
 	metadata.ClientVersion = "client\tvalue"
 	line := wakeGuardLine(metadata, now)
-	for _, want := range []string{`path "/codex\npath"`, `binary version "version\nvalue"`, `client version "client\tvalue"`, "last recorded failure", "retained attempts 1/5; initial wake allowance spent, repeat wake allowance unused"} {
+	for _, want := range []string{`path "/codex\npath"`, `binary version "version\nvalue"`, `client version "client\tvalue"`, "last recorded failure", "retained attempts 1/5; initial accounting spent, retained legacy accounting unused; automatic wake allowance spent"} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("missing quoted metadata %q: %s", want, line)
 		}
@@ -102,6 +106,33 @@ func TestDoctorWakeGuardSummariesAreBoundedAndRecoveryRequiresClosedSession(t *t
 		if line := wakeGuardLine(metadata, now); !strings.Contains(line, ": "+reason) {
 			t.Fatalf("known failure reason was omitted: %s", line)
 		}
+	}
+}
+
+func TestDoctorWakeSharesItsSingleAllowanceWithRetainedLegacyAttempts(t *testing.T) {
+	for _, tc := range []struct {
+		name                       string
+		slot0, slot1               int
+		initial, legacy, allowance string
+	}{
+		{"unused", 0, 0, "unused", "unused", "unused"},
+		{"one initial failure", 1, 0, "one known failed attempt", "unused", "has one retry"},
+		{"one retained legacy failure", 0, 1, "unused", "one known failed attempt", "has one retry"},
+		{"two failures across both ledgers", 1, 1, "one known failed attempt", "one known failed attempt", "spent"},
+		{"consumed initial wake", 2, 0, "spent", "unused", "spent"},
+		{"retained legacy wake", 0, 2, "unused", "spent", "spent"},
+		{"both ledgers spent", 2, 2, "spent", "spent", "spent"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			line := wakeGuardLine(wake.Inspection{Path: "guard", Status: "usable", Slot0: tc.slot0, Slot1: tc.slot1}, time.Now())
+			want := "initial accounting " + tc.initial + ", retained legacy accounting " + tc.legacy + "; automatic wake allowance " + tc.allowance
+			if !strings.Contains(line, want) || strings.Contains(line, "repeat wake allowance") {
+				t.Fatalf("doctor offers a separate or incorrect wake allowance: %s", line)
+			}
+			if tc.allowance == "spent" && strings.Contains(line, "retry") {
+				t.Fatalf("spent combined allowance offers another retry: %s", line)
+			}
+		})
 	}
 }
 
@@ -138,7 +169,7 @@ func TestDoctorWakeReadOnlyDiagnosticsAreLocalAndKeepOfflineExit(t *testing.T) {
 	}
 }
 
-func TestDoctorWakeReadsActualOptInAndRetainedGuardWithoutSecrets(t *testing.T) {
+func TestDoctorWakeReadsActualDefaultAndRetainedGuardWithoutSecrets(t *testing.T) {
 	home := t.TempDir()
 	token := filepath.Join(home, "hub.token")
 	layout := integrate.Layout{Home: home, Getenv: func(string) string { return "" }}
@@ -149,7 +180,7 @@ func TestDoctorWakeReadsActualOptInAndRetainedGuardWithoutSecrets(t *testing.T) 
 	if err := os.MkdirAll(filepath.Dir(config), 0700); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(config, []byte("[mcp_servers.iris]\ncommand = \"/expected/iris\"\nargs = [\"mcp\", \"--client\", \"codex\", \"--wake\"]\n"), 0600); err != nil {
+	if err := os.WriteFile(config, []byte("[mcp_servers.iris]\ncommand = \"/expected/iris\"\nargs = [\"mcp\", \"--client\", \"codex\"]\n"), 0600); err != nil {
 		t.Fatal(err)
 	}
 	sessions := hook.NewSessions(token)
@@ -163,7 +194,7 @@ func TestDoctorWakeReadsActualOptInAndRetainedGuardWithoutSecrets(t *testing.T) 
 	}
 	lines := wakeReport(layout, token, time.Unix(1800000000, 0))
 	text := strings.Join(lines, "\n")
-	for _, want := range []string{"opt-in idle wake; current arming and delivery are unverified", strconv.Quote(guard), "old outstanding queue wake (unknown)", "permanently closing that session and stopping its MCP child"} {
+	for _, want := range []string{"idle wake (default); current arming and delivery are unverified", strconv.Quote(guard), "old outstanding queue wake (unknown)", "permanently closing that session and stopping its MCP child"} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("missing actual wake evidence %q: %s", want, text)
 		}
@@ -177,5 +208,21 @@ func TestDoctorWakeReadsActualOptInAndRetainedGuardWithoutSecrets(t *testing.T) 
 	after, err := os.ReadFile(guard)
 	if err != nil || string(after) != string(body) {
 		t.Fatal("diagnostic changed retained guard")
+	}
+}
+
+func TestDoctorWakeReadsExplicitDisableAfterOrdinaryReintegration(t *testing.T) {
+	home := t.TempDir()
+	layout := integrate.Layout{Home: home, StateDir: filepath.Join(home, "state"), Getenv: func(string) string { return "" }}
+	if err := integrate.InstallCodexWake(layout, false); err != nil {
+		t.Fatal(err)
+	}
+	client, _ := integrate.ByName(integrate.Codex)
+	if err := client.Install(layout, nil); err != nil {
+		t.Fatal(err)
+	}
+	lines := wakeReport(layout, filepath.Join(home, "hub.token"), time.Now())
+	if len(lines) != 1 || !strings.Contains(lines[0], "idle wake explicitly disabled") {
+		t.Fatalf("doctor disagrees with the preserved MCP opt-out: %v", lines)
 	}
 }
