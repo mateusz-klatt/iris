@@ -67,6 +67,77 @@ func TestIntegrateCodexWakeFlagsWorkBeforeAndAfterTheClient(t *testing.T) {
 	})
 }
 
+func TestIntegrateGrokWakeFlagsStayLocalAndSurviveAPlainReinstall(t *testing.T) {
+	home := grokWakeIntegrationHome(t)
+	for _, tc := range []struct {
+		args    []string
+		enabled bool
+		text    string
+	}{
+		{[]string{"grok"}, true, ""},
+		{[]string{"--no-wake", "grok"}, false, "off\n"},
+		{[]string{"grok"}, false, "off\n"},
+		{[]string{"grok", "--wake"}, true, "on\n"},
+		{[]string{"grok", "--no-wake"}, false, "off\n"},
+		{[]string{"--wake=false", "grok"}, false, "off\n"},
+		{[]string{"grok", "--no-wake=false"}, true, "on\n"},
+	} {
+		out, errText := capture(t, func() {
+			if code := runIntegrate(tc.args); code != 0 {
+				t.Fatalf("%v: code %d", tc.args, code)
+			}
+		})
+		enabled, err := integrate.GrokWake(integrate.Layout{})
+		marker := filepath.Join(home, "iris-wake")
+		body := ""
+		if raw, readErr := os.ReadFile(marker); readErr == nil {
+			body = string(raw)
+		} else if !errors.Is(readErr, os.ErrNotExist) {
+			t.Fatal(readErr)
+		}
+		if err != nil || enabled != tc.enabled || body != tc.text || !strings.Contains(out, "integrated grok") || errText != "" {
+			t.Fatalf("%v: enabled %v %v marker %q stdout %q stderr %q", tc.args, enabled, err, body, out, errText)
+		}
+	}
+	skill := filepath.Join(home, "skills", "iris", "SKILL.md")
+	if !strings.Contains(string(mustReadIntegrate(t, skill)), "An Iris notification means new mail or a claim someone is waiting on.") {
+		t.Fatal("skill missing the notification sentence")
+	}
+	out, _ := capture(t, func() {
+		if code := runIntegrate([]string{"grok", "--remove"}); code != 0 {
+			t.Fatalf("remove: %d", code)
+		}
+	})
+	if !strings.Contains(out, "removed grok") {
+		t.Fatalf("removal output = %q", out)
+	}
+	if _, err := os.Stat(filepath.Join(home, "iris-wake")); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("removal retained the wake marker: %v", err)
+	}
+	if _, err := os.Stat(skill); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("removal retained the skill: %v", err)
+	}
+}
+
+func grokWakeIntegrationHome(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	home := filepath.Join(dir, "grok")
+	t.Setenv("GROK_HOME", home)
+	t.Setenv("IRIS_STATE_DIR", filepath.Join(dir, "state"))
+	t.Setenv("PATH", t.TempDir())
+	return home
+}
+
+func mustReadIntegrate(t *testing.T, path string) []byte {
+	t.Helper()
+	b, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return b
+}
+
 func TestIntegrateCodexWakeRejectsConflictingOrUnscopedFlagsWithoutWriting(t *testing.T) {
 	for _, args := range [][]string{
 		{"codex", "--wake", "--no-wake"},

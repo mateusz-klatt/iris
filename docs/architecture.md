@@ -177,6 +177,10 @@ Hooks always receive a session id. The problem is the stdio MCP process, which o
 | Kimi | no | yes, through a shell |
 | Codex | no; each tool call measured (0.167.0) names its session in `_meta` | yes for `exec`; **no** for app-server, where threads share one pid |
 
+The Grok cell is the stdio MCP child. Grok's `monitor` shell does not inherit
+`GROK_SESSION_ID` (measured on 1.0.77). `iris watch --client grok` reads the session id the
+hook stored for that grok process ([ADR 025](adr/025-grok-stop-monitor.md)).
+
 `iris mcp` resolves its Execution at the first tool call, by this chain:
 
 1. `IRIS_EXECUTION`, when a launcher set it.
@@ -279,6 +283,7 @@ Each client gets the strongest tier it has:
 | Loaded idle root | Own queue command after a positive native idle check | Codex, enabled by default; [ADR 023](adr/023-default-codex-wake-after-idle-check.md) |
 | Loaded foreground session | Copilot CLI extension runs `iris watch` and submits a fixed automation message through its SDK | Copilot CLI (experimental; [ADR 024](adr/024-copilot-extension-wake.md)) |
 | Loaded idle session | Authenticated web REST prompt after a positive native idle check | Kimi, opt-in while delivery is unproved; [ADR 026](adr/026-kimi-web-idle-wake.md) |
+| Asked at Stop | Model starts a persistent `iris watch` in the `monitor` tool | Grok, enabled by default; [ADR 025](adr/025-grok-stop-monitor.md) |
 | Instant, armed by the model | `Monitor` tool with a `ws` source | Claude Code |
 | Instant, Iris-owned session | App-server or ACP control of a session Iris started | Codex (measured), Copilot, Cursor, Antigravity, Grok, Kimi (later) |
 | Next turn | Hook context at prompt or post-tool | All, with client-specific limits |
@@ -322,6 +327,18 @@ without quota. Iris never calls `:takeover` on a live session. Wake is opt-in wh
 and hook consumption are unproved; fresh integration and bare MCP arguments leave it off, and an
 explicit choice survives reintegration. The server and closed sessions are not started for the user.
 The [Kimi wake guide](kimi-wake.md) and [ADR 026](adr/026-kimi-web-idle-wake.md) record setup and limits.
+
+Grok's monitor shell does not inherit `GROK_SESSION_ID` (measured on 1.0.77). After the hub
+accepts a top-level SessionStart, the hook stores the session id beside that grok process's
+pid and start time, and `iris watch --client grok` reads the file when the variable is empty.
+Stop on `end_turn` asks the model to start that watch once, in the `monitor` tool, with
+persistent set, until a background task of type `monitor` exists. The ask sees the task's
+description, not its command, so a different monitor satisfies it. This is a request, not a
+check of the command. `shutdown` and `channel_closed` are left alone. `iris integrate grok
+--no-wake` records a local off choice that Stop reads without calling the hub; setup and
+reintegration preserve it. A missing marker means on, including integrations installed before
+this choice existed. The [Grok wake guide](grok-wake.md) says what this cannot do. Grok is not
+marked single-session, and its MCP child does not run a wake worker.
 
 The runner starts no automatic ten-minute second wake for unchanged attention. Hook reminders
 below remain. Native status and queue admission are not atomic: a person can start a turn or
@@ -1022,7 +1039,7 @@ The search index is updated in the same transaction.
 | Hooks in headless mode | yes | yes | yes | yes | yes | yes | yes |
 | Project hooks | trust | trust and review | trust | trust | no trust step | trust | none |
 | User hooks need a step | no | review once | no | no | no | no | no |
-| Wake idle session | yes, plugin monitor | owned sessions | owned sessions | owned sessions | owned sessions | owned sessions | web REST after native idle check |
+| Wake idle session | yes, plugin monitor | owned sessions | owned sessions | owned sessions | owned sessions | Stop-armed monitor ([ADR 025](adr/025-grok-stop-monitor.md)) | web REST after native idle check |
 
 Codex can also write files from JavaScript. Its Code Mode `js` tool, `mcp__node_repl__js`, runs
 code such as `fs.appendFile` (measured on 0.167.0). `gpt-6-luna` used it instead of `apply_patch`
@@ -1044,7 +1061,11 @@ was measured, the tool was unknown to Iris, so its writes went unreconciled and 
   spawn cost under Defender, `cmd /c` quoting, and whether fail-open holds on those systems all
   need real runs before any claim of support.
 - Whether plugin monitors survive `--resume` and `/clear`, and at what rate monitors are stopped.
-- Whether `SessionStart` context on Grok and Kimi reaches the model at all.
+- Grok's SessionStart `systemMessage` is kept as a hook annotation and does not enter the saved
+  system prompt or chat history (measured on 1.0.77). The native skill carries what a
+  notification means. Whether Kimi's SessionStart context reaches the model is still unknown.
+- The installed Grok wake path (ADR 025) has not been re-measured end to end. The line-to-turn
+  primitive and the Stop continuation were measured on 1.0.77.
 - The nearest-process rung has not been tried on a Cursor IDE session. A Codex session binds by
   the session its tool calls name (ADR 017). The session ids from tool calls and hooks were
   compared for `exec` and for threads the daemon loaded. The attention record describes them as

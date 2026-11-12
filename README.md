@@ -29,6 +29,10 @@ the Codex wake implementation.
 idle check and is opt-in while native delivery remains unproved. It requires a compatible server
 with the same Kimi home; enable it with `iris integrate kimi --wake` and disable it with `--no-wake`.
 
+Grok asks its model, at Stop, to keep `iris watch --client grok` running in the monitor tool.
+Stop sees that a monitor is running, not the command it runs. `iris integrate grok --no-wake`
+records an explicit off choice. See [Grok wake](docs/grok-wake.md).
+
 Iris coordinates cooperating agents. It prevents and reports collisions; it is not a sandbox.
 
 ## Installing

@@ -168,6 +168,8 @@ Against the production hub, over TLS:
 - **Other clients on real hosts.** Codex has run with Claude in the bounded macOS and WSL
   shared-worktree experiments above; that does not validate every integration path. Cursor,
   Antigravity, Grok and Kimi do not have equivalent end-to-end evidence in this status record.
+  Grok's Stop-armed monitor (ADR 025) was measured as a primitive on 1.0.77 and has not been
+  re-measured as an installed integration.
   Copilot has run live on Linux only.
 - **Remote execution targets are unprotected.** A client whose tools run on a remote host, in a
   container or in a cloud sandbox changes files Iris neither claims nor checks: the hook sees only the

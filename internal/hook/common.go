@@ -26,7 +26,13 @@ type commonPayload struct {
 	MCP            json.RawMessage `json:"mcp_server"`
 	SubagentID     string          `json:"subagentId"`
 	SubagentSnake  string          `json:"subagent_id"`
-	Prompt         json.RawMessage `json:"prompt"`
+	// Prompt is not always text: Kimi sends an array. Only Codex's is read (ADR 017).
+	Prompt               json.RawMessage `json:"prompt"`
+	Reason               string          `json:"reason"`
+	StopHookActive       *bool           `json:"stopHookActive"`
+	StopHookActiveSnake  *bool           `json:"stop_hook_active"`
+	BackgroundTasks      json.RawMessage `json:"backgroundTasks"`
+	BackgroundTasksSnake json.RawMessage `json:"background_tasks"`
 }
 
 func decodeCommon(client Client, eventName string, payload []byte) (Event, error) {
@@ -56,6 +62,7 @@ func decodeCommon(client Client, eventName string, payload []byte) (Event, error
 			ev.Prompt = kimiPromptText(p.Prompt)
 		}
 	}
+	applyGrokStop(&ev, p)
 	if sub := first(p.SubagentID, p.SubagentSnake); ev.Kind == KindSubagentStart && sub != "" && sub != ev.SessionID {
 		ev.ParentSessionID = ev.SessionID
 		ev.SessionID = sub

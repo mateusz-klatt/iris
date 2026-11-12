@@ -146,6 +146,11 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		hash := sha256.Sum256(payload)
 		ev.ToolCallID = "payload:" + hex.EncodeToString(hash[:])
 	}
+	// Stop asks for a monitor before the repository check. A session outside a git checkout
+	// still needs the wake, and the ask does not call the hub (ADR 025).
+	if out, ok := r.grokMonitorAsk(ev); ok {
+		return r.finish(state, ev, out)
+	}
 	if shellEvent(ev) {
 		return r.finish(state, ev, r.reconcile(ctx, ev, state))
 	}
@@ -201,6 +206,7 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		if err := r.Hub.EndExecution(ctx, sess.ExecutionID, sess.Generation); err != nil {
 			return state.fail(err, allow)
 		}
+		r.forgetGrokSessionFile(ev)
 		if m := r.memory(); m != nil {
 			m.Forget(string(ev.Client), ev.SessionID)
 		}
@@ -305,6 +311,11 @@ func (r Runner) register(ctx context.Context, ev Event, repo gitinfo.Repo) (hubc
 				}
 			}
 		}
+	}
+	// The pid file follows a hub acceptance. It is not part of the sessions directory, so a
+	// failed write is not a session-files failure and must not mark the run skipped.
+	if err == nil && ev.Kind == KindSessionStart {
+		r.recordGrokSession(ev)
 	}
 	return sess, err
 }

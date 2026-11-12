@@ -587,8 +587,10 @@ func TestWatchAndMCPRejectBadArgumentsAndAMissingParent(t *testing.T) {
 	orig := watchParent
 	t.Cleanup(func() { watchParent = orig })
 	watchParent = func() (*proc.ParentWatch, error) { return nil, errors.New("no parent") }
-	if err := runWatch([]string{"--client", "claude"}); err == nil || !strings.Contains(err.Error(), "no parent") {
-		t.Fatal(err)
+	for _, client := range []string{"claude", "grok"} {
+		if err := runWatch([]string{"--client", client}); err == nil || !strings.Contains(err.Error(), "no parent") {
+			t.Fatalf("%s: %v", client, err)
+		}
 	}
 	if err := runMCP([]string{"--client", "claude"}); err == nil || !strings.Contains(err.Error(), "no parent") {
 		t.Fatal(err)
