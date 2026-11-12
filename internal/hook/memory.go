@@ -103,6 +103,12 @@ func (m fileMemory) lock(budget time.Duration) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
+	// A restrictive Unix umask can create this file without owner read/write access. Restore
+	// those bits through the open descriptor before locking, so later hooks can reopen it.
+	if err := protectSessionsLock(f); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
 	deadline := time.Now().Add(budget)
 	for tryLockFile(f) != nil {
 		if !time.Now().Before(deadline) {

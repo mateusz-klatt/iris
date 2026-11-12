@@ -747,7 +747,7 @@ tables, because they are Codex's. Doctor also reports an Iris MCP table written 
 Codex's `[mcp_servers.iris]` table carries two more keys, both measured on Codex 0.167.0 and both
 removed with the table:
 
-- `env_vars = ["IRIS_HUB_URL", "IRIS_TOKEN_FILE", "IRIS_EXECUTION"]`. Codex passes the full
+- `env_vars = ["IRIS_HUB_URL", "IRIS_TOKEN_FILE", "IRIS_EXECUTION", "CODEX_HOME"]`. Codex passes the full
   environment to hooks but a filtered one to MCP servers. Without this an `IRIS_HUB_URL` override
   sent the session's claims to one hub and its messages and `whoami` to another.
 - `default_tools_approval_mode = "approve"`. This approves the Iris server's tools without asking,

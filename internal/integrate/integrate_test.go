@@ -351,9 +351,10 @@ func readFiles(t *testing.T, files []string) []string {
 }
 
 // Codex filters the environment of MCP servers but not of hooks. The iris table must name the
-// hub variables, or an IRIS_HUB_URL override splits one session across two hubs, and it must
-// approve Iris's own tools, or a headless run with approval_policy "never" refuses all of them.
-func TestCodexMCPServerKeepsTheHubOverrideAndNeedsNoApproval(t *testing.T) {
+// hub variables, or an IRIS_HUB_URL override splits one session across two hubs, and CODEX_HOME
+// for its wake command. It must approve Iris's own tools, or a headless run with approval_policy
+// "never" refuses all of them.
+func TestCodexMCPServerKeepsTheHubOverrideAndCodexHomeAndNeedsNoApproval(t *testing.T) {
 	l := testLayout(t)
 	codex, _ := ByName(Codex)
 	files, _ := codex.Files(l)
@@ -374,7 +375,7 @@ func TestCodexMCPServerKeepsTheHubOverrideAndNeedsNoApproval(t *testing.T) {
 	}
 	table := text[start:]
 	for _, line := range []string{
-		`env_vars = ["IRIS_HUB_URL", "IRIS_TOKEN_FILE", "IRIS_EXECUTION"]`,
+		`env_vars = ["IRIS_HUB_URL", "IRIS_TOKEN_FILE", "IRIS_EXECUTION", "CODEX_HOME"]`,
 		`default_tools_approval_mode = "approve"`,
 	} {
 		if !strings.Contains(table, line+"\n") {
