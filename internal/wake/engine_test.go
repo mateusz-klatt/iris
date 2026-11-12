@@ -278,7 +278,8 @@ func TestWakeAdmissionSlotsIdentityBoundariesAndRestoreProof(t *testing.T) {
 				tc.change(&snapshot)
 			}
 			next, slot, due, eligible := admission(snapshot, id, 20, now)
-			if slot != tc.slot || !due.Equal(tc.due) && !(tc.eligible && !due.After(now)) || eligible != tc.eligible || len(next.Attempts) != tc.retained {
+			dueMismatch := !due.Equal(tc.due) && (!tc.eligible || due.After(now))
+			if slot != tc.slot || dueMismatch || eligible != tc.eligible || len(next.Attempts) != tc.retained {
 				t.Fatalf("admission: slot %d, due %v, eligible %t, retained %d; want %+v", slot, due, eligible, len(next.Attempts), tc)
 			}
 		})

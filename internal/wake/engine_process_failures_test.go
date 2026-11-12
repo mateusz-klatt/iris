@@ -6,6 +6,7 @@ import (
 	"errors"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"reflect"
 	"testing"
@@ -20,13 +21,23 @@ func TestWakeEngineActualStartFailuresRemainLimitedAcrossReconstructions(t *test
 	command, record, _ := commandSetup(t, binary, commandScenario{
 		VersionOut: "codex-cli " + commandVersion + "\n", Out: commandAccept + "\n",
 	})
-	startFailures := 0
+	startCalls, startFailures := 0, 0
+	var missingPath string
 	resolver.admit = func(start func() error) (bool, error) {
+		if !filepath.IsAbs(missingPath) {
+			t.Errorf("Start failure path is not absolute: %q", missingPath)
+		}
+		if _, err := os.Stat(missingPath); !errors.Is(err, os.ErrNotExist) {
+			t.Errorf("Start failure path is not absent: %v", err)
+		}
+		startCalls++
 		err := start()
-		if !errors.Is(err, os.ErrNotExist) {
+		if err == nil || (!errors.Is(err, os.ErrNotExist) && !errors.Is(err, exec.ErrNotFound)) {
 			t.Errorf("expected an actual missing-executable Start failure, got %v", err)
 		}
-		startFailures++
+		if err != nil {
+			startFailures++
+		}
 		return err == nil, err
 	}
 	var first attempt
@@ -41,7 +52,8 @@ func TestWakeEngineActualStartFailuresRemainLimitedAcrossReconstructions(t *test
 		e.store.io.syncDir = func(string) error {
 			// The real --version has succeeded. Make the queue's actual Start
 			// fail after its reservation is published, without faking an error.
-			c.path = filepath.Join(t.TempDir(), "missing-codex")
+			missingPath = filepath.Join(t.TempDir(), "missing-codex")
+			c.path = missingPath
 			return nil
 		}
 		result := e.step(context.Background())
@@ -68,14 +80,18 @@ func TestWakeEngineActualStartFailuresRemainLimitedAcrossReconstructions(t *test
 		}
 		*now = now.Add(time.Minute)
 	}
-	if startFailures != 2 {
-		t.Fatalf("three engine reconstructions attempted %d Starts, want exactly two", startFailures)
+	if startCalls != 2 || startFailures != 2 {
+		t.Fatalf("three engine reconstructions made %d Starts and %d failures, want exactly two of each", startCalls, startFailures)
 	}
 	f, err := os.Open(record)
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer f.Close()
+	defer func() {
+		if err := f.Close(); err != nil {
+			t.Errorf("close command recording: %v", err)
+		}
+	}()
 	decoder := json.NewDecoder(f)
 	for range 2 {
 		var invocation commandRecord

@@ -128,7 +128,11 @@ func commandBinary(t *testing.T) string {
 	if err != nil {
 		t.Fatal(err)
 	}
-	defer source.Close()
+	defer func() {
+		if err := source.Close(); err != nil {
+			t.Errorf("close recording executable: %v", err)
+		}
+	}()
 	dir := filepath.Join(t.TempDir(), "binary directory with spaces")
 	if err := os.Mkdir(dir, 0700); err != nil {
 		t.Fatal(err)
@@ -224,7 +228,11 @@ func TestWakeCommands(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer f.Close()
+		defer func() {
+			if err := f.Close(); err != nil {
+				t.Errorf("close command recording: %v", err)
+			}
+		}()
 		decoder := json.NewDecoder(f)
 		for _, args := range [][]string{{"--version"}, {"queue", "--thread", commandSession, "--resume", "--message", message}} {
 			var got commandRecord

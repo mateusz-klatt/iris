@@ -204,15 +204,16 @@ func TestRunnerNewAttentionSettlesBeforeAnOlderSecondNoteDeadline(t *testing.T) 
 		target := runnerTarget()
 		resolver := &runnerResolver{target: target, eligible: true}
 		conn := newRunnerStream()
-		cursor, reads := int64(1), 0
+		var cursor, reads atomic.Int64
+		cursor.Store(1)
 		source := runnerSource{
 			connect: func(context.Context, binding.WakeTarget, int64, string) (eventConnection, error) {
 				return conn, nil
 			},
 			attention: func(context.Context, binding.WakeTarget, int64, string) (attentionRead, error) {
-				reads++
+				reads.Add(1)
 				return attentionRead{Stream: "stream", HighWater: 20, Attention: hubclient.Attention{
-					Identity: hubclient.Identity{Known: true, Pending: true, Stream: "stream", Cursor: cursor},
+					Identity: hubclient.Identity{Known: true, Pending: true, Stream: "stream", Cursor: cursor.Load()},
 				}}, nil
 			},
 		}
@@ -220,28 +221,29 @@ func TestRunnerNewAttentionSettlesBeforeAnOlderSecondNoteDeadline(t *testing.T) 
 		state := newStateStore(r.sessions, target.SessionID)
 		engineTold(t, state, "stream", 1, time.Now(), false)
 		ctx, cancel := context.WithCancel(t.Context())
+		defer cancel()
 		done := make(chan struct{})
 		go func() { defer close(done); r.Run(ctx) }()
 		synctest.Wait()
 		time.Sleep(10 * time.Second)
 		synctest.Wait()
-		if reads != 1 || mustSnapshot(t, state).Present {
+		if reads.Load() != 1 || mustSnapshot(t, state).Present {
 			t.Fatal("already told attention did not wait for its second note")
 		}
 		time.Sleep(50 * time.Second)
-		cursor = 2
+		cursor.Store(2)
 		conn.reads <- runnerRead{frame: eventFrame{Stream: "stream", Cursor: 2, Kind: "inbox_changed"}}
 		synctest.Wait()
 		time.Sleep(9 * time.Second)
 		synctest.Wait()
-		if reads != 1 {
+		if reads.Load() != 1 {
 			t.Fatal("new attention bypassed settlement")
 		}
 		time.Sleep(time.Second)
 		synctest.Wait()
 		got := mustSnapshot(t, state)
-		if reads != 2 || len(got.Document.Attempts) != 1 || got.Document.mark().Cursor != 2 {
-			t.Fatalf("new attention waited for the old ten-minute timer: reads=%d, state=%+v", reads, got.Document)
+		if reads.Load() != 2 || len(got.Document.Attempts) != 1 || got.Document.mark().Cursor != 2 {
+			t.Fatalf("new attention waited for the old ten-minute timer: reads=%d, state=%+v", reads.Load(), got.Document)
 		}
 		cancel()
 		runnerDone(t, done)

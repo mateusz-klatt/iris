@@ -306,8 +306,13 @@ func TestSessionsLockRefusesProtectionFailureAndClosesTheFile(t *testing.T) {
 	if opened == nil {
 		t.Fatal("the lock file was not opened before protection")
 	}
-	if _, err := opened.Stat(); !errors.Is(err, os.ErrClosed) {
-		t.Fatalf("the refused lock descriptor leaked: %v", err)
+	// Fd returns this sentinel after Close on every platform. Stat's failure varies: Windows
+	// can report an invalid handle instead of wrapping os.ErrClosed.
+	if fd := opened.Fd(); fd != ^uintptr(0) {
+		t.Fatalf("the refused lock descriptor leaked: %v", fd)
+	}
+	if _, err := opened.Stat(); err == nil {
+		t.Fatal("the refused lock file remained usable after protection failed")
 	}
 	protectSessionsLock = original
 	unlock, err := s.Lock(hookLockBudget)
