@@ -138,17 +138,18 @@ func (d document) valid() bool {
 		if a.Stream != stream || a.Cursor != cursor {
 			return false
 		}
-		if a.Kind == "binary_check" {
+		switch a.Kind {
+		case "binary_check":
 			if a.Token != "" || a.Message != "" || a.ConsumedMS != 0 ||
 				(a.Answer != "failed" && a.Answer != "aborted") || a.AnsweredMS <= 0 {
 				return false
 			}
-		} else if a.Kind == "queue" {
+		case "queue":
 			if (a.Token == "") != (a.Message == "") || (a.ConsumedMS == 0 && a.Token == "") ||
 				(a.Answer != "" && a.AnsweredMS <= 0) {
 				return false
 			}
-		} else {
+		default:
 			return false
 		}
 		if a.outstanding() && i != len(d.Attempts)-1 {
@@ -297,9 +298,6 @@ func (s *stateStore) prepare(d document) (string, []byte, error) {
 }
 
 func (s *stateStore) protect() error {
-	if err := s.sessions.Protect(); err != nil {
-		return err
-	}
 	if err := s.io.protectDir(s.sessions.Dir()); err != nil {
 		return err
 	}
