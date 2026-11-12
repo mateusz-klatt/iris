@@ -47,7 +47,8 @@ func (c *commands) idle(ctx context.Context, session string) (bool, string) {
 		stop()
 		cancel()
 		_ = stream.Close()
-		<-finished
+		// Admission already classified the result, or failed before admission.
+		_ = <-finished
 	}()
 	client := &http.Client{Transport: stream}
 	conn, _, err := websocket.Dial(ctx, "ws://localhost/", &websocket.DialOptions{HTTPClient: client})
