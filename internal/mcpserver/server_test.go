@@ -78,7 +78,7 @@ func TestInitializationReportsTheBuildIdentity(t *testing.T) {
 }
 
 // connectHandler is connect for a hub that does more than a fakeHub.
-func connectHandler(t *testing.T, f http.Handler) *mcp.ClientSession {
+func connectHandler(t *testing.T, f http.Handler, opts ...Option) *mcp.ClientSession {
 	t.Helper()
 	srv := httptest.NewServer(f)
 	t.Cleanup(srv.Close)
@@ -94,7 +94,7 @@ func connectHandler(t *testing.T, f http.Handler) *mcp.ClientSession {
 	}
 	serverSide, clientSide := mcp.NewInMemoryTransports()
 	ctx := context.Background()
-	if _, err := New(resolver).Connect(ctx, serverSide, nil); err != nil {
+	if _, err := New(resolver, opts...).Connect(ctx, serverSide, nil); err != nil {
 		t.Fatal(err)
 	}
 	session, err := mcp.NewClient(&mcp.Implementation{Name: "test", Version: "1"}, nil).Connect(ctx, clientSide, nil)

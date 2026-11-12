@@ -1,7 +1,6 @@
 package integrate
 
 import (
-	"fmt"
 	"path/filepath"
 )
 
@@ -18,12 +17,13 @@ func (codexClient) Human() string { return "Review hooks once in /hooks" }
 // Codex starts MCP servers with a filtered environment, and its hooks with the full one. Without
 // env_vars an IRIS_HUB_URL override reached the hooks but not `iris mcp`, so claims went to one hub
 // and messages to another (measured on 0.167.0).
+// CODEX_HOME also keeps the wake command on the session's configured Codex home (ADR 017).
 //
 // default_tools_approval_mode applies to this server only. Without it every Iris tool call asks,
 // and with approval_policy "never" each one is refused. Iris tools act only on the hub, never on
 // files or a shell. "writes" was measured to refuse even whoami, because the tools carry no
 // read-only annotation.
-const codexMCPPolicy = "env_vars = [\"IRIS_HUB_URL\", \"IRIS_TOKEN_FILE\", \"IRIS_EXECUTION\"]\n" +
+const codexMCPPolicy = "env_vars = [\"IRIS_HUB_URL\", \"IRIS_TOKEN_FILE\", \"IRIS_EXECUTION\", \"CODEX_HOME\"]\n" +
 	"default_tools_approval_mode = \"approve\"\n"
 
 func (codexClient) home(l Layout) (string, error) {
@@ -48,11 +48,24 @@ func (c codexClient) Files(l Layout) ([]string, error) {
 }
 
 func (c codexClient) Install(l Layout, _ Plugins) error {
+	return c.install(l, nil)
+}
+
+func (c codexClient) install(l Layout, preference *bool) error {
 	files, err := c.Files(l)
 	if err != nil {
 		return err
 	}
 	iris := l.Iris()
+	// Validate the current TOML and the proposed edit before writing hooks. A damaged config
+	// must not leave a half-installed integration behind.
+	existing, _, err := readExisting(files[1])
+	if err != nil {
+		return err
+	}
+	if _, err := codexMCPConfig(existing, iris, preference); err != nil {
+		return err
+	}
 	if err := l.update(Codex, files[0], func(existing []byte) ([]byte, error) {
 		return writeObject(existing, func(doc map[string]any) error {
 			for _, event := range []string{"SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SessionEnd"} {
@@ -75,13 +88,8 @@ func (c codexClient) Install(l Layout, _ Plugins) error {
 	}); err != nil {
 		return err
 	}
-	block := wrapBlock(fmt.Sprintf("[mcp_servers.iris]\ncommand = %s\nargs = [\"mcp\", \"--client\", \"codex\"]\n%s", tomlString(iris), codexMCPPolicy))
 	return l.update(Codex, files[1], func(existing []byte) ([]byte, error) {
-		next, err := upsertBlock(string(existing), block)
-		if err != nil {
-			return nil, err
-		}
-		return []byte(next), nil
+		return codexMCPConfig(existing, iris, preference)
 	})
 }
 

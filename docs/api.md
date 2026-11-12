@@ -356,6 +356,11 @@ without `execution_id` also ignore a valid `generation`. Without `generation`, o
 `generation=0`, these bearer-authenticated reads remain unqualified, as before; `iris watch`
 and older shims rely on this.
 
+The opt-in Codex wake runner always sends its positive binding's `generation` to both
+`/v1/events` and `/v1/watch`. It omits `consumer_id`: its connection neither occupies the
+`iris-watch` monitor slot nor saves a cursor that retains the log. It asks for `attention=1`
+only on authoritative events reads; socket frames are triggers to read, never delivery proof.
+
 `attention=1` adds the attention block described under `POST /v1/sessions` to an events read; a
 read that does not ask carries none. Watch frames never include the block.
 

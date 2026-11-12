@@ -4,7 +4,12 @@ Status: accepted, 2026-11-09, by `claude-holzera-iris`. It rests on measurements
 `codex-holzera-iris` in [the Codex attention record](../research/clients/codex-attention.md);
 that session challenged the drafts and signed off this design. Extends D7; the binding rung under
 "Amendments from the implementation" at the end changes D6. That rung, the hub's attention
-identity and the hooks' side are implemented; the wake is not yet.
+identity and the hooks' side are implemented. W3a implements the manual opt-in runner and W3b
+adds integration controls and doctor diagnostics. Native acceptance remains required before
+the whole decision is complete. Default wake remains off.
+
+The [implementation acceptance record](../research/clients/codex-iris-idle-wake-2026-11-12.md)
+tracks the later real-Iris measurements, their platform coverage and remaining limits.
 
 ## Problem
 
@@ -417,3 +422,97 @@ a restored hub keeps its stream id and takes the event sequence back instead (AD
   attempts, a host where 50 sessions a day arm the runner keeps about 18,000 files and 18 MB a
   year, and nothing removes them. The other session files still go 30 days after their last
   change.
+
+### W3a: manual opt-in runner, 2026-11-12
+
+`iris mcp --client codex --wake` runs the listener inside that MCP child. Omitting `--wake`
+starts no listener, wake-state operation or runner subprocess. Other clients cannot enable it.
+The integration passes `CODEX_HOME` through to keep the queue command on the same Codex home.
+W3a does not yet add the integration flags or an idle-wake live doctor probe; the existing live
+doctor proves its documented hook and tool actions, not this event-to-idle-turn chain.
+
+The target must be a positive root id-mode binding with a UUID session id and no live execution
+override. A client/host-qualified bind read must confirm hook evidence for that exact execution
+and generation. A one-second binding check cancels the old worker on replacement or loss.
+Admission's final target comparison and `cmd.Start` share the resolver mutex; waiting for the
+command holds neither that mutex nor the sessions file lock.
+
+The listener uses a generation-qualified anonymous stream, without `consumer_id`, so it saves
+no retention cursor and never makes Codex `monitored`. Connection, reconnection, reset,
+`inbox_changed` and `claim_available` trigger an authoritative events read. Other frames only
+advance the reconnect cursor. A buffered hint lets the socket reader continue while a command
+waits. A candidate settles for ten seconds; later hints do not postpone an earlier candidate.
+An older identity's second-note deadline never delays settlement for new attention. Operational
+retry floors and the persisted known-failure allowance still apply.
+Failed connections back off from one to thirty seconds. Hub admission failures retry after
+thirty seconds, lock-budget or snapshot changes after ten, and other state I/O failures after
+sixty. Outstanding or unusable state is polled from files every fifteen seconds, with no
+attention reads while it blocks. A consumed reservation first settles before another read.
+
+The runner shares `sessions/.lock` with hooks, with its own one-second lock budget. It compares
+the told and wake files' presence and whole bytes before and after the hub read and again before
+publishing. The wake document has mandatory version, revision and attempts. Each attempt has a
+unique 128-bit hexadecimal id and immutable kind: `binary_check` or `queue`. Tokenless binary
+failures count toward the same one-retry allowance but cannot be outstanding or consumed. An
+unconsumed queue attempt retains its token and exact prompt. Unknown answers remain blocking.
+Two known failures exhaust a slot; a single one retries no earlier than sixty seconds after
+its answer. Unconsumed aborted attempts cost no slot. Replacement publication removes superseded
+unconsumed aborts, retaining the mark and quota-bearing attempts, so the current identity has
+at most five records. Unusable or older prototype documents are not silently reset.
+
+Preparation protects and syncs a private temporary file outside the shared lock. Installation
+compares snapshots, renames, reads back and closes under the lock. Unix directory sync follows
+unlock and precedes command start. Directories must be exactly `0700` on Unix; Windows checks
+the owner and actual owner-only protected inheritable DACL, correcting or refusing permissive
+entries. An already correct directory avoids recursive ACL rewriting. Command outcomes merge
+by immutable attempt id, preserving consumption and newer attempts, with at most three writes
+one hundred milliseconds apart. A certainly unstarted reservation is aborted by that exact id;
+if its abort cannot be saved, an unanswered queue stays blocking and a binary failure stays
+counted. An actual failed `cmd.Start` counts as a known failure rather than a free abort.
+
+The binary is resolved once to an absolute path. Before every submission, `--version` must
+match the MCP initialize version exactly, within five seconds, one-second WaitDelay and four
+KiB combined output. Queue execution has thirty seconds, one-second WaitDelay and separate
+sixty-four KiB output caps. Only complete measured success, stored-warning and same-thread
+no-rollout rejection forms receive those outcomes. Other output, signals, timeout or overflow
+is unknown. Raw output is never saved as diagnostic text or written to MCP stdout.
+
+Fixed observations in `hook-observed.log`, event `mcp`, are `wake_root_eligible`,
+`wake_stream_following`, `wake_invalid_state`, `wake_failed`, `wake_unknown` and
+`wake_worker_panic`. Root eligibility and an accepted socket are separate facts; neither proves
+a queued turn, prompt consumption or a model's inbox fetch. A recovered worker panic leaves
+MCP tools and heartbeat working. Native acceptance must still join the real incoming delivery,
+already idle same-UUID turn, exact prompt, consumed mark and inbox result, with both default
+and explicit Codex homes. The [implementation plan](../research/clients/codex-wake-runner-plan-2026-11-12.md)
+records the platform and cost evidence still required.
+
+The ledger protects against cooperating process or shim restarts. It does not prove durability
+across whole-host power loss: first-parent publication, Windows directory sync and answer or
+consumption sync leave gaps. Losing a reservation in that case can allow another wake.
+An outstanding guard never expires automatically. Resume a live session to consume its queued
+prompt. Remove its exact wake file only after permanently closing the session and stopping its
+MCP child; removing a live guard can admit duplicates.
+
+### W3b: integration controls and local diagnostics, 2026-11-12
+
+`iris integrate codex --wake` enables the runner and `--no-wake` disables it for future MCP
+children. Without either, installation, setup and reintegration preserve the current choice;
+a fresh integration remains off. The two flags are mutually exclusive and cannot be combined
+with removal, all clients or a different client. Existing children retain their startup
+arguments. A complete TOML parse determines the existing preference before hooks are changed;
+unrelated user configuration is preserved and malformed configuration is refused.
+
+Doctor reports the configured attention tier and local retained wake metadata. A configured
+runner is explicitly not proof of current arming or delivery. Guard inspection lists outside
+the shared lock and reads each file in its own hold, without changing guard bytes or directory
+protection. The stable lock file may be created or normalized by the shared lock mechanism.
+Unknown or unreadable state remains blocked. The report names attempt bounds, consumed or
+outstanding state and age, checked binary/version metadata and fixed known failure reasons;
+it never prints prompts, tokens, arbitrary stored details or raw process output. It gives the
+same recovery rule as W3a: resume a live session, and clear a guard only after permanent close
+and MCP shutdown. These local diagnostic lines do not change the hub report schema or make
+the existing exec-based live probe an idle-wake test.
+
+See [Codex idle wake](../codex-wake.md) for the controls and their limits. Native same-thread
+delivery, hosted-model behavior and short/long-thread cost evidence remain separate measurements;
+configuration and command acceptance do not substitute for them.

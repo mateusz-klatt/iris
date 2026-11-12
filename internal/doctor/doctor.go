@@ -91,6 +91,8 @@ type Result struct {
 	// Scope is the shell scope of each worktree whose breaker tripped, followed by what reduced
 	// scope cannot do (ADR 018). Empty where none tripped, and always on Windows.
 	Scope []string
+	// Wake is local Codex configuration and retained-guard diagnostics, never delivery proof.
+	Wake []string
 	// tokenFile is where the hook logs beside the token are, for a Bundle. Never shown.
 	tokenFile string
 }
@@ -180,6 +182,7 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 	res.Guard = guardLine(ctx, opt.Dir)
 	res.LineEndings = lineEndingsLine(ctx, opt.Dir)
 	res.Scope = scopeReport(tokenFile, opt.Now())
+	res.Wake = wakeReport(opt.Layout, tokenFile, opt.Now())
 	var seen map[string]string // nil when doctor could not ask the hub
 	if probe.up && probe.tokenOK {
 		res.Case = caseLine(ctx, hubURL, token, opt.host(), opt.Dir, opt.HTTP)
@@ -285,6 +288,9 @@ func (r Result) Format() string {
 	}
 	for _, line := range r.Scope {
 		fmt.Fprintf(&b, "shell scope: %s\n", line)
+	}
+	for _, line := range r.Wake {
+		fmt.Fprintf(&b, "codex wake: %s\n", line)
 	}
 	if r.Stored {
 		b.WriteString("stored: yes\n")
