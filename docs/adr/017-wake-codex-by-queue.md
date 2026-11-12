@@ -8,6 +8,9 @@ identity and the hooks' side are implemented. W3a implements the manual opt-in r
 adds integration controls and doctor diagnostics. Native acceptance remains required before
 the whole decision is complete. Default wake remains off.
 
+The [implementation acceptance record](../research/clients/codex-iris-idle-wake-2026-11-12.md)
+tracks the later real-Iris measurements, their platform coverage and remaining limits.
+
 ## Problem
 
 D7 gives each client the strongest attention tier it has. Claude Code has an instant one: a
