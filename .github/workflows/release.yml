@@ -196,7 +196,7 @@ jobs:
           push: true
           tags: |
             ghcr.io/mateusz-klatt/iris:${{ github.ref_name }}
-            ghcr.io/mateusz-klatt/iris:latest
+            ${{ !contains(github.ref_name, '-') && 'ghcr.io/mateusz-klatt/iris:latest' || '' }}
           labels: |
             org.opencontainers.image.source=https://github.com/mateusz-klatt/iris
             org.opencontainers.image.revision=${{ github.sha }}

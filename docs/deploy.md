@@ -66,7 +66,9 @@ and the token private. A bind-mounted replacement must be writable by uid 65532.
 ### Pulling and verifying a release image
 
 Every successful `v*` release-tag run also publishes `ghcr.io/mateusz-klatt/iris:<tag>`
-and `:latest` for Linux amd64 and arm64. The released image uses the root `Dockerfile`'s
+for Linux amd64 and arm64. Stable ref names without `-` also update `:latest`;
+RC and other prerelease tags publish only their version tag, still signed and attested.
+The released image uses the root `Dockerfile`'s
 `release` target with binaries from the release archives and the same runtime as `deploy`.
 The public hub continues to run the `iris-iris` image exported by CI on `main`, through
 the procedure below. GHCR publication does not replace it; the builds can have different
@@ -105,8 +107,8 @@ Use the actual tag in the identities and run the verified digest. See the
 The index signature covers both referenced platforms, but neither check proves safe
 behaviour, owner approval or what is running on the public hub. Docker does not enforce
 verification. A failed signing or attestation step can leave a pushed image; require both
-checks before using it. Both tags can move, and every successful tag, including a
-prerelease or older version, updates `latest`. Publication does not configure TLS,
+checks before using it. Version tags can move, and an older stable tag can update
+`latest`; prereleases never update it. Publication does not configure TLS,
 provision accounts or prepare backups; keep the deployment safeguards below.
 
 ### Deploying the public hub from an image CI built

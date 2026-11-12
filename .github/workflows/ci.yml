@@ -273,6 +273,8 @@ jobs:
               return steps[0]
 
           image_gate = "github.repository == 'mateusz-klatt/iris' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')"
+          version_tag = "ghcr.io/mateusz-klatt/iris:" + expression("github.ref_name")
+          stable_latest = expression("!contains(github.ref_name, '-') && 'ghcr.io/mateusz-klatt/iris:latest' || ''")
           hook = '{{ if and (eq .Os "windows") (not .IsSnapshot) }}"{{ .Env.IRIS_RELEASE_HELPER }}" sign-windows --arch={{ .Arch }} --path="{{ .Path }}"{{ end }}'
           secret_names = ["GITHUB_TOKEN", "CERTUM_EMAIL", "CERTUM_OTP", "MACOS_SIGN_P12", "MACOS_SIGN_PASSWORD", "MACOS_NOTARY_ISSUER_ID", "MACOS_NOTARY_KEY_ID", "MACOS_NOTARY_KEY"]
           def check(release, config, proof):
@@ -368,7 +370,9 @@ jobs:
               assert build["with"]["target"] == "release"
               assert build["with"]["platforms"] == "linux/amd64,linux/arm64"
               assert build["with"]["push"] is True
-              assert build["with"]["tags"].splitlines() == ["ghcr.io/mateusz-klatt/iris:" + expression("github.ref_name"), "ghcr.io/mateusz-klatt/iris:latest"]
+              # Every release keeps its version tag; only refs without '-' move latest.
+              # The pinned action ignores the empty second line for prereleases.
+              assert build["with"]["tags"].splitlines() == [version_tag, stable_latest]
               assert build["with"]["provenance"] is False
               assert image["steps"].index(using(image, "docker/login-action")) < image["steps"].index(build)
               assert image["steps"].index(using(image, "sigstore/cosign-installer")) > image["steps"].index(build)
@@ -380,6 +384,8 @@ jobs:
                   "subject-name": "ghcr.io/mateusz-klatt/iris",
                   "subject-digest": expression("steps.image.outputs.digest"), "push-to-registry": True,
               }
+              # Prereleases still build, sign and attest; only the latest tag is conditional.
+              assert all("if" not in step for step in [build, sign_image, attest])
               assert image["steps"].index(build) < image["steps"].index(sign_image) < image["steps"].index(attest)
               verify = jobs["verify-windows"]
               assert verify["env"]["EXPECTED_SIGNER_THUMBPRINT"] == proof["jobs"]["verify"]["env"]["EXPECTED_SIGNER_THUMBPRINT"] == "9C837C68415187A72D88612BDF14FCB0D6623D67"
@@ -456,6 +462,14 @@ jobs:
               if step.get("uses", "").startswith("docker/build-push-action@"):
                   for key, value in [("context", "."), ("target", "deploy"), ("platforms", "linux/amd64"), ("push", False), ("tags", "ghcr.io/mateusz-klatt/iris:latest"), ("provenance", True)]:
                       mutations.append((path + ("with", key), value))
+                  # Reject prereleases moving latest, stable releases omitting it,
+                  # and a reversed condition that publishes latest only for prereleases.
+                  for tags in [
+                      version_tag + "\nghcr.io/mateusz-klatt/iris:latest\n",
+                      version_tag + "\n",
+                      version_tag + "\n" + stable_latest.replace("!contains", "contains") + "\n",
+                  ]:
+                      mutations.append((path + ("with", "tags"), tags))
               if step.get("name") == "Check and extract the released Linux binaries":
                   mutations += [(path + ("run",), step["run"].replace("sha256sum --check --strict --ignore-missing checksums.txt", "true")), (path + ("env", "RELEASE_TAG"), expression("github.event.pull_request.title"))]
               if step.get("name") == "Sign the multi-arch image by digest":
@@ -465,6 +479,8 @@ jobs:
                       mutations.append((path + ("with", key), value))
               if step.get("name") == "Sign the multi-arch image by digest" or step.get("uses", "").startswith("actions/attest-build-provenance@"):
                   mutations.append((image_path + ("steps",), [other for i, other in enumerate(image["steps"]) if i != index]))
+              if step.get("name") == "Sign the multi-arch image by digest" or step.get("uses", "").startswith(("docker/build-push-action@", "actions/attest-build-provenance@")):
+                  mutations.append((path + ("if",), "!contains(github.ref_name, '-')"))
           handoff_index = next(i for i, step in enumerate(release["jobs"]["release"]["steps"]) if step.get("id") == "upload-image")
           mutations.append((("jobs", "release", "steps", handoff_index, "with", "path"), "dist/*"))
           for path, value in mutations:

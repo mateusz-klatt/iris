@@ -32,7 +32,11 @@ Apple or Certum credentials. A job boundary keeps registry writes out of the
 signing runner; it does not protect against a compromised repository or service.
 
 Publish one index containing `linux/amd64` and `linux/arm64`, under the full
-release tag and `latest`. Cosign signs the returned index digest keylessly;
+release tag. Stable ref names without `-` also update `latest`; RC and other
+prerelease tags publish only the version tag, with the same signing and attestation.
+This keeps prereleases from replacing the stable image. The container tag rule
+is explicit; GoReleaser's `prerelease: auto` controls only the GitHub release.
+Cosign signs the returned index digest keylessly;
 GitHub build provenance attests the same digest and is stored in GitHub and
 the registry. GoReleaser v2.20.0 keeps `dockers_v2` disabled outside snapshots,
 so the secret-bearing release step has no second image publication path.
@@ -56,9 +60,10 @@ checks against the same index digest and the expected workflow/tag identity.
 Docker does not enforce those commands. The owner must confirm GHCR package
 visibility and repository access before relying on public pulls.
 
-Both tags can move. Every successful `v*` release run, including a prerelease
-or older version, updates `latest`; it does not promise the greatest stable
-semantic version. GitHub Releases' Latest designation is independent.
+Version tags can move. Every successful stable-tag run (no `-` in the ref name)
+updates `latest`, including an older stable version; it does not promise the
+greatest stable semantic version. Prereleases publish only their version tag.
+GitHub Releases' Latest designation is independent.
 
 Signatures and provenance establish origin under the workflow's trust model,
 not safe behaviour, owner approval, complete container SBOM coverage or the

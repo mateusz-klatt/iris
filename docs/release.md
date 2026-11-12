@@ -3,7 +3,8 @@
 A pushed `v*` tag runs `.github/workflows/release.yml`, which makes a **draft**
 GitHub release (`release: draft: true`) for the owner to publish. After the release and
 Windows verification jobs succeed, a separate job publishes a signed, attested
-Linux amd64/arm64 image to `ghcr.io/mateusz-klatt/iris`, under the full tag and `latest`.
+Linux amd64/arm64 image to `ghcr.io/mateusz-klatt/iris`, under the full tag.
+Stable tags (ref names without `-`) also update `latest`; prereleases do not.
 The image, tag, Rekor entries, attestations and final archive bytes in workflow artifacts
 can be public before the owner publishes the draft. Homebrew, Scoop and winget remain
 `skip_upload: true`. Snapshots and pull requests push no images.
@@ -100,9 +101,14 @@ tag in `mateusz-klatt/iris`. The release job hands over both Linux archives and 
 original `checksums.txt` through one immutable artifact ID. The image job checks their
 hashes and packages the extracted GoReleaser binaries using the root `Dockerfile`'s
 `release` target. It does not rebuild the binary or console. The two platform manifests
-are published as one multi-architecture index; both the version tag, such as `v0.1.1`,
-and `latest` point to it. Every successful tag run updates `latest`, including prereleases
-and tags for older versions. This is separate from GitHub Releases' Latest designation.
+are published as one multi-architecture index under the version tag, such as `v0.1.1`.
+Stable ref names without `-` also update `latest`. RC and other prerelease tags, such as
+`v0.1.1-rc1`, publish only their version tag and are still signed and attested.
+An older stable tag can still move `latest`; this does not select the greatest semantic
+version. This rule is separate from `prerelease: auto` and GitHub Releases' Latest designation.
+The conditional `latest` input is empty for prereleases; the pinned action's
+[bundled list parser](https://github.com/docker/build-push-action/blob/c3c9e263c25d99ce0380d002d59b67737d91b0dc/dist/index.cjs)
+ignores empty entries, so that input adds no tag.
 
 Only `image` has `packages: write`. Its other permissions are `contents: read` for checkout,
 `id-token: write` for keyless identity, and `attestations: write` for GitHub provenance.
