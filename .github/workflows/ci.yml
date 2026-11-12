@@ -125,7 +125,7 @@ jobs:
         shell: bash
         env:
           CGO_ENABLED: "0"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() }}
         with:
           name: coverage-${{ matrix.os }}
@@ -834,7 +834,7 @@ jobs:
             echo "layers=$(docker image inspect --format '{{json .RootFS.Layers}}' iris-iris:latest)"
           } > deploy-image/iris-image.txt
           cat deploy-image/iris-image.txt
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ github.event_name == 'push' }}
         with:
           name: iris-image-${{ github.sha }}
@@ -846,7 +846,7 @@ jobs:
       # On a pull request the checkout is the merge of its head into main, so that is what this
       # image holds and the commit it names. The name says rehearsal, and a deploy looks only
       # for iris-image-<commit> in a run of a push.
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ github.event_name == 'pull_request' }}
         with:
           name: iris-rehearsal-image-pr${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}

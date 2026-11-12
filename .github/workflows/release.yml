@@ -28,7 +28,7 @@ jobs:
           cache: npm
           cache-dependency-path: web/package-lock.json
       - run: make web
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         id: upload
         with:
           name: webui-dist-${{ github.run_id }}-${{ github.run_attempt }}
@@ -55,7 +55,7 @@ jobs:
           rustup toolchain install 1.99.1 --profile minimal
           cargo +1.99.1 build --release --locked
           sha256sum target/release/ssign >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         id: upload
         with:
           name: certum-signer-${{ github.run_id }}-${{ github.run_attempt }}
@@ -126,7 +126,7 @@ jobs:
           subject-checksums: dist/checksums.txt
       # Hand over the exact Linux archive bytes built above, without registry access
       # in this job. The image job checks the original manifest before extracting.
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         id: upload-image
         with:
           name: image-release-${{ github.run_id }}-${{ github.run_attempt }}
@@ -138,7 +138,7 @@ jobs:
           retention-days: 1
       # Keep the original manifest: cosign signed these bytes. These final ZIPs
       # are downloadable from the run even while the release is still a draft.
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         id: upload
         with:
           name: windows-release-${{ github.run_id }}-${{ github.run_attempt }}
