@@ -14,7 +14,7 @@ var wakeConfiguration = integrate.CodexWake
 var inspectWakes = wake.Inspect
 
 const wakeRecovery = "Resume a live session so its exact queued prompt hook can consume its guard. Remove the exact guard file only after permanently closing that session and stopping its MCP child; removing a live guard can admit duplicate queue entries."
-const wakeLimits = "Configured idle wake allows at most two wake slots per attention identity, with one known pre-submission retry per slot. Outstanding queue guards have no expiry. Existing doctor --live Codex exec probes do not prove idle wake delivery."
+const wakeLimits = "Configured idle wake allows one automatic wake per attention identity, with one shared retry after a known queue failure. Retained legacy attempts count toward that same allowance. Outstanding queue guards have no expiry. Existing doctor --live Codex exec probes do not prove idle wake delivery."
 
 func wakeReport(layout integrate.Layout, tokenFile string, now time.Time) []string {
 	configured, enabled, err := wakeConfiguration(layout)
@@ -59,7 +59,7 @@ func wakeGuardLine(guard wake.Inspection, now time.Time) string {
 	if guard.Kind != "" {
 		switch {
 		case guard.ConsumedMS > 0:
-			state = "consumed queue wake; its slot remains spent"
+			state = "consumed queue wake; its automatic wake allowance remains spent"
 		case guard.Outstanding:
 			age := now.Sub(time.UnixMilli(guard.StartedMS))
 			if age < 0 {
@@ -76,7 +76,7 @@ func wakeGuardLine(guard wake.Inspection, now time.Time) string {
 			state = fmt.Sprintf("%s attempt (%s); bounded accounting retained", guard.Kind, guard.Outcome)
 		}
 	}
-	line := fmt.Sprintf("guard %q: %s; retained attempts %d/5; initial wake allowance %s, repeat wake allowance %s", guard.Path, state, guard.Attempts, wakeAllowance(guard.Slot0), wakeAllowance(guard.Slot1))
+	line := fmt.Sprintf("guard %q: %s; retained attempts %d/5; initial accounting %s, retained legacy accounting %s; automatic wake allowance %s", guard.Path, state, guard.Attempts, wakeAccounting(guard.Slot0), wakeAccounting(guard.Slot1), wakeAllowance(min(2, guard.Slot0+guard.Slot1)))
 	if guard.CheckedMS > 0 {
 		line += fmt.Sprintf("; last binary check %s, path %q, binary version %q, client version %q", time.UnixMilli(guard.CheckedMS).UTC().Format(time.RFC3339), guard.BinaryPath, guard.BinaryVersion, guard.ClientVersion)
 	}
@@ -93,12 +93,23 @@ func wakeGuardLine(guard wake.Inspection, now time.Time) string {
 	return line
 }
 
+func wakeAccounting(state int) string {
+	switch state {
+	case 0:
+		return "unused"
+	case 1:
+		return "one known failed attempt"
+	default:
+		return "spent"
+	}
+}
+
 func wakeAllowance(state int) string {
 	switch state {
 	case 0:
 		return "unused"
 	case 1:
-		return "has one pre-submission retry"
+		return "has one retry"
 	default:
 		return "spent"
 	}

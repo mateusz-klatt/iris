@@ -36,19 +36,19 @@ func (c *commands) idle(ctx context.Context, session string) (bool, string) {
 	if err := cmd.Start(); err != nil {
 		return false, "Codex status proxy could not start"
 	}
-	finished := make(chan error, 1)
+	finished := make(chan struct{})
+	var waitErr error
 	go func() {
-		err := cmd.Wait()
+		waitErr = cmd.Wait()
 		_ = stream.Close()
-		finished <- err
+		close(finished)
 	}()
 	stop := context.AfterFunc(ctx, func() { _ = stream.Close() })
 	defer func() {
 		stop()
 		cancel()
 		_ = stream.Close()
-		// Admission already classified the result, or failed before admission.
-		_ = <-finished
+		<-finished
 	}()
 	client := &http.Client{Transport: stream}
 	conn, _, err := websocket.Dial(ctx, "ws://localhost/", &websocket.DialOptions{HTTPClient: client})
@@ -65,10 +65,8 @@ func (c *commands) idle(ctx context.Context, session string) (bool, string) {
 	// EOF ends only our bridge; admission needs no peer close-handshake receipt.
 	_ = conn.CloseNow()
 	select {
-	case err := <-finished:
-		// Keep the deferred reap single-use after observing the process exit.
-		finished <- err
-		if (err != nil && !errors.Is(err, io.ErrClosedPipe)) || ctx.Err() != nil || errs.overflow {
+	case <-finished:
+		if (waitErr != nil && !errors.Is(waitErr, io.ErrClosedPipe)) || ctx.Err() != nil || errs.overflow {
 			return false, "Codex status proxy exceeded its bound or failed"
 		}
 	case <-ctx.Done():
