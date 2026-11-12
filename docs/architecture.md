@@ -277,6 +277,7 @@ Each client gets the strongest tier it has:
 |---|---|---|
 | Instant, idle session | Plugin monitor running `iris watch` | Claude Code (measured: 0.3 s from line to model turn) |
 | Loaded idle root | Own queue command after a positive native idle check | Codex, enabled by default; [ADR 023](adr/023-default-codex-wake-after-idle-check.md) |
+| Loaded foreground session | Copilot CLI extension runs `iris watch` and submits a fixed automation message through its SDK | Copilot CLI (experimental; [ADR 024](adr/024-copilot-extension-wake.md)) |
 | Instant, armed by the model | `Monitor` tool with a `ws` source | Claude Code |
 | Instant, Iris-owned session | App-server or ACP control of a session Iris started | Codex (measured), Copilot, Cursor, Antigravity, Grok, Kimi (later) |
 | Next turn | Hook context at prompt or post-tool | All, with client-specific limits |
@@ -295,6 +296,19 @@ without consuming wake quota. This changes no other client's tier. `iris integra
 --no-wake` writes `--wake=false`; setup and reintegration preserve it. Older bare MCP entries
 cannot distinguish the previous default-off state from an old explicit off choice, and take
 the new enabled default. The [Codex wake guide](codex-wake.md) explains that migration.
+
+Copilot CLI's user-scoped extension joins the live foreground session, starts `iris watch` with
+that session's id, and submits a fixed automation message for content-free attention lines. It
+waits for a known active turn to settle; a session initially active when the extension joins
+uses the SDK's enqueue mode. The extension requires Copilot CLI's experimental extensions to be
+enabled and the workspace to be trusted; `iris integrate` does not change that setting. It does
+not start a closed or unloaded session. A queued wake can still be empty if the current turn
+handles the same attention first. The [Copilot wake guide](copilot-wake.md) describes setup and
+limits. On Linux with Copilot CLI 1.0.109 the [measurement](research/clients/copilot-extension-wake-2026-11-12.md)
+woke an idle session about 0.12 s after a send, and a busy one 130 to 145 ms after its turn ended.
+Other CLI versions, macOS, Windows and Copilot's command sandbox were not measured. Each file the
+extension writes carries a digest header, so Iris replaces or removes only a file it wrote and
+nobody edited.
 
 The runner starts no automatic ten-minute second wake for unchanged attention. Hook reminders
 below remain. Native status and queue admission are not atomic: a person can start a turn or

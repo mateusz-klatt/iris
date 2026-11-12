@@ -97,6 +97,9 @@ func TestRemoveKeepsAManualChangeToAFileThatExisted(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, f := range files {
+				if c.Name() == Copilot && strings.Contains(filepath.ToSlash(f), "/extensions/iris/") {
+					continue
+				}
 				switch {
 				case strings.HasSuffix(f, "monitors.json"):
 					seedFile(t, f, "[]\n")

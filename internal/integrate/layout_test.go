@@ -51,9 +51,10 @@ func TestByNameAndAliases(t *testing.T) {
 	}
 }
 
-func TestHumanStepsAreOnlyForCodex(t *testing.T) {
+func TestHumanStepsAreOnlyForCodexAndCopilot(t *testing.T) {
 	for _, c := range All() {
-		if got := c.Human(); (got != "") != (c.Name() == Codex) {
+		want := c.Name() == Codex || c.Name() == Copilot
+		if got := c.Human(); (got != "") != want {
 			t.Errorf("%s: %q", c.Name(), got)
 		}
 	}

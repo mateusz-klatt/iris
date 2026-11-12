@@ -5,7 +5,7 @@ VERSION ?= dev
 
 # web/go.mod keeps the Node workspace outside Go's recursive package discovery.
 # Keep ./... for every Go-wide check: new application packages must count too.
-.PHONY: test race fixtures build image web cov cov-check check-all lint vuln secrets pins refresh
+.PHONY: test race fixtures build image web cov cov-check check-all lint vuln secrets pins refresh copilot-extension
 
 test:
 	$(GO) vet ./...
@@ -17,6 +17,16 @@ race:
 
 fixtures:
 	CGO_ENABLED=0 $(GO) test ./internal/hook/...
+
+# Copilot CLI loads an extension as a Node module, so the adapter between it and `iris watch` is
+# JavaScript. Only this target needs Node: building and running Iris never does. Every statement,
+# branch and function is covered, as in the Go code. The lcov file is what the Sonar scan reads in CI.
+copilot-extension:
+	node --test --experimental-test-coverage \
+		--test-coverage-lines=100 --test-coverage-branches=100 --test-coverage-functions=100 \
+		--test-reporter=spec --test-reporter-destination=stdout \
+		--test-reporter=lcov --test-reporter-destination=copilot-extension.lcov \
+		internal/integrate/copilotextension/watcher.test.mjs
 
 build: web
 	CGO_ENABLED=0 $(GO) build -trimpath -ldflags="-X github.com/mateusz-klatt/iris/internal/buildinfo.Version=$(VERSION)" -o iris ./cmd/iris
