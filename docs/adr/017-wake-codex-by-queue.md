@@ -4,9 +4,9 @@ Status: accepted, 2026-11-09, by `claude-holzera-iris`. It rests on measurements
 `codex-holzera-iris` in [the Codex attention record](../research/clients/codex-attention.md);
 that session challenged the drafts and signed off this design. Extends D7; the binding rung under
 "Amendments from the implementation" at the end changes D6. That rung, the hub's attention
-identity and the hooks' side are implemented. The manual opt-in runner is implemented in W3a;
-integration controls, doctor diagnostics and native acceptance remain required before the
-whole decision is complete. Default wake remains off.
+identity and the hooks' side are implemented. W3a implements the manual opt-in runner and W3b
+adds integration controls and doctor diagnostics. Native acceptance remains required before
+the whole decision is complete. Default wake remains off.
 
 ## Problem
 
@@ -439,6 +439,8 @@ no retention cursor and never makes Codex `monitored`. Connection, reconnection,
 `inbox_changed` and `claim_available` trigger an authoritative events read. Other frames only
 advance the reconnect cursor. A buffered hint lets the socket reader continue while a command
 waits. A candidate settles for ten seconds; later hints do not postpone an earlier candidate.
+An older identity's second-note deadline never delays settlement for new attention. Operational
+retry floors and the persisted known-failure allowance still apply.
 Failed connections back off from one to thirty seconds. Hub admission failures retry after
 thirty seconds, lock-budget or snapshot changes after ten, and other state I/O failures after
 sixty. Outstanding or unusable state is polled from files every fifteen seconds, with no
@@ -487,3 +489,27 @@ consumption sync leave gaps. Losing a reservation in that case can allow another
 An outstanding guard never expires automatically. Resume a live session to consume its queued
 prompt. Remove its exact wake file only after permanently closing the session and stopping its
 MCP child; removing a live guard can admit duplicates.
+
+### W3b: integration controls and local diagnostics, 2026-11-12
+
+`iris integrate codex --wake` enables the runner and `--no-wake` disables it for future MCP
+children. Without either, installation, setup and reintegration preserve the current choice;
+a fresh integration remains off. The two flags are mutually exclusive and cannot be combined
+with removal, all clients or a different client. Existing children retain their startup
+arguments. A complete TOML parse determines the existing preference before hooks are changed;
+unrelated user configuration is preserved and malformed configuration is refused.
+
+Doctor reports the configured attention tier and local retained wake metadata. A configured
+runner is explicitly not proof of current arming or delivery. Guard inspection lists outside
+the shared lock and reads each file in its own hold, without changing guard bytes or directory
+protection. The stable lock file may be created or normalized by the shared lock mechanism.
+Unknown or unreadable state remains blocked. The report names attempt bounds, consumed or
+outstanding state and age, checked binary/version metadata and fixed known failure reasons;
+it never prints prompts, tokens, arbitrary stored details or raw process output. It gives the
+same recovery rule as W3a: resume a live session, and clear a guard only after permanent close
+and MCP shutdown. These local diagnostic lines do not change the hub report schema or make
+the existing exec-based live probe an idle-wake test.
+
+See [Codex idle wake](../codex-wake.md) for the controls and their limits. Native same-thread
+delivery, hosted-model behavior and short/long-thread cost evidence remain separate measurements;
+configuration and command acceptance do not substitute for them.

@@ -1,7 +1,6 @@
 package integrate
 
 import (
-	"fmt"
 	"path/filepath"
 )
 
@@ -49,11 +48,24 @@ func (c codexClient) Files(l Layout) ([]string, error) {
 }
 
 func (c codexClient) Install(l Layout, _ Plugins) error {
+	return c.install(l, nil)
+}
+
+func (c codexClient) install(l Layout, preference *bool) error {
 	files, err := c.Files(l)
 	if err != nil {
 		return err
 	}
 	iris := l.Iris()
+	// Validate the current TOML and the proposed edit before writing hooks. A damaged config
+	// must not leave a half-installed integration behind.
+	existing, _, err := readExisting(files[1])
+	if err != nil {
+		return err
+	}
+	if _, err := codexMCPConfig(existing, iris, preference); err != nil {
+		return err
+	}
 	if err := l.update(Codex, files[0], func(existing []byte) ([]byte, error) {
 		return writeObject(existing, func(doc map[string]any) error {
 			for _, event := range []string{"SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SessionEnd"} {
@@ -76,13 +88,8 @@ func (c codexClient) Install(l Layout, _ Plugins) error {
 	}); err != nil {
 		return err
 	}
-	block := wrapBlock(fmt.Sprintf("[mcp_servers.iris]\ncommand = %s\nargs = [\"mcp\", \"--client\", \"codex\"]\n%s", tomlString(iris), codexMCPPolicy))
 	return l.update(Codex, files[1], func(existing []byte) ([]byte, error) {
-		next, err := upsertBlock(string(existing), block)
-		if err != nil {
-			return nil, err
-		}
-		return []byte(next), nil
+		return codexMCPConfig(existing, iris, preference)
 	})
 }
 

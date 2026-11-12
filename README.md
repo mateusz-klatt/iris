@@ -19,6 +19,9 @@ before edits, MCP tools let the model act explicitly, and `iris watch` carries a
 signals. On Claude Code a new message wakes an idle session in about a third of a second. A git
 pre-commit guard is the last checkpoint.
 
+Codex has an [opt-in idle wake](docs/codex-wake.md) through its own queue command. It can spend
+model budget, remains off by default and requires a loaded root session.
+
 Iris coordinates cooperating agents. It prevents and reports collisions; it is not a sandbox.
 
 ## Installing
