@@ -87,7 +87,10 @@ func newEngineTest(t *testing.T) (*engine, *engineResolver, *engineSource, *time
 	return e, r, source, &now
 }
 
-func engineDue(now time.Time, delay time.Duration) stepResult { return stepResult{Due: now.Add(delay)} }
+func engineDue(now time.Time, delay time.Duration) stepResult {
+	due := now.Add(delay)
+	return stepResult{Due: due, NotBefore: due}
+}
 
 func engineTold(t *testing.T, s *stateStore, stream string, cursor int64, at time.Time, twice bool) {
 	t.Helper()
@@ -360,6 +363,9 @@ func TestWakeEngineFileFailureRetryClassesAndPostReadFailure(t *testing.T) {
 				fail()
 			}
 			want := stepResult{Due: now.Add(tc.delay), FileWait: tc.fileWait}
+			if !tc.fileWait {
+				want.NotBefore = want.Due
+			}
 			if got := e.step(context.Background()); got != want || (!tc.postRead && (source.hooks != 0 || source.reads != 0)) {
 				t.Fatalf("file failure: %+v, want %+v, source %+v", got, want, source)
 			}

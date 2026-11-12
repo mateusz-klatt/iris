@@ -116,7 +116,7 @@ func (s *schedule) hint(now time.Time, settle time.Duration) {
 }
 
 func (s *schedule) result(result stepResult) {
-	s.due, s.required, s.fileWait = result.Due, result.Due, result.FileWait
+	s.due, s.required, s.fileWait = result.Due, result.NotBefore, result.FileWait
 }
 
 func (r *Runner) runTarget(ctx context.Context, target binding.WakeTarget) {

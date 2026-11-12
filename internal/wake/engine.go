@@ -62,7 +62,11 @@ func (e *engine) step(ctx context.Context) stepResult {
 	}
 	next, slot, due, eligible := admission(current, id, read.HighWater, e.now())
 	if !eligible {
-		return stepResult{Due: due}
+		result := stepResult{Due: due}
+		if !due.IsZero() {
+			result.NotBefore = retryAt(next, slot)
+		}
+		return result
 	}
 	info, detail := e.commands.check(ctx, e.clientVersion())
 	if !e.current(ctx) {
@@ -151,14 +155,25 @@ func admission(snapshot stateSnapshot, id hubclient.Identity, highWater int64, n
 	if next.quota(slot) >= 2 {
 		return next, slot, time.Time{}, false
 	}
-	for _, old := range next.Attempts {
-		if old.Slot == slot && old.spent() {
-			if retry := time.UnixMilli(old.AnsweredMS).Add(60 * time.Second); retry.After(due) {
-				due = retry
-			}
+	due = later(due, retryAt(next, slot))
+	return next, slot, due, !due.After(now)
+}
+
+func retryAt(d document, slot int) time.Time {
+	var due time.Time
+	for _, a := range d.Attempts {
+		if a.Slot == slot && a.Answer == "failed" {
+			due = later(due, time.UnixMilli(a.AnsweredMS).Add(60*time.Second))
 		}
 	}
-	return next, slot, due, !due.After(now)
+	return due
+}
+
+func later(a, b time.Time) time.Time {
+	if b.After(a) {
+		return b
+	}
+	return a
 }
 
 func (e *engine) current(ctx context.Context) bool {
@@ -169,12 +184,13 @@ func (e *engine) current(ctx context.Context) bool {
 	return ok && target == e.target
 }
 
-func (e *engine) after(delay time.Duration) stepResult { return stepResult{Due: e.now().Add(delay)} }
+func (e *engine) after(delay time.Duration) stepResult {
+	due := e.now().Add(delay)
+	return stepResult{Due: due, NotBefore: due}
+}
 
 func (e *engine) waitFile() stepResult {
-	result := e.after(15 * time.Second)
-	result.FileWait = true
-	return result
+	return stepResult{Due: e.now().Add(15 * time.Second), FileWait: true}
 }
 
 func (e *engine) fileFailure(err error) stepResult {

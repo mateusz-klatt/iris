@@ -37,8 +37,9 @@ type wakeSource interface {
 }
 
 type stepResult struct {
-	Due      time.Time
-	FileWait bool
+	Due       time.Time
+	NotBefore time.Time
+	FileWait  bool
 }
 
 // An engine belongs to one positive binding snapshot. The session's persistent
