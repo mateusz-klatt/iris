@@ -75,7 +75,8 @@ nfpms:
     bindir: /usr/bin
 dockers_v2:
   - id: iris-server
-    # Stage 0 can build local snapshot images, never push a release image.
+    # Snapshots only load local images. The isolated release.yml image job publishes
+    # release binaries; the archive signing job never gets registry write access.
     disable: '{{ not .IsSnapshot }}'
     ids: [iris]
     images: [ghcr.io/mateusz-klatt/iris]

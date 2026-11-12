@@ -54,13 +54,62 @@ the expanded actual local Apache rollback rehearsal passed 73/73. See the
 Final clean-candidate validation and target-deployment checks remain pending.
 
 The files in `deploy/` are written for this topology. No release binary is needed:
-`deploy/Dockerfile` builds the locked Node console and embeds it in a CGO_ENABLED=0
-Go binary. Its final scratch image runs as uid/gid 65532 and contains the binary,
-CA certificates and a writable /data. `deploy/compose.yaml` uses Linux host networking
+the root `Dockerfile`'s `deploy` target builds the locked Node console and embeds it in a
+CGO_ENABLED=0 Go binary. Its shared distroless runtime runs as uid/gid 65532 and contains
+the binary at `/iris`, CA certificates and a writable `/data`, with `TMPDIR=/data`.
+`deploy/compose.yaml` selects that target and uses Linux host networking
 so the loopback listener is reachable by the host's Apache; no port is published.
 The named `iris-data` volume holds the database, WAL and token on local Linux storage.
 Do not put it on WSL drvfs, NFS or another network filesystem. Keep volume backups
 and the token private. A bind-mounted replacement must be writable by uid 65532.
+
+### Pulling and verifying a release image
+
+Every successful `v*` release-tag run also publishes `ghcr.io/mateusz-klatt/iris:<tag>`
+for Linux amd64 and arm64. Stable ref names without `-` also update `:latest`;
+RC and other prerelease tags publish only their version tag, still signed and attested.
+The released image uses the root `Dockerfile`'s
+`release` target with binaries from the release archives and the same runtime as `deploy`.
+The public hub continues to run the `iris-iris` image exported by CI on `main`, through
+the procedure below. GHCR publication does not replace it; the builds can have different
+source commits, version labels and bytes. `v0.1.1` is a final release whose tag and
+publication remain the owner's decision.
+
+Pull a version explicitly, or use `:latest` for the moving tag:
+
+```sh
+docker pull ghcr.io/mateusz-klatt/iris:v0.1.1
+docker buildx imagetools inspect ghcr.io/mateusz-klatt/iris:v0.1.1
+```
+
+Record the top-level index `Digest` and compare it with the successful release image job's
+output. Substitute it below. Authenticate GitHub CLI and log in with `docker login ghcr.io`
+before OCI attestation verification. The owner must make the GHCR package public for
+anonymous pulls; the workflow does not set package visibility.
+
+```sh
+IMAGE='ghcr.io/mateusz-klatt/iris@sha256:<index-digest>'
+cosign verify "$IMAGE" \
+  --certificate-identity 'https://github.com/mateusz-klatt/iris/.github/workflows/release.yml@refs/tags/v0.1.1' \
+  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
+gh attestation verify "oci://$IMAGE" \
+  --repo mateusz-klatt/iris \
+  --signer-workflow mateusz-klatt/iris/.github/workflows/release.yml \
+  --source-ref refs/tags/v0.1.1 \
+  --cert-identity 'https://github.com/mateusz-klatt/iris/.github/workflows/release.yml@refs/tags/v0.1.1'
+docker pull "$IMAGE"
+```
+
+Use the actual tag in the identities and run the verified digest. See the
+[release permissions and verification limits](release.md#release-container-image),
+[Cosign verification](https://docs.sigstore.dev/cosign/verifying/verify/) and
+[GitHub attestation verification](https://cli.github.com/manual/gh_attestation_verify).
+The index signature covers both referenced platforms, but neither check proves safe
+behaviour, owner approval or what is running on the public hub. Docker does not enforce
+verification. A failed signing or attestation step can leave a pushed image; require both
+checks before using it. Version tags can move, and an older stable tag can update
+`latest`; prereleases never update it. Publication does not configure TLS,
+provision accounts or prepare backups; keep the deployment safeguards below.
 
 ### Deploying the public hub from an image CI built
 
@@ -131,8 +180,7 @@ To deploy, in one shell on the hub's machine, from a checkout of that commit (fo
    docker compose -f deploy/compose.yaml up -d --no-build --pull never
    ```
 
-5. Take the command-line `iris` for this machine out of the same image, where it is at `/iris` (the
-   release image has it at `/usr/local/bin/iris`):
+5. Take the command-line `iris` for this machine out of the same image, where it is at `/iris`:
 
    ```sh
    container=$(docker create "iris-iris:$commit")
@@ -235,10 +283,10 @@ To take a backup while the hub runs, on the hub's machine:
 iris admin backup /data/iris.db /path/to/new-backup.db
 ```
 
-In the container built from `deploy/Dockerfile`, run it as
-`docker exec iris /iris admin backup /data/iris.db /data/<name>.db` and copy the file out; the
-release image has the binary at `/usr/local/bin/iris`. The copy keeps SQLite's temporary storage
-in memory, so the image's lack of a temporary directory does not matter. It reads the database read-only, in one read transaction (SQLite's
+In either target's container, run it as
+`docker exec iris /iris admin backup /data/iris.db /data/<name>.db` and copy the file out.
+The copy keeps SQLite's temporary storage in memory. It reads the database read-only,
+in one read transaction (SQLite's
 `VACUUM INTO`), so the copy is one moment of the live database with its WAL applied. It writes an
 owner-only `<name>.partial` beside the destination, runs SQLite's integrity check on it, and only
 then links it into place. It refuses a destination or `.partial` file that exists, the live

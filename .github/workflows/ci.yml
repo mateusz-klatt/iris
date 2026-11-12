@@ -236,7 +236,7 @@ jobs:
           echo "archives=$archives sboms=$sboms"
           test "$archives" -gt 0
           test "$archives" = "$sboms"
-      - name: The release workflow confines signing and verifies its Windows handoff
+      - name: The release workflow confines signing and container publication
         shell: bash
         run: |
           set -euo pipefail
@@ -255,27 +255,51 @@ jobs:
               "anchore/sbom-action/download-syft": "66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c",
               "goreleaser/goreleaser-action": "a4f02ab5355a589de60d917a659ce617ed19b3de",
               "actions/attest-build-provenance": "4d101475d8b20a2381f78447822ac1eab6504dd8",
+              "docker/setup-buildx-action": "f87e5991a6d7451dcb8d9637bfbc97413f497069",
+              "docker/login-action": "8aa5831fb8d48d8f76594c7ddde61ae58019f550",
+              "docker/build-push-action": "c3c9e263c25d99ce0380d002d59b67737d91b0dc",
           }
           def expression(value):
               return "$" + "{{ " + value + " }}"
 
+          def named(job, name):
+              steps = [step for step in job["steps"] if step.get("name") == name]
+              assert len(steps) == 1, name
+              return steps[0]
+
+          def using(job, name):
+              steps = [step for step in job["steps"] if step.get("uses", "").startswith(name + "@")]
+              assert len(steps) == 1, name
+              return steps[0]
+
+          image_gate = "github.repository == 'mateusz-klatt/iris' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')"
+          version_tag = "ghcr.io/mateusz-klatt/iris:" + expression("github.ref_name")
+          stable_latest = expression("!contains(github.ref_name, '-') && 'ghcr.io/mateusz-klatt/iris:latest' || ''")
           hook = '{{ if and (eq .Os "windows") (not .IsSnapshot) }}"{{ .Env.IRIS_RELEASE_HELPER }}" sign-windows --arch={{ .Arch }} --path="{{ .Path }}"{{ end }}'
           secret_names = ["GITHUB_TOKEN", "CERTUM_EMAIL", "CERTUM_OTP", "MACOS_SIGN_P12", "MACOS_SIGN_PASSWORD", "MACOS_NOTARY_ISSUER_ID", "MACOS_NOTARY_KEY_ID", "MACOS_NOTARY_KEY"]
           def check(release, config, proof):
-              assert release[True] == {"push": {"tags": ["v[0-9]+.[0-9]+.[0-9]+*"]}}
+              assert release[True] == {"push": {"tags": ["v*"]}}
               assert release["permissions"] == {"contents": "read"}
               assert release["concurrency"] == {"group": "certum-signing", "cancel-in-progress": False}
               assert config["release"]["draft"] is True
               assert config["builds"][0]["hooks"] == {"post": [{"cmd": hook}]}
+              # The credential-bearing archive job must never publish containers.
+              assert len(config["dockers_v2"]) == 1
+              assert config["dockers_v2"][0]["disable"] == "{{ not .IsSnapshot }}"
               jobs = release["jobs"]
-              assert set(jobs) == {"web", "signer", "release", "verify-windows"}
+              assert set(jobs) == {"web", "signer", "release", "verify-windows", "image"}
               assert jobs["release"]["needs"] == ["web", "signer"]
               assert jobs["verify-windows"]["needs"] == "release"
+              assert jobs["image"]["needs"] == ["release", "verify-windows"]
+              permissions = {
+                  "release": {"contents": "write", "id-token": "write", "attestations": "write"},
+                  "image": {"contents": "read", "packages": "write", "id-token": "write", "attestations": "write"},
+              }
               outside_signing = deepcopy(release)
               for name, job in jobs.items():
-                  assert job["if"] == "github.repository == 'mateusz-klatt/iris'"
+                  assert job["if"] == (image_gate if name == "image" else "github.repository == 'mateusz-klatt/iris'")
                   assert job["runs-on"] == ("windows-latest" if name == "verify-windows" else "ubuntu-latest")
-                  assert job["permissions"] == ({"contents": "write", "id-token": "write", "attestations": "write"} if name == "release" else {"contents": "read"})
+                  assert job["permissions"] == permissions.get(name, {"contents": "read"})
                   for step in job["steps"]:
                       if "uses" in step:
                           action, revision = step["uses"].split("@")
@@ -305,7 +329,10 @@ jobs:
               assert installs[0]["with"] == {"version": "v2.20.0", "install-only": True}
               for name in ["web", "signer", "release"]:
                   job = jobs[name]
-                  assert job["outputs"] == {"artifact-id": expression("steps.upload.outputs.artifact-id")}
+                  outputs = {"artifact-id": expression("steps.upload.outputs.artifact-id")}
+                  if name == "release":
+                      outputs["image-artifact-id"] = expression("steps.upload-image.outputs.artifact-id")
+                  assert job["outputs"] == outputs
                   upload = [s for s in job["steps"] if s.get("id") == "upload"][0]
                   assert upload["with"]["name"].endswith(expression("github.run_id") + "-" + expression("github.run_attempt"))
                   assert upload["with"]["retention-days"] == 1
@@ -316,6 +343,50 @@ jobs:
               assert jobs["release"]["steps"][-1]["with"]["path"].splitlines() == [f"dist/iris_{version}_windows_amd64.zip", f"dist/iris_{version}_windows_arm64.zip", "dist/checksums.txt"]
               downloads = [s["with"] for s in jobs["release"]["steps"] if s.get("uses", "").startswith("actions/download-artifact@")]
               assert downloads == [{"artifact-ids": expression("needs.web.outputs.artifact-id"), "path": expression("runner.temp") + "/webui-dist"}, {"artifact-ids": expression("needs.signer.outputs.artifact-id"), "path": expression("runner.temp") + "/signer"}]
+              image = jobs["image"]
+              handoff = [step for step in jobs["release"]["steps"] if step.get("id") == "upload-image"]
+              assert len(handoff) == 1
+              assert handoff[0]["uses"] == "actions/upload-artifact@" + pins["actions/upload-artifact"]
+              assert handoff[0]["with"] == {
+                  "name": "image-release-" + expression("github.run_id") + "-" + expression("github.run_attempt"),
+                  "path": f"dist/iris_{version}_linux_amd64.tar.gz\ndist/iris_{version}_linux_arm64.tar.gz\ndist/checksums.txt\n",
+                  "if-no-files-found": "error", "retention-days": 1,
+              }
+              assert using(image, "actions/download-artifact")["with"] == {
+                  "artifact-ids": expression("needs.release.outputs.image-artifact-id"),
+                  "path": expression("runner.temp") + "/image-release",
+              }
+              extract = named(image, "Check and extract the released Linux binaries")
+              assert extract["working-directory"] == expression("runner.temp") + "/image-release"
+              assert extract["env"] == {"RELEASE_TAG": expression("github.ref_name")}
+              for policy in ["set -euo pipefail", "version=${RELEASE_TAG#v}", "sha256sum --check --strict --ignore-missing checksums.txt", "for arch in amd64 arm64; do", 'tar -xzf "iris_${version}_linux_${arch}.tar.gz" -C "linux/$arch" iris', 'cp "$GITHUB_WORKSPACE/Dockerfile" Dockerfile']:
+                  assert policy in extract["run"], policy
+              assert using(image, "docker/login-action")["with"] == {
+                  "registry": "ghcr.io", "username": expression("github.actor"), "password": expression("github.token"),
+              }
+              build = using(image, "docker/build-push-action")
+              assert build["id"] == "image"
+              assert build["with"]["context"] == expression("runner.temp") + "/image-release"
+              assert build["with"]["target"] == "release"
+              assert build["with"]["platforms"] == "linux/amd64,linux/arm64"
+              assert build["with"]["push"] is True
+              # Every release keeps its version tag; only refs without '-' move latest.
+              # The pinned action ignores the empty second line for prereleases.
+              assert build["with"]["tags"].splitlines() == [version_tag, stable_latest]
+              assert build["with"]["provenance"] is False
+              assert image["steps"].index(using(image, "docker/login-action")) < image["steps"].index(build)
+              assert image["steps"].index(using(image, "sigstore/cosign-installer")) > image["steps"].index(build)
+              sign_image = named(image, "Sign the multi-arch image by digest")
+              assert sign_image["env"] == {"IMAGE_DIGEST": expression("steps.image.outputs.digest")}
+              assert sign_image["run"] == 'cosign sign --yes "ghcr.io/mateusz-klatt/iris@$IMAGE_DIGEST"'
+              attest = using(image, "actions/attest-build-provenance")
+              assert attest["with"] == {
+                  "subject-name": "ghcr.io/mateusz-klatt/iris",
+                  "subject-digest": expression("steps.image.outputs.digest"), "push-to-registry": True,
+              }
+              # Prereleases still build, sign and attest; only the latest tag is conditional.
+              assert all("if" not in step for step in [build, sign_image, attest])
+              assert image["steps"].index(build) < image["steps"].index(sign_image) < image["steps"].index(attest)
               verify = jobs["verify-windows"]
               assert verify["env"]["EXPECTED_SIGNER_THUMBPRINT"] == proof["jobs"]["verify"]["env"]["EXPECTED_SIGNER_THUMBPRINT"] == "9C837C68415187A72D88612BDF14FCB0D6623D67"
               assert verify["steps"][0]["with"]["ref"] == expression("github.sha")
@@ -360,6 +431,58 @@ jobs:
           mutations += [(("jobs", "release", "steps", signing_index, "run"), "goreleaser release --clean")]
           for original, replacement in [("/pa /all /v /tw", "/pa /all /v"), ("$LASTEXITCODE -ne 0", "$LASTEXITCODE -eq 1"), ("$null -eq $signature.TimeStamperCertificate", "$false"), ("$signature.Status -ne 'Valid'", "$false"), ("$signature.SignerCertificate.Thumbprint -ne $env:EXPECTED_SIGNER_THUMBPRINT", "$false")]:
               mutations.append((("jobs", "verify-windows", "steps", -1, "run"), release["jobs"]["verify-windows"]["steps"][-1]["run"].replace(original, replacement)))
+          # Only the publishing job gets registry write access, never a workflow default.
+          mutations.append((("permissions",), {"contents": "read", "packages": "write"}))
+          for name in ("web", "signer", "release", "verify-windows"):
+              mutations.append((("jobs", name, "permissions"), dict(release["jobs"][name]["permissions"], packages="write")))
+          image_path = ("jobs", "image")
+          image = release["jobs"]["image"]
+          mutations += [
+              (image_path + ("if",), "github.repository == 'mateusz-klatt/iris'"),
+              (image_path + ("if",), "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')"),
+              (image_path + ("if",), "github.repository == 'mateusz-klatt/iris' && startsWith(github.ref, 'refs/tags/v')"),
+              (image_path + ("needs",), ["release"]),
+              (image_path + ("permissions",), dict(image["permissions"], contents="write")),
+              (image_path + ("env",), {"LEAK": expression("secrets.CERTUM_OTP")}),
+              (image_path + ("continue-on-error",), True),
+              (("jobs", "release", "outputs", "image-artifact-id"), expression("steps.upload.outputs.artifact-id")),
+          ]
+          for permission in image["permissions"]:
+              mutations.append((image_path + ("permissions",), {key: value for key, value in image["permissions"].items() if key != permission}))
+          for index, step in enumerate(image["steps"]):
+              path = image_path + ("steps", index)
+              if "uses" in step:
+                  mutations.append((path + ("uses",), step["uses"].split("@")[0] + "@main"))
+              if step.get("uses", "").startswith("actions/checkout@"):
+                  mutations.append((path + ("with", "persist-credentials"), True))
+              if step.get("uses", "").startswith("actions/download-artifact@"):
+                  mutations.append((path + ("with", "artifact-ids"), "1,2"))
+              if step.get("uses", "").startswith("docker/login-action@"):
+                  mutations += [(path + ("with", "registry"), "docker.io"), (path + ("with", "password"), expression("secrets.CERTUM_OTP"))]
+              if step.get("uses", "").startswith("docker/build-push-action@"):
+                  for key, value in [("context", "."), ("target", "deploy"), ("platforms", "linux/amd64"), ("push", False), ("tags", "ghcr.io/mateusz-klatt/iris:latest"), ("provenance", True)]:
+                      mutations.append((path + ("with", key), value))
+                  # Reject prereleases moving latest, stable releases omitting it,
+                  # and a reversed condition that publishes latest only for prereleases.
+                  for tags in [
+                      version_tag + "\nghcr.io/mateusz-klatt/iris:latest\n",
+                      version_tag + "\n",
+                      version_tag + "\n" + stable_latest.replace("!contains", "contains") + "\n",
+                  ]:
+                      mutations.append((path + ("with", "tags"), tags))
+              if step.get("name") == "Check and extract the released Linux binaries":
+                  mutations += [(path + ("run",), step["run"].replace("sha256sum --check --strict --ignore-missing checksums.txt", "true")), (path + ("env", "RELEASE_TAG"), expression("github.event.pull_request.title"))]
+              if step.get("name") == "Sign the multi-arch image by digest":
+                  mutations += [(path + ("env", "IMAGE_DIGEST"), expression("github.sha")), (path + ("run",), 'cosign sign --yes ghcr.io/mateusz-klatt/iris:latest')]
+              if step.get("uses", "").startswith("actions/attest-build-provenance@"):
+                  for key, value in [("subject-name", "ghcr.io/other/image"), ("subject-digest", expression("github.sha")), ("push-to-registry", False)]:
+                      mutations.append((path + ("with", key), value))
+              if step.get("name") == "Sign the multi-arch image by digest" or step.get("uses", "").startswith("actions/attest-build-provenance@"):
+                  mutations.append((image_path + ("steps",), [other for i, other in enumerate(image["steps"]) if i != index]))
+              if step.get("name") == "Sign the multi-arch image by digest" or step.get("uses", "").startswith(("docker/build-push-action@", "actions/attest-build-provenance@")):
+                  mutations.append((path + ("if",), "!contains(github.ref_name, '-')"))
+          handoff_index = next(i for i, step in enumerate(release["jobs"]["release"]["steps"]) if step.get("id") == "upload-image")
+          mutations.append((("jobs", "release", "steps", handoff_index, "with", "path"), "dist/*"))
           for path, value in mutations:
               mutated = deepcopy(release)
               target = mutated
@@ -372,7 +495,12 @@ jobs:
                   pass
               else:
                   raise AssertionError(f"Release guard accepted mutation at {path}")
-          for path, value in [(("release", "draft"), False), (("builds", 0, "hooks", "post", 0, "cmd"), hook.replace("(not .IsSnapshot)", "true"))]:
+          config_mutations = [
+              (("release", "draft"), False),
+              (("builds", 0, "hooks", "post", 0, "cmd"), hook.replace("(not .IsSnapshot)", "true")),
+              (("dockers_v2", 0, "disable"), False),
+          ]
+          for path, value in config_mutations:
               mutated = deepcopy(config)
               target = mutated
               for key in path[:-1]:
@@ -384,7 +512,7 @@ jobs:
                   pass
               else:
                   raise AssertionError(f"Release guard accepted config mutation at {path}")
-          print(f"release.yml: real workflow and config passed; all {len(mutations) + 2} mutations rejected")
+          print(f"release.yml: real workflow and config passed; all {len(mutations) + len(config_mutations)} mutations rejected")
           PY
       - name: The signing proof is manual and confines Certum secrets to sign
         shell: bash
