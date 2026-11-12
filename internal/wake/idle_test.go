@@ -190,7 +190,15 @@ func TestWakeNativeIdleProxy(t *testing.T) {
 			if err != nil || json.Unmarshal(raw, &record) != nil {
 				t.Fatalf("proxy did not exit and record protocol: %v", err)
 			}
-			if !reflect.DeepEqual(record.Args, []string{"app-server", "proxy"}) || record.CWD != c.dir || record.Home != "home sentinel" || record.CodexHome != "custom home sentinel" || !record.Closed {
+			actualDir, err := os.Stat(record.CWD)
+			if err != nil {
+				t.Fatalf("proxy working directory: %v", err)
+			}
+			expectedDir, err := os.Stat(c.dir)
+			if err != nil {
+				t.Fatalf("requested working directory: %v", err)
+			}
+			if !reflect.DeepEqual(record.Args, []string{"app-server", "proxy"}) || !os.SameFile(actualDir, expectedDir) || record.Home != "home sentinel" || record.CodexHome != "custom home sentinel" || !record.Closed {
 				t.Fatalf("proxy argv/environment/closure: %+v", record)
 			}
 			if len(record.Requests) != 3 || record.Requests[0].Method != "initialize" || record.Requests[1].Method != "initialized" || record.Requests[2].Method != "thread/read" || !reflect.DeepEqual(record.Requests[2].Params, map[string]any{"threadId": commandSession, "includeTurns": false}) {
