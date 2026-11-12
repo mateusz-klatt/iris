@@ -1,12 +1,15 @@
 # Snapshots and releases
 
-The repository is public, and nothing is published yet: no release, no package-manager update
-and no image. A pushed version tag runs `.github/workflows/release.yml`, which makes a **draft**
-GitHub release (`release: draft: true`) for the owner to publish. The tag,
-Rekor entries, attestations and final Windows ZIP bytes in the verification handoff artifact
-are public before publication. Homebrew,
-Scoop and winget are `skip_upload: true`. Docker builds are enabled only for snapshots, which never
-push. Do not enable publishing until D15's later stages are approved.
+A pushed `v*` tag runs `.github/workflows/release.yml`, which makes a **draft**
+GitHub release (`release: draft: true`) for the owner to publish. After the release and
+Windows verification jobs succeed, a separate job publishes a signed, attested
+Linux amd64/arm64 image to `ghcr.io/mateusz-klatt/iris`, under the full tag and `latest`.
+The image, tag, Rekor entries, attestations and final archive bytes in workflow artifacts
+can be public before the owner publishes the draft. Homebrew, Scoop and winget remain
+`skip_upload: true`. Snapshots and pull requests push no images.
+[ADR 022](adr/022-release-container-image.md) records this extension of D15.
+The intended shipping tag, `v0.1.1`, is a **final release** and the owner's call;
+this configuration does not create that tag or authorize anyone else to create it.
 The GoReleaser dependency is not part of the application module.
 
 The web tooling pins Vitest and its coverage provider together. The `minimatch` override
@@ -78,8 +81,9 @@ amd64 and arm64: four tar.gz archives, two Windows zip archives, checksums, and
 Linux deb/rpm packages named `iris`. Package-manager manifests remain local. Their explicit download URL templates refer to
 future GitHub assets; private snapshot assets are not public install channels.
 
-The server image uses `dockers_v2` for Linux amd64/arm64. Snapshots load local
-platform images without pushing; release publication remains a separate opt-in.
+The server image uses `dockers_v2` for local Linux amd64/arm64 snapshots, which load
+platform images without pushing. GoReleaser disables that image path on real releases;
+the separate workflow job below publishes the release image.
 It runs as uid/gid 65532 and stores the database and token under `/data`, which must be
 writable by that user. A fresh named volume is; a bind mount needs its owner set. For externally reachable serving,
 pass `--listen`, `--tls-cert` and `--tls-key` explicitly, as required by D1.
@@ -88,6 +92,78 @@ workflow already installs syft and cosign, generates an SBOM per archive, signs 
 with keyless cosign using its OIDC identity, and creates GitHub build provenance. These
 release steps are configured; their first real tag run is still pending. Apple signing
 and notarization are separate and stay disabled without `MACOS_SIGN_P12`.
+
+## Release container image
+
+The `image` job waits for `release` and `verify-windows`, and requires a push of a `v*`
+tag in `mateusz-klatt/iris`. The release job hands over both Linux archives and the
+original `checksums.txt` through one immutable artifact ID. The image job checks their
+hashes and packages the extracted GoReleaser binaries using the root `Dockerfile`'s
+`release` target. It does not rebuild the binary or console. The two platform manifests
+are published as one multi-architecture index; both the version tag, such as `v0.1.1`,
+and `latest` point to it. Every successful tag run updates `latest`, including prereleases
+and tags for older versions. This is separate from GitHub Releases' Latest designation.
+
+Only `image` has `packages: write`. Its other permissions are `contents: read` for checkout,
+`id-token: write` for keyless identity, and `attestations: write` for GitHub provenance.
+Registry authentication uses that job's GitHub token. The release job retains its existing
+permissions and the Certum/Apple secrets remain on its GoReleaser step. A separate job
+keeps registry writes out of that signing runner. This is a job boundary, not protection
+from a compromised repository or GitHub Actions service.
+
+Cosign signs the pushed **index digest** keylessly using the workflow's GitHub OIDC identity.
+`actions/attest-build-provenance` attests that same digest and stores provenance in GitHub
+and the registry. The root `Dockerfile` also has a `deploy` target for `make image`; both
+targets share the distroless non-root runtime, `/iris`, uid/gid 65532 and writable `/data`,
+with `TMPDIR=/data`. The public hub continues to use its CI-built `iris-iris` deployment
+artifact from `main`; publishing GHCR does not change the running hub or select a deployment.
+Its source, version label and image bytes can differ from the released image.
+
+Before relying on anonymous pulls, the owner must confirm that the GHCR package is public
+and that this repository's Actions token can write it. Repository visibility alone does
+not configure package access. No registry publication or keyless signing is established by
+a local snapshot; the first successful tag run must supply that evidence.
+
+To pull a version (or use `:latest` for the moving tag):
+
+```sh
+docker pull ghcr.io/mateusz-klatt/iris:v0.1.1
+docker buildx imagetools inspect ghcr.io/mateusz-klatt/iris:v0.1.1
+```
+
+Record the top-level `Digest` from the index, not one platform's child digest. Compare it
+with the successful image job's output, then use that digest throughout verification and
+deployment. Substitute it below, and substitute the actual release tag in both identities.
+Use current Cosign and GitHub CLI clients; authenticate `gh` and log in to GHCR with
+`docker login ghcr.io` before the GitHub CLI's OCI verification.
+
+```sh
+IMAGE='ghcr.io/mateusz-klatt/iris@sha256:<index-digest>'
+cosign verify "$IMAGE" \
+  --certificate-identity 'https://github.com/mateusz-klatt/iris/.github/workflows/release.yml@refs/tags/v0.1.1' \
+  --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
+gh attestation verify "oci://$IMAGE" \
+  --repo mateusz-klatt/iris \
+  --signer-workflow mateusz-klatt/iris/.github/workflows/release.yml \
+  --source-ref refs/tags/v0.1.1 \
+  --cert-identity 'https://github.com/mateusz-klatt/iris/.github/workflows/release.yml@refs/tags/v0.1.1'
+docker pull "$IMAGE"
+```
+
+These commands check the expected [Cosign identity](https://docs.sigstore.dev/cosign/verifying/verify/)
+and [GitHub workflow provenance](https://cli.github.com/manual/gh_attestation_verify).
+Verification covers the index and the platform manifests it references. Run the verified
+digest rather than resolving a mutable tag again. The default `gh` command retrieves
+attestations from GitHub; add `--bundle-from-oci` to check the registry copy instead.
+
+This cannot make push, signing and attestation atomic: a failure can leave a published
+tag without all verification evidence. Require both checks before use. Neither signature
+nor provenance establishes that code is safe, correct, approved by the owner or deployed
+on the public hub. Docker does not enforce these verification commands. Non-root execution
+does not configure TLS, access controls, backups or volume permissions; bind mounts must
+be writable by uid 65532. Snapshots exercise image construction without proving registry
+access, OIDC signing or provenance publication. The archive SBOMs describe archives,
+not the complete container filesystem.
 
 ## Windows signing proof
 
@@ -175,7 +251,7 @@ once, with a five-minute deadline, suppressed stdout/stderr and fixed messages.
 There is no automatic retry or cleanup step. The signer's cached session is
 `$XDG_RUNTIME_DIR/ssign/session.json` on the disposable hosted runner.
 
-Only the GoReleaser step receives `GITHUB_TOKEN`, `CERTUM_EMAIL`, `CERTUM_OTP`
+Within `release`, only the GoReleaser step receives `GITHUB_TOKEN`, `CERTUM_EMAIL`, `CERTUM_OTP`
 and the five `MACOS_*` secrets. GoReleaser, hooks and the compiler inherit that
 environment. ssign's child environment contains only `CERTUM_EMAIL`, `CERTUM_OTP`,
 `XDG_RUNTIME_DIR`, `HOME` and `PATH`. The release token, OIDC values, Apple secrets
@@ -183,10 +259,11 @@ and GitHub command-file paths do not reach ssign through its environment. This
 does not isolate malicious code sharing the runner's user and filesystem; the
 whole release job is trusted, and ssign still receives the TOTP seed.
 
-After GoReleaser creates the draft and build provenance, `release` uploads only
+After GoReleaser creates the draft and build provenance, the Windows handoff contains only
 `iris_<version>_windows_amd64.zip`, `iris_<version>_windows_arm64.zip` and the
 untouched `checksums.txt` that cosign signed. The artifact is retained for one day.
-The secret-free `verify-windows` job downloads that single artifact id with digest
+The Linux image handoff is a separate artifact described [above](#release-container-image).
+The secret-free `verify-windows` job downloads the Windows artifact id with digest
 verification, then runs the helper:
 
 ```text
@@ -437,6 +514,10 @@ The Homebrew upload gate above still requires a real tag's signed and notarized 
 
 ## Release candidate runbook
 
+This retains the rc1 procedure and decisions below for archive verification. It does
+not authorize an rc1 tag. The intended next shipping tag is the owner's final `v0.1.1`;
+the [container publication procedure](#release-container-image) supplements this record.
+
 Derived from main `951f0545b312e65b5368a732763390be27c87364` (#273) and this branch's `prerelease: auto`.
 Recheck `release.yml`, `signing-proof.yml`, `.goreleaser.yaml` and ADRs 020/021 at the approved commit. Commands below are for the release operator; no rc1 tag run is measured here.
 
@@ -485,13 +566,13 @@ GoReleaser v2.20.0 creates the draft with that flag and does not set Latest on i
 | Checksum and bundle | `checksums.txt` (SHA-256) and `checksums.txt.sigstore.json`; no separate signature/certificate files (`.goreleaser.yaml`, `checksum`/`signs`; [checksum default](https://github.com/goreleaser/goreleaser/blob/b8f79e0399c46895220e8479e24d599576b563a8/internal/pipe/checksums/checksums.go#L34-L47)). |
 | Provenance | GitHub attestation storage for the 16 subjects inside `checksums.txt`, not an attached provenance asset (`.github/workflows/release.yml`, `release`; [checksum exclusions](https://github.com/goreleaser/goreleaser/blob/b8f79e0399c46895220e8479e24d599576b563a8/internal/pipe/checksums/checksums.go#L183-L217)). |
 
-Expect 18 uploaded release assets. The Windows Actions handoff adds no release assets; GitHub source archive links are separate ([upload types](https://github.com/goreleaser/goreleaser/blob/b8f79e0399c46895220e8479e24d599576b563a8/internal/artifact/artifact.go#L130-L153)). No container is built/pushed; Homebrew, Scoop and winget manifests stay local through `skip_upload: true` (`.goreleaser.yaml`).
+Expect 18 uploaded release assets. The Windows and Linux-image Actions handoffs add no release assets; GitHub source archive links are separate ([upload types](https://github.com/goreleaser/goreleaser/blob/b8f79e0399c46895220e8479e24d599576b563a8/internal/artifact/artifact.go#L130-L153)). The separate `image` job publishes to GHCR after release and Windows verification succeed, as described above. Homebrew, Scoop and winget manifests stay local through `skip_upload: true` (`.goreleaser.yaml`).
 
 **What this cannot do**
 
 - There is no human gate on the tag run. The owner chose no workflow environment gate; all Apple/Certum secrets stay at repository level (ADR 021). The unused `signing` environment stays unchanged.
 - A workflow on any branch pushed to this repository can name repository secrets. Every fleet session uses the owner's GitHub account, so tag protection cannot distinguish owner from fleet. Inspect effective permissions before the cut.
-- Only the GoReleaser step receives the release token and Apple/Certum secrets. Its hooks and compiler inherit them. The helper gives ssign only `CERTUM_EMAIL`, `CERTUM_OTP`, `XDG_RUNTIME_DIR`, `HOME` and `PATH`; this filters the environment, not other processes sharing the runner. Earlier actions can alter tools or leave processes. Write-token/OIDC permissions cover the release job (`.github/workflows/release.yml`; [GitHub token context](https://github.com/github/docs/blob/b1faf75dbd3e7627ecdfaab5241b91953e308ddb/content/actions/tutorials/authenticate-with-github_token.md)).
+- Within `release`, only the GoReleaser step receives the release token and Apple/Certum secrets. Its hooks and compiler inherit them. The helper gives ssign only `CERTUM_EMAIL`, `CERTUM_OTP`, `XDG_RUNTIME_DIR`, `HOME` and `PATH`; this filters the environment, not other processes sharing the runner. Earlier actions can alter tools or leave processes. Write-token/OIDC permissions cover the release job (`.github/workflows/release.yml`; [GitHub token context](https://github.com/github/docs/blob/b1faf75dbd3e7627ecdfaab5241b91953e308ddb/content/actions/tutorials/authenticate-with-github_token.md)).
   Protect Apple/Windows signing identities and credentials, token, OIDC identity and candidate from operator mistakes, malicious pushers and compromised actions/installers/dependencies. Suspected compromise requires revocation/rotation, not merely draft deletion.
 - Console and signer artifact digest validation checks transport integrity, not the producer's honesty. A compromised producer can supply code that is embedded or used to sign; provenance establishes origin, not approval or safe behaviour (`.github/workflows/release.yml`; [download mismatch failure](https://github.com/actions/download-artifact/blob/9000827ccba6bdab643e8b6fd33ac0654aef8333/src/download-artifact.ts#L233-L241)).
 - Draft access is not secrecy: tag/source and public workflow logs are public; signed-in readers can download public-repository workflow artifacts. Keep credentials out of logs/artifacts ([artifact access](https://github.com/github/docs/blob/b1faf75dbd3e7627ecdfaab5241b91953e308ddb/content/actions/how-tos/manage-workflow-runs/download-workflow-artifacts.md#L1-L22)); transparency is public too.
@@ -528,7 +609,7 @@ printf '%s\n' "$RUN_JSON" | jq -e --arg approved "$APPROVED" --argjson workflow 
 Wait for the intended attempt to complete. Preserve that exact attempt's job results, logs and console artifact metadata.
 Require successful `web`, `signer`, `release` and `verify-windows` jobs, with no skipped required signing. Record both Apple `notarized` messages and the Windows verification summary, including manifest, ZIP and executable SHA-256 values and both timestamped signatures with the committed pin. In the install logs require GoReleaser download checksum **and** cosign verification success, without skip/fallback warnings ([action verification branches](https://github.com/goreleaser/goreleaser-action/blob/a4f02ab5355a589de60d917a659ce617ed19b3de/src/goreleaser.ts#L72-L146)).
 Record actual cosign/Syft versions; pinned defaults are [v3.1.4](https://github.com/sigstore/cosign-installer/blob/756fe2d284c7292c4e9b62c8a28f1e5629c59532/action.yml#L10-L13) and [v1.54.0](https://github.com/anchore/sbom-action/blob/66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c/src/SyftVersion.ts#L1).
-Record all three attempt-specific artifact names, IDs/digests and producer run from the workflow metadata/logs (`.github/workflows/release.yml`).
+Record all attempt-specific artifact names, IDs/digests and producer run, including the Linux-image handoff, from the workflow metadata/logs (`.github/workflows/release.yml`). Record the GHCR index digest and both verification results separately.
 Before validation, rerun or cleanup, enumerate **all** matching releases. Require exactly one intended draft, stop if any is published, and record its numeric ID. The absent `replace_existing_draft`, `use_existing_draft` and `replace_existing_artifacts` options default false; GoReleaser reruns may create another draft; a published release is not redrafted, and existing asset names fail by default ([default fields](https://github.com/goreleaser/goreleaser/blob/b8f79e0399c46895220e8479e24d599576b563a8/pkg/config/config.go#L694-L713), [release lookup/update](https://github.com/goreleaser/goreleaser/blob/b8f79e0399c46895220e8479e24d599576b563a8/internal/client/github.go#L609-L674), [asset conflicts](https://github.com/goreleaser/goreleaser/blob/b8f79e0399c46895220e8479e24d599576b563a8/internal/client/github.go#L834-L842)).
 If there is no release, investigate the failed run; do not pass this guard.
 gh's tag lookup races published-release REST and draft GraphQL requests; it does not establish uniqueness ([pinned lookup](https://github.com/cli/cli/blob/63837fb778d6a39f02be0ce76ff89f2bc8d74bdc/pkg/cmd/release/shared/fetch.go#L182-L225)).
@@ -626,4 +707,4 @@ Deleting release/tag does not roll back the hub. Follow `docs/deploy.md` and [Ro
 
 Apple submissions and cosign transparency entries are **expected** before fresh draft creation; deleting GitHub objects recalls neither submissions, immutable transparency evidence nor downloaded copies (`.goreleaser.yaml`; [pipeline order](https://github.com/goreleaser/goreleaser/blob/b8f79e0399c46895220e8479e24d599576b563a8/internal/pipeline/pipeline.go#L99-L173)).
 Public-repository attestations are stored by GitHub and copied to a public immutable Sigstore log ([pinned GitHub documentation](https://github.com/github/docs/blob/b1faf75dbd3e7627ecdfaab5241b91953e308ddb/content/actions/concepts/security/artifact-attestations.md#L24-L30)).
-GitHub-stored attestations, Actions logs/artifacts and Apple records have separate lifecycles. Console, signer and Windows handoff artifacts have one-day retention (`.github/workflows/release.yml`); repository retention at cut time and Apple retention/deletion policy are **not verified** for this runbook. The handoff's final ZIP bytes are public before owner publication; draft deletion does not recall them.
+GitHub-stored attestations, Actions logs/artifacts and Apple records have separate lifecycles. Console, signer, Linux-image and Windows handoff artifacts have one-day retention (`.github/workflows/release.yml`); repository retention at cut time and Apple retention/deletion policy are **not verified** for this runbook. The handoff's final ZIP bytes and GHCR image can be public before owner publication; draft deletion recalls neither those copies nor signatures and provenance already published.

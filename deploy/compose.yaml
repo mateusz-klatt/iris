@@ -3,7 +3,8 @@ services:
   iris:
     build:
       context: ..
-      dockerfile: deploy/Dockerfile
+      dockerfile: Dockerfile
+      target: deploy
     container_name: iris
     network_mode: host
     restart: unless-stopped

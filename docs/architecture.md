@@ -842,11 +842,14 @@ reserve for any channel that needs a bare name.
 | 2 | winget, signed apt and dnf through Cloudsmith OSS, GitHub attestations | Public release URLs; a public repository for attestations |
 | 3 | Apple notarization, Windows signing | $99 a year; SignPath Foundation, or Certum Open Source from €49 |
 
-Stage 1 is prepared but inert. `.github/workflows/release.yml` runs only when the owner pushes a
-version tag in this repository, and builds a draft release with cosign keyless signatures of the
+`.github/workflows/release.yml` runs only on a pushed `v*` tag in this repository,
+and builds a draft release with cosign keyless signatures of the
 checksums, an SBOM per archive and GitHub build provenance. Only the owner publishes the draft.
 The tag, Rekor entries, attestations and the final Windows ZIP bytes in the verification handoff
-artifact are public before publication. No image is pushed, and Homebrew, Scoop and winget stay
+artifact are public before publication. [ADR 022](adr/022-release-container-image.md)
+adds a separate job that publishes a signed, attested multi-architecture GHCR image after
+release and Windows verification succeed; this image can be public while the release is a
+draft. Snapshots and pull requests push no image. Homebrew, Scoop and winget stay
 skipped. CI checks the configuration and the SBOMs on every pull request; keyless signing needs
 a release's OIDC identity, so its first real run is the first tag.
 
