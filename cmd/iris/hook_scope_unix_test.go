@@ -152,6 +152,20 @@ func TestAHookThatTripsLeavesTheNextOneReduced(t *testing.T) {
 		return string(raw)
 	}
 
+	// Launch the stand-in once before any hook runs. macOS assesses a new executable on its
+	// first launch, and on an Intel Mac with macOS 26 that took 370 to 480 ms for a freshly
+	// written script, longer than the hook's 300 ms loopback budget: the hook killed the
+	// stand-in before it could log, and the test read an empty log. Later launches took 8 ms.
+	// This run is outside every budget, so the hook below measures git, not that first launch.
+	warm := exec.Command(filepath.Join(fake, "git"), "--version")
+	warm.Env = append(os.Environ(), "IRIS_REAL_GIT="+realGit, "IRIS_FAKE_GIT_LOG="+gitLog, "IRIS_FAKE_GIT_PIDS="+pids)
+	if out, err := warm.CombinedOutput(); err != nil {
+		t.Fatalf("stand-in git --version: %v\n%s", err, out)
+	}
+	if calls := readGitLog(); calls != "--version\n" {
+		t.Fatalf("stand-in logged %q", calls)
+	}
+
 	// The cold trip: the full status passes the loopback budget and is killed. The time includes
 	// starting the test binary, so it allows a second beyond the hook's own deadline.
 	out, took := runChild("PreToolUse")
