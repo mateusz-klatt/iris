@@ -12,6 +12,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/coder/websocket"
 	"github.com/mateusz-klatt/iris/internal/store"
@@ -37,12 +38,29 @@ func backup(t *testing.T, active bool) string {
 	return path
 }
 
+// markBackup sets the restore marker in the backup at path, as `iris admin backup` does.
+func markBackup(t *testing.T, path string) {
+	t.Helper()
+	db, _ := sql.Open("sqlite", path)
+	defer func() { _ = db.Close() }()
+	if err := store.MarkRestore(context.Background(), db, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // A restored hub gives no session its backup-time authority, resets a monitor from after the
-// backup, and says what the first sweep would remove. The backup itself is not changed.
+// backup, and says what the first sweep would remove. A marked backup's hub runs on a new
+// stream; an unmarked one keeps its stream, which is a warning, not a failure (ADR 006). The
+// backup itself is not changed.
 func TestARestoredHubPassesEveryCheck(t *testing.T) {
-	for _, active := range []bool{true, false} {
-		t.Run(map[bool]string{true: "with a live session", false: "with none"}[active], func(t *testing.T) {
+	for _, tc := range []struct{ active, marked bool }{{true, true}, {false, true}, {true, false}, {false, false}} {
+		name := map[bool]string{true: "with a live session", false: "with none"}[tc.active] + map[bool]string{true: ", marked", false: ", unmarked"}[tc.marked]
+		active := tc.active
+		t.Run(name, func(t *testing.T) {
 			src := backup(t, active)
+			if tc.marked {
+				markBackup(t, src)
+			}
 			before, _ := os.ReadFile(src)
 			var out bytes.Buffer
 			if err := Run(context.Background(), src, filepath.Join(t.TempDir(), "scratch"), &out); err != nil {
@@ -61,6 +79,9 @@ func TestARestoredHubPassesEveryCheck(t *testing.T) {
 				t.Fatal(text)
 			}
 			if active != strings.Contains(text, "gets no restored authority") {
+				t.Fatal(text)
+			}
+			if tc.marked != strings.Contains(text, "runs on a new stream") || tc.marked == strings.Contains(text, "warn the backup has no restore marker") {
 				t.Fatal(text)
 			}
 			if after, _ := os.ReadFile(src); !bytes.Equal(before, after) {

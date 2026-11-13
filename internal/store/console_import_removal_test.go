@@ -58,11 +58,14 @@ func TestFreshDatabaseHasVersion24WithoutImportLedgers(t *testing.T) {
 	assertImportRemoval(t, s.db)
 }
 
+// latestVersion is the schema version a store reaches when it opens: the last migration's.
+const latestVersion = 25
+
 func assertImportRemoval(t *testing.T, db *sql.DB) {
 	t.Helper()
 	var version, ledgers int
-	if err := db.QueryRow("SELECT (SELECT user_version FROM pragma_user_version),(SELECT COUNT(*) FROM sqlite_schema WHERE name IN ('ConsoleImport','ConsoleAssignmentImport'))").Scan(&version, &ledgers); err != nil || version != 24 || ledgers != 0 {
-		t.Fatalf("migration did not reach version 24 without import ledgers: version=%d ledgers=%d error=%v", version, ledgers, err)
+	if err := db.QueryRow("SELECT (SELECT user_version FROM pragma_user_version),(SELECT COUNT(*) FROM sqlite_schema WHERE name IN ('ConsoleImport','ConsoleAssignmentImport'))").Scan(&version, &ledgers); err != nil || version != latestVersion || ledgers != 0 {
+		t.Fatalf("migration did not reach version %d without import ledgers: version=%d ledgers=%d error=%v", latestVersion, version, ledgers, err)
 	}
 }
 

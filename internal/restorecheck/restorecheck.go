@@ -42,6 +42,7 @@ func run(ctx context.Context, backup, scratch, listen string, out io.Writer) err
 	if err != nil {
 		return err
 	}
+	backedUp, marked := restoreState(db)
 	s, err := store.Open(db, nil)
 	if err != nil {
 		return fmt.Errorf("open the copy: %w", err)
@@ -65,9 +66,18 @@ func run(ctx context.Context, backup, scratch, listen string, out io.Writer) err
 	base := "http://" + listener.Addr().String()
 
 	var status struct {
-		DatabaseBytes int64 `json:"database_bytes"`
+		DatabaseBytes int64  `json:"database_bytes"`
+		Stream        string `json:"stream"`
 	}
 	c.check(call(ctx, base, token, "GET", "/v1/status", nil, &status) == nil, "the restored hub answers status (database %d bytes)", status.DatabaseBytes)
+	// A backup made by `iris admin backup` carries a restore marker, and a hub restored from it
+	// runs on a new stream (ADR 006). A copy made any other way, or by an older binary, keeps
+	// the stream; that is not a failed check, but the operator should know.
+	if marked {
+		c.check(s.Restored() && status.Stream != "" && status.Stream != backedUp, "the backup carries a restore marker, and the restored hub runs on a new stream")
+	} else {
+		c.line("warn the backup has no restore marker, so the restored hub keeps its stream: a client that remembers a cursor of that stream can miss attention at or below it (ADR 006)")
+	}
 
 	if sample != nil {
 		// A host that moved on since the backup presents a newer generation, which the copy has
@@ -156,6 +166,18 @@ func activeSessions(path string) (int, *session, error) {
 }
 
 // scalar reads one number from the copy, on a connection of its own.
+// restoreState reads, before the copy is opened, the stream it was backed up on and whether it
+// carries a restore marker. A copy from before migration 025, without the marker's table,
+// carries none.
+func restoreState(path string) (stream string, marked bool) {
+	db, _ := sql.Open("sqlite", path) // the driver only records the name; a failed read leaves the zero value
+	defer func() { _ = db.Close() }()
+	_ = db.QueryRow("SELECT stream_id FROM Meta WHERE id=1").Scan(&stream)
+	var n int
+	_ = db.QueryRow("SELECT COUNT(*) FROM RestoreMarker").Scan(&n)
+	return stream, n > 0
+}
+
 func scalar(path, query string) (int, error) {
 	db, _ := sql.Open("sqlite", path) // the driver only records the name; the query reports errors
 	defer func() { _ = db.Close() }()

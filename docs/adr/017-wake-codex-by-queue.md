@@ -361,6 +361,9 @@ a restored hub keeps its stream id and takes the event sequence back instead (AD
   though the counts include it and the inbox returns it. A monitor has the same limit. A backup
   could give its copy a new stream id, which would close the gap for restores from
   `iris admin backup`; that changes ADR 006's restore, and this amendment does not make it.
+- ADR 006's amendment of 2026-11-13 makes that change. A database that carries the restore marker
+  `iris admin backup` writes gets a new stream at the first start of a binary with migration 025 on
+  it, so the gap remains only for a database without the marker.
 
 **The hooks follow the identity** (decisions 3 to 6; amends them).
 - The told state. A session's attention file, beside its generation, keeps the counts as before

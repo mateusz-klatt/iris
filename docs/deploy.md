@@ -246,6 +246,13 @@ it fails only where it touches a dropped table. Use the matching pre-deploy
 backup for that rollback. The procedure cannot enforce the choice made by the
 hub OS owner.
 
+Migration 025 only adds the restore marker's table. v0.1.2 ignores that table, so going back to
+v0.1.2's image alone after deploying migration 025 is safe. That was checked for v0.1.2 only, and a
+binary from before migration 024 is not safe on such a database in any case. The pre-deploy backup in
+step 3 is made by the hub that is running, so a hub from before migration 025, as v0.1.2 is, writes
+no restore marker into it. Restoring it keeps the stream unless the database it copied already
+carried a marker ([Retention and restore](#retention-and-restore-adr-006)).
+
 What this cannot do:
 
 - The checks tie the digest to the release workflow's run for the tag. They do not show that the
@@ -398,11 +405,12 @@ In either target's container, run it as
 The copy keeps SQLite's temporary storage in memory. It reads the database read-only,
 in one read transaction (SQLite's
 `VACUUM INTO`), so the copy is one moment of the live database with its WAL applied. It writes an
-owner-only `<name>.partial` beside the destination, runs SQLite's integrity check on it, and only
-then links it into place. It refuses a destination or `.partial` file that exists, the live
-database among them, and never replaces a file that appears meanwhile. A failed backup leaves
-nothing behind. It prints the schema version, the counts of messages and events, and the
-restore-check command for the new file. It does not copy `hub.token` or the independent
+owner-only `<name>.partial` beside the destination, sets the restore marker in it (below), runs
+SQLite's integrity check on it, and only then links it into place. It refuses a destination or
+`.partial` file that exists, the live database among them, and never replaces a file that appears
+meanwhile. A failed backup leaves nothing behind. It prints the schema version, the counts of
+messages and events, that the restore marker is set, and the restore-check command for the new
+file. It does not copy `hub.token` or the independent
 console key; back up both separately and keep all credential-bearing files private.
 
 To test a restore, never use the live volume. Copy a backup out of the archive, then run:
@@ -417,15 +425,30 @@ throwaway hub on a loopback port with a token of its own. It then checks:
 - that every session active at backup time is recovering, none live;
 - that the restored hub answers status;
 - that a session presenting a generation the backup never saw gets no restored authority;
-- that a monitor whose cursor is ahead of the restored history gets a reset.
+- that a monitor whose cursor is ahead of the restored history gets a reset;
+- for a backup with a restore marker, that the restored hub runs on a new stream. A backup without
+  one gets a warning instead of this check.
 
 It also prints what the first retention sweep would remove. A failed check prints `FAIL` and exits
 non-zero. This checks agent recovery, not named browser authentication. Before a real
 restore, stop the hub and follow [console isolation, fresh-key activation and grant
-review](console-activation.md#restore-a-database-with-browser-access-isolated). Replace
-`iris.db` with the reviewed backup while stopped, removing its old `-wal` and `-shm`
-files. Keep the old console key withheld. Agents then reattach with proof or register
-afresh; reopen browser access only after the named-console recovery checks pass.
+review](console-activation.md#restore-a-database-with-browser-access-isolated). Copy the
+reviewed backup over `iris.db` while stopped, removing its old `-wal` and `-shm` files. Never move
+the backup file itself into place: the first start consumes the restore marker of the file it runs
+on, and the archive should keep a marked copy. Keep the old console key withheld. Agents then
+reattach with proof or register afresh; reopen browser access only after the named-console
+recovery checks pass.
+
+The restore marker (ADR 006, amended on 2026-11-13). The first start of a hub with migration 025 on
+a copy that carries it runs on a new stream, removes the marker from that copy, and says so on
+standard error. The clients then tell or wake for what is pending once more: the hooks and the wake
+runner for mail and freed paths, a monitor for mail only. A database without the marker keeps its
+stream. Only `iris admin backup` from migration 025 on writes the marker. A copy of the live file, a
+volume snapshot, or a backup made by an older binary carries one only if its source did, so it is
+normally unmarked; that includes the pre-deploy backup taken before the first release with that
+migration. On such a database, mail sent after the restore whose event is at or below a cursor a
+client remembers is announced by no hook or monitor and wakes no one until newer attention
+arrives. The counts and the inbox still show it.
 
 ### Repairing a repository identity split (ADR 012)
 
