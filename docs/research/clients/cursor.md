@@ -33,7 +33,7 @@ User: `~/.cursor/hooks.json` (scripts cwd `~/.cursor/`). Project: `<repo>/.curso
 **Outputs:**
 - Permission hooks (`preToolUse`, `beforeShellExecution`, `beforeMCPExecution`, `beforeReadFile`, …): `{permission:"allow"|"deny"|"ask", user_message?, agent_message?, updated_input?}`. Exit `2` ≡ deny. Invalid JSON on permission hooks blocks. Other non-zero exits fail-open unless `failClosed: true`. [DOCS]
 - `sessionStart`: `{additional_context?, env?}` (fire-and-forget; `continue:false` not enforced). [DOCS] `env` injection observed on later hooks (`IRIS_HOOK_PROBE`). [MEASURED]
-- `stop` / `subagentStop`: `{followup_message?}` (docs; `stop` not seen in CLI print runs). [DOCS]
+- `stop` / `subagentStop`: `{followup_message?}` (docs; `stop` not seen in CLI print runs). [DOCS] An interactive PTY run on 2026-11-13 did fire `stop`; see A5. [MEASURED]
 - `postToolUse`: `{additional_context?, updated_mcp_tool_output?}`. [DOCS]
 
 **Timeouts:** per-hook `timeout` seconds; default “platform default”. [DOCS] Async: no native async hook type; process must finish. [DOCS]
@@ -78,7 +78,7 @@ Cursor Plugins (`.cursor-plugin/plugin.json`) can bundle hooks, MCP, rules, skil
 - `agent create-chat` returns a new id. [MEASURED]
 - `agent persist` / `persist attach|stop` for disconnect-surviving sessions. [MEASURED: `persist --help`]
 - `agent acp` — ACP server over stdio (hidden). [MEASURED] [DOCS https://cursor.com/docs/cli/using]
-- `stop` hook `followup_message` (docs; not seen in `-p`). [DOCS]
+- `stop` hook `followup_message` (docs; not seen in `-p`). [DOCS] Interactive PTY, 2026-11-13, CLI `2026.11.11-b912975`, model `composer-2.5-fast`, scratch `HOME`, project hooks only: an idle launch fired no `stop`. A launch with an initial prompt fired `stop` at `loop_count` 0 after the text `PING`. The hook's `followup_message` was visible to the model (`FOLLOWED`) and, because the hook returned it on every `stop`, repeated through `loop_count` 4, plus one further `FOLLOWED` with no later `stop`. The process stayed up until it was killed. This continues a turn that is ending. It does not wake a session that has not started one. Proposed policy: [ADR 029](../../adr/029-cursor-stop-followup.md). [MEASURED]
 - Desktop notifications when turn finishes / blocked (CLI changelog). [DOCS changelog]
 - No keystroke injection API found in `--help`. [MEASURED]
 
@@ -144,17 +144,17 @@ Windows note: prefer a real executable on `PATH` over `.sh`; desktop hooks run t
 | Capability | Value | Evidence |
 | --- | --- | --- |
 | session-start-context | yes | [MEASURED] `sessionStart` + `additional_context`/`env` |
-| prompt-context | partial | [DOCS] `beforeSubmitPrompt`; not seen in `-p` [MEASURED] |
+| prompt-context | partial | [DOCS] `beforeSubmitPrompt`; not seen in `-p`; seen on an interactive PTY run, 2026-11-13 [MEASURED] |
 | pre-tool-deny | yes | [MEASURED] `fixtures/deny-write.json` |
 | post-tool | yes | [MEASURED] `postToolUse` / `afterFileEdit` / shell after |
-| stop-block | partial | [DOCS] `stop`/`beforeSubmitPrompt`; absent in measured `-p` |
+| stop-block | partial | [DOCS] `stop`/`beforeSubmitPrompt`; absent in measured `-p`. Interactive `stop` plus `followup_message` continues a finished turn (2026-11-13) and does not fire when no turn started [MEASURED] |
 | session-end | yes | [MEASURED] `sessionEnd` |
 | edit-path-visible | yes | [MEASURED] Write `tool_input.file_path`; `afterFileEdit.file_path` |
 | shell-command-visible | yes | [MEASURED] `beforeShellExecution.command` |
 | subagent-events | partial | [DOCS] yes; [UNVERIFIED] this run |
 | fires-headless | yes | [MEASURED] with `--trust` |
 | async-handler | no | [DOCS] sync process only |
-| idle-wake | partial | [MEASURED] resume/persist/acp; no push into live idle TTY |
+| idle-wake | partial | [MEASURED] resume/persist/acp; `stop` is end-of-turn only (2026-11-13); no push into a live idle TTY |
 
 ## D. Lens findings (FIRST-RUN UX)
 
