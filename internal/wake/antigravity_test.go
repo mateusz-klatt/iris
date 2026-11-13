@@ -906,6 +906,8 @@ func TestAntigravityClassificationFinalAdmissionDeferralsAndStateEdges(t *testin
 		`{"response":{},"error":"rpc error: code = InvalidArgument desc = bad conv"}`,
 		`{"response":{},"error":"rpc error: code = NotFound desc = conversation not found"}`,
 		`{"response":{},"error":"rpc error: code = Unavailable desc = dial tcp 127.0.0.1:9: connect: connection refused"}`,
+		// agy 1.5.8 on Windows, verbatim, for a language server that refuses the connection.
+		`{"response":{},"error":"rpc error: code = Unavailable desc = connection error: desc = \"transport: Error while dialing: dial tcp 127.0.0.1:1: connectex: No connection could be made because the target machine actively refused it.\""}`,
 	} {
 		if ans, det := classifyAntigravitySend(convID, []byte(detErr), nil, errCode1); ans != "failed" || det != antigravityRejectedWake {
 			t.Fatalf("deterministic rejection %s = %q, %q", detErr, ans, det)

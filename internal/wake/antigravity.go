@@ -576,9 +576,16 @@ func classifyAntigravitySend(session string, stdout, stderr []byte, result error
 	return "unknown", "Antigravity send-message response was not a known outcome"
 }
 
+// isDeterministicAntigravityRejection names failures that happen before anything is queued. A
+// refused connection reads `connect: connection refused` on Unix and, from agy on Windows,
+// `connectex: No connection could be made because the target machine actively refused it.`
+// (measured with agy 1.5.8). Go formats Windows errors in English first, so that text does not
+// follow the system language.
 func isDeterministicAntigravityRejection(errText string) bool {
 	return strings.Contains(errText, "code = Unauthenticated") ||
 		strings.Contains(errText, "code = InvalidArgument") ||
 		strings.Contains(errText, "code = NotFound") ||
-		(strings.Contains(errText, "code = Unavailable") && strings.Contains(errText, "connect: connection refused"))
+		(strings.Contains(errText, "code = Unavailable") &&
+			(strings.Contains(errText, "connect: connection refused") ||
+				strings.Contains(errText, "connectex: No connection could be made because the target machine actively refused it")))
 }
