@@ -189,7 +189,8 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		if ev.Kind == KindSessionStart && guard.NeedsHint(repo) {
 			notes = append(notes, guard.Hint)
 		}
-		// The session context states the unread count, so those counts count as said.
+		// The session context states the unread count and the freed paths, so those counts count
+		// as said.
 		r.attentionNote(ctx, ev, sess.Attention, true, rev)
 		return r.finish(state, ev, Encode(ev, Decision{Action: ActionAllow, Context: SessionText(sess, notes...)}))
 	case KindPrompt, KindPreInvocation:
