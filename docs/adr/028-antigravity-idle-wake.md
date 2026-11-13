@@ -20,22 +20,23 @@ in-process Language Server (`ANTIGRAVITY_LS_ADDRESS`) using a per-process secret
 - `iris mcp --client antigravity` receives no `ANTIGRAVITY_*` variables.
 - All six lifecycle hooks (`SessionStart`, `PreInvocation`, `PreToolUse`, `PostToolUse`,
   `PostInvocation` and `Stop`) receive `ANTIGRAVITY_CONVERSATION_ID` alone.
-- Only subprocesses started by the `run_command` tool receive `ANTIGRAVITY_LS_ADDRESS`,
-  `ANTIGRAVITY_CSRF_TOKEN` and `ANTIGRAVITY_AGENTAPI_EXE` alongside `ANTIGRAVITY_CONVERSATION_ID`.
-  Earlier experiments saw those variables in hooks because an inner `agy --print` had been launched
-  from an outer Antigravity `run_command` shell, inheriting the outer shell's environment.
+- Only subprocesses started by the `run_command` tool receive `ANTIGRAVITY_LS_ADDRESS` and
+  `ANTIGRAVITY_CSRF_TOKEN` alongside `ANTIGRAVITY_CONVERSATION_ID`. Earlier experiments saw those
+  variables in hooks because an inner `agy --print` had been launched from an outer Antigravity
+  `run_command` shell, inheriting the outer shell's environment.
 
 ## Measurements
 
-All measurements ran on Linux/WSL2 with `agy 1.5.8` (`gemini-3.8-flash-low`) in isolated PTY
-sessions after stripping every `ANTIGRAVITY_*` variable from the outer environment.
+All measurements ran on Linux/WSL2 with `agy 1.5.8` (`gemini-3.8-flash-low`) after stripping every
+`ANTIGRAVITY_*` variable from the outer environment.
 
 1. **Delivery while idle.** Sent 2.0 s after `Stop` (`fullyIdle: true`), `agy agentapi send-message`
-   exited `0` in `905 ms` and started a new model turn about `45 ms` later. In `transcript.jsonl`,
-   the message was recorded as a `SYSTEM_MESSAGE` step (`source: "SYSTEM"`,
-   `type: "SYSTEM_MESSAGE"`), not `USER_INPUT`. When `PreInvocation` ran for that woken turn,
-   `lastUserInput` still held the earlier user prompt and the `SYSTEM_MESSAGE` step had not yet
-   been flushed to `transcript.jsonl`; by `PostInvocation` and `Stop` it was on disk.
+   exited `0` in `905 ms` and started a new model turn about `45 ms` later. In `transcript.jsonl`
+   (and `transcript_full.jsonl`, which `transcriptPath` names), the message was recorded as a
+   `SYSTEM_MESSAGE` step (`source: "SYSTEM"`, `type: "SYSTEM_MESSAGE"`), not `USER_INPUT`. When
+   `PreInvocation` ran for that woken turn, `lastUserInput` still held the earlier user prompt and
+   the `SYSTEM_MESSAGE` step had not yet been flushed to disk; by `PostInvocation` and `Stop` it
+   was present on disk.
 2. **Delivery while busy.** Sent 1.0 s into a 4 s `run_command`, `send-message` exited `0` in
    `713 ms` without interrupting the running tool. `agy` queued it and injected it as a
    `SYSTEM_MESSAGE` step right after `PostToolUse`, before the next model call (`invocationNum: 1`)
@@ -45,7 +46,7 @@ sessions after stripping every `ANTIGRAVITY_*` variable from the outer environme
    `agy agentapi send-message`.
 4. **Detached helper lifetime.** A helper detached into a new session with standard streams closed
    (`/dev/null`) survived `run_command` exit and all Turn 1 hooks, woke the idle session (`634 ms`
-   in the non-bypass sandbox run) and exited when the host `agy` process ended.
+   in the unsandboxed `BypassSandbox` run) and exited when the host `agy` process ended.
 5. **Stale credentials and dead server.** Against a live Language Server with a wrong or stale
    `ANTIGRAVITY_CSRF_TOKEN`, `send-message` exited `1` (`Unauthenticated: invalid CSRF token`;
    missing token: `missing CSRF token`). After `agy` exited, dialing the old
@@ -60,37 +61,52 @@ sessions after stripping every `ANTIGRAVITY_*` variable from the outer environme
 7. **Terminal sandbox.** Under `agy --sandbox` (and `auto` mode), `run_command` executes in a
    namespace sandbox that sees only namespace PIDs (`[1, 31]`), kills detached children when the
    foreground command exits, cannot access `~/.config/iris`, and gets `connection refused` dialing
-   `127.0.0.1:<LS_PORT>`. When the `Stop` continuation asked `run_command` to set
-   `BypassSandbox: true`, the exact rule `command(<iris-path> watch --client antigravity --wake)`
-   in `~/.gemini/antigravity-cli/settings.json` (`permissions.allow`) approved the unsandboxed
-   command without prompting on a personal account.
+   `127.0.0.1:<LS_PORT>`. Setting `BypassSandbox: true` runs the helper on the host.
+8. **Permission matcher (`permissions.allow`) in a clean `HOME`.** Tested on `agy 1.5.8` (`-p
+   --sandbox`, `toolPermission: "request-review"`, clean `HOME` with no inherited allow rules):
+   - `command(<iris-path> watch --client antigravity --wake)` denied an unallowed `/bin/echo`
+     control (with `PostToolUse` still receiving `"error": ""` on auto-denial) and blocked `&&` and
+     newline command chains, **but allowed appended arguments (`--extra`), prefixed shell variable
+     assignments (`FOO=1 <cmd>`), and the `env` wrapper (`env FOO=1 <cmd>`) outside the sandbox**.
+   - Even `command(regex:\A<escaped-cmd>\z)` rejected `env FOO=1 <cmd>` **while still allowing
+     `FOO=1 <cmd>` and `--extra` outside the sandbox**.
 
 ## Decision
 
-### Opt-in configuration and exact permission rule
+### Opt-in configuration, no automatic command allow rule, and teardown
 
-Wake for Antigravity is opt-in and off by default. `iris integrate antigravity --wake` writes a
-local marker (`on`) beside the Iris configuration and adds the exact allow rule
-`command(<iris-path> watch --client antigravity --wake)` — using the absolute `iris` path and exact
-arguments, with no wildcards — to `~/.gemini/antigravity-cli/settings.json` (`permissions.allow`),
-keeping `mcp(iris/*)` and every user setting intact.
+Wake for Antigravity is opt-in and off by default. Because Antigravity's `permissions.allow`
+matcher cannot enforce whole-invocation matching without permitting environment assignments or
+appended arguments (measurement 8), **Iris writes no `command(...)` allow rule to `settings.json`**.
+`settings.json` retains only `mcp(iris/*)`, so moving `<iris-path>` leaves no orphaned Iris
+`command(...)` permission rule behind (`iris integrate antigravity` updates hook entries by marker
+as before). With `--wake`, Antigravity keeps its interactive approval prompt for the unsandboxed
+helper command, costing the user one approval per armed conversation (and again after `/clear`,
+which starts a new `conversationId`). Iris offers no flag to write a `command(...)` allow rule
+automatically.
 
-Fresh `iris integrate antigravity` leaves wake off and writes no wake command allow rule. Plain
-`iris integrate antigravity` and `iris setup` preserve an existing explicit `on` or `off` marker
-(updating Iris's wake command rule if `on` and the binary path changed).
-`iris integrate antigravity --no-wake` writes `off` and removes Iris's wake command allow rule from
-`settings.json`. `iris integrate --remove antigravity` removes the marker and Iris's wake command
-allow rule along with `mcp(iris/*)`, the hooks and the MCP server entry; a rule the user already
-had before Iris wrote it stays theirs.
+- `iris integrate antigravity --wake` writes a local marker (`on`) beside the Iris configuration.
+- Fresh `iris integrate antigravity` leaves wake off; plain `iris integrate antigravity` and
+  `iris setup` preserve an existing explicit `on` or `off` marker.
+- `iris integrate antigravity --no-wake` writes `off` and stops any live Antigravity wake helpers
+  recorded under the helper state directory (verifying `(helper_pid, helper_start_ms)` via
+  `proc.Lookup` before terminating, then conditionally removing their owned records).
+- `iris integrate --remove antigravity` removes the wake marker and likewise stops any live
+  recorded Antigravity wake helpers, alongside removing `mcp(iris/*)`, hooks and the MCP entry.
 
-### Local helper state and `Stop` arming request
+### Per-process state, authoritative current session, and `Stop` arming request
 
-Per-process Antigravity wake state lives in a `0700` directory beside `sessions/` (mode `0600`
-files, owner-only DACL on Windows), not inside `sessions/`, so generation pruning does not remove
-active helper records. Each record is keyed by `(agy pid, start_ms)` of the nearest `agy` ancestor
-(`proc.Nearest`) and holds either the detached helper's `(helper_pid, helper_start_ms, session_id)`
-or a `failed` mark for that `agy` process. All reads and atomic replacements stay within the hook
-lock budget and never call the hub.
+Per-process Antigravity state lives in a `0700` directory beside `sessions/` (mode `0600` files,
+owner-only DACL on Windows), outside `sessions/` so generation pruning does not touch active
+records. One state file per `(agy pid, start_ms)` of the nearest `agy` ancestor (`proc.Nearest`),
+coordinated under a local file lock within the 50 ms hook budget and without hub calls, holds:
+
+- `current_session_id`: updated atomically by **every** Antigravity hook invocation on the host
+  (`SessionStart`, `PreInvocation`, `PreToolUse`, `PostToolUse`, `PostInvocation` and `Stop`) to
+  `ev.SessionID`, providing authoritative host-side evidence when `/clear` or `--conversation`
+  switches conversations inside one `agy` process;
+- `helper`: either a live entry `(helper_pid, helper_start_ms, session_id, attempt_id)`, an
+  `arm_requested(session_id)` marker, or a `failed` latch.
 
 Only when the local wake marker is `on` does `Stop` consider asking for the helper, and only when
 every gate holds:
@@ -98,169 +114,238 @@ every gate holds:
 - `fullyIdle` is `true`;
 - `terminationReason` is `"NO_TOOL_CALL"` (shutdown, cancellation, errors and missing reasons never
   ask);
-- `executionNum` is `0` and `continuationActive` is `false`, which enforces at most one ask per
-  turn despite the `agy 1.5.8` `continuationActive` drift and remains sound if a later `agy`
-  release sets `continuationActive: true`;
-- the nearest `agy` ancestor `(pid, start_ms)` is known, its local record is not marked `failed`,
-  and no live process matching `(helper_pid, helper_start_ms)` for this `conversationId` exists
-  (`proc.Lookup`, rejecting dead and zombie states).
+- `executionNum` is `0` and `continuationActive` is `false`, enforcing at most one ask per turn
+  despite the `agy 1.5.8` `continuationActive` drift and staying valid if a future `agy` sets
+  `continuationActive: true`;
+- the nearest `agy` ancestor `(pid, start_ms)` is known, `<iris-path>` contains no newline, control
+  or `"` characters (otherwise fail open without asking), the `(agy pid, start_ms)` record is not
+  marked `failed` or `arm_requested(conversationId)`, and no live process matching
+  `(helper_pid, helper_start_ms)` for this `conversationId` exists (`proc.Lookup`, rejecting dead
+  and zombie states).
 
-When all gates pass, `Stop` returns `{"decision":"continue","reason":"..."}` asking the model once
-to run the exact `<iris-path> watch --client antigravity --wake` command synchronously via
-`run_command` (not `IsDaemon`) with `BypassSandbox: true` (when `run_command` exposes
-`BypassSandbox`). With `--wake`, the helper runs outside Antigravity's terminal sandbox. Any read,
-lock or parse failure in `Stop` allows (`{}` with exit `0`, D3) and stayed well within the hook
-deadline in measurement.
+If `Stop` (`fullyIdle: true`, `terminationReason: "NO_TOOL_CALL"`) instead sees
+`arm_requested(conversationId)` with still no live helper for `conversationId` — covering a model
+that ignored the earlier request without calling `run_command` — `Stop` latches `failed` and allows
+(`{}`). When all arming gates pass, `Stop` records `arm_requested(conversationId)` (terminating any
+superseded live helper from an earlier `session_id` first) and returns
+`{"decision":"continue","reason":"..."}` asking the model once to run
+`<quoted-iris-path> watch --client antigravity --wake` synchronously via `run_command` (not
+`IsDaemon`) with `BypassSandbox: true` (when `run_command` exposes `BypassSandbox`), quoting
+`<iris-path>` for the platform shell (`sh` single-quoting on Unix; `cmd` double-quoting on Windows)
+when it contains whitespace or shell metacharacters. Any read, lock or parse failure in `Stop`
+allows (`{}` with exit `0`, D3).
 
-### Detached helper (`iris watch --client antigravity --wake`) and executable validation
+### Hardened helper (`iris watch --client antigravity --wake`)
 
-When `iris watch --client antigravity --wake` starts, the parent process runs preflight before
-detaching:
+Even if a user persists a `command(...)` rule of their own in Antigravity's TUI, the helper never
+trusts caller-supplied arguments, executable paths or Iris configuration overrides:
 
-1. Resolve its host `agy` ancestor `(pid, start_ms)` (`proc.Nearest`).
-2. Require non-empty `ANTIGRAVITY_CONVERSATION_ID` and `ANTIGRAVITY_CSRF_TOKEN`, and validate
-   `ANTIGRAVITY_LS_ADDRESS` as a literal loopback `host:port` reachable by a short TCP dial.
-3. Validate the `agentapi` executable fail-closed:
-   - when `ANTIGRAVITY_AGENTAPI_EXE` is set, it must be an absolute path whose `os.Stat` names an
-     existing regular file; if it is relative, missing or not a regular file, the helper fails
-     closed without falling back to `PATH` or guessing another path;
-   - when `ANTIGRAVITY_AGENTAPI_EXE` is unset, `agy` (`agy.exe` on Windows) resolved from `PATH`
-     must likewise be an absolute path whose `os.Stat` names an existing regular file, or the
-     helper fails closed.
-   Iris trusts the `agy`-provided environment (within the same OS-user boundary, D12) for that
-   executable path and for `ANTIGRAVITY_LS_ADDRESS`; only the address is checked to be loopback and
-   only the executable path is checked to be an absolute existing regular file.
+1. **Exact arguments.** `iris watch` for Antigravity wake requires `os.Args[1:]` to equal
+   `["watch", "--client", "antigravity", "--wake"]`; any extra flag or positional argument exits
+   `1` before detaching.
+2. **Pinned Iris configuration.** Both parent and detached child ignore `IRIS_HUB_URL`,
+   `IRIS_TOKEN_FILE`, `IRIS_EXECUTION`, `XDG_CONFIG_HOME`, `HOME` and `APPDATA` environment
+   variables, resolving the default Iris configuration directory from OS user account records on
+   Unix (`user.LookupId` for `os.Getuid()`, without `$HOME` fallback) and `FOLDERID_RoamingAppData`
+   on Windows, and reading `client.json` and `hub.token` only from that directory so a modified
+   command environment cannot redirect the hub URL, bearer token path, wake marker or session
+   directory.
+3. **Executable from the `agy` ancestor process only.** The helper never reads
+   `ANTIGRAVITY_AGENTAPI_EXE` or `PATH`. It takes the executable path exclusively from the verified
+   host `agy` ancestor `(pid, start_ms)`:
+   - on Linux, `os.Readlink("/proc/<pid>/exe")` (rejecting `" (deleted)"`), verified via `os.Stat`
+     as an absolute path to an existing regular file;
+   - on Windows (`QueryFullProcessImageName` in `internal/proc`, unmeasured live for Antigravity
+     wake) and macOS (`proc_pidpath` / `kern.procargs2` executable path, unmeasured live for
+     Antigravity wake), resolved from the `agy` ancestor process and verified as an absolute
+     existing regular file, failing closed otherwise.
+4. **Loopback Language Server check.** Require non-empty `ANTIGRAVITY_CONVERSATION_ID` and
+   `ANTIGRAVITY_CSRF_TOKEN`, require `ANTIGRAVITY_CONVERSATION_ID` to match the hook-published
+   `current_session_id` for `(agy pid, start_ms)`, and validate `ANTIGRAVITY_LS_ADDRESS` as a
+   literal loopback `host:port` reachable by a short TCP dial.
+5. **Minimal scrubbed child environment and secret handling.** Both the parent and the detached
+   child call `debug.SetTraceback("none")` so Go runtime crashes do not dump stacks or frame state.
+   Both the detached `iris` child and `<agy-exe> agentapi send-message` run with an explicit,
+   minimal constructed `Env` carrying only `ANTIGRAVITY_CONVERSATION_ID`, `ANTIGRAVITY_LS_ADDRESS`,
+   `ANTIGRAVITY_CSRF_TOKEN` and minimal trusted OS runtime variables (`SYSTEMROOT` on Windows,
+   OS-account `HOME` on Unix) — stripping `LD_*`, `DYLD_*`, `GOTRACEBACK` and any other caller
+   environment variables before executing the dynamically linked `agy` binary. Iris never writes
+   `ANTIGRAVITY_CSRF_TOKEN` to disk, logs or `argv` and never logs raw subprocess stdout or stderr.
 
-If preflight passes and a live helper already owns `(agy pid, start_ms)` for the same
-`conversationId`, the parent leaves that live record in place and exits `0`. Otherwise, within a
-bounded 2-second startup budget, the parent spawns the detached background `iris` child in a new
-session with `stdin`, `stdout` and `stderr` attached to `os.DevNull`, looks up the child's
+If preflight passes and `(agy pid, start_ms)` already holds a live `(helper_pid, helper_start_ms)`
+for this `conversationId`, the parent preserves that live entry untouched and exits `0`. Otherwise,
+within a bounded 2-second startup budget, the parent generates a 128-bit `attempt_id`, spawns the
+detached child in a new session (`stdin`, `stdout`, `stderr` on `os.DevNull`), looks up
 `(helper_pid, helper_start_ms)` via `proc.Lookup`, durably writes and syncs
-`(helper_pid, helper_start_ms, session_id)` to the `(agy pid, start_ms)` record (replacing any
-prior `failed` mark), re-checks `proc.Lookup` so a child that died immediately is caught, and only
-then exits `0`. If any preflight check, spawn, lookup or durable write fails or times out, the
-parent terminates the child if started, writes `failed` to `(agy pid, start_ms)` when the state
-directory is reachable, and exits `1`.
+`(helper_pid, helper_start_ms, session_id, attempt_id)` under the helper lock (replacing only a
+missing, dead, `arm_requested`, `failed` or superseded-`session_id` entry, never a live helper for
+the current `conversationId`), re-verifies `proc.Lookup`, and only then exits `0`.
 
 The detached child binds only to the hook-registered Execution of that single-session `agy` process
-whose `session_id` matches `ANTIGRAVITY_CONVERSATION_ID` (never registering a fallback Execution),
-heartbeats that binding while checking `proc.Lookup(agy_pid)` against `start_ms`, and exits as soon
-as that `agy` process ends, its bound `session_id` no longer matches, or another session's helper
-replaces the `(agy pid, start_ms)` record (such as after `/clear`).
+whose `session_id` matches `ANTIGRAVITY_CONVERSATION_ID` (never registering a fallback Execution).
+Before **every** binding heartbeat renewal (`Maintain`) and before **every** wake admission, the
+child checks `proc.Lookup(agy_pid)` against `start_ms`, checks that the local wake marker is `on`,
+and checks that the hook-published `current_session_id` for `(agy pid, start_ms)` still equals its
+`ANTIGRAVITY_CONVERSATION_ID` and that the helper entry still names its own
+`(helper_pid, helper_start_ms, attempt_id)`. If any check fails — `agy` exited, `--no-wake` or
+`--remove` ran, or `/clear` switched conversations (even though `binding.Resolver` refresh in
+`internal/binding/binding.go` would otherwise retain the cached Execution) — the helper stops at
+once without renewing the old Execution's lease and without sending a wake, removes the helper
+entry **only if** it still carries its own `(helper_pid, helper_start_ms, attempt_id)`, and exits.
 
-`ANTIGRAVITY_CSRF_TOKEN` stays in memory only: it is never written to disk, never placed in a log
-and never passed in `argv`. It reaches the Language Server client only through the child process
-environment; under D12, processes of the same OS user share the host boundary and can already
-inspect `/proc/<pid>/environ` of `agy` and its children.
+### Conditional failure latch, ordering with `PostToolUse`, and manual re-arming
 
-### Failure latch, ordering with `PostToolUse` and manual re-arming
+Every publish, `failed` latch and cleanup mutation on `(agy pid, start_ms)` is conditional under
+the helper directory lock and **never overwrites a live helper for the current `conversationId`**:
 
-A failing setup costs at most one automatic continuation for that `agy` process, never one per
-turn, and cannot race with a healthy helper's record:
+1. **Parent writes before exit `0`.** A successful launcher writes and syncs
+   `(helper_pid, helper_start_ms, session_id, attempt_id)` before exiting `0`. On any host-side
+   preflight, spawn, lookup or write failure, the parent terminates its spawned child if any,
+   writes `failed` **only if** no live helper already owns `(agy pid, start_ms)` for the current
+   `conversationId`, and exits `1`.
+2. **`PostToolUse` runs after process exit.** On `agy 1.5.8`, `PostToolUse` fires after the
+   `run_command` process exits, and auto-denied commands still carry `"error": ""` (measurement 8).
+   When `PostToolUse` sees a `run_command` whose unquoted command matches the exact 4-token
+   `<iris-path> watch --client antigravity --wake` invocation:
+   - if `(agy pid, start_ms)` holds a live `(helper_pid, helper_start_ms)` for this
+     `conversationId` (`proc.Lookup`), `PostToolUse` preserves that live record (even if `error` is
+     non-empty from a denied or failing duplicate call);
+   - otherwise — no live helper for this `conversationId` is recorded after the command exited
+     (covering permission denial in headless `-p` or interactive rejection, `BypassSandbox`
+     refusal, or exit `1` inside the sandbox where `~/.config/iris` is unmounted) — `PostToolUse`
+     writes `failed` for `(agy pid, start_ms)`.
 
-1. **Parent writes before exit `0`.** The parent `iris watch --client antigravity --wake` never
-   exits `0` until `(helper_pid, helper_start_ms, session_id)` is durably on disk and verified
-   live. On any host-side failure it writes `failed` and exits `1`.
-2. **`PostToolUse` runs after process exit.** On `agy 1.5.8`, `PostToolUse` fires on the host after
-   the `run_command` process exits (measured). For the exact `<iris-path> watch --client
-   antigravity --wake` command, `PostToolUse` decides from the command's outcome (`error` field)
-   together with the `(agy pid, start_ms)` record:
-   - if `error` is empty and `(agy pid, start_ms)` holds a live `(helper_pid, helper_start_ms)` for
-     this `conversationId` (`proc.Lookup`), `PostToolUse` keeps that live record;
-   - otherwise — `error` is non-empty (non-zero exit, permission denial or `BypassSandbox` refusal)
-     or `(agy pid, start_ms)` holds no live helper for this `conversationId` (such as exit `1`
-     inside Antigravity's sandbox where `~/.config/iris` is unmounted and host PIDs are hidden, or
-     a child that exited before `PostToolUse`) — `PostToolUse` writes `failed` for
-     `(agy pid, start_ms)`.
+Once `(agy pid, start_ms)` is marked `failed`, `Stop` stops asking for that `agy` process. A person
+can re-arm without restarting `agy` by asking the session to run `<quoted-iris-path> watch --client
+antigravity --wake` once via `run_command` (with `BypassSandbox: true` when sandboxed): on success,
+the parent's conditional publish replaces `failed` with the new live helper entry before exiting
+`0`. Running the command from an external shell outside `agy` cannot re-arm because it lacks
+`ANTIGRAVITY_LS_ADDRESS`, `ANTIGRAVITY_CSRF_TOKEN` and the `agy` ancestor.
 
-Once `(agy pid, start_ms)` is marked `failed`, `Stop` stops asking for the lifetime of that `agy`
-process. A person can re-arm that `agy` process without restarting it by asking the session to run
-the exact `<iris-path> watch --client antigravity --wake` command once through `run_command` (with
-`BypassSandbox: true` when sandboxed): a successful run overwrites the `failed` mark with the new
-live `(helper_pid, helper_start_ms, session_id)` record before exiting `0`. Running the command
-from a separate shell outside `agy` cannot re-arm the session because only `agy`'s `run_command`
-carries `ANTIGRAVITY_LS_ADDRESS`, `ANTIGRAVITY_CSRF_TOKEN` and the `agy` ancestor.
+### Hook idle state, wake quota, classification, and incremental guard scanning
 
-### Hook idle state, wake quota and `PostInvocation` guard consumption
-
-Hooks track session idle state locally per `(client, conversationId)` beside the helper record:
+Hooks track idle state per `(antigravity, conversationId)` beside the helper state:
 
 - `PreInvocation` clears idle (`false`) before each model call.
 - `Stop` sets idle (`true`) only when `fullyIdle` is `true` and `Stop` is not returning
-  `decision: "continue"`; any other `Stop` clears idle.
+  `decision: "continue"`, recording `transcriptPath`'s regular-file identity and byte size as
+  `(file_id, idle_offset)`; any other `Stop` clears idle.
 
-When `iris watch` observes pending attention for the bound Execution, admission runs through
-`internal/wake` (`antigravity` client state store). The helper requires local idle to be `true`,
-the `agy` process to be live, and the validated `agentapi` executable path to still be an absolute
-existing regular file (re-applying the fail-closed check above), then re-reads authoritative
-attention and told state under the shared sessions lock before directly executing `<agentapi-exe>
-agentapi send-message <conversationId> <prompt>` (never through a shell) with the fixed,
-content-free Iris notification and its correlation token. Busy, missing or unreadable idle state
-defers without spending wake quota. One automatic wake per attention identity remains the limit,
-with the shared single retry on a known refusal (`send-message` exit `1`) and an unspent/retained
-guard on unknown outcomes or the 30-second queue deadline.
+Wake admission and quota go through `internal/wake` (`antigravity` state store). All hub reads,
+process checks, marker reads and subprocess waits happen **outside** the shared `sessions` lock
+(`snapshot -> checks/hub -> snapshot/compare -> publish` within the 50 ms file-only lock budget;
+`answer` merges by immutable `attempt.ID` after the command finishes). Final admission right before
+executing `<agy-exe> agentapi send-message <conversationId> <prompt>` requires:
 
-Because `agy` records `send-message` in `transcript.jsonl` as a `SYSTEM_MESSAGE` step that is on
-disk by `PostInvocation` (and not in `PreInvocation`'s `lastUserInput`), `PostInvocation` reads a
-bounded tail of `transcriptPath` and consumes the outstanding `antigravity` wake guard when a
-`SYSTEM_MESSAGE` step contains that exact Iris notification and correlation token.
+- local wake marker `on`;
+- live `agy` process `(pid, start_ms)` whose hook-published `current_session_id` equals
+  `ANTIGRAVITY_CONVERSATION_ID` and whose helper record still matches this helper's
+  `(helper_pid, helper_start_ms, attempt_id)`;
+- local idle `true` for `(antigravity, conversationId)`;
+- `<agy-exe>` from the `agy` ancestor process still an existing regular file.
+
+Any unmet check defers (or exits if disabled/superseded) without spending wake quota. One automatic
+wake per attention identity remains the limit, using the fixed, content-free Iris notification and
+correlation token.
+
+Like `internal/wake/command.go` for Codex, exit `1` is not generically retried:
+
+- `"submitted"`: exit `0` with empty `stderr` and valid JSON `stdout` confirming `sendMessage` for
+  `recipientId == conversationId`.
+- `"failed"` (eligible for the shared single retry): exit `1` with empty `stderr` and valid JSON
+  `stdout` whose `error` matches a measured deterministic pre-enqueue rejection (`code =
+  Unauthenticated`, `code = InvalidArgument`, `code = NotFound`, or `code = Unavailable` with
+  `connect: connection refused`).
+- `"unknown"` (retains the outstanding guard with no retry): every other exit status, non-JSON
+  output, non-empty `stderr`, mid-RPC transport reset, `DeadlineExceeded` / `Internal` / `Unknown`
+  gRPC status, signal exit or 30-second command timeout.
+
+To consume the guard in `PostInvocation` without missing messages when tool or model output grows
+large (`internal/wake/engine.go`), Iris uses **incremental, attempt-associated forward scanning**
+rather than a fixed tail window:
+
+- When a reservation is published, Iris records `(attempt_id, file_id, scanned_offset,
+  skipping_line)` initialized from `idle_offset` at reservation time with `skipping_line: false`
+  (falling back to `0` if `file_id` changed or the file shrank).
+- On `PostInvocation`, while an outstanding `antigravity` guard exists, the hook opens
+  `transcriptPath` without following terminal symlinks (`O_NOFOLLOW` on Unix), verifies a regular
+  file, seeks to `scanned_offset`, and scans up to a bounded per-hook byte budget (`4 MiB` within
+  the hook deadline). Complete `\n`-terminated lines up to `64 KiB` are parsed and advance
+  `scanned_offset` past `\n`; an incomplete trailing line `<= 64 KiB` at EOF leaves `scanned_offset`
+  at the start of that line until flushed; any line exceeding `64 KiB` cannot hold Iris's short
+  fixed wake message and sets `skipping_line = true`, advancing `scanned_offset` across `4 MiB`
+  chunks until `\n` clears `skipping_line` so oversized tool outputs never wedge `scanned_offset`
+  or allocate unbounded memory.
+- A line consumes the guard only when it parses as JSON with `source == "SYSTEM"` and
+  `type == "SYSTEM_MESSAGE"` whose `content` matches the `<SYSTEM_MESSAGE>\n[Message] timestamp=...
+  sender=<conversationId> priority=... content=<payload>\n</SYSTEM_MESSAGE>` envelope with
+  `<payload>` equal to the outstanding attempt's whole `Message` byte-for-byte — never by substring
+  match and never from `USER_INPUT` or composite steps.
 
 ## Limits
 
-- **No wake before arming, and one shell step per session.** Neither `SessionStart` nor `iris mcp`
-  has the Language Server address or token, so nothing can wake a session before its first turn
-  reaches `Stop` and arms the helper. Arming costs one `Stop` continuation and one `run_command`
-  step per `agy` process.
-- **Request, not enforcement.** `Stop` asks the model to start the helper; a model may ignore the
-  request or omit `BypassSandbox: true`. If the model never calls `run_command`, no helper runs.
-- **Runs outside Antigravity's terminal sandbox; enterprise accounts may refuse it.** With
-  `--wake`, the helper runs unsandboxed on the host so it can reach `~/.config/iris`, the hub, host
-  process state and `127.0.0.1:<LS_PORT>`. The `command(...)` allow rule covers `BypassSandbox` on
-  personal accounts, whereas Antigravity enterprise and business policies enforce separate
-  `unsandboxed(...)` review or disable sandbox bypass, so `--wake` does not work where policy
-  refuses it.
-- **Busy-turn race.** Idle observation in hooks and `send-message` submission in the helper are not
-  atomic. If the user starts a turn between the idle check and submission, `agy` queues the message
-  and injects it as a `<SYSTEM_MESSAGE>` into that running turn (measurement 2), so the model may
-  answer it as part of the current turn or run a follow-up tool call after the user's work. Iris
+- **No wake before arming, and one interactive approval + shell step per armed conversation.**
+  Neither `SessionStart` nor `iris mcp` has the Language Server address or token, so nothing wakes a
+  session before its first turn reaches `Stop` and arms the helper. Because Iris writes no
+  `command(...)` allow rule, Antigravity prompts the user once per armed conversation (and again
+  after `/clear`, which creates a new `conversationId`) to approve the unsandboxed helper command;
+  in headless `-p` mode without user approval, the request is denied once, latched `failed`, and not
+  repeated.
+- **Choosing "Always allow" in Antigravity weakens the sandbox for that binary.** If a user
+  persists a `command(...)` allow rule themselves, Antigravity's matcher permits `VAR=value`
+  assignments, `env` wrappers and extra arguments on that binary outside the sandbox (measurement
+  8). Iris's exact-`argv`, ancestor-exe, pinned-config and scrubbed-`Env` checks confine what `iris
+  watch` itself will do, not what Antigravity's rule syntax allows.
+- **Request, not enforcement; enterprise policy may refuse sandbox bypass.** A model may ignore the
+  `Stop` request or omit `BypassSandbox: true`, and enterprise policies may block unsandboxed
+  commands (`unsandboxed(...)` review or disabled bypass).
+- **Disabling wake cannot recall an already-queued message.** `--no-wake` and `--remove` terminate
+  live helpers and block new admissions, but a `send-message` already accepted by `agy` remains in
+  `agy`'s conversation queue.
+- **Busy-turn race.** Hook idle recording and helper submission are not atomic. If the user starts
+  a turn between them, `agy` queues the message and injects it as `<SYSTEM_MESSAGE>` into the
+  active turn (measurement 2), so the model may handle it in that turn or spend an extra step. Iris
   cannot promise zero billable empty turns.
-- **Environment trust boundary (D12).** Iris trusts the `agy`-provided process environment (or
-  `PATH` when `ANTIGRAVITY_AGENTAPI_EXE` is unset) for the `agentapi` binary and Language Server
-  address. Only `ANTIGRAVITY_LS_ADDRESS` is checked to be a literal loopback `host:port` and only
-  the executable path is checked to be an absolute existing regular file; Iris cannot authenticate
-  the loopback listener before `agentapi` sends `ANTIGRAVITY_CSRF_TOKEN`.
-- **Live `agy` process required and stale credentials fail.** The helper works only while the `agy`
-  process that spawned it stays alive. After an `agy` exit or restart, the previous Language Server
-  address or CSRF token fails with exit `1` (measurement 5); a resumed session in a new `agy`
-  process must arm a fresh helper.
-- **Platform scope.** The clean-environment lifecycle, `Stop` continuation, `BypassSandbox`
-  behavior and `transcript.jsonl` `SYSTEM_MESSAGE` shape were measured on Linux/WSL2 with
-  `agy 1.5.8`; macOS and Windows require separate live verification.
+- **Same-user secret and loopback trust boundary (D12).** Iris keeps `ANTIGRAVITY_CSRF_TOKEN` out of
+  its own files, logs, crash tracebacks and `argv`, and passes it only in the scrubbed `Env` of the
+  helper and `<agy-exe> agentapi`; same-OS-user processes can still inspect `/proc/<pid>/environ` or
+  process memory, and OS core dumps or swap outside Iris remain governed by the host OS.
+  `ANTIGRAVITY_LS_ADDRESS` comes from `agy`'s environment and is checked only to be literal
+  loopback; Iris cannot authenticate the loopback listener before `agentapi` sends the token.
+- **Live `agy` process, default config location, and platform scope.** After `agy` exits or
+  restarts, old Language Server addresses and tokens fail with exit `1` (measurement 5), and
+  upgrading `agy` in place on Linux causes `/proc/<pid>/exe` to carry `" (deleted)"`, stopping wakes
+  until `agy` restarts. Because the helper ignores `HOME`, `XDG_CONFIG_HOME`, `APPDATA`,
+  `IRIS_HUB_URL` and `IRIS_TOKEN_FILE` environment overrides, non-default Iris locations configured
+  only through environment variables (rather than `client.json` in the OS account's default config
+  directory) cannot use Antigravity wake. Measurements ran on Linux/WSL2 with `agy 1.5.8`; macOS and
+  Windows process-image lookups and wake delivery remain unmeasured live.
 
 ## Verification
 
 Unit and integration tests at 100% statement coverage will verify:
 
-- `iris integrate antigravity` opt-in (`--wake`), `--no-wake`, plain reintegration preservation,
-  exact `command(<iris-path> watch --client antigravity --wake)` insertion and removal in
-  `settings.json`, user-owned rule preservation, and `--remove`;
+- `iris integrate antigravity` opt-in (`--wake`), `--no-wake` and `--remove` marker management,
+  absence of any Iris-written `command(...)` allow rule in `settings.json`, and live helper
+  termination on `--no-wake` and `--remove`;
 - `Stop` arming gates (`fullyIdle`, `terminationReason == "NO_TOOL_CALL"`, `executionNum == 0`,
-  `!continuationActive`, wake marker `on`/`off`, live helper liveness via `proc.Lookup`, and D3
-  fail-open on errors);
-- parent-before-exit durable record ordering against `PostToolUse`, single-attempt `failed`
-  latching on both host preflight failure and `PostToolUse` (`error` or missing live record after a
-  failed or sandboxed command), `Stop` suppression while `failed`, and manual re-arming clearing
-  `failed` on a subsequent successful helper run;
-- fail-closed validation of `ANTIGRAVITY_AGENTAPI_EXE` (rejecting relative, missing and non-regular
-  paths with no `PATH` fallback) and identical absolute regular-file validation of the `PATH`
-  fallback when `ANTIGRAVITY_AGENTAPI_EXE` is unset;
-- helper deduplication on `(agy pid, start_ms)`, detached startup, positive single-session binding
-  with `session_id == ANTIGRAVITY_CONVERSATION_ID`, exit on `agy` termination or session
-  replacement, and absence of `ANTIGRAVITY_CSRF_TOKEN` from disk, logs and `argv`;
-- hook idle transitions (`PreInvocation` clear, `Stop` set only when `fullyIdle` without
-  continuation), `internal/wake` quota and retry accounting against a fake `agentapi` binary, and
-  `PostInvocation` guard consumption from real-shape `transcript.jsonl` `SYSTEM_MESSAGE` lines
-  while rejecting `USER_INPUT` and non-matching steps.
+  `!continuationActive`, wake marker `on`/`off`, shell quoting / unsafe-path refusal, live helper
+  check via `proc.Lookup`, and D3 fail-open on errors);
+- hardened helper preflight: exact `os.Args` enforcement, rejection of `IRIS_HUB_URL` /
+  `IRIS_TOKEN_FILE` / `IRIS_EXECUTION` / `XDG_CONFIG_HOME` overrides, `agy` ancestor executable
+  resolution (rejecting env/`PATH` overrides and non-regular or deleted files), loopback LS check,
+  and scrubbed child `Env` with no `ANTIGRAVITY_CSRF_TOKEN` on disk, in logs or in `argv`;
+- conditional `(agy pid, start_ms)` ownership: parent-before-exit durable write, preservation of a
+  live helper when a duplicate command fails or is denied in `PostToolUse` (including `"error":
+  ""` auto-denial), single-attempt `failed` latching when no helper is live, conditional cleanup by
+  `(helper_pid, helper_start_ms, attempt_id)`, and manual re-arming via `run_command`;
+- hook-published `current_session_id` checked before every heartbeat renewal and wake admission
+  (`/clear` stops lease renewal and exits the superseded helper immediately) and wake marker `on`
+  re-verified at final admission;
+- lock-free hub/subprocess execution, narrow `"failed"` vs `"unknown"` classification of
+  `agentapi send-message` exits, and incremental forward `PostInvocation` scanning from
+  `idle_offset` / `scanned_offset` across multi-megabyte transcripts and oversized lines with
+  strict `SYSTEM` + `SYSTEM_MESSAGE` whole-message matching.
 
 Run the full local WSL gates (`make test`, `make race`, `make cov`, `make cov-check`,
 `make check-all` and `make fixtures`) before implementation review.

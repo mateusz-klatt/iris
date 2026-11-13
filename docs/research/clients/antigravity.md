@@ -300,11 +300,16 @@ all outer `ANTIGRAVITY_*` variables stripped before launch:
   `PostInvocation`, not yet in `PreInvocation`), and started a model turn. Sent while `run_command`
   was busy, it exited `0` in `713 ms` without interrupting the tool and was folded into the active
   turn before the next model call. A wrong CSRF token or dead Language Server port exited `1`.
-- **`Stop` continuation and sandbox.** Returning `{"decision":"continue","reason":"..."}` from
-  `Stop` (`fullyIdle: true`, `terminationReason: "NO_TOOL_CALL"`, `executionNum: 0`) started a
-  continuation turn, whereas `continuationActive` remained `false` across `executionNum` `0..4`
-  despite the vendor documentation. Under `agy --sandbox`, `run_command` runs in a PID, mount and
-  network namespace where `~/.config/iris` is absent and `127.0.0.1:<LS_PORT>` refuses connections;
-  setting `BypassSandbox: true` with an exact `command(...)` allow rule in
-  `~/.gemini/antigravity-cli/settings.json` ran unsandboxed without prompting on a personal account
-  ([ADR 028](../../adr/028-antigravity-idle-wake.md)).
+- **`Stop` continuation, sandbox and `permissions.allow` matcher.** Returning
+  `{"decision":"continue","reason":"..."}` from `Stop` (`fullyIdle: true`,
+  `terminationReason: "NO_TOOL_CALL"`, `executionNum: 0`) started a continuation turn, whereas
+  `continuationActive` remained `false` across `executionNum` `0..4` despite the vendor
+  documentation. Under `agy --sandbox`, `run_command` runs in a PID, mount and network namespace
+  where `~/.config/iris` is absent and `127.0.0.1:<LS_PORT>` refuses connections, while
+  `BypassSandbox: true` runs on the host. Tested in a clean `HOME` (`-p --sandbox`,
+  `toolPermission: "request-review"`), `command(<iris-path> watch --client antigravity --wake)`
+  denied an unallowed `/bin/echo` control (with `PostToolUse` still receiving `"error": ""` on
+  auto-denial) and blocked `&&` and newline command chains, **but allowed `--extra`, `FOO=1 <cmd>`
+  and `env FOO=1 <cmd>` outside the sandbox**; `command(regex:\A...\z)` rejected `env FOO=1 <cmd>`
+  while still allowing `FOO=1 <cmd>` and `--extra`. Because whole-invocation matching cannot be
+  enforced, [ADR 028](../../adr/028-antigravity-idle-wake.md) writes no `command(...)` allow rule.
