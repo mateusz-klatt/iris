@@ -189,6 +189,23 @@ Against the production hub, over TLS:
   `CGO_ENABLED=0` and `GOMAXPROCS=2`. The local diagnostic log is
   `iris-windows-integrate-993e545.log`. This bounded validation used no artificial CPU stress and
   does not reproduce or resolve the original full-load failure.
+- **ADR 018 scope tests that fail now and then in CI.** On 2026-11-13 three of them failed once each,
+  every time in a pull request that did not touch the hook:
+  - `TestAColdCacheRegistersBeforeChoosingTheScope` failed on `test (macos-latest)` in run
+    43392693883 (#290 at `b97cd78`). Its case of a full status past its budget on an older hub saw
+    no hub call at all, and the test's temporary directory could not be removed because something
+    was still writing into it. The job passed when it was rerun.
+  - `TestAFailedScopedRequestIsNeverResentAsFull/one_call/past_the_budget` failed on
+    `test (macos-latest)` in run 43392561151 (#296 at `0347e5b`). The run ended at stage
+    "shell session" without the deadline error.
+  - `TestEveryClientsOutputIsValidInReducedScope/copilot` failed on `test (ubuntu-latest)` in run
+    43396567786 (#299 at `3136b78`). After a status that should have tripped the breaker, the breaker
+    still had the state the test had set, with no new cooldown.
+
+  Each failing case gives the whole reconcile a real 20 ms deadline (the trip budget in
+  `internal/hook/scope_unix_test.go`). On a loaded runner that deadline can pass before the step
+  under test has begun or has recorded its result. That is the suspected cause, not yet confirmed.
+  A required check that fails one run in a few costs every pull request a rerun.
 - **Services:** loading the LaunchAgent at login, the `systemd --user` unit starting at boot from
   linger alone, without a login session (it needs the Codex desktop app closed first), and the
   service exit codes on Windows.
