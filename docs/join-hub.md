@@ -197,7 +197,12 @@ hub has not seen yet.
 
 Some things are worth knowing without being failures. A tool name Iris does not recognise, and a
 cross-load, where this client's hook ran inside another client's session, are kept in
-`hook-observed.log` beside it, a separate file so they cannot crowd out failures. The row keeps its
+`hook-observed.log` beside it, a separate file so they cannot crowd out failures. So is a rebind:
+an MCP server binding its session again after a heartbeat answered that its generation was lost,
+which covers one that expired, ended or is unknown to the hub (ADR 027). Rebinds that keep coming
+mean the session keeps losing its binding and getting it back. A host that sleeps, or loses its
+network, past the 60 s lease is one cause worth checking, but the count alone does not show it.
+The row keeps its
 status and adds "observed in 24 h: …" with a count for each. A tool name is reduced to letters,
 digits and `_-.:/` there, because it comes from the client.
 

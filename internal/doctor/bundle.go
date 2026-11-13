@@ -124,7 +124,7 @@ func bareVersion(text string) string {
 // observationKind keeps an observation's kind and drops what follows it, a tool name or a
 // client, which comes from the client: "unknown tool view" is "unknown tool".
 func observationKind(text string) string {
-	for _, kind := range []string{"unknown tool", "cross-load", binding.ObservedTwoSessions, binding.ObservedUnusable} {
+	for _, kind := range []string{"unknown tool", "cross-load", binding.ObservedTwoSessions, binding.ObservedUnusable, binding.ObservedRebound} {
 		if strings.HasPrefix(text, kind) {
 			return kind
 		}

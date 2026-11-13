@@ -262,9 +262,11 @@ func TestMaintainStopsWithItsContext(t *testing.T) {
 	}
 }
 
-// Once lost, the binding is empty, so there is nothing to renew until a fresh bind.
+// Once lost, the binding is empty, so there is nothing to renew until a fresh bind. With no
+// evidence to look by, the tick's lookup (ADR 027) sends nothing either: this resolver has no
+// hub, so any request would fail the test.
 func TestMaintainRenewsNothingWhileLost(t *testing.T) {
-	r := &Resolver{lost: true}
+	r := &Resolver{lost: true, Getenv: func(string) string { return "" }}
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
 	r.Maintain(ctx, "shim", time.Millisecond, func() bool { return true }, func() { t.Error("stopped") })
@@ -277,7 +279,8 @@ func TestMaintainSurvivesAnUnboundTickAndAHubFailure(t *testing.T) {
 		w.WriteHeader(http.StatusBadGateway)
 	}))
 	defer srv.Close()
-	r := &Resolver{Hub: &hubclient.Client{Config: config{srv.URL}}}
+	// No evidence to look by: an unbound tick sends nothing, so every request is a heartbeat.
+	r := &Resolver{Hub: &hubclient.Client{Config: config{srv.URL}}, Getenv: func(string) string { return "" }}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	parent := make(chan struct{}, 1)

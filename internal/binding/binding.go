@@ -321,9 +321,16 @@ func (r *Resolver) resolve(ctx context.Context, handle, exclude string) (Bound, 
 	return Bound{}, lastErr
 }
 
+// ObservedRebound is the observation, for doctor, of a shim whose tick bound its session's
+// current Execution after a heartbeat had found the previous one lost (ADR 027). It is fixed
+// text and says nothing of which session.
+const ObservedRebound = "rebound on heartbeat after a loss"
+
 // Maintain stops before any renewal after parent loss. The process owner also cancels
 // this context when the transport reaches EOF. A generation the heartbeat finds lost is
-// dropped, never renewed, and the process keeps running: the next Resolve binds afresh.
+// dropped, never renewed, and the process keeps running. A shim's next tick looks for the
+// session's current Execution, as a call would (ADR 027); the watch's own loop and a call's
+// Resolve bind afresh too.
 func (r *Resolver) Maintain(ctx context.Context, source string, interval time.Duration, parentAlive func() bool, onStop func()) {
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
@@ -339,6 +346,7 @@ func (r *Resolver) Maintain(ctx context.Context, source string, interval time.Du
 		}
 		r.adopt(ctx)
 		r.mu.Lock()
+		rebound := source == "shim" && r.lookupHeld(ctx)
 		renew := []Bound{r.bound}
 		if r.pending != nil && !r.gone[r.pending.from.ExecutionID] {
 			// Keep the fallback's mail reachable until handover is confirmed. An
@@ -363,6 +371,11 @@ func (r *Resolver) Maintain(ctx context.Context, source string, interval time.Du
 					r.bound = fresh
 				}
 				r.mu.Unlock()
+				// A rebind is only ever this tick's sole renewal: the lookup runs
+				// without a pending handover.
+				if rebound {
+					r.observe(ObservedRebound)
+				}
 			}
 			if IsCode(err, "lost") {
 				r.mu.Lock()
@@ -377,6 +390,39 @@ func (r *Resolver) Maintain(ctx context.Context, source string, interval time.Du
 			}
 		}
 	}
+}
+
+// lookupHeld is a shim's tick looking for its session's current Execution while the process
+// holds none, with mu held (ADR 027). A shim binds on a tool call, so without this one that
+// had no call yet, or lost its generation and got no call after, renewed nothing while the
+// session's hooks registered generation after generation on the hook-only lease.
+//
+// It binds what a call without a handle would, through rungs 1 to 3, and only an Execution
+// live at the hub: it never registers, never binds by a handle, never binds one found lost,
+// and never decides how calls bind. Codex calls can name their session, so its first call
+// decides the process's mode; Codex and a process in id mode are left to their calls. A
+// failed lookup changes nothing, so a confirmed loss stays confirmed until a bind succeeds.
+// It reports whether its bind replaced a generation a heartbeat had found lost.
+func (r *Resolver) lookupHeld(ctx context.Context) bool {
+	if m := r.decided.Load(); r.Client == "codex" || (m != nil && m.mode != legacy) {
+		return false
+	}
+	if r.bound.ExecutionID != "" || r.own || r.pending != nil {
+		return false
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	b, err := r.resolve(ctx, "", "")
+	if err != nil {
+		return false
+	}
+	if r.gone[b.ExecutionID] {
+		r.bound = Bound{}
+		return false
+	}
+	lost := r.lost
+	r.lost = false
+	return lost
 }
 
 // Rebound reports a positively known replacement for the stream's binding. An

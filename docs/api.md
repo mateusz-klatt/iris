@@ -136,6 +136,7 @@ accept the remembered generation before the persisted 120 s recovery deadline:
 | A recognized pre-edit hook with paths inside the worktree | Registers before touching the paths. The edit is refused if recovery proof is missing. |
 | A shell reconcile | Can register with proof. A command is not a reliable recovery action: a budget spent before registration reaches the hub leaves the session recovering. Registration may already have succeeded before a later timeout. ADR 018's breaker changes later hooks' scope; it does not register in the background. |
 | A heartbeat from a shim retaining the binding | Reattaches with its generation. An unbound shim cannot send that proof; Codex id-mode sub-agent lookups never renew. |
+| An unbound shim's heartbeat tick (ADR 027) | Looks the session up as a call without a handle would. It binds only an Execution live at the hub, so it cannot discover a recovering one, and it never registers or binds one found lost. It finds the generation a registering hook obtained, then renews it. Not for Codex, a process in id mode or `iris watch`. |
 | Another MCP call | Binding lookups do not reattach. A call can discover a session a hook already registered; primary `whoami` also heartbeats after a successful bind. Initial legacy fallback registration carries no prior generation and cannot recover a recovering session. |
 | Waiting past the deadline | Loses the old Execution and its reservations. A later registering hook can obtain a new generation, never revive the old one. |
 
