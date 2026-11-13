@@ -313,18 +313,33 @@ func TestAntigravitySpawnDetachedProcessAndLoopbackValidation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	pid, _, kill, err := spawnDetachedProcess(exe, []string{"watch", "--client", "antigravity", "--wake"}, []string{"ANTIGRAVITY_CSRF_TOKEN=sleep-for-spawn-test"})
+	self, ok := proc.Lookup(os.Getpid())
+	if !ok {
+		t.Fatal("self lookup failed")
+	}
+	parent := proc.Ancestor{PID: self.PID, StartMS: self.StartMS}
+	pid, _, kill, err := spawnDetachedProcess(exe, []string{"watch", "--client", "antigravity", "--wake"}, []string{"ANTIGRAVITY_CSRF_TOKEN=sleep-for-spawn-test"}, parent)
 	if err != nil || pid <= 0 {
 		t.Fatalf("spawnDetachedProcess = %d, %v", pid, err)
 	}
-	if _, ok := proc.Lookup(pid); !ok {
+	child, ok := proc.Lookup(pid)
+	if !ok {
 		kill()
 		t.Fatal("spawned detached child not found")
 	}
+	if child.PPID != parent.PID {
+		kill()
+		t.Fatalf("helper parent = %d, want %d", child.PPID, parent.PID)
+	}
 	kill()
 
+	// A parent that no longer matches is refused before anything starts.
+	if _, _, _, err := spawnDetachedProcess(exe, []string{"watch", "--client", "antigravity", "--wake"}, nil, proc.Ancestor{PID: self.PID, StartMS: self.StartMS + 1}); err == nil {
+		t.Fatal("spawned under a parent that no longer matches")
+	}
+
 	// Also exercise release() on a second short-lived child and kill via proc.Terminate.
-	pid2, release2, _, err := spawnDetachedProcess(exe, []string{"watch", "--client", "antigravity", "--wake"}, []string{"ANTIGRAVITY_CSRF_TOKEN=sleep-for-spawn-test"})
+	pid2, release2, _, err := spawnDetachedProcess(exe, []string{"watch", "--client", "antigravity", "--wake"}, []string{"ANTIGRAVITY_CSRF_TOKEN=sleep-for-spawn-test"}, parent)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,13 +350,13 @@ func TestAntigravitySpawnDetachedProcessAndLoopbackValidation(t *testing.T) {
 	}
 
 	// Missing binary error.
-	if _, _, _, err := spawnDetachedProcess(filepath.Join(t.TempDir(), "missing"), nil, nil); err == nil {
+	if _, _, _, err := spawnDetachedProcess(filepath.Join(t.TempDir(), "missing"), nil, nil, parent); err == nil {
 		t.Fatal("missing executable succeeded")
 	}
 	// openDevNull error.
 	origNull := openDevNull
 	openDevNull = func() (*os.File, error) { return nil, errors.New("devnull err") }
-	_, _, _, err = spawnDetachedProcess(exe, nil, nil)
+	_, _, _, err = spawnDetachedProcess(exe, nil, nil, parent)
 	openDevNull = origNull
 	if err == nil {
 		t.Fatal("openDevNull error ignored")
@@ -473,13 +488,13 @@ func TestAntigravityParentPreflightOwnershipScrubbingAndFailureLatch(t *testing.
 		o.irisExecutable = func() (string, error) { return "", errors.New("no iris") }
 	})
 	checkPreflightFail("spawn error", func(o *antigravityOptions) {
-		o.spawnDetached = func(string, []string, []string) (int, func(), func(), error) {
+		o.spawnDetached = func(string, []string, []string, proc.Ancestor) (int, func(), func(), error) {
 			return 0, nil, nil, errors.New("spawn failed")
 		}
 	})
 	checkPreflightFail("post-spawn lookup miss", func(o *antigravityOptions) {
 		killed := false
-		o.spawnDetached = func(string, []string, []string) (int, func(), func(), error) {
+		o.spawnDetached = func(string, []string, []string, proc.Ancestor) (int, func(), func(), error) {
 			return 999999, func() {}, func() { killed = true }, nil
 		}
 		o.lookup = func(pid int) (proc.Snapshot, bool) {
@@ -491,7 +506,7 @@ func TestAntigravityParentPreflightOwnershipScrubbingAndFailureLatch(t *testing.
 		_ = killed
 	})
 	checkPreflightFail("publish error when session switched mid-spawn", func(o *antigravityOptions) {
-		o.spawnDetached = func(string, []string, []string) (int, func(), func(), error) {
+		o.spawnDetached = func(string, []string, []string, proc.Ancestor) (int, func(), func(), error) {
 			h.emitHook("22222222-3333-4444-5555-666666666666", "SessionStart", map[string]any{"conversationId": "22222222-3333-4444-5555-666666666666"})
 			return 8888, func() {}, func() {}, nil
 		}
@@ -507,7 +522,7 @@ func TestAntigravityParentPreflightOwnershipScrubbingAndFailureLatch(t *testing.
 	h.emitHook(convID, "SessionStart", map[string]any{"conversationId": convID})
 	checkPreflightFail("post-publish child exit", func(o *antigravityOptions) {
 		checks := 0
-		o.spawnDetached = func(string, []string, []string) (int, func(), func(), error) {
+		o.spawnDetached = func(string, []string, []string, proc.Ancestor) (int, func(), func(), error) {
 			return 8889, func() {}, func() {}, nil
 		}
 		o.lookup = func(pid int) (proc.Snapshot, bool) {
@@ -536,9 +551,11 @@ func TestAntigravityParentPreflightOwnershipScrubbingAndFailureLatch(t *testing.
 
 	okOpts := h.baseOptions(convID, secret)
 	okOpts.lookup = lookup
-	okOpts.spawnDetached = func(_ string, args, env []string) (int, func(), func(), error) {
+	var capturedParent proc.Ancestor
+	okOpts.spawnDetached = func(_ string, args, env []string, parent proc.Ancestor) (int, func(), func(), error) {
 		capturedArgs = append([]string(nil), args...)
 		capturedEnv = append([]string(nil), env...)
+		capturedParent = parent
 		return 7777, func() { released = true }, func() { t.Error("unexpected kill on healthy spawn") }, nil
 	}
 	if err := runAntigravity(context.Background(), okOpts); err != nil {
@@ -546,6 +563,10 @@ func TestAntigravityParentPreflightOwnershipScrubbingAndFailureLatch(t *testing.
 	}
 	if !released || !slices.Equal(capturedArgs, []string{"watch", "--client", "antigravity", "--wake"}) {
 		t.Fatalf("released=%v args=%v", released, capturedArgs)
+	}
+	// The helper is started under the agy process the launcher verified, never another one.
+	if capturedParent.PID != h.agyPID || capturedParent.StartMS != h.agyStartMS {
+		t.Fatalf("helper parent = %+v, want the verified agy (%d, %d)", capturedParent, h.agyPID, h.agyStartMS)
 	}
 	for _, entry := range capturedEnv {
 		if strings.HasPrefix(entry, "GOTRACEBACK=") || strings.HasPrefix(entry, "LD_") || strings.HasPrefix(entry, "DYLD_") || strings.HasPrefix(entry, "IRIS_HUB_URL=") {
@@ -566,7 +587,7 @@ func TestAntigravityParentPreflightOwnershipScrubbingAndFailureLatch(t *testing.
 	// Duplicate call while 7777 is live exits 0 without spawning!
 	spawnedAgain := false
 	dupOpts := okOpts
-	dupOpts.spawnDetached = func(string, []string, []string) (int, func(), func(), error) {
+	dupOpts.spawnDetached = func(string, []string, []string, proc.Ancestor) (int, func(), func(), error) {
 		spawnedAgain = true
 		return 0, nil, nil, errors.New("should not spawn")
 	}
@@ -596,7 +617,7 @@ func TestAntigravityParentPreflightOwnershipScrubbingAndFailureLatch(t *testing.
 	raceKilled := false
 	raceOpts := okOpts
 	raceOpts.terminate = func(int, int64) error { return nil }
-	raceOpts.spawnDetached = func(string, []string, []string) (int, func(), func(), error) {
+	raceOpts.spawnDetached = func(string, []string, []string, proc.Ancestor) (int, func(), func(), error) {
 		liveChildren[7777] = 70000
 		liveChildren[7778] = 70008
 		_, _ = hook.PublishAntigravityHelper(h.configDir, hook.AntigravityHelperOwner{

@@ -110,12 +110,7 @@ func TestImageNameOfABadHandleIsEmpty(t *testing.T) {
 	}
 }
 
-func TestDetachAndTerminateWindows(t *testing.T) {
-	cmd := exec.Command("cmd.exe", "/c", "exit 0")
-	Detach(cmd)
-	if cmd.SysProcAttr == nil || cmd.SysProcAttr.CreationFlags == 0 {
-		t.Fatalf("Detach flags = %+v", cmd.SysProcAttr)
-	}
+func TestTerminateWindows(t *testing.T) {
 	if err := terminateOS(0x7FFFFFF0, 100); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("missing pid = %v", err)
 	}

@@ -69,8 +69,23 @@ func executableFrom(
 	return exe, nil
 }
 
-// Detach configures cmd to run in a new process session detached from the caller's group.
-func Detach(cmd *exec.Cmd) { detachOS(cmd) }
+// DetachUnder configures cmd to run detached from the caller, as a child of the live process
+// (pid, startMS). It refuses when that process no longer matches. Call release after cmd.Start.
+//
+// On Windows the child is created under that process instead of the caller, so it takes that
+// process's job and token rather than the caller's. A command that agy runs is in a job that ends
+// with the command and forbids breakaway, so a helper it starts would otherwise die with it
+// (ADR 028). The child still takes the caller's desktop. Unix keeps the caller as the parent: a
+// new session already separates the child, and (pid, startMS) is only checked.
+func DetachUnder(cmd *exec.Cmd, pid int, startMS int64) (release func(), err error) {
+	return detachUnderOS(cmd, pid, startMS)
+}
+
+// NoConsole starts cmd without a console. On Windows a console program started from a process
+// on another desktop, such as one in agy's command sandbox, can fail to initialize while
+// attaching a new console, and dies with 0xC0000142 before it runs. Without a console it runs,
+// and the pipes set on cmd still carry its output. Unix has no consoles and leaves cmd as it is.
+func NoConsole(cmd *exec.Cmd) { noConsoleOS(cmd) }
 
 // Terminate stops a live process only when its platform identity still matches (pid, startMS).
 func Terminate(pid int, startMS int64) error {
