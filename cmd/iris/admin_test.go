@@ -46,7 +46,7 @@ func TestAdminForgetReportsARefusal(t *testing.T) {
 }
 
 func TestAdminUsage(t *testing.T) {
-	for _, args := range [][]string{nil, {"nope"}, {"forget"}, {"forget", "--agent", "a", "--repository", "r"}, {"forget", "--bogus"}, {"forget", "--agent", "a", "extra"}, {"restore-check", "only-one"}, {"backup", "only-one"}, {"merge"}, {"merge", "--from", "a"}, {"merge", "--into", "b"}, {"merge", "--from", "a", "--into", "a"}, {"merge", "--bogus"}, {"merge", "--from", "a", "--into", "b", "extra"}} {
+	for _, args := range [][]string{nil, {"nope"}, {"forget"}, {"forget", "--agent", "a", "--repository", "r"}, {"forget", "--bogus"}, {"forget", "--agent", "a", "extra"}, {"restore-check", "only-one"}, {"backup", "only-one"}, {"mark-restored"}, {"mark-restored", "a.db", "b.db"}, {"merge"}, {"merge", "--from", "a"}, {"merge", "--into", "b"}, {"merge", "--from", "a", "--into", "a"}, {"merge", "--bogus"}, {"merge", "--from", "a", "--into", "b", "extra"}} {
 		if err := runAdmin(args); err == nil || err.Error() != adminUsage {
 			t.Errorf("%v: %v", args, err)
 		}
@@ -134,6 +134,28 @@ func TestAdminBackupFeedsRestoreCheck(t *testing.T) {
 	}
 	out.Reset()
 	if err := adminCommand(context.Background(), nil, []string{"restore-check", dest, filepath.Join(t.TempDir(), "scratch")}, &out); err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+}
+
+// mark-restored runs locally and offline. It marks a copy that a backup did not make, so restore-check
+// checks its new stream, and it refuses a database that a hub has open.
+func TestAdminMarkRestoredMarksACopyAndRefusesALiveHub(t *testing.T) {
+	src := filepath.Join(t.TempDir(), "copy.db")
+	s, err := store.Open(src, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := adminCommand(context.Background(), nil, []string{"mark-restored", src}, &out); err == nil || !strings.Contains(err.Error(), "database already owned by another hub") || out.Len() != 0 {
+		t.Fatalf("a database a hub has open: %v\n%s", err, out.String())
+	}
+	_ = s.Close()
+	if err := adminCommand(context.Background(), nil, []string{"mark-restored", src}, &out); err != nil || out.String() != "restore marker set in "+src+": the next hub start on it runs on a new stream (ADR 006)\n" {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	out.Reset()
+	if err := adminCommand(context.Background(), nil, []string{"restore-check", src, filepath.Join(t.TempDir(), "scratch")}, &out); err != nil || !strings.Contains(out.String(), "runs on a new stream") {
 		t.Fatalf("%v\n%s", err, out.String())
 	}
 }

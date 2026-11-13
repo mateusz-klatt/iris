@@ -76,7 +76,7 @@ func run(ctx context.Context, backup, scratch, listen string, out io.Writer) err
 	if marked {
 		c.check(s.Restored() && status.Stream != "" && status.Stream != backedUp, "the backup carries a restore marker, and the restored hub runs on a new stream")
 	} else {
-		c.line("warn the backup has no restore marker, so the restored hub keeps its stream: a client that remembers a cursor of that stream can miss attention at or below it (ADR 006)")
+		c.line("warn the backup has no restore marker, so the restored hub keeps its stream: a client that remembers a cursor of that stream can miss attention at or below it (ADR 006). Run `iris admin mark-restored` on the copy you restore, before its first start.")
 	}
 
 	if sample != nil {

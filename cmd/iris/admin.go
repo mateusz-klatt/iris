@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"flag"
+	"fmt"
 	"io"
 	"os"
 	"time"
@@ -12,9 +13,10 @@ import (
 	"github.com/mateusz-klatt/iris/internal/backup"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 	"github.com/mateusz-klatt/iris/internal/restorecheck"
+	"github.com/mateusz-klatt/iris/internal/store"
 )
 
-const adminUsage = "usage: iris admin forget (--repository <id> | --agent <name>) [--dry-run]\n       iris admin merge --from <id> --into <id> [--dry-run]\n       iris admin contact --repository <id> (<agent> | --clear)\n       iris admin backup <hub database> <new backup file>\n       iris admin restore-check <backup file> <empty scratch directory>\n       iris admin console (create | reset | activate) <username> < password-file"
+const adminUsage = "usage: iris admin forget (--repository <id> | --agent <name>) [--dry-run]\n       iris admin merge --from <id> --into <id> [--dry-run]\n       iris admin contact --repository <id> (<agent> | --clear)\n       iris admin backup <hub database> <new backup file>\n       iris admin restore-check <backup file> <empty scratch directory>\n       iris admin mark-restored <restored hub database>\n       iris admin console (create | reset | activate) <username> < password-file"
 
 func runAdmin(args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -58,6 +60,17 @@ func adminCommand(ctx context.Context, client *hubclient.Client, args []string, 
 			return errors.New(adminUsage)
 		}
 		return restorecheck.Run(ctx, args[1], args[2], stdout)
+	case "mark-restored":
+		// Local and offline: it sets the restore marker in a database that no hub has open, so
+		// that the next start on it runs on a new stream, as a backup's copy does (ADR 006).
+		if len(args) != 2 {
+			return errors.New(adminUsage)
+		}
+		if err := store.MarkRestored(ctx, args[1], time.Now()); err != nil {
+			return err
+		}
+		_, err := fmt.Fprintf(stdout, "restore marker set in %s: the next hub start on it runs on a new stream (ADR 006)\n", args[1])
+		return err
 	case "forget":
 		fs := flag.NewFlagSet("admin forget", flag.ContinueOnError)
 		fs.SetOutput(io.Discard)

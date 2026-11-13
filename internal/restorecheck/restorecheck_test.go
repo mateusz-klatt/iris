@@ -81,7 +81,7 @@ func TestARestoredHubPassesEveryCheck(t *testing.T) {
 			if active != strings.Contains(text, "gets no restored authority") {
 				t.Fatal(text)
 			}
-			if tc.marked != strings.Contains(text, "runs on a new stream") || tc.marked == strings.Contains(text, "warn the backup has no restore marker") {
+			if tc.marked != strings.Contains(text, "runs on a new stream") || tc.marked == strings.Contains(text, "warn the backup has no restore marker") || tc.marked == strings.Contains(text, "Run `iris admin mark-restored` on the copy you restore") {
 				t.Fatal(text)
 			}
 			if after, _ := os.ReadFile(src); !bytes.Equal(before, after) {
