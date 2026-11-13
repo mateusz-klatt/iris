@@ -27,6 +27,7 @@ type commonPayload struct {
 	SubagentID           string          `json:"subagentId"`
 	SubagentSnake        string          `json:"subagent_id"`
 	Prompt               json.RawMessage `json:"prompt"`
+	IsSteer              *bool           `json:"is_steer"`
 	Reason               string          `json:"reason"`
 	StopHookActive       *bool           `json:"stopHookActive"`
 	StopHookActiveSnake  *bool           `json:"stop_hook_active"`
@@ -59,6 +60,7 @@ func decodeCommon(client Client, eventName string, payload []byte) (Event, error
 			_ = json.Unmarshal(p.Prompt, &ev.Prompt)
 		case ClientKimi:
 			ev.Prompt = kimiPromptText(p.Prompt)
+			ev.Steer = p.IsSteer != nil && *p.IsSteer
 		}
 	}
 	applyGrokStop(&ev, p)

@@ -21,12 +21,8 @@ import (
 	"github.com/mateusz-klatt/iris/internal/proc"
 )
 
-// Grace is how long a Stop request waits for its watcher to publish itself. A Stop inside it asks
-// for nothing more. A Stop after it, while no watcher is live, latches failed instead of asking
-// again, so a model that ignores the request is not asked at the end of every turn.
-const Grace = 5 * time.Second
-
-// The latch states. Each stops Stop from asking until SessionStart or an explicit start clears it.
+// The latch states. Each stops the prompt hook from asking until SessionStart or an explicit start
+// clears it.
 const (
 	LatchDisabled = "disabled"
 	LatchFailed   = "failed"
@@ -111,7 +107,7 @@ type Latch struct {
 }
 
 // Checkpoint is the watchers' durable cursor. Initialized stays false until a watcher has set a
-// baseline, so a record that a Stop created holds no cursor yet.
+// baseline, so a record that a request created holds no cursor yet.
 type Checkpoint struct {
 	Stream      string `json:"stream"`
 	Cursor      int64  `json:"cursor"`
@@ -347,11 +343,12 @@ func (s *Store) MapSession(pid int, startMS int64, session string, budget time.D
 	})
 }
 
-// RequestArm decides whether a Stop of k's session asks the model for a watcher, and records the
-// request. It asks only when all of these hold: the process's map still names this session, no
-// latch is set, no watcher is live, and no request is pending. A request older than Grace (or
-// dated in the future, after the clock went back) that no live watcher answered latches failed
-// instead. ask is never true unless the request was written, so a failed write cannot ask twice.
+// RequestArm decides, at a user prompt that starts a turn of k's session, whether to ask the model
+// for a watcher, and records the request. It asks only when all of these hold: the process's map
+// still names this session, no latch is set, no watcher is live, and no request is pending. A
+// request still pending here was not answered by the turn that received it, which has ended, so it
+// latches failed instead of asking at every turn. ask is never true unless the request was written,
+// so a failed write cannot ask twice.
 func (s *Store) RequestArm(k Key, budget time.Duration) (ask bool, err error) {
 	if !k.valid() {
 		return false, errKey
@@ -366,9 +363,6 @@ func (s *Store) RequestArm(k Key, budget time.Duration) (ask bool, err error) {
 			}
 			now := s.now().UnixMilli()
 			if r.ArmRequestedMS != 0 {
-				if age := now - r.ArmRequestedMS; age >= 0 && age < Grace.Milliseconds() {
-					return false
-				}
 				r.ArmRequestedMS, r.Latch = 0, &Latch{State: LatchFailed, AtMS: now}
 				return true
 			}
@@ -377,6 +371,23 @@ func (s *Store) RequestArm(k Key, budget time.Duration) (ask bool, err error) {
 		})
 	})
 	return ask && err == nil, err
+}
+
+// Read reads k's record under the lock. exists is false for a key that has none. Like Session, it
+// makes and protects nothing.
+func (s *Store) Read(k Key, budget time.Duration) (r Record, exists bool, err error) {
+	if !k.valid() {
+		return Record{}, false, errKey
+	}
+	unlock, err := s.lock(budget)
+	if errors.Is(err, fs.ErrNotExist) {
+		return Record{Version: recordVersion}, false, nil
+	}
+	if err != nil {
+		return Record{}, false, err
+	}
+	defer unlock()
+	return readRecord(s.recordPath(k))
 }
 
 // pruneStart picks where in the listing a pruning pass begins, from 0 to n-1. Starting at a random

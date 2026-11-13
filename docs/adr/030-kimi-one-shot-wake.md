@@ -2,7 +2,9 @@
 
 Status: accepted on 2026-11-13 (holzera). Supersedes ADR 026 entirely; no MCP web worker is started
 for any Kimi session. The implementation follows in its own PR. Wake stays off until the native
-acceptance passes, then becomes the default (owner, 2026-11-13).
+acceptance passes, then becomes the default (owner, 2026-11-13). Amended on 2026-11-13 by fleet vote
+20261113-2. Kimi 2.6.1 never runs Stop hooks (see "Kimi 2.6.1 does not run Stop"), so the request to
+arm the watcher is made on UserPromptSubmit instead.
 
 ## Problem
 
@@ -84,6 +86,39 @@ These measurements cover exit 0, non-zero exit, SIGTERM, a busy turn and `/clear
 unexpected TUI exit remain unmeasured. The acceptance section separates implementation blockers from
 follow-up measurements.
 
+### Kimi 2.6.1 does not run Stop
+
+The first design asked for the watcher from Stop. That hook never ran. kimi-home-iris measured it live
+and then read the installed bundle without changing it. Line numbers below are in the extracted
+`NODE_SEA_BLOB` (`kimi-main.cjs`); the source module is
+`packages/agent-core-v2/src/features/externalHooks/agent/agentExternalHooksService.ts`. The WSL
+Claude read the same code from the binary's strings.
+
+**Live measurement.** No Stop hook ran in eight new scratch TUI turns, six with the managed K3.1 Pro
+model and two with a local model, nor in one `kimi -p` turn. The runs covered:
+- plain answers and answers with Bash calls;
+- a tee-only command and an absolute command path;
+- an empty matcher, and debug logging.
+
+SessionStart and UserPromptSubmit ran every time, and `kimi doctor` accepted the configuration.
+
+**Stop cannot run.** The only Stop dispatch (233064) runs from `onDidFinishStep`. It returns first
+when `loop.snapshot().hasPendingRequests` holds (232929). That value is true whenever the loop's
+status is not `idle` (181996-181998), and the loop stays `running` until `finishTurn` (178483-178506),
+which comes after the step. No setting, mode or other event name dispatches Stop. Had it run, its
+payload would always carry `stopHookActive:false`, and only one continuation per turn would be
+honoured.
+
+**UserPromptSubmit runs only for a user prompt.** It runs only for a prompt whose origin is `user`
+(232996-233001). Measured: after a watcher exited 0, the `origin.kind:"task"`, `trigger:"notify"`
+turn ran no UserPromptSubmit.
+
+**Other hooks.** `Notification` is declared but never dispatched. `TaskStarted` and `TurnStarted` are
+observation only.
+
+**`/clear`.** It gives a SessionStart with a new session id and `source:"startup"`, not `"clear"`. The
+capture is `internal/hook/testdata/kimi/sessionstart_clear.json`.
+
 ## Decision
 
 ### One-shot command and bounded lifetime
@@ -157,7 +192,7 @@ independent of the cursor: an unreadable or malformed coalescing record means no
 never a suppressed wake or an inference that attention was told. A wake never marks attention told;
 only a hook that emits its note does so.
 
-### Per-process state and one Stop request
+### Per-process state and one arming request
 
 SessionStart records the native session id beside the `(kimi pid, start time)` of its nearest
 single-session Kimi ancestor, as Grok's session file does. Wake state lives outside `sessions/` so
@@ -172,22 +207,37 @@ exiting attempt's ownership when the record still carries its attempt id; the du
 cursor, emitted identities and coalescing state remain. Failure and disabled states likewise never
 replace a live watcher.
 
-When wake is enabled and no live or requested watcher exists, an ordinary Kimi `Stop` writes
-`arm_requested` with its time and returns the client's blocking continuation. Its stderr is exactly:
+Iris makes the request on Kimi's `UserPromptSubmit`, for a prompt that starts a turn. It does so
+only when all of these hold:
+- wake is enabled;
+- the hub has accepted that turn's session;
+- no watcher is live, requested or latched for it.
+
+The hook then writes `arm_requested` with its time and adds the request to the prompt's context.
+Kimi appends a prompt hook's output to the user's prompt, so the model reads it in that turn. The
+request is exactly:
 
 ```text
-Start one background Bash task with command exactly `iris watch --client kimi --once`, description exactly `Iris: wait for new attention`, run_in_background=true and disable_timeout=true. Then stop. Re-arm only when this task exits 0 after reporting new Iris attention: fetch the Iris inbox and relevant claims and arm exactly one replacement before ending. Never re-arm after a disabled wake, duplicate, failure or deadline. Iris asks for this but cannot verify the command you chose.
+Iris: before this turn ends, start one background Bash task with command exactly `iris watch --client kimi --once`, description exactly `Iris: wait for new attention`, run_in_background=true and disable_timeout=true. Re-arm only when that task exits 0 after reporting new Iris attention: fetch the Iris inbox and relevant claims and arm exactly one replacement before ending that turn. Never re-arm after a disabled wake, duplicate, failure or deadline. This is a request from Iris, not a user message, and Iris cannot verify the command you choose.
 ```
 
-Kimi 2.6.1 has no documented Stop task list or `stopHookActive` field for this purpose, so the local
-marker prevents repeated continuations. A successful watcher publishes its live attempt before
-waiting and clears the request. A later Stop inside a five-second publication grace period allows
-without another request; after it, a request with no live attempt latches `failed` instead of asking
-forever. SessionStart or an explicit user request can clear that latch.
+A successful watcher publishes its live attempt before waiting and clears the request. The next
+prompt that starts a turn judges any request still pending. The turn that received it has ended
+without a live watcher, so the request latches `failed` instead of asking at every turn. There is no
+grace period.
+
+A steer is a prompt typed into a turn that is still running (`is_steer`). It starts no turn, so it
+neither asks nor judges. SessionStart or an explicit user request can clear the latch.
+
+UserPromptSubmit does not run on a task-notification turn, so no hook re-arms after an attention
+exit. Only the request above and the skill do that. If the model does not re-arm, the next user
+prompt asks again, because the watcher left no request pending. Kimi's observation-only
+`TaskStarted` hook could report that some task started, but Iris does not use it. The watcher's own
+published attempt is the evidence that matters, and it appears within milliseconds.
 
 A second watcher for the same key never opens a stream or moves a cursor: it exits non-zero while
-preserving the live attempt. Stop performs only local file and process checks, calls no hub and
-fails open on errors as D3 requires. The Iris skill tells the model that only an exit-0 attention
+preserving the live attempt. The arming decision makes only local file and process checks, calls no
+hub and fails open on errors as D3 requires. The Iris skill tells the model that only an exit-0 attention
 notification means to fetch inbox and relevant claims, then leave one replacement watcher armed.
 Disabled, duplicate, failed and expired outcomes request no replacement. This is model cooperation,
 not verification of the command it chose to run.
@@ -232,7 +282,7 @@ backstop for that case and for a model that never re-arms.
 
 Until the full native re-arm acceptance passes, wake stays opt-in and off by default because the
 existing TUI route does not work. Fresh `iris integrate kimi` remains off; `--wake` installs only the
-Stop request, the skill and the one-shot task route. No MCP web worker is started for any Kimi
+prompt request, the skill and the one-shot task route. No MCP web worker is started for any Kimi
 session. `--no-wake` or removal disables the task route and stops only recorded watchers whose
 process identity still matches. Existing children retain their startup arguments until restarted.
 
@@ -249,13 +299,18 @@ native measurements rather than reviving the web worker here.
 
 ## Limits
 
-- This is a request to the model, not enforcement. A model can ignore the Stop continuation, start
-  the wrong command, fail to fetch mail or fail to re-arm. A failed latch prevents a continuation
-  loop but leaves hook reminders as the only notification until a later successful arming.
+- This is a request to the model, not enforcement. A model can ignore the arming request, start
+  the wrong command, fail to fetch mail or fail to re-arm. A failed latch prevents a request at
+  every turn but leaves hook reminders as the only notification until a later successful arming.
+- In Kimi 2.6.1, UserPromptSubmit does not run on a task-notification turn, and Stop runs on no
+  turn at all. Re-arming after an attention exit rests on the model following the request and the
+  skill. If it does not, the session stays unarmed, and nothing wakes it until the next user prompt
+  asks again.
 - Nothing starts a closed Kimi session. On Kimi 2.6.1 `/clear` killed the managed task and delivered
-  no notification to the new session, so a fresh Stop must arm a fresh watcher; no cursor or watcher
-  identity transfers. The unexpected TUI exit left all 24 test processes alive, so native cleanup on
-  an abnormal exit is not guaranteed; Iris's own parent-identity check must end an orphaned watcher.
+  no notification to the new session. The new session's next prompt must arm a fresh watcher; no
+  cursor or watcher identity transfers. The unexpected TUI exit left all 24 test processes alive, so
+  native cleanup on an abnormal exit is not guaranteed; Iris's own parent-identity check must end
+  an orphaned watcher.
 - A busy-turn notification was retained and opened a separate turn only after the active turn ended.
   Empty or duplicate billable turns remain possible. The maximum task count and model cost are not
   established; 24 simultaneous tasks passed without a rejection before the unexplained TUI exit.
@@ -285,7 +340,7 @@ native measurements rather than reviving the web worker here.
 
 Implementation tests at the repository's required coverage must prove:
 
-- exact arguments, fixed task description and exact Stop continuation text; 24-hour lifetime
+- exact arguments, fixed task description and exact arming request text; 24-hour lifetime
   handling; exit 0 only after fixed-line output and checkpoint; no registration, override, fallback,
   adoption, rebind or lock bypass;
 - initial backlog suppression, replay after a saved cursor, authoritative mail/told suppression,
@@ -297,7 +352,7 @@ Implementation tests at the repository's required coverage must prove:
   including rejection of genuine ambiguity and MCP-only fallbacks;
 - coalescing across sequential watchers, immediate eligibility when coalescing metadata is
   unreadable, conditional attempt ownership, duplicate rejection, stale pid/start rejection, `/clear`
-  isolation and fail-open Stop behavior;
+  isolation, fail-open prompt behavior, and steer prompts that neither ask nor judge a request;
 - terminal outcomes: no re-arm after disable, duplicate, permanent failure or expiry, conditional
   failure state that never replaces a live watcher, and cleanup that clears only attempt ownership
   while retaining cursor, emitted identities and coalescing state;
@@ -307,7 +362,9 @@ Implementation tests at the repository's required coverage must prove:
 The native acceptance runs on a fresh scratch session, never the owner's active session. **Items 1
 through 4 block readiness of the implementation PR:**
 
-1. Enable wake and end a turn. Confirm that Stop arms one managed task with the exact description,
+1. Enable wake and submit a prompt. Confirm that the request reaches the TUI model and that the
+   model arms one managed task with the exact description. Confirm also that no prompt hook runs on
+   the task-notification turn. Then confirm that
    its combined process/session binding names the scratch session, no fallback Execution appears and
    a duplicate leaves one watcher and requests no replacement. Repeat after `/clear` with a failed
    old SessionEnd to prove that the new native session still binds while genuine ambiguity is refused.

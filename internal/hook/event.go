@@ -70,6 +70,9 @@ type Event struct {
 	// Prompt is a prompt event's whole prompt, for one comparison only: whether it is the message
 	// of the session's own wake (ADR 017, decision 3). It is never logged and decides nothing else.
 	Prompt string
+	// Steer is set for a Kimi prompt typed into a turn that is still running (is_steer). Such a
+	// prompt starts no turn, so it never asks for or judges Kimi's one-shot watcher (ADR 030).
+	Steer bool
 	// GrokStop is set only for a Grok Stop event. It decides whether to ask for a monitor (ADR 025).
 	GrokStop *GrokStop
 	// TranscriptPath is an Antigravity conversation's JSONL transcript path, used only for

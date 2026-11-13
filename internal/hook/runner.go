@@ -156,14 +156,9 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		hash := sha256.Sum256(payload)
 		ev.ToolCallID = "payload:" + hex.EncodeToString(hash[:])
 	}
-	// Stop asks for a monitor before the repository check. A Grok session outside a git checkout
-	// still needs the wake (ADR 025). Kimi's one-shot watcher is asked for here too (ADR 030), but
-	// only for a session whose SessionStart the hub accepted, which published the session's map.
-	// Neither ask calls the hub.
+	// Stop asks for a monitor before the repository check. A session outside a git checkout
+	// still needs the wake, and the ask does not call the hub (ADR 025).
 	if out, ok := r.grokMonitorAsk(ev); ok {
-		return r.finish(state, ev, out)
-	}
-	if out, ok := r.kimiWakeAsk(ev); ok {
 		return r.finish(state, ev, out)
 	}
 	if shellEvent(ev) {
@@ -217,7 +212,13 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		if err != nil {
 			return state.fail(err, r.failOpen(state, ev, err, allow))
 		}
-		return r.finish(state, ev, Encode(ev, Decision{Action: ActionAllow, Context: r.attentionNote(ctx, ev, sess.Attention, false, rev)}))
+		note := r.attentionNote(ctx, ev, sess.Attention, false, rev)
+		// Kimi's one-shot watcher is asked for at a user prompt whose session the hub accepted
+		// (ADR 030): Kimi 2.6.1 never runs Stop hooks.
+		if ask := r.kimiArm(ev); ask != "" {
+			note = strings.TrimPrefix(note+"\n"+ask, "\n")
+		}
+		return r.finish(state, ev, Encode(ev, Decision{Action: ActionAllow, Context: note}))
 	case KindSessionEnd:
 		state.at("session")
 		sess, err := r.register(ctx, ev, repo)

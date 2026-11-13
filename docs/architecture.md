@@ -358,11 +358,14 @@ watcher binds to that session alone. `/clear` points the process at its new sess
 SessionStart also clears that session's latch, and removes the state of Kimi processes that have
 ended.
 
-When `kimi-wake/preference` reads `on`, Stop asks the model, in the ADR's exact words, to start
-the watcher. It asks again only when no watcher is live and no request is pending. A request that
-no watcher answers within five seconds latches `failed` at the next Stop instead of asking at every
-turn. The ask reads local files and the process table, calls no hub and lets the turn end on any
-failure. Nothing writes the preference yet, and the watcher follows in a later change.
+When `kimi-wake/preference` reads `on`, a user prompt that starts a turn asks the model, in the
+ADR's exact words, to start the watcher. Kimi 2.6.1 never runs Stop hooks, so the ask cannot come
+at the end of a turn. The prompt asks only when no watcher is live and no request is pending. A
+request still pending at the next such prompt was not answered, so it latches `failed` instead of
+asking at every turn. A steer typed into a running turn neither asks nor judges. No prompt hook runs
+on a task-notification turn, so re-arming after an attention exit rests on the model. The ask reads
+local files and the process table, calls no hub and asks nothing on any failure. Nothing writes the
+preference yet, and the watcher follows in a later change.
 
 Grok's monitor shell does not inherit `GROK_SESSION_ID` (measured on 1.0.77). After the hub
 accepts a top-level SessionStart, the hook stores the session id beside that grok process's

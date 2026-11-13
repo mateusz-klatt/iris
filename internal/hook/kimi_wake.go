@@ -6,10 +6,11 @@ import (
 	"github.com/mateusz-klatt/iris/internal/proc"
 )
 
-// kimiWatchReason is the Stop continuation of ADR 030, word for word. Kimi shows a blocking Stop
-// hook's stderr to the model, which then starts the one-shot watcher as a managed background task.
-// Kimi 2.6.1 gives Stop no task list, so Iris cannot see which command the model chose.
-const kimiWatchReason = "Start one background Bash task with command exactly `iris watch --client kimi --once`, description exactly `Iris: wait for new attention`, run_in_background=true and disable_timeout=true. Then stop. Re-arm only when this task exits 0 after reporting new Iris attention: fetch the Iris inbox and relevant claims and arm exactly one replacement before ending. Never re-arm after a disabled wake, duplicate, failure or deadline. Iris asks for this but cannot verify the command you chose."
+// kimiArmRequest is ADR 030's request to arm the one-shot watcher, word for word. Kimi appends a
+// prompt hook's output to the user's prompt, so the model reads it in the turn that prompt starts.
+// Kimi 2.6.1 never runs Stop hooks, which is why the request rides on the prompt instead. Iris
+// cannot see which command the model then starts.
+const kimiArmRequest = "Iris: before this turn ends, start one background Bash task with command exactly `iris watch --client kimi --once`, description exactly `Iris: wait for new attention`, run_in_background=true and disable_timeout=true. Re-arm only when that task exits 0 after reporting new Iris attention: fetch the Iris inbox and relevant claims and arm exactly one replacement before ending that turn. Never re-arm after a disabled wake, duplicate, failure or deadline. This is a request from Iris, not a user message, and Iris cannot verify the command you choose."
 
 // kimiWake is the Kimi wake state under the pinned Iris directory, which a hook's environment
 // cannot redirect. ok is false when that directory is unknown.
@@ -60,25 +61,26 @@ func (r Runner) recordKimiSession(ev Event) {
 	_ = s.MapSession(a.PID, a.StartMS, ev.SessionID, hookLockBudget)
 }
 
-// kimiWakeAsk asks the model to start the one-shot watcher at the end of a turn, when wake is on
-// and no watcher is live, pending or latched for this session (ADR 030). It reads local files and
-// the process table only and calls no hub, and any failure lets the turn end (D3). ok is false
-// when the hook continues with its ordinary allow.
-func (r Runner) kimiWakeAsk(ev Event) (Output, bool) {
-	if !kimiTopLevel(ev, KindStop) {
-		return Output{}, false
+// kimiArm is the request to arm the one-shot watcher that a Kimi user prompt adds to its context,
+// or "" (ADR 030). It asks only when wake is on and no watcher is live, pending or latched for this
+// session; a request the previous turn left unanswered latches instead. A steer, typed into a turn
+// that is still running, starts no turn and neither asks nor judges. It reads local files and the
+// process table only, and any failure asks nothing (D3).
+func (r Runner) kimiArm(ev Event) string {
+	if !kimiTopLevel(ev, KindPrompt) || ev.Steer {
+		return ""
 	}
 	s, ok := r.kimiWake()
 	if !ok || !kimiwake.Enabled(s.Root) {
-		return Output{}, false
+		return ""
 	}
 	a, ok := r.kimiProcess()
 	if !ok {
-		return Output{}, false
+		return ""
 	}
 	ask, err := s.RequestArm(kimiwake.Key{PID: a.PID, StartMS: a.StartMS, Session: ev.SessionID}, hookLockBudget)
 	if err != nil || !ask {
-		return Output{}, false
+		return ""
 	}
-	return Output{Stderr: []byte(kimiWatchReason + "\n"), Exit: 2}, true
+	return kimiArmRequest
 }

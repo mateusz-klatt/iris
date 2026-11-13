@@ -164,30 +164,26 @@ func TestOnlyKimiSessionIdsNameARecord(t *testing.T) {
 	}
 }
 
-// A Stop asks for a watcher once. Inside the grace it asks nothing more, because the watcher may
-// not have published itself yet; after it, a request no live watcher answered latches failed
-// instead of asking at the end of every turn, and the latch keeps every later Stop quiet.
-func TestAStopAsksOnceThenWaitsForItsWatcherThenLatches(t *testing.T) {
+// A prompt asks for a watcher once. A request still pending at the next prompt was not answered by
+// the turn that received it, so it latches failed instead of asking at every turn, and the latch
+// keeps every later prompt quiet.
+func TestAPromptAsksOnceThenLatchesAnUnansweredRequest(t *testing.T) {
 	s, now, _ := newStore(t)
 	k := keyFor(sessionA)
 	mapSession(t, s, sessionA)
 	ask, err := s.RequestArm(k, time.Second)
 	if err != nil || !ask {
-		t.Fatalf("first stop: %v %v", ask, err)
+		t.Fatalf("first prompt: %v %v", ask, err)
 	}
 	r, _ := recordOf(t, s, k)
 	if r.Version != recordVersion || r.ArmRequestedMS != now.UnixMilli() || r.Latch != nil || r.Attempt != nil || r.Checkpoint.Initialized {
 		t.Fatalf("after the request: %+v", r)
 	}
-	*now = now.Add(Grace - time.Millisecond)
-	if ask, err := s.RequestArm(k, time.Second); err != nil || ask {
-		t.Fatalf("inside the grace: %v %v", ask, err)
-	}
-	*now = now.Add(time.Millisecond)
+	*now = now.Add(time.Second)
 	ask, err = s.RequestArm(k, time.Second)
 	r, _ = recordOf(t, s, k)
 	if err != nil || ask || r.Latch == nil || *r.Latch != (Latch{State: LatchFailed, AtMS: now.UnixMilli()}) || r.ArmRequestedMS != 0 {
-		t.Fatalf("after the grace: %v %v %+v", ask, err, r)
+		t.Fatalf("next prompt: %v %v %+v", ask, err, r)
 	}
 	*now = now.Add(time.Hour)
 	if ask, err := s.RequestArm(k, time.Second); err != nil || ask {
@@ -195,22 +191,36 @@ func TestAStopAsksOnceThenWaitsForItsWatcherThenLatches(t *testing.T) {
 	}
 }
 
-// A request dated in the future, after the clock went back, cannot be judged young, so it latches
-// rather than suppressing every request until the clock catches up.
-func TestARequestFromAClockThatWentBackLatches(t *testing.T) {
-	s, now, _ := newStore(t)
+// Read gives a key's record under the lock, makes nothing, and refuses an invalid key and a lock
+// held past its budget.
+func TestARecordIsReadUnderTheLock(t *testing.T) {
+	s, _, _ := newStore(t)
 	k := keyFor(sessionA)
+	if r, exists, err := s.Read(k, time.Second); err != nil || exists || r.Version != recordVersion {
+		t.Fatalf("before any state: %+v %v %v", r, exists, err)
+	}
+	absent(t, s.Root)
+	if _, _, err := s.Read(Key{}, time.Second); !errors.Is(err, errKey) {
+		t.Fatal(err)
+	}
 	mapSession(t, s, sessionA)
-	put(t, s, k, Record{Version: recordVersion, ArmRequestedMS: now.UnixMilli() + 1})
-	ask, err := s.RequestArm(k, time.Second)
-	r, _ := recordOf(t, s, k)
-	if err != nil || ask || r.Latch == nil || r.Latch.State != LatchFailed {
-		t.Fatalf("%v %v %+v", ask, err, r)
+	want := Record{Version: recordVersion, Latch: &Latch{State: LatchExpired, AtMS: 5}}
+	put(t, s, k, want)
+	if r, exists, err := s.Read(k, time.Second); err != nil || !exists || !reflect.DeepEqual(r, want) {
+		t.Fatalf("%+v %v %v", r, exists, err)
+	}
+	release, err := s.lock(time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if _, _, err := s.Read(k, 20*time.Millisecond); !errors.Is(err, ErrLocked) {
+		t.Fatal(err)
 	}
 }
 
-// A live watcher owns its record, so a Stop leaves it untouched. Once the watcher's process ends
-// without cleaning up, its stale claim no longer counts and a Stop asks again.
+// A live watcher owns its record, so a prompt leaves it untouched. Once the watcher's process ends
+// without cleaning up, its stale claim no longer counts and a prompt asks again.
 func TestALiveWatcherIsLeftAloneAndADeadOneIsReplaced(t *testing.T) {
 	s, now, procs := newStore(t)
 	k := keyFor(sessionA)
@@ -222,7 +232,7 @@ func TestALiveWatcherIsLeftAloneAndADeadOneIsReplaced(t *testing.T) {
 		t.Fatalf("live watcher: %v %v", ask, err)
 	}
 	if after := raw(t, s.recordPath(k)); !bytes.Equal(before, after) {
-		t.Fatalf("a Stop rewrote a live watcher's record:\n%s\n%s", before, after)
+		t.Fatalf("a prompt rewrote a live watcher's record:\n%s\n%s", before, after)
 	}
 	procs.set(watcher.PID, watcher.StartMS, false)
 	ask, err := s.RequestArm(k, time.Second)
@@ -232,9 +242,9 @@ func TestALiveWatcherIsLeftAloneAndADeadOneIsReplaced(t *testing.T) {
 	}
 }
 
-// A Stop asks only for the session its process runs now, as SessionStart published it. Without a
+// A prompt asks only for the session its process runs now, as SessionStart published it. Without a
 // map, or with one naming another session, it asks nothing and creates no record.
-func TestAStopAsksOnlyForTheSessionItsProcessRuns(t *testing.T) {
+func TestAPromptAsksOnlyForTheSessionItsProcessRuns(t *testing.T) {
 	s, _, _ := newStore(t)
 	a, b := keyFor(sessionA), keyFor(sessionB)
 	// Before any SessionStart there is no state directory, and a read creates none.
@@ -553,7 +563,7 @@ func TestAnUnreadableRecordIsLeftAsItIs(t *testing.T) {
 			setup(t, path)
 			before, _ := os.ReadFile(path)
 			if ask, err := s.RequestArm(keyFor(sessionA), time.Second); ask || err == nil {
-				t.Fatalf("Stop: %v %v", ask, err)
+				t.Fatalf("request: %v %v", ask, err)
 			}
 			// SessionStart still publishes the map, then reports the record it could not clear.
 			if err := s.MapSession(kimiPID, kimiStart, sessionA, time.Second); err == nil {
@@ -624,7 +634,7 @@ func TestAFailedWriteAsksNothingAndLeavesNoTemporaryFile(t *testing.T) {
 			t.Cleanup(inject(t, s))
 			ask, err := s.RequestArm(keyFor(sessionA), time.Second)
 			if ask || err == nil {
-				t.Fatalf("Stop: %v %v", ask, err)
+				t.Fatalf("request: %v %v", ask, err)
 			}
 			if err := s.MapSession(kimiPID, kimiStart, sessionB, time.Second); err == nil {
 				t.Fatal("SessionStart reported no failure")
