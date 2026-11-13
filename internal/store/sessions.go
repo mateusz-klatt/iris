@@ -350,6 +350,17 @@ func (t *transaction) session(r Request) (map[string]any, error) {
 		if err := t.rememberRepository(r, e.Repo); err != nil {
 			return nil, err
 		}
+		// A hook speaks for the client process that runs the session now. A session resumed in a
+		// new process within its lease, after an exit without SessionEnd, keeps its Execution,
+		// which must then name the new process, or a lookup by that process finds nothing and its
+		// MCP server registers a fallback instead (D6). Only a hook with a whole process identity
+		// rewrites it, and the newest hook wins; a shim, watch or MCP registration never does.
+		if r.Source == "hook" && r.ClientPID > 0 && r.ClientPIDStartMS > 0 && (e.PID != r.ClientPID || e.PIDStart != r.ClientPIDStartMS || e.Single != r.SingleSession) {
+			if _, err := t.exec("UPDATE Execution SET client_pid=?,client_pid_start_ms=?,single_session=? WHERE id=?", r.ClientPID, r.ClientPIDStartMS, r.SingleSession, e.ID); err != nil {
+				return nil, err
+			}
+			e.PID, e.PIDStart, e.Single = r.ClientPID, r.ClientPIDStartMS, r.SingleSession
+		}
 		lease, err := t.resume(&e, r.Source == "shim" || r.Source == "watch" || r.Source == "mcp")
 		if err != nil {
 			return nil, err
