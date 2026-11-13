@@ -502,10 +502,16 @@ func TestBindingAliasesAndPolicy(t *testing.T) {
 		t.Fatal(resolved)
 	}
 	registration.SessionID = "four"
-	call(t, s, "sessions", registration)
+	registration.Source = "hook"
+	four := call(t, s, "sessions", registration)
+	registration.Source = ""
 	expectError(t, s, "bind", bind, "ambiguous")
+	// A session id beside the process selects one of them, when a hook registered it: both are
+	// matched together (ADR 030), never the session alone.
 	bind.SessionID = "four"
-	call(t, s, "bind", bind)
+	if got := call(t, s, "bind", bind); got["execution_id"] != four["execution_id"] || got["match"] != "process_session" {
+		t.Fatalf("by session and process: %v", got)
+	}
 	a, ao := session(t, s, 10)
 	b, _ := session(t, s, 11)
 	if err := s.SetRepositoryPolicy(context.Background(), ao["repository_id"].(string), "sensitive", "ask"); err != nil {

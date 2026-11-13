@@ -490,7 +490,18 @@ func (t *transaction) bind(r Request) (map[string]any, error) {
 	}
 	query := executionSelect + "WHERE e.client=? AND e.host_id=? AND e.state='active' AND e.recovery_deadline IS NULL AND e.boot_epoch=? AND e.deadline_tick_ms>?"
 	args := []any{r.Client, r.Host, t.s.epoch, t.s.clock.Tick()}
-	if r.SessionID != "" {
+	combined := r.SessionID != "" && (r.ClientPID != 0 || r.ClientPIDStartMS != 0)
+	if combined {
+		// A session and its client process together (ADR 030): every constraint applies, and an
+		// incomplete process identity is refused rather than looked up by session alone. Only
+		// an Execution a hook registered for a single-session process matches, never an MCP-only
+		// fallback.
+		if r.ClientPID <= 0 || r.ClientPIDStartMS <= 0 {
+			return nil, fail("bad_request", "a session lookup by client process needs a positive client_pid and client_pid_start_ms")
+		}
+		query += " AND e.session_id=? AND e.client_pid=? AND e.client_pid_start_ms=? AND e.single_session=1 AND e.hook_seen_ms>0"
+		args = append(args, r.SessionID, r.ClientPID, r.ClientPIDStartMS)
+	} else if r.SessionID != "" {
 		query += " AND e.session_id=?"
 		args = append(args, r.SessionID)
 	} else {
@@ -527,7 +538,13 @@ func (t *transaction) bind(r Request) (map[string]any, error) {
 	if len(matches) > 1 {
 		return nil, fail("ambiguous", "multiple sessions match; provide an explicit execution handle")
 	}
-	return t.boundWithHooks(matches[0])
+	out, err := t.boundWithHooks(matches[0])
+	if combined && err == nil {
+		// Only this branch says so. A hub from before it takes such a request by session alone
+		// and answers without this field, which the asking client must refuse.
+		out["match"] = "process_session"
+	}
+	return out, err
 }
 
 // boundWithHooks is a bind answer: the binding, and whether any hook has reached the hub for that
