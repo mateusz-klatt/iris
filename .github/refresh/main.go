@@ -222,12 +222,14 @@ func (r *Report) actions(root string, src Sources) {
 			})
 		})
 	}
-	r.pinTables(files, latest)
+	// The release checks keep their pin table in Go, beside the workflows they check.
+	guard, _ := filepath.Glob(filepath.Join(root, "cmd", "iris-workflowguard", "pins.go")) // a fixed pattern cannot be malformed
+	r.pinTables(append(files, guard...), latest)
 }
 
-// pinEntry is a line of a pin table that a workflow asserts its actions against, such as
-// `"actions/setup-go": "<commit>",` in ci.yml's release checks. It names an action as a `uses:`
-// line does, without the version.
+// pinEntry is a line of a pin table that a check asserts actions against, such as
+// `"actions/setup-go": "<commit>",` in cmd/iris-workflowguard/pins.go. It names an action as a
+// `uses:` line does, without the version.
 var pinEntry = regexp.MustCompile(`"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)((?:/[^"@\s]*)?)":\s*"([0-9a-f]{40})"`)
 
 // pinTables moves each pin-table entry to the commit its action's `uses:` lines now name, so a

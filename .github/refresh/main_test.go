@@ -36,9 +36,11 @@ func fakeRepo(t *testing.T) string {
 			"              \"o/unused\": \"" + oldSHA + "\",\n          }\n" +
 			"          again = {\"actions/checkout\": \"" + oldSHA + "\"}\n",
 		".github/workflows/release.yml": "steps:\n      - uses: actions/setup-go@" + oldSHA + " # v5\n",
-		"Dockerfile":                    "FROM --platform=$BUILDPLATFORM busybox:1.38@" + oldImage + " AS data\nFROM gcr.io/distroless/static-debian12:nonroot@" + oldImage + "\n",
-		"go.mod":                        "module example\n\ngo 1.27\n\nrequire (\n\tgithub.com/coder/websocket v1.8.13\n\tgolang.org/x/sys v0.49.0 // indirect\n)\n",
-		"web/package-lock.json":         `{"packages":{"":{},"node_modules/react":{"version":"19.0.0"},"node_modules/vite":{"version":"7.0.0"},"node_modules/a/node_modules/b":{"version":"1.0.0"}}}`,
+		// The release checks' own pin table, in Go.
+		"cmd/iris-workflowguard/pins.go": "var pins = map[string]string{\n\t\"actions/checkout\": \"" + oldSHA + "\",\n\t\"actions/setup-go\": \"" + oldSHA + "\",\n}\n",
+		"Dockerfile":                     "FROM --platform=$BUILDPLATFORM busybox:1.38@" + oldImage + " AS data\nFROM gcr.io/distroless/static-debian12:nonroot@" + oldImage + "\n",
+		"go.mod":                         "module example\n\ngo 1.27\n\nrequire (\n\tgithub.com/coder/websocket v1.8.13\n\tgolang.org/x/sys v0.49.0 // indirect\n)\n",
+		"web/package-lock.json":          `{"packages":{"":{},"node_modules/react":{"version":"19.0.0"},"node_modules/vite":{"version":"7.0.0"},"node_modules/a/node_modules/b":{"version":"1.0.0"}}}`,
 	}
 	for name, body := range files {
 		p := filepath.Join(root, filepath.FromSlash(name))
@@ -178,6 +180,9 @@ func TestRefreshUpdatesEveryPinAndRunsTheChecks(t *testing.T) {
 	if rel := read(t, root, ".github/workflows/release.yml"); !strings.Contains(rel, "actions/setup-go@"+newSHA+" # v7.0.0") {
 		t.Fatalf("release workflow:\n%s", rel)
 	}
+	if pins := read(t, root, "cmd/iris-workflowguard/pins.go"); !strings.Contains(pins, `"actions/checkout": "`+newSHA+`"`) || !strings.Contains(pins, `"actions/setup-go": "`+newSHA+`"`) {
+		t.Fatalf("the release checks' pins:\n%s", pins)
+	}
 	if df := read(t, root, "Dockerfile"); !strings.Contains(df, "FROM --platform=$BUILDPLATFORM busybox:1.38@"+newImage+" AS data") || !strings.Contains(df, "static-debian12:nonroot@"+oldImage) {
 		t.Fatalf("Dockerfile:\n%s", df)
 	}
@@ -191,6 +196,7 @@ func TestRefreshUpdatesEveryPinAndRunsTheChecks(t *testing.T) {
 		"ci.yml actions/checkout -> v7.0.1 (222222222222), major from v4",
 		"ci.yml pin table actions/checkout -> v7.0.1 (222222222222)",
 		"ci.yml pin table actions/setup-go -> v7.0.0 (222222222222)",
+		"pins.go pin table actions/checkout -> v7.0.1 (222222222222)",
 		"release.yml actions/setup-go -> v7.0.0 (222222222222), major from v5",
 		"Dockerfile busybox:1.38 sha256:aaaaaaaaaaaa -> sha256:bbbbbbbbbbbb",
 		"go.mod github.com/coder/websocket v1.8.13 -> v1.8.14",
