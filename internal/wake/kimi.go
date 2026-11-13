@@ -18,6 +18,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/mateusz-klatt/iris/internal/hubclient"
@@ -37,6 +38,14 @@ type kimiInstance struct {
 
 type kimiServer struct {
 	base, version, token string
+	client               *http.Client
+	transport            *http.Transport
+}
+
+func (s *kimiServer) close() {
+	if s.transport != nil {
+		s.transport.CloseIdleConnections()
+	}
 }
 
 type kimiCommands struct {
@@ -48,6 +57,7 @@ type kimiCommands struct {
 	now            func() time.Time
 	versionTimeout time.Duration
 	idleTimeout    time.Duration
+	startTimeout   time.Duration
 	queueTimeout   time.Duration
 	server         *kimiServer
 	lookupProcess  func(int) (proc.Snapshot, bool)
@@ -58,7 +68,7 @@ var kimiUserHomeDir = os.UserHomeDir
 func newKimiCommands() *kimiCommands {
 	c := &kimiCommands{
 		http: http.DefaultClient, readFile: os.ReadFile, readDir: os.ReadDir, now: time.Now, lookupProcess: proc.Lookup,
-		versionTimeout: 5 * time.Second, idleTimeout: 5 * time.Second, queueTimeout: 30 * time.Second,
+		versionTimeout: 5 * time.Second, idleTimeout: 5 * time.Second, startTimeout: 2 * time.Second, queueTimeout: 30 * time.Second,
 	}
 	home := os.Getenv("KIMI_CODE_HOME")
 	if home == "" {
@@ -74,8 +84,46 @@ func newKimiCommands() *kimiCommands {
 	return c
 }
 
+func pinKimiClient(client *http.Client) (*http.Client, *http.Transport) {
+	if client == nil {
+		client = http.DefaultClient
+	}
+	base, _ := client.Transport.(*http.Transport)
+	if base == nil {
+		base = http.DefaultTransport.(*http.Transport)
+	}
+	transport := base.Clone()
+	dial := transport.DialContext
+	if dial == nil {
+		dial = (&net.Dialer{}).DialContext
+	}
+	var mu sync.Mutex
+	dialed := false
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		mu.Lock()
+		defer mu.Unlock()
+		if dialed {
+			return nil, errors.New("kimi server attempted to replace its verified connection")
+		}
+		conn, err := dial(ctx, network, address)
+		if err != nil {
+			return nil, err
+		}
+		dialed = true
+		return conn, nil
+	}
+	transport.MaxConnsPerHost = 1
+	transport.MaxIdleConnsPerHost = 1
+	pinned := *client
+	pinned.Transport = transport
+	return &pinned, transport
+}
+
 func (c *kimiCommands) check(ctx context.Context, clientVersion string) (binaryInfo, string) {
 	info := binaryInfo{ClientVersion: clientVersion, CheckedMS: c.now().UnixMilli()}
+	if c.server != nil {
+		c.server.close()
+	}
 	c.server = nil
 	if c.homeFailure != "" {
 		return info, c.homeFailure
@@ -114,6 +162,7 @@ func (c *kimiCommands) check(ctx context.Context, clientVersion string) (binaryI
 			version: instance.HostVersion,
 			base:    "http://" + net.JoinHostPort(instance.Host, strconv.Itoa(instance.Port)), // NOSONAR: go:S5332; Kimi uses HTTP on the literal loopback allowlisted above.
 		}
+		candidate.client, candidate.transport = pinKimiClient(c.http)
 		var health struct {
 			OK bool `json:"ok"`
 		}
@@ -131,11 +180,13 @@ func (c *kimiCommands) check(ctx context.Context, clientVersion string) (binaryI
 		}
 		cancel()
 		if err != nil || !health.OK || meta.ServerID == "" || meta.ServerVersion != candidate.version {
+			candidate.close()
 			continue
 		}
 		info.Path, info.Version = candidate.base, candidate.version
 		if candidate.version != clientVersion {
 			versionMismatch = true
+			candidate.close()
 			continue
 		}
 		c.server = candidate
@@ -185,12 +236,19 @@ func newKimiRequest(ctx context.Context, server *kimiServer, method, path string
 	return req, nil
 }
 
+func (c *kimiCommands) httpClient(server *kimiServer) *http.Client {
+	if server.client != nil {
+		return server.client
+	}
+	return c.http
+}
+
 func (c *kimiCommands) startCall(ctx context.Context, server *kimiServer, method, path string, body any) (*http.Response, error) {
 	req, err := newKimiRequest(ctx, server, method, path, body)
 	if err != nil {
 		return nil, err
 	}
-	return hubclient.NoRedirects(c.http).Do(req)
+	return hubclient.NoRedirects(c.httpClient(server)).Do(req)
 }
 
 type kimiCallResult struct {
@@ -200,6 +258,7 @@ type kimiCallResult struct {
 
 type kimiCall struct {
 	done chan kimiCallResult
+	stop context.CancelFunc
 }
 
 func (c *kimiCall) wait() (*http.Response, error) {
@@ -208,8 +267,10 @@ func (c *kimiCall) wait() (*http.Response, error) {
 }
 
 func (c *kimiCommands) beginCall(ctx context.Context, server *kimiServer, method, path string, body any) (*kimiCall, error) {
-	req, err := newKimiRequest(ctx, server, method, path, body)
+	requestCtx, stopRequest := context.WithCancel(ctx)
+	req, err := newKimiRequest(requestCtx, server, method, path, body)
 	if err != nil {
+		stopRequest()
 		return nil, err
 	}
 	wrote := make(chan struct{}, 1)
@@ -221,14 +282,21 @@ func (c *kimiCommands) beginCall(ctx context.Context, server *kimiServer, method
 			}
 		},
 	}))
-	call := &kimiCall{done: make(chan kimiCallResult, 1)}
+	call := &kimiCall{done: make(chan kimiCallResult, 1), stop: stopRequest}
 	go func() {
-		res, err := hubclient.NoRedirects(c.http).Do(req)
+		res, err := hubclient.NoRedirects(c.httpClient(server)).Do(req)
 		call.done <- kimiCallResult{res: res, err: err}
 	}()
+	timer := time.NewTimer(c.startTimeout)
 	select {
 	case <-wrote:
+		timer.Stop()
 	case result := <-call.done:
+		timer.Stop()
+		call.done <- result
+	case <-timer.C:
+		stopRequest()
+		result := <-call.done
 		call.done <- result
 	}
 	return call, nil
@@ -339,6 +407,7 @@ func (c *kimiCommands) queue(ctx context.Context, session, message string, start
 		result.answer, result.detail = "unknown", "Kimi prompt response was not a known outcome"
 		return result
 	}
+	defer call.stop()
 	res, err := call.wait()
 	if err == nil {
 		err = c.finishCall(res, &answer)
@@ -354,9 +423,12 @@ func (c *kimiCommands) queue(ctx context.Context, session, message string, start
 		}
 	}
 	var api *kimiAPIError
+	if errors.As(err, &api) && api.code == 40931 {
+		return commandAnswer{answer: "aborted", detail: kimiActive}
+	}
 	if errors.As(err, &api) {
 		switch api.code {
-		case 40001, 40101, 40110, 40113, 40401, 40407, 40415, 40420, 40912, 40926, 40930, 40931, 40932:
+		case 40001, 40101, 40110, 40113, 40401, 40407, 40415, 40420, 40912, 40926, 40930, 40932:
 			result.answer, result.detail = "failed", "Kimi refused the wake prompt"
 			return result
 		}

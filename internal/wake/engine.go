@@ -103,6 +103,9 @@ func (e *engine) step(ctx context.Context) stepResult {
 	}
 	switch answer.answer {
 	case "aborted":
+		if answer.detail == kimiActive {
+			return e.after(15 * time.Second)
+		}
 		return stepResult{}
 	case "failed":
 		e.note("wake_failed")

@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -47,6 +48,7 @@ type kimiFake struct {
 	prompts      []map[string]any
 	paths        []string
 	auth         []string
+	connections  int
 	rawResponse  string
 }
 
@@ -60,7 +62,15 @@ func newKimiFake(t *testing.T) *kimiFake {
 		t.Fatal(err)
 	}
 	f.resetSession()
-	f.server = httptest.NewServer(http.HandlerFunc(f.handle))
+	f.server = httptest.NewUnstartedServer(http.HandlerFunc(f.handle))
+	f.server.Config.ConnState = func(_ net.Conn, state http.ConnState) {
+		if state == http.StateNew {
+			f.mu.Lock()
+			f.connections++
+			f.mu.Unlock()
+		}
+	}
+	f.server.Start()
 	t.Cleanup(f.server.Close)
 	u, err := url.Parse(f.server.URL)
 	if err != nil {
@@ -214,6 +224,33 @@ func TestKimiNativeServerDiscoveryIdleAndPromptQueue(t *testing.T) {
 			t.Fatalf("%s was not a known rejected submission: %+v", status, got)
 		}
 	}
+	f.mu.Lock()
+	connections := f.connections
+	f.mu.Unlock()
+	if connections != 1 {
+		t.Fatalf("Kimi calls used %d connections instead of the verified one", connections)
+	}
+	if _, detail := f.check(); detail != "" {
+		t.Fatalf("repeated preflight did not replace its closed idle connection cleanly: %q", detail)
+	}
+}
+
+func TestKimiNativeRefusesReconnectAfterVerifiedConnectionCloses(t *testing.T) {
+	f := newKimiFake(t)
+	if _, detail := f.check(); detail != "" {
+		t.Fatal(detail)
+	}
+	f.server.CloseClientConnections()
+	idle, detail := f.commands.idle(context.Background(), kimiTestSession)
+	if idle || detail != "Kimi session status could not be verified" {
+		t.Fatalf("closed verified connection was replaced: %t %q", idle, detail)
+	}
+	f.mu.Lock()
+	connections, paths, auth := f.connections, len(f.paths), len(f.auth)
+	f.mu.Unlock()
+	if connections != 1 || paths != 2 || auth != 2 {
+		t.Fatalf("reconnect sent another request: connections %d, paths %d, auth %d", connections, paths, auth)
+	}
 }
 
 func TestKimiNativeQueueWaitsForResponseOutsideAdmission(t *testing.T) {
@@ -272,7 +309,7 @@ func TestKimiNativeQueueWaitsForResponseOutsideAdmission(t *testing.T) {
 	}
 
 	commands := &kimiCommands{
-		http: server.Client(), queueTimeout: 5 * time.Second,
+		http: server.Client(), startTimeout: 5 * time.Second, queueTimeout: 5 * time.Second,
 		server: &kimiServer{base: server.URL, token: kimiTestToken},
 	}
 	done := make(chan commandAnswer, 1)
@@ -507,11 +544,15 @@ func TestKimiNativeQueueOutcomesAndAdmission(t *testing.T) {
 		t.Fatal(detail)
 	}
 	message := promptFor("fedcba9876543210fedcba9876543210")
-	for _, code := range []int{40001, 40101, 40110, 40113, 40401, 40407, 40415, 40420, 40912, 40926, 40930, 40931, 40932} {
+	for _, code := range []int{40001, 40101, 40110, 40113, 40401, 40407, 40415, 40420, 40912, 40926, 40930, 40932} {
 		f.promptCode = code
 		if got := f.commands.queue(context.Background(), kimiTestSession, message, admitKimi); got.answer != "failed" || got.detail != "Kimi refused the wake prompt" {
 			t.Fatalf("API code %d: %+v", code, got)
 		}
+	}
+	f.promptCode = 40931
+	if got := f.commands.queue(context.Background(), kimiTestSession, message, admitKimi); got.answer != "aborted" || got.started || got.detail != kimiActive {
+		t.Fatalf("native lock conflict consumed a wake attempt: %+v", got)
 	}
 	for _, tc := range []struct {
 		name, promptID, status string
@@ -664,17 +705,70 @@ type kimiBrokenBody struct{}
 func (kimiBrokenBody) Read([]byte) (int, error) { return 0, errors.New("read failed") }
 func (kimiBrokenBody) Close() error             { return nil }
 
+func TestKimiNativeStartTimeoutFinishesTransportBeforeAdmission(t *testing.T) {
+	transportDone := make(chan struct{})
+	commands := &kimiCommands{
+		startTimeout: 20 * time.Millisecond, queueTimeout: time.Second,
+		server: &kimiServer{base: "http://127.0.0.1"},
+		http: &http.Client{Transport: kimiRoundTripFunc(func(r *http.Request) (*http.Response, error) {
+			<-r.Context().Done()
+			close(transportDone)
+			return nil, r.Context().Err()
+		})},
+	}
+	finishedBeforeAdmission := false
+	answer := commands.queue(context.Background(), kimiTestSession, promptFor("start-timeout"), func(start func() error) (bool, error) {
+		ok, err := admitKimi(start)
+		select {
+		case <-transportDone:
+			finishedBeforeAdmission = true
+		default:
+		}
+		return ok, err
+	})
+	if !finishedBeforeAdmission || answer.answer != "unknown" || !answer.started {
+		t.Fatalf("start timeout allowed a late or definite outcome: admitted %t, answer %+v", finishedBeforeAdmission, answer)
+	}
+}
+
+func TestPinKimiClientDefaultsAndDialFailure(t *testing.T) {
+	for name, client := range map[string]*http.Client{
+		"default client": nil,
+		"custom round tripper": {Transport: kimiRoundTripFunc(func(*http.Request) (*http.Response, error) {
+			return nil, errors.New("unused")
+		})},
+		"transport without dialer": {Transport: &http.Transport{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			pinned, transport := pinKimiClient(client)
+			if pinned == nil || pinned.Transport != transport || transport.DialContext == nil {
+				t.Fatal("pinned client did not receive its bounded transport")
+			}
+			transport.CloseIdleConnections()
+		})
+	}
+	failure := errors.New("dial failed")
+	_, transport := pinKimiClient(&http.Client{Transport: &http.Transport{DialContext: func(context.Context, string, string) (net.Conn, error) {
+		return nil, failure
+	}}})
+	conn, err := transport.DialContext(context.Background(), "tcp", "127.0.0.1:1")
+	if conn != nil || !errors.Is(err, failure) {
+		t.Fatalf("failed dial was hidden or consumed a connection: %v, %v", conn, err)
+	}
+}
+
 func TestKimiBeginCallHandlesTransportWithoutWriteTrace(t *testing.T) {
 	commands := &kimiCommands{http: &http.Client{Transport: kimiRoundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusOK, Header: http.Header{},
 			Body: io.NopCloser(strings.NewReader(`{"code":0}`)),
 		}, nil
-	})}}
+	})}, startTimeout: 5 * time.Second}
 	call, err := commands.beginCall(context.Background(), &kimiServer{base: "http://127.0.0.1"}, http.MethodGet, "/api/v1/meta", nil)
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer call.stop()
 	res, err := call.wait()
 	if err != nil {
 		t.Fatal(err)
@@ -788,5 +882,36 @@ func TestKimiEngineAdmitsCanonicalSessionAndUsesKimiGuard(t *testing.T) {
 	}
 	if current := mustSnapshot(t, e.store).Document; current.LastFailure != nil {
 		t.Fatalf("ordinary busy state became an operational failure: %+v", current.LastFailure)
+	}
+}
+
+func TestKimiEngineLockConflictDefersWithoutSpendingQuota(t *testing.T) {
+	e, resolver, _, now := newEngineTest(t)
+	f := newKimiFake(t)
+	target := binding.WakeTarget{
+		Client: "kimi", SessionID: kimiTestSession, Host: "kimi-host",
+		Bound: binding.Bound{ExecutionID: "kimi-execution", Generation: 2, Rung: 3},
+	}
+	e.target, resolver.target = target, target
+	e.commands = f.commands
+	e.clientVersion = func() string { return kimiTestVersion }
+	e.store = newClientStateStore(e.store.sessions, "kimi", target.SessionID)
+	f.promptCode = 40931
+	if got := e.step(context.Background()); got != engineDue(*now, 15*time.Second) {
+		t.Fatalf("lock conflict did not schedule an idle retry: %+v", got)
+	}
+	snapshot := mustSnapshot(t, e.store)
+	if len(snapshot.Document.Attempts) != 1 || snapshot.Document.Attempts[0].Answer != "aborted" ||
+		nativeQuota(snapshot.Document) != 0 || snapshot.Document.outstanding() != nil {
+		t.Fatalf("lock conflict spent or retained wake quota: %+v", snapshot.Document)
+	}
+	f.promptCode = 0
+	*now = now.Add(15 * time.Second)
+	if got := e.step(context.Background()); !got.FileWait {
+		t.Fatalf("released lock did not permit a fresh submission: %+v", got)
+	}
+	snapshot = mustSnapshot(t, e.store)
+	if len(snapshot.Document.Attempts) != 1 || snapshot.Document.Attempts[0].Answer != "submitted" || len(f.prompts) != 2 {
+		t.Fatalf("retry replaced neither the deferred attempt nor its accounting: %+v, prompts %d", snapshot.Document, len(f.prompts))
 	}
 }
