@@ -20,6 +20,7 @@ import (
 
 var (
 	runAntigravityWake = wake.RunAntigravity
+	runKimiOnce        = func(ctx context.Context) wake.Outcome { return wake.RunKimiOnce(ctx, os.Stdout) }
 	watchProcessArgs   = func() []string { return os.Args[1:] }
 )
 
@@ -27,15 +28,28 @@ func runWatch(args []string) error {
 	fs := flag.NewFlagSet("watch", flag.ContinueOnError)
 	client := fs.String("client", "", "agent client")
 	_ = fs.Bool("wake", false, "start detached Antigravity idle-wake helper")
+	_ = fs.Bool("once", false, "Kimi's one-shot watcher: wait for new attention, then exit (ADR 030)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
-	hasWake := false
+	hasWake, hasOnce := false, false
 	fs.Visit(func(f *flag.Flag) {
-		if f.Name == "wake" {
-			hasWake = true
-		}
+		hasWake = hasWake || f.Name == "wake"
+		hasOnce = hasOnce || f.Name == "once"
 	})
+	if hasOnce {
+		// The command a model starts as a managed background task, word for word. Its outcome is
+		// its exit status, which Kimi reports in the task's notification.
+		if !slices.Equal(args, []string{"--client", "kimi", "--once"}) || !slices.Equal(watchProcessArgs(), []string{"watch", "--client", "kimi", "--once"}) {
+			return errors.New("usage: iris watch --client kimi --once")
+		}
+		ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+		defer cancel()
+		if outcome := runKimiOnce(ctx); outcome != wake.Attention {
+			return exitStatus(outcome)
+		}
+		return nil
+	}
 	if hasWake {
 		if !slices.Equal(args, []string{"--client", "antigravity", "--wake"}) || !slices.Equal(watchProcessArgs(), []string{"watch", "--client", "antigravity", "--wake"}) {
 			return errors.New("usage: iris watch --client antigravity --wake")

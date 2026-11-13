@@ -55,11 +55,21 @@ func dispatch(args []string) int {
 		}
 	}
 	if err := run(args); err != nil {
+		var status exitStatus
+		if errors.As(err, &status) {
+			return int(status)
+		}
 		fmt.Fprintln(os.Stderr, err)
 		return 1
 	}
 	return 0
 }
+
+// exitStatus ends a command with its own exit code and nothing more on stderr: the command has
+// already said what it had to. Kimi's one-shot watcher reports how it ended this way (ADR 030).
+type exitStatus int
+
+func (s exitStatus) Error() string { return fmt.Sprintf("exit status %d", int(s)) }
 func run(args []string) error {
 	if len(args) > 0 && args[0] == "admin" {
 		return runAdmin(args[1:])

@@ -365,7 +365,46 @@ request still pending at the next such prompt was not answered, so it latches `f
 asking at every turn. A steer typed into a running turn neither asks nor judges. No prompt hook runs
 on a task-notification turn, so re-arming after an attention exit rests on the model. The ask reads
 local files and the process table, calls no hub and asks nothing on any failure. Nothing writes the
-preference yet, and the watcher follows in a later change.
+preference yet; the integration follows in a later change.
+
+The watcher, `iris watch --client kimi --once`, accepts only that exact command. It reads the hub
+configuration and its state from the pinned directory, never from its environment, because a model
+starts it. Before any hub call it claims its record. Another live watcher makes this one a
+duplicate. Otherwise the claim clears the request and any latch: a watcher's start counts as an
+explicit start.
+
+It then looks up, and never registers, the Execution a hook registered for its Kimi process and
+session, and requires the hub's combined match (#335). A watcher with no record takes the hub's
+high-water mark as a baseline and announces no history.
+
+It follows the stream without a `consumer_id`. Every 20 seconds it renews only its pinned generation
+as a shim, so the session is not marked monitored, and checks its Kimi process, the preference and
+the session map. Event reads that a recovering hub refuses are retried. Only a heartbeat that
+answers `lost` ends the watcher for its generation.
+
+Before a line, an authoritative read and the session's told state decide what is new:
+- Mail fetched or told is checkpointed silently.
+- Availability already emitted or told is not repeated.
+- A told identity above the hub's high-water mark comes from before a restore and covers nothing.
+- The 30-second coalescing window carries over between watchers through the record.
+
+No checkpoint ever passes attention still held. The watcher prints one fixed line, saves the cursor
+at the hub as `iris-watch`, records what it emitted and gives up the record, then exits 0. If saving
+fails after the print it exits 15, and the next watcher replays.
+
+Every other outcome has its own exit code and a fixed line saying not to re-arm:
+
+| Code | Outcome | Latch |
+|---|---|---|
+| 10 | disabled: wake off, process or session changed, or stopped | `disabled` |
+| 11 | duplicate | none |
+| 12 | failed | `failed` |
+| 13 | expired after 24 hours | `expired` |
+| 14 | lost | none |
+| 15 | not completed | none |
+
+A latch never replaces a live watcher. `iris mcp --client kimi` no longer starts the ADR 026 web
+worker; an old `--wake` is accepted and does nothing.
 
 Grok's monitor shell does not inherit `GROK_SESSION_ID` (measured on 1.0.77). After the hub
 accepts a top-level SessionStart, the hook stores the session id beside that grok process's

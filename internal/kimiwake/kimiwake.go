@@ -129,7 +129,26 @@ type Record struct {
 	Latch          *Latch              `json:"latch,omitempty"`
 	Checkpoint     Checkpoint          `json:"checkpoint"`
 	Emitted        map[string]Identity `json:"emitted,omitempty"`
-	Coalesce       map[string]int64    `json:"coalesce,omitempty"`
+	Coalesce       Delays              `json:"coalesce,omitempty"`
+}
+
+// Delays are the coalescing deadlines per attention kind, in Unix milliseconds. They only delay a
+// wake and never suppress one (ADR 030). So malformed coalescing data decodes as no delay rather
+// than failing the record, whose ownership and cursor must stay usable.
+type Delays map[string]int64
+
+// UnmarshalJSON keeps every well-formed deadline and drops the rest. It never fails.
+func (d *Delays) UnmarshalJSON(raw []byte) error {
+	*d = Delays{}
+	var fields map[string]json.RawMessage
+	_ = json.Unmarshal(raw, &fields) // a value that is not an object holds no deadline
+	for kind, value := range fields {
+		var ms int64
+		if json.Unmarshal(value, &ms) == nil {
+			(*d)[kind] = ms
+		}
+	}
+	return nil
 }
 
 // sessionMap is a Kimi process's current native session, as its SessionStart published it.
@@ -371,6 +390,63 @@ func (s *Store) RequestArm(k Key, budget time.Duration) (ask bool, err error) {
 		})
 	})
 	return ask && err == nil, err
+}
+
+// Own claims k's record for the watcher self. It is a watcher's first step, before any hub call, so
+// the request it answers is cleared at once. It refuses, writing nothing, while another live
+// watcher holds the record: that start is a duplicate. A watcher's start is an explicit start, so it
+// also clears a latch, including one a prompt set because it was judged before this publication.
+func (s *Store) Own(k Key, self Attempt, budget time.Duration) (owned bool, err error) {
+	if !k.valid() || self.PID <= 0 || self.StartMS <= 0 || self.ID == "" {
+		return false, errKey
+	}
+	err = s.locked(budget, func() error {
+		return s.updateHeld(k, func(r *Record, _ bool) bool {
+			if r.Attempt != nil && r.Attempt.ID != self.ID && s.alive(r.Attempt.PID, r.Attempt.StartMS) {
+				return false
+			}
+			claim := self
+			r.Attempt, r.ArmRequestedMS, r.Latch, owned = &claim, 0, nil, true
+			return true
+		})
+	})
+	return owned && err == nil, err
+}
+
+// UpdateOwned applies change to k's record and writes it, but only while the watcher id still holds
+// the record. owned is false, with nothing written, once another watcher or nobody holds it.
+func (s *Store) UpdateOwned(k Key, id string, budget time.Duration, change func(*Record)) (owned bool, err error) {
+	if !k.valid() || id == "" {
+		return false, errKey
+	}
+	err = s.locked(budget, func() error {
+		return s.updateHeld(k, func(r *Record, _ bool) bool {
+			if r.Attempt == nil || r.Attempt.ID != id {
+				return false
+			}
+			change(r)
+			owned = true
+			return true
+		})
+	})
+	return owned && err == nil, err
+}
+
+// LatchIfFree latches k in state unless a live watcher holds it: a failure or a disabled wake never
+// replaces a live watcher. It clears a pending request, which the latch supersedes.
+func (s *Store) LatchIfFree(k Key, state string, budget time.Duration) error {
+	if !k.valid() {
+		return errKey
+	}
+	return s.locked(budget, func() error {
+		return s.updateHeld(k, func(r *Record, _ bool) bool {
+			if r.Attempt != nil && s.alive(r.Attempt.PID, r.Attempt.StartMS) {
+				return false
+			}
+			r.Latch, r.ArmRequestedMS = &Latch{State: state, AtMS: s.now().UnixMilli()}, 0
+			return true
+		})
+	})
 }
 
 // Read reads k's record under the lock. exists is false for a key that has none. Like Session, it
