@@ -101,10 +101,16 @@ owner-only DACL on Windows), outside `sessions/` so generation pruning does not 
 records. One state file per `(agy pid, start_ms)` of the nearest `agy` ancestor (`proc.Nearest`),
 coordinated under a local file lock within the 50 ms hook budget and without hub calls, holds:
 
-- `current_session_id`: updated atomically by **every** Antigravity hook invocation on the host
-  (`SessionStart`, `PreInvocation`, `PreToolUse`, `PostToolUse`, `PostInvocation` and `Stop`) to
-  `ev.SessionID`, providing authoritative host-side evidence when `/clear` or `--conversation`
-  switches conversations inside one `agy` process;
+- `current_session_id` and a bounded `superseded_session_ids` ring: `SessionStart` is the
+  authoritative conversation activation — when `SessionStart` runs with
+  `ev.SessionID != current_session_id`, it moves any prior `current_session_id` into
+  `superseded_session_ids`, removes `ev.SessionID` from `superseded_session_ids` (supporting
+  explicit `--conversation` resume), and sets `current_session_id = ev.SessionID`. Non-`SessionStart`
+  hooks (`PreInvocation`, `PreToolUse`, `PostToolUse`, `PostInvocation` and `Stop`) ignore any
+  `ev.SessionID` present in `superseded_session_ids` so a late trailing hook from a retired
+  conversation cannot overwrite `current_session_id` or arm a helper after `/clear` (while an unseen
+  `ev.SessionID` if `SessionStart` was skipped retires the prior `current_session_id` into
+  `superseded_session_ids` and advances `current_session_id`);
 - `helper`: either a live entry `(helper_pid, helper_start_ms, session_id, attempt_id)`, an
   `arm_requested(session_id)` marker, or a `failed` latch.
 
@@ -164,12 +170,15 @@ trusts caller-supplied arguments, executable paths or Iris configuration overrid
    `current_session_id` for `(agy pid, start_ms)`, and validate `ANTIGRAVITY_LS_ADDRESS` as a
    literal loopback `host:port` reachable by a short TCP dial.
 5. **Minimal scrubbed child environment and secret handling.** Both the parent and the detached
-   child call `debug.SetTraceback("none")` so Go runtime crashes do not dump stacks or frame state.
-   Both the detached `iris` child and `<agy-exe> agentapi send-message` run with an explicit,
-   minimal constructed `Env` carrying only `ANTIGRAVITY_CONVERSATION_ID`, `ANTIGRAVITY_LS_ADDRESS`,
-   `ANTIGRAVITY_CSRF_TOKEN` and minimal trusted OS runtime variables (`SYSTEMROOT` on Windows,
-   OS-account `HOME` on Unix) — stripping `LD_*`, `DYLD_*`, `GOTRACEBACK` and any other caller
-   environment variables before executing the dynamically linked `agy` binary. Iris never writes
+   child call `debug.SetTraceback("none")`. Because Go evaluates `GOTRACEBACK` before `main()` and
+   `debug.SetTraceback` cannot lower a level inherited from the environment, an inherited
+   `GOTRACEBACK` in `run_command` still governs the short-lived parent launcher until it exits; the
+   parent omits `GOTRACEBACK` when constructing the explicit, minimal `Env` for both the detached
+   `iris` child and `<agy-exe> agentapi send-message` — carrying only
+   `ANTIGRAVITY_CONVERSATION_ID`, `ANTIGRAVITY_LS_ADDRESS`, `ANTIGRAVITY_CSRF_TOKEN` and minimal
+   trusted OS runtime variables (`SYSTEMROOT` on Windows, OS-account `HOME` on Unix), while
+   stripping `LD_*`, `DYLD_*`, `GOTRACEBACK` and all other caller environment variables — so
+   `debug.SetTraceback("none")` governs the detached helper from runtime startup. Iris never writes
    `ANTIGRAVITY_CSRF_TOKEN` to disk, logs or `argv` and never logs raw subprocess stdout or stderr.
 
 If preflight passes and `(agy pid, start_ms)` already holds a live `(helper_pid, helper_start_ms)`
@@ -224,12 +233,14 @@ the parent's conditional publish replaces `failed` with the new live helper entr
 
 ### Hook idle state, wake quota, classification, and incremental guard scanning
 
-Hooks track idle state per `(antigravity, conversationId)` beside the helper state:
+Hooks track idle state and `transcript_path` per `(antigravity, conversationId)` beside the helper
+state:
 
+- `SessionStart` and `PostInvocation` keep `transcript_path` current when non-empty.
 - `PreInvocation` clears idle (`false`) before each model call.
 - `Stop` sets idle (`true`) only when `fullyIdle` is `true` and `Stop` is not returning
-  `decision: "continue"`, recording `transcriptPath`'s regular-file identity and byte size as
-  `(file_id, idle_offset)`; any other `Stop` clears idle.
+  `decision: "continue"`, recording `transcriptPath` alongside its regular-file identity and byte
+  size as `(transcript_path, file_id, idle_offset)`; any other `Stop` clears idle.
 
 Wake admission and quota go through `internal/wake` (`antigravity` state store). All hub reads,
 process checks, marker reads and subprocess waits happen **outside** the shared `sessions` lock
@@ -260,27 +271,45 @@ Like `internal/wake/command.go` for Codex, exit `1` is not generically retried:
   output, non-empty `stderr`, mid-RPC transport reset, `DeadlineExceeded` / `Internal` / `Unknown`
   gRPC status, signal exit or 30-second command timeout.
 
-To consume the guard in `PostInvocation` without missing messages when tool or model output grows
-large (`internal/wake/engine.go`), Iris uses **incremental, attempt-associated forward scanning**
-rather than a fixed tail window:
+To consume the guard without missing messages when tool or model output grows large — including
+when a busy-race turn exhausts `PostInvocation` budgets and returns to `idle` before the cursor
+reaches `SYSTEM_MESSAGE` (`internal/wake/engine.go`) — both `PostInvocation` and the detached
+helper run **incremental, attempt-associated forward scanning** outside the `sessions` lock:
 
-- When a reservation is published, Iris records `(attempt_id, file_id, scanned_offset,
-  skipping_line)` initialized from `idle_offset` at reservation time with `skipping_line: false`
-  (falling back to `0` if `file_id` changed or the file shrank).
-- On `PostInvocation`, while an outstanding `antigravity` guard exists, the hook opens
-  `transcriptPath` without following terminal symlinks (`O_NOFOLLOW` on Unix), verifies a regular
-  file, seeks to `scanned_offset`, and scans up to a bounded per-hook byte budget (`4 MiB` within
-  the hook deadline). Complete `\n`-terminated lines up to `64 KiB` are parsed and advance
-  `scanned_offset` past `\n`; an incomplete trailing line `<= 64 KiB` at EOF leaves `scanned_offset`
-  at the start of that line until flushed; any line exceeding `64 KiB` cannot hold Iris's short
-  fixed wake message and sets `skipping_line = true`, advancing `scanned_offset` across `4 MiB`
-  chunks until `\n` clears `skipping_line` so oversized tool outputs never wedge `scanned_offset`
-  or allocate unbounded memory.
-- A line consumes the guard only when it parses as JSON with `source == "SYSTEM"` and
-  `type == "SYSTEM_MESSAGE"` whose `content` matches the `<SYSTEM_MESSAGE>\n[Message] timestamp=...
-  sender=<conversationId> priority=... content=<payload>\n</SYSTEM_MESSAGE>` envelope with
-  `<payload>` equal to the outstanding attempt's whole `Message` byte-for-byte — never by substring
-  match and never from `USER_INPUT` or composite steps.
+- **Cursor initialization:** when a reservation for `attempt.ID` is published, Iris records
+  `(attempt_id, transcript_path, file_id, scanned_offset, skipping_line: false)` initialized from
+  `idle_offset` at reservation time (or `scanned_offset: 0` if `file_id` is absent).
+- **Hook + helper continuation passes:** `PostInvocation` runs one bounded pass (`<= 4 MiB` within
+  the hook deadline) while an outstanding `antigravity` guard exists, and **the detached helper
+  itself** runs bounded `4 MiB` continuation passes on its poll loop whenever an outstanding
+  `antigravity` guard exists for its `conversationId` and `scanned_offset` trails
+  `transcript_path`'s current size (continuing across ticks while the session is `idle` until the
+  cursor catches up to EOF or the guard is consumed).
+- **Rotation or truncation reset:** each pass opens `transcript_path` without following terminal
+  symlinks (`O_NOFOLLOW` on Unix) and verifies a regular file via `fstat`. If `current_file_id !=
+  file_id` (rotation/replacement) or `current_size < scanned_offset` (truncation), the pass resets
+  its cursor to `(file_id: current_file_id, scanned_offset: 0, skipping_line: false)` from byte `0`.
+- **Half-line budget cuts and oversized lines:** complete `\n`-terminated lines up to `64 KiB` are
+  parsed and advance `scanned_offset` past `\n`. If the `4 MiB` budget (or EOF) cuts a line in half
+  while `<= 64 KiB` of that line has been read, the pass stops **without** advancing
+  `scanned_offset` past the start of that partial line (`skipping_line: false`), so the next `4 MiB`
+  pass re-reads the line cleanly from its start once flushed. Once a single line exceeds `64 KiB`
+  without `\n`, it cannot hold Iris's short fixed wake message: `skipping_line` becomes `true` and
+  `scanned_offset` advances to the budget cut across `4 MiB` passes until `\n` advances
+  `scanned_offset` past the newline and clears `skipping_line = false`.
+- **Exact-match evidence:** a complete `<= 64 KiB` line matches only when it parses as JSON with
+  `source == "SYSTEM"` and `type == "SYSTEM_MESSAGE"` whose `content` matches the
+  `<SYSTEM_MESSAGE>\n[Message] timestamp=... sender=<conversationId> priority=...
+  content=<payload>\n</SYSTEM_MESSAGE>` envelope with `<payload>` equal to the outstanding
+  attempt's whole `Message` byte-for-byte — never by substring match and never from `USER_INPUT` or
+  composite steps.
+- **Merging progress by `attempt.ID`:** under the short `sessions` lock, a pass result applies
+  **only** if the stored outstanding guard still carries `attempt.ID == pass.attempt_id` (discarding
+  stale passes after consumption or replacement). A matching pass consumes that attempt's guard; a
+  non-matching pass on the same `file_id` advances `(scanned_offset, skipping_line)` monotonically
+  (`pass.scanned_offset > stored.scanned_offset`, or equal offset setting `skipping_line = true`),
+  or updates `(file_id, scanned_offset, skipping_line)` when the pass observed rotation or
+  truncation of `stored.file_id`.
 
 ## Limits
 
@@ -307,9 +336,11 @@ rather than a fixed tail window:
   active turn (measurement 2), so the model may handle it in that turn or spend an extra step. Iris
   cannot promise zero billable empty turns.
 - **Same-user secret and loopback trust boundary (D12).** Iris keeps `ANTIGRAVITY_CSRF_TOKEN` out of
-  its own files, logs, crash tracebacks and `argv`, and passes it only in the scrubbed `Env` of the
-  helper and `<agy-exe> agentapi`; same-OS-user processes can still inspect `/proc/<pid>/environ` or
-  process memory, and OS core dumps or swap outside Iris remain governed by the host OS.
+  its own files, logs, detached-helper crash tracebacks and `argv` (while a caller-supplied
+  `GOTRACEBACK` in `run_command` still applies to the short-lived parent launcher because Go reads
+  `GOTRACEBACK` before `main()`), and passes it only in the scrubbed `Env` of the helper and
+  `<agy-exe> agentapi`; same-OS-user processes can still inspect `/proc/<pid>/environ` or process
+  memory, and OS core dumps or swap outside Iris remain governed by the host OS.
   `ANTIGRAVITY_LS_ADDRESS` comes from `agy`'s environment and is checked only to be literal
   loopback; Iris cannot authenticate the loopback listener before `agentapi` sends the token.
 - **Live `agy` process, default config location, and platform scope.** After `agy` exits or
@@ -339,13 +370,17 @@ Unit and integration tests at 100% statement coverage will verify:
   live helper when a duplicate command fails or is denied in `PostToolUse` (including `"error":
   ""` auto-denial), single-attempt `failed` latching when no helper is live, conditional cleanup by
   `(helper_pid, helper_start_ms, attempt_id)`, and manual re-arming via `run_command`;
-- hook-published `current_session_id` checked before every heartbeat renewal and wake admission
-  (`/clear` stops lease renewal and exits the superseded helper immediately) and wake marker `on`
+- hook-published `current_session_id` protected by `superseded_session_ids` against stale trailing
+  hooks from retired conversations, checked before every heartbeat renewal and wake admission
+  (`/clear` stops lease renewal and exits the superseded helper immediately), and wake marker `on`
   re-verified at final admission;
-- lock-free hub/subprocess execution, narrow `"failed"` vs `"unknown"` classification of
-  `agentapi send-message` exits, and incremental forward `PostInvocation` scanning from
-  `idle_offset` / `scanned_offset` across multi-megabyte transcripts and oversized lines with
-  strict `SYSTEM` + `SYSTEM_MESSAGE` whole-message matching.
+- lock-free hub/subprocess execution, `GOTRACEBACK` stripped from detached-helper and `<agy-exe>`
+  environments, narrow `"failed"` vs `"unknown"` classification of `agentapi send-message` exits,
+  and incremental forward scanning by both `PostInvocation` and helper continuation passes —
+  including when a busy-race turn exceeds `PostInvocation`'s `4 MiB` budget and returns to `idle`
+  before the cursor reaches `SYSTEM_MESSAGE`, half-line `4 MiB` budget cuts, rotation/truncation
+  resets, monotonic cursor merging by `attempt.ID`, and strict `SYSTEM` + `SYSTEM_MESSAGE`
+  whole-message matching.
 
 Run the full local WSL gates (`make test`, `make race`, `make cov`, `make cov-check`,
 `make check-all` and `make fixtures`) before implementation review.
