@@ -65,7 +65,15 @@ func TestAHookThatTripsLeavesTheNextOneReduced(t *testing.T) {
 		// TestMain does not touch.
 		_ = os.Setenv("IRIS_HUB_URL", os.Getenv("IRIS_CHILD_HUB_URL"))
 		_ = os.Setenv("IRIS_TOKEN_FILE", os.Getenv("IRIS_CHILD_TOKEN_FILE"))
-		os.Exit(runHook([]string{"--client", "claude", "--event", os.Getenv("IRIS_CHILD_EVENT")}))
+		args := []string{"--client", "claude", "--event", os.Getenv("IRIS_CHILD_EVENT")}
+		if os.Getenv("IRIS_CHILD_UNHURRIED") == "1" {
+			// The reduced hook is checked for what it does. With the real budgets, a loaded
+			// machine spent the 300 ms loopback budget on the registration alone, so the hook
+			// ran no git and sent nothing, and the test failed for the machine's speed.
+			hookShellDeadline = time.Minute
+			os.Exit(runHookIO(args, os.Stdin, os.Stdout, os.Stderr, os.Getenv, time.Minute))
+		}
+		os.Exit(runHook(args))
 	}
 	realGit, err := exec.LookPath("git")
 	if err != nil {
@@ -129,7 +137,9 @@ func TestAHookThatTripsLeavesTheNextOneReduced(t *testing.T) {
 
 	payload, _ := json.Marshal(map[string]any{"session_id": "trip", "cwd": super, "tool_name": "Bash", "tool_use_id": "t", "tool_input": map[string]string{"command": "make"}})
 	exe, _ := os.Executable()
-	runChild := func(event string) (string, time.Duration) {
+	// runChild runs one real hook process. An unhurried one gets a minute for its whole run and
+	// for its shell reconcile, in place of the real 1.5 s and 300 ms budgets.
+	runChild := func(event string, unhurried bool) (string, time.Duration) {
 		t.Helper()
 		cmd := exec.Command(exe, "-test.run=^TestAHookThatTripsLeavesTheNextOneReduced$")
 		cmd.Env = append(os.Environ(), "IRIS_TEST_HOOK_CHILD=1", "IRIS_CHILD_EVENT="+event,
@@ -137,6 +147,9 @@ func TestAHookThatTripsLeavesTheNextOneReduced(t *testing.T) {
 			"PATH="+fake+string(os.PathListSeparator)+os.Getenv("PATH"),
 			"IRIS_REAL_GIT="+realGit, "IRIS_FAKE_GIT_LOG="+gitLog, "IRIS_FAKE_GIT_PIDS="+pids,
 			"GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1")
+		if unhurried {
+			cmd.Env = append(cmd.Env, "IRIS_CHILD_UNHURRIED=1")
+		}
 		cmd.Stdin = bytes.NewReader(payload)
 		var stdout, stderr bytes.Buffer
 		cmd.Stdout, cmd.Stderr = &stdout, &stderr
@@ -168,7 +181,7 @@ func TestAHookThatTripsLeavesTheNextOneReduced(t *testing.T) {
 
 	// The cold trip: the full status passes the loopback budget and is killed. The time includes
 	// starting the test binary, so it allows a second beyond the hook's own deadline.
-	out, took := runChild("PreToolUse")
+	out, took := runChild("PreToolUse", false)
 	if out != "{}\n" || took > hook.DefaultDeadline+time.Second {
 		t.Fatalf("first hook: %q in %v", out, took)
 	}
@@ -195,8 +208,10 @@ func TestAHookThatTripsLeavesTheNextOneReduced(t *testing.T) {
 		t.Fatalf("hints %+v", hints)
 	}
 
-	// The next hook process runs reduced: it registers to learn the capability, then sends.
-	if out, _ = runChild("PostToolUse"); out != "{}\n" {
+	// The next hook process runs reduced: it registers to learn the capability, then sends. It
+	// runs unhurried, because this checks what it does, and the trip above already holds the real
+	// budgets to account.
+	if out, _ = runChild("PostToolUse", true); out != "{}\n" {
 		t.Fatalf("second hook: %q", out)
 	}
 	if calls := readGitLog(); !strings.Contains(calls, "ls-files --stage -z") || !strings.Contains(calls, "--ignore-submodules=dirty") || strings.Contains(calls, "--ignore-submodules=untracked") {
