@@ -1,6 +1,6 @@
 # Antigravity CLI (`agy`) report (1.5.1)
 
-> Corrections by the orchestrator: `ANTIGRAVITY_*` variables reach hooks only. The stdio MCP process has none of them, as `mcp_process.json` shows, which contradicts D9 and P5 below. `CLAUDE_DELEGATOR_AGY_DEPTH` belongs to the delegation bridge, not to agy. One run consumed 28% of the weekly Gemini quota and the reply 69% of the other group.
+> Corrections: hooks receive `ANTIGRAVITY_CONVERSATION_ID` only; the other `ANTIGRAVITY_*` variables (`ANTIGRAVITY_LS_ADDRESS`, `ANTIGRAVITY_CSRF_TOKEN`, `ANTIGRAVITY_AGENTAPI_EXE`, `ANTIGRAVITY_TRAJECTORY_ID` and the rest) reach `run_command` subprocesses only. The 1.5.1 experiment saw them in hooks because an inner `agy --print` was started inside an outer Antigravity `run_command` shell (re-measured on 1.5.8 with outer `ANTIGRAVITY_*` stripped; see section I and [ADR 028](../../adr/028-antigravity-idle-wake.md)). The stdio MCP process receives no `ANTIGRAVITY_*` variables, as `mcp_process.json` shows, which contradicts A6, D9 and P5 below. `CLAUDE_DELEGATOR_AGY_DEPTH` belongs to the delegation bridge, not to agy. One run consumed 28% of the weekly Gemini quota and the reply 69% of the other group.
 
 > Measured on: Linux x86-64, agy 1.5.1 (Go 1.28-20261102-RC00, dynamically linked).  
 > Workspace: `.agents/hooks.json` and `.agents/plugins/iris-test/` created for this experiment.
@@ -62,7 +62,7 @@
 
 **MCP server process:** Direct child of agy (not via sh). CWD = plugin directory. Same agy PID as hook's grandparent — MCP and hook share the agy parent. `[MEASURED fixtures/mcp_process.json mcp_ppid = hook grandparent_pid]`
 
-**Key env vars injected (key names only, never values):** `ANTIGRAVITY_CONVERSATION_ID`, `ANTIGRAVITY_TRAJECTORY_ID`, `ANTIGRAVITY_LS_ADDRESS`, `ANTIGRAVITY_CSRF_TOKEN`, `CLAUDE_DELEGATOR_AGY_DEPTH`, `CLAUDE_CODE_MESSAGING_TOKEN`, `CLAUDE_CODE_SESSION_ID`, plus full inherited shell env. `[MEASURED fixtures/log.jsonl env_keys + mcp_process.json env_keys]`
+**Key env vars injected (key names only, never values):** `ANTIGRAVITY_CONVERSATION_ID`, `ANTIGRAVITY_TRAJECTORY_ID`, `ANTIGRAVITY_LS_ADDRESS`, `ANTIGRAVITY_CSRF_TOKEN`, `CLAUDE_DELEGATOR_AGY_DEPTH`, `CLAUDE_CODE_MESSAGING_TOKEN`, `CLAUDE_CODE_SESSION_ID`, plus full inherited shell env. `[MEASURED fixtures/log.jsonl env_keys + mcp_process.json env_keys; CORRECTED in 1.5.8 clean-env run: hooks receive ANTIGRAVITY_CONVERSATION_ID only, MCP receives none, and the remaining ANTIGRAVITY_* vars are injected into run_command subprocesses only]`
 
 **Sandbox and loopback:** `--sandbox` restricts terminal but loopback HTTP remains accessible. `[MEASURED: agy --sandbox curl http://127.0.0.1:9 succeeded]`
 
@@ -280,3 +280,36 @@ Another session held an explicit claim on one file.
   run. With a short prompt, the transport carried the right id and the ack succeeded. Iris now
   refuses an empty id with a message that names the field (#90).
 - **Not measured:** session end (Antigravity has Stop only), Windows, and hook latency.
+
+## I. Measured on Linux/WSL2, 1.5.8 (2026-11-13)
+
+Clean-environment PTY runs (`agy -i … --model gemini-3.8-flash-low --disable-slash-commands`) with
+all outer `ANTIGRAVITY_*` variables stripped before launch:
+
+- **Environment isolation.** Top-level `agy` and `iris mcp --client antigravity` have no
+  `ANTIGRAVITY_*` variables in `/proc/<pid>/environ`. All six lifecycle hooks (`SessionStart`,
+  `PreInvocation`, `PreToolUse`, `PostToolUse`, `PostInvocation` and `Stop`) receive
+  `ANTIGRAVITY_CONVERSATION_ID` alone. Only `run_command` subprocesses receive
+  `ANTIGRAVITY_LS_ADDRESS`, `ANTIGRAVITY_CSRF_TOKEN`, `ANTIGRAVITY_AGENTAPI_EXE`,
+  `ANTIGRAVITY_LS_VERSION`, `ANTIGRAVITY_APP_DATA_DIR`, `ANTIGRAVITY_PROJECT_ID`,
+  `ANTIGRAVITY_SOURCE_METADATA`, `ANTIGRAVITY_TRAJECTORY_ID` and `ANTIGRAVITY_AGENT` alongside
+  `ANTIGRAVITY_CONVERSATION_ID`.
+- **`agy agentapi send-message`.** Dials `ANTIGRAVITY_LS_ADDRESS` with `ANTIGRAVITY_CSRF_TOKEN` and
+  accepts `conversationId` (`ANTIGRAVITY_CONVERSATION_ID`). Sent to an idle session, it exited `0`
+  in `634–905 ms`, appended a `SYSTEM_MESSAGE` step to `transcript.jsonl` (present on disk by
+  `PostInvocation`, not yet in `PreInvocation`), and started a model turn. Sent while `run_command`
+  was busy, it exited `0` in `713 ms` without interrupting the tool and was folded into the active
+  turn before the next model call. A wrong CSRF token or dead Language Server port exited `1`.
+- **`Stop` continuation, sandbox and `permissions.allow` matcher.** Returning
+  `{"decision":"continue","reason":"..."}` from `Stop` (`fullyIdle: true`,
+  `terminationReason: "NO_TOOL_CALL"`, `executionNum: 0`) started a continuation turn, whereas
+  `continuationActive` remained `false` across `executionNum` `0..4` despite the vendor
+  documentation. Under `agy --sandbox`, `run_command` runs in a PID, mount and network namespace
+  where `~/.config/iris` is absent and `127.0.0.1:<LS_PORT>` refuses connections, while
+  `BypassSandbox: true` runs on the host. Tested in a clean `HOME` (`-p --sandbox`,
+  `toolPermission: "request-review"`), `command(<iris-path> watch --client antigravity --wake)`
+  denied an unallowed `/bin/echo` control (with `PostToolUse` still receiving `"error": ""` on
+  auto-denial) and blocked `&&` and newline command chains, **but allowed `--extra`, `FOO=1 <cmd>`
+  and `env FOO=1 <cmd>` outside the sandbox**; `command(regex:\A...\z)` rejected `env FOO=1 <cmd>`
+  while still allowing `FOO=1 <cmd>` and `--extra`. Because whole-invocation matching cannot be
+  enforced, [ADR 028](../../adr/028-antigravity-idle-wake.md) writes no `command(...)` allow rule.
