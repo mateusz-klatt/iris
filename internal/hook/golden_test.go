@@ -350,6 +350,7 @@ var fixtureWant = map[string]decoded{
 	"cursor/preToolUse.json":           {kind: KindPreTool, session: cursorSession, cwd: proj, tool: "Write", class: ClassEdit, paths: []string{"/workspace/project/fixtures/deny-target.txt"}, call: cursorSession},
 	"cursor/sessionEnd.json":           {kind: KindSessionEnd, session: cursorSession, cwd: proj},
 	"cursor/sessionStart.json":         {kind: KindSessionStart, session: cursorSession, cwd: proj},
+	"cursor/stop.json":                 {kind: KindStop, session: "c07cffe8-203b-4517-8ece-6dd9f9c8f162", cwd: proj},
 
 	"grok/PostToolUse-shell.json":         {kind: KindPostTool, session: grokShell, cwd: proj, tool: "run_terminal_command", class: ClassShell, command: "printf 'shell-ok\\n'", call: "call-cb61fada-d57a-4dba-a5b2-ce48672c998c-1"},
 	"grok/PostToolUse.json":               {kind: KindPostTool, session: grokMain, cwd: proj, tool: "write", class: ClassEdit, paths: []string{"/workspace/project/note.txt"}, call: "call-1117010f-8145-4391-bd2d-ff25f95b0cc1-0"},

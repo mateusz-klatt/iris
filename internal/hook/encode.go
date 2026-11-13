@@ -164,9 +164,19 @@ type cursorCtx struct {
 	AdditionalContext string `json:"additional_context"`
 }
 
+type cursorFollow struct {
+	Followup string `json:"followup_message"`
+}
+
 func encodeCursor(ev Event, d Decision) Output {
 	d = normalize(ClientCursor, d)
 	text := message(d)
+	if ev.Kind == KindStop {
+		if d.Action == ActionAllow && text != "" {
+			return Output{Stdout: jsonLine(cursorFollow{Followup: text})}
+		}
+		return Output{Stdout: []byte("{}\n")}
+	}
 	if ev.Kind == KindPreTool || d.Action == ActionDeny || d.Action == ActionAsk {
 		perm := "allow"
 		switch d.Action {

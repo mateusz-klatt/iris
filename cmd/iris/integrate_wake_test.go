@@ -498,3 +498,38 @@ func TestIntegrateAllDefaultsCodexOnAndPreservesExplicitDisable(t *testing.T) {
 		}
 	}
 }
+
+func TestIntegrateCursorWakeDefaultsOnAndKeepsAnExplicitOff(t *testing.T) {
+	dir := t.TempDir()
+	t.Setenv("HOME", dir)
+	t.Setenv("IRIS_STATE_DIR", filepath.Join(dir, "state"))
+	marker := filepath.Join(dir, ".cursor", "iris-wake")
+	for _, tc := range []struct {
+		args    []string
+		enabled bool
+		text    string
+	}{
+		{[]string{"cursor"}, true, ""},
+		{[]string{"cursor", "--no-wake"}, false, "off\n"},
+		{[]string{"cursor"}, false, "off\n"},
+		{[]string{"cursor", "--wake"}, true, "on\n"},
+	} {
+		if code := runIntegrate(tc.args); code != 0 {
+			t.Fatalf("%v: code %d", tc.args, code)
+		}
+		enabled, err := integrate.CursorWake(integrate.Layout{})
+		body := ""
+		if raw, readErr := os.ReadFile(marker); readErr == nil {
+			body = string(raw)
+		} else if !errors.Is(readErr, os.ErrNotExist) {
+			t.Fatal(readErr)
+		}
+		if err != nil || enabled != tc.enabled || body != tc.text {
+			t.Fatalf("%v: enabled %v %v marker %q", tc.args, enabled, err, body)
+		}
+	}
+	hooks := filepath.Join(dir, ".cursor", "hooks.json")
+	if !strings.Contains(string(mustReadIntegrate(t, hooks)), "--event stop") {
+		t.Fatal("cursor hooks do not run stop")
+	}
+}
