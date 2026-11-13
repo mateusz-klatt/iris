@@ -124,7 +124,7 @@ func (t *transaction) live(ex string, generation int64) (execution, error) {
 	return e, nil
 }
 func bound(e execution) map[string]any {
-	return map[string]any{"execution_id": e.ID, "generation": e.Generation, "repository_id": e.Repo, "agent": map[string]any{"id": e.AgentID, "name": e.Name}}
+	return map[string]any{"execution_id": e.ID, "generation": e.Generation, "repository_id": e.Repo, "agent": map[string]any{"id": e.AgentID, "name": e.Name}, "session_id": e.Session}
 }
 
 var safePart = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)

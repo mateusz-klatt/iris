@@ -1,16 +1,17 @@
 package binding
 
-// WakeTarget is the positive root binding a Codex wake may follow. SessionID keeps
-// the original identity named by the client; the queue runner validates its UUID
-// syntax separately before constructing a command.
+// WakeTarget is the positive session binding a native wake may follow. SessionID keeps
+// the original identity named by the client; each native adapter validates its syntax.
+// Client is empty for Codex to retain the original target snapshots.
 type WakeTarget struct {
 	SessionID string
 	Bound     Bound
 	Host      string
+	Client    string
 }
 
-// Primary snapshots this process's current Codex root binding. It does no lookup
-// or registration: legacy, undecided and lookup-only processes cannot arm a wake.
+// Primary snapshots this process's current native session binding. It does no lookup
+// or registration: undecided, lookup-only and fallback registrations cannot arm a wake.
 func (r *Resolver) Primary() (WakeTarget, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -35,17 +36,29 @@ func (r *Resolver) StartIfPrimary(expected WakeTarget, start func() error) (bool
 	return true, nil
 }
 
-// primaryHeld reads only positive cached evidence, with mu held. A root decision
-// alone is insufficient: its session lookup must have retained a live binding.
+// primaryHeld reads only positive cached evidence, with mu held. A binding decision
+// alone is insufficient: the resolver must also retain the live hook-registered session.
 func (r *Resolver) primaryHeld() (WakeTarget, bool) {
 	m := r.decided.Load()
-	if r.Client != "codex" || m == nil || m.mode != root ||
-		r.Host == "" || r.bound.ExecutionID == "" || r.bound.Generation <= 0 || r.bound.Rung != 2 ||
+	if r.Host == "" || r.bound.ExecutionID == "" || r.bound.Generation <= 0 ||
 		r.lost || r.gone[r.bound.ExecutionID] {
 		return WakeTarget{}, false
 	}
 	if ex := r.Getenv("IRIS_EXECUTION"); ex != "" && !r.gone[ex] {
 		return WakeTarget{}, false
 	}
-	return WakeTarget{SessionID: m.session, Bound: r.bound, Host: r.Host}, true
+	switch r.Client {
+	case "codex":
+		if m == nil || m.mode != root || r.bound.Rung != 2 {
+			return WakeTarget{}, false
+		}
+		return WakeTarget{SessionID: m.session, Bound: r.bound, Host: r.Host}, true
+	case "kimi":
+		if m == nil || m.mode != legacy || r.own || r.bound.Rung != 3 || r.bound.SessionID == "" {
+			return WakeTarget{}, false
+		}
+		return WakeTarget{SessionID: r.bound.SessionID, Bound: r.bound, Host: r.Host, Client: "kimi"}, true
+	default:
+		return WakeTarget{}, false
+	}
 }

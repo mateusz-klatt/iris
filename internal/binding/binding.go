@@ -22,6 +22,7 @@ type Bound struct {
 	Generation   int             `json:"generation"`
 	RepositoryID string          `json:"repository_id"`
 	Agent        hubclient.Agent `json:"agent"`
+	SessionID    string          `json:"session_id,omitempty"`
 	Rung         int             `json:"binding_rung"`
 }
 type Resolver struct {
@@ -207,7 +208,7 @@ func (r *Resolver) register(ctx context.Context, session string, a proc.Ancestor
 	if err != nil {
 		return Bound{}, err
 	}
-	b := Bound{ExecutionID: response.ExecutionID, Generation: response.Generation, RepositoryID: response.RepositoryID, Agent: response.Agent, Rung: rung}
+	b := Bound{ExecutionID: response.ExecutionID, Generation: response.Generation, RepositoryID: response.RepositoryID, Agent: response.Agent, SessionID: session, Rung: rung}
 	r.bound, r.own = b, true
 	return b, nil
 }

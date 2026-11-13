@@ -198,12 +198,20 @@ type stateIO struct {
 
 type stateStore struct {
 	sessions *hook.Sessions
+	client   string
 	session  string
 	io       stateIO
 }
 
 func newStateStore(sessions *hook.Sessions, session string) *stateStore {
-	return &stateStore{sessions: sessions, session: session, io: stateIO{
+	return newClientStateStore(sessions, "codex", session)
+}
+
+func newClientStateStore(sessions *hook.Sessions, client, session string) *stateStore {
+	if client == "" {
+		client = "codex"
+	}
+	return &stateStore{sessions: sessions, client: client, session: session, io: stateIO{
 		readFile:   os.ReadFile,
 		createTemp: func(dir, pattern string) (stateFile, error) { return os.CreateTemp(dir, pattern) },
 		rename:     os.Rename, remove: os.Remove, protectFile: func(path string) error {
@@ -215,7 +223,7 @@ func newStateStore(sessions *hook.Sessions, session string) *stateStore {
 	}}
 }
 
-func (s *stateStore) path() string { return s.sessions.WakePath("codex", s.session) }
+func (s *stateStore) path() string { return s.sessions.WakePath(s.client, s.session) }
 
 func (s *stateStore) snapshot() (stateSnapshot, error) {
 	if err := s.protect(); err != nil {
@@ -230,7 +238,7 @@ func (s *stateStore) snapshot() (stateSnapshot, error) {
 }
 
 func (s *stateStore) snapshotLocked() (stateSnapshot, error) {
-	told, err := s.sessions.Told("codex", s.session)
+	told, err := s.sessions.Told(s.client, s.session)
 	if err != nil {
 		return stateSnapshot{}, err
 	}

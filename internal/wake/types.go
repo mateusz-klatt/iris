@@ -13,6 +13,12 @@ type targetResolver interface {
 	StartIfPrimary(binding.WakeTarget, func() error) (bool, error)
 }
 
+type nativeCommands interface {
+	check(context.Context, string) (binaryInfo, string)
+	idle(context.Context, string) (bool, string)
+	queue(context.Context, string, string, func(func() error) (bool, error)) commandAnswer
+}
+
 type attentionRead struct {
 	Attention hubclient.Attention
 	Stream    string
@@ -49,7 +55,7 @@ type engine struct {
 	resolver      targetResolver
 	source        wakeSource
 	store         *stateStore
-	commands      *commands
+	commands      nativeCommands
 	clientVersion func() string
 	now           func() time.Time
 	observe       func(string)

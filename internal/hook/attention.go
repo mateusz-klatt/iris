@@ -42,9 +42,9 @@ func promptEvent(ev Event) bool {
 // session was told it is said once more, by a prompt hook.
 const secondNoteAfter = 10 * time.Minute
 
-// consumeWake is the first thing a Codex prompt hook does with its session, before repository
-// discovery and any network call, so a hub outage or a failed registration cannot leave an
-// executed wake unconsumed (ADR 017, decision 3).
+// consumeWake is the first thing a native-wake prompt hook does with its session, before
+// repository discovery and any network call, so a hub outage or a failed registration cannot
+// leave an executed wake unconsumed (ADR 017, decision 3).
 func (r Runner) consumeWake(ev Event) {
 	wm, ok := r.memory().(wakeMemory)
 	if !ok {

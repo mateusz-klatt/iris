@@ -25,9 +25,18 @@ func (c kimiClient) Files(l Layout) ([]string, error) {
 	return []string{filepath.Join(dir, "config.toml"), filepath.Join(dir, "mcp.json")}, nil
 }
 
-func (c kimiClient) Install(l Layout, _ Plugins) error {
+func (c kimiClient) Install(l Layout, _ Plugins) error { return c.install(l, nil) }
+
+func (c kimiClient) install(l Layout, wake *bool) error {
 	files, err := c.Files(l)
 	if err != nil {
+		return err
+	}
+	existingMCP, _, err := readExisting(files[1])
+	if err != nil {
+		return err
+	}
+	if _, err := readObject(existingMCP); err != nil {
 		return err
 	}
 	iris := l.Iris()
@@ -50,8 +59,7 @@ func (c kimiClient) Install(l Layout, _ Plugins) error {
 	}
 	return l.update(Kimi, files[1], func(existing []byte) ([]byte, error) {
 		return writeObject(existing, func(doc map[string]any) error {
-			mcpServers(doc, iris, Kimi)
-			return nil
+			return kimiMCPConfig(doc, iris, filepath.Dir(files[0]), wake)
 		})
 	})
 }

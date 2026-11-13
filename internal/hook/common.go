@@ -49,7 +49,7 @@ func decodeCommon(client Client, eventName string, payload []byte) (Event, error
 		}
 		applyTool(&ev, name, raw, mcpPresent(p.MCP))
 	}
-	if client == ClientCodex && ev.Kind == KindPrompt {
+	if (client == ClientCodex || client == ClientKimi) && ev.Kind == KindPrompt {
 		_ = json.Unmarshal(p.Prompt, &ev.Prompt) // a prompt that is not text matches no wake
 	}
 	if sub := first(p.SubagentID, p.SubagentSnake); ev.Kind == KindSubagentStart && sub != "" && sub != ev.SessionID {

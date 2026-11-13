@@ -25,6 +25,10 @@ root session whose native status is verified idle. It can spend model budget;
 `iris integrate codex --no-wake` records an explicit off choice. The published v0.1.0 predates
 the Codex wake implementation.
 
+[Kimi idle wake](docs/kimi-wake.md) uses the authenticated local `kimi web` API after a native
+idle check and is also enabled by default. It requires a compatible server with the same Kimi home;
+`iris integrate kimi --no-wake` records an explicit off choice.
+
 Iris coordinates cooperating agents. It prevents and reports collisions; it is not a sandbox.
 
 ## Installing

@@ -24,8 +24,12 @@ func (s hubSource) HookSeen(ctx context.Context, target binding.WakeTarget) (boo
 		binding.Bound
 		HookSeen bool `json:"hook_seen"`
 	}
+	client := target.Client
+	if client == "" {
+		client = "codex"
+	}
 	err := s.client.Do(ctx, http.MethodPost, "/v1/bind", map[string]string{
-		"execution": target.Bound.ExecutionID, "client": "codex", "host": target.Host,
+		"execution": target.Bound.ExecutionID, "client": client, "host": target.Host,
 	}, &out)
 	if err != nil {
 		return false, err

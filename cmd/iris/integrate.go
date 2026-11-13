@@ -14,8 +14,8 @@ func runIntegrate(args []string) int {
 	fs.SetOutput(os.Stderr)
 	remove := fs.Bool("remove", false, "restore the files Iris wrote")
 	all := fs.Bool("all", false, "every supported client")
-	wake := fs.Bool("wake", false, "enable Codex's Iris wake runner")
-	noWake := fs.Bool("no-wake", false, "disable Codex's Iris wake runner")
+	wake := fs.Bool("wake", false, "enable the native Iris wake runner for Codex or Kimi")
+	noWake := fs.Bool("no-wake", false, "disable the native Iris wake runner for Codex or Kimi")
 	if err := fs.Parse(integrateFlagArgs(args)); err != nil {
 		return 2
 	}
@@ -33,7 +33,7 @@ func runIntegrate(args []string) int {
 		return 2
 	}
 	if (wakeSet || noWakeSet) && (*all || *remove) {
-		fmt.Fprintln(os.Stderr, "--wake and --no-wake require a Codex install without --all or --remove")
+		fmt.Fprintln(os.Stderr, "--wake and --no-wake require a Codex or Kimi install without --all or --remove")
 		return 2
 	}
 	var names []string
@@ -54,8 +54,8 @@ func runIntegrate(args []string) int {
 		fmt.Fprintln(os.Stderr, "usage: iris integrate [--remove] [--all] <client>")
 		return 2
 	}
-	if (wakeSet || noWakeSet) && names[0] != integrate.Codex {
-		fmt.Fprintln(os.Stderr, "--wake and --no-wake require Codex")
+	if (wakeSet || noWakeSet) && names[0] != integrate.Codex && names[0] != integrate.Kimi {
+		fmt.Fprintln(os.Stderr, "--wake and --no-wake require Codex or Kimi")
 		return 2
 	}
 	layout := integrate.Layout{}
@@ -72,7 +72,11 @@ func runIntegrate(args []string) int {
 			if noWakeSet {
 				enabled = !*noWake
 			}
-			err = integrate.InstallCodexWake(layout, enabled)
+			if name == integrate.Kimi {
+				err = integrate.InstallKimiWake(layout, enabled)
+			} else {
+				err = integrate.InstallCodexWake(layout, enabled)
+			}
 		} else {
 			err = c.Install(layout, plugins)
 		}

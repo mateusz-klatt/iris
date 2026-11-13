@@ -105,7 +105,7 @@ func TestMCPWakeOptOutCreatesNoWorkerAndKeepsInitializationLazy(t *testing.T) {
 		{"--client", "cursor"},
 		{"--client", "antigravity"},
 		{"--client", "grok"},
-		{"--client", "kimi"},
+		{"--client", "kimi", "--wake=false"},
 		{"--client", "claude", "--wake=false"},
 	} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
@@ -263,5 +263,36 @@ func TestMCPWakeUnboundStdioEOFLeavesNoNetworkOrSessionFiles(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(filepath.Dir(token), "sessions")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("an unbound wake created session files: %v", err)
+	}
+}
+
+func TestMCPWakeDefaultsOnForKimiAndHonorsExplicitEnable(t *testing.T) {
+	for _, args := range [][]string{{"--client", "kimi"}, {"--client", "kimi", "--wake"}} {
+		t.Run(strings.Join(args, " "), func(t *testing.T) {
+			_, _ = mcpWakeTrap(t)
+			original := newMCPWakeWorker
+			t.Cleanup(func() { newMCPWakeWorker = original })
+			var workers atomic.Int32
+			newMCPWakeWorker = func(resolver *binding.Resolver, _ *hook.Sessions, _ func() string, _ func(string)) mcpWakeWorker {
+				if resolver.Client != "kimi" {
+					t.Errorf("worker client = %q", resolver.Client)
+				}
+				workers.Add(1)
+				return mcpWakeFunction(func(context.Context) {})
+			}
+			session, done := connectMCPCommand(t, args, "2.6.0")
+			_ = session.Close()
+			waitMCPCommand(t, done)
+			if workers.Load() != 1 {
+				t.Fatalf("Kimi started %d wake workers", workers.Load())
+			}
+		})
+	}
+}
+
+func TestMCPWakeFactoryConstructsKimiWorker(t *testing.T) {
+	worker := newMCPWakeWorker(binding.New(nil, "kimi"), hook.NewSessions("token"), func() string { return "2.6.0" }, nil)
+	if worker == nil {
+		t.Fatal("Kimi wake factory returned no worker")
 	}
 }
