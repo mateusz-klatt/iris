@@ -123,6 +123,9 @@ func TestPreservesUserContentAndRestoresIt(t *testing.T) {
 			}
 			original := map[string]string{}
 			for _, f := range files {
+				if c.Name() == Copilot && strings.Contains(filepath.ToSlash(f), "/extensions/iris/") {
+					continue
+				}
 				if err := os.MkdirAll(filepath.Dir(f), 0o700); err != nil {
 					t.Fatal(err)
 				}
@@ -146,6 +149,9 @@ func TestPreservesUserContentAndRestoresIt(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, f := range files {
+				if c.Name() == Copilot && strings.Contains(filepath.ToSlash(f), "/extensions/iris/") {
+					continue
+				}
 				got, err := os.ReadFile(f)
 				if err != nil {
 					t.Fatal(err)
@@ -158,6 +164,9 @@ func TestPreservesUserContentAndRestoresIt(t *testing.T) {
 				t.Fatal(err)
 			}
 			for _, f := range files {
+				if c.Name() == Copilot && strings.Contains(filepath.ToSlash(f), "/extensions/iris/") {
+					continue
+				}
 				got, err := os.ReadFile(f)
 				if err != nil {
 					t.Fatal(err)

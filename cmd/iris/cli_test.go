@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
@@ -163,6 +164,80 @@ func TestIntegrateOneClientThenRemoveIt(t *testing.T) {
 	})
 	if !strings.Contains(out, "integrated claude") || !strings.Contains(out, "removed claude") {
 		t.Fatalf("out %q err %q", out, errText)
+	}
+}
+
+// Copilot loads the extension only with its experimental features on, which Iris leaves to the
+// person, so integrate says what is left to do. A removal that has to keep an extension file
+// somebody changed exits 1, names the file and does not claim it removed Copilot.
+func TestIntegrateCopilotReportsItsStepAndAnExtensionItKept(t *testing.T) {
+	dir := t.TempDir()
+	home := filepath.Join(dir, "copilot")
+	t.Setenv("COPILOT_HOME", home)
+	t.Setenv("IRIS_STATE_DIR", filepath.Join(dir, "state"))
+	t.Setenv("PATH", t.TempDir())
+	client, _ := integrate.ByName(integrate.Copilot)
+	out, errText := capture(t, func() {
+		if code := dispatch([]string{"integrate", "copilot"}); code != 0 {
+			t.Fatalf("install %d", code)
+		}
+	})
+	if want := "integrated copilot\ncopilot: " + client.Human() + "\n"; out != want || errText != "" {
+		t.Fatalf("out %q err %q", out, errText)
+	}
+	extension := filepath.Join(home, "extensions", "iris", "extension.mjs")
+	if err := os.WriteFile(extension, []byte("export {};\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	out, errText = capture(t, func() {
+		if code := dispatch([]string{"integrate", "--remove", "copilot"}); code != 1 {
+			t.Fatalf("remove %d", code)
+		}
+	})
+	if out != "" || !strings.Contains(errText, extension) || !strings.Contains(errText, "move it aside") {
+		t.Fatalf("out %q err %q", out, errText)
+	}
+	if got, err := os.ReadFile(extension); err != nil || string(got) != "export {};\n" {
+		t.Fatalf("changed extension = %q, %v", got, err)
+	}
+}
+
+// Codex records when a person reviewed its hooks, so integrate prints that step only while it is
+// still needed.
+func TestIntegrateCodexPrintsTheHooksReviewOnlyWhileItIsNeeded(t *testing.T) {
+	codexWakeIntegrationHome(t)
+	integrateCodex := func() string {
+		out, errText := capture(t, func() {
+			if code := dispatch([]string{"integrate", "codex"}); code != 0 {
+				t.Fatalf("integrate codex %d", code)
+			}
+		})
+		if errText != "" {
+			t.Fatalf("stderr %q", errText)
+		}
+		return out
+	}
+	if out := integrateCodex(); out != "integrated codex\ncodex: Review hooks once in /hooks\n" {
+		t.Fatalf("before the review: %q", out)
+	}
+	codex, _ := integrate.ByName(integrate.Codex)
+	files, err := codex.Files(integrate.Layout{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	config, err := os.ReadFile(files[1])
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, event := range []string{"session_start", "user_prompt_submit", "pre_tool_use", "post_tool_use", "stop", "session_end"} {
+		// %q escapes a path's backslashes and quotes as a TOML basic string does.
+		config = fmt.Appendf(config, "\n[hooks.state.%q]\ntrusted_hash = \"sha256:x\"\n", files[0]+":"+event+":0:0")
+	}
+	if err := os.WriteFile(files[1], config, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out := integrateCodex(); out != "integrated codex\n" {
+		t.Fatalf("after the review: %q", out)
 	}
 }
 

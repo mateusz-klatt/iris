@@ -35,6 +35,11 @@ another. It also sets each tool call's session id beside the session id of the h
 turn, in nine runs that include `codex exec resume`, `codex exec fork` and a sub-agent. ADR 017's
 binding rung rests on it.
 
+The [Copilot extension wake measurement](clients/copilot-extension-wake-2026-11-12.md) ran Copilot
+CLI 1.0.109's real extension loader with `iris watch` and a model: an idle and a busy session,
+`/clear`, resuming with unread mail, shutdown, and how the installer treats a file edited by hand.
+[ADR 024](../adr/024-copilot-extension-wake.md) rests on it.
+
 The [gap re-audit of 2026-11-09](gap-reaudit-2026-11-09.md) checks every finding of the
 [gap review of 2026-11-07](gap-review-2026-11-07.md) again, against `main` at `4840765`: 28 closed,
 7 partly addressed, 1 open.

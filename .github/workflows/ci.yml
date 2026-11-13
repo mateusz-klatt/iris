@@ -40,6 +40,11 @@ jobs:
         # The 100% gate is enforced after the scan, so Sonar always gets the data.
         continue-on-error: true
         run: npm run coverage --prefix web
+      - name: Copilot extension coverage
+        id: extension_coverage
+        # Enforced below with the console's gate, after the scan, so Sonar gets this data too.
+        continue-on-error: true
+        run: make copilot-extension
       # Runs that Dependabot triggers get no repository secrets, so the scanner cannot
       # authenticate and fails whatever the change. Those runs skip the analysis and say so.
       # main's own run after the merge has the token, so the gate on main still decides.
@@ -73,8 +78,10 @@ jobs:
         if: ${{ !cancelled() }}
         env:
           WEB_COVERAGE: ${{ steps.web_coverage.outcome }}
+          EXTENSION_COVERAGE: ${{ steps.extension_coverage.outcome }}
         run: |
           test "$WEB_COVERAGE" = success
+          test "$EXTENSION_COVERAGE" = success
           make cov-check
   web:
     runs-on: ubuntu-latest

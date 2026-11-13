@@ -277,6 +277,7 @@ Each client gets the strongest tier it has:
 |---|---|---|
 | Instant, idle session | Plugin monitor running `iris watch` | Claude Code (measured: 0.3 s from line to model turn) |
 | Loaded idle root | Own queue command after a positive native idle check | Codex, enabled by default; [ADR 023](adr/023-default-codex-wake-after-idle-check.md) |
+| Loaded foreground session | Copilot CLI extension runs `iris watch` and submits a fixed automation message through its SDK | Copilot CLI (experimental; [ADR 024](adr/024-copilot-extension-wake.md)) |
 | Instant, armed by the model | `Monitor` tool with a `ws` source | Claude Code |
 | Instant, Iris-owned session | App-server or ACP control of a session Iris started | Codex (measured), Copilot, Cursor, Antigravity, Grok, Kimi (later) |
 | Next turn | Hook context at prompt or post-tool | All, with client-specific limits |
@@ -295,6 +296,19 @@ without consuming wake quota. This changes no other client's tier. `iris integra
 --no-wake` writes `--wake=false`; setup and reintegration preserve it. Older bare MCP entries
 cannot distinguish the previous default-off state from an old explicit off choice, and take
 the new enabled default. The [Codex wake guide](codex-wake.md) explains that migration.
+
+Copilot CLI's user-scoped extension joins the live foreground session, starts `iris watch` with
+that session's id, and submits a fixed automation message for content-free attention lines. It
+waits for a known active turn to settle; a session initially active when the extension joins
+uses the SDK's enqueue mode. The extension requires Copilot CLI's experimental extensions to be
+enabled and the workspace to be trusted; `iris integrate` does not change that setting. It does
+not start a closed or unloaded session. A queued wake can still be empty if the current turn
+handles the same attention first. The [Copilot wake guide](copilot-wake.md) describes setup and
+limits. On Linux with Copilot CLI 1.0.109 the [measurement](research/clients/copilot-extension-wake-2026-11-12.md)
+woke an idle session about 0.12 s after a send, and a busy one 130 to 145 ms after its turn ended.
+Other CLI versions, macOS, Windows and Copilot's command sandbox were not measured. Each file the
+extension writes carries a digest header, so Iris replaces or removes only a file it wrote and
+nobody edited.
 
 The runner starts no automatic ten-minute second wake for unchanged attention. Hook reminders
 below remain. Native status and queue admission are not atomic: a person can start a turn or
@@ -722,7 +736,8 @@ and the exact files it will write. It asks once, then installs the user service 
 `systemd --user` or HKCU Run), integrates the clients and runs `iris doctor`. It ends with
 the steps only a human can do, such as Codex's `/hooks` review, and reports `Iris inactive on
 <client>` for each one left undone, so that a green finish is never false. `iris integrate
-<client>` and `iris integrate --remove` do the parts separately.
+<client>` and `iris integrate --remove` do the parts separately; `iris integrate` also ends with
+the client's step that only a human can do.
 On Windows the `Iris` value under
 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` runs the stable binary with
 `service start`. The first real non-elevated Windows 11 setup measured access denied for
@@ -744,7 +759,9 @@ is used only to return the original bytes when nothing but Iris differs, and nev
 entries of its own, because that would reinstall an older integration. Removal cannot keep the
 formatting of a JSON file changed after install: keys come back sorted and indented by Iris's
 writer, as they do on install. A file that no longer parses is refused and stays in the manifest
-for a retry. A plugin skill somebody edited no longer matches its template, so it stays.
+for a retry. A plugin skill somebody edited no longer matches its template, so it stays. A Copilot
+extension file that no longer matches its digest stays too, emptied included; when the manifest
+records it, the command fails until it is moved aside.
 
 Clients that cannot be fully automated are reported truthfully. Codex needs its hooks reviewed
 once in `/hooks`; project hooks need trust on Cursor, Copilot and Grok. Kimi has no project

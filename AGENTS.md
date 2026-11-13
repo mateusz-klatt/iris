@@ -20,6 +20,7 @@ make test     # go vet and go test, without cgo
 make race     # go test -race, which needs a C toolchain on some platforms
 make build    # the binary
 make fixtures # replays captured client payloads through the hook adapters
+make copilot-extension # Node tests of the Copilot CLI extension at 100% coverage; only this target needs Node
 make refresh  # updates modules, packages, tool pins, action SHAs and image digests; never commits
 ```
 
@@ -41,8 +42,9 @@ make refresh  # updates modules, packages, tool pins, action SHAs and image dige
 
 Rebase on current `main` and run the full checks locally, where there are many cores: `make test`,
 `make race`, `make cov`, `make cov-check`, `make check-all` and `make fixtures`, plus the web tests for
-a console change. Report the commit and the result. GitHub CI is the safety net across platforms, not
-the place to find out that something fails.
+a console change and `make copilot-extension` for a Copilot extension change. Report the commit and
+the result. GitHub CI is the safety net across platforms, not the place to find out that something
+fails.
 
 ## Commits
 

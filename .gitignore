@@ -10,4 +10,5 @@ node_modules/
 /iris.exe
 /web/dist/
 coverage.out
+copilot-extension.lcov
 .playwright-mcp/
