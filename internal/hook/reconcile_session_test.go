@@ -87,10 +87,12 @@ func TestAShellStatusPastItsBudgetDoesNotRegisterTheSession(t *testing.T) {
 	r.Find = func(string) (gitinfo.Repo, error) {
 		return gitinfo.Repo{Worktree: ev.CWD}, nil
 	}
-	r.ShellDeadline = 100 * time.Millisecond
+	// The budget runs out inside git status, where this test needs it, however loaded the machine.
+	r.ShellDeadline, r.shellTimeout = 100*time.Millisecond, handTimeout
 	statusReturned := make(chan struct{})
 	r.Status = func(ctx context.Context, _ string, _ gitinfo.Scope, _ *gitinfo.Attempt) (map[string]string, error) {
 		defer close(statusReturned)
+		passDeadline(ctx)
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}

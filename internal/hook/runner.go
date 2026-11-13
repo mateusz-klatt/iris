@@ -52,6 +52,10 @@ type Runner struct {
 	// after starts the deadline. Tests replace it so a deadline fires at a known
 	// stage rather than whenever a slow machine gets there.
 	after func(time.Duration) <-chan time.Time
+	// shellTimeout starts a shell reconcile's budget, as after starts the hook's deadline. Nil
+	// means context.WithTimeout. Tests replace it so the budget runs out inside the stand-in
+	// that is slow on purpose, rather than wherever a loaded machine happens to be.
+	shellTimeout func(context.Context, time.Duration) (context.Context, context.CancelFunc)
 	// logAfter starts the failure log budget, as after starts the deadline. Tests that read the
 	// log pass one that never fires, so Run returns only once the entry is written.
 	logAfter func(time.Duration) <-chan time.Time

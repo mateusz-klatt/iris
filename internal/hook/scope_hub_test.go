@@ -4,10 +4,69 @@ import (
 	"context"
 	"slices"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"github.com/mateusz-klatt/iris/internal/gitinfo"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 )
+
+// handDeadline is a reconcile budget that a test runs out by hand, so a loaded machine cannot
+// move it. Until passDeadline is called it reports the deadline a timeout of the same budget
+// would report, or its parent's deadline when that is earlier, and it does not end. Once passed,
+// it reads as a timeout that has fired. Ended by its own cancel, it reads as cancelled, and ended
+// by its parent, as its parent does.
+type handDeadline struct {
+	context.Context // ends when passed, cancelled or its parent ends
+	parent          context.Context
+	at              time.Time
+	passed          *atomic.Bool
+	end             context.CancelFunc
+}
+
+// handKey finds a reconcile's hand deadline in a context derived from it.
+type handKey struct{}
+
+// handTimeout stands in for context.WithTimeout as a Runner's shellTimeout.
+func handTimeout(parent context.Context, budget time.Duration) (context.Context, context.CancelFunc) {
+	ctx, end := context.WithCancel(parent)
+	return handDeadline{Context: ctx, parent: parent, at: time.Now().Add(budget), passed: new(atomic.Bool), end: end}, end
+}
+
+func (d handDeadline) Deadline() (time.Time, bool) {
+	if at, ok := d.parent.Deadline(); ok && at.Before(d.at) {
+		return at, true
+	}
+	return d.at, true
+}
+
+func (d handDeadline) Err() error {
+	if err := d.parent.Err(); err != nil {
+		return err
+	}
+	if d.Context.Err() == nil {
+		return nil
+	}
+	if d.passed.Load() {
+		return context.DeadlineExceeded
+	}
+	return context.Canceled
+}
+
+func (d handDeadline) Value(key any) any {
+	if key == (handKey{}) {
+		return d
+	}
+	return d.Context.Value(key)
+}
+
+// passDeadline runs out the budget of the reconcile whose context ctx is or derives from, now: the
+// caller is the part that is slow on purpose, and the budget ends while it waits.
+func passDeadline(ctx context.Context) {
+	d := ctx.Value(handKey{}).(handDeadline)
+	d.passed.Store(true)
+	d.end()
+}
 
 // statusEntry is how a stand-in for git status logs itself in a scopeHub's calls.
 func statusEntry(s gitinfo.Scope) string {
@@ -33,7 +92,8 @@ type scopeHub struct {
 	scopedOneCall []hubclient.ScopedSessionRequest
 	registerErrs  []error
 	scopedErrs    []error
-	// waitOneCall and waitScoped make those calls last until the reconcile's deadline.
+	// waitOneCall and waitScoped make those calls the slow part: each runs out the reconcile's hand
+	// deadline and lasts until it has passed.
 	waitOneCall, waitScoped bool
 }
 
@@ -95,6 +155,7 @@ func (h *scopeHub) ReconcileSession(ctx context.Context, r hubclient.ShellSessio
 	wait, out := h.waitOneCall, h.answer()
 	h.mu.Unlock()
 	if wait {
+		passDeadline(ctx)
 		<-ctx.Done()
 		return hubclient.ShellResponse{}, ctx.Err()
 	}
@@ -108,6 +169,7 @@ func (h *scopeHub) ReconcileScoped(ctx context.Context, r hubclient.ScopedReques
 	wait, err, out := h.waitScoped, nextErr(&h.scopedErrs), h.answer().CheckResponse
 	h.mu.Unlock()
 	if wait {
+		passDeadline(ctx)
 		<-ctx.Done()
 		return hubclient.CheckResponse{}, ctx.Err()
 	}
@@ -121,6 +183,7 @@ func (h *scopeHub) ReconcileScopedSession(ctx context.Context, r hubclient.Scope
 	wait, err, out := h.waitScoped, nextErr(&h.scopedErrs), h.answer()
 	h.mu.Unlock()
 	if wait {
+		passDeadline(ctx)
 		<-ctx.Done()
 		return hubclient.ShellResponse{}, ctx.Err()
 	}
