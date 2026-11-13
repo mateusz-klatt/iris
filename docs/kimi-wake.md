@@ -38,8 +38,10 @@ environment. Start `kimi web` with that home too. When several instances are reg
 Iris tries their loopback endpoints until it finds a live Kimi process consistent with the registry
 pid and start time. It probes `/api/v1/healthz` without credentials before sending the token, then
 requires a valid live server id and a version matching `/api/v1/meta`. Registry and live ids can
-differ in Kimi 2.6.0. The initialized client and server versions must match. Each candidate has its
-own five-second health/metadata budget, so a stalled endpoint does not consume the next candidate's
+differ in Kimi 2.6.0. The client and server versions must match. Kimi 2.6.1 reports `0.0.0` in MCP
+clientInfo, so only that exact sentinel or an empty value triggers a two-second, strictly parsed
+`kimi --version` fallback through PATH. Each candidate has its own five-second health/metadata
+budget, so a stalled endpoint does not consume the next candidate's
 budget; total preflight time grows with the candidate count. Health, metadata, idle reads and the
 prompt share one connection. Iris refuses to reconnect that candidate after the connection closes.
 
@@ -75,8 +77,10 @@ server, wake waits and the existing hook notifications and Iris tools continue t
 The process and health checks plus the single-connection transport reduce accidental token
 disclosure to a stale or reused port. They do not authenticate the initial connection before the
 token is sent: a local process imitating Kimi's health response can still receive it. A closed
-verified connection makes later calls fail instead of reaching a replacement listener. The token is
-never intentionally logged.
+verified connection makes later calls fail instead of reaching a replacement listener. The version
+fallback uses the `kimi` binary found on PATH, which can differ from the already running client after
+an upgrade or a PATH change. It does not prove the running process's version; every probe failure or
+server mismatch fails closed without a prompt. The token is never intentionally logged.
 
 The idle read, binding admission and prompt submission are not atomic. Connect and request writing
 have a separate two-second deadline under the binding lock. On timeout Iris cancels and joins the

@@ -37,8 +37,12 @@ against its filename, and requires the registry pid to name a live Kimi process 
 registry start time. Linux rejects zombie and dead process states in that lookup. It calls
 `/api/v1/healthz` without credentials before sending the token, then requires a nonempty live server
 id and a matching version through `/api/v1/meta`. Kimi 2.6.0 uses different registry and live ids.
-The server and initialized client versions must match. Each candidate has an independent five-second
-health/metadata budget, so a stalled endpoint cannot consume a later candidate's budget; total
+The server and client versions must match. A real Kimi 2.6.1 initialize reports `clientInfo.version`
+as `0.0.0`. Only an empty value or exactly that sentinel triggers a bounded `kimi --version` command,
+resolved through PATH when the MCP child starts. The command has a two-second deadline, bounded
+output and strict numeric `x.y.z` parsing. Other reported versions are used unchanged. Each candidate
+has an independent five-second health/metadata budget, so a stalled endpoint cannot consume a later
+candidate's budget; total
 preflight time grows with the candidate count. Each candidate also has a cloned transport that
 permits one successful dial. Health, metadata, idle reads and the prompt use that connection; if it
 closes, a later call fails rather than reconnecting to a replacement listener. Discarded candidates
@@ -76,7 +80,10 @@ ordinary hooks and durable mail still work.
 Process and health checks plus the single-connection transport reduce accidental token disclosure
 to stale or reused ports, but do not authenticate the endpoint before the bearer token is sent. A
 local process imitating the health response on the initial connection can still receive it. Once the
-verified connection closes, wake fails rather than trusting a replacement listener.
+verified connection closes, wake fails rather than trusting a replacement listener. The version
+fallback names a binary resolved from PATH, not necessarily the binary behind the already running
+Kimi process. A different PATH target can therefore produce a false mismatch; it fails closed without
+a prompt and does not prove which version the running client loaded.
 
 Idle observation and binding admission are not atomic with prompt submission. Connect and request
 writing have a separate two-second deadline under the binding lock. On timeout Iris cancels the
@@ -94,8 +101,11 @@ cross-platform behavior and model cost require separate acceptance evidence.
 Tests use an authenticated fake Kimi HTTP server and the real hub/store. They cover process and
 health verification before token disclosure, a real Linux zombie, one connection across all calls,
 reconnect refusal after that connection closes, and transport completion at the short start
-deadline. A real resolver heartbeat completes while the prompt response is held. Further cases cover
-version and identity checks, loopback and redirect refusal, exact idle evidence, running and queued
+deadline. A real resolver heartbeat completes while the prompt response is held. The unedited Kimi
+2.6.1 initialize fixture feeds the version regression: it failed before the fallback and passed after
+it. Command failure, timeout, malformed and overflowing output, missing or relative PATH results and
+server mismatch all fail before a prompt. Further cases cover version and identity checks, loopback
+and redirect refusal, exact idle evidence, running and queued
 acceptance, stable idempotency, known refusals, quota-free `40931` deferral and retry, unknown
 outcomes and separate Kimi guards. Prompt tests use the real capture's shape to prove exact guard
 consumption and reject composite or non-text parts. Installation tests

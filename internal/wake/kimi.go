@@ -14,6 +14,7 @@ import (
 	"net/http/httptrace"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -56,10 +57,13 @@ type kimiCommands struct {
 	readDir        func(string) ([]os.DirEntry, error)
 	now            func() time.Time
 	versionTimeout time.Duration
+	clientTimeout  time.Duration
 	idleTimeout    time.Duration
 	startTimeout   time.Duration
 	queueTimeout   time.Duration
 	server         *kimiServer
+	clientPath     string
+	clientFailure  string
 	lookupProcess  func(int) (proc.Snapshot, bool)
 }
 
@@ -68,7 +72,13 @@ var kimiUserHomeDir = os.UserHomeDir
 func newKimiCommands() *kimiCommands {
 	c := &kimiCommands{
 		http: http.DefaultClient, readFile: os.ReadFile, readDir: os.ReadDir, now: time.Now, lookupProcess: proc.Lookup,
-		versionTimeout: 5 * time.Second, idleTimeout: 5 * time.Second, startTimeout: 2 * time.Second, queueTimeout: 30 * time.Second,
+		versionTimeout: 5 * time.Second, clientTimeout: 2 * time.Second, idleTimeout: 5 * time.Second, startTimeout: 2 * time.Second, queueTimeout: 30 * time.Second,
+	}
+	path, err := exec.LookPath("kimi")
+	if err != nil || !filepath.IsAbs(path) {
+		c.clientFailure = "Kimi executable is not available on PATH"
+	} else {
+		c.clientPath = path
 	}
 	home := os.Getenv("KIMI_CODE_HOME")
 	if home == "" {
@@ -119,6 +129,46 @@ func pinKimiClient(client *http.Client) (*http.Client, *http.Transport) {
 	return &pinned, transport
 }
 
+func (c *kimiCommands) binaryVersion(ctx context.Context) (string, error) {
+	if c.clientFailure != "" {
+		return "", errors.New(c.clientFailure)
+	}
+	ctx, cancel := context.WithTimeout(ctx, c.clientTimeout)
+	defer cancel()
+	output := &limitedOutput{limit: 4 << 10}
+	cmd := exec.CommandContext(ctx, c.clientPath, "--version")
+	cmd.Stdout, cmd.Stderr, cmd.WaitDelay = output, output, time.Second
+	if err := cmd.Run(); err != nil {
+		return "", errors.New("kimi version command did not complete successfully")
+	}
+	if ctx.Err() != nil || output.overflow {
+		return "", errors.New("kimi version response exceeded its bound")
+	}
+	versionLines := lines(string(output.data))
+	if len(versionLines) != 1 || !validKimiVersion(versionLines[0]) {
+		return "", errors.New("kimi version response was invalid")
+	}
+	return versionLines[0], nil
+}
+
+func validKimiVersion(version string) bool {
+	parts := strings.Split(version, ".")
+	if len(parts) != 3 {
+		return false
+	}
+	for _, part := range parts {
+		if part == "" {
+			return false
+		}
+		for _, digit := range part {
+			if digit < '0' || digit > '9' {
+				return false
+			}
+		}
+	}
+	return true
+}
+
 func (c *kimiCommands) check(ctx context.Context, clientVersion string) (binaryInfo, string) {
 	info := binaryInfo{ClientVersion: clientVersion, CheckedMS: c.now().UnixMilli()}
 	if c.server != nil {
@@ -128,8 +178,13 @@ func (c *kimiCommands) check(ctx context.Context, clientVersion string) (binaryI
 	if c.homeFailure != "" {
 		return info, c.homeFailure
 	}
-	if clientVersion == "" {
-		return info, "Kimi initialization did not name its version"
+	if clientVersion == "" || clientVersion == "0.0.0" {
+		resolved, err := c.binaryVersion(ctx)
+		if err != nil {
+			return info, "Kimi executable version could not be determined"
+		}
+		clientVersion = resolved
+		info.ClientVersion = resolved
 	}
 	token, err := c.readSecret(filepath.Join(c.home, "server.token"))
 	if err != nil {

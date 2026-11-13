@@ -17,6 +17,20 @@ prompt to another isolated session without a provider: the server accepted it, e
 created no turn. This is evidence for an external web-API wake, not for direct push into a TUI
 widget, native TUI refresh or completed model delivery. Iris uses the REST idle read and never
 calls `:takeover` on a live session.
+## 2026-11-13 addendum: Kimi 2.6.1 MCP version sentinel
+
+A real Kimi 2.6.1 TUI, launched with a scratch home and exited through `/exit`, sent this exact
+initialize payload to a stdio MCP wrapper:
+
+```json
+{"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{},"clientInfo":{"name":"kimi-code","version":"0.0.0"}},"jsonrpc":"2.0","id":0}
+```
+
+The unedited capture is `internal/mcpserver/testdata/kimi/initialize-2.6.1.json`. No model turn ran,
+and the wrapper's Iris process used a dead loopback hub rather than production. This proves the wire
+sentinel, not the version of the running client binary. Iris therefore falls back only for empty or
+exactly `0.0.0` clientInfo to a bounded, strictly parsed `kimi --version` resolved through PATH.
+
 See [ADR 026](../adr/026-kimi-web-idle-wake.md). The older report below remains the evidence for
 2.5.1 hooks and process mechanics; its statement about the absence of direct idle-TUI push is not
 a claim that the newer external REST channel is absent.
