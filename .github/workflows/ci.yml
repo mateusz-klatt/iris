@@ -874,7 +874,7 @@ jobs:
           go-version-file: go.mod
       # The CI tools under .github are outside ./..., and a pattern skips dot directories,
       # so each is named.
-      - run: go test -cover ./.github/covermerge ./.github/pincheck
+      - run: go test -cover ./.github/covermerge ./.github/pincheck ./.github/refresh
       - run: make check-all
         env:
           GITLEAKS_LOG_OPTS: ${{ github.event_name == 'pull_request' && format('{0}..{1}', github.event.pull_request.base.sha, github.event.pull_request.head.sha) || '--all' }}
