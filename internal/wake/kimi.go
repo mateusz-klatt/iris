@@ -26,7 +26,12 @@ import (
 	"github.com/mateusz-klatt/iris/internal/proc"
 )
 
-const kimiActive = "Kimi session is active"
+const (
+	kimiActive = "Kimi session is active"
+	// kimiOccupied is Kimi's SESSION_OCCUPIED, 40931 in kimi 2.6.1: another Kimi process, such as
+	// the TUI, holds the session's lock, and kimi web cannot prompt the session while it does.
+	kimiOccupied = "Kimi session is open in another Kimi process"
+)
 
 type kimiInstance struct {
 	ServerID    string `json:"server_id"`
@@ -409,7 +414,7 @@ func (c *kimiCommands) idle(ctx context.Context, session string) (bool, string) 
 	err := c.call(ctx, c.server, http.MethodGet, "/api/v1/sessions/"+url.PathEscape(session), nil, &status)
 	var api *kimiAPIError
 	if errors.As(err, &api) && api.code == 40931 {
-		return false, kimiActive
+		return false, kimiOccupied
 	}
 	if err != nil || status.ID != session || status.Busy == nil || status.MainTurnActive == nil || status.Archived == nil {
 		return false, "Kimi session status could not be verified"
@@ -478,11 +483,13 @@ func (c *kimiCommands) queue(ctx context.Context, session, message string, start
 		}
 	}
 	var api *kimiAPIError
-	if errors.As(err, &api) && api.code == 40931 {
-		return commandAnswer{answer: "aborted", detail: kimiActive}
-	}
 	if errors.As(err, &api) {
 		switch api.code {
+		case 40901:
+			// SESSION_BUSY: the session is in a turn and can take a prompt once it ends.
+			return commandAnswer{answer: "aborted", detail: kimiActive}
+		case 40931:
+			return commandAnswer{answer: "aborted", detail: kimiOccupied}
 		case 40001, 40101, 40110, 40113, 40401, 40407, 40415, 40420, 40912, 40926, 40930, 40932:
 			result.answer, result.detail = "failed", "Kimi refused the wake prompt"
 			return result

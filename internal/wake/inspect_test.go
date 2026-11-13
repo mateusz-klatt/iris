@@ -119,6 +119,7 @@ func TestInspectFailureReasonsRecognizeOnlyExactPreSubmissionDiagnostics(t *test
 		"Codex has no saved rollout for this thread",
 		"Kimi executable version could not be determined",
 		"Kimi executable and server versions differ",
+		"Kimi session is open in another Kimi process",
 	} {
 		d := testDocument(testAttempt(1, "binary_check", "failed"))
 		d.LastFailure = &failure{AtMS: 200, Detail: reason}

@@ -476,31 +476,29 @@ func TestKimiNativeIdleRequiresAnExactUsableSession(t *testing.T) {
 	if _, detail, _ := f.check(); detail != "" {
 		t.Fatal(detail)
 	}
+	unverified := "Kimi session status could not be verified"
 	for _, tc := range []struct {
 		name   string
 		mutate func()
-		active bool
+		want   string
 	}{
-		{"busy", func() { f.session["busy"] = true }, true},
-		{"turn active", func() { f.session["main_turn_active"] = true }, true},
-		{"archived", func() { f.session["archived"] = true }, true},
-		{"pending approval", func() { f.session["pending_interaction"] = "approval" }, true},
-		{"wrong session", func() { f.session["id"] = "session_other" }, false},
-		{"missing busy", func() { delete(f.session, "busy") }, false},
-		{"missing turn", func() { delete(f.session, "main_turn_active") }, false},
-		{"missing archive", func() { delete(f.session, "archived") }, false},
-		{"lock conflict", func() { f.sessionCode = 40931 }, true},
-		{"missing session", func() { f.sessionCode = 40401 }, false},
+		{"busy", func() { f.session["busy"] = true }, kimiActive},
+		{"turn active", func() { f.session["main_turn_active"] = true }, kimiActive},
+		{"archived", func() { f.session["archived"] = true }, kimiActive},
+		{"pending approval", func() { f.session["pending_interaction"] = "approval" }, kimiActive},
+		{"wrong session", func() { f.session["id"] = "session_other" }, unverified},
+		{"missing busy", func() { delete(f.session, "busy") }, unverified},
+		{"missing turn", func() { delete(f.session, "main_turn_active") }, unverified},
+		{"missing archive", func() { delete(f.session, "archived") }, unverified},
+		{"open in another Kimi process", func() { f.sessionCode = 40931 }, kimiOccupied},
+		{"missing session", func() { f.sessionCode = 40401 }, unverified},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			f.resetSession()
 			f.sessionCode = 0
 			tc.mutate()
 			idle, detail := f.commands.idle(context.Background(), kimiTestSession)
-			want := "Kimi session status could not be verified"
-			if tc.active {
-				want = kimiActive
-			}
+			want := tc.want
 			if idle || detail != want {
 				t.Fatalf("idle %t, detail %q; want false, %q", idle, detail, want)
 			}
@@ -659,9 +657,13 @@ func TestKimiNativeQueueOutcomesAndAdmission(t *testing.T) {
 			t.Fatalf("API code %d: %+v", code, got)
 		}
 	}
-	f.promptCode = 40931
-	if got := f.commands.queue(context.Background(), kimiTestSession, message, admitKimi); got.answer != "aborted" || got.started || got.detail != kimiActive {
-		t.Fatalf("native lock conflict consumed a wake attempt: %+v", got)
+	// kimi 2.6.1: 40901 is SESSION_BUSY and 40931 SESSION_OCCUPIED, a lock another Kimi process
+	// holds. Neither accepted the prompt, so neither is a started or spent wake.
+	for code, detail := range map[int]string{40901: kimiActive, 40931: kimiOccupied} {
+		f.promptCode = code
+		if got := f.commands.queue(context.Background(), kimiTestSession, message, admitKimi); got.answer != "aborted" || got.started || got.detail != detail {
+			t.Fatalf("API code %d consumed a wake attempt or lost its reason: %+v", code, got)
+		}
 	}
 	for _, tc := range []struct {
 		name, promptID, status string
@@ -1012,29 +1014,32 @@ func TestKimiEngineNotesABusySessionOncePerChange(t *testing.T) {
 	for i, poll := range []struct {
 		busy       bool
 		promptCode int
+		after      time.Duration
 		noted      []string
 	}{
-		{false, 40931, []string{abortedSessionActive}},
-		{false, 40931, nil},
-		{true, 0, []string{deferredSessionActive}},
-		{true, 0, nil},
-		{true, 0, nil},
-		{false, 40931, []string{abortedSessionActive}},
+		{false, 40901, 15 * time.Second, []string{abortedSessionActive}},
+		{false, 40901, 15 * time.Second, nil},
+		{true, 0, 15 * time.Second, []string{deferredSessionActive}},
+		{true, 0, 15 * time.Second, nil},
+		{true, 0, 15 * time.Second, nil},
+		{false, 40931, time.Minute, []string{failedSessionOccupied}},
+		{false, 40931, time.Minute, nil},
+		{false, 40901, 15 * time.Second, []string{abortedSessionActive}},
 	} {
 		f.mu.Lock()
 		f.session["busy"], f.promptCode = poll.busy, poll.promptCode
 		f.mu.Unlock()
 		before := len(observed)
-		if got := e.step(context.Background()); got != engineDue(*now, 15*time.Second) {
-			t.Fatalf("poll %d: a busy session was not checked again after 15 s: %+v", i, got)
+		if got := e.step(context.Background()); got != engineDue(*now, poll.after) {
+			t.Fatalf("poll %d was not checked again after %s: %+v", i, poll.after, got)
 		}
 		if noted := observed[before:]; !slices.Equal(noted, poll.noted) {
 			t.Fatalf("poll %d noted %q, want %q", i, noted, poll.noted)
 		}
-		*now = now.Add(15 * time.Second)
-	}
-	if d := mustSnapshot(t, e.store).Document; nativeQuota(d) != 0 || d.LastFailure != nil {
-		t.Fatalf("a busy session spent quota or became a failure: %+v", d)
+		if d := mustSnapshot(t, e.store).Document; nativeQuota(d) != 0 {
+			t.Fatalf("poll %d spent wake quota: %+v", i, d)
+		}
+		*now = now.Add(poll.after)
 	}
 	f.mu.Lock()
 	f.session["busy"], f.promptCode = false, 0
@@ -1045,33 +1050,112 @@ func TestKimiEngineNotesABusySessionOncePerChange(t *testing.T) {
 	}
 }
 
-func TestKimiEngineLockConflictDefersWithoutSpendingQuota(t *testing.T) {
-	e, resolver, _, now := newEngineTest(t)
-	f := newKimiFake(t)
-	target := binding.WakeTarget{
-		Client: "kimi", SessionID: kimiTestSession, Host: "kimi-host",
-		Bound: binding.Bound{ExecutionID: "kimi-execution", Generation: 2, Rung: 3},
+// An occupied session whose reason cannot be recorded is a state file failure like any other: it
+// is noted as one and retried on that schedule. The occupation is noted when it is next recorded,
+// because the step between them ended otherwise.
+func TestKimiEngineOccupiedReasonThatCannotBeRecordedIsAStateFileFailure(t *testing.T) {
+	for _, phase := range []string{"read", "publish"} {
+		t.Run(phase, func(t *testing.T) {
+			e, resolver, _, now := newEngineTest(t)
+			f := newKimiFake(t)
+			target := binding.WakeTarget{
+				Client: "kimi", SessionID: kimiTestSession, Host: "kimi-host",
+				Bound: binding.Bound{ExecutionID: "kimi-execution", Generation: 2, Rung: 3},
+			}
+			e.target, resolver.target = target, target
+			e.commands = f.commands
+			e.store = newClientStateStore(e.store.sessions, "kimi", target.SessionID)
+			f.mu.Lock()
+			f.sessionCode = 40931
+			f.mu.Unlock()
+			var observed []string
+			e.observe = func(text string) { observed = append(observed, text) }
+			// The client version is read after the step's own state reads, just before the status
+			// read that finds the session occupied, so only recording the reason fails.
+			working := e.store.io
+			e.clientVersion = func() string {
+				if phase == "read" {
+					e.store.io.readFile = func(string) ([]byte, error) { return nil, errors.New(commandSecret) }
+				} else {
+					e.store.io.createTemp = func(string, string) (stateFile, error) { return nil, errors.New(commandSecret) }
+				}
+				return kimiTestVersion
+			}
+			if got := e.step(context.Background()); got != engineDue(*now, time.Minute) || !slices.Equal(observed, []string{failedStateFile}) {
+				t.Fatalf("unrecorded occupation: %+v, noted %q", got, observed)
+			}
+			e.store.io = working
+			e.clientVersion = func() string { return kimiTestVersion }
+			if d := mustSnapshot(t, e.store).Document; d.LastFailure != nil {
+				t.Fatalf("a reason that could not be recorded was recorded: %+v", d.LastFailure)
+			}
+			*now = now.Add(time.Minute)
+			if got := e.step(context.Background()); got != engineDue(*now, time.Minute) || !slices.Equal(observed, []string{failedStateFile, failedSessionOccupied}) {
+				t.Fatalf("the occupation after the file failure: %+v, noted %q", got, observed)
+			}
+		})
 	}
-	e.target, resolver.target = target, target
-	e.commands = f.commands
-	e.clientVersion = func() string { return kimiTestVersion }
-	e.store = newClientStateStore(e.store.sessions, "kimi", target.SessionID)
-	f.promptCode = 40931
-	if got := e.step(context.Background()); got != engineDue(*now, 15*time.Second) {
-		t.Fatalf("lock conflict did not schedule an idle retry: %+v", got)
-	}
-	snapshot := mustSnapshot(t, e.store)
-	if len(snapshot.Document.Attempts) != 1 || snapshot.Document.Attempts[0].Answer != "aborted" ||
-		nativeQuota(snapshot.Document) != 0 || snapshot.Document.outstanding() != nil {
-		t.Fatalf("lock conflict spent or retained wake quota: %+v", snapshot.Document)
-	}
-	f.promptCode = 0
-	*now = now.Add(15 * time.Second)
-	if got := e.step(context.Background()); !got.FileWait {
-		t.Fatalf("released lock did not permit a fresh submission: %+v", got)
-	}
-	snapshot = mustSnapshot(t, e.store)
-	if len(snapshot.Document.Attempts) != 1 || snapshot.Document.Attempts[0].Answer != "submitted" || len(f.prompts) != 2 {
-		t.Fatalf("retry replaced neither the deferred attempt nor its accounting: %+v, prompts %d", snapshot.Document, len(f.prompts))
+}
+
+// kimi 2.6.1 answers 40931, SESSION_OCCUPIED, while another Kimi process such as the TUI holds the
+// session's lock, and kimi web cannot prompt the session until it exits. That is a refusal that
+// lasts: it waits a minute, spends no allowance, keeps its reason for inspection and is noted
+// once, on the prompt or on the status read alike.
+func TestKimiEngineOccupiedSessionWaitsAMinuteWithoutSpendingQuota(t *testing.T) {
+	for _, where := range []string{"prompt", "status read"} {
+		t.Run(where, func(t *testing.T) {
+			e, resolver, _, now := newEngineTest(t)
+			f := newKimiFake(t)
+			target := binding.WakeTarget{
+				Client: "kimi", SessionID: kimiTestSession, Host: "kimi-host",
+				Bound: binding.Bound{ExecutionID: "kimi-execution", Generation: 2, Rung: 3},
+			}
+			e.target, resolver.target = target, target
+			e.commands = f.commands
+			e.clientVersion = func() string { return kimiTestVersion }
+			e.store = newClientStateStore(e.store.sessions, "kimi", target.SessionID)
+			var observed []string
+			e.observe = func(text string) { observed = append(observed, text) }
+			occupy := func(code int) {
+				f.mu.Lock()
+				defer f.mu.Unlock()
+				if where == "prompt" {
+					f.promptCode = code
+				} else {
+					f.sessionCode = code
+				}
+			}
+			occupy(40931)
+			for try := range 2 {
+				if got := e.step(context.Background()); got != engineDue(*now, time.Minute) {
+					t.Fatalf("try %d: an occupied session was not tried again after a minute: %+v", try, got)
+				}
+				d := mustSnapshot(t, e.store).Document
+				if nativeQuota(d) != 0 || d.outstanding() != nil || d.LastFailure == nil || d.LastFailure.Detail != kimiOccupied || d.LastFailure.AtMS != now.UnixMilli() {
+					t.Fatalf("try %d spent quota, kept a guard or lost its reason: %+v", try, d)
+				}
+				if reason := inspectDocument("guard", inspectionBytes(t, d)).FailureReason; reason != kimiOccupied {
+					t.Fatalf("inspection reason %q", reason)
+				}
+				if !slices.Equal(observed, []string{failedSessionOccupied}) {
+					t.Fatalf("try %d noted %q, want one line for the whole occupation", try, observed)
+				}
+				*now = now.Add(time.Minute)
+			}
+			f.mu.Lock()
+			prompts := len(f.prompts)
+			f.mu.Unlock()
+			if want := map[string]int{"prompt": 2, "status read": 0}[where]; prompts != want {
+				t.Fatalf("occupied tries sent %d prompts, want %d", prompts, want)
+			}
+			occupy(0)
+			if got := e.step(context.Background()); !got.FileWait || resolver.starts != prompts+1 {
+				t.Fatalf("a session the other process released was not woken: %+v, starts %d", got, resolver.starts)
+			}
+			d := mustSnapshot(t, e.store).Document
+			if len(d.Attempts) != 1 || d.Attempts[0].Answer != "submitted" || d.LastFailure != nil || len(observed) != 1 {
+				t.Fatalf("the wake after the occupation: %+v, noted %q", d, observed)
+			}
+		})
 	}
 }
