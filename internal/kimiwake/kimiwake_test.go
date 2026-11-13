@@ -705,3 +705,138 @@ func TestStateFileNamesNameTheirProcess(t *testing.T) {
 		}
 	}
 }
+
+// A watcher owns its record first: the request it answers and any latch go at once, and the
+// durable state stays. A second live watcher is a duplicate and changes nothing; a dead holder's
+// claim is taken over, and owning again is the same claim.
+func TestAWatcherOwnsItsRecordAndAnotherLiveOneIsADuplicate(t *testing.T) {
+	s, _, procs := newStore(t)
+	k := keyFor(sessionA)
+	mapSession(t, s, sessionA)
+	put(t, s, k, Record{Version: recordVersion, ArmRequestedMS: 5, Latch: &Latch{State: LatchFailed, AtMS: 6}, Checkpoint: Checkpoint{Stream: "s1", Cursor: 7, Initialized: true}})
+	first, second := Attempt{PID: 9001, StartMS: 9002, ID: "first"}, Attempt{PID: 9003, StartMS: 9004, ID: "second"}
+	procs.set(first.PID, first.StartMS, true)
+	if owned, err := s.Own(k, first, time.Second); err != nil || !owned {
+		t.Fatalf("first: %v %v", owned, err)
+	}
+	r, _ := recordOf(t, s, k)
+	if r.Attempt == nil || *r.Attempt != first || r.ArmRequestedMS != 0 || r.Latch != nil || r.Checkpoint != (Checkpoint{Stream: "s1", Cursor: 7, Initialized: true}) {
+		t.Fatalf("owned: %+v", r)
+	}
+	before := raw(t, s.recordPath(k))
+	if owned, err := s.Own(k, second, time.Second); err != nil || owned {
+		t.Fatalf("duplicate: %v %v", owned, err)
+	}
+	if !bytes.Equal(before, raw(t, s.recordPath(k))) {
+		t.Fatal("a duplicate changed the record")
+	}
+	if owned, err := s.Own(k, first, time.Second); err != nil || !owned {
+		t.Fatalf("the same watcher again: %v %v", owned, err)
+	}
+	procs.set(first.PID, first.StartMS, false)
+	if owned, err := s.Own(k, second, time.Second); err != nil || !owned {
+		t.Fatalf("after the holder ended: %v %v", owned, err)
+	}
+	for _, bad := range []Attempt{{PID: 0, StartMS: 1, ID: "x"}, {PID: 1, StartMS: 0, ID: "x"}, {PID: 1, StartMS: 1}} {
+		if _, err := s.Own(k, bad, time.Second); !errors.Is(err, errKey) {
+			t.Fatalf("%+v: %v", bad, err)
+		}
+	}
+	if _, err := s.Own(Key{}, first, time.Second); !errors.Is(err, errKey) {
+		t.Fatal(err)
+	}
+}
+
+// A prompt judged before the requested watcher publishes itself latches, and the publication then
+// clears the latch. A watcher published first keeps the prompt quiet. Either order ends armed.
+func TestARacingPromptAndTheWatchersPublicationEndArmed(t *testing.T) {
+	for name, promptFirst := range map[string]bool{"prompt first": true, "watcher first": false} {
+		t.Run(name, func(t *testing.T) {
+			s, _, procs := newStore(t)
+			k := keyFor(sessionA)
+			mapSession(t, s, sessionA)
+			if ask, err := s.RequestArm(k, time.Second); err != nil || !ask {
+				t.Fatalf("request: %v %v", ask, err)
+			}
+			w := Attempt{PID: 9001, StartMS: 9002, ID: "w"}
+			procs.set(w.PID, w.StartMS, true)
+			if promptFirst {
+				if ask, err := s.RequestArm(k, time.Second); err != nil || ask {
+					t.Fatalf("racing prompt: %v %v", ask, err)
+				}
+			}
+			if owned, err := s.Own(k, w, time.Second); err != nil || !owned {
+				t.Fatalf("publication: %v %v", owned, err)
+			}
+			if !promptFirst {
+				if ask, err := s.RequestArm(k, time.Second); err != nil || ask {
+					t.Fatalf("later prompt: %v %v", ask, err)
+				}
+			}
+			if r, _ := recordOf(t, s, k); r.Latch != nil || r.ArmRequestedMS != 0 || r.Attempt == nil || r.Attempt.ID != "w" {
+				t.Fatalf("not armed: %+v", r)
+			}
+		})
+	}
+}
+
+// Only the watcher holding a record changes it. Once it has released the record, or another holds
+// it, nothing is written, and the durable state stays.
+func TestOnlyTheHoldingWatcherUpdatesItsRecord(t *testing.T) {
+	s, _, procs := newStore(t)
+	k := keyFor(sessionA)
+	mapSession(t, s, sessionA)
+	w := Attempt{PID: 9001, StartMS: 9002, ID: "w"}
+	procs.set(w.PID, w.StartMS, true)
+	if owned, err := s.Own(k, w, time.Second); err != nil || !owned {
+		t.Fatalf("%v %v", owned, err)
+	}
+	baseline := Checkpoint{Stream: "s1", Cursor: 3, Initialized: true}
+	if owned, err := s.UpdateOwned(k, "w", time.Second, func(r *Record) { r.Checkpoint = baseline }); err != nil || !owned {
+		t.Fatalf("holder: %v %v", owned, err)
+	}
+	if owned, err := s.UpdateOwned(k, "other", time.Second, func(*Record) { t.Fatal("changed for another watcher") }); err != nil || owned {
+		t.Fatalf("another: %v %v", owned, err)
+	}
+	if owned, err := s.UpdateOwned(k, "w", time.Second, func(r *Record) { r.Attempt = nil }); err != nil || !owned {
+		t.Fatalf("release: %v %v", owned, err)
+	}
+	if owned, err := s.UpdateOwned(k, "w", time.Second, func(*Record) { t.Fatal("changed after release") }); err != nil || owned {
+		t.Fatalf("after release: %v %v", owned, err)
+	}
+	if r, _ := recordOf(t, s, k); r.Attempt != nil || r.Checkpoint != baseline {
+		t.Fatalf("after release: %+v", r)
+	}
+	if _, err := s.UpdateOwned(k, "", time.Second, func(*Record) {}); !errors.Is(err, errKey) {
+		t.Fatal(err)
+	}
+	if _, err := s.UpdateOwned(Key{}, "w", time.Second, func(*Record) {}); !errors.Is(err, errKey) {
+		t.Fatal(err)
+	}
+}
+
+// A latch never replaces a live watcher. Without one it latches and supersedes a pending request.
+func TestALatchNeverReplacesALiveWatcher(t *testing.T) {
+	s, now, procs := newStore(t)
+	k := keyFor(sessionA)
+	mapSession(t, s, sessionA)
+	w := Attempt{PID: 9001, StartMS: 9002, ID: "w"}
+	procs.set(w.PID, w.StartMS, true)
+	before := put(t, s, k, Record{Version: recordVersion, ArmRequestedMS: 5, Attempt: &w})
+	if err := s.LatchIfFree(k, LatchDisabled, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(before, raw(t, s.recordPath(k))) {
+		t.Fatal("a latch replaced a live watcher")
+	}
+	procs.set(w.PID, w.StartMS, false)
+	if err := s.LatchIfFree(k, LatchDisabled, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if r, _ := recordOf(t, s, k); r.Latch == nil || *r.Latch != (Latch{State: LatchDisabled, AtMS: now.UnixMilli()}) || r.ArmRequestedMS != 0 {
+		t.Fatalf("%+v", r)
+	}
+	if err := s.LatchIfFree(Key{}, LatchFailed, time.Second); !errors.Is(err, errKey) {
+		t.Fatal(err)
+	}
+}
