@@ -1,8 +1,8 @@
 # 026: Kimi idle wake through the local web API
 
-Status: accepted for opt-in implementation on the owner's direction, 2026-11-12; revised after
-review on 2026-11-13. Changes D7. Extends the positive-idle and single-wake policy of ADR 023 to
-Kimi without changing Codex or the other clients.
+Status: superseded by [ADR 030](030-kimi-one-shot-wake.md) on 2026-11-13. The web API route is
+retired and no MCP web worker is started for any Kimi session. The remainder of this ADR is retained
+as the record of the earlier design and measurements.
 
 ## Problem
 
