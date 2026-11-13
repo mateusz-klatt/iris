@@ -34,7 +34,7 @@ args = ["/home/user/.claude/plugins/marketplaces/delegator/server/usage/index.js
 enabled = true
 
 [mcp_servers.iris]
-command = "IRIS_COMMAND"
+command = IRIS_COMMAND
 args = [
     "mcp",
     "--client",

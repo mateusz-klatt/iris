@@ -11,7 +11,7 @@ import (
 )
 
 // grokConfig writes content as the layout's Grok config.toml, with IRIS_COMMAND replaced by the
-// layout's Iris path, and returns the Grok client, its config path and what was written.
+// layout's Iris path as a TOML string, as Grok writes it (escaped backslashes on Windows), and returns the Grok client, its config path and what was written.
 func grokConfig(t *testing.T, l Layout, content string) (Client, string, string) {
 	t.Helper()
 	c, _ := ByName(Grok)
@@ -19,7 +19,7 @@ func grokConfig(t *testing.T, l Layout, content string) (Client, string, string)
 	if err != nil {
 		t.Fatal(err)
 	}
-	content = strings.ReplaceAll(content, "IRIS_COMMAND", l.Iris())
+	content = strings.ReplaceAll(content, "IRIS_COMMAND", tomlString(l.Iris()))
 	if err := os.MkdirAll(filepath.Dir(files[1]), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -79,7 +79,7 @@ func TestGrokAdoptsItsOwnTableAfterGrokRewroteTheConfig(t *testing.T) {
 func TestGrokAdoptsATableFollowedByOthers(t *testing.T) {
 	for _, next := range []string{"[ui]\nyolo = false\n", "[[marketplace.sources]]\nname = \"x\"\n"} {
 		l := testLayout(t)
-		mine := "[mcp_servers.iris]\ncommand = \"IRIS_COMMAND\"\nargs = [ \"mcp\", \"--client\", \"grok\" ]\n\n\n" + next
+		mine := "[mcp_servers.iris]\ncommand = IRIS_COMMAND\nargs = [ \"mcp\", \"--client\", \"grok\" ]\n\n\n" + next
 		c, path, _ := grokConfig(t, l, mine)
 		if err := c.Install(l, nil); err != nil {
 			t.Fatal(err)
@@ -96,11 +96,11 @@ func TestGrokAdoptsATableFollowedByOthers(t *testing.T) {
 // or one that does not decode. Codex never adopts, even its own table.
 func TestGrokRefusesAnUnmarkedTableThatIsNotIrisOwn(t *testing.T) {
 	forms := map[string]string{
-		"other args":   "[mcp_servers.iris]\ncommand = \"IRIS_COMMAND\"\nargs = [\"mcp\", \"--client\", \"codex\"]\n",
-		"no args":      "[mcp_servers.iris]\ncommand = \"IRIS_COMMAND\"\n",
-		"another key":  "[mcp_servers.iris]\ncommand = \"IRIS_COMMAND\"\nargs = [\"mcp\", \"--client\", \"grok\"]\nenv = { A = \"1\" }\n",
-		"twice":        "[mcp_servers.iris]\ncommand = \"IRIS_COMMAND\"\nargs = [\"mcp\", \"--client\", \"grok\"]\n[mcp_servers.iris]\ncommand = \"x\"\n",
-		"not decoding": "[mcp_servers.iris]\ncommand = \"IRIS_COMMAND\"\nargs = [\"mcp\", \"--client\", \"grok\"\n",
+		"other args":   "[mcp_servers.iris]\ncommand = IRIS_COMMAND\nargs = [\"mcp\", \"--client\", \"codex\"]\n",
+		"no args":      "[mcp_servers.iris]\ncommand = IRIS_COMMAND\n",
+		"another key":  "[mcp_servers.iris]\ncommand = IRIS_COMMAND\nargs = [\"mcp\", \"--client\", \"grok\"]\nenv = { A = \"1\" }\n",
+		"twice":        "[mcp_servers.iris]\ncommand = IRIS_COMMAND\nargs = [\"mcp\", \"--client\", \"grok\"]\n[mcp_servers.iris]\ncommand = \"x\"\n",
+		"not decoding": "[mcp_servers.iris]\ncommand = IRIS_COMMAND\nargs = [\"mcp\", \"--client\", \"grok\"\n",
 	}
 	for name, mine := range forms {
 		t.Run(name, func(t *testing.T) {
@@ -142,5 +142,23 @@ func TestSameContentComparesTOMLByValue(t *testing.T) {
 	}
 	if sameContent([]byte(marked), []byte("[t]\nargs = [\"a\", \"c\"]\n")) {
 		t.Fatal("a changed value read as the same")
+	}
+}
+
+// A Windows path is written by Grok as a TOML string with escaped backslashes, and decodes to the
+// same command, so it is adopted on every platform alike.
+func TestGrokAdoptsAWindowsPathWrittenAsATOMLString(t *testing.T) {
+	iris := `C:\Users\person\AppData\Local\iris\iris.exe`
+	ours := map[string]any{"command": iris, "args": []any{"mcp", "--client", Grok}, "enabled": true}
+	block := wrapBlock("[mcp_servers.iris]\ncommand = " + tomlString(iris) + "\nargs = [\"mcp\", \"--client\", \"grok\"]\nenabled = true\n")
+	saved := "[ui]\nyolo = false\n\n[mcp_servers.iris]\ncommand = " + tomlString(iris) + "\nargs = [\n    \"mcp\",\n    \"--client\",\n    \"grok\",\n]\nenabled = true\n"
+	if got, want := adoptTable(saved, "mcp_servers.iris", ours, block), "[ui]\nyolo = false\n\n"+block; got != want {
+		t.Fatalf("got\n%s\nwant\n%s", got, want)
+	}
+	// Written raw, the backslashes are escapes: it decodes to another command or not at all, and is
+	// a person's.
+	raw := strings.ReplaceAll(saved, tomlString(iris), `"`+iris+`"`)
+	if got := adoptTable(raw, "mcp_servers.iris", ours, block); got != raw {
+		t.Fatalf("adopted a command that decodes otherwise\n%s", got)
 	}
 }
