@@ -8,6 +8,9 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// stillActive is STILL_ACTIVE, the exit code Windows reports for a process that has not exited.
+const stillActive = 259
+
 func lookupOS(pid int) (Snapshot, bool) {
 	if pid <= 0 {
 		return Snapshot{}, false
@@ -18,6 +21,14 @@ func lookupOS(pid int) (Snapshot, bool) {
 	}
 	// This query-only handle owns no pending writes; closing it cannot affect the snapshot.
 	defer func() { _ = windows.CloseHandle(h) }()
+	// An exited process keeps its process object, start time included, for as long as anyone
+	// holds a handle to it, so opening it does not prove it runs. Like a zombie on Linux, it is
+	// not running. A process that itself exited with code 259 is indistinguishable from a running
+	// one here; Windows documents that limit of the exit code.
+	var code uint32
+	if windows.GetExitCodeProcess(h, &code) == nil && code != stillActive {
+		return Snapshot{}, false
+	}
 
 	var info windows.PROCESS_BASIC_INFORMATION
 	var n uint32
