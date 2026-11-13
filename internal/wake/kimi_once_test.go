@@ -197,7 +197,16 @@ type onceTest struct {
 	procM *sync.Mutex
 	toldM sync.Mutex
 	toldV hook.ToldSnapshot
+	mapM  sync.Mutex
+	mapE  error
 	key   kimiwake.Key
+}
+
+// mapFails makes reading the session map fail, as while another process holds the state's lock.
+func (ot *onceTest) mapFails(err error) {
+	ot.mapM.Lock()
+	defer ot.mapM.Unlock()
+	ot.mapE = err
 }
 
 // told sets what the hooks told the session.
@@ -229,6 +238,15 @@ func newOnceTest(t *testing.T) *onceTest {
 			ot.toldM.Lock()
 			defer ot.toldM.Unlock()
 			return ot.toldV, nil
+		},
+		mapped: func(pid int, start int64) (string, bool, error) {
+			ot.mapM.Lock()
+			err := ot.mapE
+			ot.mapM.Unlock()
+			if err != nil {
+				return "", false, err
+			}
+			return ot.store.Session(pid, start, time.Second)
 		},
 		nearest: func() (proc.Ancestor, error) {
 			return proc.Ancestor{PID: onceKimiPID, StartMS: onceKimiStart, Name: "kimi"}, nil

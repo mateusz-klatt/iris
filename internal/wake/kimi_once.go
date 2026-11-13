@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
 	"time"
 
@@ -71,8 +72,10 @@ type onceHub interface {
 
 // kimiOnce is one run of `iris watch --client kimi --once`.
 type kimiOnce struct {
-	hub     onceHub
-	store   *kimiwake.Store
+	hub   onceHub
+	store *kimiwake.Store
+	// mapped reads the session a Kimi process runs now, under the state's lock.
+	mapped  func(pid int, startMS int64) (string, bool, error)
 	told    func(session string) (hook.ToldSnapshot, error)
 	nearest func() (proc.Ancestor, error)
 	alive   func(pid int, startMS int64) bool
@@ -114,9 +117,13 @@ func newKimiOnce(out io.Writer, load func() (hubclient.Resolved, string, error),
 	host, _ := os.Hostname()
 	cwd, _ := os.Getwd()
 	sessions := hook.NewSessions(token)
+	store := &kimiwake.Store{Root: kimiwake.Root(dir)}
 	return &kimiOnce{
 		hub:   hubSource{client: &hubclient.Client{Config: resolved}},
-		store: &kimiwake.Store{Root: kimiwake.Root(dir)},
+		store: store,
+		mapped: func(pid int, startMS int64) (string, bool, error) {
+			return store.Session(pid, startMS, onceLockBudget)
+		},
 		told: func(session string) (hook.ToldSnapshot, error) {
 			unlock, err := sessions.Lock(onceLockBudget)
 			if err != nil {
@@ -142,7 +149,7 @@ func (w *kimiOnce) run(parent context.Context) Outcome {
 	if err != nil || anc.PID <= 0 || anc.StartMS <= 0 || !proc.SingleSession(anc, "kimi") {
 		return w.say(Failed)
 	}
-	session, ok, err := w.store.Session(anc.PID, anc.StartMS, onceLockBudget)
+	session, ok, err := w.mapped(anc.PID, anc.StartMS)
 	if err != nil || !ok {
 		return w.say(Failed)
 	}
@@ -158,8 +165,8 @@ func (w *kimiOnce) run(parent context.Context) Outcome {
 	if !owned {
 		return w.say(Duplicate)
 	}
-	o := &onceRun{w: w, key: key, held: map[string]int64{}}
-	outcome := o.watch(ctx, parent)
+	o := &onceRun{w: w, key: key, parent: parent, held: map[string]int64{}}
+	outcome := o.watch(ctx)
 	o.release(outcome)
 	return w.say(outcome)
 }
@@ -175,8 +182,11 @@ func (w *kimiOnce) say(o Outcome) Outcome {
 
 // onceRun is a watcher that owns its record.
 type onceRun struct {
-	w       *kimiOnce
-	key     kimiwake.Key
+	w   *kimiOnce
+	key kimiwake.Key
+	// parent is the context the command was given. Its end is a stop from outside; the lifetime
+	// is a context of its own below it.
+	parent  context.Context
 	target  binding.WakeTarget
 	bound   bool
 	fresh   bool // the record had no baseline before this run
@@ -187,26 +197,27 @@ type onceRun struct {
 	emitted map[string]kimiwake.Identity
 	delays  kimiwake.Delays
 	held    map[string]int64 // attention not yet announced, by kind, with its newest cursor
-	until   time.Time        // when a held candidate is decided again
+	again   bool             // a reset whose read failed, to be read again
+	until   time.Time        // when held attention, or a failed reset, is taken up again
 	delay   time.Duration
 }
 
-func (o *onceRun) watch(ctx, parent context.Context) Outcome {
+func (o *onceRun) watch(ctx context.Context) Outcome {
 	tick := time.NewTicker(onceBeat)
 	defer tick.Stop()
-	if out, done := o.bind(ctx, parent, tick); done {
+	if out, done := o.bind(ctx, tick); done {
 		return out
 	}
-	if out, done := o.baseline(ctx, parent, tick); done {
+	if out, done := o.baseline(ctx, tick); done {
 		return out
 	}
-	return o.follow(ctx, parent, tick)
+	return o.follow(ctx, tick)
 }
 
 // ended is the outcome when the context ends: the lifetime, or a stop from outside, as removal or
 // a turned-off wake sends.
-func (o *onceRun) ended(parent context.Context) Outcome {
-	if parent.Err() != nil {
+func (o *onceRun) ended() Outcome {
+	if o.parent.Err() != nil {
 		return Disabled
 	}
 	return Expired
@@ -224,16 +235,28 @@ func (o *onceRun) release(out Outcome) {
 	})
 }
 
-// checks are the local conditions of every phase: the Kimi process still runs, wake is still on,
-// and the process still runs this session. A map that cannot be read now decides nothing.
-func (o *onceRun) checks() (Outcome, bool) {
+// local is the local conditions: the Kimi process still runs, wake is still on, and the process
+// still runs this session. unsure says the map could not be read now, for instance while another
+// process held the state's lock.
+func (o *onceRun) local() (out Outcome, stop, unsure bool) {
 	if !o.w.alive(o.key.PID, o.key.StartMS) || !kimiwake.Enabled(o.w.store.Root) {
-		return Disabled, true
+		return Disabled, true, false
 	}
-	if session, ok, err := o.w.store.Session(o.key.PID, o.key.StartMS, onceLockBudget); err == nil && (!ok || session != o.key.Session) {
-		return Disabled, true
+	session, ok, err := o.w.mapped(o.key.PID, o.key.StartMS)
+	if err != nil {
+		return 0, false, true
 	}
-	return 0, false
+	if !ok || session != o.key.Session {
+		return Disabled, true, false
+	}
+	return 0, false, false
+}
+
+// checks are the local conditions of every phase. A map that cannot be read now decides nothing
+// there; only a line needs it read positively.
+func (o *onceRun) checks() (Outcome, bool) {
+	out, stop, _ := o.local()
+	return out, stop
 }
 
 // beat is the 20-second tick of every phase: the pinned generation's heartbeat once bound, then the
@@ -252,14 +275,14 @@ func (o *onceRun) beat(ctx context.Context) (Outcome, bool) {
 }
 
 // pause waits out the backoff, which doubles up to its cap, while the tick goes on.
-func (o *onceRun) pause(ctx, parent context.Context, tick *time.Ticker) (Outcome, bool) {
+func (o *onceRun) pause(ctx context.Context, tick *time.Ticker) (Outcome, bool) {
 	wait := time.NewTimer(o.delay)
 	defer wait.Stop()
 	o.delay = min(o.delay*2, onceMaxBackoff)
 	for {
 		select {
 		case <-ctx.Done():
-			return o.ended(parent), true
+			return o.ended(), true
 		case <-wait.C:
 			return 0, false
 		case <-tick.C:
@@ -273,7 +296,7 @@ func (o *onceRun) pause(ctx, parent context.Context, tick *time.Ticker) (Outcome
 // bind looks up the hook-registered Execution of this process and session, and never registers
 // one. A refusal that a retry cannot change fails the watcher. An Execution not found may be
 // recovering after a hub restart, so unbound is retried for the hub's recovery window.
-func (o *onceRun) bind(ctx, parent context.Context, tick *time.Ticker) (Outcome, bool) {
+func (o *onceRun) bind(ctx context.Context, tick *time.Ticker) (Outcome, bool) {
 	o.delay = time.Second
 	start := o.w.now()
 	for {
@@ -292,7 +315,7 @@ func (o *onceRun) bind(ctx, parent context.Context, tick *time.Ticker) (Outcome,
 			hubclient.IsCode(err, "unauthorized") || (hubclient.IsCode(err, "unbound") && o.w.now().Sub(start) >= onceUnbound) {
 			return Failed, true
 		}
-		if out, stop := o.pause(ctx, parent, tick); stop {
+		if out, stop := o.pause(ctx, tick); stop {
 			return out, true
 		}
 	}
@@ -308,7 +331,7 @@ func (o *onceRun) read(ctx context.Context) (attentionRead, error) {
 // baseline takes the record's cursor, or sets one. A watcher with no prior record takes the hub's
 // current stream and high-water mark, and announces nothing for history: unread mail and freed
 // paths that predate it are what SessionStart, the prompt hooks and the inbox already cover.
-func (o *onceRun) baseline(ctx, parent context.Context, tick *time.Ticker) (Outcome, bool) {
+func (o *onceRun) baseline(ctx context.Context, tick *time.Ticker) (Outcome, bool) {
 	r, _, err := o.w.store.Read(o.key, onceLockBudget)
 	if err != nil {
 		return Failed, true
@@ -329,16 +352,18 @@ func (o *onceRun) baseline(ctx, parent context.Context, tick *time.Ticker) (Outc
 			}
 			return 0, false
 		}
-		if out, stop := o.pause(ctx, parent, tick); stop {
+		if out, stop := o.pause(ctx, tick); stop {
 			return out, true
 		}
 	}
 }
 
-// save checkpoints the cursor in the record, while this watcher holds it.
+// save checkpoints the cursor in the record, while this watcher holds it, together with what was
+// emitted: identities a rollback took back must not suppress attention for the next watcher.
 func (o *onceRun) save() bool {
 	owned, err := o.w.store.UpdateOwned(o.key, o.w.self.ID, onceLockBudget, func(r *kimiwake.Record) {
 		r.Checkpoint = kimiwake.Checkpoint{Stream: o.stream, Cursor: o.cursor, Initialized: true}
+		r.Emitted = o.emitted
 	})
 	if err != nil || !owned {
 		return false
@@ -348,29 +373,29 @@ func (o *onceRun) save() bool {
 }
 
 // follow keeps a stream open from the cursor, and opens it again after it fails.
-func (o *onceRun) follow(ctx, parent context.Context, tick *time.Ticker) Outcome {
+func (o *onceRun) follow(ctx context.Context, tick *time.Ticker) Outcome {
 	o.delay = time.Second
 	for {
 		call, cancel := context.WithTimeout(ctx, onceCall)
 		conn, err := o.w.hub.Connect(call, o.target, o.cursor, o.stream)
 		cancel()
 		if err == nil {
-			out, done := o.serve(ctx, parent, tick, conn)
+			out, done := o.serve(ctx, tick, conn)
 			conn.Close()
 			if done {
 				return out
 			}
 			o.delay = time.Second
 		}
-		if out, stop := o.pause(ctx, parent, tick); stop {
+		if out, stop := o.pause(ctx, tick); stop {
 			return out
 		}
 	}
 }
 
-// serve handles one open stream: its frames, the tick and the time a held candidate is due. It
-// returns done=false when the stream fails, to be opened again.
-func (o *onceRun) serve(ctx, parent context.Context, tick *time.Ticker, conn eventConnection) (Outcome, bool) {
+// serve handles one open stream: its frames, the tick, and the time when held attention is due or a
+// failed reset is read again. It returns done=false when the stream fails, to be opened again.
+func (o *onceRun) serve(ctx context.Context, tick *time.Ticker, conn eventConnection) (Outcome, bool) {
 	reading, stop := context.WithCancel(ctx)
 	defer stop()
 	frames, failed := make(chan eventFrame), make(chan struct{})
@@ -391,7 +416,7 @@ func (o *onceRun) serve(ctx, parent context.Context, tick *time.Ticker, conn eve
 	for {
 		var due <-chan time.Time
 		var timer *time.Timer
-		if len(o.held) > 0 {
+		if len(o.held) > 0 || o.again {
 			timer = time.NewTimer(max(0, o.until.Sub(o.w.now())))
 			due = timer.C
 		}
@@ -399,14 +424,18 @@ func (o *onceRun) serve(ctx, parent context.Context, tick *time.Ticker, conn eve
 		var done bool
 		select {
 		case <-ctx.Done():
-			out, done = o.ended(parent), true
+			out, done = o.ended(), true
 		case <-failed:
 			out, done = 0, false
 			stop()
 		case <-tick.C:
 			out, done = o.beat(ctx)
 		case <-due:
-			out, done = o.decide(ctx)
+			if o.again {
+				out, done = o.reset(ctx)
+			} else {
+				out, done = o.decide(ctx)
+			}
 		case f := <-frames:
 			out, done = o.frame(ctx, f)
 		}
@@ -438,15 +467,21 @@ func (o *onceRun) frame(ctx context.Context, f eventFrame) (Outcome, bool) {
 	return 0, false
 }
 
-// reset re-reads attention after the hub restarted the log or the stream.
-//   - A new stream: what is pending there may be announced once, unless this run took the first
-//     baseline, which never announces history.
+// reset re-reads attention after the hub restarted the log or the stream. A read that fails is
+// tried again after a call budget, even if no further frame comes.
+//   - A new stream: attention held from the old one goes with it. What is pending in the new one
+//     may be announced once, unless this run took the first baseline, which never announces history.
 //   - The same stream gone back, as after a restore: the cursor re-anchors at the high-water mark,
-//     and what was emitted above it no longer counts.
+//     and what was emitted or held above it no longer counts.
 //   - The same stream with events dropped: only an identity newer than the cursor qualifies.
+//
+// The snapshot names one identity for mail and freed paths together, so each kind it shows pending
+// is held, and a claim is not lost when the mail is fetched before the decision.
 func (o *onceRun) reset(ctx context.Context) (Outcome, bool) {
 	read, err := o.read(ctx)
+	o.again = err != nil
 	if err != nil {
+		o.until = o.w.now().Add(onceCall)
 		return 0, false
 	}
 	id := read.Attention.Identity
@@ -454,6 +489,7 @@ func (o *onceRun) reset(ctx context.Context) (Outcome, bool) {
 	switch {
 	case read.Stream != o.stream:
 		newer = id.Pending && id.Stream == read.Stream && !o.fresh
+		o.held = map[string]int64{}
 	case read.HighWater < o.cursor:
 		newer = false
 		for kind, e := range o.emitted {
@@ -468,12 +504,13 @@ func (o *onceRun) reset(ctx context.Context) (Outcome, bool) {
 		}
 	}
 	o.stream, o.cursor = read.Stream, read.HighWater
-	if newer {
-		kind := "claim_available"
-		if read.Attention.Unread > 0 {
-			kind = "inbox_changed"
-		}
-		o.held[kind] = id.Cursor
+	if newer && read.Attention.Unread > 0 {
+		o.held["inbox_changed"] = id.Cursor
+	}
+	if newer && read.Attention.Available > 0 {
+		o.held["claim_available"] = id.Cursor
+	}
+	if len(o.held) > 0 {
 		o.until = o.w.now()
 		return o.decide(ctx)
 	}
@@ -484,7 +521,9 @@ func (o *onceRun) reset(ctx context.Context) (Outcome, bool) {
 // decide judges what is held, against authoritative attention and what the hooks told the
 // session. Mail already fetched or told, and availability already emitted or told, is not new. A
 // told identity above the hub's high-water mark comes from before a restore and covers nothing.
-// What is new waits out the rest of its kind's coalescing window, and then completes.
+// What is new completes as soon as any of its kinds is out of its coalescing window, and the line
+// covers every kind held. Right before the line the watcher checks once more: a stop, or a session
+// map it cannot read positively, prints nothing.
 func (o *onceRun) decide(ctx context.Context) (Outcome, bool) {
 	if out, stop := o.checks(); stop {
 		return out, true
@@ -512,10 +551,14 @@ func (o *onceRun) decide(ctx context.Context) (Outcome, bool) {
 		if e, ok := o.emitted[kind]; kind == "claim_available" && ((ok && e.Stream == o.stream && e.Cursor >= cursor) || covered(o.stream, cursor)) {
 			continue
 		}
-		news[kind] = cursor
-		if next := time.UnixMilli(o.delays[kind]); o.delays[kind] > 0 && next.After(due) {
-			due = next
+		var eligible time.Time // the zero time: now
+		if ms := o.delays[kind]; ms > 0 {
+			eligible = time.UnixMilli(ms)
 		}
+		if len(news) == 0 || eligible.Before(due) {
+			due = eligible
+		}
+		news[kind] = cursor
 	}
 	if len(news) == 0 {
 		o.held = map[string]int64{}
@@ -524,6 +567,17 @@ func (o *onceRun) decide(ctx context.Context) (Outcome, bool) {
 	}
 	if o.w.now().Before(due) {
 		o.until = due
+		return 0, false
+	}
+	if ctx.Err() != nil {
+		return o.ended(), true
+	}
+	out, stop, unsure := o.local()
+	if stop {
+		return out, true
+	}
+	if unsure {
+		o.until = o.w.now().Add(onceCall)
 		return 0, false
 	}
 	return o.complete(ctx, news), true
@@ -550,9 +604,6 @@ func (o *onceRun) quiet(ctx context.Context) {
 // each kind's next coalescing time, and give up the record. A failure after the print exits non-zero
 // with the old checkpoint, so the next watcher replays: a repeated wake, never a lost one.
 func (o *onceRun) complete(ctx context.Context, news map[string]int64) Outcome {
-	if out, stop := o.checks(); stop {
-		return out
-	}
 	if _, err := fmt.Fprintln(o.w.out, attentionLine); err != nil {
 		return NotCompleted
 	}
@@ -563,16 +614,21 @@ func (o *onceRun) complete(ctx context.Context, news map[string]int64) Outcome {
 		return NotCompleted
 	}
 	next := o.w.now().Add(onceWindow).UnixMilli()
+	// The emitted identities start from this run's view, which drops what a rollback took back.
+	emitted := maps.Clone(o.emitted)
+	if emitted == nil {
+		emitted = map[string]kimiwake.Identity{}
+	}
+	for kind, cursor := range news {
+		emitted[kind] = kimiwake.Identity{Stream: o.stream, Cursor: cursor}
+	}
 	owned, err := o.w.store.UpdateOwned(o.key, o.w.self.ID, onceLockBudget, func(r *kimiwake.Record) {
 		r.Checkpoint = kimiwake.Checkpoint{Stream: o.stream, Cursor: o.cursor, Initialized: true}
-		if r.Emitted == nil {
-			r.Emitted = map[string]kimiwake.Identity{}
-		}
+		r.Emitted = emitted
 		if r.Coalesce == nil {
 			r.Coalesce = kimiwake.Delays{}
 		}
-		for kind, cursor := range news {
-			r.Emitted[kind] = kimiwake.Identity{Stream: o.stream, Cursor: cursor}
+		for kind := range news {
 			r.Coalesce[kind] = next
 		}
 		r.Attempt = nil

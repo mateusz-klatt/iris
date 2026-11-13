@@ -70,6 +70,12 @@ func TestKimiOnceIsWiredFromThePinnedConfiguration(t *testing.T) {
 	if !w.alive(4242, 1700) || w.alive(4242, 1701) || w.alive(4243, 1700) || w.alive(4242, 0) {
 		t.Fatal("the process check did not match a pid and start time together")
 	}
+	if err := (&kimiwake.Store{Root: kimiwake.Root(dir)}).MapSession(4242, 1700, onceSession, time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if session, ok, err := w.mapped(4242, 1700); err != nil || !ok || session != onceSession {
+		t.Fatalf("the session map is not read from the pinned state: %q %v %v", session, ok, err)
+	}
 	if told, err := w.told(onceSession); err != nil || told.Present {
 		t.Fatalf("%+v %v", told, err)
 	}
