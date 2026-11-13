@@ -72,11 +72,12 @@ func runIntegrate(args []string) int {
 			if noWakeSet {
 				enabled = !*noWake
 			}
-			if name == integrate.Kimi {
+			switch name {
+			case integrate.Kimi:
 				err = integrate.InstallKimiWake(layout, enabled)
-			} else if name == integrate.Grok {
+			case integrate.Grok:
 				err = integrate.InstallGrokWake(layout, enabled)
-			} else {
+			default:
 				err = integrate.InstallCodexWake(layout, enabled)
 			}
 		} else {

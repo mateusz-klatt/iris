@@ -395,6 +395,8 @@ func TestGrokWatchEnvWithoutATokenPathReadsNothing(t *testing.T) {
 	t.Setenv("HOME", "")
 	t.Setenv("XDG_CONFIG_HOME", "")
 	t.Setenv("USERPROFILE", "")
+	// Windows os.UserConfigDir reads AppData, so clearing the Unix homes is not enough.
+	t.Setenv("AppData", "")
 	env := func(string) string { return "" }
 	got := GrokSessionEnv(env, grokAncestor(1, 2, "grok"))("GROK_SESSION_ID")
 	if got != "" {
