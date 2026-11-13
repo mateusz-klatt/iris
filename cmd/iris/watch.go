@@ -5,6 +5,7 @@ import (
 	"errors"
 	"flag"
 	"github.com/mateusz-klatt/iris/internal/binding"
+	"github.com/mateusz-klatt/iris/internal/hook"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 	"github.com/mateusz-klatt/iris/internal/watch"
 	"io"
@@ -25,13 +26,18 @@ func runWatch(args []string) error {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
+	resolver := binding.New(&hubclient.Client{Config: hubclient.NewConfig()}, *client)
+	// The monitor shell does not inherit GROK_SESSION_ID. The hook wrote it beside the grok
+	// process. A variable that is already set is left alone.
+	if hook.Canonical(*client) == hook.ClientGrok {
+		resolver.Getenv = hook.GrokSessionEnv(resolver.Getenv, resolver.Ancestor)
+	}
 	parent, err := watchParent()
 	if err != nil {
 		return err
 	}
 	maintained := make(chan struct{})
 	defer func() { cancel(); <-maintained; parent.Close() }()
-	resolver := binding.New(&hubclient.Client{Config: hubclient.NewConfig()}, *client)
 	go func() { defer close(maintained); resolver.Maintain(ctx, "watch", 20*time.Second, parent.Alive, cancel) }()
 	err = (&watch.Runner{Resolver: resolver, Output: os.Stdout}).Run(ctx)
 	return stopLine(os.Stdout, err, parent.Alive())

@@ -70,6 +70,8 @@ type Event struct {
 	// Prompt is a prompt event's whole prompt, for one comparison only: whether it is the message
 	// of the session's own wake (ADR 017, decision 3). It is never logged and decides nothing else.
 	Prompt string
+	// GrokStop is set only for a Grok Stop event. It decides whether to ask for a monitor (ADR 025).
+	GrokStop *GrokStop
 }
 
 // Action is the canonical decision.
