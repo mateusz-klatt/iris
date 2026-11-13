@@ -100,6 +100,37 @@ func TestSessionStartCountsAsSaid(t *testing.T) {
 	}
 }
 
+// SessionStart counts as told for everything pending, freed paths included, so its context states
+// them as it states the unread count. It used to leave them out while counting them as told, and a
+// path freed for a resumed session was then never announced (ADR 017). With none freed, the context
+// has no such line.
+func TestSessionStartStatesTheFreedPathsItCountsAsSaid(t *testing.T) {
+	root := gitRepo(t)
+	env := failureEnv(t)
+	now := &hubclient.Attention{Available: 2, HighWater: hubHighWater, Identity: hubclient.Identity{Known: true, Pending: true, Stream: testStream, Cursor: 7}}
+	calls := 0
+	hub := attentionHub{now: now, calls: &calls}
+	run := func(event, payload string) string {
+		t.Helper()
+		out := Runner{ClientName: "claude", EventName: event, Stdin: strings.NewReader(payload), Hub: hub, Getenv: env, after: never, logAfter: never}.Run()
+		if out.Exit != 0 {
+			t.Fatalf("exit %d: %s", out.Exit, out.Stderr)
+		}
+		return string(out.Stdout)
+	}
+	start := `{"session_id":"s","cwd":` + quote(root) + `,"hook_event_name":"SessionStart","source":"resume"}`
+	if got := run("SessionStart", start); !strings.Contains(got, "Paths you were refused that are free now: 2. Use the claims tool.") {
+		t.Fatalf("the context leaves out freed paths that it counts as told: %s", got)
+	}
+	if got := run(promptPayload(ClientClaude, root)); strings.Contains(got, "Iris:") {
+		t.Fatalf("the freed paths SessionStart stated were repeated: %s", got)
+	}
+	*now = hubclient.Attention{Unread: 1}
+	if got := run("SessionStart", start); strings.Contains(got, "Paths you were refused") {
+		t.Fatalf("a freed-paths line with none freed: %s", got)
+	}
+}
+
 // Only clients whose prompt hook reaches the model make the call; the others make none.
 func TestOnlyClientsWithPromptContextAsk(t *testing.T) {
 	root := gitRepo(t)

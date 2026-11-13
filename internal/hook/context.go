@@ -31,6 +31,11 @@ func SessionText(s hubclient.SessionResponse, notes ...string) string {
 	}
 	head.WriteString(".\n")
 	fmt.Fprintf(&head, "Unread messages: %d.\n", s.Unread)
+	// The context counts as told for everything pending (ADR 017), freed paths included, so it
+	// states them too: a freed path it left out would never be announced afterwards.
+	if n := s.Attention.Available; n > 0 {
+		fmt.Fprintf(&head, "Paths you were refused that are free now: %d. Use the claims tool.\n", n)
+	}
 	for _, note := range notes {
 		head.WriteString(note)
 	}

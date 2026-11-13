@@ -382,7 +382,9 @@ a restored hub keeps its stream id and takes the event sequence back instead (AD
   newest pending ten minutes after it was told. A note says everything pending, as counts, because
   the identity, not the counts, said that something is new.
 - The SessionStart context counts as told, and a context that restates the identity already told,
-  as a resumed session's does, counts as its second telling. Where a monitor beats, it says the
+  as a resumed session's does, counts as its second telling. Because it counts as told for
+  everything pending, it states the freed paths beside the unread count; a freed path it left out
+  would never be announced afterwards. Where a monitor beats, it says the
   note, and the told state stays as it was. A hub from before, which sends no `identity`, and a
   reconcile answer without `attention` behave as before. The told state goes when the session
   ends; a stale generation that the hook drops no longer takes it along.
