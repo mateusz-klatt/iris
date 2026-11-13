@@ -129,7 +129,26 @@ type Record struct {
 	Latch          *Latch              `json:"latch,omitempty"`
 	Checkpoint     Checkpoint          `json:"checkpoint"`
 	Emitted        map[string]Identity `json:"emitted,omitempty"`
-	Coalesce       map[string]int64    `json:"coalesce,omitempty"`
+	Coalesce       Delays              `json:"coalesce,omitempty"`
+}
+
+// Delays are the coalescing deadlines per attention kind, in Unix milliseconds. They only delay a
+// wake and never suppress one (ADR 030). So malformed coalescing data decodes as no delay rather
+// than failing the record, whose ownership and cursor must stay usable.
+type Delays map[string]int64
+
+// UnmarshalJSON keeps every well-formed deadline and drops the rest. It never fails.
+func (d *Delays) UnmarshalJSON(raw []byte) error {
+	*d = Delays{}
+	var fields map[string]json.RawMessage
+	_ = json.Unmarshal(raw, &fields) // a value that is not an object holds no deadline
+	for kind, value := range fields {
+		var ms int64
+		if json.Unmarshal(value, &ms) == nil {
+			(*d)[kind] = ms
+		}
+	}
+	return nil
 }
 
 // sessionMap is a Kimi process's current native session, as its SessionStart published it.

@@ -3,6 +3,7 @@ package kimiwake
 import (
 	"bytes"
 	"errors"
+	"maps"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -812,6 +813,37 @@ func TestOnlyTheHoldingWatcherUpdatesItsRecord(t *testing.T) {
 	}
 	if _, err := s.UpdateOwned(Key{}, "w", time.Second, func(*Record) {}); !errors.Is(err, errKey) {
 		t.Fatal(err)
+	}
+}
+
+// Coalescing data only delays a wake, so a malformed deadline, or a coalescing value that is not an
+// object, decodes as no delay. The record stays usable: a watcher can own and update it, and its
+// checkpoint survives.
+func TestMalformedCoalescingDataIsNoDelay(t *testing.T) {
+	for body, want := range map[string]Delays{
+		`{"version":1,"checkpoint":{"stream":"s1","cursor":4,"initialized":true},"coalesce":{"inbox_changed":9,"claim_available":"bad","x":1.5}}`: {"inbox_changed": 9},
+		`{"version":1,"checkpoint":{"stream":"s1","cursor":4,"initialized":true},"coalesce":"bad"}`:                                               {},
+		`{"version":1,"checkpoint":{"stream":"s1","cursor":4,"initialized":true},"coalesce":[1,2]}`:                                               {},
+	} {
+		s, _, procs := newStore(t)
+		k := keyFor(sessionA)
+		mapSession(t, s, sessionA)
+		if err := os.WriteFile(s.recordPath(k), []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		w := Attempt{PID: 9001, StartMS: 9002, ID: "w"}
+		procs.set(w.PID, w.StartMS, true)
+		if owned, err := s.Own(k, w, time.Second); err != nil || !owned {
+			t.Fatalf("%s: own %v %v", body, owned, err)
+		}
+		var seen Delays
+		if owned, err := s.UpdateOwned(k, "w", time.Second, func(r *Record) { seen = r.Coalesce }); err != nil || !owned {
+			t.Fatalf("%s: update %v %v", body, owned, err)
+		}
+		r, _ := recordOf(t, s, k)
+		if !maps.Equal(seen, want) || r.Checkpoint != (Checkpoint{Stream: "s1", Cursor: 4, Initialized: true}) {
+			t.Fatalf("%s: coalesce %v, record %+v", body, seen, r)
+		}
 	}
 }
 
