@@ -51,8 +51,10 @@ Authoritative attention and told state are read again after the idle observation
 The prompt is the existing fixed, content-free Iris notification with its correlation token; no
 message body or hub payload enters it. `prompt_id` is `iris-` plus the SHA-256 of that exact prompt.
 Native answers `running` and `queued` are accepted submissions. A known refusal has the shared
-single retry; an unknown or malformed response retains the outstanding guard. The exact prompt
-hook consumes that guard. Decoding accepts a text string or exactly one text part; composite and
+single retry; an unknown or malformed response retains the outstanding guard. A response that never
+arrives reaches the 30-second queue deadline and is unknown; it neither clears the guard nor permits
+another wake. Binding heartbeats continue while the response is pending. The exact prompt hook
+consumes that guard. Decoding accepts a text string or exactly one text part; composite and
 non-text prompts never match. One automatic wake per attention identity remains the limit.
 
 `40931` is a refusal to retry later, never evidence that Iris may remove a lock. The runner has no

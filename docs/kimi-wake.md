@@ -81,8 +81,10 @@ after the idle read, so an accepted prompt can run later and find no work. Queue
 proves neither a completed turn nor an inbox fetch, and Iris cannot guarantee zero empty
 or billable turns.
 
-An accepted or uncertain wake retains its guard until its exact prompt hook consumes it. Resume
-that session first. There is no timeout that clears an outstanding guard. Do not remove a live
+An accepted or uncertain wake retains its guard until its exact prompt hook consumes it. If the
+HTTP response never arrives, the 30-second queue deadline records an unknown outcome; binding
+heartbeats continue while it waits. The deadline does not clear the guard or permit another wake.
+Resume that session first. There is no timeout that clears an outstanding guard. Do not remove a live
 guard or clear all session state to repair it. The current guard-inspection report is the Codex-era
 report; native Kimi arming, TUI refresh and delivery are not proved by `iris doctor --live`.
 

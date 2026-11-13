@@ -21,6 +21,7 @@ import (
 
 	"github.com/mateusz-klatt/iris/internal/binding"
 	"github.com/mateusz-klatt/iris/internal/hook"
+	"github.com/mateusz-klatt/iris/internal/hubclient"
 	"github.com/mateusz-klatt/iris/internal/proc"
 )
 
@@ -216,11 +217,15 @@ func TestKimiNativeServerDiscoveryIdleAndPromptQueue(t *testing.T) {
 }
 
 func TestKimiNativeQueueWaitsForResponseOutsideAdmission(t *testing.T) {
-	release := make(chan struct{})
+	release, promptSeen := make(chan struct{}), make(chan struct{}, 1)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Errorf("invalid prompt body: %v", err)
+		}
+		select {
+		case promptSeen <- struct{}{}:
+		default:
 		}
 		<-release
 		writeKimiEnvelope(w, 0, map[string]any{
@@ -228,27 +233,88 @@ func TestKimiNativeQueueWaitsForResponseOutsideAdmission(t *testing.T) {
 		})
 	}))
 	defer server.Close()
+
+	var hubMu sync.Mutex
+	beats := 0
+	heartbeatDone := make(chan struct{})
+	var heartbeatOnce sync.Once
+	hubServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v1/bind":
+			_ = json.NewEncoder(w).Encode(map[string]any{
+				"execution_id": "ex_kimi", "generation": 1, "session_id": kimiTestSession, "binding_rung": 3,
+			})
+		case "/v1/executions/ex_kimi/heartbeat":
+			hubMu.Lock()
+			beats++
+			hubMu.Unlock()
+			_ = json.NewEncoder(w).Encode(map[string]any{"lease_ms": 60000})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer hubServer.Close()
+	resolver := binding.New(&hubclient.Client{
+		Config: hubAdapterConfig{url: hubServer.URL, token: hubAdapterToken}, HTTP: hubServer.Client(),
+	}, "kimi")
+	resolver.Host, resolver.CWD = "host", t.TempDir()
+	resolver.Getenv = func(string) string { return "" }
+	resolver.Ancestor = func() (proc.Ancestor, error) {
+		return proc.Ancestor{PID: 42, StartMS: 100, Name: "kimi-code"}, nil
+	}
+	bound, primary, err := resolver.ResolveCall(context.Background(), "", "", "")
+	if err != nil || !primary || bound.SessionID != kimiTestSession {
+		t.Fatalf("Kimi test binding: %+v, %t, %v", bound, primary, err)
+	}
+	target, ok := resolver.Primary()
+	if !ok {
+		t.Fatal("Kimi test binding is not wake-eligible")
+	}
+
 	commands := &kimiCommands{
 		http: server.Client(), queueTimeout: 5 * time.Second,
 		server: &kimiServer{base: server.URL, token: kimiTestToken},
 	}
-	admitted := make(chan struct{})
 	done := make(chan commandAnswer, 1)
 	message := promptFor("response-outside-admission")
 	go func() {
 		done <- commands.queue(context.Background(), kimiTestSession, message, func(start func() error) (bool, error) {
-			ok, err := admitKimi(start)
-			close(admitted)
-			return ok, err
+			return resolver.StartIfPrimary(target, start)
 		})
 	}()
 	select {
-	case <-admitted:
+	case <-promptSeen:
 	case <-time.After(2 * time.Second):
 		close(release)
 		<-done
-		t.Fatal("binding admission waited for the HTTP response")
+		t.Fatal("Kimi prompt did not reach the held-response server")
 	}
+
+	run, stop := context.WithCancel(context.Background())
+	maintainDone := make(chan struct{})
+	go func() {
+		defer close(maintainDone)
+		resolver.Maintain(run, "shim", time.Millisecond, func() bool {
+			hubMu.Lock()
+			completed := beats > 0
+			hubMu.Unlock()
+			if completed {
+				heartbeatOnce.Do(func() { close(heartbeatDone) })
+			}
+			return true
+		}, func() { t.Error("heartbeat stopped with a live parent") })
+	}()
+	select {
+	case <-heartbeatDone:
+	case <-time.After(2 * time.Second):
+		close(release)
+		stop()
+		<-maintainDone
+		<-done
+		t.Fatal("heartbeat did not complete while the Kimi response was held")
+	}
+	stop()
+	<-maintainDone
 	close(release)
 	select {
 	case answer := <-done:
