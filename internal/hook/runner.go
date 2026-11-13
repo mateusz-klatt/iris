@@ -184,6 +184,13 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		if err != nil {
 			return state.fail(err, r.failOpen(state, ev, err, allow))
 		}
+		if ev.Kind == KindSubagentStart && ev.ParentSessionID == "" {
+			// A sub-agent that is its root session to Iris, as Claude Code's and Codex's are (ADR
+			// 017), reads this context with a model of its own. The root session's model never sees
+			// it, so it counts as told for no one. A sub-agent with a session of its own, as Grok's
+			// has, keeps its own told state below.
+			return r.finish(state, ev, Encode(ev, Decision{Action: ActionAllow, Context: SessionText(sess)}))
+		}
 		var notes []string
 		// Once per session, not per subagent: the hint is about the repository.
 		if ev.Kind == KindSessionStart && guard.NeedsHint(repo) {
