@@ -65,6 +65,12 @@ alone means Antigravity prompts the user once per armed conversation (and again 
 which starts a new `conversationId`). Do not choose a persistent `command(...)` rule for `iris` if
 you want Antigravity's command sandbox to keep gating other `iris` invocations.
 
+On Windows, agy's safety monitor also flags `BypassSandbox: true` and asks for confirmation every
+time the helper is armed, even when a persistent rule matches. The confirmation appeared 35–45 s
+after the request on `agy 1.5.8`. Its "always allow" choice writes the `command(...)` prefix rule
+described above. To keep the sandbox gating other `iris` invocations, allow the helper once each
+time instead.
+
 If the prompt is denied, ignored, fails preflight or runs in headless `-p` mode without interactive
 approval, Iris latches `failed` on that `(agy pid, start_ms)` process record. Because the latch is
 per `(agy pid, start_ms)` rather than per conversation, `Stop` does not ask again on that `agy`
@@ -105,6 +111,13 @@ and oversized lines, and consume the wake guard only when the whole notification
   process visibility, Iris cannot authenticate the loopback listener before `agentapi` sends the
   CSRF token, in-place upgrades of a running `agy` binary on Linux mark `/proc/<pid>/exe` deleted
   until `agy` restarts, and non-default Iris locations set only via environment variables cannot use
-  Antigravity wake. Measurements ran on Linux/WSL2 with `agy 1.5.8`; macOS and Windows remain
-  unmeasured live. See [ADR 028](adr/028-antigravity-idle-wake.md) for the full design and
+  Antigravity wake. Measurements ran with `agy 1.5.8` on Linux/WSL2 and on Windows 11; macOS has
+  not been measured live.
+- **Windows.**
+  - agy runs each command in a job that ends with the command and forbids breakaway. Iris therefore
+    starts the helper under the `agy` process it has verified, not under the command.
+  - The helper keeps the command sandbox's desktop. Iris therefore starts
+    `<agy-exe> agentapi send-message` without a console, because a console program started there
+    died at startup.
+  - Both behaviours were measured on `agy 1.5.8`, and a later agy may change them. See [ADR 028](adr/028-antigravity-idle-wake.md) for the full design and
   measurements.

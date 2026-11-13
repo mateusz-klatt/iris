@@ -440,6 +440,13 @@ conversation is recorded idle. Because delivery enters `transcript_full.jsonl` a
 `SYSTEM_MESSAGE` step (`sender=system` in `-i` mode, `sender=<conversationId>` in `-p` mode) without
 firing `BeforeAgent`, both `PostInvocation` and the helper's poll loop advance a bounded `4 MiB`
 transcript cursor to consume the wake guard on exact whole-message match.
+
+On Windows two more steps are needed, both measured on `agy 1.5.8`.
+- agy runs each command in a job that ends with the command and forbids breakaway, so the helper
+  is created under the verified `agy` process rather than the command.
+- The helper keeps the command sandbox's desktop, so `agentapi send-message` starts without a
+  console.
+
 The [Antigravity wake guide](antigravity-wake.md) and [ADR 028](adr/028-antigravity-idle-wake.md)
 record setup and limits.
 
