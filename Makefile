@@ -7,9 +7,12 @@ VERSION ?= dev
 # Keep ./... for every Go-wide check: new application packages must count too.
 .PHONY: test race fixtures build image web cov cov-check check-all lint vuln secrets pins refresh copilot-extension
 
+# The CI tools under .github are outside ./... (GITHUB_TOOLS, below), so their tests are named:
+# CI's check-all job tests some of them before it runs check-all, and this tests them all.
 test:
 	$(GO) vet ./...
 	CGO_ENABLED=0 $(GO) test ./...
+	CGO_ENABLED=0 $(GO) test $(GITHUB_TOOLS)
 
 race:
 	# Exhaustive SQLite rollback sweeps need more time under race instrumentation.
