@@ -122,3 +122,47 @@ func TestCodexReviewWithoutAHomeIsTheFixedStep(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+// windowsHooksState is the fixture's home, which a test replaces with its own hooks.json.
+const windowsHooksState = `C:\Users\someone\.codex\hooks.json`
+
+func TestCodexReviewReadsTheLiteralKeysCodexWritesOnWindows(t *testing.T) {
+	l, hooks, config := codexInstalled(t)
+	fixture, err := os.ReadFile("testdata/codex/hooks-state-windows.toml")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(fixture), "[hooks.state.'"+windowsHooksState+":user_prompt_submit:0:0']") {
+		t.Fatal("the fixture no longer has the literal-key shape this test is about")
+	}
+	if step, _ := (codexClient{}).Review(l); step != "Review hooks once in /hooks" {
+		t.Fatalf("unreviewed: %q", step)
+	}
+	raw, err := os.ReadFile(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw = append(raw, "\n"+strings.ReplaceAll(string(fixture), windowsHooksState, hooks)...)
+	if err = os.WriteFile(config, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if step, note := (codexClient{}).Review(l); step != "" || note != codexReviewed {
+		t.Fatalf("a review Codex recorded under literal keys was missed: %q %q", step, note)
+	}
+}
+
+func TestCodexReviewTrustsNothingInAConfigThatDoesNotDecode(t *testing.T) {
+	l, hooks, config := codexInstalled(t)
+	trustAs(t, config, hooks, 0, allCodexEvents...)
+	raw, err := os.ReadFile(config)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// A hooks.state entry that is not a table fails decoding like any other error.
+	if err = os.WriteFile(config, append(raw, "\n[hooks.state]\nloose = 1\n"...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if step, _ := (codexClient{}).Review(l); step != "Review hooks once in /hooks" {
+		t.Fatalf("%q", step)
+	}
+}
