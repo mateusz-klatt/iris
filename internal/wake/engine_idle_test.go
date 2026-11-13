@@ -39,10 +39,16 @@ func TestWakeEngineActiveBurstChecksBinaryThenDefersWithoutQuota(t *testing.T) {
 		unlock()
 		return false, "Codex thread is active"
 	}
+	var observed []string
+	e.observe = func(text string) { observed = append(observed, text) }
 	for range 25 {
 		if got := e.step(context.Background()); got != engineDue(*now, 15*time.Second) {
 			t.Fatalf("active burst did not defer: %+v", got)
 		}
+	}
+	// One line for the whole busy turn, not one per poll.
+	if !reflect.DeepEqual(observed, []string{deferredSessionActive}) {
+		t.Fatalf("a turn busy for 25 polls was noted %q, want once", observed)
 	}
 	if snapshot := mustSnapshot(t, e.store); snapshot.Present || r.starts != 0 || source.reads != 25 || idleReads != 25 {
 		t.Fatalf("active burst reserved or queued a wake: %+v, starts%d reads%d idle%d", snapshot.Document, r.starts, source.reads, idleReads)
@@ -53,6 +59,13 @@ func TestWakeEngineActiveBurstChecksBinaryThenDefersWithoutQuota(t *testing.T) {
 	*now = now.Add(15 * time.Second)
 	if got := e.step(context.Background()); got != (stepResult{}) || idleReads != 25 || r.starts != 0 || mustSnapshot(t, e.store).Present {
 		t.Fatalf("mail fetched by the active turn caused a wake: %+v", got)
+	}
+	// That step ended otherwise, so new mail that again finds the session busy is a new
+	// deferral and is noted again.
+	source.read.Attention.Identity = hubclient.Identity{Known: true, Pending: true, Stream: "stream", Cursor: 8}
+	*now = now.Add(15 * time.Second)
+	if got := e.step(context.Background()); got != engineDue(*now, 15*time.Second) || !reflect.DeepEqual(observed, []string{deferredSessionActive, deferredSessionActive}) {
+		t.Fatalf("a busy session after another outcome: %+v, noted %q", got, observed)
 	}
 }
 

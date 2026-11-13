@@ -13,6 +13,8 @@ import (
 	"github.com/coder/websocket"
 )
 
+const codexActive = "Codex thread is active"
+
 // The proxy is a byte bridge to the daemon selected by the inherited Codex
 // environment. It neither starts a daemon nor resumes or subscribes to a thread.
 // HTTP and WebSocket framing use the standard libraries, on every platform.
@@ -73,7 +75,7 @@ func (c *commands) idle(ctx context.Context, session string) (bool, string) {
 		return false, "Codex status proxy exceeded its bound or failed"
 	}
 	if status == "active" {
-		return false, "Codex thread is active"
+		return false, codexActive
 	}
 	return true, ""
 }

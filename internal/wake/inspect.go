@@ -133,7 +133,8 @@ func inspectionFailureReason(detail string) string {
 		"Codex queue command could not start",
 		"Codex has no saved rollout for this thread",
 		"Kimi executable version could not be determined",
-		"Kimi executable and server versions differ":
+		"Kimi executable and server versions differ",
+		kimiOccupied:
 		return detail
 	default:
 		return "Unrecognized wake failure"

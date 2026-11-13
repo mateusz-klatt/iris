@@ -61,12 +61,16 @@ Its client-chosen `prompt_id` is a SHA-256 of that exact prompt, so repeating th
 not intentionally create another wake. Native `running` and `queued` responses count as accepted.
 There is one automatic wake per attention identity and one shared retry after a known refusal.
 
+**A session open in the Kimi TUI cannot be woken this way.** While another Kimi process, such as
+the TUI, holds the session's lock, Kimi 2.6.1 answers `40931`, SESSION_OCCUPIED, and kimi web cannot
+prompt the session until that process exits. Iris records the fixed reason "Kimi session is open
+in another Kimi process", spends no wake allowance and tries again every 60 seconds.
+`hook-observed.log` notes `wake_failed: session occupied` once for the whole time, not on every try.
+A busy session, `40901` on the prompt, is checked again after 15 seconds.
+
 Iris **never calls `:takeover`**. That endpoint is only for a lock left by a process known to be gone.
-A live `40931` conflict is a non-submission deferral, including when the prompt POST returns it.
-It spends no wake allowance and schedules another idle check after 15 seconds. Iris does not remove
-the other process's lock or risk interleaved session history. A front-end that retains its native
-lock can prevent wake indefinitely; only a session that the native API reports idle and whose prompt
-it accepts is eligible.
+Iris does not remove the other process's lock or risk interleaved session history. Only a session
+that the native API reports idle and whose prompt it accepts is eligible.
 
 ## Limits and recovery
 

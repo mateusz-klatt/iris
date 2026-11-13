@@ -65,10 +65,16 @@ another wake. Binding heartbeats continue while the response is pending. The exa
 consumes that guard. Decoding accepts a text string or exactly one text part; composite and
 non-text prompts never match. One automatic wake per attention identity remains the limit.
 
-`40931` on either the idle read or prompt POST is a non-submission deferral, never evidence that
-Iris may remove a lock. A prompt conflict is recorded as an unspent abort and schedules another idle
-check after 15 seconds. The runner has no `:takeover` call. Token text, native error messages and
-response payloads are not logged.
+Kimi 2.6.1 answers `40931`, SESSION_OCCUPIED, while another Kimi process holds the session's lock,
+as the Kimi TUI does while the session is open in it. kimi web cannot prompt such a session, so **a
+session open in the Kimi TUI cannot be woken this way**. This was measured on kimi 2.6.1, whose own
+message for the code says the session is in use by another instance. On the idle read or the prompt
+POST, `40931` submits nothing and spends no allowance: Iris records the fixed reason "Kimi session
+is open in another Kimi process", tries again after sixty seconds and never takes it as evidence
+that it may remove the lock. `40901`, SESSION_BUSY, on the prompt POST is an unspent abort checked
+again after 15 seconds.
+The runner has no `:takeover` call. Token text, native error messages and response payloads are
+not logged.
 
 ## Limits
 
@@ -92,9 +98,10 @@ response headers and body are awaited after unlocking, up to the 30-second queue
 can change after submission starts, and a person can start a turn or fetch mail between idle
 observation and submission, so an accepted prompt can run later or find
 no work. Queue acceptance proves neither a completed turn nor an inbox fetch. Iris cannot promise zero
-billable empty turns. A front-end that retains a `40931` native lock can prevent wake indefinitely;
-active sessions are checked again after 15 seconds, never taken over. Native TUI refresh,
-cross-platform behavior and model cost require separate acceptance evidence.
+billable empty turns. A session open in another Kimi process, such as the TUI, cannot be woken while
+that process holds its lock: `40931` is tried again every sixty seconds and never taken over. Active
+sessions are checked again after 15 seconds. Native TUI refresh, cross-platform behavior and model
+cost require separate acceptance evidence.
 
 ## Verification
 
@@ -106,7 +113,8 @@ deadline. A real resolver heartbeat completes while the prompt response is held.
 it. Command failure, timeout, malformed and overflowing output, missing or relative PATH results and
 server mismatch all fail before a prompt. Further cases cover version and identity checks, loopback
 and redirect refusal, exact idle evidence, running and queued
-acceptance, stable idempotency, known refusals, quota-free `40931` deferral and retry, unknown
+acceptance, stable idempotency, known refusals, quota-free `40901` and `40931` deferrals and their
+retries, unknown
 outcomes and separate Kimi guards. Prompt tests use the real capture's shape to prove exact guard
 consumption and reject composite or non-text parts. Installation tests
 cover opt-in, explicit preference persistence, custom homes and broken files. Binding tests prove
