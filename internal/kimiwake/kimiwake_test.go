@@ -847,6 +847,109 @@ func TestMalformedCoalescingDataIsNoDelay(t *testing.T) {
 	}
 }
 
+// The preference records the choice: none before integration, then default, on or off. Only on
+// enables wake for now; anything else in the file is refused rather than guessed.
+func TestThePreferenceRecordsTheChoice(t *testing.T) {
+	s, _, _ := newStore(t)
+	if got, err := Preference(s.Root); err != nil || got != "" {
+		t.Fatalf("before integration: %q %v", got, err)
+	}
+	for _, value := range []string{PreferenceDefault, PreferenceOff, PreferenceOn} {
+		if err := SetPreference(s.Root, value); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := Preference(s.Root); err != nil || got != value || Enabled(s.Root) != (value == PreferenceOn) {
+			t.Fatalf("%s: %q %v, enabled %v", value, got, err, Enabled(s.Root))
+		}
+	}
+	if err := SetPreference(s.Root, "maybe"); !errors.Is(err, ErrPreference) {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(s.Root, preferenceName), []byte("maybe\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Preference(s.Root); !errors.Is(err, ErrPreference) {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(s.Root, preferenceName)); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(s.Root, preferenceName), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Preference(s.Root); err == nil || errors.Is(err, ErrPreference) {
+		t.Fatalf("an unreadable preference: %v", err)
+	}
+	blocker := filepath.Join(t.TempDir(), "blocker")
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := SetPreference(filepath.Join(blocker, "kimi-wake"), PreferenceOn); err == nil {
+		t.Fatal("wrote a preference where no directory can be made")
+	}
+}
+
+// Turning wake off stops every watcher a record shows alive, by its pid and start time, and latches
+// its record disabled once it no longer runs. A watcher already gone is skipped. A stop that fails
+// is reported and leaves its record unlatched, without keeping the others from stopping.
+func TestStopWatchersStopsTheLiveOnesAndLatchesThem(t *testing.T) {
+	s, _, procs := newStore(t)
+	mapSession(t, s, sessionA)
+	live, gone, stubborn := keyFor(sessionA), keyFor(sessionB), Key{PID: kimiPID, StartMS: kimiStart, Session: "session_c"}
+	put(t, s, live, Record{Version: recordVersion, Attempt: &Attempt{PID: 9001, StartMS: 9002, ID: "live"}})
+	put(t, s, gone, Record{Version: recordVersion, Attempt: &Attempt{PID: 9003, StartMS: 9004, ID: "gone"}})
+	put(t, s, stubborn, Record{Version: recordVersion, Attempt: &Attempt{PID: 9005, StartMS: 9006, ID: "stubborn"}})
+	procs.set(9001, 9002, true)
+	procs.set(9005, 9006, true)
+	for _, name := range []string{"notes.json", "1-2.json", "1-2-bad id.json", ".tmp-123"} {
+		if err := os.WriteFile(filepath.Join(s.Root, watchersName, name), []byte("{"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(s.recordPath(Key{PID: kimiPID, StartMS: kimiStart, Session: "session_broken"}), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stopped []int
+	terminate = func(pid int, start int64) error {
+		stopped = append(stopped, pid)
+		if pid == 9005 {
+			return errors.New("access denied")
+		}
+		procs.set(pid, start, false)
+		return nil
+	}
+	t.Cleanup(func() { terminate = defaultTerminate })
+	err := s.StopWatchers(time.Second)
+	if err == nil || !strings.Contains(err.Error(), "watcher 9005") || !slices.Equal(stopped, []int{9001, 9005}) && !slices.Equal(stopped, []int{9005, 9001}) {
+		t.Fatalf("%v %v", err, stopped)
+	}
+	if r, _ := recordOf(t, s, live); r.Latch == nil || r.Latch.State != LatchDisabled {
+		t.Fatalf("the stopped watcher's record: %+v", r)
+	}
+	if r, _ := recordOf(t, s, gone); r.Latch != nil {
+		t.Fatalf("a record without a live watcher was latched: %+v", r)
+	}
+	if r, _ := recordOf(t, s, stubborn); r.Latch != nil {
+		t.Fatalf("a watcher that could not be stopped was latched: %+v", r)
+	}
+	// A watcher that ended on its own before its stop counts as stopped.
+	procs.set(9005, 9006, true)
+	terminate = func(int, int64) error { return proc.ErrNotFound }
+	if err := s.StopWatchers(time.Second); err != nil {
+		t.Fatal(err)
+	}
+	release, err := s.lock(time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if err := s.StopWatchers(20 * time.Millisecond); !errors.Is(err, ErrLocked) {
+		t.Fatal(err)
+	}
+}
+
+var defaultTerminate = terminate
+
 // A latch never replaces a live watcher. Without one it latches and supersedes a pending request.
 func TestALatchNeverReplacesALiveWatcher(t *testing.T) {
 	s, now, procs := newStore(t)

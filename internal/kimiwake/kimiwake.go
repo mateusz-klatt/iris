@@ -61,10 +61,106 @@ func Root(pinned string) string { return filepath.Join(pinned, dirName) }
 
 // Enabled reports whether wake is on. Only a preference file whose trimmed text is exactly "on"
 // enables it. A missing, unreadable or any other file means off, which is the default until the
-// native acceptance passes.
+// native acceptance passes: "default", a person's lack of an explicit choice, is off for now.
 func Enabled(root string) bool {
 	raw, err := os.ReadFile(filepath.Join(root, preferenceName))
 	return err == nil && strings.TrimSpace(string(raw)) == "on"
+}
+
+// The preference's values. The file records the choice, as Antigravity's marker does: "default"
+// when the person made none, "on" or "off" when they did. A missing file means not integrated.
+const (
+	PreferenceDefault = "default"
+	PreferenceOn      = "on"
+	PreferenceOff     = "off"
+)
+
+// ErrPreference is a preference file that holds none of the three values.
+var ErrPreference = errors.New("the Kimi wake preference is not default, on or off")
+
+// Preference reads the recorded choice: "" when there is none yet.
+func Preference(root string) (string, error) {
+	raw, err := os.ReadFile(filepath.Join(root, preferenceName))
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	switch value := strings.TrimSpace(string(raw)); value {
+	case PreferenceDefault, PreferenceOn, PreferenceOff:
+		return value, nil
+	default:
+		return "", ErrPreference
+	}
+}
+
+// SetPreference records the choice, making and protecting the state directory first.
+func SetPreference(root, value string) error {
+	switch value {
+	case PreferenceDefault, PreferenceOn, PreferenceOff:
+	default:
+		return ErrPreference
+	}
+	s := &Store{Root: root}
+	if err := s.prepare(); err != nil {
+		return err
+	}
+	return replaceText(filepath.Join(root, preferenceName), value)
+}
+
+// terminate stops a process only while its pid and start time still match. Tests replace it.
+var terminate = proc.Terminate
+
+// StopWatchers stops every watcher a record shows alive, as turning wake off or removing the
+// integration requires, and latches each record it touched disabled once no live watcher holds
+// it. A watcher that ends on its own first is skipped. A failed stop is returned, joined, and
+// does not keep the others from stopping.
+func (s *Store) StopWatchers(budget time.Duration) error {
+	var live []Key
+	var attempts []Attempt
+	err := s.locked(budget, func() error {
+		entries, _ := os.ReadDir(filepath.Join(s.Root, watchersName))
+		for _, e := range entries {
+			k, ok := recordKey(e.Name())
+			if !ok {
+				continue
+			}
+			r, _, err := readRecord(s.recordPath(k))
+			if err == nil && r.Attempt != nil && s.alive(r.Attempt.PID, r.Attempt.StartMS) {
+				live, attempts = append(live, k), append(attempts, *r.Attempt)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	var failed []error
+	for i, k := range live {
+		a := attempts[i]
+		if err := terminate(a.PID, a.StartMS); err != nil && !errors.Is(err, proc.ErrNotFound) {
+			failed = append(failed, fmt.Errorf("watcher %d: %w", a.PID, err))
+			continue
+		}
+		failed = append(failed, s.LatchIfFree(k, LatchDisabled, budget))
+	}
+	return errors.Join(failed...)
+}
+
+// recordKey reads the key a record file is named after: "<pid>-<start>-<session>.json".
+func recordKey(name string) (Key, bool) {
+	base, ok := strings.CutSuffix(name, ".json")
+	if !ok {
+		return Key{}, false
+	}
+	fields := strings.SplitN(base, "-", 3)
+	if len(fields) != 3 {
+		return Key{}, false
+	}
+	pid, startMS, ok := entryProcess(fields[0] + "-" + fields[1] + ".json")
+	k := Key{PID: pid, StartMS: startMS, Session: fields[2]}
+	return k, ok && k.valid()
 }
 
 // ValidSession accepts the native session ids Kimi gives, "session_" and a UUID. It rejects
@@ -271,6 +367,14 @@ func readRecord(path string) (Record, bool, error) {
 // the old content or the new one and never part of either.
 func replace(path string, v any) error {
 	raw, _ := json.Marshal(v) // Records and session maps are plain values that always encode.
+	return writeWhole(path, raw)
+}
+
+// replaceText writes a one-line text file whole, as replace writes a record.
+func replaceText(path, text string) error { return writeWhole(path, []byte(text)) }
+
+// writeWhole writes raw and a newline through a protected temporary file and a rename.
+func writeWhole(path string, raw []byte) error {
 	f, err := createTemp(filepath.Dir(path), ".tmp-*")
 	if err != nil {
 		return err
