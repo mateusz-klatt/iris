@@ -105,6 +105,16 @@ one. A lookup by session id excludes recovering Executions, so Codex id mode wit
 binding answers `unbound` during recovery. `hook_seen` says whether any hook has reached the hub
 for that Execution. Codex and Kimi wake require it to be true.
 
+A request with `session_id` and the client process (`client_pid` and `client_pid_start_ms`)
+looks both up together (ADR 030). Every one of `client`, `host`, `session_id`, `client_pid` and
+`client_pid_start_ms` must match a live, current-epoch Execution that a hook registered for a
+process known to host one session; an MCP-only registration never matches. `cwd` is not matched.
+Only this lookup adds `"match":"process_session"` to the answer. A client that relies on it must
+refuse an answer without that field, because a hub from before it takes such a request by session
+alone. A `client_pid` or `client_pid_start_ms` that is missing or not positive beside a
+`session_id` is `bad_request`, never a lookup by session alone. A request without both keeps the
+lookups above.
+
 `POST /v1/executions/{id}/heartbeat` takes `{"generation":1,"source":"shim"}`, where `source` is
 `shim`, `watch` or `hook`. It returns `{"lease_ms":60000}`, or `lost`.
 
