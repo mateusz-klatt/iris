@@ -95,12 +95,13 @@ the session needs a new generation.
  "client_pid":123,"client_pid_start_ms":1793917887311,"cwd":"..."}
 ```
 
-It returns `{"execution_id":"...","generation":1,"agent":{...},"hook_seen":true}`, `unbound`,
-`ambiguous`, or `lost` for an explicit Execution that is unusable. Binding only looks up a usable
-Execution; it does not reattach one. A lookup by session id excludes recovering Executions, so
-Codex id mode without a cached binding answers `unbound` during recovery. `hook_seen` says
-whether any hook has reached the hub for that Execution. ADR 017
-requires Codex's wake to arm only when `hook_seen` is true.
+It returns `{"execution_id":"...","generation":1,"agent":{...},"session_id":"...","hook_seen":true}`,
+`unbound`, `ambiguous`, or `lost` for an explicit Execution that is unusable. The returned
+`session_id` is the native session registered by the hook; an older hub may omit it, in which case
+Kimi's native wake stays disarmed. Binding only looks up a usable Execution; it does not reattach
+one. A lookup by session id excludes recovering Executions, so Codex id mode without a cached
+binding answers `unbound` during recovery. `hook_seen` says whether any hook has reached the hub
+for that Execution. Codex and Kimi wake require it to be true.
 
 `POST /v1/executions/{id}/heartbeat` takes `{"generation":1,"source":"shim"}`, where `source` is
 `shim`, `watch` or `hook`. It returns `{"lease_ms":60000}`, or `lost`.

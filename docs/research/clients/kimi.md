@@ -1,5 +1,26 @@
 # Kimi Code report (2.5.1)
 
+## 2026-11-12 addendum: local web wake in 2.6.0
+
+Kimi 2.6.0 exposes the documented, experimental REST and WebSocket surfaces from `kimi web`.
+The session prompt endpoint accepts a client-chosen idempotent `prompt_id` and enqueues input; a
+session resource reports `busy`, `main_turn_active`, `archived` and `pending_interaction`. Live
+`/openapi.json` and `/asyncapi.json` are the compatibility contract. Running instances register in
+`$KIMI_CODE_HOME/server/instances/`; their bearer is in `$KIMI_CODE_HOME/server.token` (mode 0600).
+The [Server API reference](https://www.kimi.com/code/docs/en/kimi-code-cli/reference/server-api.html)
+also defines `40931` and warns that `:takeover` is only for a lock abandoned by a dead process.
+
+An isolated 2.6.0 server on loopback confirmed session creation, `busy:false`, an empty prompt
+queue and an `agent` frame with `status:"idle"`. A later adapter test submitted the fixed Iris
+prompt to another isolated session without a provider: the server accepted it, ended with
+`last_turn_reason:"failed"`, and reported zero turns, tokens and cost; repeating its `prompt_id`
+created no turn. This is evidence for an external web-API wake, not for direct push into a TUI
+widget, native TUI refresh or completed model delivery. Iris uses the REST idle read and never
+calls `:takeover` on a live session.
+See [ADR 026](../adr/026-kimi-web-idle-wake.md). The older report below remains the evidence for
+2.5.1 hooks and process mechanics; its statement about the absence of direct idle-TUI push is not
+a claim that the newer external REST channel is absent.
+
 > The run ended early on the 3 requests per minute limit of the account; sections A to G were complete. `session_id` does not appear in the stdio MCP environment, so this client uses the nearest-process rung of the binding chain.
 
 Evidence: [MEASURED] = observed on the installed binary on this Linux host (command/fixture given);

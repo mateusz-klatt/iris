@@ -12,6 +12,8 @@ import (
 	"sync"
 	"time"
 	"unicode"
+
+	"github.com/mateusz-klatt/iris/internal/binding"
 )
 
 // The queue prompt carries no hub content. Its random suffix routes the prompt
@@ -43,6 +45,21 @@ func canonicalSession(session string) (string, bool) {
 		}
 	}
 	return strings.ToLower(session), true
+}
+
+func canonicalTargetSession(target binding.WakeTarget) (string, bool) {
+	if target.Client != "kimi" {
+		return canonicalSession(target.SessionID)
+	}
+	raw, ok := strings.CutPrefix(target.SessionID, "session_")
+	if !ok {
+		return "", false
+	}
+	id, ok := canonicalSession(raw)
+	if !ok || raw != id {
+		return "", false
+	}
+	return "session_" + id, true
 }
 
 type limitedOutput struct {

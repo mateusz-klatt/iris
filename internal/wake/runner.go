@@ -1,4 +1,4 @@
-// Package wake queues bounded, content-free notifications to its own loaded Codex thread.
+// Package wake queues bounded, content-free notifications to its own loaded native session.
 package wake
 
 import (
@@ -12,12 +12,12 @@ import (
 
 // Runner belongs to one MCP child. Its durable guard belongs to the session, so
 // neither replacing a binding nor restarting this process grants another wake.
-// Construct and run it only when the Codex integration's effective wake preference is enabled.
+// Construct and run it only when the client's effective wake preference is enabled.
 type Runner struct {
 	resolver      targetResolver
 	source        wakeSource
 	sessions      *hook.Sessions
-	commands      *commands
+	commands      nativeCommands
 	clientVersion func() string
 	observe       func(string)
 	now           func() time.Time
@@ -31,9 +31,18 @@ type Runner struct {
 // New resolves the executable but opens no stream or state file and starts no
 // process. Run waits for the resolver's positive root binding before doing work.
 func New(resolver *binding.Resolver, sessions *hook.Sessions, clientVersion func() string, observe func(string)) *Runner {
+	return newRunner(resolver, sessions, clientVersion, observe, newCommands())
+}
+
+// NewKimi uses the local Kimi web server belonging to the MCP process's inherited home.
+func NewKimi(resolver *binding.Resolver, sessions *hook.Sessions, clientVersion func() string, observe func(string)) *Runner {
+	return newRunner(resolver, sessions, clientVersion, observe, newKimiCommands())
+}
+
+func newRunner(resolver *binding.Resolver, sessions *hook.Sessions, clientVersion func() string, observe func(string), commands nativeCommands) *Runner {
 	return &Runner{
 		resolver: resolver, source: hubSource{client: resolver.Hub}, sessions: sessions,
-		commands: newCommands(), clientVersion: clientVersion, observe: observe,
+		commands: commands, clientVersion: clientVersion, observe: observe,
 		now: time.Now, targetPoll: time.Second, settle: 10 * time.Second,
 		filePoll: 15 * time.Second, reconnectBase: time.Second, reconnectMax: 30 * time.Second,
 	}
@@ -68,7 +77,7 @@ func (r *Runner) Run(ctx context.Context) {
 	}()
 	for {
 		target, eligible := r.resolver.Primary()
-		if _, valid := canonicalSession(target.SessionID); !valid {
+		if _, valid := canonicalTargetSession(target); !valid {
 			eligible = false
 		}
 		if !eligible || target != current {
@@ -123,7 +132,7 @@ func (r *Runner) runTarget(ctx context.Context, target binding.WakeTarget) {
 	defer r.recovered()
 	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	store := newStateStore(r.sessions, target.SessionID)
+	store := newClientStateStore(r.sessions, target.Client, target.SessionID)
 	e := engine{target: target, resolver: r.resolver, source: r.source, store: store,
 		commands: r.commands, clientVersion: r.clientVersion, now: r.now, observe: r.observe}
 	hints := make(chan struct{}, 1)

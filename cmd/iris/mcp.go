@@ -24,13 +24,16 @@ type mcpWakeWorker interface{ Run(context.Context) }
 var mcpStdioTransport = func() mcp.Transport { return &mcp.StdioTransport{} }
 var mcpObserver = hook.Observer
 var newMCPWakeWorker = func(resolver *binding.Resolver, sessions *hook.Sessions, version func() string, observe func(string)) mcpWakeWorker {
+	if resolver.Client == "kimi" {
+		return wake.NewKimi(resolver, sessions, version, observe)
+	}
 	return wake.New(resolver, sessions, version, observe)
 }
 
 func runMCP(args []string) error {
 	fs := flag.NewFlagSet("mcp", flag.ContinueOnError)
 	client := fs.String("client", "", "agent client")
-	wakeFlag := fs.Bool("wake", false, "wake this Codex root session when attention is pending (default for Codex; --wake=false disables)")
+	wakeFlag := fs.Bool("wake", false, "wake this native session when attention is pending (default for Codex, opt-in for Kimi; --wake=false disables)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -43,8 +46,8 @@ func runMCP(args []string) error {
 			wakeEnabled = *wakeFlag
 		}
 	})
-	if wakeEnabled && *client != "codex" {
-		return errors.New("--wake requires --client codex")
+	if wakeEnabled && *client != "codex" && *client != "kimi" {
+		return errors.New("--wake requires --client codex or kimi")
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()

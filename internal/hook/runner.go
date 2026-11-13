@@ -133,7 +133,7 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		return FallbackAllow(runner)
 	}
 	state.received(r.canaryReceipt(ev))
-	if ev.Client == ClientCodex && ev.Kind == KindPrompt {
+	if (ev.Client == ClientCodex || ev.Client == ClientKimi) && ev.Kind == KindPrompt {
 		r.consumeWake(ev)
 	}
 	// Some clients supply only a timestamp, not a tool call ID. Hash the raw

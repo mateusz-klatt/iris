@@ -278,6 +278,7 @@ Each client gets the strongest tier it has:
 | Instant, idle session | Plugin monitor running `iris watch` | Claude Code (measured: 0.3 s from line to model turn) |
 | Loaded idle root | Own queue command after a positive native idle check | Codex, enabled by default; [ADR 023](adr/023-default-codex-wake-after-idle-check.md) |
 | Loaded foreground session | Copilot CLI extension runs `iris watch` and submits a fixed automation message through its SDK | Copilot CLI (experimental; [ADR 024](adr/024-copilot-extension-wake.md)) |
+| Loaded idle session | Authenticated web REST prompt after a positive native idle check | Kimi, opt-in while delivery is unproved; [ADR 026](adr/026-kimi-web-idle-wake.md) |
 | Instant, armed by the model | `Monitor` tool with a `ws` source | Claude Code |
 | Instant, Iris-owned session | App-server or ACP control of a session Iris started | Codex (measured), Copilot, Cursor, Antigravity, Grok, Kimi (later) |
 | Next turn | Hook context at prompt or post-tool | All, with client-specific limits |
@@ -309,6 +310,16 @@ woke an idle session about 0.12 s after a send, and a busy one 130 to 145 ms aft
 Other CLI versions, macOS, Windows and Copilot's command sandbox were not measured. Each file the
 extension writes carries a digest header, so Iris replaces or removes only a file it wrote and
 nobody edited.
+
+Kimi's MCP child follows the hook-registered session found through its single-session client
+process. A compatible `kimi web` using the same home is required: Iris validates the registered
+Kimi process, probes its unauthenticated health endpoint before sending `server.token`, verifies
+live metadata and matching versions, and reads the exact session's native idle state before
+submitting a fixed prompt with an idempotent `prompt_id`. Busy, locked or unknown state defers
+without quota. Iris never calls `:takeover` on a live session. Wake is opt-in while native delivery
+and hook consumption are unproved; fresh integration and bare MCP arguments leave it off, and an
+explicit choice survives reintegration. The server and closed sessions are not started for the user.
+The [Kimi wake guide](kimi-wake.md) and [ADR 026](adr/026-kimi-web-idle-wake.md) record setup and limits.
 
 The runner starts no automatic ten-minute second wake for unchanged attention. Hook reminders
 below remain. Native status and queue admission are not atomic: a person can start a turn or
@@ -1009,7 +1020,7 @@ The search index is updated in the same transaction.
 | Hooks in headless mode | yes | yes | yes | yes | yes | yes | yes |
 | Project hooks | trust | trust and review | trust | trust | no trust step | trust | none |
 | User hooks need a step | no | review once | no | no | no | no | no |
-| Wake idle session | yes, plugin monitor | owned sessions | owned sessions | owned sessions | owned sessions | owned sessions | owned sessions |
+| Wake idle session | yes, plugin monitor | owned sessions | owned sessions | owned sessions | owned sessions | owned sessions | web REST after native idle check |
 
 Codex can also write files from JavaScript. Its Code Mode `js` tool, `mcp__node_repl__js`, runs
 code such as `fs.appendFile` (measured on 0.167.0). `gpt-6-luna` used it instead of `apply_patch`

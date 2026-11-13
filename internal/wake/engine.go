@@ -12,7 +12,7 @@ import (
 // step admits at most one reservation. Every hub read is outside the shared file
 // lock, and both snapshots are compared again by publish before installation.
 func (e *engine) step(ctx context.Context) stepResult {
-	session, valid := canonicalSession(e.target.SessionID)
+	session, valid := canonicalTargetSession(e.target)
 	if !valid || !e.current(ctx) {
 		return stepResult{}
 	}
@@ -53,7 +53,7 @@ func (e *engine) step(ctx context.Context) stepResult {
 		return stepResult{}
 	}
 	if !idle {
-		if detail == "Codex thread is active" {
+		if detail == "Codex thread is active" || detail == "Kimi session is active" {
 			return e.after(15 * time.Second)
 		}
 		return e.preflightFailure(current, info, detail)
