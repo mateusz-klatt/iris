@@ -85,12 +85,19 @@ func (r Runner) reconcile(ctx context.Context, ev Event, state *runState) Output
 	// settle records only the first outcome. When the budget runs out, the git status or hub
 	// call it interrupts fails too, and that failure is the budget's, not a broken hook's:
 	// otherwise it could land first or overwrite the budget's entry, and doctor would call a
-	// client silent for one slow git status.
+	// client silent for one slow git status. A later outcome returns only once the first is
+	// recorded: Run reads the state as soon as reconcile returns, and the goroutine that took
+	// the slot can be preempted before it records, which would lose doctor's entry.
 	var settled atomic.Bool
+	recorded := make(chan struct{})
 	settle := func(err error, out Output) Output {
 		if !settled.CompareAndSwap(false, true) {
+			r.settlingAt(false)
+			<-recorded
 			return out
 		}
+		defer close(recorded)
+		r.settlingAt(true)
 		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			err = hookFailure(shellOverBudget)
 		}
@@ -166,6 +173,13 @@ func (r Runner) reconcile(ctx context.Context, ev Event, state *runState) Output
 	}
 	r.tripIfSlow(parent, ctx, budget, state, run)
 	return out
+}
+
+// settlingAt runs the Runner's settling seam, if a test set one.
+func (r Runner) settlingAt(first bool) {
+	if r.settling != nil {
+		r.settling(first)
+	}
 }
 
 // status runs git status in the given scope, or the Runner's stand-in for it.
