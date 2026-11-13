@@ -147,22 +147,29 @@ docker buildx imagetools inspect ghcr.io/mateusz-klatt/iris:v0.1.1
 
 Record the top-level `Digest` from the index, not one platform's child digest. Compare it
 with the successful image job's output, then use that digest throughout verification and
-deployment. Substitute it below, and substitute the actual release tag in both identities.
+deployment. Substitute it and the release tag below.
 Use current Cosign and GitHub CLI clients; authenticate `gh` and log in to GHCR with
 `docker login ghcr.io` before the GitHub CLI's OCI verification.
 
 ```sh
+tag='<tag>'
 IMAGE='ghcr.io/mateusz-klatt/iris@sha256:<index-digest>'
+commit=$(gh api "repos/mateusz-klatt/iris/commits/$tag" --jq .sha)
+identity="https://github.com/mateusz-klatt/iris/.github/workflows/release.yml@refs/tags/$tag"
 cosign verify "$IMAGE" \
-  --certificate-identity 'https://github.com/mateusz-klatt/iris/.github/workflows/release.yml@refs/tags/v0.1.1' \
+  --certificate-identity "$identity" \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
 gh attestation verify "oci://$IMAGE" \
   --repo mateusz-klatt/iris \
-  --signer-workflow mateusz-klatt/iris/.github/workflows/release.yml \
-  --source-ref refs/tags/v0.1.1 \
-  --cert-identity 'https://github.com/mateusz-klatt/iris/.github/workflows/release.yml@refs/tags/v0.1.1'
+  --cert-identity "$identity" \
+  --cert-oidc-issuer 'https://token.actions.githubusercontent.com' \
+  --source-ref "refs/tags/$tag" \
+  --source-digest "$commit"
 docker pull "$IMAGE"
 ```
+
+gh refuses `--cert-identity` together with `--signer-workflow`; the identity already names the
+workflow and the tag. gh 2.81.0 and 2.103.3 both rejected that pair while `v0.1.2` was verified.
 
 These commands check the expected [Cosign identity](https://docs.sigstore.dev/cosign/verifying/verify/)
 and [GitHub workflow provenance](https://cli.github.com/manual/gh_attestation_verify).
@@ -354,6 +361,50 @@ Not measured: a real browser download, because no public asset exists yet; wheth
 window, because the screen was not watched; Defender, which is off on this machine; and a machine that
 enforces SmartScreen by policy. So this does not settle whether signing is needed. It shows that a
 console user and a Scoop user never meet the mark, and that an Explorer user does.
+
+### Replacing an installed binary, measured on v0.1.2
+
+Measured on 2026-11-13 on Windows 11 (AMD64). The host already ran Iris for Claude Code. The
+plugin's hooks, its MCP server and its `iris watch` monitor all name one absolute path, here
+`C:\Users\<user>\go\bin\iris.exe`. Find yours in the plugin's `hooks/hooks.json` and `.mcp.json`
+before replacing anything.
+
+Windows does not let a running executable be overwritten, but it lets it be renamed. Install the
+verified `iris.exe` by renaming the old file and copying the new one to the same path:
+
+```powershell
+Rename-Item -LiteralPath 'C:\Users\<user>\go\bin\iris.exe' -NewName 'iris.exe.old-<date>-<old version>'
+Copy-Item -LiteralPath '<extracted>\iris.exe' -Destination 'C:\Users\<user>\go\bin\iris.exe'
+iris version
+```
+
+What changes at once, and what only after a restart:
+
+- Each hook starts a new process, so the next hook runs the new binary.
+- The MCP server and the monitor keep the process they started with, from the renamed file. They
+  run the new binary only after the client session restarts. `Get-Process iris` still reports the
+  original path for those processes, so compare their start time with the time of the install.
+- The renamed file is the rollback. Keep it until the new version has run for a while.
+
+Check the hooks with `iris doctor`, and with one headless turn from the repository:
+
+```powershell
+claude -p "Reply with the single word OK." --max-turns 1 --output-format json
+```
+
+That turn runs the plugin's SessionStart and SessionEnd hooks on the new binary. Afterwards the
+session is listed by `peers` as ended, and doctor's `last hook` for Claude moves to the time of the
+turn. On `v0.1.2` the turn ran from 12:11:00 to 12:11:06 UTC. `peers` listed it as ended, and
+`last hook` read 12:11:10 UTC. The turn costs one short model call.
+
+What this check cannot show:
+
+- The plugin monitor does not run under `claude -p`, so the turn checks hooks, not the monitor.
+- It says nothing about the MCP server or the monitor until the session restarts.
+- Doctor judges the last 24 hours. A hook that failed open before the install keeps the Claude row
+  `silent`, so doctor's exit code alone does not judge the new binary. After the `v0.1.2` install
+  it read `hub: ok` and `token: ok`, and the Claude row stayed `silent` because of a fail-open at
+  10:29 UTC, before the install.
 
 ## macOS artifacts, measured
 
@@ -595,7 +646,7 @@ Expect 18 uploaded release assets. The Windows and Linux-image Actions handoffs 
 
 Record literal tag, approved SHA, merge/deployment evidence, release ID, run ID/attempt, console/signer/handoff artifact IDs and digests, signer executable SHA-256, installed tool versions, both proof runs and each result below.
 Each platform has a named verifier. Unavailable measurements stay **not measured**; never report them as passed.
-Unavailable arm64 darwin `codesign`, `spctl` and `iris version` results do not by themselves block acceptance; the owner weighs that gap before publication. Other unavailable measurements block acceptance.
+Unavailable arm64 darwin `codesign`, `spctl` and `iris version` results, and an unavailable Windows arm64 `iris version`, do not by themselves block acceptance; the owner weighs that gap before publication. Other unavailable measurements block acceptance.
 Use Bash with `set -euo pipefail`, jq and an authenticated account with draft access. Record `gh version` and `cosign version`; these commands target gh 2.103.3 and cosign v3.1.4.
 Use a fresh download directory and stop on any failure. Operator versions are **not verified** until recorded; candidate verification is **not measured** ([gh flags](https://github.com/cli/cli/blob/63837fb778d6a39f02be0ce76ff89f2bc8d74bdc/pkg/cmd/attestation/verify/verify.go#L260-L268)).
 At cut time holzera uses the hand-filled approved SHA, after the stop/go record passes. First confirm `git remote get-url --push origin` names `mateusz-klatt/iris`:
@@ -653,7 +704,18 @@ done < checksums.txt
 
 Require the complete inventory above: 18 release assets, 16 checksum/provenance subjects and `prerelease=true`.
 Under vote 7 2A, holzera compares the SHA-256 of each downloaded draft Windows ZIP with that exact attempt's `verify-windows` summary. Record both filenames, both sets of hashes and equality in the acceptance record. Stop on any mismatch; same-run handoff verification cannot establish that mutable draft assets stayed unchanged.
-On Linux use `sha256sum -c checksums.txt` instead. Record signature, checksum and every provenance result; signatures do not establish that the source was approved.
+On Linux use `sha256sum -c checksums.txt` instead. On Windows, run the same command in Git Bash, which Git for Windows provides.
+A download of only the Windows ZIPs and the two checksum files cannot use `-c`: it reports the missing assets as failures, and `--ignore-missing` would also pass a ZIP that has no line. Compare each ZIP with its own line instead, as measured on Windows for `v0.1.2`:
+
+```sh
+for zip in iris_<version>_windows_amd64.zip iris_<version>_windows_arm64.zip; do
+  want=$(awk -v f="$zip" '$2 == f {print $1}' checksums.txt)
+  test -n "$want"
+  test "$(sha256sum "$zip" | cut -d' ' -f1)" = "$want"
+done
+```
+
+Record signature, checksum and every provenance result; signatures do not establish that the source was approved.
 Extract each darwin archive separately. Run the commands below against the amd64 binary on the owner's Intel Mac (x86_64).
 For arm64, run them on a GitHub `macos-latest` runner (Apple silicon), or record them as **not measured** for the owner to weigh before publishing the rc ([runner specifications](https://docs.github.com/en/actions/reference/runners/github-hosted-runners#standard-github-hosted-runners-for-public-repositories)). No runner execution is measured here.
 For measured results, require Developer ID Application: Mateusz Klatt (26MP7QQP95), TeamIdentifier `26MP7QQP95`, secure timestamp, hardened runtime and accepted Notarized Developer ID assessment ([signing evidence](#signing-and-notarization)).
@@ -679,9 +741,11 @@ done
 ```
 
 On Windows, extract the two matched draft ZIPs separately. For each `iris.exe`, require `signtool verify /pa /all /v /tw .\iris.exe` to exit 0 (exit 2 fails), then record `Get-AuthenticodeSignature .\iris.exe | Format-List Status,StatusMessage,SignerCertificate,TimeStamperCertificate`.
+`signtool.exe` comes with the Windows SDK and is not on `PATH` by default; the `v0.1.2` check ran `C:\Program Files (x86)\Windows Kits\10\bin\10.0.26100.0\x64\signtool.exe`. `Get-AuthenticodeSignature` is part of PowerShell.
 Require `Valid`, a non-null timestamp certificate and signer thumbprint `9C837C68415187A72D88612BDF14FCB0D6623D67`. Expected signer subject: `CN=Open Source Developer Mateusz Klatt, O=Open Source Developer, L=Warszawa, S=mazowieckie, C=PL` (ADR 021). Missing/skipped/unverifiable signing blocks acceptance. Native signature verification does not establish SmartScreen reputation or successful program execution.
-Run `iris version` from each native binary (`.\iris.exe version` on Windows), with the arm64 darwin option above. Expect `0.1.0-rc1 (commit <approved-40-char-sha>; source clean; console unverified)`; record actual output. The console field proves neither freshness nor completeness (`.goreleaser.yaml`, `builds.ldflags`; `internal/buildinfo/buildinfo.go`).
-Before publishing, the owner reviews the complete acceptance record: approved SHA/run, one complete draft, prerelease flag, tool verification, console/signer/handoff artifacts, all assets/checksums/provenance, both Apple notarizations, Intel Mac Gatekeeper measurements, both Windows signatures/verify job, holzera's two draft ZIP hash comparisons, package metadata and native execution results, including any **not measured** arm64 darwin checks.
+Run `iris version` from each native binary (`.\iris.exe version` on Windows), with the arm64 darwin option above. Expect `0.1.0-rc1 (commit <approved-40-char-sha>; source clean; console unverified)`; record actual output.
+An AMD64 Windows host cannot run the arm64 `iris.exe`. On the host used for `v0.1.2` that binary passed the signature checks, and its `iris version` is recorded as **not measured**. The console field proves neither freshness nor completeness (`.goreleaser.yaml`, `builds.ldflags`; `internal/buildinfo/buildinfo.go`).
+Before publishing, the owner reviews the complete acceptance record: approved SHA/run, one complete draft, prerelease flag, tool verification, console/signer/handoff artifacts, all assets/checksums/provenance, both Apple notarizations, Intel Mac Gatekeeper measurements, both Windows signatures/verify job, holzera's two draft ZIP hash comparisons, package metadata and native execution results, including any **not measured** arm64 darwin or Windows checks.
 Only he publishes; a draft nobody publishes remains a draft until deleted.
 
 **Failure handling and take-back**

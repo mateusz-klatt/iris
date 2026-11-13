@@ -88,19 +88,27 @@ before OCI attestation verification. The owner must make the GHCR package public
 anonymous pulls; the workflow does not set package visibility.
 
 ```sh
+tag='<tag>'
 IMAGE='ghcr.io/mateusz-klatt/iris@sha256:<index-digest>'
+commit=$(gh api "repos/mateusz-klatt/iris/commits/$tag" --jq .sha)
+identity="https://github.com/mateusz-klatt/iris/.github/workflows/release.yml@refs/tags/$tag"
 cosign verify "$IMAGE" \
-  --certificate-identity 'https://github.com/mateusz-klatt/iris/.github/workflows/release.yml@refs/tags/v0.1.1' \
+  --certificate-identity "$identity" \
   --certificate-oidc-issuer 'https://token.actions.githubusercontent.com'
 gh attestation verify "oci://$IMAGE" \
   --repo mateusz-klatt/iris \
-  --signer-workflow mateusz-klatt/iris/.github/workflows/release.yml \
-  --source-ref refs/tags/v0.1.1 \
-  --cert-identity 'https://github.com/mateusz-klatt/iris/.github/workflows/release.yml@refs/tags/v0.1.1'
+  --cert-identity "$identity" \
+  --cert-oidc-issuer 'https://token.actions.githubusercontent.com' \
+  --source-ref "refs/tags/$tag" \
+  --source-digest "$commit"
 docker pull "$IMAGE"
 ```
 
-Use the actual tag in the identities and run the verified digest. See the
+Run only the verified digest. The certificate identity already names the workflow and the tag. gh
+refuses `--cert-identity` together with `--signer-workflow`: gh 2.81.0 and 2.103.3 both rejected
+that pair while `v0.1.2` was verified. `--source-digest` ties the attestation to the tag's
+commit, and a wrong commit fails. Add `--bundle-from-oci` to check the copy of the attestation
+stored in the registry instead of GitHub's. See the
 [release permissions and verification limits](release.md#release-container-image),
 [Cosign verification](https://docs.sigstore.dev/cosign/verifying/verify/) and
 [GitHub attestation verification](https://cli.github.com/manual/gh_attestation_verify).
@@ -136,7 +144,7 @@ To deploy release `<tag>`, in one shell on the hub's machine:
    both pass. Then fix the names the later steps use:
 
    ```sh
-   tag=v0.1.1
+   tag='<tag>'
    IMAGE='ghcr.io/mateusz-klatt/iris@sha256:<index-digest>'
    commit=$(gh api "repos/mateusz-klatt/iris/commits/$tag" --jq .sha)
    version="${tag#v} (commit $commit; source clean; console unverified)"
