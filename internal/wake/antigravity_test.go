@@ -21,6 +21,7 @@ import (
 	"time"
 
 	"github.com/mateusz-klatt/iris/internal/binding"
+	"github.com/mateusz-klatt/iris/internal/config"
 	"github.com/mateusz-klatt/iris/internal/gitinfo"
 	"github.com/mateusz-klatt/iris/internal/hook"
 	"github.com/mateusz-klatt/iris/internal/hub"
@@ -72,7 +73,15 @@ func TestMain(m *testing.M) {
 		}
 		os.Exit(scripted.ExitCode)
 	}
-	os.Exit(m.Run())
+	dir, err := os.MkdirTemp("", "iris-wake-test")
+	if err != nil {
+		panic(err)
+	}
+	restore := config.SetPinnedForTest(filepath.Join(dir, "pinned-iris"))
+	code := m.Run()
+	restore()
+	_ = os.RemoveAll(dir)
+	os.Exit(code)
 }
 
 type agyTestHarness struct {

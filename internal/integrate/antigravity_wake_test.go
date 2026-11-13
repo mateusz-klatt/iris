@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/mateusz-klatt/iris/internal/config"
 )
 
 func TestAntigravityWakeOptInNoCommandAllowRuleAndRemove(t *testing.T) {
@@ -307,4 +309,84 @@ func TestAntigravityConfigDirSplitAndPinnedFallback(t *testing.T) {
 	if err := InstallAntigravityWake(badPinnedLayout, false); err == nil {
 		t.Fatal("directory at pinned marker path succeeded on --no-wake")
 	}
+}
+
+func TestAntigravityNilPinnedInjectionIsolatesRemoveAndNoWake(t *testing.T) {
+	c, _ := ByName(Antigravity)
+	isolatedPinned, err := config.PinnedDir()
+	if err != nil || !strings.HasPrefix(filepath.Clean(isolatedPinned), filepath.Clean(os.TempDir())) {
+		t.Fatalf("TestMain PinnedDir = %q, %v (temp %q)", isolatedPinned, err, os.TempDir())
+	}
+	if err := os.MkdirAll(isolatedPinned, 0o700); err != nil {
+		t.Fatal(err)
+	}
+
+	outsideAccount := filepath.Join(t.TempDir(), "outside-account-iris")
+	if err := os.MkdirAll(outsideAccount, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	outsideMarker := filepath.Join(outsideAccount, antigravityWakeFile)
+	if err := os.WriteFile(outsideMarker, []byte("on\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	beforeInfo, err := os.Stat(outsideMarker)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	seedIsolatedOn := func() {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(isolatedPinned, antigravityWakeFile), []byte("on\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	assertIsolatedOffAndOutsideUntouched := func(step string) {
+		t.Helper()
+		if got := string(mustRead(t, filepath.Join(isolatedPinned, antigravityWakeFile))); got != "off\n" {
+			t.Fatalf("%s: isolated marker = %q, want off", step, got)
+		}
+		afterInfo, statErr := os.Stat(outsideMarker)
+		if statErr != nil || !afterInfo.ModTime().Equal(beforeInfo.ModTime()) || string(mustRead(t, outsideMarker)) != "on\n" {
+			t.Fatalf("%s: outside account marker changed (%v, mtime %v -> %v)", step, statErr, beforeInfo.ModTime(), afterInfo.ModTime())
+		}
+	}
+
+	// 1. Homeless Layout with nil PinnedConfigDir on --no-wake and Remove touches only TestMain's isolatedPinned.
+	seedIsolatedOn()
+	if err := InstallAntigravityWake(homeless(t), false); err == nil {
+		t.Fatal("homeless --no-wake succeeded")
+	}
+	assertIsolatedOffAndOutsideUntouched("homeless --no-wake")
+
+	seedIsolatedOn()
+	if err := c.Remove(homeless(t), nil); err == nil {
+		t.Fatal("homeless Remove succeeded")
+	}
+	assertIsolatedOffAndOutsideUntouched("homeless Remove")
+
+	// 2. Normal temp-Home Layout with nil PinnedConfigDir on --no-wake and Remove touches only tempHome and isolatedPinned.
+	tempHome := t.TempDir()
+	nilPinnedLayout := Layout{
+		Home:     tempHome,
+		StateDir: filepath.Join(tempHome, "state"),
+		Getenv:   func(string) string { return "" },
+		GOOS:     "linux",
+		LookPath: func(name string) (string, error) {
+			if name == "iris" {
+				return "/usr/local/bin/iris", nil
+			}
+			return "", errors.New("not found")
+		},
+	}
+	seedIsolatedOn()
+	if err := InstallAntigravityWake(nilPinnedLayout, false); err != nil {
+		t.Fatalf("nilPinnedLayout --no-wake: %v", err)
+	}
+	assertIsolatedOffAndOutsideUntouched("nilPinnedLayout --no-wake")
+
+	seedIsolatedOn()
+	if err := c.Remove(nilPinnedLayout, nil); err != nil {
+		t.Fatalf("nilPinnedLayout Remove: %v", err)
+	}
+	assertIsolatedOffAndOutsideUntouched("nilPinnedLayout Remove")
 }
