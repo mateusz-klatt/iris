@@ -108,13 +108,13 @@ func newCommands() *commands {
 	return c
 }
 
-func (c *commands) check(ctx context.Context, clientVersion string) (binaryInfo, string) {
+func (c *commands) check(ctx context.Context, clientVersion string) (binaryInfo, string, bool) {
 	info := binaryInfo{Path: c.path, ClientVersion: clientVersion, CheckedMS: c.now().UnixMilli()}
 	if c.pathFailure != "" {
-		return info, c.pathFailure
+		return info, c.pathFailure, false
 	}
 	if clientVersion == "" {
-		return info, "Codex initialization did not name its version"
+		return info, "Codex initialization did not name its version", false
 	}
 	ctx, cancel := context.WithTimeout(ctx, c.versionTimeout)
 	defer cancel()
@@ -123,10 +123,10 @@ func (c *commands) check(ctx context.Context, clientVersion string) (binaryInfo,
 	cmd.Dir, cmd.Env, cmd.WaitDelay = c.dir, c.env, c.waitDelay
 	cmd.Stdout, cmd.Stderr = output, output
 	if err := cmd.Run(); err != nil {
-		return info, "Codex version command did not complete successfully"
+		return info, "Codex version command did not complete successfully", false
 	}
 	if ctx.Err() != nil || output.overflow {
-		return info, "Codex version response exceeded its bound"
+		return info, "Codex version response exceeded its bound", false
 	}
 	version := ""
 	for _, line := range strings.Split(string(output.data), "\n") {
@@ -136,13 +136,13 @@ func (c *commands) check(ctx context.Context, clientVersion string) (binaryInfo,
 		}
 	}
 	if version == "" {
-		return info, "Codex version response named no version"
+		return info, "Codex version response named no version", false
 	}
 	if version != clientVersion {
-		return info, "Codex executable and initialized client versions differ"
+		return info, "Codex executable and initialized client versions differ", true
 	}
 	info.Version = version
-	return info, ""
+	return info, "", false
 }
 
 type commandAnswer struct {

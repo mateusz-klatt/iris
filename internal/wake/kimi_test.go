@@ -170,7 +170,7 @@ func (f *kimiFake) handle(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (f *kimiFake) check() (binaryInfo, string) {
+func (f *kimiFake) check() (binaryInfo, string, bool) {
 	return f.commands.check(context.Background(), kimiTestVersion)
 }
 
@@ -214,7 +214,7 @@ func TestKimiNativeSentinelUsesClientBinaryVersion(t *testing.T) {
 	}
 	_, record := kimiBinarySetup(t, commandScenario{VersionOut: kimiTestVersion + "\n"})
 	f := newKimiFake(t)
-	info, detail := f.commands.check(context.Background(), captured.Params.ClientInfo.Version)
+	info, detail, _ := f.commands.check(context.Background(), captured.Params.ClientInfo.Version)
 	if detail != "" || info.ClientVersion != kimiTestVersion || info.Version != kimiTestVersion {
 		t.Fatalf("sentinel did not fall back to the client binary: %+v, %q", info, detail)
 	}
@@ -250,7 +250,7 @@ func TestKimiNativeSentinelVersionFailuresSpendNoAttempts(t *testing.T) {
 			if tc.timeout != 0 {
 				f.commands.clientTimeout = tc.timeout
 			}
-			info, detail := f.commands.check(context.Background(), "0.0.0")
+			info, detail, _ := f.commands.check(context.Background(), "0.0.0")
 			if detail != "Kimi executable version could not be determined" || info.Version != "" || len(f.prompts) != 0 || len(f.paths) != 0 {
 				t.Fatalf("failed client probe reached the server or spent wake: %+v, %q, paths %d, prompts %d", info, detail, len(f.paths), len(f.prompts))
 			}
@@ -271,7 +271,7 @@ func TestKimiNativeSentinelVersionFailuresSpendNoAttempts(t *testing.T) {
 				t.Setenv("PATH", ".")
 			}
 			f := newKimiFake(t)
-			if _, detail := f.commands.check(context.Background(), "0.0.0"); detail != "Kimi executable version could not be determined" || len(f.prompts) != 0 {
+			if _, detail, _ := f.commands.check(context.Background(), "0.0.0"); detail != "Kimi executable version could not be determined" || len(f.prompts) != 0 {
 				t.Fatalf("unavailable or relative client binary admitted wake: %q, prompts %d", detail, len(f.prompts))
 			}
 		})
@@ -281,7 +281,7 @@ func TestKimiNativeSentinelVersionFailuresSpendNoAttempts(t *testing.T) {
 func TestKimiNativeSentinelVersionMismatchSpendsNoAttempts(t *testing.T) {
 	kimiBinarySetup(t, commandScenario{VersionOut: "9.9.9\n"})
 	f := newKimiFake(t)
-	info, detail := f.commands.check(context.Background(), "0.0.0")
+	info, detail, _ := f.commands.check(context.Background(), "0.0.0")
 	if detail != "Kimi executable and server versions differ" || info.ClientVersion != "9.9.9" || len(f.prompts) != 0 {
 		t.Fatalf("client/server mismatch spent wake or hid versions: %+v, %q", info, detail)
 	}
@@ -289,7 +289,7 @@ func TestKimiNativeSentinelVersionMismatchSpendsNoAttempts(t *testing.T) {
 
 func TestKimiNativeServerDiscoveryIdleAndPromptQueue(t *testing.T) {
 	f := newKimiFake(t)
-	info, detail := f.check()
+	info, detail, _ := f.check()
 	if detail != "" || info.Path != f.server.URL || info.Version != kimiTestVersion || info.ClientVersion != kimiTestVersion || info.CheckedMS == 0 {
 		t.Fatalf("server preflight: %+v, %q", info, detail)
 	}
@@ -337,14 +337,14 @@ func TestKimiNativeServerDiscoveryIdleAndPromptQueue(t *testing.T) {
 	if connections != 1 {
 		t.Fatalf("Kimi calls used %d connections instead of the verified one", connections)
 	}
-	if _, detail := f.check(); detail != "" {
+	if _, detail, _ := f.check(); detail != "" {
 		t.Fatalf("repeated preflight did not replace its closed idle connection cleanly: %q", detail)
 	}
 }
 
 func TestKimiNativeRefusesReconnectAfterVerifiedConnectionCloses(t *testing.T) {
 	f := newKimiFake(t)
-	if _, detail := f.check(); detail != "" {
+	if _, detail, _ := f.check(); detail != "" {
 		t.Fatal(detail)
 	}
 	f.server.CloseClientConnections()
@@ -472,7 +472,7 @@ func TestKimiNativeQueueWaitsForResponseOutsideAdmission(t *testing.T) {
 
 func TestKimiNativeIdleRequiresAnExactUsableSession(t *testing.T) {
 	f := newKimiFake(t)
-	if _, detail := f.check(); detail != "" {
+	if _, detail, _ := f.check(); detail != "" {
 		t.Fatal(detail)
 	}
 	for _, tc := range []struct {
@@ -510,28 +510,28 @@ func TestKimiNativeIdleRequiresAnExactUsableSession(t *testing.T) {
 func TestKimiNativePreflightFailuresAndCandidateFallback(t *testing.T) {
 	f := newKimiFake(t)
 	f.commands.clientPath, f.commands.clientFailure = "", "Kimi executable is not available on PATH"
-	if _, detail := f.commands.check(context.Background(), ""); detail != "Kimi executable version could not be determined" {
+	if _, detail, differs := f.commands.check(context.Background(), ""); detail != "Kimi executable version could not be determined" || differs {
 		t.Fatalf("missing client binary version: %q", detail)
 	}
-	if _, detail := f.commands.check(context.Background(), "other-version"); detail != "Kimi executable and server versions differ" {
+	if _, detail, differs := f.commands.check(context.Background(), "other-version"); detail != "Kimi executable and server versions differ" || !differs {
 		t.Fatalf("version mismatch: %q", detail)
 	}
 	broken := &kimiCommands{homeFailure: "home failed", now: time.Now}
-	if _, detail := broken.check(context.Background(), kimiTestVersion); detail != "home failed" {
+	if _, detail, _ := broken.check(context.Background(), kimiTestVersion); detail != "home failed" {
 		t.Fatalf("home failure: %q", detail)
 	}
 	missingToken := newKimiFake(t)
 	if err := os.Remove(filepath.Join(missingToken.home, "server.token")); err != nil {
 		t.Fatal(err)
 	}
-	if _, detail := missingToken.check(); detail != "Kimi server token could not be read" {
+	if _, detail, _ := missingToken.check(); detail != "Kimi server token could not be read" {
 		t.Fatalf("missing token: %q", detail)
 	}
 	missingInstances := newKimiFake(t)
 	if err := os.RemoveAll(filepath.Join(missingInstances.home, "server", "instances")); err != nil {
 		t.Fatal(err)
 	}
-	if _, detail := missingInstances.check(); detail != "Kimi server instances could not be read" {
+	if _, detail, _ := missingInstances.check(); detail != "Kimi server instances could not be read" {
 		t.Fatalf("missing instances: %q", detail)
 	}
 
@@ -551,7 +551,7 @@ func TestKimiNativePreflightFailuresAndCandidateFallback(t *testing.T) {
 	fallback.writeInstance("wrong-host.json", map[string]any{"server_id": "bad", "host": "localhost", "port": 1, "host_version": kimiTestVersion})
 	fallback.writeInstance("wrong-port.json", map[string]any{"server_id": "bad", "host": "127.0.0.1", "port": 0, "host_version": kimiTestVersion})
 	fallback.writeInstance("wrong-meta.json", map[string]any{"server_id": "bad", "host": "127.0.0.1", "port": 1, "host_version": kimiTestVersion})
-	info, detail := fallback.check()
+	info, detail, _ := fallback.check()
 	if detail != "" || info.Path != fallback.server.URL {
 		t.Fatalf("valid instance did not survive invalid candidates: %+v %q", info, detail)
 	}
@@ -568,7 +568,7 @@ func TestKimiNativePreflightGivesEachCandidateItsOwnBudget(t *testing.T) {
 		"host_version": kimiTestVersion, "pid": 4242, "started_at": 2000,
 	})
 	f.commands.versionTimeout = 100 * time.Millisecond
-	info, detail := f.check()
+	info, detail, _ := f.check()
 	if detail != "" || info.Path != f.server.URL {
 		t.Fatalf("stalled candidate starved the healthy server: %+v %q", info, detail)
 	}
@@ -588,7 +588,7 @@ func TestKimiNativeRejectsUnverifiedProcessBeforeHTTP(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newKimiFake(t)
 			f.commands.lookupProcess = func(int) (proc.Snapshot, bool) { return tc.process, tc.alive }
-			if _, detail := f.check(); detail != "Kimi web server is unavailable or incompatible" {
+			if _, detail, _ := f.check(); detail != "Kimi web server is unavailable or incompatible" {
 				t.Fatalf("unverified process passed preflight: %q", detail)
 			}
 			if len(f.paths) != 0 || len(f.auth) != 0 {
@@ -610,7 +610,7 @@ func TestKimiNativeDoesNotSendTokenToFailedHealthcheck(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			f := newKimiFake(t)
 			f.healthCode, f.healthOK = tc.code, tc.ok
-			if _, detail := f.check(); detail != "Kimi web server is unavailable or incompatible" {
+			if _, detail, _ := f.check(); detail != "Kimi web server is unavailable or incompatible" {
 				t.Fatalf("failed healthcheck passed preflight: %q", detail)
 			}
 			if len(f.paths) != 1 || f.paths[0] != "/api/v1/healthz" || len(f.auth) != 1 || f.auth[0] != "" {
@@ -648,7 +648,7 @@ func TestKimiNativeTokenValidation(t *testing.T) {
 
 func TestKimiNativeQueueOutcomesAndAdmission(t *testing.T) {
 	f := newKimiFake(t)
-	if _, detail := f.check(); detail != "" {
+	if _, detail, _ := f.check(); detail != "" {
 		t.Fatal(detail)
 	}
 	message := promptFor("fedcba9876543210fedcba9876543210")
@@ -708,7 +708,7 @@ func TestKimiNativeQueueOutcomesAndAdmission(t *testing.T) {
 
 func TestKimiNativeTransportFailuresAreUnknown(t *testing.T) {
 	f := newKimiFake(t)
-	if _, detail := f.check(); detail != "" {
+	if _, detail, _ := f.check(); detail != "" {
 		t.Fatal(detail)
 	}
 	f.server.Close()
@@ -768,7 +768,7 @@ func TestKimiNativeReportsNoCompatibleInstance(t *testing.T) {
 		"server_id": "server-good", "host": "127.0.0.1", "port": mustKimiPort(t, f.server.URL), "host_version": "registry-old",
 		"pid": 4242, "started_at": 2000,
 	})
-	if _, detail := f.check(); detail != "Kimi web server is unavailable or incompatible" {
+	if _, detail, _ := f.check(); detail != "Kimi web server is unavailable or incompatible" {
 		t.Fatalf("mismatched server identity passed preflight: %q", detail)
 	}
 }
