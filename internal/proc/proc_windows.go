@@ -41,3 +41,7 @@ func imageName(h windows.Handle) string {
 	}
 	return windows.UTF16ToString(buf[:size])
 }
+
+func executableOS(_ int, s Snapshot) (string, error) {
+	return s.Name, nil
+}

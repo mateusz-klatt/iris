@@ -369,6 +369,7 @@ func (d wakeDoc) forget(cutoff time.Time) {
 			delete(a, "token")
 			delete(a, "message")
 			delete(a, "answer")
+			delete(a, "scan")
 		}
 	}
 }

@@ -1,21 +1,33 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"os"
 	"strings"
 
+	"github.com/mateusz-klatt/iris/internal/hook"
 	"github.com/mateusz-klatt/iris/internal/integrate"
 )
+
+var integrateLayout = func() integrate.Layout { return integrate.Layout{} }
+
+func stopAntigravityHelpers(layout integrate.Layout) error {
+	dirs, err := integrate.AntigravityConfigDirs(layout)
+	for _, dir := range dirs {
+		err = errors.Join(err, hook.StopAntigravityWakeHelpers(dir))
+	}
+	return err
+}
 
 func runIntegrate(args []string) int {
 	fs := flag.NewFlagSet("integrate", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
 	remove := fs.Bool("remove", false, "restore the files Iris wrote")
 	all := fs.Bool("all", false, "every supported client")
-	wake := fs.Bool("wake", false, "enable the native Iris wake runner for Codex, Kimi or Grok")
-	noWake := fs.Bool("no-wake", false, "disable the native Iris wake runner for Codex, Kimi or Grok")
+	wake := fs.Bool("wake", false, "enable the native Iris wake runner for Antigravity, Codex, Kimi or Grok")
+	noWake := fs.Bool("no-wake", false, "disable the native Iris wake runner for Antigravity, Codex, Kimi or Grok")
 	if err := fs.Parse(integrateFlagArgs(args)); err != nil {
 		return 2
 	}
@@ -33,7 +45,7 @@ func runIntegrate(args []string) int {
 		return 2
 	}
 	if (wakeSet || noWakeSet) && (*all || *remove) {
-		fmt.Fprintln(os.Stderr, "--wake and --no-wake require a Codex, Kimi or Grok install without --all or --remove")
+		fmt.Fprintln(os.Stderr, "--wake and --no-wake require an Antigravity, Codex, Kimi or Grok install without --all or --remove")
 		return 2
 	}
 	var names []string
@@ -54,11 +66,11 @@ func runIntegrate(args []string) int {
 		fmt.Fprintln(os.Stderr, "usage: iris integrate [--remove] [--all] <client>")
 		return 2
 	}
-	if (wakeSet || noWakeSet) && names[0] != integrate.Codex && names[0] != integrate.Kimi && names[0] != integrate.Grok {
-		fmt.Fprintln(os.Stderr, "--wake and --no-wake require Codex, Kimi or Grok")
+	if (wakeSet || noWakeSet) && names[0] != integrate.Antigravity && names[0] != integrate.Codex && names[0] != integrate.Kimi && names[0] != integrate.Grok {
+		fmt.Fprintln(os.Stderr, "--wake and --no-wake require Antigravity, Codex, Kimi or Grok")
 		return 2
 	}
-	layout := integrate.Layout{}
+	layout := integrateLayout()
 	plugins := integrate.ExecPlugins{}
 	code := 0
 	for _, name := range names {
@@ -67,12 +79,20 @@ func runIntegrate(args []string) int {
 		var err error
 		if *remove {
 			err = c.Remove(layout, plugins)
+			if name == integrate.Antigravity {
+				err = errors.Join(err, stopAntigravityHelpers(layout))
+			}
 		} else if wakeSet || noWakeSet {
 			enabled := *wake
 			if noWakeSet {
 				enabled = !*noWake
 			}
 			switch name {
+			case integrate.Antigravity:
+				err = integrate.InstallAntigravityWake(layout, enabled)
+				if !enabled {
+					err = errors.Join(err, stopAntigravityHelpers(layout))
+				}
 			case integrate.Kimi:
 				err = integrate.InstallKimiWake(layout, enabled)
 			case integrate.Grok:

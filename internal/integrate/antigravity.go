@@ -1,6 +1,7 @@
 package integrate
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"slices"
@@ -153,8 +154,117 @@ func agyMatched(l Layout, iris, event string) map[string]any {
 	}
 }
 
+// antigravityWakeFile is the opt-in local wake marker beside hub.token.
+const antigravityWakeFile = "antigravity-wake"
+
+func sameConfigDir(goos, a, b string) bool {
+	ca, cb := filepath.Clean(a), filepath.Clean(b)
+	if goos == "windows" {
+		return strings.EqualFold(ca, cb)
+	}
+	return ca == cb
+}
+
+func writePinnedWakeOff(pinnedDir string) error {
+	path := filepath.Join(pinnedDir, antigravityWakeFile)
+	if err := refuseSpecial(path); err != nil {
+		return err
+	}
+	return atomicWrite(path, []byte("off\n"))
+}
+
+func wakeMarkerOn(dir string) bool {
+	raw, absent, err := readExisting(filepath.Join(dir, antigravityWakeFile))
+	return err == nil && !absent && strings.TrimSpace(string(raw)) == "on"
+}
+
+// AntigravityConfigDirs returns the unique Iris configuration directories whose recorded
+// Antigravity wake helpers must be stopped on --no-wake or --remove: the environment's
+// IrisConfigDir (when resolvable) and the OS account's pinned default directory.
+func AntigravityConfigDirs(l Layout) ([]string, error) {
+	pinnedDir, pinnedErr := l.pinnedConfigDir()
+	configDir, cfgErr := l.IrisConfigDir()
+	var dirs []string
+	if cfgErr == nil {
+		dirs = append(dirs, configDir)
+	}
+	if pinnedErr == nil && (cfgErr != nil || !sameConfigDir(l.goos(), configDir, pinnedDir)) {
+		dirs = append(dirs, pinnedDir)
+	}
+	return dirs, errors.Join(cfgErr, pinnedErr)
+}
+
+// InstallAntigravityWake installs Antigravity and writes the opt-in wake marker beside hub.token.
+// Enabling wake requires IrisConfigDir to match the OS account's pinned default directory so hooks,
+// integrate and the detached helper agree on one location; disabling wake always also writes off
+// in the pinned directory. Plain Install leaves the marker untouched, and settings.json never
+// receives a command(...) rule.
+func InstallAntigravityWake(l Layout, enabled bool) error {
+	pinnedDir, pinnedErr := l.pinnedConfigDir()
+	configDir, cfgErr := l.IrisConfigDir()
+	if enabled {
+		if cfgErr != nil {
+			return cfgErr
+		}
+		if pinnedErr != nil {
+			return pinnedErr
+		}
+		if !sameConfigDir(l.goos(), configDir, pinnedDir) {
+			return fmt.Errorf("antigravity wake requires the default Iris configuration directory %s; current environment resolves %s", pinnedDir, configDir)
+		}
+		if err := (antigravityClient{}).Install(l, nil); err != nil {
+			return err
+		}
+		return l.update(Antigravity, filepath.Join(configDir, antigravityWakeFile), func([]byte) ([]byte, error) {
+			return []byte("on\n"), nil
+		})
+	}
+	var pinnedCleanupErr error
+	if pinnedErr != nil {
+		pinnedCleanupErr = pinnedErr
+	} else if cfgErr != nil || !sameConfigDir(l.goos(), configDir, pinnedDir) {
+		pinnedCleanupErr = writePinnedWakeOff(pinnedDir)
+	}
+	if cfgErr != nil {
+		return errors.Join(cfgErr, pinnedCleanupErr)
+	}
+	if err := (antigravityClient{}).Install(l, nil); err != nil {
+		return errors.Join(err, pinnedCleanupErr)
+	}
+	err := l.update(Antigravity, filepath.Join(configDir, antigravityWakeFile), func([]byte) ([]byte, error) {
+		return []byte("off\n"), nil
+	})
+	return errors.Join(err, pinnedCleanupErr)
+}
+
+// AntigravityWake reports whether Antigravity's opt-in wake marker is explicitly "on".
+// A missing marker is false (off by default).
+func AntigravityWake(l Layout) (bool, error) {
+	configDir, err := l.IrisConfigDir()
+	if err != nil {
+		return false, err
+	}
+	raw, absent, err := readExisting(filepath.Join(configDir, antigravityWakeFile))
+	if err != nil {
+		return false, err
+	}
+	if absent {
+		return false, nil
+	}
+	return strings.TrimSpace(string(raw)) == "on", nil
+}
+
 func (c antigravityClient) Remove(l Layout, _ Plugins) error {
-	return l.unwire(Antigravity, stripClient(Antigravity))
+	err := l.unwire(Antigravity, stripClient(Antigravity))
+	configDir, cfgErr := l.IrisConfigDir()
+	pinnedDir, pinnedErr := l.pinnedConfigDir()
+	if pinnedErr != nil {
+		return errors.Join(err, pinnedErr)
+	}
+	if cfgErr != nil || !sameConfigDir(l.goos(), configDir, pinnedDir) || wakeMarkerOn(pinnedDir) {
+		err = errors.Join(err, writePinnedWakeOff(pinnedDir))
+	}
+	return err
 }
 
 func (c antigravityClient) Canary(l Layout) (Invocation, error) {

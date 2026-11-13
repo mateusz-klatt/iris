@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/mateusz-klatt/iris/internal/binding"
+	"github.com/mateusz-klatt/iris/internal/hook"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 )
 
@@ -19,6 +20,10 @@ type nativeCommands interface {
 	check(context.Context, string) (binaryInfo, string, bool)
 	idle(context.Context, string) (bool, string)
 	queue(context.Context, string, string, func(func() error) (bool, error)) commandAnswer
+}
+
+type scanInitializer interface {
+	initialScan(string) *hook.AntigravityScanCursor
 }
 
 type attentionRead struct {
@@ -61,6 +66,7 @@ type engine struct {
 	clientVersion func() string
 	now           func() time.Time
 	observe       func(string)
+	filePoll      time.Duration
 	hookSeen      bool
 	cursor        int64
 	stream        string

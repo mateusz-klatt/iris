@@ -65,7 +65,8 @@ type Resolver struct {
 	seen    string
 	twoSeen bool
 	// unusable is set once a call has been observed naming a session without a usable Execution.
-	unusable atomic.Bool
+	unusable    atomic.Bool
+	wakeSession string
 }
 
 type handover struct {
@@ -358,6 +359,10 @@ func (r *Resolver) Maintain(ctx context.Context, source string, interval time.Du
 			if b.ExecutionID == "" {
 				continue
 			}
+			if r.wakeSession != "" && !parentAlive() {
+				onStop()
+				return
+			}
 			call, cancel := context.WithTimeout(ctx, 5*time.Second)
 			// Decode over the previous binding: older hubs return only lease_ms on an
 			// ordinary heartbeat, and omit all binding fields, including its local rung.
@@ -412,7 +417,13 @@ func (r *Resolver) lookupHeld(ctx context.Context) bool {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	b, err := r.resolve(ctx, "", "")
+	var b Bound
+	var err error
+	if r.wakeSession != "" {
+		b, err = r.lookupAntigravityWakeHeld(ctx)
+	} else {
+		b, err = r.resolve(ctx, "", "")
+	}
 	if err != nil {
 		return false
 	}

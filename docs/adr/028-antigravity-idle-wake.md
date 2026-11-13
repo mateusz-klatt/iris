@@ -85,14 +85,20 @@ helper command, costing the user one approval per armed conversation (and again 
 which starts a new `conversationId`). Iris offers no flag to write a `command(...)` allow rule
 automatically.
 
-- `iris integrate antigravity --wake` writes a local marker (`on`) beside the Iris configuration.
+- `iris integrate antigravity --wake` writes a local marker (`on`) beside the Iris configuration,
+  refusing (with both paths named) unless the resolved Iris configuration directory matches the OS
+  account's pinned default directory.
 - Fresh `iris integrate antigravity` leaves wake off; plain `iris integrate antigravity` and
   `iris setup` preserve an existing explicit `on` or `off` marker.
 - `iris integrate antigravity --no-wake` writes `off` and stops any live Antigravity wake helpers
   recorded under the helper state directory (verifying `(helper_pid, helper_start_ms)` via
-  `proc.Lookup` before terminating, then conditionally removing their owned records).
+  `proc.Lookup` before terminating, then conditionally removing their owned records), and always
+  also writes `off` and stops recorded helpers in the pinned default directory idempotently when the
+  environment resolves another location.
 - `iris integrate --remove antigravity` removes the wake marker and likewise stops any live
-  recorded Antigravity wake helpers, alongside removing `mcp(iris/*)`, hooks and the MCP entry.
+  recorded Antigravity wake helpers (and idempotently writes `off` and stops recorded helpers in the
+  pinned default directory when the environment differs), alongside removing `mcp(iris/*)`, hooks
+  and the MCP entry.
 
 ### Per-process state, authoritative current session, and `Stop` arming request
 
@@ -114,7 +120,8 @@ coordinated under a local file lock within the 50 ms hook budget and without hub
 - `helper`: either a live entry `(helper_pid, helper_start_ms, session_id, attempt_id)`, an
   `arm_requested(session_id)` marker, or a `failed` latch.
 
-Only when the local wake marker is `on` does `Stop` consider asking for the helper, and only when
+Only when the hook's Iris configuration directory matches the OS account's pinned default directory
+and the local wake marker is `on` does `Stop` consider asking for the helper, and only when
 every gate holds:
 
 - `fullyIdle` is `true`;
@@ -150,9 +157,10 @@ trusts caller-supplied arguments, executable paths or Iris configuration overrid
    `["watch", "--client", "antigravity", "--wake"]`; any extra flag or positional argument exits
    `1` before detaching.
 2. **Pinned Iris configuration.** Both parent and detached child ignore `IRIS_HUB_URL`,
-   `IRIS_TOKEN_FILE`, `IRIS_EXECUTION`, `XDG_CONFIG_HOME`, `HOME` and `APPDATA` environment
-   variables, resolving the default Iris configuration directory from OS user account records on
-   Unix (`user.LookupId` for `os.Getuid()`, without `$HOME` fallback) and `FOLDERID_RoamingAppData`
+   `IRIS_TOKEN_FILE`, `IRIS_EXECUTION`, `XDG_CONFIG_HOME`, `HOME`, `USERPROFILE` and `APPDATA`
+   environment variables, resolving the default Iris configuration directory from OS user account
+   records on Unix (`user.LookupId` for `os.Getuid()`, without `$HOME` fallback) and the process
+   token's user profile directory (`GetUserProfileDirectory` -> `<profile>\AppData\Roaming\iris`)
    on Windows, and reading `client.json` and `hub.token` only from that directory so a modified
    command environment cannot redirect the hub URL, bearer token path, wake marker or session
    directory.
@@ -168,7 +176,11 @@ trusts caller-supplied arguments, executable paths or Iris configuration overrid
 4. **Loopback Language Server check.** Require non-empty `ANTIGRAVITY_CONVERSATION_ID` and
    `ANTIGRAVITY_CSRF_TOKEN`, require `ANTIGRAVITY_CONVERSATION_ID` to match the hook-published
    `current_session_id` for `(agy pid, start_ms)`, and validate `ANTIGRAVITY_LS_ADDRESS` as a
-   literal loopback `host:port` reachable by a short TCP dial.
+   loopback `host:port` reachable by a short TCP dial. On `agy 1.5.8`, Antigravity binds its
+   Language Server listener on `127.0.0.1:<port>` while exporting `ANTIGRAVITY_LS_ADDRESS=localhost:<port>`
+   to `run_command` shells (measured live in `-i` mode); the helper accepts literal `127.0.0.1` or
+   `::1` as well as `localhost`, dialing literal `127.0.0.1:<port>` and `[::1]:<port>` directly
+   without DNS or `/etc/hosts` and passing the verified literal loopback `host:port` onward.
 5. **Minimal scrubbed child environment and secret handling.** Both the parent and the detached
    child call `debug.SetTraceback("none")`. Because Go evaluates `GOTRACEBACK` before `main()` and
    `debug.SetTraceback` cannot lower a level inherited from the environment, an inherited
@@ -299,10 +311,11 @@ helper run **incremental, attempt-associated forward scanning** outside the `ses
   `scanned_offset` past the newline and clears `skipping_line = false`.
 - **Exact-match evidence:** a complete `<= 64 KiB` line matches only when it parses as JSON with
   `source == "SYSTEM"` and `type == "SYSTEM_MESSAGE"` whose `content` matches the
-  `<SYSTEM_MESSAGE>\n[Message] timestamp=... sender=<conversationId> priority=...
-  content=<payload>\n</SYSTEM_MESSAGE>` envelope with `<payload>` equal to the outstanding
-  attempt's whole `Message` byte-for-byte — never by substring match and never from `USER_INPUT` or
-  composite steps.
+  `<SYSTEM_MESSAGE>\n[Message] timestamp=... sender=<sender> priority=...
+  content=<payload>\n</SYSTEM_MESSAGE>` envelope with `<sender>` equal to `conversationId` (measured
+  in headless `-p` mode on `agy 1.5.8`) or `"system"` (measured in interactive `-i` mode on
+  `agy 1.5.8`) and `<payload>` equal to the outstanding attempt's whole `Message` byte-for-byte —
+  never by substring match and never from `USER_INPUT` or composite steps.
 - **Merging progress by `attempt.ID`:** under the short `sessions` lock, a pass result applies
   **only** if the stored outstanding guard still carries `attempt.ID == pass.attempt_id` (discarding
   stale passes after consumption or replacement). A matching pass consumes that attempt's guard; a

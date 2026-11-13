@@ -134,7 +134,10 @@ func inspectionFailureReason(detail string) string {
 		"Codex has no saved rollout for this thread",
 		"Kimi executable version could not be determined",
 		"Kimi executable and server versions differ",
-		kimiOccupied:
+		kimiOccupied,
+		antigravityExeUnavailable,
+		antigravitySendStartFailed,
+		antigravityRejectedWake:
 		return detail
 	default:
 		return "Unrecognized wake failure"

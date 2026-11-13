@@ -44,10 +44,37 @@ func processName(pid int, comm string) string {
 	return comm
 }
 
+func executableOS(pid int, _ Snapshot) (string, error) {
+	raw, err := unix.SysctlRaw("kern.procargs2", pid)
+	if err != nil {
+		return "", err
+	}
+	return executablePath(raw), nil
+}
+
+func executablePath(raw []byte) string {
+	exe, ok, _ := cutProcargs(raw)
+	if !ok {
+		return ""
+	}
+	return exe
+}
+
 // firstArgument reads argv[0] from a kern.procargs2 buffer: a 32-bit argument count, the
 // executable path, NUL padding, then the arguments.
 func firstArgument(raw []byte) string {
-	_, rest, _ := bytes.Cut(raw[min(4, len(raw)):], []byte{0})
+	_, _, rest := cutProcargs(raw)
 	arg, _, _ := bytes.Cut(bytes.TrimLeft(rest, "\x00"), []byte{0})
 	return string(arg)
+}
+
+func cutProcargs(raw []byte) (exe string, complete bool, rest []byte) {
+	if len(raw) < 4 {
+		return "", false, nil
+	}
+	pathBytes, after, found := bytes.Cut(raw[4:], []byte{0})
+	if !found {
+		return "", false, nil
+	}
+	return string(pathBytes), true, after
 }

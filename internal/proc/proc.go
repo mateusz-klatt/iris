@@ -6,7 +6,9 @@ package proc
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path"
+	"path/filepath"
 	"strconv"
 	"strings"
 )
@@ -32,6 +34,64 @@ type Snapshot struct {
 
 // Lookup returns one live process using the same platform evidence as the ancestor walk.
 func Lookup(pid int) (Snapshot, bool) { return lookupOS(pid) }
+
+// Executable resolves the verified regular-file executable of a live process matching (pid, startMS).
+func Executable(pid int, startMS int64) (string, error) {
+	return executableFrom(pid, startMS, lookupOS, executableOS, os.Stat)
+}
+
+func executableFrom(
+	pid int,
+	startMS int64,
+	get func(int) (Snapshot, bool),
+	readExe func(int, Snapshot) (string, error),
+	stat func(string) (os.FileInfo, error),
+) (string, error) {
+	if pid <= 0 || startMS <= 0 {
+		return "", ErrNotFound
+	}
+	snap, ok := get(pid)
+	if !ok || snap.StartMS != startMS {
+		return "", ErrNotFound
+	}
+	exe, err := readExe(pid, snap)
+	if err != nil || exe == "" || strings.HasSuffix(exe, " (deleted)") || !filepath.IsAbs(exe) {
+		return "", ErrNotFound
+	}
+	info, err := stat(exe)
+	if err != nil || !info.Mode().IsRegular() {
+		return "", ErrNotFound
+	}
+	after, ok := get(pid)
+	if !ok || after.StartMS != startMS {
+		return "", ErrNotFound
+	}
+	return exe, nil
+}
+
+// Detach configures cmd to run in a new process session detached from the caller's group.
+func Detach(cmd *exec.Cmd) { detachOS(cmd) }
+
+// Terminate stops a live process only when its platform identity still matches (pid, startMS).
+func Terminate(pid int, startMS int64) error {
+	return terminateFrom(pid, startMS, lookupOS, terminateOS)
+}
+
+func terminateFrom(
+	pid int,
+	startMS int64,
+	get func(int) (Snapshot, bool),
+	kill func(int, int64) error,
+) error {
+	if pid <= 0 || startMS <= 0 {
+		return ErrNotFound
+	}
+	snap, ok := get(pid)
+	if !ok || snap.StartMS != startMS {
+		return ErrNotFound
+	}
+	return kill(pid, startMS)
+}
 
 // Nearest returns the ancestor of the current process that Iris records.
 func Nearest() (Ancestor, error) { return nearest(os.Getpid(), lookupOS) }

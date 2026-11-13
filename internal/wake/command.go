@@ -48,18 +48,26 @@ func canonicalSession(session string) (string, bool) {
 }
 
 func canonicalTargetSession(target binding.WakeTarget) (string, bool) {
-	if target.Client != "kimi" {
+	switch target.Client {
+	case "kimi":
+		raw, ok := strings.CutPrefix(target.SessionID, "session_")
+		if !ok {
+			return "", false
+		}
+		id, ok := canonicalSession(raw)
+		if !ok || raw != id {
+			return "", false
+		}
+		return "session_" + id, true
+	case "antigravity":
+		id, ok := canonicalSession(target.SessionID)
+		if !ok || target.SessionID != id {
+			return "", false
+		}
+		return id, true
+	default:
 		return canonicalSession(target.SessionID)
 	}
-	raw, ok := strings.CutPrefix(target.SessionID, "session_")
-	if !ok {
-		return "", false
-	}
-	id, ok := canonicalSession(raw)
-	if !ok || raw != id {
-		return "", false
-	}
-	return "session_" + id, true
 }
 
 type limitedOutput struct {

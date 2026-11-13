@@ -4,22 +4,43 @@ import (
 	"context"
 	"errors"
 	"flag"
-	"github.com/mateusz-klatt/iris/internal/binding"
-	"github.com/mateusz-klatt/iris/internal/hook"
-	"github.com/mateusz-klatt/iris/internal/hubclient"
-	"github.com/mateusz-klatt/iris/internal/watch"
 	"io"
 	"os"
 	"os/signal"
+	"slices"
 	"syscall"
 	"time"
+
+	"github.com/mateusz-klatt/iris/internal/binding"
+	"github.com/mateusz-klatt/iris/internal/hook"
+	"github.com/mateusz-klatt/iris/internal/hubclient"
+	"github.com/mateusz-klatt/iris/internal/wake"
+	"github.com/mateusz-klatt/iris/internal/watch"
+)
+
+var (
+	runAntigravityWake = wake.RunAntigravity
+	watchProcessArgs   = func() []string { return os.Args[1:] }
 )
 
 func runWatch(args []string) error {
 	fs := flag.NewFlagSet("watch", flag.ContinueOnError)
 	client := fs.String("client", "", "agent client")
+	_ = fs.Bool("wake", false, "start detached Antigravity idle-wake helper")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+	hasWake := false
+	fs.Visit(func(f *flag.Flag) {
+		if f.Name == "wake" {
+			hasWake = true
+		}
+	})
+	if hasWake {
+		if !slices.Equal(args, []string{"--client", "antigravity", "--wake"}) || !slices.Equal(watchProcessArgs(), []string{"watch", "--client", "antigravity", "--wake"}) {
+			return errors.New("usage: iris watch --client antigravity --wake")
+		}
+		return runAntigravityWake()
 	}
 	if *client == "" || fs.NArg() != 0 {
 		return errors.New("usage: iris watch --client <client>")
