@@ -13,11 +13,11 @@ func TestPinnedWindowsHelpersCoverErrorAndRelativeBranches(t *testing.T) {
 	bogus := filepath.Join(t.TempDir(), "bogus")
 	t.Setenv("APPDATA", bogus)
 	t.Setenv("USERPROFILE", bogus)
-	if dir, err := PinnedDir(); err != nil || !filepath.IsAbs(dir) || strings.HasPrefix(dir, bogus) {
-		t.Fatalf("PinnedDir = %q, %v", dir, err)
+	if dir, err := pinnedConfigDirOS(); err != nil || !filepath.IsAbs(dir) || strings.HasPrefix(dir, bogus) {
+		t.Fatalf("pinnedConfigDirOS = %q, %v", dir, err)
 	}
-	if env, err := PinnedRuntimeEnv(); err != nil || len(env) != 1 || strings.Contains(env[0], bogus) {
-		t.Fatalf("PinnedRuntimeEnv = %v, %v", env, err)
+	if env, err := pinnedRuntimeEnvOS(); err != nil || len(env) != 1 || strings.Contains(env[0], bogus) {
+		t.Fatalf("pinnedRuntimeEnvOS = %v, %v", env, err)
 	}
 
 	if got, err := pinnedConfigDirWindows(func() (string, error) { return `C:\Users\alice`, nil }); err != nil || got != filepath.Join(`C:\Users\alice`, "AppData", "Roaming", "iris") {

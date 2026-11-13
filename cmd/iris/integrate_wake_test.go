@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mateusz-klatt/iris/internal/config"
 	"github.com/mateusz-klatt/iris/internal/hook"
 	"github.com/mateusz-klatt/iris/internal/integrate"
 	"github.com/mateusz-klatt/iris/internal/proc"
@@ -338,6 +339,49 @@ func TestIntegrateAntigravityWakeFlagsAreOptInAndSurviveReinstall(t *testing.T) 
 	_ = child5.Wait()
 	if hook.VerifyAntigravityHelper(cfg, owner5, nil) || hook.AntigravityWakeEnabled(cfg) {
 		t.Fatal("homeless --no-wake left pinned helper or wake marker active")
+	}
+}
+
+func TestRunIntegrateAntigravityDefaultLayoutUsesIsolatedPinnedDir(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("USERPROFILE", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
+	t.Setenv("IRIS_STATE_DIR", filepath.Join(home, "state"))
+
+	isolatedPinned, err := config.PinnedDir()
+	if err != nil || !strings.HasPrefix(filepath.Clean(isolatedPinned), filepath.Clean(os.TempDir())) {
+		t.Fatalf("TestMain PinnedDir = %q, %v", isolatedPinned, err)
+	}
+	if err := os.MkdirAll(isolatedPinned, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hook.AntigravityWakePath(isolatedPinned), []byte("on\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	child1, owner1 := startCmdTestAgyHelper(t, isolatedPinned)
+	capture(t, func() {
+		if code := runIntegrate([]string{"antigravity", "--no-wake"}); code != 0 {
+			t.Fatalf("default layout --no-wake returned %d", code)
+		}
+	})
+	_ = child1.Wait()
+	if hook.VerifyAntigravityHelper(isolatedPinned, owner1, nil) || hook.AntigravityWakeEnabled(isolatedPinned) {
+		t.Fatal("default layout --no-wake did not stop helper or disable isolatedPinned marker")
+	}
+
+	if err := os.WriteFile(hook.AntigravityWakePath(isolatedPinned), []byte("on\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	child2, owner2 := startCmdTestAgyHelper(t, isolatedPinned)
+	capture(t, func() {
+		if code := runIntegrate([]string{"antigravity", "--remove"}); code != 0 {
+			t.Fatalf("default layout --remove returned %d", code)
+		}
+	})
+	_ = child2.Wait()
+	if hook.VerifyAntigravityHelper(isolatedPinned, owner2, nil) || hook.AntigravityWakeEnabled(isolatedPinned) {
+		t.Fatal("default layout --remove did not stop helper or disable isolatedPinned marker")
 	}
 }
 

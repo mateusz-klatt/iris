@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mateusz-klatt/iris/internal/config"
 	"github.com/mateusz-klatt/iris/internal/gitinfo"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 	"github.com/mateusz-klatt/iris/internal/integrate"
@@ -24,8 +25,15 @@ func TestMain(m *testing.M) {
 	if mode := os.Getenv("IRIS_FAKE_LIVE_CLIENT"); mode != "" {
 		os.Exit(fakeLiveClient(mode, os.Args[1:]))
 	}
+	dir, err := os.MkdirTemp("", "iris-test-home")
+	if err != nil {
+		panic(err)
+	}
+	restore := config.SetPinnedForTest(filepath.Join(dir, "pinned-iris"))
 	code := m.Run()
+	restore()
 	integrate.CleanupFake()
+	integrate.CleanupTestDir(dir, "iris-test-home")
 	os.Exit(code)
 }
 

@@ -14,11 +14,11 @@ func TestPinnedUnixHelpersCoverAccountAndPlatformBranches(t *testing.T) {
 	bogus := filepath.Join(t.TempDir(), "bogus")
 	t.Setenv("HOME", bogus)
 	t.Setenv("XDG_CONFIG_HOME", bogus)
-	if dir, err := PinnedDir(); err != nil || !filepath.IsAbs(dir) || strings.HasPrefix(dir, bogus) {
-		t.Fatalf("PinnedDir = %q, %v", dir, err)
+	if dir, err := pinnedConfigDirOS(); err != nil || !filepath.IsAbs(dir) || strings.HasPrefix(dir, bogus) {
+		t.Fatalf("pinnedConfigDirOS = %q, %v", dir, err)
 	}
-	if env, err := PinnedRuntimeEnv(); err != nil || len(env) != 1 || strings.Contains(env[0], bogus) {
-		t.Fatalf("PinnedRuntimeEnv = %v, %v", env, err)
+	if env, err := pinnedRuntimeEnvOS(); err != nil || len(env) != 1 || strings.Contains(env[0], bogus) {
+		t.Fatalf("pinnedRuntimeEnvOS = %v, %v", env, err)
 	}
 
 	okLookup := func(uid string) (*user.User, error) {

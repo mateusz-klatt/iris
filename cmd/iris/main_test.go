@@ -2,8 +2,10 @@ package main
 
 import (
 	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/mateusz-klatt/iris/internal/config"
 	"github.com/mateusz-klatt/iris/internal/integrate"
 )
 
@@ -20,7 +22,10 @@ func TestMain(m *testing.M) {
 	// These children inherit the parent's temporary home and can exit or be
 	// killed inside a test, before m.Run returns. Only the parent owns cleanup.
 	if os.Getenv("IRIS_TEST_MCP_CHILD") == "1" || os.Getenv("IRIS_TEST_HOOK_CHILD") == "1" {
-		os.Exit(m.Run())
+		restore := config.SetPinnedForTest(filepath.Join(os.Getenv("HOME"), "pinned-iris"))
+		code := m.Run()
+		restore()
+		os.Exit(code)
 	}
 	dir, err := os.MkdirTemp("", "iris-test-home")
 	if err != nil {
@@ -31,7 +36,9 @@ func TestMain(m *testing.M) {
 			panic(err)
 		}
 	}
+	restore := config.SetPinnedForTest(filepath.Join(dir, "pinned-iris"))
 	code := m.Run()
+	restore()
 	integrate.CleanupFake()
 	integrate.CleanupTestDir(dir, "iris-test-home")
 	os.Exit(code)

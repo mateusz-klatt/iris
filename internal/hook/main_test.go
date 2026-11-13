@@ -3,8 +3,10 @@ package hook
 import (
 	"io"
 	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/mateusz-klatt/iris/internal/config"
 	"github.com/mateusz-klatt/iris/internal/integrate"
 )
 
@@ -33,7 +35,9 @@ func TestMain(m *testing.M) {
 			panic(err)
 		}
 	}
+	restore := config.SetPinnedForTest(filepath.Join(dir, "pinned-iris"))
 	code := m.Run()
+	restore()
 	integrate.CleanupTestDir(dir, "iris-test-home")
 	os.Exit(code)
 }

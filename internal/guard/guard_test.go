@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	irisconfig "github.com/mateusz-klatt/iris/internal/config"
 	"github.com/mateusz-klatt/iris/internal/gitinfo"
 	"github.com/mateusz-klatt/iris/internal/hub"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
@@ -48,7 +49,15 @@ func TestMain(m *testing.M) {
 			panic(err)
 		}
 	}
-	os.Exit(m.Run())
+	dir, err := os.MkdirTemp("", "iris-guard-test")
+	if err != nil {
+		panic(err)
+	}
+	restore := irisconfig.SetPinnedForTest(filepath.Join(dir, "pinned-iris"))
+	code := m.Run()
+	restore()
+	_ = os.RemoveAll(dir)
+	os.Exit(code)
 }
 
 func TestInstallRemove(t *testing.T) {
