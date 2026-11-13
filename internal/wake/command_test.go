@@ -151,6 +151,16 @@ func commandBinary(t *testing.T) string {
 	if copyErr != nil || closeErr != nil {
 		t.Fatalf("copy recording executable: %v, close %v", copyErr, closeErr)
 	}
+	// Launch the copy once before any test times it. macOS assesses an executable on its
+	// first launch; on an Intel Mac with macOS 26 a fresh copy of the race-built test binary
+	// took 2.1 s to launch the first time and 1.0 s the second, and under a full race run
+	// that first launch passed the 5 s version timeout. This launch runs no test and no
+	// helper mode, outside every timeout, so the tests time the commands, not that check.
+	warm := exec.Command(path, "-test.run=^$")
+	warm.Env = append(os.Environ(), "IRIS_WAKE_COMMAND_HELPER=", "IRIS_WAKE_PROXY_HELPER=", "IRIS_WAKE_STATE_HELPER=")
+	if out, err := warm.CombinedOutput(); err != nil {
+		t.Fatalf("first launch of the copied executable: %v\n%s", err, out)
+	}
 	return path
 }
 
