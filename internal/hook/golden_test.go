@@ -225,7 +225,7 @@ func argvEvent(client, file string) string {
 			return "PreToolUse"
 		case name == "posttooluse":
 			return "PostToolUse"
-		case name == "sessionstart":
+		case strings.HasPrefix(name, "sessionstart"):
 			return "SessionStart"
 		default:
 			return "UserPromptSubmit"
@@ -370,4 +370,7 @@ var fixtureWant = map[string]decoded{
 	"kimi/pre_tool_use_write_denied.json": {kind: KindPreTool, session: kimiSession, cwd: "/workspace/project/hooklab", tool: "Write", class: ClassEdit, paths: []string{"deny-me.txt"}, call: "Write_0_a89dd82f"},
 	"kimi/sessionstart.json":              {kind: KindSessionStart, session: kimiSession, cwd: "/workspace/project/hooklab"},
 	"kimi/userpromptsubmit.json":          {kind: KindPrompt, session: kimiSession, cwd: "/workspace/project/hooklab"},
+	// Captured by kimi-home-iris (Kimi 2.6.1, scratch TUI) right after /clear: a new session id,
+	// and source "startup", not "clear".
+	"kimi/sessionstart_clear.json": {kind: KindSessionStart, session: "session_ed6d97b7-bcca-4709-9357-ce4864358892", cwd: "/workspace/project/hooklab"},
 }
