@@ -485,16 +485,30 @@ no-rollout rejection forms receive those outcomes. Other output, signals, timeou
 is unknown. Raw output is never saved as diagnostic text or written to MCP stdout.
 
 Fixed observations in `hook-observed.log`, event `mcp`, are `wake_root_eligible`,
-`wake_stream_following`, `wake_invalid_state`, `wake_hooks_unseen`, the `wake_failed` reasons
+`wake_stream_following`, `wake_invalid_state`, `wake_hooks_unseen`,
+`wake_deferred: session active`, `wake_aborted: session active`, the `wake_failed` reasons
 below, `wake_unknown` and `wake_worker_panic`. `wake_hooks_unseen` means the hub has no hook
 report from the bound execution and generation, so the session is not yet eligible; nothing ran
-and nothing failed. Each `wake_failed` observation names one condition, never error, command or
-client text, because doctor counts observations by their exact text:
+and nothing failed.
+
+`wake_deferred: session active` means the idle check reported the session active: for Codex an
+active thread, for Kimi a session that is busy, archived, locked or waiting on an interaction
+(ADR 026). `wake_aborted: session active` means Kimi answered a reserved prompt with `40931`, its
+session lock. Neither spends quota or is a failure; both check again after fifteen seconds. A
+session can stay active for many such checks, so the engine notes each only when a step's outcome
+changes to it: a session active for an hour leaves one line, not 240. Any other outcome clears
+that memory, so the next active period is noted again, and so does a new binding, whose engine
+starts without it.
+
+Each `wake_failed` observation names one condition, never error, command or client text, because
+doctor counts observations by their exact text:
 
 - `wake_failed: hook check`: the hub could not be asked whether the session's hooks were seen.
 - `wake_failed: attention read`: the authoritative attention read failed.
-- `wake_failed: version differs`: the executable named a version other than the client's, as
-  after a CLI update under a running session; restarting that session clears it.
+- `wake_failed: version differs`: the check found a version other than the client's. For Codex
+  the executable names another version than the running session, as after a CLI update under
+  it; restarting that session clears it. For Kimi the running `kimi web` server names another
+  version than the installed `kimi` (ADR 026); restarting `kimi web` clears it.
 - `wake_failed: binary check`: any other binary check failure, such as a missing executable,
   an unreadable version or, for Kimi, an unavailable web server.
 - `wake_failed: idle check`: the session's idle state could not be verified.

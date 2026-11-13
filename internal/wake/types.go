@@ -64,4 +64,6 @@ type engine struct {
 	hookSeen      bool
 	cursor        int64
 	stream        string
+	// condition is the observation of a lasting condition the previous step ended in, or empty.
+	condition string
 }

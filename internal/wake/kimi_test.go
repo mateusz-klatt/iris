@@ -15,6 +15,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -990,6 +991,57 @@ func TestKimiEngineAdmitsCanonicalSessionAndUsesKimiGuard(t *testing.T) {
 	}
 	if current := mustSnapshot(t, e.store).Document; current.LastFailure != nil {
 		t.Fatalf("ordinary busy state became an operational failure: %+v", current.LastFailure)
+	}
+}
+
+// A busy session is checked again every fifteen seconds for as long as its turn lasts, so each
+// busy outcome is noted when a step's outcome changes to it, not on every poll (ADR 017).
+func TestKimiEngineNotesABusySessionOncePerChange(t *testing.T) {
+	e, resolver, _, now := newEngineTest(t)
+	f := newKimiFake(t)
+	target := binding.WakeTarget{
+		Client: "kimi", SessionID: kimiTestSession, Host: "kimi-host",
+		Bound: binding.Bound{ExecutionID: "kimi-execution", Generation: 2, Rung: 3},
+	}
+	e.target, resolver.target = target, target
+	e.commands = f.commands
+	e.clientVersion = func() string { return kimiTestVersion }
+	e.store = newClientStateStore(e.store.sessions, "kimi", target.SessionID)
+	var observed []string
+	e.observe = func(text string) { observed = append(observed, text) }
+	for i, poll := range []struct {
+		busy       bool
+		promptCode int
+		noted      []string
+	}{
+		{false, 40931, []string{abortedSessionActive}},
+		{false, 40931, nil},
+		{true, 0, []string{deferredSessionActive}},
+		{true, 0, nil},
+		{true, 0, nil},
+		{false, 40931, []string{abortedSessionActive}},
+	} {
+		f.mu.Lock()
+		f.session["busy"], f.promptCode = poll.busy, poll.promptCode
+		f.mu.Unlock()
+		before := len(observed)
+		if got := e.step(context.Background()); got != engineDue(*now, 15*time.Second) {
+			t.Fatalf("poll %d: a busy session was not checked again after 15 s: %+v", i, got)
+		}
+		if noted := observed[before:]; !slices.Equal(noted, poll.noted) {
+			t.Fatalf("poll %d noted %q, want %q", i, noted, poll.noted)
+		}
+		*now = now.Add(15 * time.Second)
+	}
+	if d := mustSnapshot(t, e.store).Document; nativeQuota(d) != 0 || d.LastFailure != nil {
+		t.Fatalf("a busy session spent quota or became a failure: %+v", d)
+	}
+	f.mu.Lock()
+	f.session["busy"], f.promptCode = false, 0
+	f.mu.Unlock()
+	before := len(observed)
+	if got := e.step(context.Background()); !got.FileWait || len(observed) != before {
+		t.Fatalf("an idle session's wake: %+v, noted %q", got, observed[before:])
 	}
 }
 

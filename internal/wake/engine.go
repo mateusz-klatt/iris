@@ -9,23 +9,29 @@ import (
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 )
 
-// The fixed observations of a failed wake step and of a session whose hooks the hub has not
-// seen (ADR 017). Each names the condition and never carries error, command or client text: doctor counts observations
-// by their exact text, so a free-form part would split one cause into many rows.
+// Fixed observations of a wake step (ADR 017). Each names a condition and never carries
+// error, command or client text: doctor counts observations by their exact text, so a
+// free-form part would split one cause into many rows.
 const (
-	observedHooksUnseen  = "wake_hooks_unseen"
-	failedHookCheck      = "wake_failed: hook check"
-	failedAttentionRead  = "wake_failed: attention read"
-	failedVersionDiffers = "wake_failed: version differs"
-	failedBinaryCheck    = "wake_failed: binary check"
-	failedIdleCheck      = "wake_failed: idle check"
-	failedQueue          = "wake_failed: queue failed"
-	failedStateFile      = "wake_failed: state file"
+	observedHooksUnseen   = "wake_hooks_unseen"
+	deferredSessionActive = "wake_deferred: session active"
+	abortedSessionActive  = "wake_aborted: session active"
+	failedHookCheck       = "wake_failed: hook check"
+	failedAttentionRead   = "wake_failed: attention read"
+	failedVersionDiffers  = "wake_failed: version differs"
+	failedBinaryCheck     = "wake_failed: binary check"
+	failedIdleCheck       = "wake_failed: idle check"
+	failedQueue           = "wake_failed: queue failed"
+	failedStateFile       = "wake_failed: state file"
 )
 
 // step admits at most one reservation. Every hub read is outside the shared file
 // lock, and both snapshots are compared again by publish before installation.
 func (e *engine) step(ctx context.Context) stepResult {
+	// Only a step that ends in the same lasting condition sets this again; any other outcome
+	// clears it.
+	last := e.condition
+	e.condition = ""
 	session, valid := canonicalTargetSession(e.target)
 	if !valid || !e.current(ctx) {
 		return stepResult{}
@@ -78,7 +84,7 @@ func (e *engine) step(ctx context.Context) stepResult {
 	}
 	if !idle {
 		if detail == "Codex thread is active" || detail == "Kimi session is active" {
-			return e.after(15 * time.Second)
+			return e.recheck(last, deferredSessionActive, 15*time.Second)
 		}
 		return e.preflightFailure(current, info, detail, failedIdleCheck)
 	}
@@ -128,7 +134,7 @@ func (e *engine) step(ctx context.Context) stepResult {
 	switch answer.answer {
 	case "aborted":
 		if answer.detail == kimiActive {
-			return e.after(15 * time.Second)
+			return e.recheck(last, abortedSessionActive, 15*time.Second)
 		}
 		return stepResult{}
 	case "failed":
@@ -138,6 +144,17 @@ func (e *engine) step(ctx context.Context) stepResult {
 		e.note("wake_unknown")
 	}
 	return e.waitFile()
+}
+
+// recheck tries a lasting condition again after delay. A session can stay active for many
+// checks, so the observation is noted only when the previous step did not end in the same one:
+// one line each time the outcome changes, not one per check.
+func (e *engine) recheck(last, observation string, delay time.Duration) stepResult {
+	if observation != last {
+		e.note(observation)
+	}
+	e.condition = observation
+	return e.after(delay)
 }
 
 // A failed preflight can explain why a wake is deferred without creating a
