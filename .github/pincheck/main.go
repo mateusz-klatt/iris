@@ -24,7 +24,7 @@ func main() {
 
 func run(dirs []string, out io.Writer) int {
 	if len(dirs) == 0 {
-		fmt.Fprintln(out, "usage: pincheck <workflow directory>...")
+		_, _ = fmt.Fprintln(out, "usage: pincheck <workflow directory>...")
 		return 2
 	}
 	var problems []string
@@ -32,13 +32,13 @@ func run(dirs []string, out io.Writer) int {
 		// The pattern is fixed, so Glob cannot report ErrBadPattern.
 		files, _ := filepath.Glob(filepath.Join(dir, "*.y*ml"))
 		if len(files) == 0 {
-			fmt.Fprintf(out, "%s: no workflows found\n", dir)
+			_, _ = fmt.Fprintf(out, "%s: no workflows found\n", dir)
 			return 2
 		}
 		for _, file := range files {
 			raw, err := os.ReadFile(file)
 			if err != nil {
-				fmt.Fprintln(out, err)
+				_, _ = fmt.Fprintln(out, err)
 				return 2
 			}
 			problems = append(problems, check(file, string(raw))...)
@@ -46,7 +46,7 @@ func run(dirs []string, out io.Writer) int {
 	}
 	sort.Strings(problems)
 	for _, p := range problems {
-		fmt.Fprintln(out, p)
+		_, _ = fmt.Fprintln(out, p)
 	}
 	if len(problems) > 0 {
 		return 1

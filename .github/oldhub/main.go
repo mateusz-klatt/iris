@@ -36,11 +36,11 @@ func main() { os.Exit(run(os.Args[1:], os.Stderr)) }
 
 func run(args []string, out io.Writer) int {
 	if len(args) != 1 {
-		fmt.Fprintln(out, "usage: oldhub <database path>")
+		_, _ = fmt.Fprintln(out, "usage: oldhub <database path>")
 		return 2
 	}
 	if err := write(args[0]); err != nil {
-		fmt.Fprintln(out, "oldhub:", err)
+		_, _ = fmt.Fprintln(out, "oldhub:", err)
 		return 1
 	}
 	return 0
