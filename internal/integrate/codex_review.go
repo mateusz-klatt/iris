@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 // Reviewer is a client whose readiness depends on state only a person can
@@ -36,7 +38,9 @@ const codexReviewed = "hook review recorded; hash not verified; `iris doctor --l
 // a [hooks.state."<hooks.json>:<event>:<group>:<hook>"] table with a
 // trusted_hash, one per hook. Every Iris hook needs one, keyed by the
 // hooks.json path Codex builds from HOME or CODEX_HOME, exactly as Iris
-// wrote it. The hash is not checked: it could not be reproduced (measured on
+// wrote it. Keys are compared after TOML decoding: Codex writes a Windows
+// path as a literal key, [hooks.state.'C:\...'], and others as basic strings.
+// The hash is not checked: it could not be reproduced (measured on
 // 0.167.0), so a table left by an earlier hook at the same position would
 // also pass. Only a live run proves that the hooks run.
 func (c codexClient) Review(l Layout) (step, note string) {
@@ -81,7 +85,7 @@ func hooksReviewed(hooksFile, config string) bool {
 	}
 	root, _ := doc.(map[string]any)
 	hooks, _ := root["hooks"].(map[string]any)
-	headers := tomlHeaders(config)
+	trusted := trustedHooks(config)
 	for _, e := range codexEvents {
 		groups, _ := hooks[e.event].([]any)
 		group := -1
@@ -90,27 +94,29 @@ func hooksReviewed(hooksFile, config string) bool {
 				group = i
 			}
 		}
-		key := fmt.Sprintf("%s:%s:%d:0", hooksFile, e.key, group)
-		if group < 0 || !headers["hooks.state."+tomlString(key)] {
+		if group < 0 || !trusted[fmt.Sprintf("%s:%s:%d:0", hooksFile, e.key, group)] {
 			return false
 		}
 	}
 	return true
 }
 
-// tomlHeaders lists the table headers in a TOML file that carry a
-// trusted_hash, without the brackets.
-func tomlHeaders(config string) map[string]bool {
+// trustedHooks returns the decoded hooks.state keys whose table carries a
+// trusted_hash. A config that does not decode, including one with a
+// hooks.state entry that is not a table, trusts nothing.
+func trustedHooks(config string) map[string]bool {
+	var doc struct {
+		Hooks struct {
+			State map[string]map[string]any `toml:"state"`
+		} `toml:"hooks"`
+	}
 	out := map[string]bool{}
-	current := ""
-	for _, line := range strings.Split(config, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "[") && strings.HasSuffix(line, "]") {
-			current = strings.TrimSpace(line[1 : len(line)-1])
-			continue
-		}
-		if key, _, ok := strings.Cut(line, "="); ok && strings.TrimSpace(key) == "trusted_hash" && current != "" {
-			out[current] = true
+	if toml.Unmarshal([]byte(config), &doc) != nil {
+		return out
+	}
+	for key, table := range doc.Hooks.State {
+		if _, ok := table["trusted_hash"]; ok {
+			out[key] = true
 		}
 	}
 	return out
