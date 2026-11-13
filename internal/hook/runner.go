@@ -64,6 +64,10 @@ type Runner struct {
 	logAfter func(time.Duration) <-chan time.Time
 	// logged runs once the failure write has finished, even after Run has returned.
 	logged func()
+	// settling runs inside a shell reconcile's settle: with true once the first outcome has taken
+	// the slot, before it is recorded, and with false before a later outcome waits for that
+	// record. Tests hold the first outcome there to pin the order a preemption could produce.
+	settling func(first bool)
 }
 
 // Run catches every failure, including panics, and always returns valid output
