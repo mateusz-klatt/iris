@@ -192,7 +192,7 @@ func TestIntegrateGrokWakeFlagsStayLocalAndSurviveAPlainReinstall(t *testing.T) 
 	}
 }
 
-func TestIntegrateAntigravityWakeFlagsAreOptInAndSurviveReinstall(t *testing.T) {
+func TestIntegrateAntigravityWakeDefaultsOnAndPreservesExplicitChoices(t *testing.T) {
 	dir := t.TempDir()
 	home := filepath.Join(dir, "home")
 	cfg := filepath.Join(dir, "cfg")
@@ -213,12 +213,15 @@ func TestIntegrateAntigravityWakeFlagsAreOptInAndSurviveReinstall(t *testing.T) 
 	for _, tc := range []struct {
 		args    []string
 		enabled bool
+		marker  string
 	}{
-		{[]string{"antigravity"}, false},
-		{[]string{"agy", "--wake"}, true},
-		{[]string{"antigravity"}, true},
-		{[]string{"antigravity", "--no-wake"}, false},
-		{[]string{"agy"}, false},
+		{[]string{"antigravity"}, true, "default\n"},
+		{[]string{"agy", "--no-wake"}, false, "off\n"},
+		{[]string{"antigravity"}, false, "off\n"},
+		{[]string{"agy", "--wake"}, true, "on\n"},
+		{[]string{"antigravity"}, true, "on\n"},
+		{[]string{"antigravity", "--no-wake"}, false, "off\n"},
+		{[]string{"agy"}, false, "off\n"},
 	} {
 		out, errText := capture(t, func() {
 			if code := runIntegrate(tc.args); code != 0 {
@@ -226,8 +229,9 @@ func TestIntegrateAntigravityWakeFlagsAreOptInAndSurviveReinstall(t *testing.T) 
 			}
 		})
 		enabled, err := integrate.AntigravityWake(integrate.Layout{})
-		if err != nil || enabled != tc.enabled || !strings.Contains(out, "integrated antigravity") || errText != "" {
-			t.Fatalf("%v: enabled %v %v stdout %q stderr %q", tc.args, enabled, err, out, errText)
+		gotMarker := string(mustReadIntegrate(t, hook.AntigravityWakePath(cfg)))
+		if err != nil || enabled != tc.enabled || gotMarker != tc.marker || !strings.Contains(out, "integrated antigravity") || errText != "" {
+			t.Fatalf("%v: enabled %v %v marker %q stdout %q stderr %q", tc.args, enabled, err, gotMarker, out, errText)
 		}
 	}
 

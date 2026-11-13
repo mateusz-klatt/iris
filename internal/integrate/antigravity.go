@@ -45,6 +45,18 @@ func AgySettings(l Layout) (string, error) {
 const AgyAllowRule = "mcp(iris/*)"
 
 func (c antigravityClient) Install(l Layout, _ Plugins) error {
+	if err := c.installFiles(l); err != nil {
+		return err
+	}
+	configDir, _ := l.IrisConfigDir()
+	pinnedDir, err := l.pinnedConfigDir()
+	if err != nil || !sameConfigDir(l.goos(), configDir, pinnedDir) {
+		return nil
+	}
+	return l.update(Antigravity, filepath.Join(configDir, antigravityWakeFile), defaultAntigravityWake)
+}
+
+func (c antigravityClient) installFiles(l Layout) error {
 	files, err := c.Files(l)
 	if err != nil {
 		return err
@@ -154,8 +166,21 @@ func agyMatched(l Layout, iris, event string) map[string]any {
 	}
 }
 
-// antigravityWakeFile is the opt-in local wake marker beside hub.token.
+// antigravityWakeFile is the local three-state wake marker beside hub.token:
+// "default" (no explicit choice, wake active), "on" (explicit --wake, wake active)
+// or "off" (explicit --no-wake, wake disabled). A missing file is unconfigured (false).
 const antigravityWakeFile = "antigravity-wake"
+
+func defaultAntigravityWake(existing []byte) ([]byte, error) {
+	switch strings.TrimSpace(string(existing)) {
+	case "", "default":
+		return []byte("default\n"), nil
+	case "on", "off":
+		return existing, nil
+	default:
+		return nil, fmt.Errorf("%w: unrecognized antigravity wake marker", ErrBroken)
+	}
+}
 
 func sameConfigDir(goos, a, b string) bool {
 	ca, cb := filepath.Clean(a), filepath.Clean(b)
@@ -173,9 +198,18 @@ func writePinnedWakeOff(pinnedDir string) error {
 	return atomicWrite(path, []byte("off\n"))
 }
 
+func wakeMarkerEnabled(raw []byte) bool {
+	switch strings.TrimSpace(string(raw)) {
+	case "on", "default":
+		return true
+	default:
+		return false
+	}
+}
+
 func wakeMarkerOn(dir string) bool {
 	raw, absent, err := readExisting(filepath.Join(dir, antigravityWakeFile))
-	return err == nil && !absent && strings.TrimSpace(string(raw)) == "on"
+	return err == nil && !absent && wakeMarkerEnabled(raw)
 }
 
 // AntigravityConfigDirs returns the unique Iris configuration directories whose recorded
@@ -194,10 +228,11 @@ func AntigravityConfigDirs(l Layout) ([]string, error) {
 	return dirs, errors.Join(cfgErr, pinnedErr)
 }
 
-// InstallAntigravityWake installs Antigravity and writes the opt-in wake marker beside hub.token.
-// Enabling wake requires IrisConfigDir to match the OS account's pinned default directory so hooks,
-// integrate and the detached helper agree on one location; disabling wake always also writes off
-// in the pinned directory. Plain Install leaves the marker untouched, and settings.json never
+// InstallAntigravityWake installs Antigravity and writes an explicit wake preference ("on" or
+// "off") beside hub.token. Enabling wake requires IrisConfigDir to match the OS account's pinned
+// default directory so hooks, integrate and the detached helper agree on one location; disabling
+// wake always also writes off in the pinned directory. Plain Install writes "default" when no
+// explicit "on" or "off" marker is present on the pinned directory, and settings.json never
 // receives a command(...) rule.
 func InstallAntigravityWake(l Layout, enabled bool) error {
 	pinnedDir, pinnedErr := l.pinnedConfigDir()
@@ -212,7 +247,7 @@ func InstallAntigravityWake(l Layout, enabled bool) error {
 		if !sameConfigDir(l.goos(), configDir, pinnedDir) {
 			return fmt.Errorf("antigravity wake requires the default Iris configuration directory %s; current environment resolves %s", pinnedDir, configDir)
 		}
-		if err := (antigravityClient{}).Install(l, nil); err != nil {
+		if err := (antigravityClient{}).installFiles(l); err != nil {
 			return err
 		}
 		return l.update(Antigravity, filepath.Join(configDir, antigravityWakeFile), func([]byte) ([]byte, error) {
@@ -228,7 +263,7 @@ func InstallAntigravityWake(l Layout, enabled bool) error {
 	if cfgErr != nil {
 		return errors.Join(cfgErr, pinnedCleanupErr)
 	}
-	if err := (antigravityClient{}).Install(l, nil); err != nil {
+	if err := (antigravityClient{}).installFiles(l); err != nil {
 		return errors.Join(err, pinnedCleanupErr)
 	}
 	err := l.update(Antigravity, filepath.Join(configDir, antigravityWakeFile), func([]byte) ([]byte, error) {
@@ -237,8 +272,8 @@ func InstallAntigravityWake(l Layout, enabled bool) error {
 	return errors.Join(err, pinnedCleanupErr)
 }
 
-// AntigravityWake reports whether Antigravity's opt-in wake marker is explicitly "on".
-// A missing marker is false (off by default).
+// AntigravityWake reports whether Antigravity's local wake marker enables wake ("on" or "default").
+// A missing or "off" marker reports false.
 func AntigravityWake(l Layout) (bool, error) {
 	configDir, err := l.IrisConfigDir()
 	if err != nil {
@@ -251,7 +286,7 @@ func AntigravityWake(l Layout) (bool, error) {
 	if absent {
 		return false, nil
 	}
-	return strings.TrimSpace(string(raw)) == "on", nil
+	return wakeMarkerEnabled(raw), nil
 }
 
 func (c antigravityClient) Remove(l Layout, _ Plugins) error {

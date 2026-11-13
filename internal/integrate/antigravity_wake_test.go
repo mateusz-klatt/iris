@@ -10,36 +10,34 @@ import (
 	"github.com/mateusz-klatt/iris/internal/config"
 )
 
-func TestAntigravityWakeOptInNoCommandAllowRuleAndRemove(t *testing.T) {
+func TestAntigravityWakeDefaultOnThreeStateNoCommandAllowRuleAndRemove(t *testing.T) {
 	l := testLayout(t)
 	c, _ := ByName(Antigravity)
-
-	// Fresh plain Install leaves wake off, writes no marker, has zero drift, and writes no command(...) rule.
-	if err := c.Install(l, nil); err != nil {
-		t.Fatal(err)
-	}
-	enabled, err := AntigravityWake(l)
-	if err != nil || enabled {
-		t.Fatalf("fresh install: enabled=%v err=%v", enabled, err)
-	}
 	configDir, err := l.IrisConfigDir()
 	if err != nil {
 		t.Fatal(err)
 	}
 	markerPath := filepath.Join(configDir, antigravityWakeFile)
-	if _, err := os.Stat(markerPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("plain install wrote wake marker: %v", err)
-	}
-	if drifted, err := l.Drift(c); err != nil || len(drifted) != 0 {
-		t.Fatalf("drift = %v, %v", drifted, err)
+
+	// Before Install, AntigravityWake is false (missing marker is unconfigured).
+	if enabled, err := AntigravityWake(l); err != nil || enabled {
+		t.Fatalf("before install: enabled=%v err=%v", enabled, err)
 	}
 
-	// Opt-in --wake writes "on\n", survives plain Install, and still never writes command(...) to settings.json.
-	if err := InstallAntigravityWake(l, true); err != nil {
+	// Fresh plain Install writes "default\n" (no explicit choice, wake active), has zero drift,
+	// and never writes a command(...) allow rule to settings.json.
+	if err := c.Install(l, nil); err != nil {
 		t.Fatal(err)
 	}
-	if enabled, err = AntigravityWake(l); err != nil || !enabled {
-		t.Fatalf("--wake: enabled=%v err=%v", enabled, err)
+	enabled, err := AntigravityWake(l)
+	if err != nil || !enabled {
+		t.Fatalf("fresh install: enabled=%v err=%v", enabled, err)
+	}
+	if got := string(mustRead(t, markerPath)); got != "default\n" {
+		t.Fatalf("fresh install marker = %q, want default", got)
+	}
+	if drifted, err := l.Drift(c); err != nil || len(drifted) != 0 {
+		t.Fatalf("drift after fresh install = %v, %v", drifted, err)
 	}
 	settingsPath, err := AgySettings(l)
 	if err != nil {
@@ -49,19 +47,54 @@ func TestAntigravityWakeOptInNoCommandAllowRuleAndRemove(t *testing.T) {
 	if strings.Contains(settingsText, "command(") || !strings.Contains(settingsText, AgyAllowRule) {
 		t.Fatalf("unexpected settings.json:\n%s", settingsText)
 	}
+
+	// An older pre-default-on installation without antigravity-wake maps to "no choice":
+	// Drift flags the missing marker, and plain re-install writes "default\n" turning wake on.
+	if err := os.Remove(markerPath); err != nil {
+		t.Fatal(err)
+	}
+	if drifted, err := l.Drift(c); err != nil || len(drifted) != 1 || drifted[0] != markerPath {
+		t.Fatalf("drift with missing marker = %v, %v", drifted, err)
+	}
 	if err := c.Install(l, nil); err != nil {
 		t.Fatal(err)
 	}
-	if enabled, err = AntigravityWake(l); err != nil || !enabled {
-		t.Fatalf("plain reinstall cleared on: enabled=%v err=%v", enabled, err)
+	if got := string(mustRead(t, markerPath)); got != "default\n" {
+		t.Fatalf("re-install from missing marker = %q, want default", got)
 	}
 
-	// --no-wake writes "off\n" and survives plain Install.
+	// Explicit --wake writes "on\n" (distinct from "default\n"), has zero drift, and survives plain Install.
+	if err := InstallAntigravityWake(l, true); err != nil {
+		t.Fatal(err)
+	}
+	if enabled, err = AntigravityWake(l); err != nil || !enabled {
+		t.Fatalf("--wake: enabled=%v err=%v", enabled, err)
+	}
+	if got := string(mustRead(t, markerPath)); got != "on\n" {
+		t.Fatalf("--wake marker = %q, want on", got)
+	}
+	if drifted, err := l.Drift(c); err != nil || len(drifted) != 0 {
+		t.Fatalf("drift with explicit on = %v, %v", drifted, err)
+	}
+	if err := c.Install(l, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(mustRead(t, markerPath)); got != "on\n" {
+		t.Fatalf("plain reinstall overwrote explicit on: %q", got)
+	}
+
+	// Explicit --no-wake writes "off\n", has zero drift, and survives plain Install.
 	if err := InstallAntigravityWake(l, false); err != nil {
 		t.Fatal(err)
 	}
 	if enabled, err = AntigravityWake(l); err != nil || enabled {
 		t.Fatalf("--no-wake: enabled=%v err=%v", enabled, err)
+	}
+	if got := string(mustRead(t, markerPath)); got != "off\n" {
+		t.Fatalf("--no-wake marker = %q, want off", got)
+	}
+	if drifted, err := l.Drift(c); err != nil || len(drifted) != 0 {
+		t.Fatalf("drift with explicit off = %v, %v", drifted, err)
 	}
 	if err := c.Install(l, nil); err != nil {
 		t.Fatal(err)
@@ -69,16 +102,43 @@ func TestAntigravityWakeOptInNoCommandAllowRuleAndRemove(t *testing.T) {
 	if enabled, err = AntigravityWake(l); err != nil || enabled {
 		t.Fatalf("plain reinstall cleared off: enabled=%v err=%v", enabled, err)
 	}
+	if got := string(mustRead(t, markerPath)); got != "off\n" {
+		t.Fatalf("plain reinstall overwrote explicit off: %q", got)
+	}
 
-	// Remove deletes the wake marker alongside hooks, MCP entry and mcp(iris/*).
-	if err := InstallAntigravityWake(l, true); err != nil {
+	// Unrecognized text in antigravity-wake fails closed on AntigravityWake, is reported as
+	// ErrBroken by plain Install and Drift rather than silently overwritten, and is preserved on Remove.
+	if err := os.WriteFile(markerPath, []byte("custom-user-note\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if enabled, err = AntigravityWake(l); err != nil || enabled {
+		t.Fatalf("unrecognized marker: enabled=%v err=%v", enabled, err)
+	}
+	if err := c.Install(l, nil); !errors.Is(err, ErrBroken) {
+		t.Fatalf("plain install on unrecognized marker = %v, want ErrBroken", err)
+	}
+	if _, err := l.Drift(c); !errors.Is(err, ErrBroken) {
+		t.Fatalf("Drift on unrecognized marker = %v, want ErrBroken", err)
+	}
+	if err := c.Remove(l, nil); err != nil {
+		t.Fatal(err)
+	}
+	if got := string(mustRead(t, markerPath)); got != "custom-user-note\n" {
+		t.Fatalf("Remove altered user text in wake marker: %q", got)
+	}
+	if err := os.Remove(markerPath); err != nil {
+		t.Fatal(err)
+	}
+
+	// Remove deletes Iris's "default\n" wake marker alongside hooks, MCP entry and mcp(iris/*).
+	if err := c.Install(l, nil); err != nil {
 		t.Fatal(err)
 	}
 	if err := c.Remove(l, nil); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := os.Stat(markerPath); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("Remove kept wake marker: %v", err)
+		t.Fatalf("Remove kept default wake marker: %v", err)
 	}
 }
 
@@ -200,7 +260,8 @@ func TestAntigravityConfigDirSplitAndPinnedFallback(t *testing.T) {
 		t.Fatalf("windows case-insensitive --wake failed: %v", err)
 	}
 
-	// 4. Split directories: --wake refuses naming both paths; --no-wake and --remove both write "off\n" to pinnedDir idempotently.
+	// 4. Split directories: plain Install installs client files without writing a wake marker,
+	// --wake refuses naming both paths, and --no-wake and --remove both write "off\n" to pinnedDir idempotently.
 	pinnedDir := filepath.Join(t.TempDir(), "pinned-iris")
 	if err := os.MkdirAll(pinnedDir, 0o700); err != nil {
 		t.Fatal(err)
@@ -211,6 +272,13 @@ func TestAntigravityConfigDirSplitAndPinnedFallback(t *testing.T) {
 	splitLayout := testLayout(t)
 	splitCfg, _ := splitLayout.IrisConfigDir()
 	splitLayout.PinnedConfigDir = func() (string, error) { return pinnedDir, nil }
+
+	if err := c.Install(splitLayout, nil); err != nil {
+		t.Fatalf("split plain Install failed: %v", err)
+	}
+	if _, statErr := os.Stat(filepath.Join(splitCfg, antigravityWakeFile)); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("split plain Install wrote wake marker in %s: %v", splitCfg, statErr)
+	}
 
 	err = InstallAntigravityWake(splitLayout, true)
 	if err == nil || !strings.Contains(err.Error(), pinnedDir) || !strings.Contains(err.Error(), splitCfg) {
@@ -242,21 +310,25 @@ func TestAntigravityConfigDirSplitAndPinnedFallback(t *testing.T) {
 		t.Fatalf("pinned marker after split --remove = %q", got)
 	}
 
-	// 5. Same configDir with a separate StateDir (where unwire did not track antigravity-wake) still turns "on" to "off\n" on Remove.
+	// 5. Same configDir with a separate StateDir (where unwire did not track antigravity-wake)
+	// still turns both "on" and "default" to "off\n" on Remove.
+	for _, untracked := range []string{"on\n", "default\n"} {
+		samePinned := testLayout(t)
+		sameCfg, _ := samePinned.IrisConfigDir()
+		if err := os.MkdirAll(sameCfg, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(sameCfg, antigravityWakeFile), []byte(untracked), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := c.Remove(samePinned, nil); err != nil {
+			t.Fatalf("same-dir untracked %q Remove: %v", untracked, err)
+		}
+		if got := string(mustRead(t, filepath.Join(sameCfg, antigravityWakeFile))); got != "off\n" {
+			t.Fatalf("same-dir untracked %q after Remove = %q", untracked, got)
+		}
+	}
 	samePinned := testLayout(t)
-	sameCfg, _ := samePinned.IrisConfigDir()
-	if err := os.MkdirAll(sameCfg, 0o700); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(sameCfg, antigravityWakeFile), []byte("on\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := c.Remove(samePinned, nil); err != nil {
-		t.Fatalf("same-dir untracked marker Remove: %v", err)
-	}
-	if got := string(mustRead(t, filepath.Join(sameCfg, antigravityWakeFile))); got != "off\n" {
-		t.Fatalf("same-dir untracked marker after Remove = %q", got)
-	}
 
 	// 6. Homeless --no-wake and --remove still disable pinnedDir while returning the IrisConfigDir error on --no-wake;
 	// broken Install on split --no-wake and non-regular pinned marker path also return errors cleanly.

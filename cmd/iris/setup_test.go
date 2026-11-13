@@ -170,6 +170,65 @@ func TestSetupPreservesExplicitCodexWakeDisable(t *testing.T) {
 	}
 }
 
+func TestSetupDefaultsAntigravityWakeOnAndPreservesExplicitChoices(t *testing.T) {
+	home := t.TempDir()
+	cfgDir := filepath.Join(home, ".config", "iris")
+	layout := integrate.Layout{
+		Home:            home,
+		StateDir:        filepath.Join(home, "state"),
+		Getenv:          func(string) string { return "" },
+		LookPath:        func(string) (string, error) { return "", os.ErrNotExist },
+		PinnedConfigDir: func() (string, error) { return cfgDir, nil },
+		GOOS:            "linux",
+	}
+	runAgySetup := func() {
+		t.Helper()
+		var out bytes.Buffer
+		code := setup([]string{"--yes", "--hub", "https://hub.example"}, setupEnv{
+			out: &out, errw: &out, layout: layout,
+			detect: func(func(string) (string, error)) []string { return []string{integrate.Antigravity} },
+			runDoctor: func(context.Context, doctor.Options) (doctor.Result, error) {
+				return doctor.Result{HubUp: true, TokenOK: true}, nil
+			},
+			tokenFile: filepath.Join(cfgDir, "hub.token"),
+		})
+		if code != 0 {
+			t.Fatalf("setup exit %d: %s", code, out.String())
+		}
+	}
+
+	markerPath := filepath.Join(cfgDir, "antigravity-wake")
+	runAgySetup()
+	if enabled, err := integrate.AntigravityWake(layout); err != nil || !enabled {
+		t.Fatalf("fresh setup: enabled=%v err=%v", enabled, err)
+	}
+	if raw, err := os.ReadFile(markerPath); err != nil || string(raw) != "default\n" {
+		t.Fatalf("fresh setup marker = %q, %v", raw, err)
+	}
+
+	if err := integrate.InstallAntigravityWake(layout, false); err != nil {
+		t.Fatal(err)
+	}
+	runAgySetup()
+	if enabled, err := integrate.AntigravityWake(layout); err != nil || enabled {
+		t.Fatalf("setup after --no-wake: enabled=%v err=%v", enabled, err)
+	}
+	if raw, err := os.ReadFile(markerPath); err != nil || string(raw) != "off\n" {
+		t.Fatalf("setup after --no-wake marker = %q, %v", raw, err)
+	}
+
+	if err := integrate.InstallAntigravityWake(layout, true); err != nil {
+		t.Fatal(err)
+	}
+	runAgySetup()
+	if enabled, err := integrate.AntigravityWake(layout); err != nil || !enabled {
+		t.Fatalf("setup after --wake: enabled=%v err=%v", enabled, err)
+	}
+	if raw, err := os.ReadFile(markerPath); err != nil || string(raw) != "on\n" {
+		t.Fatalf("setup after --wake marker = %q, %v", raw, err)
+	}
+}
+
 func TestSetupLoopbackInstallsService(t *testing.T) {
 	var listen, token string
 	var out bytes.Buffer

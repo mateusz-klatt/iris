@@ -68,6 +68,18 @@ func TestAntigravityWakeMarkerAndDecode(t *testing.T) {
 	if !AntigravityWakeEnabled(dir) {
 		t.Fatal("on marker reported disabled")
 	}
+	if err := os.WriteFile(AntigravityWakePath(dir), []byte("  default \n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !AntigravityWakeEnabled(dir) {
+		t.Fatal("default marker reported disabled")
+	}
+	if err := os.WriteFile(AntigravityWakePath(dir), []byte("custom\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if AntigravityWakeEnabled(dir) {
+		t.Fatal("unrecognized marker reported enabled")
+	}
 
 	// Missing executionNum decodes as -1 so Stop never treats it as 0.
 	ev, err := Decode(ClientAntigravity, "Stop", []byte(`{"conversationId":"conv-1","fullyIdle":true,"terminationReason":"NO_TOOL_CALL","continuationActive":true}`))

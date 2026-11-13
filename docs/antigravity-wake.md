@@ -8,26 +8,45 @@ and spend model budget.
 
 ## Enable or disable wake
 
-Fresh integration and ordinary reintegration leave Antigravity wake off. Enable or disable it
-explicitly with:
+Fresh `iris integrate antigravity` and `iris setup` enable Antigravity wake by default when the
+resolved Iris configuration directory matches the OS account's default Iris directory, writing
+`default` to `antigravity-wake` beside `hub.token`. Because Iris never writes a `command(...)` allow
+rule, default-on wake costs **one interactive approval prompt per armed conversation** (and again
+after `/clear`). Override the preference explicitly with:
 
 ```sh
-iris integrate antigravity --wake
 iris integrate antigravity --no-wake
+iris integrate antigravity --wake
 ```
 
-`--wake` writes `on` to `antigravity-wake` in the Iris configuration directory, refusing (and naming
-both paths) if environment overrides resolve a directory different from the OS account's default Iris
-directory. `--no-wake` writes `off`. Setup and bare `iris integrate antigravity` keep an existing
-`on` or `off` choice. Both `--no-wake` and `iris integrate --remove antigravity` stop live
-Antigravity wake helpers after verifying each helper process by PID and start time, and always also
-write `off` and stop recorded helpers in the OS account's default Iris directory idempotently.
+`antigravity-wake` uses three on-disk states so a default installation is never mistaken for an
+explicit choice:
+
+- `default` — no explicit choice (wake enabled), written by `iris integrate antigravity`,
+  `iris integrate --all` and `iris setup` on the OS account's default Iris directory when no
+  explicit `on` or `off` marker is present. (If environment overrides resolve a different directory,
+  plain `iris integrate antigravity` and `iris setup` install hooks and MCP without writing
+  `antigravity-wake`, since the hardened helper runs only against the OS account's default
+  directory.)
+- `on` — explicit opt-in (`--wake`, wake enabled), refusing (and naming both paths) if environment
+  overrides resolve a directory different from the OS account's default Iris directory.
+- `off` — explicit opt-out (`--no-wake`, wake disabled).
+
+`iris setup` and bare `iris integrate antigravity` keep an existing `on` or `off` choice untouched.
+Prior installations without `antigravity-wake` map to no explicit choice: wake remains off while the
+file is absent (`iris doctor` reports configuration drift on `antigravity-wake`), and running
+`iris integrate antigravity` or `iris setup` writes `default` and enables wake; existing `on` and
+`off` files keep their explicit meaning. Both `--no-wake` and `iris integrate --remove antigravity`
+stop live Antigravity wake helpers after verifying each helper process by PID and start time, and
+always also write `off` (when split or untracked on `--remove`, and always on `--no-wake`) and stop
+recorded helpers in the OS account's default Iris directory idempotently.
 
 ## Approval and arming
 
 Antigravity passes `ANTIGRAVITY_LS_ADDRESS` and `ANTIGRAVITY_CSRF_TOKEN` to `run_command` shells,
 not to hooks or MCP servers. When the hook's Iris directory matches the OS account's default
-directory, wake is `on`, and a conversation reaches an idle `Stop` (`fullyIdle: true`,
+directory, wake is enabled (`default` or `on`), and a conversation reaches an idle `Stop`
+(`fullyIdle: true`,
 `terminationReason == "NO_TOOL_CALL"`, `executionNum == 0`, `continuationActive == false`) with no
 live helper for that `conversationId` and no `failed` latch on that `(agy pid, start_ms)`, `Stop`
 returns `decision: "continue"` once asking the model to invoke:
