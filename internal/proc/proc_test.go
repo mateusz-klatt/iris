@@ -3,10 +3,35 @@ package proc
 import (
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"testing"
+	"time"
 )
+
+// A process that has exited is not running, even before its parent collects it: a zombie on
+// Linux and macOS, and on Windows a process object that the parent's handle keeps. The child is
+// this test binary running no tests, and it is collected only after the check.
+func TestAnExitedProcessIsNotRunningBeforeItIsCollected(t *testing.T) {
+	self, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	child := exec.Command(self, "-test.run=^$")
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = child.Wait() }()
+	for deadline := time.Now().Add(30 * time.Second); ; time.Sleep(10 * time.Millisecond) {
+		if _, ok := Lookup(child.Process.Pid); !ok {
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("an exited child that was not collected still counted as running")
+		}
+	}
+}
 
 func TestNearestFrom(t *testing.T) {
 	tree := map[int]Snapshot{

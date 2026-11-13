@@ -8,12 +8,17 @@ import (
 	"golang.org/x/sys/unix"
 )
 
+// zombie is SZOMB, the p_stat of a process that has exited but not been collected (sys/proc.h).
+const zombie = 5
+
 func lookupOS(pid int) (Snapshot, bool) {
 	if pid <= 0 {
 		return Snapshot{}, false
 	}
 	k, err := unix.SysctlKinfoProc("kern.proc.pid", pid)
-	if err != nil || k == nil {
+	// A zombie has exited and only waits for its parent to collect it, so it is not running, as
+	// on Linux.
+	if err != nil || k == nil || k.Proc.P_stat == zombie {
 		return Snapshot{}, false
 	}
 	name := k.Proc.P_comm[:]
