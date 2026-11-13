@@ -1,9 +1,8 @@
 # 030: Wake Kimi by completing a one-shot background watcher
 
-Status: proposed for opt-in implementation on the owner's direction, 2026-11-13. Changes D7 for
-Kimi only and supersedes ADR 026 entirely. No MCP web worker is started for any Kimi session. The
-attention identity and told-state rules of ADR 017 remain in force. After native acceptance, the
-owner's later direction makes wake enabled by default where the implementation is verified live.
+Status: accepted on 2026-11-13 (holzera). Supersedes ADR 026 entirely; no MCP web worker is started
+for any Kimi session. The implementation follows in its own PR. Wake stays off until the native
+acceptance passes, then becomes the default (owner, 2026-11-13).
 
 ## Problem
 
