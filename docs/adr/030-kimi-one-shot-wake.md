@@ -93,35 +93,54 @@ follow-up measurements.
 model starts it only through Kimi's managed background Bash, with `run_in_background:true`,
 `disable_timeout:true` and description exactly `Iris: wait for new attention`. The disabled client
 timeout is necessary because Kimi's default background timeout is ten minutes, but the watcher itself
-has an absolute 24-hour lifetime. Its deadline produces a non-zero exit without an attention line; the
-resulting terminal notification may cost one turn before the watcher is re-armed.
+has an absolute 24-hour lifetime. Its deadline produces a non-zero exit without an attention line;
+the resulting terminal notification may cost one turn, but expiry never requests automatic re-arming.
 
 The watcher exits 0 only after it prints one fixed, content-free Iris line for new attention and
 durably checkpoints that attention. The line asks the model to use the Iris inbox and claims tools;
 it carries no message body, sender, token or native task output. Printing is not the wake: exit 0 is.
 The watcher prints before checkpointing, as the persistent watch does. A checkpoint failure exits
-non-zero and may replay attention on the next run; a duplicate wake is preferable to skipping it.
+non-zero and may replay attention on a later manually armed run; a duplicate wake is preferable to
+skipping it.
 
-A transient hub or socket failure uses the existing bounded reconnect/backoff and consumes the same
-24-hour lifetime. It does not print attention and does not start a new Execution. Parent-process
-exit, wake being disabled, a changed native session, confirmed Execution loss, an ambiguous binding,
-or the absolute deadline ends the watcher non-zero. There is no `:takeover`, lock bypass, detached
-helper or listener after the watcher exits.
+### Terminal outcomes and retry policy
+
+Only an attention exit 0 asks the model to fetch inbox/claims and arm a replacement. Other terminal
+outcomes never request automatic re-arming, although Kimi may still open a turn to report them:
+
+- **Disabled:** wake was turned off, the integration was removed, the parent ended or the native
+  session changed. A conditional `disabled` state prevents another request. `--no-wake` and removal
+  stop the recorded watcher without creating a retry loop.
+- **Duplicate:** another live watcher owns the session key. The duplicate exits without opening a
+  stream or moving a cursor and never replaces that live record. No replacement is requested.
+- **Permanent failure or expiry:** positive binding or startup fails permanently, or the 24-hour
+  lifetime expires. A conditional `failed`/`expired` state is written only when no live watcher owns
+  the current key and never overwrites one. SessionStart or an explicit user request can clear it.
+
+A transient hub or socket failure instead uses the existing bounded reconnect/backoff inside the
+same process and consumes the 24-hour lifetime. It does not print attention or start a new Execution.
+There is no `:takeover`, lock bypass, detached helper or listener after the watcher exits. Any later
+ordinary turn may use the durable cursor, but only SessionStart or an explicit user request rearms
+after these non-attention outcomes.
 
 ### A durable cursor, never an initial backlog wake
 
 Each watcher has one positive start cursor and follows only `inbox_changed` and `claim_available`.
 The per-session record retains its stream, checkpointed cursor, last emitted identities and
-per-kind coalescing deadlines across one-shot processes. The hub consumer name is `iris-watch-kimi`,
-distinct from other clients' persistent monitors.
+per-kind coalescing deadlines across one-shot processes. The socket is anonymous: it sends no
+`consumer_id`. After printing, Iris explicitly checkpoints through the existing events read with
+`consumer_id=iris-watch`, the name the hub already special-cases. This needs no hub protocol change
+and does not let the socket advance retention without an emitted line.
 
 - With no prior record, the initial snapshot establishes the current stream and high-water cursor.
   Existing unread mail and old freed paths do not print or exit. SessionStart, prompt hooks and the
   durable inbox already cover that backlog.
 - With a prior record, replay starts after its checkpoint. Attention committed between completion
   and re-arm is therefore new to this watcher, not initial history. Before printing, Iris reads
-  authoritative attention and the hook told state again. Attention already fetched or told is
-  checkpointed without a wake; otherwise the fixed line is printed and the cursor is checkpointed.
+  authoritative attention and the hook told state again. Mail already fetched or told is checkpointed
+  without a wake. Claim availability stays historical as ADR 017 specifies and may print once unless
+  the told or emitted checkpoint already covers it; that can cost one extra turn. Otherwise the fixed
+  line is printed and the cursor is checkpointed.
 - A same-stream reset uses the durable attention identity, not counts. Only an identity newer than
   the saved cursor can qualify. A snapshot with no newer pending identity merely re-anchors the
   watcher. If the evidence is too old to make that comparison, Iris conservatively re-anchors
@@ -132,7 +151,8 @@ distinct from other clients' persistent monitors.
 
 The first candidate after an idle period is eligible immediately. The existing 30-second coalescing
 window survives re-arming through the per-session record: later candidates wait out the remainder,
-and an authoritative recount suppresses one already handled. A candidate is not postponed forever by
+and an authoritative recount suppresses mail already fetched. Availability stays historical. A
+candidate is not postponed forever by
 new events. Checkpointing covers every event folded into the emitted line. Coalescing metadata is
 independent of the cursor: an unreadable or malformed coalescing record means no coalescing delay,
 never a suppressed wake or an inference that attention was told. A wake never marks attention told;
@@ -148,14 +168,16 @@ owner-only protection on Windows. Records are keyed by `(kimi pid, start time, n
 
 A record holds an `arm_requested` marker or a live `(watcher pid, start time, attempt id)`, plus the
 cursor and coalescing state above. Process checks use both pid and start time and reject dead and
-zombie processes. Every mutation is conditional under the local state lock; cleanup removes only
-the record that still carries the exiting watcher's attempt id.
+zombie processes. Every mutation is conditional under the local state lock. Cleanup clears only the
+exiting attempt's ownership when the record still carries its attempt id; the durable stream,
+cursor, emitted identities and coalescing state remain. Failure and disabled states likewise never
+replace a live watcher.
 
 When wake is enabled and no live or requested watcher exists, an ordinary Kimi `Stop` writes
 `arm_requested` with its time and returns the client's blocking continuation. Its stderr is exactly:
 
 ```text
-Start one background Bash task with command exactly `iris watch --client kimi --once`, description exactly `Iris: wait for new attention`, run_in_background=true and disable_timeout=true. Then stop. When its terminal notification arrives, fetch the Iris inbox and relevant claims and arm exactly one replacement before ending. Iris asks for this but cannot verify the command you chose.
+Start one background Bash task with command exactly `iris watch --client kimi --once`, description exactly `Iris: wait for new attention`, run_in_background=true and disable_timeout=true. Then stop. Re-arm only when this task exits 0 after reporting new Iris attention: fetch the Iris inbox and relevant claims and arm exactly one replacement before ending. Never re-arm after a disabled wake, duplicate, failure or deadline. Iris asks for this but cannot verify the command you chose.
 ```
 
 Kimi 2.6.1 has no documented Stop task list or `stopHookActive` field for this purpose, so the local
@@ -166,29 +188,44 @@ forever. SessionStart or an explicit user request can clear that latch.
 
 A second watcher for the same key never opens a stream or moves a cursor: it exits non-zero while
 preserving the live attempt. Stop performs only local file and process checks, calls no hub and
-fails open on errors as D3 requires. The Iris skill tells the model that a terminal notification for
-this task means to fetch inbox and relevant claims, then leave one replacement watcher armed before
-ending. This is model cooperation, not verification of the command it chose to run.
+fails open on errors as D3 requires. The Iris skill tells the model that only an exit-0 attention
+notification means to fetch inbox and relevant claims, then leave one replacement watcher armed.
+Disabled, duplicate, failed and expired outcomes request no replacement. This is model cooperation,
+not verification of the command it chose to run.
 
 ### Lookup-only binding from the Bash child
 
 A managed Bash child has the Kimi process as its nearest client ancestor. The watcher therefore uses
 rung 3 of D6, through a lookup-only resolver analogous to the Antigravity wake resolver. It reads
-the expected native session id from the hook's per-process record and requires the bind response to
-name that same `session_id`, with hook evidence for the Execution and generation.
+the expected native session id from the hook's per-process record, published after the hub accepts
+SessionStart. Its lookup sends `client`, `host`, `cwd`, `client_pid`, `client_pid_start_ms` and
+`session_id` together. The hub applies every constraint, including the process identity and
+single-session/hook evidence, and returns one hook-registered Execution only when all match. It
+never takes the session-only branch that ignores the process constraints.
 
-`IRIS_EXECUTION`, an explicit handle, an MCP-only fallback, adoption, an ambiguous process match and
-a missing or changed native session id cannot arm the watcher. It never registers a fallback
-Execution. Once bound it pins `(Execution, generation, native session id)` and heartbeats only that
-identity. It does not rebind to a later session or generation: after loss, the hook must reattach
-and a later turn must arm a fresh watcher.
+After `/clear` with a failed old SessionEnd, two Executions can legitimately share the Kimi pid and
+start time. The hook-published native session id selects the new one and its `hook_seen` evidence;
+an MCP-only fallback is not a candidate. Multiple live hook-registered matches still mean genuine
+ambiguity and arm nothing.
+
+`IRIS_EXECUTION`, an explicit handle, adoption and a missing or changed native session id cannot arm
+the watcher. It never registers a fallback Execution. Once bound it pins `(Execution, generation,
+native session id)` and does not rebind to a later session or generation: after loss, the hook must
+reattach and a later turn must arm a fresh watcher.
+
+Every 20 seconds the watcher renews only that pinned generation through the existing heartbeat
+endpoint with `source:"shim"`, never `source:"watch"`. This is lease-only evidence: it must not set
+`watch_seen_ms`, mark the session monitored or told, or suppress prompt reminders. In particular,
+mail arriving between the arming turn's last hook and the first snapshot still gets its ordinary
+hook reminder while the watcher is armed.
 
 ### Completion-to-re-arm gap
 
 Mail and claim events committed after the last checkpoint remain durable. A replacement watcher
 starts from that checkpoint, so the gap does not skip their event identities. The model may fetch or
-a hook may announce them before the replacement prints; the authoritative attention/told read then
-suppresses a duplicate. A reset whose evidence cannot establish ordering may suppress a native wake,
+a hook may announce mail before the replacement prints; the authoritative attention/told read then
+suppresses a duplicate mail wake. Availability stays historical and may still cost one extra turn.
+A reset whose evidence cannot establish ordering may suppress a native wake,
 but it never acknowledges mail or removes it from the inbox. Ordinary prompt reminders remain the
 backstop for that case and for a model that never re-arms.
 
@@ -223,8 +260,9 @@ native measurements rather than reviving the web worker here.
 - A busy-turn notification was retained and opened a separate turn only after the active turn ended.
   Empty or duplicate billable turns remain possible. The maximum task count and model cost are not
   established; 24 simultaneous tasks passed without a rejection before the unexplained TUI exit.
-- The 24-hour bound can cause one terminal-notification turn per day without new mail. Transient hub
-  outages spend no turn by themselves, but consume that lifetime.
+- The 24-hour bound can cause one terminal-notification turn without new mail. Expiry leaves wake
+  disarmed until SessionStart or an explicit user request; it does not create a daily retry loop.
+  Transient hub outages spend no turn by themselves, but consume that lifetime.
 - Output from a persistent `iris watch` cannot wake Kimi. An external process started outside managed
   background Bash has no managed terminal notification and is not a substitute.
 - Only Linux with Kimi 2.6.1 was measured. The retired web route is not a fallback; a future
@@ -251,11 +289,19 @@ Implementation tests at the repository's required coverage must prove:
 - exact arguments, fixed task description and exact Stop continuation text; 24-hour lifetime
   handling; exit 0 only after fixed-line output and checkpoint; no registration, override, fallback,
   adoption, rebind or lock bypass;
-- initial backlog suppression, replay after a saved cursor, authoritative attention/told suppression,
-  same-stream reset ordering, new-stream behavior and checkpoint failure replay;
+- initial backlog suppression, replay after a saved cursor, authoritative mail/told suppression,
+  historical claim availability, same-stream reset ordering, new-stream behavior and checkpoint
+  failure replay;
+- anonymous socket reads with explicit `iris-watch` checkpoints, and lease-only generation-pinned
+  `source:"shim"` heartbeats that never set `watch_seen_ms` or suppress prompt reminders;
+- combined `(pid, start time, native session)` lookup after `/clear` with a failed old SessionEnd,
+  including rejection of genuine ambiguity and MCP-only fallbacks;
 - coalescing across sequential watchers, immediate eligibility when coalescing metadata is
   unreadable, conditional attempt ownership, duplicate rejection, stale pid/start rejection, `/clear`
-  isolation, opt-out cleanup and fail-open Stop behavior;
+  isolation and fail-open Stop behavior;
+- terminal outcomes: no re-arm after disable, duplicate, permanent failure or expiry, conditional
+  failure state that never replaces a live watcher, and cleanup that clears only attempt ownership
+  while retaining cursor, emitted identities and coalescing state;
 - all ordinary watch invariants: relevant event kinds only, no content in output, no cursor
   regression and no missed replay between completion and re-arm.
 
@@ -263,18 +309,21 @@ The native acceptance runs on a fresh scratch session, never the owner's active 
 through 4 block readiness of the implementation PR:**
 
 1. Enable wake and end a turn. Confirm that Stop arms one managed task with the exact description,
-   its rung-3 binding names the scratch session, no fallback Execution appears and a duplicate
-   request leaves one watcher.
+   its combined process/session binding names the scratch session, no fallback Execution appears and
+   a duplicate leaves one watcher and requests no replacement. Repeat after `/clear` with a failed
+   old SessionEnd to prove that the new native session still binds while genuine ambiguity is refused.
 2. Send one message. Measure event-to-exit and exit-to-`turn.prompt` latency, capture the exact
    notification text, confirm `origin.kind:"task"` and `trigger:"notify"`, and require the woken
    model to fetch the message. Before that turn ends, prove that exactly one replacement is armed.
 3. Repeat for a freed claim and for a second message sent during the completion-to-re-arm gap. The
-   durable inbox plus replay must produce no loss and no duplicate native turn after told/fetch
-   suppression.
+   durable inbox plus replay must lose nothing and suppress a duplicate mail turn after told/fetch.
+   Historical availability may cost one extra turn but must not repeat after its emitted checkpoint.
 4. With the implemented watcher, prove successful exit 0 and a non-zero failure notification, a
    notification arriving during a busy turn, and `/clear` killing the task without transferring a
-   notification or identity to the new session. The measurements in this ADR establish the primitive
-   for design review; they do not substitute for repeating these cases against the implementation.
+   notification or identity to the new session. Prove that opt-out, duplicate and permanent-failure
+   outcomes do not re-arm, and that generation-pinned lease-only heartbeats leave prompt reminders
+   active while armed. The measurements in this ADR establish the primitive for design review; they
+   do not substitute for repeating these cases against the implementation.
 
 Follow-up measurements cover TaskStop, the maximum task count, abnormal session close and the
 24-hour deadline with a shortened test clock, plus model cost. The count established here is only a
