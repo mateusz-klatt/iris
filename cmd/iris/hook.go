@@ -11,6 +11,12 @@ import (
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 )
 
+// hookShellDeadline is the shell reconcile budget a hook process uses. Zero, as in every real
+// hook, leaves it to the hub's address (ReconcileDeadline for a hub on this machine). A test's
+// child hook raises it when the test checks what a reduced reconcile does, not how fast a loaded
+// machine runs it.
+var hookShellDeadline time.Duration
+
 func runHook(args []string) int {
 	return runHookIO(args, os.Stdin, os.Stdout, os.Stderr, os.Getenv, hook.DefaultDeadline)
 }
@@ -34,8 +40,9 @@ func runHookIO(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv 
 		Getenv:     getenv,
 		// Load client.json inside Run. A stalled or panicking read must stay
 		// inside the deadline and the panic recovery, or the hook breaks D3.
-		Hub:      &hubclient.Client{Config: hubclient.EnvConfig{Getenv: getenv}, HTTP: hubclient.HedgedClient()},
-		Deadline: deadline,
+		Hub:           &hubclient.Client{Config: hubclient.EnvConfig{Getenv: getenv}, HTTP: hubclient.HedgedClient()},
+		Deadline:      deadline,
+		ShellDeadline: hookShellDeadline,
 	}.Run()
 	_, _ = stdout.Write(out.Stdout)
 	_, _ = stderr.Write(out.Stderr)
