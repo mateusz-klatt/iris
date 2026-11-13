@@ -15,8 +15,8 @@ The image, tag, Rekor entries, attestations and final archive bytes in workflow 
 can be public before the draft is published. Homebrew, Scoop and winget remain
 `skip_upload: true`. Snapshots and pull requests push no images.
 [ADR 022](adr/022-release-container-image.md) records this extension of D15.
-The intended shipping tag, `v0.1.1`, is a **final release** and the owner's call;
-this configuration does not create that tag or authorize anyone else to create it.
+A final release tag is the owner's call ([release candidate runbook](#release-candidate-runbook));
+this configuration neither creates one nor authorizes anyone to create it.
 The GoReleaser dependency is not part of the application module.
 
 The web tooling pins Vitest and its coverage provider together. The `minimatch` override
