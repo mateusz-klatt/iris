@@ -26,7 +26,9 @@ import (
 
 const scopeHubURL = "http://127.0.0.1:7878"
 
-// tripBudget is a reconcile budget short enough to pass while a stand-in for git waits.
+// tripBudget is the reconcile budget of a test about running past it. The fixture's budgets end
+// by hand (handTimeout), inside the stand-in that is slow on purpose, so its length only sets the
+// deadline that stand-ins and the trip rule measure against; no clock has to reach it.
 const tripBudget = 20 * time.Millisecond
 
 // gitStandIn is a Runner's stand-in for git status.
@@ -78,6 +80,9 @@ func newScopeFixture(t *testing.T) *scopeFixture {
 		IndexID:  func(string) (gitinfo.IndexID, error) { return gitinfo.IndexID{Device: 1, Inode: 2, Size: 4}, nil },
 		Now:      f.now,
 		Getenv:   func(key string) string { return f.env[key] },
+		// A budget ends only where a stand-in runs it out: a loaded runner once spent all 20 ms
+		// before the step a test was about.
+		shellTimeout: handTimeout,
 	}
 	f.ev = Event{Client: ClientClaude, Kind: KindPreTool, SessionID: "s", CWD: root, ToolClass: ClassShell}
 	return f
@@ -118,12 +123,13 @@ func (f *scopeFixture) quickGit(entries map[string]string) gitStandIn {
 }
 
 // slowGit is a git status that started with left of the budget and is still running when the
-// deadline passes.
+// deadline passes, which it runs out itself.
 func (f *scopeFixture) slowGit(left time.Duration) gitStandIn {
 	return func(ctx context.Context, _ string, scope gitinfo.Scope, a *gitinfo.Attempt) (map[string]string, error) {
 		f.hub.note(statusEntry(scope))
 		deadline, _ := ctx.Deadline()
 		a.Begin(ctx, deadline.Add(-left))
+		passDeadline(ctx)
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
@@ -149,35 +155,46 @@ func TestABreakerTripsOnlyWhenGitWasTheSlowPart(t *testing.T) {
 			if capped {
 				a.Cap()
 			}
+			passDeadline(ctx)
 			<-ctx.Done()
 			return nil, ctx.Err()
 		}
 	}
+	// git is given the reconcile's parent and the parent's cancel, for the cases that end it.
+	type standIn = func(f *scopeFixture, parent context.Context, cancel context.CancelFunc) gitStandIn
+	slow := func(left time.Duration) standIn {
+		return func(f *scopeFixture, _ context.Context, _ context.CancelFunc) gitStandIn { return f.slowGit(left) }
+	}
+	waiting := func(begin, capped bool) standIn {
+		return func(f *scopeFixture, _ context.Context, _ context.CancelFunc) gitStandIn {
+			return waits(f, begin, capped)
+		}
+	}
 	cases := []struct {
 		name    string
-		git     func(*scopeFixture, context.CancelFunc) gitStandIn
+		git     standIn
 		parent  time.Duration // a deadline of the reconcile's parent, if any
 		budget  time.Duration
 		slowHub bool
 		plain   bool // the hook keeps no scope memory
 		trips   bool
 	}{
-		{name: "git still running with the whole budget its own", git: func(f *scopeFixture, _ context.CancelFunc) gitStandIn { return f.slowGit(tripBudget) }, budget: tripBudget, trips: true},
-		{name: "git started with half the budget left", git: func(f *scopeFixture, _ context.CancelFunc) gitStandIn { return f.slowGit(tripBudget / 2) }, budget: tripBudget, trips: true},
-		{name: "git started with less than half left", git: func(f *scopeFixture, _ context.CancelFunc) gitStandIn {
-			return f.slowGit(tripBudget/2 - time.Nanosecond)
-		}, budget: tripBudget},
-		{name: "git never started", git: func(f *scopeFixture, _ context.CancelFunc) gitStandIn { return waits(f, false, false) }, budget: tripBudget},
-		{name: "git passed the output cap", git: func(f *scopeFixture, _ context.CancelFunc) gitStandIn { return waits(f, true, true) }, budget: tripBudget},
-		{name: "git failed in time", git: func(f *scopeFixture, _ context.CancelFunc) gitStandIn {
+		{name: "git still running with the whole budget its own", git: slow(tripBudget), budget: tripBudget, trips: true},
+		{name: "git started with half the budget left", git: slow(tripBudget / 2), budget: tripBudget, trips: true},
+		{name: "git started with less than half left", git: slow(tripBudget/2 - time.Nanosecond), budget: tripBudget},
+		{name: "git never started", git: waiting(false, false), budget: tripBudget},
+		{name: "git passed the output cap", git: waiting(true, true), budget: tripBudget},
+		{name: "git failed in time", git: func(f *scopeFixture, _ context.Context, _ context.CancelFunc) gitStandIn {
 			return func(ctx context.Context, _ string, scope gitinfo.Scope, a *gitinfo.Attempt) (map[string]string, error) {
 				f.hub.note(statusEntry(scope))
 				a.Begin(ctx, time.Now())
 				return nil, errors.New("git failed")
 			}
 		}, budget: time.Hour},
-		{name: "the hub was the slow part", git: func(f *scopeFixture, _ context.CancelFunc) gitStandIn { return f.quickGit(nil) }, budget: tripBudget, slowHub: true},
-		{name: "the hook cancelled the reconcile", git: func(f *scopeFixture, cancel context.CancelFunc) gitStandIn {
+		{name: "the hub was the slow part", git: func(f *scopeFixture, _ context.Context, _ context.CancelFunc) gitStandIn {
+			return f.quickGit(nil)
+		}, budget: tripBudget, slowHub: true},
+		{name: "the hook cancelled the reconcile", git: func(f *scopeFixture, _ context.Context, cancel context.CancelFunc) gitStandIn {
 			return func(ctx context.Context, _ string, scope gitinfo.Scope, a *gitinfo.Attempt) (map[string]string, error) {
 				f.hub.note(statusEntry(scope))
 				a.Begin(ctx, time.Now())
@@ -186,8 +203,19 @@ func TestABreakerTripsOnlyWhenGitWasTheSlowPart(t *testing.T) {
 				return nil, ctx.Err()
 			}
 		}, budget: tripBudget},
-		{name: "a parent deadline ended the reconcile", git: func(f *scopeFixture, _ context.CancelFunc) gitStandIn { return f.slowGit(tripBudget) }, parent: tripBudget, budget: time.Hour},
-		{name: "the hook keeps no scope memory", git: func(f *scopeFixture, _ context.CancelFunc) gitStandIn { return f.slowGit(tripBudget) }, budget: tripBudget, plain: true},
+		// git is still running with the whole of the parent's budget, the earlier deadline, when
+		// that deadline passes: the parent's, not the reconcile's own.
+		{name: "a parent deadline ended the reconcile", git: func(f *scopeFixture, parent context.Context, _ context.CancelFunc) gitStandIn {
+			return func(ctx context.Context, _ string, scope gitinfo.Scope, a *gitinfo.Attempt) (map[string]string, error) {
+				f.hub.note(statusEntry(scope))
+				deadline, _ := ctx.Deadline()
+				a.Begin(ctx, deadline.Add(-tripBudget))
+				passDeadline(parent)
+				<-ctx.Done()
+				return nil, ctx.Err()
+			}
+		}, parent: tripBudget, budget: time.Hour},
+		{name: "the hook keeps no scope memory", git: slow(tripBudget), budget: tripBudget, plain: true},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -198,10 +226,10 @@ func TestABreakerTripsOnlyWhenGitWasTheSlowPart(t *testing.T) {
 			}
 			parent, cancel := context.WithCancel(context.Background())
 			if tc.parent > 0 {
-				parent, cancel = context.WithTimeout(context.Background(), tc.parent)
+				parent, cancel = handTimeout(context.Background(), tc.parent)
 			}
 			defer cancel()
-			out, state := f.runIn(parent, tc.git(f, cancel), tc.budget)
+			out, state := f.runIn(parent, tc.git(f, parent, cancel), tc.budget)
 			if !isAllow(out) {
 				t.Fatalf("%s", out.Stdout)
 			}
@@ -682,6 +710,7 @@ func TestConcurrentHooksLeaveABreakerTheNextHookFollows(t *testing.T) {
 			a.Begin(ctx, time.Now())
 			close(started)
 			<-succeeded
+			passDeadline(ctx)
 			<-ctx.Done()
 			return nil, ctx.Err()
 		}
@@ -875,14 +904,16 @@ func TestAStalledBreakerWriteStillReturnsValidOutput(t *testing.T) {
 	}
 }
 
-// slowResetMemory takes its first breaker write past the reconcile's deadline, as a stalled disk
-// would, and records every write.
+// slowResetMemory stalls its first breaker write, as a stalled disk would: the write runs out the
+// reconcile's deadline and lands only once released, after the hook has returned. It records
+// every write.
 type slowResetMemory struct {
 	fileMemory
-	stall  time.Duration
-	mu     sync.Mutex
-	writes []breaker
-	done   chan struct{}
+	pass    func()
+	release chan struct{}
+	mu      sync.Mutex
+	writes  []breaker
+	done    chan struct{}
 }
 
 func (s *slowResetMemory) SetBreaker(worktree string, b breaker) {
@@ -892,7 +923,8 @@ func (s *slowResetMemory) SetBreaker(worktree string, b breaker) {
 	s.mu.Unlock()
 	if first {
 		defer close(s.done)
-		time.Sleep(s.stall)
+		s.pass()
+		<-s.release
 	}
 	s.fileMemory.SetBreaker(worktree, b)
 }
@@ -902,11 +934,19 @@ func (s *slowResetMemory) SetBreaker(worktree string, b breaker) {
 func TestAStalledResetAfterAFullStatusIsNoTrip(t *testing.T) {
 	f := newScopeFixture(t)
 	f.m.SetBreaker(f.key(), breaker{V: 1, Worktree: f.repo.Worktree, Scope: scopeReduced, NextFullMS: f.now().UnixMilli(), CooldownMS: time.Minute.Milliseconds()})
-	slow := &slowResetMemory{fileMemory: f.m, stall: 3 * tripBudget, done: make(chan struct{})}
+	// The write is the slow part, so it runs out the budget of the reconcile this test makes.
+	var budget context.Context
+	f.r.shellTimeout = func(parent context.Context, d time.Duration) (context.Context, context.CancelFunc) {
+		ctx, cancel := handTimeout(parent, d)
+		budget = ctx
+		return ctx, cancel
+	}
+	slow := &slowResetMemory{fileMemory: f.m, pass: func() { passDeadline(budget) }, release: make(chan struct{}), done: make(chan struct{})}
 	// The two-call form registers before the status, so nothing is written to the memory after
 	// the reset, which the worker may still be finishing when the test ends.
 	f.r.Memory, f.r.Hub = slow, reconcileHub{}
 	f.run(f.quickGit(map[string]string{"a.txt": "??"}), tripBudget)
+	close(slow.release)
 	<-slow.done
 	slow.mu.Lock()
 	writes := slices.Clone(slow.writes)

@@ -75,7 +75,11 @@ func (r Runner) reconcile(ctx context.Context, ev Event, state *runState) Output
 		return allow
 	}
 	parent, budget, run := ctx, r.shellLimit(), &shellRun{}
-	ctx, cancel := context.WithTimeout(ctx, budget)
+	timeout := r.shellTimeout
+	if timeout == nil {
+		timeout = context.WithTimeout
+	}
+	ctx, cancel := timeout(ctx, budget)
 	defer cancel()
 	ctx, git := gitinfo.WithStopper(ctx)
 	// settle records only the first outcome. When the budget runs out, the git status or hub

@@ -39,11 +39,13 @@ func TestWindowsKeepsNoBreakerAndSendsNoReducedSnapshot(t *testing.T) {
 		t.Fatal(err)
 	}
 	slow := r
-	slow.ShellDeadline = 20 * time.Millisecond
+	// The budget runs out inside git status, where this test needs it, however loaded the machine.
+	slow.ShellDeadline, slow.shellTimeout = 20*time.Millisecond, handTimeout
 	slow.Status = func(ctx context.Context, _ string, scope gitinfo.Scope, a *gitinfo.Attempt) (map[string]string, error) {
 		h.note(statusEntry(scope))
 		deadline, _ := ctx.Deadline()
 		a.Begin(ctx, deadline.Add(-slow.ShellDeadline))
+		passDeadline(ctx)
 		<-ctx.Done()
 		return nil, ctx.Err()
 	}
