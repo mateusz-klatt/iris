@@ -318,9 +318,11 @@ nobody edited.
 
 Kimi's MCP child follows the hook-registered session found through its single-session client
 process. A compatible `kimi web` using the same home is required: Iris validates the registered
-Kimi process, probes its unauthenticated health endpoint before sending `server.token`, verifies
-live metadata and matching versions, and reads the exact session's native idle state before
-submitting a fixed prompt with an idempotent `prompt_id`. The candidate's transport refuses a
+Kimi process, probes its unauthenticated health endpoint before sending `server.token` and verifies
+live metadata and matching versions. An empty or `0.0.0` MCP client version falls back to a strictly
+parsed, two-second `kimi --version` through PATH; this does not prove the running binary's identity.
+Iris reads the exact session's native idle state before submitting a fixed prompt with an idempotent
+`prompt_id`. The candidate's transport refuses a
 second connection after preflight. Prompt connect/write has a two-second deadline under binding
 admission; the response wait is outside that lock. Busy, locked or unknown state defers
 without quota. Iris never calls `:takeover` on a live session. Wake is opt-in while native delivery

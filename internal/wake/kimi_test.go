@@ -14,6 +14,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -178,6 +179,111 @@ func admitKimi(start func() error) (bool, error) {
 		return false, err
 	}
 	return true, nil
+}
+
+func kimiBinarySetup(t *testing.T, scenario commandScenario) (string, string) {
+	t.Helper()
+	binary := commandBinary(t)
+	_, record, _ := commandSetup(t, binary, scenario)
+	name := "kimi"
+	if runtime.GOOS == "windows" {
+		name += ".exe"
+	}
+	path := filepath.Join(filepath.Dir(binary), name)
+	if err := os.Rename(binary, path); err != nil {
+		t.Fatal(err)
+	}
+	return path, record
+}
+
+func TestKimiNativeSentinelUsesClientBinaryVersion(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "mcpserver", "testdata", "kimi", "initialize-2.6.1.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var captured struct {
+		Params struct {
+			ClientInfo struct {
+				Name    string `json:"name"`
+				Version string `json:"version"`
+			} `json:"clientInfo"`
+		} `json:"params"`
+	}
+	if err := json.Unmarshal(raw, &captured); err != nil || captured.Params.ClientInfo.Name != "kimi-code" || captured.Params.ClientInfo.Version != "0.0.0" {
+		t.Fatalf("real Kimi capture changed: %+v, %v", captured, err)
+	}
+	_, record := kimiBinarySetup(t, commandScenario{VersionOut: kimiTestVersion + "\n"})
+	f := newKimiFake(t)
+	info, detail := f.commands.check(context.Background(), captured.Params.ClientInfo.Version)
+	if detail != "" || info.ClientVersion != kimiTestVersion || info.Version != kimiTestVersion {
+		t.Fatalf("sentinel did not fall back to the client binary: %+v, %q", info, detail)
+	}
+	encoded, err := os.ReadFile(record)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var invocation commandRecord
+	if err := json.Unmarshal(encoded, &invocation); err != nil || len(invocation.Args) != 1 || invocation.Args[0] != "--version" {
+		t.Fatalf("client version probe used the wrong invocation: %+v, %v", invocation, err)
+	}
+}
+
+func TestKimiNativeSentinelVersionFailuresSpendNoAttempts(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		scenario commandScenario
+		timeout  time.Duration
+	}{
+		{"empty", commandScenario{}, 0},
+		{"short version", commandScenario{VersionOut: "2.6\n"}, 0},
+		{"nonnumeric", commandScenario{VersionOut: "2.6.x\n"}, 0},
+		{"extra text", commandScenario{VersionOut: "2.6.0 extra\n"}, 0},
+		{"multiple lines", commandScenario{VersionOut: "2.6.0\n2.6.0\n"}, 0},
+		{"overflow", commandScenario{OutBytes: (4 << 10) + 1}, 0},
+		{"command failure", commandScenario{Out: "2.6.0\n", Exit: 1}, 0},
+		{"timeout", commandScenario{Out: "2.6.0\n", Hang: true}, 50 * time.Millisecond},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			kimiBinarySetup(t, tc.scenario)
+			f := newKimiFake(t)
+			if tc.timeout != 0 {
+				f.commands.clientTimeout = tc.timeout
+			}
+			info, detail := f.commands.check(context.Background(), "0.0.0")
+			if detail != "Kimi executable version could not be determined" || info.Version != "" || len(f.prompts) != 0 || len(f.paths) != 0 {
+				t.Fatalf("failed client probe reached the server or spent wake: %+v, %q, paths %d, prompts %d", info, detail, len(f.paths), len(f.prompts))
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name, version string
+	}{
+		{"missing binary", ""},
+		{"relative binary", "relative"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if tc.version == "" {
+				t.Setenv("PATH", t.TempDir())
+			} else {
+				path, _ := kimiBinarySetup(t, commandScenario{VersionOut: kimiTestVersion + "\n"})
+				t.Chdir(filepath.Dir(path))
+				t.Setenv("PATH", ".")
+			}
+			f := newKimiFake(t)
+			if _, detail := f.commands.check(context.Background(), "0.0.0"); detail != "Kimi executable version could not be determined" || len(f.prompts) != 0 {
+				t.Fatalf("unavailable or relative client binary admitted wake: %q, prompts %d", detail, len(f.prompts))
+			}
+		})
+	}
+}
+
+func TestKimiNativeSentinelVersionMismatchSpendsNoAttempts(t *testing.T) {
+	kimiBinarySetup(t, commandScenario{VersionOut: "9.9.9\n"})
+	f := newKimiFake(t)
+	info, detail := f.commands.check(context.Background(), "0.0.0")
+	if detail != "Kimi executable and server versions differ" || info.ClientVersion != "9.9.9" || len(f.prompts) != 0 {
+		t.Fatalf("client/server mismatch spent wake or hid versions: %+v, %q", info, detail)
+	}
 }
 
 func TestKimiNativeServerDiscoveryIdleAndPromptQueue(t *testing.T) {
@@ -402,8 +508,9 @@ func TestKimiNativeIdleRequiresAnExactUsableSession(t *testing.T) {
 
 func TestKimiNativePreflightFailuresAndCandidateFallback(t *testing.T) {
 	f := newKimiFake(t)
-	if _, detail := f.commands.check(context.Background(), ""); detail != "Kimi initialization did not name its version" {
-		t.Fatalf("missing initialized version: %q", detail)
+	f.commands.clientPath, f.commands.clientFailure = "", "Kimi executable is not available on PATH"
+	if _, detail := f.commands.check(context.Background(), ""); detail != "Kimi executable version could not be determined" {
+		t.Fatalf("missing client binary version: %q", detail)
 	}
 	if _, detail := f.commands.check(context.Background(), "other-version"); detail != "Kimi executable and server versions differ" {
 		t.Fatalf("version mismatch: %q", detail)

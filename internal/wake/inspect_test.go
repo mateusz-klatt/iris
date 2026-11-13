@@ -117,6 +117,8 @@ func TestInspectFailureReasonsRecognizeOnlyExactPreSubmissionDiagnostics(t *test
 		"Codex status proxy exceeded its bound or failed",
 		"Codex queue command could not start",
 		"Codex has no saved rollout for this thread",
+		"Kimi executable version could not be determined",
+		"Kimi executable and server versions differ",
 	} {
 		d := testDocument(testAttempt(1, "binary_check", "failed"))
 		d.LastFailure = &failure{AtMS: 200, Detail: reason}

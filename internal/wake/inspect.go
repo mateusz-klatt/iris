@@ -131,7 +131,9 @@ func inspectionFailureReason(detail string) string {
 		"Codex thread status could not be verified",
 		"Codex status proxy exceeded its bound or failed",
 		"Codex queue command could not start",
-		"Codex has no saved rollout for this thread":
+		"Codex has no saved rollout for this thread",
+		"Kimi executable version could not be determined",
+		"Kimi executable and server versions differ":
 		return detail
 	default:
 		return "Unrecognized wake failure"
