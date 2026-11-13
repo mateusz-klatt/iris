@@ -140,7 +140,7 @@ func TestTheUsersOwnHandlersAreNotDrift(t *testing.T) {
 	}
 	hooks := doc["hooks"].(map[string]any)
 	hooks["preToolUse"] = append(hooks["preToolUse"].([]any), map[string]any{"command": "my-own-linter"})
-	hooks["stop"] = []any{map[string]any{"command": "my-own-notifier"}}
+	hooks["stop"] = append(hooks["stop"].([]any), map[string]any{"command": "my-own-notifier"})
 	edited, _ := json.Marshal(doc)
 	if err := os.WriteFile(files[0], edited, 0o600); err != nil {
 		t.Fatal(err)

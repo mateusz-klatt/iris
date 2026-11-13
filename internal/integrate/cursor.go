@@ -1,6 +1,9 @@
 package integrate
 
-import "path/filepath"
+import (
+	"path/filepath"
+	"strings"
+)
 
 func init() { register(cursorClient{}) }
 
@@ -23,7 +26,7 @@ func (c cursorClient) Install(l Layout, _ Plugins) error {
 		return err
 	}
 	iris := l.Iris()
-	events := []string{"sessionStart", "sessionEnd", "preToolUse", "postToolUse", "postToolUseFailure", "beforeShellExecution", "afterShellExecution", "afterFileEdit", "beforeMCPExecution"}
+	events := []string{"sessionStart", "sessionEnd", "stop", "preToolUse", "postToolUse", "postToolUseFailure", "beforeShellExecution", "afterShellExecution", "afterFileEdit", "beforeMCPExecution"}
 	if err := l.update(Cursor, files[0], func(existing []byte) ([]byte, error) {
 		return writeObject(existing, func(doc map[string]any) error {
 			if err := requireVersion1(doc); err != nil {
@@ -49,6 +52,51 @@ func (c cursorClient) Install(l Layout, _ Plugins) error {
 			return nil
 		})
 	})
+}
+
+const cursorWakeFile = "iris-wake"
+
+// InstallCursorWake installs Cursor and writes an explicit wake marker. Plain Install does not
+// touch the marker, so a missing file stays on and an explicit off survives reintegration.
+func InstallCursorWake(l Layout, enabled bool) error {
+	path, err := cursorWakePath(l)
+	if err != nil {
+		return err
+	}
+	if err := (cursorClient{}).Install(l, nil); err != nil {
+		return err
+	}
+	body := "on\n"
+	if !enabled {
+		body = "off\n"
+	}
+	return l.update(Cursor, path, func([]byte) ([]byte, error) {
+		return []byte(body), nil
+	})
+}
+
+// CursorWake reports the marker. A missing file is on. This does not prove a stop hook ran.
+func CursorWake(l Layout) (bool, error) {
+	path, err := cursorWakePath(l)
+	if err != nil {
+		return false, err
+	}
+	raw, absent, err := readExisting(path)
+	if err != nil {
+		return false, err
+	}
+	if absent {
+		return true, nil
+	}
+	return strings.TrimSpace(string(raw)) != "off", nil
+}
+
+func cursorWakePath(l Layout) (string, error) {
+	dir, err := l.underHome(".cursor")
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(dir, cursorWakeFile), nil
 }
 
 func (c cursorClient) Remove(l Layout, _ Plugins) error { return l.unwire(Cursor, stripClient(Cursor)) }
