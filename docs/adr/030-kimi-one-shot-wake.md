@@ -1,9 +1,9 @@
 # 030: Wake Kimi by completing a one-shot background watcher
 
 Status: proposed for opt-in implementation on the owner's direction, 2026-11-13. Changes D7 for
-Kimi only. For a session open in the Kimi TUI it supersedes ADR 026; the web API remains only for
-a positively identified session owned by `kimi web`. The attention identity and told-state rules of
-ADR 017 remain in force.
+Kimi only and supersedes ADR 026 entirely. No MCP web worker is started for any Kimi session. The
+attention identity and told-state rules of ADR 017 remain in force. After native acceptance, the
+owner's later direction makes wake enabled by default where the implementation is verified live.
 
 ## Problem
 
@@ -41,9 +41,37 @@ while [ ! -f /home/klattm/projects/iris/.playwright-mcp/kimi-wake-research-20261
   mtime 18:29:23.975Z.
 - The TUI remained idle with `[1 task running]`. No turn or notification appeared while the final
   `sleep 20` ran.
-- The task exited at 18:29:43.981Z. At 18:29:43.997Z a new `turn.prompt` had
-  `origin.kind:"task"`, `trigger:"notify"` and turn id 3. The model answered
+- The task exited at 18:29:43.981Z. Its `task.terminated` record was at 18:29:43.996Z and a new
+  `turn.prompt` followed at 18:29:43.997Z: 16 ms from process exit and 1 ms from the terminal event.
+  The turn had `origin.kind:"task"`, `trigger:"notify"` and turn id 3. The model answered
   `SCRATCH-EMIT-COMPLETED` and ended at 18:29:47.016Z.
+
+Follow-up measurements used new scratch sessions under
+`~/.kimi-code/sessions/wd_kimi-wake-measure-20261113_2cb0ef9fcff6/`:
+
+- **Non-zero exit.** `sleep 15; exit 7` produced `status:"failed"`, `exitCode:7` and a warning
+  `<notification type="task.failed">` with `Title: Background process failed`. The process ended at
+  20:08:45.422Z, `task.terminated` was at 20:08:45.428Z and the new `task/notify` turn at
+  20:08:45.429Z. The model saw the notification and answered `SCRATCH-NONZERO-OBSERVED`.
+- **SIGTERM.** A scratch `sleep 120` received `kill -TERM 58581` at 20:10:00Z. It ended as
+  `status:"failed"`, `exitCode:-1`, not `killed`; `task.terminated` was at 20:10:00.197Z and the new
+  turn at 20:10:00.198Z. The model saw the same failed-notification form and answered
+  `SCRATCH-KILL-OBSERVED`.
+- **Busy turn.** The agent started `sleep 10; printf SCRATCH-BUSY-DONE` in the background and then
+  ran foreground `sleep 20`. The background process ended at 20:11:05.384Z. `task.terminated` and
+  `prompt.steered` were recorded at 20:11:05.391Z and .392Z, while the foreground tool was still
+  active. The active turn ended at 20:11:20.998Z and a separate `task/notify` turn began at
+  20:11:20.999Z. The notification was not lost or folded into an earlier model request; it waited
+  about 15.6 seconds for the active turn to finish.
+- **`/clear`.** A new session started `sleep 60` as `SCRATCH-CLEAR2`. `/clear` changed the session id
+  from `session_5a3fcb93-161e-418e-a07d-adafc467a7f5` to
+  `session_638c5a91-9064-450e-8a7a-6f48c85d9186`. The old session recorded `status:"killed"` at
+  20:14:03.798Z. The process was gone, and neither session had a notification or a new turn for it.
+  An earlier attempt raced a task notification and was discarded as evidence.
+- **Task count.** The model started 24 managed `sleep 300`/`sleep 600` tasks without a rejection.
+  The scratch TUI then disappeared without an error in its session log; all 24 `sleep` processes
+  remained alive and were cleaned up by their exact recorded pids and commands. This establishes a
+  lower bound of 24, not a maximum or a causal connection to the TUI's exit.
 
 The automatic message is a `<notification>` containing the task id, terminal status and, when output
 exists, an output-file path. It is not a streaming-output notification. These results agree with the
@@ -52,8 +80,10 @@ The [hook documentation](https://www.kimi.com/code/docs/en/kimi-code-cli/customi
 makes `Notification` observation-only and limits `Stop` to a turn that is already ending. Plugins
 package those same hooks; they add no documented idle-session push API.
 
-The measurements do not establish behavior on macOS or Windows, task survival across `/clear`, or
-every terminal status. Those are acceptance items below, not assumptions in the design.
+These measurements cover exit 0, non-zero exit, SIGTERM, a busy turn and `/clear` on Linux with Kimi
+2.6.1. TaskStop-specific behavior, the maximum task count, macOS, Windows and the cause of the
+unexpected TUI exit remain unmeasured. The acceptance section separates implementation blockers from
+follow-up measurements.
 
 ## Decision
 
@@ -61,10 +91,10 @@ every terminal status. Those are acceptance items below, not assumptions in the 
 
 `iris watch --client kimi --once` is a separate mode; the persistent Grok watch is unchanged. The
 model starts it only through Kimi's managed background Bash, with `run_in_background:true`,
-`disable_timeout:true` and a fixed Iris description. The disabled client timeout is necessary because
-Kimi's default background timeout is ten minutes, but the watcher itself has an absolute 24-hour
-lifetime. Its deadline produces a non-zero exit without an attention line; the resulting terminal
-notification may cost one turn before the watcher is re-armed.
+`disable_timeout:true` and description exactly `Iris: wait for new attention`. The disabled client
+timeout is necessary because Kimi's default background timeout is ten minutes, but the watcher itself
+has an absolute 24-hour lifetime. Its deadline produces a non-zero exit without an attention line; the
+resulting terminal notification may cost one turn before the watcher is re-armed.
 
 The watcher exits 0 only after it prints one fixed, content-free Iris line for new attention and
 durably checkpoints that attention. The line asks the model to use the Iris inbox and claims tools;
@@ -103,8 +133,10 @@ distinct from other clients' persistent monitors.
 The first candidate after an idle period is eligible immediately. The existing 30-second coalescing
 window survives re-arming through the per-session record: later candidates wait out the remainder,
 and an authoritative recount suppresses one already handled. A candidate is not postponed forever by
-new events. Checkpointing covers every event folded into the emitted line. A wake never marks
-attention told; only a hook that emits its note does so.
+new events. Checkpointing covers every event folded into the emitted line. Coalescing metadata is
+independent of the cursor: an unreadable or malformed coalescing record means no coalescing delay,
+never a suppressed wake or an inference that attention was told. A wake never marks attention told;
+only a hook that emits its note does so.
 
 ### Per-process state and one Stop request
 
@@ -120,14 +152,17 @@ zombie processes. Every mutation is conditional under the local state lock; clea
 the record that still carries the exiting watcher's attempt id.
 
 When wake is enabled and no live or requested watcher exists, an ordinary Kimi `Stop` writes
-`arm_requested` with its time and returns the client's blocking continuation. Its stderr asks the
-model once to start exactly `iris watch --client kimi --once` through background Bash with the
-settings above, then end the turn. Kimi 2.6.1 has no documented Stop task list or `stopHookActive`
-field for this purpose, so the local marker prevents repeated continuations. A successful watcher
-publishes its live attempt before waiting and clears the request. A later Stop inside a five-second
-publication grace period allows without another request; after it, a request with no live attempt
-latches `failed` instead of asking forever. SessionStart or an explicit user request can clear that
-latch.
+`arm_requested` with its time and returns the client's blocking continuation. Its stderr is exactly:
+
+```text
+Start one background Bash task with command exactly `iris watch --client kimi --once`, description exactly `Iris: wait for new attention`, run_in_background=true and disable_timeout=true. Then stop. When its terminal notification arrives, fetch the Iris inbox and relevant claims and arm exactly one replacement before ending. Iris asks for this but cannot verify the command you chose.
+```
+
+Kimi 2.6.1 has no documented Stop task list or `stopHookActive` field for this purpose, so the local
+marker prevents repeated continuations. A successful watcher publishes its live attempt before
+waiting and clears the request. A later Stop inside a five-second publication grace period allows
+without another request; after it, a request with no live attempt latches `failed` instead of asking
+forever. SessionStart or an explicit user request can clear that latch.
 
 A second watcher for the same key never opens a stream or moves a cursor: it exits non-zero while
 preserving the live attempt. Stop performs only local file and process checks, calls no hub and
@@ -157,45 +192,43 @@ suppresses a duplicate. A reset whose evidence cannot establish ordering may sup
 but it never acknowledges mail or removes it from the inbox. Ordinary prompt reminders remain the
 backstop for that case and for a model that never re-arms.
 
-### Opt-in and the ADR 026 web path
+### Opt-in now, default after acceptance, and retirement of ADR 026
 
-Wake remains opt-in. Fresh `iris integrate kimi` is off; `--wake` enables the appropriate native
-route, ordinary setup and reintegration preserve the explicit choice, and `--no-wake` or removal
-disables both routes and stops only recorded watchers whose process identity still matches. Existing
-children retain their startup arguments until restarted.
+Until the full native re-arm acceptance passes, wake stays opt-in and off by default because the
+existing TUI route does not work. Fresh `iris integrate kimi` remains off; `--wake` installs only the
+Stop request, the skill and the one-shot task route. No MCP web worker is started for any Kimi
+session. `--no-wake` or removal disables the task route and stops only recorded watchers whose
+process identity still matches. Existing children retain their startup arguments until restarted.
 
-For a hook-registered single-session TUI, `--wake` installs the Stop request and skill, and the MCP
-web worker is not used. ADR 026 remains only for a positively identified `kimi web`-owned session
-whose own binding and native idle checks pass. The SessionStart adapter records `client_type` and
-the nearest Kimi ancestor. A live `$KIMI_CODE_HOME/server/instances/` entry verified against that
-ancestor's pid and start time is positive web-owned evidence. The captured `kimi_code_cli` value,
-an eligible single-session ancestor and a complete registry scan proving that it is not such a web
-server select the task route. Unreadable or incomplete surface evidence arms neither route; a bind
-response or `40931` alone is not a surface discriminator.
+After native acceptance on a platform, fresh `iris integrate kimi` and `iris setup` turn wake on by
+default there. An explicit `--no-wake` is always preserved, and ordinary setup and reintegration
+preserve either explicit choice. Platforms without native acceptance remain off. This implements the
+owner's direction of 2026-11-13 at about 20:20 UTC: wake should be on by default for every CLI whose
+implementation is complete and verified live, while incomplete or failing implementations stay off.
 
-The per-session route choice is held under the same local lock as watcher state. Reserving a route
-and initiating its task or web prompt are atomic with respect to the other route; waiting for the
-task or prompt response happens outside that lock. A session therefore never has an armed one-shot
-watcher and an outstanding web prompt at once. No web-to-TUI prompt attempts remain, and a web-hosted
-task route is not enabled until it passes the same native acceptance as the TUI.
+ADR 026 is retired for every Kimi session, not only the TUI. There is no surface-discrimination,
+route-reservation or mutual-exclusion machinery, and no web fallback when a task cannot be armed. If
+a `kimi web`-owned surface later needs this mechanism, it requires its own ADR, positive binding and
+native measurements rather than reviving the web worker here.
 
 ## Limits
 
 - This is a request to the model, not enforcement. A model can ignore the Stop continuation, start
   the wrong command, fail to fetch mail or fail to re-arm. A failed latch prevents a continuation
   loop but leaves hook reminders as the only notification until a later successful arming.
-- Nothing starts a closed Kimi session. Background tasks normally stop when their session closes;
-  no external task survives to deliver a completion. `/clear` survival requires measurement, and
-  stale watcher identity is never transferred to the new session.
-- A busy-turn notification may be steered into that turn or open another one. An empty or duplicate
-  billable turn remains possible. Non-zero exits, kills, notification ordering while busy, task-count
-  limits and their model cost are acceptance measurements, not guarantees here.
+- Nothing starts a closed Kimi session. On Kimi 2.6.1 `/clear` killed the managed task and delivered
+  no notification to the new session, so a fresh Stop must arm a fresh watcher; no cursor or watcher
+  identity transfers. The unexpected TUI exit left all 24 test processes alive, so native cleanup on
+  an abnormal exit is not guaranteed; Iris's own parent-identity check must end an orphaned watcher.
+- A busy-turn notification was retained and opened a separate turn only after the active turn ended.
+  Empty or duplicate billable turns remain possible. The maximum task count and model cost are not
+  established; 24 simultaneous tasks passed without a rejection before the unexplained TUI exit.
 - The 24-hour bound can cause one terminal-notification turn per day without new mail. Transient hub
   outages spend no turn by themselves, but consume that lifetime.
 - Output from a persistent `iris watch` cannot wake Kimi. An external process started outside managed
   background Bash has no managed terminal notification and is not a substitute.
-- Only Linux with Kimi 2.6.1 was measured. The REST web route keeps ADR 026's experimental API and
-  version limits for the web-owned sessions it can positively identify.
+- Only Linux with Kimi 2.6.1 was measured. The retired web route is not a fallback; a future
+  web-owned use case needs new evidence and its own decision.
 - Message bodies remain untrusted data. Neither the watcher line nor the native task notification
   carries them or chooses what the model does with them.
 
@@ -204,8 +237,8 @@ task route is not enabled until it passes the same native acceptance as the TUI.
 - **A persistent watcher whose output lines wake Kimi.** Output alone produced no turn in the
   controlled measurement.
 - **Taking or disabling the TUI lock.** Both permit concurrent writers and interleaved history.
-- **One shared native route selected by guessing the client surface.** Unknown evidence arms no
-  route; the TUI and web-owned sessions must not race two wake mechanisms.
+- **Keeping the ADR 026 web route beside the task route.** It cannot reach a TUI and adds unmeasured
+  surface-discrimination and mutual-exclusion complexity. A future web-only use gets its own ADR.
 - **Polling through `CronCreate`.** It can inject a scheduled prompt, but spends turns without new
   attention and is not event-driven delivery.
 - **An externally spawned watcher.** It is not a Kimi managed task and cannot provide the measured
@@ -215,32 +248,39 @@ task route is not enabled until it passes the same native acceptance as the TUI.
 
 Implementation tests at the repository's required coverage must prove:
 
-- exact argument and 24-hour lifetime handling; exit 0 only after fixed-line output and checkpoint;
-  no registration, override, fallback, adoption, rebind or lock bypass;
+- exact arguments, fixed task description and exact Stop continuation text; 24-hour lifetime
+  handling; exit 0 only after fixed-line output and checkpoint; no registration, override, fallback,
+  adoption, rebind or lock bypass;
 - initial backlog suppression, replay after a saved cursor, authoritative attention/told suppression,
   same-stream reset ordering, new-stream behavior and checkpoint failure replay;
-- coalescing across sequential watchers, conditional attempt ownership, duplicate rejection, stale
-  pid/start rejection, `/clear` isolation, opt-out cleanup and fail-open Stop behavior;
-- positive TUI versus web surface selection and mutual exclusion with ADR 026;
+- coalescing across sequential watchers, immediate eligibility when coalescing metadata is
+  unreadable, conditional attempt ownership, duplicate rejection, stale pid/start rejection, `/clear`
+  isolation, opt-out cleanup and fail-open Stop behavior;
 - all ordinary watch invariants: relevant event kinds only, no content in output, no cursor
   regression and no missed replay between completion and re-arm.
 
-The native acceptance runs on a fresh scratch session, never the owner's active session:
+The native acceptance runs on a fresh scratch session, never the owner's active session. **Items 1
+through 4 block readiness of the implementation PR:**
 
-1. Enable wake and end a turn. Confirm that Stop arms one managed task, its rung-3 binding names the
-   scratch session, no fallback Execution appears and a duplicate request leaves one watcher.
+1. Enable wake and end a turn. Confirm that Stop arms one managed task with the exact description,
+   its rung-3 binding names the scratch session, no fallback Execution appears and a duplicate
+   request leaves one watcher.
 2. Send one message. Measure event-to-exit and exit-to-`turn.prompt` latency, capture the exact
    notification text, confirm `origin.kind:"task"` and `trigger:"notify"`, and require the woken
    model to fetch the message. Before that turn ends, prove that exactly one replacement is armed.
 3. Repeat for a freed claim and for a second message sent during the completion-to-re-arm gap. The
    durable inbox plus replay must produce no loss and no duplicate native turn after told/fetch
    suppression.
-4. Measure completion with exit 0, non-zero exit, kill and output while running; measure a notification
-   arriving during a busy turn. Record whether it is queued, steered or folded and what text reaches
-   the model. Measure task-count limits, `/clear`, session close and the 24-hour deadline with a
-   shortened test clock.
-5. Run the equivalent scratch test on a `kimi web`-owned session before enabling its task route, and
-   prove that the REST and task routes cannot both submit for one session.
+4. With the implemented watcher, prove successful exit 0 and a non-zero failure notification, a
+   notification arriving during a busy turn, and `/clear` killing the task without transferring a
+   notification or identity to the new session. The measurements in this ADR establish the primitive
+   for design review; they do not substitute for repeating these cases against the implementation.
+
+Follow-up measurements cover TaskStop, the maximum task count, abnormal session close and the
+24-hour deadline with a shortened test clock, plus model cost. The count established here is only a
+lower bound of 24. macOS and Windows require their own live acceptance before wake becomes default
+on those platforms. None of this follow-up weakens the blockers above or the full re-arm acceptance
+required before default-on.
 
 Run `make test`, `make race`, `make cov`, `make cov-check`, `make check-all` and `make fixtures`
 before implementation review. Record real model turns separately from fixtures, including platform,
