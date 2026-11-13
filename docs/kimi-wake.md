@@ -75,9 +75,9 @@ do not authenticate the endpoint before the token is sent: a local process imita
 response can still receive it. The token is never intentionally logged.
 
 The idle read, binding admission and prompt submission are not atomic. Binding is checked again
-and the POST starts under the binding lock; response headers end that hold and the body is read
-after unlocking. Binding can change after submission starts, and a person can start a turn or fetch
-mail after the idle read, so an accepted prompt can run later and find no work. Queue acceptance
+and the POST is written under the binding lock; response headers and body are awaited after
+unlocking. Binding can change after submission starts, and a person can start a turn or fetch mail
+after the idle read, so an accepted prompt can run later and find no work. Queue acceptance
 proves neither a completed turn nor an inbox fetch, and Iris cannot guarantee zero empty
 or billable turns.
 

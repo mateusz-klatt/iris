@@ -70,9 +70,9 @@ authenticate the endpoint before the bearer token is sent. A local process imita
 response can still receive it.
 
 Idle observation and binding admission are not atomic with prompt submission. The binding is
-rechecked and the POST starts under the binding lock; response headers end that hold and the body
-is read after unlocking. Binding can change after submission starts, and a person can start a turn
-or fetch mail between idle observation and submission, so an accepted prompt can run later or find
+rechecked and the POST is written under the binding lock; response headers and body are awaited
+after unlocking. Binding can change after submission starts, and a person can start a turn or fetch
+mail between idle observation and submission, so an accepted prompt can run later or find
 no work. Queue acceptance proves neither a completed turn nor an inbox fetch. Iris cannot promise zero
 billable empty turns. A front-end that retains a `40931` native lock can prevent wake indefinitely;
 active sessions are checked again after 15 seconds, never taken over. Native TUI refresh,

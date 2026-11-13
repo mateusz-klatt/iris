@@ -11,6 +11,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/http/httptrace"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -162,7 +163,7 @@ type kimiAPIError struct{ code int }
 
 func (e *kimiAPIError) Error() string { return fmt.Sprintf("Kimi API error %d", e.code) }
 
-func (c *kimiCommands) startCall(ctx context.Context, server *kimiServer, method, path string, body any) (*http.Response, error) {
+func newKimiRequest(ctx context.Context, server *kimiServer, method, path string, body any) (*http.Request, error) {
 	var input io.Reader
 	if body != nil {
 		raw, err := json.Marshal(body)
@@ -181,7 +182,56 @@ func (c *kimiCommands) startCall(ctx context.Context, server *kimiServer, method
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
+	return req, nil
+}
+
+func (c *kimiCommands) startCall(ctx context.Context, server *kimiServer, method, path string, body any) (*http.Response, error) {
+	req, err := newKimiRequest(ctx, server, method, path, body)
+	if err != nil {
+		return nil, err
+	}
 	return hubclient.NoRedirects(c.http).Do(req)
+}
+
+type kimiCallResult struct {
+	res *http.Response
+	err error
+}
+
+type kimiCall struct {
+	done chan kimiCallResult
+}
+
+func (c *kimiCall) wait() (*http.Response, error) {
+	result := <-c.done
+	return result.res, result.err
+}
+
+func (c *kimiCommands) beginCall(ctx context.Context, server *kimiServer, method, path string, body any) (*kimiCall, error) {
+	req, err := newKimiRequest(ctx, server, method, path, body)
+	if err != nil {
+		return nil, err
+	}
+	wrote := make(chan struct{}, 1)
+	req = req.WithContext(httptrace.WithClientTrace(req.Context(), &httptrace.ClientTrace{
+		WroteRequest: func(httptrace.WroteRequestInfo) {
+			select {
+			case wrote <- struct{}{}:
+			default:
+			}
+		},
+	}))
+	call := &kimiCall{done: make(chan kimiCallResult, 1)}
+	go func() {
+		res, err := hubclient.NoRedirects(c.http).Do(req)
+		call.done <- kimiCallResult{res: res, err: err}
+	}()
+	select {
+	case <-wrote:
+	case result := <-call.done:
+		call.done <- result
+	}
+	return call, nil
 }
 
 func (c *kimiCommands) finishCall(res *http.Response, dest any) error {
@@ -267,12 +317,12 @@ func (c *kimiCommands) queue(ctx context.Context, session, message string, start
 			Text string `json:"text"`
 		} `json:"content"`
 	}
-	var res *http.Response
+	var call *kimiCall
 	attempted := false
 	_, admissionErr := start(func() error {
 		attempted = true
 		var err error
-		res, err = c.startCall(ctx, c.server, http.MethodPost, "/api/v1/sessions/"+url.PathEscape(session)+"/prompts", map[string]any{
+		call, err = c.beginCall(ctx, c.server, http.MethodPost, "/api/v1/sessions/"+url.PathEscape(session)+"/prompts", map[string]any{
 			"prompt_id": id,
 			"content":   []map[string]string{{"type": "text", "text": message}},
 		})
@@ -289,7 +339,10 @@ func (c *kimiCommands) queue(ctx context.Context, session, message string, start
 		result.answer, result.detail = "unknown", "Kimi prompt response was not a known outcome"
 		return result
 	}
-	err := c.finishCall(res, &answer)
+	res, err := call.wait()
+	if err == nil {
+		err = c.finishCall(res, &answer)
+	}
 	if err == nil && answer.PromptID == id && len(answer.Content) == 1 && answer.Content[0].Type == "text" && answer.Content[0].Text == message {
 		switch answer.Status {
 		case "running", "queued":

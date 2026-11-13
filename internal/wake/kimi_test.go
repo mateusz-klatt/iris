@@ -186,14 +186,7 @@ func TestKimiNativeServerDiscoveryIdleAndPromptQueue(t *testing.T) {
 	admissions := 0
 	answer := f.commands.queue(context.Background(), kimiTestSession, message, func(start func() error) (bool, error) {
 		admissions++
-		admitted, err := admitKimi(start)
-		f.mu.Lock()
-		submitted := len(f.prompts)
-		f.mu.Unlock()
-		if submitted != 1 {
-			t.Error("prompt submission was not initiated inside binding admission")
-		}
-		return admitted, err
+		return admitKimi(start)
 	})
 	if answer.answer != "submitted" || !answer.started || answer.detail != "" || admissions != 1 {
 		t.Fatalf("prompt was not accepted: %+v, admissions %d", answer, admissions)
@@ -219,6 +212,51 @@ func TestKimiNativeServerDiscoveryIdleAndPromptQueue(t *testing.T) {
 		if got := f.commands.queue(context.Background(), kimiTestSession, message, admitKimi); got.answer != "failed" || got.detail != "Kimi rejected the wake prompt" {
 			t.Fatalf("%s was not a known rejected submission: %+v", status, got)
 		}
+	}
+}
+
+func TestKimiNativeQueueWaitsForResponseOutsideAdmission(t *testing.T) {
+	release := make(chan struct{})
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Errorf("invalid prompt body: %v", err)
+		}
+		<-release
+		writeKimiEnvelope(w, 0, map[string]any{
+			"prompt_id": body["prompt_id"], "status": "running", "content": body["content"],
+		})
+	}))
+	defer server.Close()
+	commands := &kimiCommands{
+		http: server.Client(), queueTimeout: 5 * time.Second,
+		server: &kimiServer{base: server.URL, token: kimiTestToken},
+	}
+	admitted := make(chan struct{})
+	done := make(chan commandAnswer, 1)
+	message := promptFor("response-outside-admission")
+	go func() {
+		done <- commands.queue(context.Background(), kimiTestSession, message, func(start func() error) (bool, error) {
+			ok, err := admitKimi(start)
+			close(admitted)
+			return ok, err
+		})
+	}()
+	select {
+	case <-admitted:
+	case <-time.After(2 * time.Second):
+		close(release)
+		<-done
+		t.Fatal("binding admission waited for the HTTP response")
+	}
+	close(release)
+	select {
+	case answer := <-done:
+		if answer.answer != "submitted" || !answer.started {
+			t.Fatalf("released response was not accepted: %+v", answer)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("prompt response did not finish after its release")
 	}
 }
 
@@ -438,6 +476,12 @@ func TestKimiNativeQueueOutcomesAndAdmission(t *testing.T) {
 	if got := f.commands.queue(context.Background(), kimiTestSession, message, func(func() error) (bool, error) { return false, errors.New("admission") }); got.answer != "failed" || got.detail != "Kimi wake admission failed" || len(f.prompts) != before {
 		t.Fatalf("admission failure submitted a prompt: %+v", got)
 	}
+	validServer := f.commands.server
+	f.commands.server = &kimiServer{base: "://invalid"}
+	if got := f.commands.queue(context.Background(), kimiTestSession, message, admitKimi); got.answer != "unknown" || !got.started || len(f.prompts) != before {
+		t.Fatalf("invalid prompt request was not conservative: %+v", got)
+	}
+	f.commands.server = validServer
 	withoutServer := &kimiCommands{}
 	if idle, detail := withoutServer.idle(context.Background(), kimiTestSession); idle || detail != "Kimi web server has not passed its preflight" {
 		t.Fatalf("idle without preflight: %t %q", idle, detail)
@@ -553,6 +597,26 @@ type kimiBrokenBody struct{}
 
 func (kimiBrokenBody) Read([]byte) (int, error) { return 0, errors.New("read failed") }
 func (kimiBrokenBody) Close() error             { return nil }
+
+func TestKimiBeginCallHandlesTransportWithoutWriteTrace(t *testing.T) {
+	commands := &kimiCommands{http: &http.Client{Transport: kimiRoundTripFunc(func(*http.Request) (*http.Response, error) {
+		return &http.Response{
+			StatusCode: http.StatusOK, Header: http.Header{},
+			Body: io.NopCloser(strings.NewReader(`{"code":0}`)),
+		}, nil
+	})}}
+	call, err := commands.beginCall(context.Background(), &kimiServer{base: "http://127.0.0.1"}, http.MethodGet, "/api/v1/meta", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := call.wait()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := commands.finishCall(res, nil); err != nil {
+		t.Fatalf("transport without a write trace did not complete: %v", err)
+	}
+}
 
 func TestKimiCallRejectsInvalidRequestsAndResponses(t *testing.T) {
 	f := newKimiFake(t)
