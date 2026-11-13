@@ -50,15 +50,26 @@ runs still stand: they did not fire `stop`. This run does not replace that resul
 
 ## Decision
 
-The tier name is end of a turn, not idle. `stop` cannot wake a session that is already idle.
+The tier is end of turn. An idle session still waits for the next prompt. `stop` fires when
+a turn ends, and it does not fire again while the session sits idle after that. New mail
+during that wait has no `stop` to answer. This cannot wake an already idle session.
 
-If this proposal is accepted, a Cursor `stop` hook may print `followup_message` only when
-authoritative attention is newer than what that session was last told, once per attention
-identity, with fixed content-free text. The follow-up turn's own `stop` does not print
-another follow-up. `loop_count` on the `stop` payload is a backstop: a value above zero
-prints no follow-up, because this measurement showed that an unconditional reply loops.
-The hook stays inside the hook deadline, fails open, and does not deny the stop. A failure
-prints `{}`.
+`loop_count` greater than zero must never print a follow-up. The measurement returned
+`followup_message` on every `stop`. The client then ran another turn, and the model answered
+`FOLLOWED`, at `loop_count` 1, 2, 3 and 4, and once more after that with no further `stop`.
+A follow-up is itself a turn that ends in `stop`. Printing another follow-up there is how
+the loop happened. `loop_count` above zero means this `stop` is already a follow-up, so the
+hook prints `{}`.
+
+"Attention newer than what the session was last told" is the same identity the next-turn
+tier already uses. The hub names the newest pending attention. The session's told state is
+the identity recorded beside its generation. The `stop` hook may print `followup_message`
+only when that newest identity is newer than the recorded one. Printing it records the
+identity, so the follow-up turn's own `stop` sees the same identity and prints nothing.
+The comparison is the hook's ordinary read under the sessions-directory lock. It stays
+inside the hook's 1.5 s internal deadline. Cursor's installed hook timeout is 3 s. A miss,
+a timeout or any other failure prints `{}` and does not deny the stop. Cursor's own
+timeout result is still unknown. This proposal does not depend on a timeout denying the turn.
 
 Wake is opt-in with `--wake` and off otherwise, including a fresh `iris integrate cursor`,
 until a later measurement shows the installed hook on a real Iris session. This draft does
