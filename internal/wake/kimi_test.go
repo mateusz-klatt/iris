@@ -237,6 +237,7 @@ func TestKimiNativeSentinelVersionFailuresSpendNoAttempts(t *testing.T) {
 		{"empty", commandScenario{}, 0},
 		{"short version", commandScenario{VersionOut: "2.6\n"}, 0},
 		{"nonnumeric", commandScenario{VersionOut: "2.6.x\n"}, 0},
+		{"empty component", commandScenario{VersionOut: "2..1\n"}, 0},
 		{"extra text", commandScenario{VersionOut: "2.6.0 extra\n"}, 0},
 		{"multiple lines", commandScenario{VersionOut: "2.6.0\n2.6.0\n"}, 0},
 		{"overflow", commandScenario{OutBytes: (4 << 10) + 1}, 0},
