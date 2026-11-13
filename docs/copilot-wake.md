@@ -16,14 +16,21 @@ restart the Copilot session:
 iris integrate copilot
 ```
 
-Iris does not enable experimental CLI settings on your behalf. `/extensions manage` in Copilot
-lists the extensions it loaded and their status. `iris integrate --remove copilot` removes the
-extension together with the hooks and the MCP entry.
+Iris does not enable experimental CLI settings on your behalf, so `iris integrate copilot` prints
+that step after it installs. `/extensions manage` in Copilot lists the extensions it loaded and
+their status. `iris integrate --remove copilot` removes the extension together with the hooks and
+the MCP entry.
 
 Iris marks the two files it writes in `$COPILOT_HOME/extensions/iris` (`~/.copilot/extensions/iris`
 by default) with a header that holds the SHA-256 of the rest of the file. A later install or
-removal changes only a file whose digest still matches. If you edited one, or put your own file
-there, `iris integrate` stops with a message that names it. Move the file aside and run it again.
+removal changes only a file whose digest still matches, so removal deletes those files even if
+Iris's record of the installation was lost. The hooks and the MCP entry are removed from that
+record only, so without it they stay. If you edited a file there, emptied it, or put your own file
+there, Iris keeps it. `iris integrate` names it and stops before it writes anything. If the record
+shows that Iris wrote that file, `iris integrate --remove` names it too, still removes the hooks,
+the MCP entry and the other file, then exits with status 1. Move the file aside and run the same
+command again. Without that record, removal keeps the file without a message, and Copilot still
+loads it. The `extensions/iris` directory may stay behind, empty.
 
 ## What it does and does not do
 
@@ -42,7 +49,10 @@ there, `iris integrate` stops with a message that names it. Move the file aside 
   model can acknowledge a delivery on its own, and one did when measured. Message bodies are
   untrusted data and never grant authority.
 - The extension gets Copilot's environment, including any token variables it holds, and passes it
-  to `iris watch`. If the extension reports that its attention monitor stopped, run `iris doctor`.
+  to `iris watch`. The monitor's own status lines go to the session timeline as log entries, never
+  as a message, so they start no turn: that notifications stopped, are still stopped or resumed, or
+  that the hub rejected this host's token. If one says notifications stopped or the token was
+  rejected, run `iris doctor`.
 - With Copilot's command sandbox on, extensions may run inside it (`sandbox.sandboxExtensions`).
   Whether `iris watch` can then reach the hub was not measured.
 - Measured on Linux with Copilot CLI 1.0.109 only. Other versions, macOS and Windows are not

@@ -108,18 +108,34 @@ test("wakes once when idle and defers attention received during a turn", async (
     assert.equal(calls.length, 2);
 });
 
-test("logs stopped monitors without waking the model", async (t) => {
+test("logs the monitor's status lines without waking the model", async (t) => {
     const { calls, child } = harness(t);
     child.stdout.write("Iris: notifications stopped: the hub is unavailable.\n");
     child.stdout.write("Iris: notifications still stopped: run iris doctor.\n");
     child.stdout.write("Iris: notifications resumed.\n");
+    child.stdout.write("a line that is not from Iris\n");
     await new Promise((resolve) => setImmediate(resolve));
     assert.deepEqual(
-        calls.filter((call) => call[0] === "log").map((call) => call[1]),
+        calls.filter((call) => call[0] === "log").map((call) => [call[1], call[2].level]),
         [
-            "Iris: notifications stopped: the hub is unavailable.",
-            "Iris: notifications still stopped: run iris doctor.",
+            ["Iris: notifications stopped: the hub is unavailable.", "warning"],
+            ["Iris: notifications still stopped: run iris doctor.", "warning"],
+            ["Iris: notifications resumed.", "info"],
         ]
+    );
+    assert.equal(calls.some((call) => call[0] === "send"), false);
+});
+
+// iris watch prints this once and keeps running, so no exit is reported for it.
+test("logs a token the hub rejected as a warning without waking the model", async (t) => {
+    const { calls, child } = harness(t);
+    const rejected =
+        "Iris: the hub rejected this host's token, so notifications have stopped. Tell the user to run `iris doctor`.";
+    child.stdout.write(`${rejected}\n`);
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual(
+        calls.filter((call) => call[0] === "log").map((call) => [call[1], call[2].level]),
+        [[rejected, "warning"]]
     );
     assert.equal(calls.some((call) => call[0] === "send"), false);
 });

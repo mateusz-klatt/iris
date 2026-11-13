@@ -736,7 +736,8 @@ and the exact files it will write. It asks once, then installs the user service 
 `systemd --user` or HKCU Run), integrates the clients and runs `iris doctor`. It ends with
 the steps only a human can do, such as Codex's `/hooks` review, and reports `Iris inactive on
 <client>` for each one left undone, so that a green finish is never false. `iris integrate
-<client>` and `iris integrate --remove` do the parts separately.
+<client>` and `iris integrate --remove` do the parts separately; `iris integrate` also ends with
+the client's step that only a human can do.
 On Windows the `Iris` value under
 `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` runs the stable binary with
 `service start`. The first real non-elevated Windows 11 setup measured access denied for
@@ -758,7 +759,9 @@ is used only to return the original bytes when nothing but Iris differs, and nev
 entries of its own, because that would reinstall an older integration. Removal cannot keep the
 formatting of a JSON file changed after install: keys come back sorted and indented by Iris's
 writer, as they do on install. A file that no longer parses is refused and stays in the manifest
-for a retry. A plugin skill somebody edited no longer matches its template, so it stays.
+for a retry. A plugin skill somebody edited no longer matches its template, so it stays. A Copilot
+extension file that no longer matches its digest stays too, emptied included; when the manifest
+records it, the command fails until it is moved aside.
 
 Clients that cannot be fully automated are reported truthfully. Codex needs its hooks reviewed
 once in `/hooks`; project hooks need trust on Cursor, Copilot and Grok. Kimi has no project

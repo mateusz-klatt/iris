@@ -83,11 +83,24 @@ func runIntegrate(args []string) int {
 		}
 		if *remove {
 			fmt.Printf("removed %s\n", name)
-		} else {
-			fmt.Printf("integrated %s\n", name)
+			continue
+		}
+		fmt.Printf("integrated %s\n", name)
+		if step := humanStep(c, layout); step != "" {
+			fmt.Printf("%s: %s\n", name, step)
 		}
 	}
 	return code
+}
+
+// humanStep is what a person must still do before the client runs Iris, read as doctor reads it:
+// a client that can check whether the step was done says so instead of repeating it.
+func humanStep(c integrate.Client, l integrate.Layout) string {
+	if r, ok := c.(integrate.Reviewer); ok {
+		step, _ := r.Review(l)
+		return step
+	}
+	return c.Human()
 }
 
 // Integrate's options are booleans, so they can be collected before the positional client.

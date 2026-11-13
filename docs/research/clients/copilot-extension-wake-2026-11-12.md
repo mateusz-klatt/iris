@@ -49,11 +49,14 @@ and its reply did.
 
 ## Installer
 
-On the final build: a first install wrote both extension files with a header that carries the
-SHA-256 of the rest of the file. A second install changed nothing. An install from another `iris`
-path rewrote the extension file with the new path. A file edited by hand was refused with a
-message that names it, exit status 1. `iris integrate --remove copilot` then deleted the file that was unchanged and kept the
-edited one, and an install after restoring it succeeded.
+On the last build measured: a first install wrote both extension files with a header that carries
+the SHA-256 of the rest of the file. A second install changed nothing. An install from another
+`iris` path rewrote the extension file with the new path. A file edited by hand was refused with a
+message that names it, exit status 1. `iris integrate --remove copilot` then deleted the file that
+was unchanged and kept the edited one, and an install after restoring it succeeded.
+
+A change made after review has that removal also name the kept file and exit with status 1 until
+the file is moved aside. Tests cover it; it was not measured live.
 
 The first run's build left an extension file behind after a removal when `iris` was found at a
 different path than at installation. That is the reason for the header.
@@ -66,6 +69,6 @@ different path than at installation. That is the reason for the header.
 - macOS and Windows, and any Copilot CLI version other than 1.0.109.
 - Non-interactive `copilot -p`. The CLI documentation says it loads a user's extensions, so the
   extension would also start `iris watch` there.
-- Failure reporting through `session.log` with a live CLI: monitor start failure, an unexpected
-  exit and a refused send are covered by the extension's own tests only.
+- Reporting through `session.log` with a live CLI: monitor start failure, an unexpected exit, a
+  refused send and the monitor's status lines are covered by the extension's own tests only.
 - The cost of a wake in credits.

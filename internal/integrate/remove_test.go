@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -60,6 +61,12 @@ func assertNoIris(t *testing.T, path string, text string) {
 	}
 }
 
+// isCopilotExtensionFile reports whether path is one of Copilot's extension files. Iris writes
+// them whole, with no entries of the user's to keep beside its own; their own tests cover them.
+func isCopilotExtensionFile(c Client, path string) bool {
+	return c.Name() == Copilot && strings.Contains(filepath.ToSlash(path), "/extensions/iris/")
+}
+
 func TestRemoveKeepsAManualChangeToAFileIrisCreated(t *testing.T) {
 	for _, c := range All() {
 		t.Run(c.Name(), func(t *testing.T) {
@@ -71,6 +78,7 @@ func TestRemoveKeepsAManualChangeToAFileIrisCreated(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			files = slices.DeleteFunc(files, func(f string) bool { return isCopilotExtensionFile(c, f) })
 			for _, f := range files {
 				editByHand(t, f)
 			}
@@ -96,10 +104,8 @@ func TestRemoveKeepsAManualChangeToAFileThatExisted(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
+			files = slices.DeleteFunc(files, func(f string) bool { return isCopilotExtensionFile(c, f) })
 			for _, f := range files {
-				if c.Name() == Copilot && strings.Contains(filepath.ToSlash(f), "/extensions/iris/") {
-					continue
-				}
 				switch {
 				case strings.HasSuffix(f, "monitors.json"):
 					seedFile(t, f, "[]\n")

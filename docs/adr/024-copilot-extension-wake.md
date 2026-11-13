@@ -20,25 +20,36 @@ coalescing.
 
 The extension passes only recognized, content-free attention lines to Copilot. It submits a
 fixed message with the `automation-iris` source, which has no human authority, and never copies
-mail bodies or hub payloads into a prompt. When the extension has observed an active turn, it
-waits for `session.idle` before sending. SDK message delivery uses the queue, so an initially
-active session that has not yet emitted a lifecycle event can finish its current work first.
-The message asks the agent to read the current inbox and claims state; it does not acknowledge
-messages.
+mail bodies or hub payloads into a prompt. Every other line that `iris watch` prints is the
+monitor's own status: notifications stopped, still stopped or resumed, or the hub rejected this
+host's token. The extension writes those lines to the session timeline with `session.log` and
+never submits them as a message, so they start no turn. When the extension has observed an active
+turn, it waits for `session.idle` before sending. SDK message delivery uses the queue, so an
+initially active session that has not yet emitted a lifecycle event can finish its current work
+first. The message asks the agent to read the current inbox and claims state; it does not
+acknowledge messages.
 
 The JavaScript is a thin adapter required by Copilot's SDK. Iris still owns all attention,
 identity and delivery policy in Go. The extension uses the Node runtime already provided by
 Copilot CLI; users do not install Node for Iris.
 
 Extensions require Copilot CLI's experimental feature to be enabled and the workspace to be
-trusted. `iris integrate` reports this prerequisite but does not change the user's CLI settings.
+trusted. `iris integrate copilot` prints this prerequisite after it installs, but does not change
+the user's CLI settings.
 
 The extension's two files are Iris's alone. Each begins with a header holding the SHA-256 of the
 rest of the file. Installation replaces, and `iris integrate --remove` deletes, a file there only
-while that digest still matches, whichever `iris` path or version wrote it, so a removal works
-even after Iris's manifest was lost or the binary moved. A file that does not match is the
-user's: it is never overwritten or removed, and installation stops with a message that names it.
-Removal restores the hooks and MCP entries through Iris's integration manifest as before.
+while that digest still matches, whichever `iris` path or version wrote it, so the extension is
+removed even after Iris's manifest was lost or the binary moved. A file that does not match,
+emptied included, is the user's: it is never overwritten or removed. Installation stops with a
+message that names it, before it writes anything. When the manifest records that Iris wrote the
+file, removal names it too and keeps that record. It still takes out the hooks, the MCP entry and
+the other file, and exits with status 1 on every platform; once the file is moved aside, the same
+command finishes. Without that record, removal keeps the file without a message, and Copilot
+still loads it. Removal restores the hooks and MCP entries through Iris's integration manifest as
+before, so with the manifest lost they stay. The `extensions/iris` directory is recorded with the
+first file Iris created in it, so it can stay behind, empty, when the manifest was lost or a kept
+file was moved aside later.
 
 ## Limits
 
@@ -77,7 +88,10 @@ with unread mail, a graceful exit that left no process, and the end of the exten
 watcher after `kill -9` of the CLI. It also records what it did not measure.
 
 The extension's tests cover line filtering, session identity, active and idle transitions, send
-failure reporting, monitor failure reporting, shutdown and the entry point, at 100% lines,
-branches and functions (`make copilot-extension`). The Go tests cover installation,
-idempotence, a custom `COPILOT_HOME`, the ownership header on upgrade and removal, and exact
-restoration of the user's hooks and MCP entries.
+failure reporting, monitor failure reporting, status lines in the session timeline including a
+rejected token, shutdown and the entry point, at 100% lines, branches and functions
+(`make copilot-extension`). The Go tests cover installation, idempotence, a custom
+`COPILOT_HOME`, the ownership header on upgrade and removal, removal without a manifest, which
+keeps a changed file without a message, an edited or emptied extension file kept with its record
+and a failed exit until it is moved aside, the printed prerequisite, and exact restoration of the
+user's hooks and MCP entries.

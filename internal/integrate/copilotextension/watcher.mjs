@@ -57,14 +57,14 @@ export function startWatcher({ iris, session, sessionId, spawn = spawnProcess, e
         dispatch();
     });
 
+    // Every other line Iris prints is the monitor's own status: stopped, still stopped, resumed, or a
+    // token the hub rejected. It goes to the session timeline as a log entry and starts no turn.
     stdout.on("line", (line) => {
         if (isAttentionLine(line)) {
             pending = true;
             dispatch();
-        } else if (line.startsWith("Iris: notifications stopped:")) {
-            log(line);
-        } else if (line.startsWith("Iris: notifications still stopped:")) {
-            log(line);
+        } else if (line.startsWith("Iris: ")) {
+            log(line, line === "Iris: notifications resumed." ? "info" : "warning");
         }
     });
     child.stderr.resume();

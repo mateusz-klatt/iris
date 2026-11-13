@@ -5,6 +5,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
@@ -107,6 +108,20 @@ func (c copilotClient) Install(l Layout, _ Plugins) error {
 }
 
 func (c copilotClient) Remove(l Layout, _ Plugins) error {
+	files, err := c.Files(l)
+	if err != nil {
+		return err
+	}
+	// An extension file carries its own proof that Iris wrote it, so one nobody changed is removed
+	// even when no manifest records it, as after the manifest was lost. A file that cannot be read
+	// is left to unwire, which reports it if it was recorded.
+	for _, path := range files[2:] {
+		if data, absent, err := readExisting(path); err == nil && !absent && irisCopilotFile(data) {
+			if err := l.remember(Copilot, path, nil, true); err != nil {
+				return err
+			}
+		}
+	}
 	return l.unwire(Copilot, stripCopilot())
 }
 
@@ -172,15 +187,20 @@ func irisCopilotFile(data []byte) bool {
 	return ok && owned && digest == hex.EncodeToString(sum[:])
 }
 
+// errChangedExtension keeps a recorded extension file that no longer matches its digest, emptied
+// included: what is in it now is somebody's, and deleting it would lose their work. unwire keeps
+// the record too, so the command fails until the file is moved aside and then finishes on a retry.
+var errChangedExtension = errors.New("not a file Iris wrote, or it was edited since, so it stays; move it aside, then run iris integrate --remove copilot again")
+
 func stripCopilot() stripFunc {
 	strip := stripClient(Copilot)
 	return func(path string, data []byte) ([]byte, bool, error) {
 		if filepath.Ext(path) != ".mjs" {
 			return strip(path, data)
 		}
-		if irisCopilotFile(data) {
-			return nil, true, nil
+		if !irisCopilotFile(data) {
+			return nil, false, errChangedExtension
 		}
-		return data, false, nil
+		return nil, true, nil
 	}
 }
