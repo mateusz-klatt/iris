@@ -70,6 +70,9 @@ func (r Runner) kimiArm(ev Event) string {
 	if !kimiTopLevel(ev, KindPrompt) || ev.Steer {
 		return ""
 	}
+	if r.arming != nil {
+		r.arming()
+	}
 	s, ok := r.kimiWake()
 	if !ok || !kimiwake.Enabled(s.Root) {
 		return ""

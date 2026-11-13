@@ -64,6 +64,9 @@ type Runner struct {
 	logAfter func(time.Duration) <-chan time.Time
 	// logged runs once the failure write has finished, even after Run has returned.
 	logged func()
+	// arming runs as a Kimi prompt's arming decision starts (ADR 030). Tests hold it there to pass
+	// the deadline at that stage.
+	arming func()
 	// settling runs inside a shell reconcile's settle: with true once the first outcome has taken
 	// the slot, before it is recorded, and with false before a later outcome waits for that
 	// record. Tests hold the first outcome there to pin the order a preemption could produce.
@@ -212,10 +215,13 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		if err != nil {
 			return state.fail(err, r.failOpen(state, ev, err, allow))
 		}
-		note := r.attentionNote(ctx, ev, sess.Attention, false, rev)
 		// Kimi's one-shot watcher is asked for at a user prompt whose session the hub accepted
-		// (ADR 030): Kimi 2.6.1 never runs Stop hooks.
-		if ask := r.kimiArm(ev); ask != "" {
+		// (ADR 030): Kimi 2.6.1 never runs Stop hooks. The request is decided before the note,
+		// which records what the session was told. Were the deadline to pass while arming waits
+		// for its lock, after the note, the note would be lost with its attention recorded as told.
+		ask := r.kimiArm(ev)
+		note := r.attentionNote(ctx, ev, sess.Attention, false, rev)
+		if ask != "" {
 			note = strings.TrimPrefix(note+"\n"+ask, "\n")
 		}
 		return r.finish(state, ev, Encode(ev, Decision{Action: ActionAllow, Context: note}))

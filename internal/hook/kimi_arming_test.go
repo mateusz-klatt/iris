@@ -44,8 +44,7 @@ func newKimiHarness(t *testing.T) *kimiHarness {
 	}
 }
 
-func (h *kimiHarness) run(event, session, extra string) Output {
-	h.t.Helper()
+func (h *kimiHarness) runner(event, session, extra string) Runner {
 	body := `{"hook_event_name":"` + event + `","session_id":"` + session + `","cwd":` + quote(h.repo) + `,"client_type":"kimi_code_cli"` + extra + `}`
 	return Runner{
 		ClientName: "kimi", EventName: event, Stdin: strings.NewReader(body), Hub: h.hub, Getenv: h.env,
@@ -54,7 +53,12 @@ func (h *kimiHarness) run(event, session, extra string) Output {
 		PinnedConfigDir: func() (string, error) { return h.pinned, h.pinErr },
 		Now:             func() time.Time { return h.now },
 		after:           never, logAfter: never,
-	}.Run()
+	}
+}
+
+func (h *kimiHarness) run(event, session, extra string) Output {
+	h.t.Helper()
+	return h.runner(event, session, extra).Run()
 }
 
 func (h *kimiHarness) start(session string) Output {
@@ -62,10 +66,13 @@ func (h *kimiHarness) start(session string) Output {
 	return h.run("SessionStart", session, "")
 }
 
+// turnPrompt is a prompt's payload fields when it starts a turn.
+const turnPrompt = `,"prompt":[{"type":"text","text":"hello"}],"is_steer":false`
+
 // prompt submits a prompt that starts a turn; steer submits one typed into a running turn.
 func (h *kimiHarness) prompt(session string) Output {
 	h.t.Helper()
-	return h.run("UserPromptSubmit", session, `,"prompt":[{"type":"text","text":"hello"}],"is_steer":false`)
+	return h.run("UserPromptSubmit", session, turnPrompt)
 }
 
 func (h *kimiHarness) steer(session string) Output {
@@ -205,6 +212,35 @@ func TestKimiArmRequestFollowsTheAttentionNote(t *testing.T) {
 	lines := strings.Split(strings.TrimSuffix(string(out.Stdout), "\n"), "\n")
 	if out.Exit != 0 || len(lines) != 2 || !strings.HasPrefix(lines[0], "Iris: ") || !strings.Contains(lines[0], "message") || lines[1] != kimiArmRequest {
 		t.Fatalf("stdout %q", out.Stdout)
+	}
+}
+
+// The request is decided before the attention note records what the session was told. A deadline
+// that passes while arming loses the note, so its attention must stay untold for a later prompt to
+// say it.
+func TestADeadlineWhileArmingLeavesTheAttentionUntold(t *testing.T) {
+	h := newKimiHarness(t)
+	h.wake("on")
+	h.start(kimiSession)
+	calls := 0
+	h.hub = attentionHub{calls: &calls, now: &hubclient.Attention{
+		Unread: 1, HighWater: 5, Identity: hubclient.Identity{Known: true, Pending: true, Stream: "s1", Cursor: 5},
+	}}
+	r := h.runner("UserPromptSubmit", kimiSession, turnPrompt)
+	deadline, entered := make(chan time.Time), make(chan struct{})
+	r.after = func(time.Duration) <-chan time.Time { return deadline }
+	// The decision never goes on: a real hook process exits once the deadline has answered.
+	r.arming = func() { close(entered); select {} }
+	out := make(chan Output, 1)
+	go func() { out <- r.Run() }()
+	<-entered
+	deadline <- time.Now()
+	if got := <-out; got.Exit != 0 || len(got.Stdout) != 0 {
+		t.Fatalf("past the deadline: %+v", got)
+	}
+	told, err := NewSessions(h.env("IRIS_TOKEN_FILE")).Told("kimi", kimiSession)
+	if err != nil || told.Identity.Pending {
+		t.Fatalf("the lost note's attention was recorded as told: %+v %v", told, err)
 	}
 }
 

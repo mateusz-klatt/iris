@@ -232,8 +232,10 @@ neither asks nor judges. SessionStart or an explicit user request can clear the 
 UserPromptSubmit does not run on a task-notification turn, so no hook re-arms after an attention
 exit. Only the request above and the skill do that. If the model does not re-arm, the next user
 prompt asks again, because the watcher left no request pending. Kimi's observation-only
-`TaskStarted` hook could report that some task started, but Iris does not use it. The watcher's own
-published attempt is the evidence that matters, and it appears within milliseconds.
+`TaskStarted` hook could report that some task started, but Iris does not use it. The evidence that
+matters is the watcher's own attempt, which it publishes as its first step, before any hub call.
+That timing is not guaranteed. If the next prompt is judged before the publication, the request
+latches, and the publication then clears the latch. A watcher's start counts as an explicit start.
 
 A second watcher for the same key never opens a stream or moves a cursor: it exits non-zero while
 preserving the live attempt. The arming decision makes only local file and process checks, calls no
