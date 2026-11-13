@@ -60,7 +60,7 @@ Do not let saved client configuration select a different hub.
 1. Before replacing a running image, take a fresh consistent database backup and
    keep a copy off the hub's volume. Protect the owner credential separately and
    preserve any existing console key privately. Install the selected validated
-   image using [deploy.md](deploy.md#deploying-the-public-hub-from-an-image-ci-built).
+   image using [deploy.md](deploy.md#deploying-the-public-hub-from-a-release-image).
    Confirm that agent coordination and authenticated `iris doctor` uploads still
    work if the browser console is closed.
 2. To create a new account, the owner uses a fresh password. If the account
@@ -339,7 +339,7 @@ Use a supported backend that retains named authentication, its reviewed database
 and console key. A version has named authentication when its commit is the
 activation change or a later one on `main`; `iris version` prints the commit, and
 `docs/status.md` records the commit of the cutover. Migration compatibility and
-lost writes still require the backup review in [deploy.md](deploy.md#deploying-the-public-hub-from-an-image-ci-built).
+lost writes still require the backup review in [deploy.md](deploy.md#deploying-the-public-hub-from-a-release-image).
 An arbitrary older Iris binary can reopen legacy browser authority on a newer
 database; the newer binary cannot constrain a separately launched old process.
 

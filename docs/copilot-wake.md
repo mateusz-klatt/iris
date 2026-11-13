@@ -37,6 +37,9 @@ loads it. The `extensions/iris` directory may stay behind, empty.
 - It runs only in a live Copilot CLI session that loaded it. It cannot start a closed or unloaded
   session, and it does not wake a machine that is off.
 - A session busy with a turn is not interrupted. The wake is sent after the turn ends.
+- If Copilot accepts a wake but then sends neither `assistant.turn_start` nor `session.idle`,
+  the extension keeps the session marked busy. Later wakes are held, not lost, until the next
+  `session.idle`; the mail itself stays in the inbox.
 - `iris watch` holds a further attention line for 30 s after the previous one. Mail that arrives
   within that window is announced by a later wake, not at once.
 - A session that starts or resumes with unread mail is woken soon after it starts. That costs a

@@ -127,9 +127,11 @@ Cosign signs the pushed **index digest** keylessly using the workflow's GitHub O
 `actions/attest-build-provenance` attests that same digest and stores provenance in GitHub
 and the registry. The root `Dockerfile` also has a `deploy` target for `make image`; both
 targets share the distroless non-root runtime, `/iris`, uid/gid 65532 and writable `/data`,
-with `TMPDIR=/data`. The public hub continues to use its CI-built `iris-iris` deployment
-artifact from `main`; publishing GHCR does not change the running hub or select a deployment.
-Its source, version label and image bytes can differ from the released image.
+with `TMPDIR=/data`. Since `v0.1.1` the public hub is deployed from the released image, pinned by
+its index digest ([deploy.md](deploy.md#deploying-the-public-hub-from-a-release-image)). Between
+releases it may run a `main` commit's CI image instead
+([deploy.md](deploy.md#deploying-a-main-commit-between-releases)), which is neither signed nor
+attested. Publishing to GHCR does not change the running hub by itself; a deploy does.
 
 Before relying on anonymous pulls, the owner must confirm that the GHCR package is public
 and that this repository's Actions token can write it. Repository visibility alone does

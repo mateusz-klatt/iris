@@ -70,10 +70,10 @@ for Linux amd64 and arm64. Stable ref names without `-` also update `:latest`;
 RC and other prerelease tags publish only their version tag, still signed and attested.
 The released image uses the root `Dockerfile`'s
 `release` target with binaries from the release archives and the same runtime as `deploy`.
-The public hub continues to run the `iris-iris` image exported by CI on `main`, through
-the procedure below. GHCR publication does not replace it; the builds can have different
-source commits, version labels and bytes. `v0.1.1` is a final release whose tag and
-publication remain the owner's decision.
+Since `v0.1.1` the public hub is deployed from this image, pinned by its index digest, through
+the procedure below. Between releases it may run a `main` commit's CI image instead. Publication
+alone does not change the running hub; a deploy changes the image that the host's compose file
+names. Tagging and publishing a final release such as `v0.1.1` is the owner's decision.
 
 Pull a version explicitly, or use `:latest` for the moving tag:
 
@@ -111,81 +111,80 @@ checks before using it. Version tags can move, and an older stable tag can updat
 `latest`; prereleases never update it. Publication does not configure TLS,
 provision accounts or prepare backups; keep the deployment safeguards below.
 
-### Deploying the public hub from an image CI built
+### Deploying the public hub from a release image
 
-The public hub's machine does other work, and building the console and the binary starves it, so
-it compiles nothing. On every push to `main`, a CI job of its own builds the deployment image with
-`make image` from a checkout no other step has touched, checks that it names that commit with a
-clean source, and keeps it for 7 days as a workflow
-artifact named `iris-image-<full commit>`. The artifact holds `iris-image.tar.gz`, from `docker
-save`, and `iris-image.txt`, which records the commit, the platform, the runner's image ID and the
-layer list. The image is linux/amd64, which is what the hub's machine runs.
+The hub's machine does other work, so it compiles nothing. Since `v0.1.1` the public hub is
+deployed from the signed release image on GHCR, pinned by its index digest: the machine pulls the
+image that a `v*` tag run published, and verifies it. Between releases, a commit on `main` can be
+deployed from the image CI built for it, with weaker evidence
+([below](#deploying-a-main-commit-between-releases)).
 
-A pull request's run keeps an image too, for one day, as `iris-rehearsal-image-pr<number>-<head
-commit>`. It is built from the merge of the pull request's head into `main` and names that merge
-commit, which exists nowhere else. It is there to rehearse a change before it is merged, on a
-loopback address with a scratch database. It is never deployed: the procedure below takes only
-`iris-image-<commit>` from a run of a push to `main`.
+A compose file on the host defines the service. It lives outside this repository, and this document
+does not reproduce it. For a release it names the image by digest, as
+`image: ghcr.io/mateusz-klatt/iris@sha256:<index-digest>`. Its runtime settings must match the
+`iris` service in `deploy/compose.yaml`: host networking, the `iris-data` volume at `/data`, and
+the same `serve` command. `deploy/compose.yaml` is the build configuration for `make image` and for
+hosts that build their own image ([below](#building-on-the-host)). The public hub does not run from
+it. Below, `<host-compose>` stands for the host's file.
 
-To deploy, in one shell on the hub's machine, from a checkout of that commit (for its
-`deploy/compose.yaml`):
+To deploy release `<tag>`, in one shell on the hub's machine:
 
-1. Select the successful run of a push to `main` for exactly that commit, and download its image:
+1. Pull and verify the image as described in
+   [Pulling and verifying a release image](#pulling-and-verifying-a-release-image). Record the index
+   digest, compare it with the output of the release run's image job, and run both
+   `cosign verify` and `gh attestation verify` with that tag's identities. Use the image only if
+   both pass. Then fix the names the later steps use:
 
    ```sh
-   commit=$(git rev-parse HEAD)
-   run=$(gh run list --workflow ci.yml --branch main --event push --commit "$commit" --status success --limit 1 --json databaseId --jq '.[0].databaseId')
-   test -n "$run"
-   attempt=$(gh api "repos/mateusz-klatt/iris/actions/runs/$run" --jq .run_attempt)
-   artifact=$(gh api "repos/mateusz-klatt/iris/actions/runs/$run/artifacts" --jq "[.artifacts[] | select(.name == \"iris-image-$commit\")] | max_by(.created_at) | .id")
-   work=$(mktemp -d)
-   gh run download "$run" --name "iris-image-$commit" --dir "$work"
-   archive=$(sha256sum "$work/iris-image.tar.gz" | cut -d' ' -f1)
-   grep -qx "commit=$commit" "$work/iris-image.txt"
-   grep -qx "platform=linux/amd64" "$work/iris-image.txt"
+   tag=v0.1.1
+   IMAGE='ghcr.io/mateusz-klatt/iris@sha256:<index-digest>'
+   commit=$(gh api "repos/mateusz-klatt/iris/commits/$tag" --jq .sha)
+   version="${tag#v} (commit $commit; source clean; console unverified)"
+   test "$(docker run --rm "$IMAGE" version)" = "$version"
    ```
 
-2. Keep the image that is running under its own commit, then load the new one, give it its commit
-   tag and compare it. Loading moves the `iris-iris:latest` tag and changes nothing that is running:
+2. Record what is running now, for a rollback:
 
    ```sh
-   previous=$(docker exec iris /iris version | sed -n 's/.*(commit \([0-9a-f]*\);.*/\1/p')
-   test -n "$previous"
-   docker tag "$(docker inspect --format '{{.Image}}' iris)" "iris-iris:$previous"
-   docker load -i "$work/iris-image.tar.gz"
-   docker tag iris-iris:latest "iris-iris:$commit"
-   test "$(docker image inspect --format '{{json .RootFS.Layers}}' "iris-iris:$commit")" = "$(sed -n 's/^layers=//p' "$work/iris-image.txt")"
-   test "$(docker run --rm "iris-iris:$commit" version)" = "dev (commit $commit; source clean; console unverified)"
-   image=$(docker image inspect --format '{{.Id}}' "iris-iris:$commit")
+   previous=$(docker inspect --format '{{.Config.Image}}' iris)
+   previous_version=$(docker exec iris /iris version)
    ```
 
-   The comparison uses the layer list because an image ID depends on how a Docker daemon stores
-   images: the runner uses containerd's image store, and a daemon on overlay2 may report a different
-   ID for the same image.
-
-3. Back up the database, as in [Retention and restore](#retention-and-restore-adr-006), and copy
-   the file off the volume. The name carries the time, because the backup refuses a destination
-   that exists and the same commit can be deployed a second time:
+3. Back up the database, the token and the console key, and copy them off the volume. Back up the
+   database as in [Retention and restore](#retention-and-restore-adr-006). The backup copies neither
+   `hub.token` nor the console key, which by default sits beside the database as
+   `iris.db.console.key`. Copy both as well. The backup's name carries the time, because the backup
+   refuses a destination that exists, and the same release can be deployed a second time.
+   `<private-dir>` is an owner-only directory off the volume:
 
    ```sh
-   backup="before-$commit-$(date -u +%Y%m%dT%H%M%SZ).db"
+   stamp=$(date -u +%Y%m%dT%H%M%SZ)
+   backup="before-$tag-$stamp.db"
    docker exec iris /iris admin backup /data/iris.db "/data/$backup"
+   docker cp "iris:/data/$backup" <private-dir>/
+   docker cp iris:/data/hub.token "<private-dir>/hub.token.$stamp"
+   docker cp iris:/data/iris.db.console.key "<private-dir>/iris.db.console.key.$stamp"
+   chmod 600 <private-dir>/*
    ```
 
-4. Replace the container. `--no-build` and `--pull never` make a missing or misnamed image an error
-   instead of a compile or a pull here, which the compose file's `build` section would otherwise
-   allow:
+4. Change the pinned digest in `<host-compose>` to the digest of `$IMAGE`, then replace the
+   container. `--no-build` and `--pull never` prevent Docker Compose from building or pulling an
+   image, so the command fails if the configured image is not available locally. Step 1 already
+   pulled the verified image:
 
    ```sh
-   docker compose -f deploy/compose.yaml up -d --no-build --pull never
+   docker compose -f <host-compose> up -d --no-build --pull never iris
    ```
 
-5. Take the command-line `iris` for this machine out of the same image, where it is at `/iris`:
+5. Install the command-line `iris` for this machine from the same release. Take it out of the image,
+   where it is at `/iris`. The image packages the binary from the release archive, so this is the
+   released binary:
 
    ```sh
-   container=$(docker create "iris-iris:$commit")
-   docker cp "$container:/iris" "$work/iris"
-   docker rm "$container"
+   work=$(mktemp -d)
+   docker create --name iris-cli-extract "$IMAGE"
+   docker cp iris-cli-extract:/iris "$work/iris"
+   docker rm iris-cli-extract
    install -m 755 "$work/iris" "$HOME/.local/bin/iris"
    ```
 
@@ -195,16 +194,13 @@ To deploy, in one shell on the hub's machine, from a checkout of that commit (fo
    ```sh
    curl -fsS --retry 30 --retry-connrefused --retry-delay 1 http://127.0.0.1:7878/v1/status
    test "$(docker inspect --format '{{.State.Status}} {{.RestartCount}}' iris)" = "running 0"
-   version="dev (commit $commit; source clean; console unverified)"
    test "$(docker exec iris /iris version)" = "$version"
    test "$(iris version)" = "$version"
-   printf '%s commit=%s run=%s attempt=%s artifact=%s archive_sha256=%s image_id=%s\n' "$(date -u +%FT%TZ)" "$commit" "$run" "$attempt" "$artifact" "$archive" "$image" >> "$HOME/iris-deploys.log"
+   printf '%s tag=%s commit=%s image=%s previous=%s backup=%s\n' "$(date -u +%FT%TZ)" "$tag" "$commit" "$IMAGE" "$previous" "$backup" >> "$HOME/iris-deploys.log"
    ```
 
-   These values answer different questions. The run and attempt name the CI execution, the artifact
-   ID names GitHub's stored copy, the checksum identifies the downloaded archive, and the image ID
-   identifies the loaded image on this host. None of them is a registry digest: `docker save` and
-   `docker load` produce none.
+   The record names the image by its registry digest, so it identifies exactly what runs. Cosign
+   and the attestation tie that digest to the release workflow's run for the tag.
 
 To roll back, first decide whether the previous image may serve the public address. That depends on
 the console. Until a first cutover to named accounts has succeeded, going back to the previous image
@@ -217,34 +213,140 @@ binary or database rollback alone can restore legacy browser authority. The curr
 the owner's password for Apache `sudo`; only the owner can install/reload the live filter and drain
 existing browser connections. Agents can prepare and rehearse it. While the owner is unavailable,
 keep a supported named-authentication image, or stop/move the hub off the proxied port; the latter
-makes agent coordination unavailable too. Do not start an exposed old backend. Then return the tag
-to the previous image, replace the container the same way, and take the command-line `iris` from
-that image with step 5, with `iris-iris:$previous` where step 5 says `iris-iris:$commit`:
+makes agent coordination unavailable too. Do not start an exposed old backend.
+
+Then put `$previous` back as the pinned image in `<host-compose>`, and replace the container the
+same way. Install the command-line `iris` from that image with step 5, using `$previous` in place of
+`$IMAGE`:
 
 ```sh
-docker tag "iris-iris:$previous" iris-iris:latest
-docker compose -f deploy/compose.yaml up -d --no-build --pull never
+docker compose -f <host-compose> up -d --no-build --pull never iris
 ```
 
-The artifact expires after 7 days, so the images on the host are the rollback. Keep the one running
-and the two before it, and remove older ones with `docker image rm iris-iris:<commit>`.
+The host keeps pulled images until they are removed. Keep the one running and the two before it.
+GHCR keeps the release images, so a removed one can be pulled again by digest and verified as in
+step 1.
 
-Going back to the image alone is enough only when the deployment added no migration; check with
-`git log --oneline "$previous..$commit" -- internal/store/migrations`. Iris does not refuse an older
-hub on a newer database, and it is not safe there. After a migration, stop the hub and restore the
-backup from step 3, which also loses the mail and other writes made since.
+Going back to the image alone is enough only when the deployment added no migration. To check, take
+the commit from `$previous_version` and run
+`git log --oneline "<previous commit>..$commit" -- internal/store/migrations`. Iris does not refuse
+an older hub on a newer database, and it is not safe there. After a migration, stop the hub and
+restore the backup from step 3, which also loses the mail and other writes made since.
 Migration 024 drops the account and assignment import ledgers. A pre-024 binary
 can open a version-24 database because the store has no maximum-version fence;
 it fails only where it touches a dropped table. Use the matching pre-deploy
 backup for that rollback. The procedure cannot enforce the choice made by the
 hub OS owner.
 
-What ties the image to the source is that it came from the CI run of that commit, by GitHub's record
-of the run. Nothing signs it, and anyone who can push to `main` or change the workflow decides what
-CI builds. The version string is an assertion made by the build: the checks above catch the wrong
-file, not a dishonest build. CI runs only `iris version` from this image; its non-root run on a
-fresh volume uses the release image, so step 4 is the first time this image serves, unless it was
-rehearsed first on a scratch database, as the first cutover to named accounts requires.
+What this cannot do:
+
+- The checks tie the digest to the release workflow's run for the tag. They do not show that the
+  source was reviewed, or that the code is safe. Anyone who can push a `v*` tag or change the
+  workflow decides what is built.
+- Docker does not enforce the verification. Nothing stops a compose file from naming an
+  unverified digest. These steps are a procedure, not a gate.
+- `<host-compose>` lies outside the repository, so no review and no CI sees a change to it. Nothing
+  detects drift between it and `deploy/compose.yaml`.
+- The version check catches the wrong image, not a dishonest build.
+- Step 4 is the first time a new release image serves, unless it was rehearsed first on a scratch
+  database, as the first cutover to named accounts requires.
+
+### Deploying a main commit between releases
+
+Between releases, a commit on `main` can be deployed from the image CI built for it. This path has
+no signature, no attestation and no registry digest. What ties the image to its source is GitHub's
+record of the CI run.
+
+On every push to `main`, a CI job of its own builds the image with `make image` from a checkout no
+other step has touched, checks that it names that commit with a clean source, and keeps it for 7
+days as a workflow artifact named `iris-image-<full commit>`. The artifact holds
+`iris-image.tar.gz`, from `docker save`, and `iris-image.txt`, which records the commit, the
+platform, the runner's image ID and the layer list. The image is linux/amd64, which is what the
+hub's machine runs.
+
+A pull request's run keeps an image too, for one day, as
+`iris-rehearsal-image-pr<number>-<head commit>`. It is built from the merge of the pull request's
+head into `main` and names that merge commit, which exists nowhere else. It is there to rehearse a
+change before it is merged, on a loopback address with a scratch database. It is never deployed:
+the procedure below takes only `iris-image-<commit>` from a run of a push to `main`.
+
+To deploy commit `<commit>` of `main`, in one shell on the hub's machine:
+
+1. Select the successful run of a push to `main` for exactly that commit, and download its image:
+
+   ```sh
+   commit=$(gh api "repos/mateusz-klatt/iris/commits/<commit>" --jq .sha)
+   run=$(gh run list --repo mateusz-klatt/iris --workflow ci.yml --branch main --event push --commit "$commit" --status success --limit 1 --json databaseId --jq '.[0].databaseId')
+   test -n "$run"
+   attempt=$(gh api "repos/mateusz-klatt/iris/actions/runs/$run" --jq .run_attempt)
+   artifact=$(gh api "repos/mateusz-klatt/iris/actions/runs/$run/artifacts" --jq "[.artifacts[] | select(.name == \"iris-image-$commit\")] | max_by(.created_at) | .id")
+   work=$(mktemp -d)
+   gh run download "$run" --repo mateusz-klatt/iris --name "iris-image-$commit" --dir "$work"
+   archive=$(sha256sum "$work/iris-image.tar.gz" | cut -d' ' -f1)
+   grep -qx "commit=$commit" "$work/iris-image.txt"
+   grep -qx "platform=linux/amd64" "$work/iris-image.txt"
+   ```
+
+2. Load the image, tag it with its full commit, and compare it. Loading moves the
+   `iris-iris:latest` tag, which `<host-compose>` does not name, so nothing that is running changes:
+
+   ```sh
+   docker load -i "$work/iris-image.tar.gz"
+   IMAGE="iris-iris:$commit"
+   docker tag iris-iris:latest "$IMAGE"
+   test "$(docker image inspect --format '{{json .RootFS.Layers}}' "$IMAGE")" = "$(sed -n 's/^layers=//p' "$work/iris-image.txt")"
+   version="dev (commit $commit; source clean; console unverified)"
+   test "$(docker run --rm "$IMAGE" version)" = "$version"
+   image=$(docker image inspect --format '{{.Id}}' "$IMAGE")
+   ```
+
+   The comparison uses the layer list because an image ID depends on how a Docker daemon stores
+   images: the runner uses containerd's image store, and a daemon on overlay2 may report a different
+   ID for the same image.
+
+3. Record what is running and back up, as in steps 2 and 3 of the release procedure, with `$commit`
+   in place of `$tag` in the backup's name.
+
+4. Set the service's image in `<host-compose>` to `iris-iris:<full commit>`, the value of `$IMAGE`,
+   then replace the container:
+
+   ```sh
+   docker compose -f <host-compose> up -d --no-build --pull never iris
+   ```
+
+5. Install the command-line `iris` from the same image with step 5 of the release procedure.
+   `$IMAGE` names the loaded image, so the commands are unchanged.
+
+6. Run the four checks of step 6 of the release procedure. Then record what was deployed with this
+   line in place of that step's record:
+
+   ```sh
+   printf '%s commit=%s run=%s attempt=%s artifact=%s archive_sha256=%s image_id=%s previous=%s backup=%s\n' "$(date -u +%FT%TZ)" "$commit" "$run" "$attempt" "$artifact" "$archive" "$image" "$previous" "$backup" >> "$HOME/iris-deploys.log"
+   ```
+
+   These values answer different questions. The run and attempt name the CI execution, the
+   artifact ID names GitHub's stored copy, the checksum identifies the downloaded archive, and the
+   image ID identifies the loaded image on this host. None of them is a registry digest: `docker
+   save` and `docker load` produce none.
+
+To roll back, follow the release procedure's rollback, including its console and migration checks.
+`$previous` is whatever `<host-compose>` named before: a release digest, or an `iris-iris:<commit>`
+tag. A CI image cannot be pulled again, and its artifact expires after 7 days, so the copy on the
+host is the rollback. Keep the image that runs and the two before it, and remove older CI images
+with `docker image rm iris-iris:<commit>`.
+
+What this path cannot do, beyond the limits listed for a release:
+
+- Nothing signs or attests the image, and it has no registry digest. It is tied to the source only
+  by GitHub's record of the CI run of that commit. Anyone who can push to `main` or change the
+  workflow decides what CI builds.
+- The version string is an assertion made by the build. The checks catch the wrong file, not a
+  dishonest build.
+- CI runs only `iris version` from this image. Its run as non-root on a fresh volume uses the
+  release image, so step 4 is the first time this image serves, unless it was rehearsed first on a
+  scratch database.
+- After 7 days the artifact can no longer be downloaded, so step 1 fails for that commit. An image
+  already loaded on the host can still serve a deployment or a rollback.
 
 ### Building on the host
 
