@@ -125,6 +125,9 @@ func run(args []string) error {
 		return err
 	}
 	defer func() { _ = s.Close() }()
+	if s.Restored() {
+		fmt.Fprintln(os.Stderr, "Iris: this database is a restored backup, so the hub runs on a new stream (ADR 006)")
+	}
 	token, err := config.Token(cfg.TokenFile)
 	if err != nil {
 		return err

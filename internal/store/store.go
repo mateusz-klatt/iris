@@ -93,6 +93,9 @@ var attentionIdentitySchema string
 //go:embed migrations/024.sql
 var removeConsoleImportSchema string
 
+//go:embed migrations/025.sql
+var restoreMarkerSchema string
+
 // Clock separates lease ticks from persisted wall-clock expiries. Tick must be monotonic
 // within a Store's lifetime; client timestamps never participate in lease decisions.
 type Clock interface {
@@ -136,6 +139,8 @@ type Store struct {
 	epoch   int64
 	stream  string
 	changed chan struct{}
+	// restored says this start consumed a restore marker and so runs on a new stream (ADR 006).
+	restored bool
 	// transactions is process-local diagnostic state, never part of a durable cursor.
 	transactions atomic.Uint64
 	// cross counts cross-repository recipient attempts per credential, per minute. It is
@@ -379,6 +384,11 @@ func openDatabase(filename string, clock Clock, driverName string) (*Store, erro
 				return err
 			}
 		}
+		if version < 25 {
+			if _, err := t.exec(restoreMarkerSchema); err != nil {
+				return err
+			}
+		}
 		// A reduced shell baseline does not cross a hub start (ADR 018). An older hub that ran
 		// in between could not keep it current, so the first reduced snapshot after a start
 		// only sets a baseline. Full baselines stay, as before.
@@ -390,6 +400,24 @@ func openDatabase(filename string, clock Clock, driverName string) (*Store, erro
 		}
 		if _, err := t.exec("INSERT OR IGNORE INTO Meta VALUES(1,?,0)", newStreamID()); err != nil {
 			return err
+		}
+		// A copy made by `iris admin backup` carries a restore marker (ADR 006). Its first start
+		// runs on a new stream: a client that remembers a cursor of the copied stream would
+		// otherwise take attention committed after the restore, at or below that cursor, for
+		// attention it was already told. The marker goes in the same transaction, so a start
+		// that fails keeps it for the next one.
+		var marked int
+		if err := t.row("SELECT COUNT(*) FROM RestoreMarker").Scan(&marked); err != nil {
+			return err
+		}
+		s.restored = marked > 0
+		if s.restored {
+			if _, err := t.exec("UPDATE Meta SET stream_id=? WHERE id=1", newStreamID()); err != nil {
+				return err
+			}
+			if _, err := t.exec("DELETE FROM RestoreMarker"); err != nil {
+				return err
+			}
 		}
 		if _, err := t.exec("UPDATE Meta SET boot_epoch=boot_epoch+1 WHERE id=1"); err != nil {
 			return err
@@ -420,6 +448,10 @@ func (s *Store) Close() error {
 	return err
 }
 func (s *Store) Changes() <-chan struct{} { s.mu.Lock(); defer s.mu.Unlock(); return s.changed }
+
+// Restored reports whether this start consumed a restore marker, and so runs on a new stream
+// (ADR 006). It never changes after Open.
+func (s *Store) Restored() bool { return s.restored }
 
 // TransactionCount reports how many transactions successfully began in this Store.
 // It includes transactions that later rolled back and resets when the Store is reopened.

@@ -321,6 +321,9 @@ console until all access has been restored and checked.
    account again after reset: its temporary state is operator with no grants.
 6. Take a consistent `iris admin backup` of the reviewed candidate, then stop it
    before installing that backup in the target; do not copy a live main file alone.
+   That backup carries a restore marker, so the target's first start runs on a
+   new stream and agents are told or woken once more for what is pending
+   ([ADR 006](adr/006-retention-and-restore.md), amended).
    Preserve the new key with that database, start one named-authentication hub,
    repeat readiness/sign-in/revocation checks, and only then reopen public browser
    access. Do not copy the withheld old key back. The recorded local synthetic

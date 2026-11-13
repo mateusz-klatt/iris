@@ -63,7 +63,9 @@ is `null` when nothing is. A hub that knows identities always sends the field, `
 hub from before sends none, so a client tells the two apart by the field's presence. Mail keeps
 its identity after retention deletes its event. A freed path stays in the identity until
 retention deletes its event, even after the path was taken. `high_water` is the event sequence's
-high-water mark. A restore keeps the stream and takes the sequence back, so a cursor that a client
+high-water mark. A hub restored from a backup that carries a restore marker runs on a new stream,
+which a client treats as it treats any other stream (ADR 006, amended). A restore from a database
+without the marker keeps the stream and takes the sequence back, so a cursor that a client
 remembers above `high_water` means that the hub went back (ADR 006, decision 7). A client that
 first checks after `high_water` has reached its remembered cursor cannot tell. Responses to
 touch and shell reconcile requests, and to events reads with `attention=1`, carry the same block

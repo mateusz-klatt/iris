@@ -338,8 +338,9 @@ func (t *transaction) explicit(r Request) (map[string]any, error) {
 	if found {
 		var n int
 		// Recovery rotates the numeric fence; merge preserves it and its epoch.
-		// The stream is fixed for this database, so a live current-epoch fence
-		// also proves that its saved token belongs to this boot.
+		// The stream changes only at a start, which also raises the epoch, so a
+		// live current-epoch fence also proves that its saved token belongs to
+		// this boot.
 		if err = t.row("SELECT COUNT(*) FROM Claim WHERE fence=? AND execution_id=? AND boot_epoch=? AND revoked_ms IS NULL", out["fence"], e.ID, t.s.epoch).Scan(&n); err != nil {
 			return nil, err
 		}

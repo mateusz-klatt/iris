@@ -12,7 +12,9 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"time"
 
+	"github.com/mateusz-klatt/iris/internal/store"
 	_ "modernc.org/sqlite"
 )
 
@@ -50,14 +52,36 @@ func Run(ctx context.Context, source, dest string, out io.Writer) error {
 		_ = os.Remove(partial)
 		return fmt.Errorf("copy: %w", err)
 	}
+	// The copy carries the restore marker, so a hub started on it runs on a new stream (ADR 006).
+	// It is set before the copy is checked and published, so a published backup always has it.
+	if err := markCopy(ctx, partial); err != nil {
+		removeCopy(partial)
+		return fmt.Errorf("mark the copy for a restore: %w", err)
+	}
 	s, err := place(partial, dest)
 	_ = os.Remove(partial) // on success dest is a second link to the same file
 	if err != nil {
 		return err
 	}
-	_, _ = fmt.Fprintf(out, "backup %s: integrity ok, schema %d, %d messages, %d events, %d bytes\n", dest, s.version, s.messages, s.events, s.bytes)
+	_, _ = fmt.Fprintf(out, "backup %s: integrity ok, schema %d, %d messages, %d events, %d bytes, restore marker set\n", dest, s.version, s.messages, s.events, s.bytes)
 	_, _ = fmt.Fprintf(out, "test a restore on a copy, never the live volume:\n  iris admin restore-check %s <empty scratch directory>\n", dest)
 	return nil
+}
+
+// markCopy sets the restore marker in the copy at path, opened read-write on its own. The copy
+// is in rollback-journal mode, as VACUUM INTO writes it, so the marker is in the file itself once
+// the connection closes. It is a variable so a test can make marking fail.
+var markCopy = func(ctx context.Context, path string) error {
+	db, _ := sql.Open("sqlite", readWrite(path)) // the driver only records the name; Exec reports errors
+	defer func() { _ = db.Close() }()
+	return store.MarkRestore(ctx, db, time.Now())
+}
+
+// removeCopy removes an unpublished copy and anything SQLite left beside it.
+func removeCopy(path string) {
+	for _, suffix := range []string{"", "-journal", "-wal", "-shm"} {
+		_ = os.Remove(path + suffix)
+	}
 }
 
 // place checks the copy and links it in as dest. verify is a variable so a test can make a
@@ -93,8 +117,11 @@ func summarise(path string) (summary, error) {
 	if result != "ok" {
 		return s, fmt.Errorf("the copy failed SQLite's integrity check: %s", result)
 	}
+	// A copy without the restore marker fails here too: its made_ms reads as NULL.
+	var marked int64
 	err := db.QueryRow(`SELECT (SELECT user_version FROM pragma_user_version),(SELECT COUNT(*) FROM Message),
-(SELECT COUNT(*) FROM Event),(SELECT page_count*page_size FROM pragma_page_count,pragma_page_size)`).Scan(&s.version, &s.messages, &s.events, &s.bytes)
+(SELECT COUNT(*) FROM Event),(SELECT page_count*page_size FROM pragma_page_count,pragma_page_size),
+(SELECT made_ms FROM RestoreMarker WHERE id=1)`).Scan(&s.version, &s.messages, &s.events, &s.bytes, &marked)
 	if err != nil {
 		return s, fmt.Errorf("read the copy: %w", err)
 	}
@@ -105,7 +132,13 @@ func summarise(path string) (summary, error) {
 // waits up to five seconds while the hub holds a lock, and keeps temporary storage in memory, as
 // the hub does since the image has no temporary directory (#171). The path is escaped, so a ? or # in it
 // stays part of the name: file:/home/a/hub.db, or file:C:/a/hub.db on Windows.
-func readOnly(path string) string {
+func readOnly(path string) string { return sqliteURI(path, "ro") }
+
+// readWrite names a database as readOnly does, opened for writing. It is used only on the
+// unpublished copy, which no hub has open.
+func readWrite(path string) string { return sqliteURI(path, "rw") }
+
+func sqliteURI(path, mode string) string {
 	abs, _ := filepath.Abs(path) // Abs fails only when the working directory is gone
-	return "file:" + (&url.URL{Path: filepath.ToSlash(abs)}).EscapedPath() + "?mode=ro&_pragma=busy_timeout(5000)&_pragma=temp_store(2)"
+	return "file:" + (&url.URL{Path: filepath.ToSlash(abs)}).EscapedPath() + "?mode=" + mode + "&_pragma=busy_timeout(5000)&_pragma=temp_store(2)"
 }
