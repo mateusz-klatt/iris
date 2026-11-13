@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -35,7 +36,9 @@ func grokGetenv(t *testing.T, extra map[string]string) func(string) string {
 func grokRun(t *testing.T, env func(string) string, anc func() (proc.Ancestor, error), event, payload string, hub Hub) Output {
 	t.Helper()
 	root := gitRepo(t)
-	body := strings.ReplaceAll(payload, "ROOT", root)
+	// A Windows temp path contains backslashes. Those are illegal JSON escapes,
+	// so the payload must use forward slashes, which Windows accepts as a path.
+	body := strings.ReplaceAll(payload, "ROOT", filepath.ToSlash(root))
 	return Runner{
 		ClientName: "grok",
 		EventName:  event,
@@ -70,11 +73,11 @@ func TestGrokSessionStartWritesThePidFileAndASubagentDoesNotReplaceIt(t *testing
 	}
 	file := grokPID(t, env, 4242, 1700000000000)
 	info, err := os.Stat(file)
-	if err != nil || info.Mode().Perm() != 0o600 {
+	if err != nil || (runtime.GOOS != "windows" && info.Mode().Perm() != 0o600) {
 		t.Fatalf("pid file mode: %v %v", info, err)
 	}
 	dirInfo, err := os.Stat(filepath.Dir(file))
-	if err != nil || dirInfo.Mode().Perm() != 0o700 {
+	if err != nil || (runtime.GOOS != "windows" && dirInfo.Mode().Perm() != 0o700) {
 		t.Fatalf("pid directory mode: %v %v", dirInfo, err)
 	}
 	got, ok := ReadGrokSession(filepath.Dir(file), 4242, 1700000000000)
@@ -441,7 +444,7 @@ func TestGrokStopAsksUntilAMonitorExists(t *testing.T) {
 			out := Runner{
 				ClientName: tc.client,
 				EventName:  event,
-				Stdin:      strings.NewReader(strings.ReplaceAll(body, "ROOT", t.TempDir())),
+				Stdin:      strings.NewReader(strings.ReplaceAll(body, "ROOT", filepath.ToSlash(t.TempDir()))),
 				Hub:        &countingHub{fn: func() { calls++ }},
 				Getenv:     tc.env,
 				after:      never,
