@@ -289,7 +289,18 @@ func TestGrokSessionProtectionAndUnreadableFiles(t *testing.T) {
 		t.Fatalf("punctuation in a session id: %q %v", got, ok)
 	}
 
-	if os.Geteuid() != 0 {
+	if runtime.GOOS == "windows" {
+		// A mode of 0500 does not stop CreateTemp on Windows. The refusal still has
+		// to be handled, so the test supplies the error the OS will not.
+		origCreate := createGrokTemp
+		createGrokTemp = func(string, string) (*os.File, error) {
+			return nil, errors.New("access denied")
+		}
+		if err := writeGrokSession(t.TempDir(), 1, 2, grokSession); err == nil {
+			t.Fatal("wrote when the temporary file could not be created")
+		}
+		createGrokTemp = origCreate
+	} else if os.Geteuid() != 0 {
 		locked := filepath.Join(t.TempDir(), "locked")
 		if err := os.Mkdir(locked, 0o500); err != nil {
 			t.Fatal(err)

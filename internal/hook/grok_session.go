@@ -20,6 +20,10 @@ const grokPIDDirName = "grok-pids"
 // and the mode bits are what keep the file private.
 var protectPath = config.OwnerOnly
 
+// createGrokTemp opens the private temporary file. Tests replace it on systems that
+// ignore a directory mode and would otherwise allow the write.
+var createGrokTemp = os.CreateTemp
+
 // validGrokSession accepts the ids Grok puts in a hook payload: a UUID, and nothing a file
 // name or a second line could be made from. The file name itself is only the pid and start time.
 func validGrokSession(id string) bool {
@@ -66,7 +70,7 @@ func writeGrokSession(dir string, pid int, startMS int64, sessionID string) erro
 	if err := protectPath(dir); err != nil {
 		return err
 	}
-	f, err := os.CreateTemp(dir, ".tmp-*")
+	f, err := createGrokTemp(dir, ".tmp-*")
 	if err != nil {
 		return err
 	}
