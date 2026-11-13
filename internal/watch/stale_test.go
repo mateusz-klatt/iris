@@ -77,6 +77,33 @@ func (h realHub) watchFor(t *testing.T, ex string, wait time.Duration) string {
 	return out.String()
 }
 
+// watchUntilSaid runs a monitor for the Execution until it has printed want, and returns what it
+// printed. A fixed window for mail the monitor must announce missed it on a loaded machine; the
+// bound only ends a monitor that never says it. A window still serves where a monitor must stay
+// quiet, since a slower monitor is only quieter.
+func (h realHub) watchUntilSaid(t *testing.T, ex, want string) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	out := &lines{}
+	r := &Runner{Resolver: &binding.Resolver{Hub: &hubclient.Client{Config: testConfig{url: h.url}}}, Output: out, Backoff: 10 * time.Millisecond}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		_ = r.connect(ctx, binding.Bound{ExecutionID: ex}, new(int64), new(string), &Coalescer{Output: out})
+	}()
+	for !strings.Contains(out.String(), want) {
+		select {
+		case <-done:
+			return out.String()
+		case <-time.After(time.Millisecond):
+		}
+	}
+	cancel()
+	<-done
+	return out.String()
+}
+
 func TestANewMonitorDoesNotRepeatHistory(t *testing.T) {
 	h := startHub(t)
 	sender, gen := h.session(t, "sender")
@@ -159,7 +186,7 @@ func TestAMonitorIsQuietAboutMailAlreadyFetched(t *testing.T) {
 		t.Fatalf("announced fetched mail: %q", got)
 	}
 	h.call(t, "messages", store.Request{ExecutionID: sender, Generation: gen, Key: "m2", To: []string{name}, Body: "new"})
-	if got := h.watchFor(t, reader, 300*time.Millisecond); !strings.Contains(got, "1 new message") {
+	if got := h.watchUntilSaid(t, reader, "1 new message"); !strings.Contains(got, "1 new message") {
 		t.Fatalf("missed new mail: %q", got)
 	}
 }
