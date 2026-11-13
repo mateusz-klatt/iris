@@ -1,7 +1,6 @@
 # 029: Cursor end-of-turn follow-up
 
-Status: proposed on 2026-11-13 by `cursor-home-iris-2`, from a scratch measurement.
-Not accepted. Would change D7 for Cursor only if accepted. No code in this draft.
+Status: accepted on 2026-11-13 (holzera). The implementation follows in its own PR.
 
 ## Problem
 
@@ -71,9 +70,11 @@ inside the hook's 1.5 s internal deadline. Cursor's installed hook timeout is 3 
 a timeout or any other failure prints `{}` and does not deny the stop. Cursor's own
 timeout result is still unknown. This proposal does not depend on a timeout denying the turn.
 
-Wake is opt-in with `--wake` and off otherwise, including a fresh `iris integrate cursor`,
-until a later measurement shows the installed hook on a real Iris session. This draft does
-not add that code.
+On 2026-11-13, about 20:20 UTC, the owner decided that a CLI Iris can wake is on by default
+unless that implementation is incomplete or does not work. For Cursor the default turns on
+once the installed hooks are verified live on a scratch session. A fresh `iris integrate
+cursor` and `iris setup` then write wake on. `--no-wake` turns it off, and reintegration
+keeps an explicit choice. This ADR does not add that code. The implementation PR defaults on.
 
 What this does not do: it does not start a closed session, inject a keystroke, or deliver
 mail while the session is sitting idle between turns. A queued follow-up can still be empty
