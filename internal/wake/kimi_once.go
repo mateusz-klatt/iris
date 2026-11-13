@@ -449,9 +449,10 @@ func (o *onceRun) serve(ctx context.Context, tick *time.Ticker, conn eventConnec
 }
 
 // frame takes one event. A reset, or a frame from another stream, is answered by an authoritative
-// read. A frame at or below the cursor was seen already.
+// read, and so is any frame while a reset is still unresolved: the cursor must not move past what
+// that reset has yet to judge. A frame at or below the cursor was seen already.
 func (o *onceRun) frame(ctx context.Context, f eventFrame) (Outcome, bool) {
-	if f.Kind == "reset" || f.Stream != o.stream {
+	if f.Kind == "reset" || f.Stream != o.stream || o.again {
 		return o.reset(ctx)
 	}
 	if f.Cursor <= o.cursor {
@@ -569,10 +570,11 @@ func (o *onceRun) decide(ctx context.Context) (Outcome, bool) {
 		o.until = due
 		return 0, false
 	}
+	out, stop, unsure := o.local()
+	// The last blocking work is done: a stop or the end of the lifetime by now prints nothing.
 	if ctx.Err() != nil {
 		return o.ended(), true
 	}
-	out, stop, unsure := o.local()
 	if stop {
 		return out, true
 	}

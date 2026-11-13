@@ -71,6 +71,84 @@ func TestKimiOnceReadsAFailedResetAgain(t *testing.T) {
 	})
 }
 
+// While a reset is unresolved, a later frame does not move the cursor past what the reset has yet
+// to judge: the reset, read again, still finds attention newer than the old checkpoint.
+func TestKimiOnceHoldsItsCursorWhileAResetIsUnresolved(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ot := newOnceTest(t)
+		ot.baseline("s1", 10, nil)
+		ot.hub.set(func(h *onceFake) {
+			h.read = func(int64, string) (attentionRead, error) { return attentionRead{}, errors.New("down") }
+		})
+		c := ot.stream()
+		done := ot.start(t.Context())
+		c.frames <- frame("s1", 0, "reset")
+		c.frames <- frame("s1", 31, "claim_released")
+		synctest.Wait()
+		if len(ot.hub.saved) != 0 || ot.record().Checkpoint.Cursor != 10 {
+			t.Fatalf("moved past an unresolved reset: %v %+v", ot.hub.saved, ot.record())
+		}
+		ot.reads(claim("s1", 25, 31))
+		ot.announced(<-done, "s1", 31, map[string]int64{"claim_available": 25})
+	})
+}
+
+// Attention whose authoritative read fails is decided again after a call budget, without another
+// frame.
+func TestKimiOnceDecidesAgainAfterAFailedRead(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		ot, c, done := following(t, t.Context())
+		ot.hub.set(func(h *onceFake) {
+			h.read = func(int64, string) (attentionRead, error) { return attentionRead{}, errors.New("down") }
+		})
+		c.frames <- frame("s1", 11, "inbox_changed")
+		synctest.Wait()
+		if ot.out.String() != "" {
+			t.Fatalf("announced without a read: %q", ot.out)
+		}
+		ot.reads(mail("s1", 1, 11, 11))
+		ot.announced(<-done, "s1", 11, map[string]int64{"inbox_changed": 11})
+	})
+}
+
+// A stop, or the end of the lifetime, during the last map read before a line also prints nothing.
+func TestKimiOnceEndedDuringTheLastMapReadPrintsNoLine(t *testing.T) {
+	for name, want := range map[string]Outcome{"stopped": Disabled, "expired": Expired} {
+		t.Run(name, func(t *testing.T) {
+			synctest.Test(t, func(t *testing.T) {
+				ot := newOnceTest(t)
+				ot.baseline("s1", 10, nil)
+				ctx, cancel := context.WithCancel(t.Context())
+				defer cancel()
+				armed := false // set once the told state is read, which comes before the last map read
+				ot.w.told = func(string) (hook.ToldSnapshot, error) {
+					armed = true
+					return hook.ToldSnapshot{}, nil
+				}
+				read := ot.w.mapped
+				ot.w.mapped = func(pid int, start int64) (string, bool, error) {
+					if armed && want == Disabled {
+						cancel()
+					} else if armed {
+						time.Sleep(onceLifetime + time.Minute)
+					}
+					return read(pid, start)
+				}
+				ot.reads(mail("s1", 1, 11, 11))
+				c := ot.stream()
+				done := ot.start(ctx)
+				c.frames <- frame("s1", 11, "inbox_changed")
+				if got := <-done; got != want || ot.out.String() != outcomeLines[want]+"\n" || len(ot.hub.saved) != 0 {
+					t.Fatalf("%v %q %v", got, ot.out, ot.hub.saved)
+				}
+				if r := ot.record(); r.Latch == nil || r.Latch.State != latchFor[want] {
+					t.Fatalf("%+v", r)
+				}
+			})
+		})
+	}
+}
+
 // Attention held from one stream is dropped when the stream changes: it is never announced under
 // the new stream, nor recorded there with the old stream's cursor.
 func TestKimiOnceDropsHeldAttentionWhenTheStreamChanges(t *testing.T) {
