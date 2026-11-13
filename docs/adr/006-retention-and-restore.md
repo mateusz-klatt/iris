@@ -86,10 +86,19 @@ one until newer attention arrived, though the counts included it and the inbox r
 - The copy is one file, with no `-wal` or `-shm` beside it, so the marker goes wherever the file's
   bytes are copied.
 - The first start of a hub with migration 025 on a database that carries the marker gives it a new
-  stream id and deletes the marker. Both happen in the start's own transaction, before the epoch is raised, so a
-  failed start keeps the marker and the old stream. Later starts on the same file keep the new
-  stream, and every copy of one backup gets a stream of its own at its first start. `iris serve`
-  says on standard error when it starts on a marked database.
+  stream id and deletes the marker. Both happen in the start's own transaction, before the epoch
+  is raised, so a failed start keeps the marker and the old stream. Later starts on the same file
+  keep the new stream, and every copy of one backup gets a stream of its own at its first start.
+  `iris serve` says on standard error when it starts on a marked database.
+- `iris admin mark-restored <database>` sets the marker in a database that has none, so that a copy
+  made some other way also runs on a new stream at its next start. It works offline. It holds the
+  hub's lock on the path a hub would resolve for the whole operation, so it refuses a database
+  that a hub has open under that path or under a link to it. A hard link or another mount of the
+  file is a path of its own, which the lock does not see. It starts nothing, so no epoch,
+  recovery, expiry or migration runs. It refuses a file that is not a hub database, and marking
+  again leaves one row. Before it reports success, it checkpoints the marker into the database
+  file itself, so a copy of that file alone carries it. Another process holding a read on the
+  file can stop the checkpoint; it then fails and says so.
 
 **What clients do.** A new stream is new attention to every client (ADR 017, decision 4), so what
 is pending is said once more.
@@ -106,12 +115,13 @@ recovery ends; ended and lost Executions stay as they were. A fence or claim tok
 restore is refused, as after any restart, and a session that reattaches gets fresh fences.
 
 **What this cannot do.**
-- A database without the marker keeps its stream, and the gap. Only `iris admin backup` from
-  migration 025 on writes the marker. A copy of the live file, a volume or host snapshot,
-  `sqlite3 .backup` and a backup by a binary from before migration 025 carry one only if their
-  source did, so they are normally unmarked. That includes the backup taken before deploying the
-  first release with migration 025, because the running binary makes it. `iris admin restore-check`
-  warns about an unmarked backup instead of checking for a new stream.
+- A database without the marker keeps its stream, and the gap, unless `iris admin mark-restored`
+  marks it before its first start. Only `iris admin backup` from migration 025 on writes the marker
+  by itself. A copy of the live file, a volume or host snapshot, `sqlite3 .backup` and a backup by
+  a binary from before migration 025 carry one only if their source did, so they are normally
+  unmarked. That includes the backup taken before deploying the first release with migration 025,
+  because the running binary makes it. `iris admin restore-check` warns about an unmarked backup,
+  and names `iris admin mark-restored`, instead of checking for a new stream.
 - A binary from before migration 025 ignores the table. A marked copy that such a binary starts
   first keeps its stream and its marker, and so does every backup or copy made of it meanwhile. The
   first later start by a binary with the migration rotates the stream then.

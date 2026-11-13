@@ -248,10 +248,13 @@ hub OS owner.
 
 Migration 025 only adds the restore marker's table. v0.1.2 ignores that table, so going back to
 v0.1.2's image alone after deploying migration 025 is safe. That was checked for v0.1.2 only, and a
-binary from before migration 024 is not safe on such a database in any case. The pre-deploy backup in
-step 3 is made by the hub that is running, so a hub from before migration 025, as v0.1.2 is, writes
-no restore marker into it. Restoring it keeps the stream unless the database it copied already
-carried a marker ([Retention and restore](#retention-and-restore-adr-006)).
+binary from before migration 024 is not safe on such a database in any case. The pre-deploy
+backup in step 3 is made by the hub that is running, so a hub from before migration 025, as v0.1.2
+is, writes no restore marker into it. Restoring it keeps the stream unless the database it copied
+already carried a marker, or you mark the copy with `iris admin mark-restored` before it goes into
+place ([Retention and restore](#retention-and-restore-adr-006)). A hub from before migration 025
+ignores the marker, so after a rollback to one the stream changes only at the next start of a
+binary with that migration.
 
 What this cannot do:
 
@@ -427,7 +430,7 @@ throwaway hub on a loopback port with a token of its own. It then checks:
 - that a session presenting a generation the backup never saw gets no restored authority;
 - that a monitor whose cursor is ahead of the restored history gets a reset;
 - for a backup with a restore marker, that the restored hub runs on a new stream. A backup without
-  one gets a warning instead of this check.
+  one gets a warning instead of this check, which names `iris admin mark-restored` (below).
 
 It also prints what the first retention sweep would remove. A failed check prints `FAIL` and exits
 non-zero. This checks agent recovery, not named browser authentication. Before a real
@@ -435,15 +438,27 @@ restore, stop the hub and follow [console isolation, fresh-key activation and gr
 review](console-activation.md#restore-a-database-with-browser-access-isolated). Copy the
 reviewed backup over `iris.db` while stopped, removing its old `-wal` and `-shm` files. Never move
 the backup file itself into place: the first start consumes the restore marker of the file it runs
-on, and the archive should keep a marked copy. Keep the old console key withheld. Agents then
-reattach with proof or register afresh; reopen browser access only after the named-console
-recovery checks pass.
+on, and the archive should keep a marked copy. If restore-check warned that the backup has no
+restore marker, mark the copy on the host before it goes into place, while no hub has it open:
+
+```sh
+iris admin mark-restored /path/to/backup-copy.db
+```
+
+It sets the marker and changes nothing else in the file. It refuses a file that is not a hub
+database, and a database that a hub has open under that path or a link to it; it cannot see a hub
+that opened the file through a hard link or another mount. It writes the marker into the database
+file itself before it reports success. If another process keeps the copy open in a way that stops
+that, it fails and says so; close that process and run it again. Keep the old console key
+withheld. Agents then reattach with proof or register afresh; reopen browser access only after the
+named-console recovery checks pass.
 
 The restore marker (ADR 006, amended on 2026-11-13). The first start of a hub with migration 025 on
 a copy that carries it runs on a new stream, removes the marker from that copy, and says so on
 standard error. The clients then tell or wake for what is pending once more: the hooks and the wake
 runner for mail and freed paths, a monitor for mail only. A database without the marker keeps its
-stream. Only `iris admin backup` from migration 025 on writes the marker. A copy of the live file, a
+stream, unless `iris admin mark-restored` marks it before its first start. Only `iris admin backup`
+from migration 025 on writes the marker by itself. A copy of the live file, a
 volume snapshot, or a backup made by an older binary carries one only if its source did, so it is
 normally unmarked; that includes the pre-deploy backup taken before the first release with that
 migration. On such a database, mail sent after the restore whose event is at or below a cursor a
