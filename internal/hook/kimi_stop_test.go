@@ -69,7 +69,10 @@ func (h *kimiHarness) wake(text string) {
 }
 
 func (h *kimiHarness) mapped() string {
-	id, _ := (&kimiwake.Store{Root: h.root()}).MappedSession(kimiWakePID, kimiWakeStart)
+	id, _, err := (&kimiwake.Store{Root: h.root()}).Session(kimiWakePID, kimiWakeStart, time.Second)
+	if err != nil {
+		h.t.Fatal(err)
+	}
 	return id
 }
 

@@ -10,6 +10,7 @@ import (
 	"errors"
 	"fmt"
 	"io/fs"
+	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -289,9 +290,27 @@ func (s *Store) updateHeld(k Key, change func(r *Record, exists bool) bool) erro
 	return replace(path, r)
 }
 
-// MappedSession reads the native session the Kimi process (pid, startMS) runs now, as its last
-// SessionStart published it. A missing or malformed map is none.
-func (s *Store) MappedSession(pid int, startMS int64) (string, bool) {
+// Session reads, under the lock, the native session the Kimi process (pid, startMS) runs now, as
+// its last SessionStart published it. ok is false for a missing or malformed map. The lock
+// matters on Windows: a reader holding the map open while a SessionStart renames a new one over it
+// would fail that publication.
+// A read makes and protects nothing: without the state directory no SessionStart has published a
+// map, so there is none.
+func (s *Store) Session(pid int, startMS int64, budget time.Duration) (string, bool, error) {
+	unlock, err := s.lock(budget)
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", false, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	defer unlock()
+	session, ok := s.mappedSession(pid, startMS)
+	return session, ok, nil
+}
+
+// mappedSession reads the map with the lock held. A missing or malformed map is none.
+func (s *Store) mappedSession(pid int, startMS int64) (string, bool) {
 	raw, err := os.ReadFile(s.sessionPath(pid, startMS))
 	if err != nil {
 		return "", false
@@ -338,7 +357,7 @@ func (s *Store) RequestArm(k Key, budget time.Duration) (ask bool, err error) {
 		return false, errKey
 	}
 	err = s.locked(budget, func() error {
-		if current, ok := s.MappedSession(k.PID, k.StartMS); !ok || current != k.Session {
+		if current, ok := s.mappedSession(k.PID, k.StartMS); !ok || current != k.Session {
 			return nil
 		}
 		return s.updateHeld(k, func(r *Record, _ bool) bool {
@@ -360,26 +379,39 @@ func (s *Store) RequestArm(k Key, budget time.Duration) (ask bool, err error) {
 	return ask && err == nil, err
 }
 
+// pruneStart picks where in the listing a pruning pass begins, from 0 to n-1. Starting at a random
+// place means the live entries early in the listing cannot use up every pass's limit and keep the
+// ended entries after them from ever being checked. Tests replace it.
+var pruneStart = rand.IntN
+
 // prune removes up to pruneLimit entries whose Kimi process has ended, with the lock held. Once its
 // process ends, a record's cursor serves nobody: a new process starts new keys. The process whose
 // SessionStart is pruning is running, whatever a process lookup says, and a name that is not a
 // state file's is left alone.
 func (s *Store) prune(selfPID int, selfStartMS int64) {
-	checked := 0
+	var entries []string
 	for _, dir := range []string{sessionsName, watchersName} {
-		entries, _ := os.ReadDir(filepath.Join(s.Root, dir))
-		for _, e := range entries {
-			pid, startMS, ok := entryProcess(e.Name())
-			if !ok || (pid == selfPID && startMS == selfStartMS) {
-				continue
-			}
-			if checked == pruneLimit {
-				return
-			}
-			checked++
-			if !s.alive(pid, startMS) {
-				_ = os.Remove(filepath.Join(s.Root, dir, e.Name()))
-			}
+		listed, _ := os.ReadDir(filepath.Join(s.Root, dir))
+		for _, e := range listed {
+			entries = append(entries, filepath.Join(dir, e.Name()))
+		}
+	}
+	// One more than the count, so an empty listing needs no case of its own; a start equal to
+	// the count is the same place as zero.
+	start := pruneStart(len(entries) + 1)
+	checked := 0
+	for i := range entries {
+		entry := entries[(start+i)%len(entries)]
+		pid, startMS, ok := entryProcess(filepath.Base(entry))
+		if !ok || (pid == selfPID && startMS == selfStartMS) {
+			continue
+		}
+		if checked == pruneLimit {
+			return
+		}
+		checked++
+		if !s.alive(pid, startMS) {
+			_ = os.Remove(filepath.Join(s.Root, entry))
 		}
 	}
 }

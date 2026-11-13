@@ -73,6 +73,16 @@ func raw(t *testing.T, path string) []byte {
 	return b
 }
 
+// mapped reads the process's map as a reader does, under the lock.
+func mapped(t *testing.T, s *Store) (string, bool) {
+	t.Helper()
+	id, ok, err := s.Session(kimiPID, kimiStart, time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return id, ok
+}
+
 func mapSession(t *testing.T, s *Store, session string) {
 	t.Helper()
 	if err := s.MapSession(kimiPID, kimiStart, session, time.Second); err != nil {
@@ -227,6 +237,11 @@ func TestALiveWatcherIsLeftAloneAndADeadOneIsReplaced(t *testing.T) {
 func TestAStopAsksOnlyForTheSessionItsProcessRuns(t *testing.T) {
 	s, _, _ := newStore(t)
 	a, b := keyFor(sessionA), keyFor(sessionB)
+	// Before any SessionStart there is no state directory, and a read creates none.
+	if id, ok := mapped(t, s); ok || id != "" {
+		t.Fatalf("mapped %q before any SessionStart", id)
+	}
+	absent(t, s.Root)
 	if ask, err := s.RequestArm(a, time.Second); err != nil || ask {
 		t.Fatalf("no map: %v %v", ask, err)
 	}
@@ -244,7 +259,7 @@ func TestAStopAsksOnlyForTheSessionItsProcessRuns(t *testing.T) {
 		if err := os.WriteFile(s.sessionPath(kimiPID, kimiStart), []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if id, ok := s.MappedSession(kimiPID, kimiStart); ok || id != "" {
+		if id, ok := mapped(t, s); ok || id != "" {
 			t.Fatalf("%q mapped %q", body, id)
 		}
 	}
@@ -260,7 +275,7 @@ func TestSessionStartRepointsTheProcessAndClearsOnlyTheNewKeysLatch(t *testing.T
 	mapSession(t, s, sessionA)
 	oldRecord := put(t, s, a, Record{Version: recordVersion, Latch: &Latch{State: LatchFailed, AtMS: 1}})
 	mapSession(t, s, sessionB)
-	if id, ok := s.MappedSession(kimiPID, kimiStart); !ok || id != sessionB {
+	if id, ok := mapped(t, s); !ok || id != sessionB {
 		t.Fatalf("map after /clear: %q %v", id, ok)
 	}
 	if !bytes.Equal(oldRecord, raw(t, s.recordPath(a))) {
@@ -332,7 +347,7 @@ func TestSessionStartRemovesTheStateOfEndedProcesses(t *testing.T) {
 			t.Fatalf("%s: kept %v, stat %v", name, kept, err)
 		}
 	}
-	if id, ok := s.MappedSession(kimiPID, kimiStart); !ok || id != sessionA {
+	if id, ok := mapped(t, s); !ok || id != sessionA {
 		t.Fatal("pruning removed the running process's own map")
 	}
 }
@@ -344,11 +359,65 @@ func TestSessionStartKeepsItsOwnProcessState(t *testing.T) {
 	procs.set(kimiPID, kimiStart, false)
 	put(t, s, keyFor(sessionA), Record{Version: recordVersion, Checkpoint: Checkpoint{Stream: "s1", Cursor: 3, Initialized: true}})
 	mapSession(t, s, sessionB)
-	if id, ok := s.MappedSession(kimiPID, kimiStart); !ok || id != sessionB {
+	if id, ok := mapped(t, s); !ok || id != sessionB {
 		t.Fatalf("map %q %v", id, ok)
 	}
 	if _, exists := recordOf(t, s, keyFor(sessionA)); !exists {
 		t.Fatal("pruning removed a record of the process that is pruning")
+	}
+}
+
+// pinPruneStart makes the pruning passes begin at the given places, the last one repeating.
+func pinPruneStart(t *testing.T, starts ...int) {
+	t.Helper()
+	original, pass := pruneStart, 0
+	pruneStart = func(int) int {
+		start := starts[min(pass, len(starts)-1)]
+		pass++
+		return start
+	}
+	t.Cleanup(func() { pruneStart = original })
+}
+
+func count(t *testing.T, dir string) int {
+	t.Helper()
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(entries)
+}
+
+// Live entries early in the listing cannot keep the ended ones after them forever: a pass that
+// starts at the top spends its limit on live entries, and a pass that starts elsewhere reaches the
+// ended ones.
+func TestPruningReachesEndedEntriesBehindLiveOnes(t *testing.T) {
+	s, _, procs := newStore(t)
+	if err := s.prepare(); err != nil {
+		t.Fatal(err)
+	}
+	live := pruneLimit + 6
+	for pid := 1; pid <= live; pid++ {
+		procs.set(pid, 1, true)
+		if err := os.WriteFile(s.sessionPath(pid, 1), []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// "9001-1.json" and the rest sort after every live name, "9-1.json" included.
+	for pid := 9001; pid <= 9005; pid++ {
+		if err := os.WriteFile(s.sessionPath(pid, 1), []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sessions := filepath.Join(s.Root, sessionsName)
+	pinPruneStart(t, 0, live)
+	s.prune(0, 0)
+	if n := count(t, sessions); n != live+5 {
+		t.Fatalf("a pass from the top left %d entries, want all %d", n, live+5)
+	}
+	s.prune(0, 0)
+	if n := count(t, sessions); n != live {
+		t.Fatalf("a pass from the ended entries left %d entries, want the %d live ones", n, live)
 	}
 }
 
@@ -359,6 +428,7 @@ func TestPruningChecksABoundedNumberOfEntries(t *testing.T) {
 	if err := s.prepare(); err != nil {
 		t.Fatal(err)
 	}
+	pinPruneStart(t, 0)
 	for i := 1; i <= pruneLimit+5; i++ {
 		if err := os.WriteFile(s.sessionPath(i, 1), []byte("{}"), 0o600); err != nil {
 			t.Fatal(err)
@@ -439,9 +509,13 @@ func TestALockHeldPastTheBudgetRefuses(t *testing.T) {
 	if err := s.MapSession(kimiPID, kimiStart, sessionB, 20*time.Millisecond); !errors.Is(err, ErrLocked) {
 		t.Fatal(err)
 	}
+	// A read waits for the lock too, and is refused past its budget.
+	if id, ok, err := s.Session(kimiPID, kimiStart, 20*time.Millisecond); ok || id != "" || !errors.Is(err, ErrLocked) {
+		t.Fatalf("a read past the budget: %q %v %v", id, ok, err)
+	}
 	release()
 	absent(t, s.recordPath(keyFor(sessionA)))
-	if id, _ := s.MappedSession(kimiPID, kimiStart); id != sessionA {
+	if id, _ := mapped(t, s); id != sessionA {
 		t.Fatalf("a refused SessionStart re-pointed the map to %q", id)
 	}
 	if ask, err := s.RequestArm(keyFor(sessionA), time.Second); err != nil || !ask {
