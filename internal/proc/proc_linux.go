@@ -23,7 +23,10 @@ func lookupOS(pid int) (Snapshot, bool) {
 	if argv := argv0(pid); argv != "" {
 		name = argv
 	}
-	start, _ := startMS(pid)
+	state, start, err := statEvidence(pid)
+	if err == nil && (state == "Z" || state == "X" || state == "x") {
+		return Snapshot{}, false
+	}
 	return Snapshot{PID: pid, PPID: ppid, Name: name, StartMS: start}, true
 }
 
@@ -45,16 +48,21 @@ func argv0(pid int) string {
 	return first
 }
 
-func startMS(pid int) (int64, error) {
+func statEvidence(pid int) (string, int64, error) {
 	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/stat")
 	if err != nil {
-		return 0, err
+		return "", 0, err
 	}
-	return startFrom(string(b), clock)
+	state, _, start, err := parseStat(string(b))
+	if err != nil {
+		return "", 0, err
+	}
+	start, err = startFrom(string(b), clock)
+	return state, start, err
 }
 
 func startFrom(stat string, clock func() (int64, int64, error)) (int64, error) {
-	_, ticks, err := parseStat(stat)
+	_, _, ticks, err := parseStat(stat)
 	if err != nil {
 		return 0, err
 	}
@@ -65,22 +73,23 @@ func startFrom(stat string, clock func() (int64, int64, error)) (int64, error) {
 	return (boot*clk + ticks) * 1000 / clk, nil
 }
 
-func parseStat(s string) (ppid int, startTicks int64, err error) {
+func parseStat(s string) (state string, ppid int, startTicks int64, err error) {
 	end := strings.LastIndex(s, ")")
 	if end < 0 || end+2 >= len(s) {
-		return 0, 0, os.ErrInvalid
+		return "", 0, 0, os.ErrInvalid
 	}
 	fields := strings.Fields(s[end+2:])
 	// Fields after comm: state is 0, ppid is 1, starttime is 19 (proc field 22).
 	if len(fields) < 20 {
-		return 0, 0, os.ErrInvalid
+		return "", 0, 0, os.ErrInvalid
 	}
+	state = fields[0]
 	ppid, err = strconv.Atoi(fields[1])
 	if err != nil {
-		return 0, 0, err
+		return "", 0, 0, err
 	}
 	startTicks, err = strconv.ParseInt(fields[19], 10, 64)
-	return ppid, startTicks, err
+	return state, ppid, startTicks, err
 }
 
 var (
