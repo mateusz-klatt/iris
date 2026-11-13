@@ -262,7 +262,9 @@ Each change below was made by the pull request that implemented it.
 - A Codex sub-agent is its root session to Iris: it shares the root's mailbox, claims and
   generation. Iris installs no SubagentStart or SubagentStop hook for Codex, and the decoder reads
   `subagentId` and `subagent_id`, not the `agent_id` Codex sends, so the captured payloads decode
-  to the root session.
+  to the root session. Claude Code's sub-agents send the same `agent_id` and decode the same way. A
+  SubagentStart context there reaches only the sub-agent's model, so a hand-installed SubagentStart
+  hook never counts it as told for the root session.
 - A call whose session has no single usable Execution gets a typed `unbound` error: "No single
   usable Iris Execution matches the session Codex names on this call, on this host. Its hooks may
   not have run, or the hub may have restarted and the session not reattached yet. Run `iris

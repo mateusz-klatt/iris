@@ -263,6 +263,10 @@ const (
 	// ScheduleWakeup tools.
 	claudeToolsSession  = "76d28899-a30f-4b4f-9598-1fce6bc60152"
 	claudeWakeupSession = "af647fc5-1139-4ada-b6da-902ec2615848"
+	// Captured from Claude Code 2.1.323 on Linux on 2026-11-13, from a scratch session that ran a
+	// general-purpose sub-agent: the root's session id, with the sub-agent named agent_id. As with
+	// Codex, agent_id is not read, so the sub-agent decodes to its root session (ADR 017).
+	claudeSubagentRoot = "13fd9fe4-e10e-4a08-804b-2fbd3702dda9"
 	// Captured from Codex 0.167.0 on Linux on 2026-11-10 (ADR 017's measurement B): a thread
 	// the app-server daemon loaded, and the root of a session that spawned a sub-agent.
 	codexDaemonRoot   = "01a1c5fb-ea8a-7842-b3cd-68cb0e300fd9"
@@ -300,6 +304,7 @@ var fixtureWant = map[string]decoded{
 	"claude/SessionEnd.json":                         {kind: KindSessionEnd, session: claudeSession, cwd: proj},
 	"claude/SessionStart.json":                       {kind: KindSessionStart, session: claudeSession, cwd: proj},
 	"claude/Stop.json":                               {kind: KindStop, session: claudeSession, cwd: proj},
+	"claude/SubagentStart.json":                      {kind: KindSubagentStart, session: claudeSubagentRoot, cwd: proj},
 	"claude/UserPromptSubmit.json":                   {kind: KindPrompt, session: claudeSession, cwd: proj},
 
 	"codex/PostToolUse-apply_patch.json":  {kind: KindPostTool, session: codexSession, cwd: proj, tool: "apply_patch", class: ClassEdit, paths: []string{"allowed.txt"}, call: "exec-9935dec0-9319-4b3f-a7d9-2dd761d9377b"},
