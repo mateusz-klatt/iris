@@ -937,7 +937,9 @@ reserve for any channel that needs a bare name.
 
 `.github/workflows/release.yml` runs only on a pushed `v*` tag in this repository,
 and builds a draft release with cosign keyless signatures of the
-checksums, an SBOM per archive and GitHub build provenance. Only the owner publishes the draft.
+checksums, an SBOM per archive and GitHub build provenance. The owner decides the tag and the
+publication. He may name one session to carry them out for one release, and that session records
+his order verbatim in the release records; no workflow gate enforces this ([release](release.md)).
 The tag, Rekor entries, attestations and the final Windows ZIP bytes in the verification handoff
 artifact are public before publication. [ADR 022](adr/022-release-container-image.md)
 adds a separate job that publishes a signed, attested multi-architecture GHCR image after
