@@ -105,6 +105,7 @@ func TestMCPWakeOptOutCreatesNoWorkerAndKeepsInitializationLazy(t *testing.T) {
 		{"--client", "cursor"},
 		{"--client", "antigravity"},
 		{"--client", "grok"},
+		{"--client", "kimi"},
 		{"--client", "kimi", "--wake=false"},
 		{"--client", "claude", "--wake=false"},
 	} {
@@ -266,8 +267,8 @@ func TestMCPWakeUnboundStdioEOFLeavesNoNetworkOrSessionFiles(t *testing.T) {
 	}
 }
 
-func TestMCPWakeDefaultsOnForKimiAndHonorsExplicitEnable(t *testing.T) {
-	for _, args := range [][]string{{"--client", "kimi"}, {"--client", "kimi", "--wake"}} {
+func TestMCPWakeOptInForKimi(t *testing.T) {
+	for _, args := range [][]string{{"--client", "kimi", "--wake"}, {"--client", "kimi", "--wake=true"}} {
 		t.Run(strings.Join(args, " "), func(t *testing.T) {
 			_, _ = mcpWakeTrap(t)
 			original := newMCPWakeWorker

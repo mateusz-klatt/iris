@@ -15,29 +15,30 @@ kimi web --no-open
 Do not use `--dangerous-bypass-auth` for ordinary use. Iris reads the server token from
 `$KIMI_CODE_HOME/server.token`; it does not print it or copy it into the MCP configuration.
 
-Install or update Iris, then restart the Kimi session's MCP connection:
+Install or update Iris, explicitly enable wake, then restart the Kimi session's MCP connection:
 
 ```sh
-iris integrate kimi
+iris integrate kimi --wake
 ```
 
-Fresh integration enables wake. Disable or explicitly enable future sessions with:
+Fresh integration and a bare `iris mcp --client kimi` leave wake off while native delivery is
+unproved. Disable it again or enable it later with:
 
 ```sh
 iris integrate kimi --no-wake
 iris integrate kimi --wake
 ```
 
-`--no-wake` records `--wake=false`. Setup and ordinary reintegration preserve that choice. A bare
-`iris mcp --client kimi` also enables wake; disable a manually configured server with
-`iris mcp --client kimi --wake=false`. Existing bare entries therefore take the enabled default.
-`iris integrate --remove kimi` removes Iris's integration.
+`--no-wake` records `--wake=false`. Setup and ordinary reintegration preserve that choice. A
+manually configured server opts in with `iris mcp --client kimi --wake`; `--wake=false` disables it.
+Existing bare entries remain disabled. `iris integrate --remove kimi` removes Iris's integration.
 
 For a custom home, the integration writes the same absolute or inherited `KIMI_CODE_HOME` into the
 Iris MCP environment. Start `kimi web` with that home too. When several instances are registered,
-Iris tries their loopback endpoints until it finds one with a valid live server id and a version
-matching `/api/v1/meta`. Registry and live ids can differ in Kimi 2.6.0. The initialized client and
-server versions must match.
+Iris tries their loopback endpoints until it finds a live Kimi process consistent with the registry
+pid and start time. It probes `/api/v1/healthz` without credentials before sending the token, then
+requires a valid live server id and a version matching `/api/v1/meta`. Registry and live ids can
+differ in Kimi 2.6.0. The initialized client and server versions must match.
 
 ## What Iris does
 
@@ -57,7 +58,9 @@ There is one automatic wake per attention identity and one shared retry after a 
 
 Iris **never calls `:takeover`**. That endpoint is only for a lock left by a process known to be gone.
 A live `40931` conflict defers or refuses the submission; Iris does not remove the other process's
-lock or risk interleaved session history.
+lock or risk interleaved session history. While attention remains, a session reported active is
+checked again after 15 seconds. A front-end that retains its native lock can therefore prevent wake
+indefinitely; only a session that the native API reports idle and whose prompt it accepts is eligible.
 
 ## Limits and recovery
 
@@ -65,18 +68,26 @@ Iris does not start or supervise `kimi web`, resume a closed session or retain a
 MCP child ends. The API is experimental, so the version check is deliberate. Without a compatible
 server, wake waits and the existing hook notifications and Iris tools continue to work.
 
-The idle read and prompt submission are not atomic. A person can start a turn or fetch mail between
-them, so an accepted prompt can run later and find no work. Queue acceptance proves neither a
-completed turn nor an inbox fetch, and Iris cannot guarantee zero empty or billable turns.
+The process and health checks reduce accidental token disclosure to a stale or reused port. They
+do not authenticate the endpoint before the token is sent: a local process imitating Kimi's health
+response can still receive it. The token is never intentionally logged.
+
+The idle read, binding admission and prompt submission are not atomic. Binding is checked again
+immediately before the POST, but no binding lock is held through that request. A person can start a
+turn or fetch mail between these steps, so an accepted prompt can run later and find no work. Queue
+acceptance proves neither a completed turn nor an inbox fetch, and Iris cannot guarantee zero empty
+or billable turns.
 
 An accepted or uncertain wake retains its guard until its exact prompt hook consumes it. Resume
 that session first. There is no timeout that clears an outstanding guard. Do not remove a live
 guard or clear all session state to repair it. The current guard-inspection report is the Codex-era
 report; native Kimi arming, TUI refresh and delivery are not proved by `iris doctor --live`.
 
-The shared runner and fake-server protocol tests run without model credits. An isolated real Kimi
-2.6.0 server also accepted the adapter's prompt; without a provider it failed before a model turn,
-with zero tokens and zero cost. Real TUI delivery, cross-platform acceptance and model cost need
+The shared runner and fake-server protocol tests run without model credits. Tests use the real
+captured prompt shape to verify guard consumption and reject composite or non-text prompts, but no
+API-submitted prompt has yet produced a captured live hook. An isolated real Kimi 2.6.0 server
+accepted the adapter's prompt; without a provider it failed before a model turn, with zero tokens
+and zero cost. Real hook consumption, TUI delivery, cross-platform acceptance and model cost need
 separate evidence. See
 [ADR 026](adr/026-kimi-web-idle-wake.md) for the decision and [Kimi's Server API reference](https://www.kimi.com/code/docs/en/kimi-code-cli/reference/server-api.html)
 for the native protocol.

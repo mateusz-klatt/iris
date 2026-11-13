@@ -16,7 +16,7 @@ func TestIntegrateKimiWakeFlagsAndPreferencePreservation(t *testing.T) {
 		args    []string
 		enabled bool
 	}{
-		{[]string{"kimi"}, true},
+		{[]string{"kimi"}, false},
 		{[]string{"kimi", "--no-wake"}, false},
 		{[]string{"kimi"}, false},
 		{[]string{"--wake", "kimi"}, true},

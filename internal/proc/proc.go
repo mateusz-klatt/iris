@@ -30,6 +30,9 @@ type Snapshot struct {
 	StartMS int64
 }
 
+// Lookup returns one live process using the same platform evidence as the ancestor walk.
+func Lookup(pid int) (Snapshot, bool) { return lookupOS(pid) }
+
 // Nearest returns the ancestor of the current process that Iris records.
 func Nearest() (Ancestor, error) { return nearest(os.Getpid(), lookupOS) }
 func nearest(self int, get func(int) (Snapshot, bool)) (Ancestor, error) {

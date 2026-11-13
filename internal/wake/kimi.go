@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/mateusz-klatt/iris/internal/hubclient"
+	"github.com/mateusz-klatt/iris/internal/proc"
 )
 
 const kimiActive = "Kimi session is active"
@@ -28,6 +29,8 @@ type kimiInstance struct {
 	ServerID    string `json:"server_id"`
 	Host        string `json:"host"`
 	Port        int    `json:"port"`
+	PID         int    `json:"pid"`
+	StartedMS   int64  `json:"started_at"`
 	HostVersion string `json:"host_version"`
 }
 
@@ -46,13 +49,14 @@ type kimiCommands struct {
 	idleTimeout    time.Duration
 	queueTimeout   time.Duration
 	server         *kimiServer
+	lookupProcess  func(int) (proc.Snapshot, bool)
 }
 
 var kimiUserHomeDir = os.UserHomeDir
 
 func newKimiCommands() *kimiCommands {
 	c := &kimiCommands{
-		http: http.DefaultClient, readFile: os.ReadFile, readDir: os.ReadDir, now: time.Now,
+		http: http.DefaultClient, readFile: os.ReadFile, readDir: os.ReadDir, now: time.Now, lookupProcess: proc.Lookup,
 		versionTimeout: 5 * time.Second, idleTimeout: 5 * time.Second, queueTimeout: 30 * time.Second,
 	}
 	home := os.Getenv("KIMI_CODE_HOME")
@@ -100,13 +104,24 @@ func (c *kimiCommands) check(ctx context.Context, clientVersion string) (binaryI
 		}
 		var instance kimiInstance
 		if json.Unmarshal(raw, &instance) != nil || instance.ServerID == "" || entry.Name() != instance.ServerID+".json" || instance.HostVersion == "" ||
-			(instance.Host != "127.0.0.1" && instance.Host != "::1") || instance.Port < 1 || instance.Port > 65535 {
+			(instance.Host != "127.0.0.1" && instance.Host != "::1") || instance.Port < 1 || instance.Port > 65535 || instance.PID <= 0 || instance.StartedMS <= 0 {
+			continue
+		}
+		process, ok := c.lookupProcess(instance.PID)
+		if !ok || process.StartMS <= 0 || process.StartMS > instance.StartedMS || !proc.SingleSession(proc.Ancestor(process), "kimi") {
 			continue
 		}
 		candidate := &kimiServer{
-			version: instance.HostVersion, token: token,
-			base: "http://" + net.JoinHostPort(instance.Host, strconv.Itoa(instance.Port)),
+			version: instance.HostVersion,
+			base:    "http://" + net.JoinHostPort(instance.Host, strconv.Itoa(instance.Port)), // NOSONAR: go:S5332; Kimi uses HTTP on the literal loopback allowlisted above.
 		}
+		var health struct {
+			OK bool `json:"ok"`
+		}
+		if err := c.call(ctx, candidate, http.MethodGet, "/api/v1/healthz", nil, &health); err != nil || !health.OK {
+			continue
+		}
+		candidate.token = token
 		var meta struct {
 			ServerID      string `json:"server_id"`
 			ServerVersion string `json:"server_version"`
@@ -160,7 +175,9 @@ func (c *kimiCommands) call(ctx context.Context, server *kimiServer, method, pat
 	if err != nil {
 		return err
 	}
-	req.Header.Set("Authorization", "Bearer "+server.token)
+	if server.token != "" {
+		req.Header.Set("Authorization", "Bearer "+server.token)
+	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}

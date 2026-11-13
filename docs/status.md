@@ -219,3 +219,6 @@ included, which was the one that had been red. These findings were reviewed and 
 - The session cookie has no `Secure` flag on loopback, where the console is served over HTTP and
   Safari would refuse a `Secure` cookie. Behind the public origin it is `Secure`.
 - HTTP and WebSocket URLs on loopback, for the local hub and the console.
+- Kimi's native web API also uses HTTP only on a literal loopback address. Its base-URL construction
+  in `internal/wake/kimi.go` carries a `NOSONAR` comment for `go:S5332`. The process and health
+  checks before the bearer token neither authenticate the endpoint nor encrypt HTTP; changes need review.

@@ -21,6 +21,7 @@ import (
 
 	"github.com/mateusz-klatt/iris/internal/binding"
 	"github.com/mateusz-klatt/iris/internal/hook"
+	"github.com/mateusz-klatt/iris/internal/proc"
 )
 
 const (
@@ -35,6 +36,8 @@ type kimiFake struct {
 	server       *httptest.Server
 	commands     *kimiCommands
 	mu           sync.Mutex
+	healthCode   int
+	healthOK     bool
 	metaCode     int
 	sessionCode  int
 	promptCode   int
@@ -42,12 +45,13 @@ type kimiFake struct {
 	promptStatus string
 	prompts      []map[string]any
 	paths        []string
+	auth         []string
 	rawResponse  string
 }
 
 func newKimiFake(t *testing.T) *kimiFake {
 	t.Helper()
-	f := &kimiFake{t: t, home: t.TempDir(), promptStatus: "running"}
+	f := &kimiFake{t: t, home: t.TempDir(), promptStatus: "running", healthOK: true}
 	if err := os.MkdirAll(filepath.Join(f.home, "server", "instances"), 0o700); err != nil {
 		t.Fatal(err)
 	}
@@ -67,11 +71,15 @@ func newKimiFake(t *testing.T) *kimiFake {
 	}
 	f.writeInstance("server-good.json", map[string]any{
 		"server_id": "server-good", "host": u.Hostname(), "port": port, "host_version": kimiTestVersion,
+		"pid": 4242, "started_at": 2000,
 	})
 	f.commands = newKimiCommands()
 	f.commands.home = f.home
 	f.commands.http = f.server.Client()
 	f.commands.now = func() time.Time { return time.Unix(1800000000, 0) }
+	f.commands.lookupProcess = func(int) (proc.Snapshot, bool) {
+		return proc.Snapshot{PID: 4242, Name: "kimi-code", StartMS: 1000}, true
+	}
 	return f
 }
 
@@ -100,6 +108,15 @@ func (f *kimiFake) handle(w http.ResponseWriter, r *http.Request) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.paths = append(f.paths, r.URL.Path)
+	f.auth = append(f.auth, r.Header.Get("Authorization"))
+	if r.URL.Path == "/api/v1/healthz" {
+		if f.healthCode != 0 {
+			writeKimiEnvelope(w, f.healthCode, nil)
+			return
+		}
+		writeKimiEnvelope(w, 0, map[string]any{"ok": f.healthOK})
+		return
+	}
 	if r.Header.Get("Authorization") != "Bearer "+kimiTestToken {
 		w.WriteHeader(http.StatusUnauthorized)
 		writeKimiEnvelope(w, 40101, nil)
@@ -157,6 +174,9 @@ func TestKimiNativeServerDiscoveryIdleAndPromptQueue(t *testing.T) {
 	info, detail := f.check()
 	if detail != "" || info.Path != f.server.URL || info.Version != kimiTestVersion || info.ClientVersion != kimiTestVersion || info.CheckedMS == 0 {
 		t.Fatalf("server preflight: %+v, %q", info, detail)
+	}
+	if len(f.paths) != 2 || f.paths[0] != "/api/v1/healthz" || f.paths[1] != "/api/v1/meta" || f.auth[0] != "" || f.auth[1] != "Bearer "+kimiTestToken {
+		t.Fatalf("preflight leaked the token or skipped health verification: paths %v, auth %v", f.paths, f.auth)
 	}
 	idle, detail := f.commands.idle(context.Background(), kimiTestSession)
 	if !idle || detail != "" {
@@ -278,6 +298,52 @@ func TestKimiNativePreflightFailuresAndCandidateFallback(t *testing.T) {
 	info, detail := fallback.check()
 	if detail != "" || info.Path != fallback.server.URL {
 		t.Fatalf("valid instance did not survive invalid candidates: %+v %q", info, detail)
+	}
+}
+
+func TestKimiNativeRejectsUnverifiedProcessBeforeHTTP(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		process proc.Snapshot
+		alive   bool
+	}{
+		{"dead", proc.Snapshot{PID: 4242, Name: "kimi-code", StartMS: 1000}, false},
+		{"wrong executable", proc.Snapshot{PID: 4242, Name: "other", StartMS: 1000}, true},
+		{"pid reused", proc.Snapshot{PID: 4242, Name: "kimi-code", StartMS: 2001}, true},
+		{"unknown start", proc.Snapshot{PID: 4242, Name: "kimi-code"}, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newKimiFake(t)
+			f.commands.lookupProcess = func(int) (proc.Snapshot, bool) { return tc.process, tc.alive }
+			if _, detail := f.check(); detail != "Kimi web server is unavailable or incompatible" {
+				t.Fatalf("unverified process passed preflight: %q", detail)
+			}
+			if len(f.paths) != 0 || len(f.auth) != 0 {
+				t.Fatalf("unverified process received HTTP requests: paths %v, auth %v", f.paths, f.auth)
+			}
+		})
+	}
+}
+
+func TestKimiNativeDoesNotSendTokenToFailedHealthcheck(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		code int
+		ok   bool
+	}{
+		{"error", 40401, true},
+		{"not healthy", 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			f := newKimiFake(t)
+			f.healthCode, f.healthOK = tc.code, tc.ok
+			if _, detail := f.check(); detail != "Kimi web server is unavailable or incompatible" {
+				t.Fatalf("failed healthcheck passed preflight: %q", detail)
+			}
+			if len(f.paths) != 1 || f.paths[0] != "/api/v1/healthz" || len(f.auth) != 1 || f.auth[0] != "" {
+				t.Fatalf("healthcheck received credentials or meta followed a failure: paths %v, auth %v", f.paths, f.auth)
+			}
+		})
 	}
 }
 
@@ -418,6 +484,7 @@ func TestKimiNativeReportsNoCompatibleInstance(t *testing.T) {
 	f := newKimiFake(t)
 	f.writeInstance("server-good.json", map[string]any{
 		"server_id": "server-good", "host": "127.0.0.1", "port": mustKimiPort(t, f.server.URL), "host_version": "registry-old",
+		"pid": 4242, "started_at": 2000,
 	})
 	if _, detail := f.check(); detail != "Kimi web server is unavailable or incompatible" {
 		t.Fatalf("mismatched server identity passed preflight: %q", detail)

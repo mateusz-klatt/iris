@@ -26,7 +26,7 @@ func TestKimiWakePreferenceSurvivesReintegrationAndExplicitChanges(t *testing.T)
 	if err := client.Install(layout, nil); err != nil {
 		t.Fatal(err)
 	}
-	assertKimiWake(t, layout, true, true)
+	assertKimiWake(t, layout, true, false)
 	files, err := client.Files(layout)
 	if err != nil {
 		t.Fatal(err)
@@ -37,7 +37,7 @@ func TestKimiWakePreferenceSurvivesReintegrationAndExplicitChanges(t *testing.T)
 		t.Fatalf("invalid MCP JSON: %s", raw)
 	}
 	server := doc["mcpServers"].(map[string]any)["iris"].(map[string]any)
-	if !reflect.DeepEqual(server["args"], []any{"mcp", "--client", "kimi", "--wake"}) {
+	if !reflect.DeepEqual(server["args"], []any{"mcp", "--client", "kimi", "--wake=false"}) {
 		t.Fatalf("fresh wake args: %+v", server["args"])
 	}
 	if server["env"].(map[string]any)["KIMI_CODE_HOME"] != customHome {
@@ -100,7 +100,7 @@ func TestKimiWakeParsesOnlyAValidKimiInvocation(t *testing.T) {
 	}{
 		{"empty", nil, false, false},
 		{"other command", map[string]any{"command": "other", "args": []any{"mcp", "--client", "kimi"}}, false, false},
-		{"windows Iris", map[string]any{"command": `C:\tools\iris.exe`, "args": []any{"mcp", "--client", "kimi"}}, true, true},
+		{"windows Iris bare remains off", map[string]any{"command": `C:\tools\iris.exe`, "args": []any{"mcp", "--client", "kimi"}}, true, false},
 		{"non-string arg", map[string]any{"command": "iris", "args": []any{1}}, false, false},
 		{"no args", map[string]any{"command": "iris"}, false, false},
 		{"other command args", map[string]any{"command": "iris", "args": []any{"other"}}, false, false},

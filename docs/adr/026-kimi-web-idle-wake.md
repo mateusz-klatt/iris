@@ -1,7 +1,8 @@
 # 026: Kimi idle wake through the local web API
 
-Status: accepted on the owner's direction, 2026-11-12. Changes D7. Extends the positive-idle
-and single-wake policy of ADR 023 to Kimi without changing Codex or the other clients.
+Status: accepted for opt-in implementation on the owner's direction, 2026-11-12; revised after
+review on 2026-11-13. Changes D7. Extends the positive-idle and single-wake policy of ADR 023 to
+Kimi without changing Codex or the other clients.
 
 ## Problem
 
@@ -14,10 +15,11 @@ Iris MCP child, but only with positive session identity and without taking anoth
 
 ### Configuration and binding
 
-`iris mcp --client kimi` enables the native runner by default. `--wake=false` disables it.
-`iris integrate kimi` writes `--wake`; `--no-wake` writes `--wake=false`, which setup and ordinary
-reintegration preserve. `--wake` explicitly enables it again. Existing bare MCP entries take the
-enabled default. An existing child keeps its startup arguments until its MCP connection restarts.
+`iris mcp --client kimi` leaves the native runner off until native delivery and prompt-hook
+consumption have acceptance evidence. `--wake` opts in and `--wake=false` disables it. Fresh
+`iris integrate kimi` writes `--wake=false`; `--wake` writes `--wake`, which setup and ordinary
+reintegration preserve. Existing bare MCP entries remain off. An existing child keeps its startup
+arguments until its MCP connection restarts.
 
 The integration writes the absolute or inherited `KIMI_CODE_HOME` into the Iris MCP environment.
 It does not write the web token into that environment or into any journal.
@@ -29,12 +31,13 @@ lookup-only bindings and missing native session ids cannot. The hub's binding re
 
 ### Server preflight and idle evidence
 
-The runner reads `$KIMI_CODE_HOME/server.token` and candidates under
-`server/instances/`. It accepts only a literal loopback address, refuses redirects, bounds every
-response, checks the registry id against its filename, requires a nonempty live server id and
-validates the version through `/api/v1/meta`. Kimi 2.6.0 uses different registry and live ids.
-The server and initialized client versions must match. It starts no web server, resumes no session and never
-calls `:takeover`.
+The runner reads `$KIMI_CODE_HOME/server.token` and candidates under `server/instances/`. It accepts
+only a literal loopback address, refuses redirects, bounds every response, checks the registry id
+against its filename, and requires the registry pid to name a live Kimi process no newer than the
+registry start time. It calls `/api/v1/healthz` without credentials before sending the token, then
+requires a nonempty live server id and a matching version through `/api/v1/meta`. Kimi 2.6.0 uses
+different registry and live ids. The server and initialized client versions must match. Iris starts
+no web server, resumes no session and never calls `:takeover`.
 
 The exact session must answer `/api/v1/sessions/{session_id}` with the same id, `busy:false`,
 `main_turn_active:false`, `archived:false` and `pending_interaction:"none"`. Busy, archived,
@@ -47,7 +50,8 @@ The prompt is the existing fixed, content-free Iris notification with its correl
 message body or hub payload enters it. `prompt_id` is `iris-` plus the SHA-256 of that exact prompt.
 Native answers `running` and `queued` are accepted submissions. A known refusal has the shared
 single retry; an unknown or malformed response retains the outstanding guard. The exact prompt
-hook consumes that guard. One automatic wake per attention identity remains the limit.
+hook consumes that guard. Decoding accepts a text string or exactly one text part; composite and
+non-text prompts never match. One automatic wake per attention identity remains the limit.
 
 `40931` is a refusal to retry later, never evidence that Iris may remove a lock. The runner has no
 `:takeover` call. Token text, native error messages and response payloads are not logged.
@@ -59,24 +63,34 @@ validation and the live schema are part of the compatibility boundary. Iris does
 server and does not start a closed or unloaded session. After the MCP child ends no listener remains;
 ordinary hooks and durable mail still work.
 
-Idle observation and prompt submission are separate operations. A person can start a turn or fetch
-mail between them, so an accepted prompt can run later or find no work. Queue acceptance proves
-neither a completed turn nor an inbox fetch. Iris cannot promise zero billable empty turns. Native
-TUI refresh, cross-platform behavior and model cost require separate acceptance evidence.
+Process and health checks reduce accidental token disclosure to stale or reused ports, but do not
+authenticate the endpoint before the bearer token is sent. A local process imitating the health
+response can still receive it.
+
+Idle observation, binding admission and prompt submission are separate operations. The binding is
+rechecked immediately before the POST, but no binding lock is held through that request. A person
+can start a turn or fetch mail between these steps, so an accepted prompt can run later or find no
+work. Queue acceptance proves neither a completed turn nor an inbox fetch. Iris cannot promise zero
+billable empty turns. A front-end that retains a `40931` native lock can prevent wake indefinitely;
+active sessions are checked again after 15 seconds, never taken over. Native TUI refresh,
+cross-platform behavior and model cost require separate acceptance evidence.
 
 ## Verification
 
-Tests use an authenticated fake Kimi HTTP server and the real hub/store. They cover discovery,
-version and identity checks, loopback and redirect refusal, exact idle evidence, running and queued
-acceptance, stable idempotency, known refusals including `40931`, unknown outcomes, prompt-hook
-consumption and separate Kimi guards. Installation tests cover default-on, explicit-off persistence,
-custom homes and broken files. Binding tests prove that only the hook session of the single-session
-client process can arm the runner. No fixture invokes `:takeover` or spends model credits.
+Tests use an authenticated fake Kimi HTTP server and the real hub/store. They cover process and
+health verification before token disclosure, version and identity checks, loopback and redirect
+refusal, exact idle evidence, running and queued acceptance, stable idempotency, known refusals
+including `40931`, unknown outcomes and separate Kimi guards. Prompt tests use the real capture's
+shape to prove exact guard consumption and reject composite or non-text parts. Installation tests
+cover opt-in, explicit preference persistence, custom homes and broken files. Binding tests prove
+that only the hook session of the single-session client process can arm the runner. No fixture
+invokes `:takeover` or spends model credits.
 
 An isolated real Kimi 2.6.0 web server passed preflight and the exact idle read, then accepted the
 fixed prompt. With no provider configured it ended as `last_turn_reason:"failed"` with zero turns,
 input and output tokens and zero cost. Repeating the same `prompt_id` did not create another turn.
-This validates the HTTP adapter and idempotency, not native model delivery or TUI refresh.
+This validates the HTTP adapter and idempotency, not native model delivery, live prompt-hook
+consumption or TUI refresh.
 
 Run the full local gates. Record any real web-server or TUI acceptance separately, and do not
 present an HTTP fixture as proof of native model delivery or cross-platform support.

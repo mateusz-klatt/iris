@@ -1,6 +1,7 @@
 package proc
 
 import (
+	"os"
 	"runtime"
 	"testing"
 )
@@ -48,6 +49,13 @@ func TestNearestFrom(t *testing.T) {
 	})
 	if !ok || got.Name != "python3" {
 		t.Fatalf("fallback nearest non-shell = %+v", got)
+	}
+}
+
+func TestLookupLive(t *testing.T) {
+	got, ok := Lookup(os.Getpid())
+	if !ok || got.PID != os.Getpid() || got.Name == "" || got.StartMS <= 0 {
+		t.Fatalf("current process = %+v, ok %t", got, ok)
 	}
 }
 

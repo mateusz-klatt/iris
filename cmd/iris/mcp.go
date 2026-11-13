@@ -33,14 +33,14 @@ var newMCPWakeWorker = func(resolver *binding.Resolver, sessions *hook.Sessions,
 func runMCP(args []string) error {
 	fs := flag.NewFlagSet("mcp", flag.ContinueOnError)
 	client := fs.String("client", "", "agent client")
-	wakeFlag := fs.Bool("wake", false, "wake this native session when attention is pending (default for Codex and Kimi; --wake=false disables)")
+	wakeFlag := fs.Bool("wake", false, "wake this native session when attention is pending (default for Codex, opt-in for Kimi; --wake=false disables)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
 	if *client == "" || fs.NArg() != 0 {
 		return errors.New("usage: iris mcp --client <client> [--wake=true|false]")
 	}
-	wakeEnabled := *client == "codex" || *client == "kimi"
+	wakeEnabled := *client == "codex"
 	fs.Visit(func(f *flag.Flag) {
 		if f.Name == "wake" {
 			wakeEnabled = *wakeFlag

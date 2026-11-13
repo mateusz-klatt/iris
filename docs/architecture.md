@@ -278,7 +278,7 @@ Each client gets the strongest tier it has:
 | Instant, idle session | Plugin monitor running `iris watch` | Claude Code (measured: 0.3 s from line to model turn) |
 | Loaded idle root | Own queue command after a positive native idle check | Codex, enabled by default; [ADR 023](adr/023-default-codex-wake-after-idle-check.md) |
 | Loaded foreground session | Copilot CLI extension runs `iris watch` and submits a fixed automation message through its SDK | Copilot CLI (experimental; [ADR 024](adr/024-copilot-extension-wake.md)) |
-| Loaded idle session | Authenticated web REST prompt after a positive native idle check | Kimi, enabled by default; [ADR 026](adr/026-kimi-web-idle-wake.md) |
+| Loaded idle session | Authenticated web REST prompt after a positive native idle check | Kimi, opt-in while delivery is unproved; [ADR 026](adr/026-kimi-web-idle-wake.md) |
 | Instant, armed by the model | `Monitor` tool with a `ws` source | Claude Code |
 | Instant, Iris-owned session | App-server or ACP control of a session Iris started | Codex (measured), Copilot, Cursor, Antigravity, Grok, Kimi (later) |
 | Next turn | Hook context at prompt or post-tool | All, with client-specific limits |
@@ -312,13 +312,14 @@ extension writes carries a digest header, so Iris replaces or removes only a fil
 nobody edited.
 
 Kimi's MCP child follows the hook-registered session found through its single-session client
-process. A compatible `kimi web` using the same home is required: Iris discovers its loopback
-instance, authenticates with `server.token`, verifies server identity and matching version, and
-reads the exact session's native idle state before submitting a fixed prompt with an idempotent
-`prompt_id`. Busy, locked or unknown state defers without quota. Iris never calls `:takeover` on a
-live session. Fresh integration enables wake; `--no-wake` is preserved like Codex's. The server and
-closed sessions are not started for the user. The [Kimi wake guide](kimi-wake.md) and
-[ADR 026](adr/026-kimi-web-idle-wake.md) record setup and limits.
+process. A compatible `kimi web` using the same home is required: Iris validates the registered
+Kimi process, probes its unauthenticated health endpoint before sending `server.token`, verifies
+live metadata and matching versions, and reads the exact session's native idle state before
+submitting a fixed prompt with an idempotent `prompt_id`. Busy, locked or unknown state defers
+without quota. Iris never calls `:takeover` on a live session. Wake is opt-in while native delivery
+and hook consumption are unproved; fresh integration and bare MCP arguments leave it off, and an
+explicit choice survives reintegration. The server and closed sessions are not started for the user.
+The [Kimi wake guide](kimi-wake.md) and [ADR 026](adr/026-kimi-web-idle-wake.md) record setup and limits.
 
 The runner starts no automatic ten-minute second wake for unchanged attention. Hook reminders
 below remain. Native status and queue admission are not atomic: a person can start a turn or

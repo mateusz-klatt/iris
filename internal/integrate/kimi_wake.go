@@ -53,7 +53,7 @@ func kimiWake(doc map[string]any, iris string) (bool, bool) {
 	flags := flag.NewFlagSet("Kimi Iris MCP", flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
 	client := flags.String("client", "", "")
-	wake := flags.Bool("wake", true, "")
+	wake := flags.Bool("wake", false, "")
 	if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 || *client != Kimi {
 		return false, false
 	}
@@ -63,7 +63,7 @@ func kimiWake(doc map[string]any, iris string) (bool, bool) {
 func kimiMCPConfig(doc map[string]any, iris, home string, preference *bool) error {
 	configured, enabled := kimiWake(doc, iris)
 	if !configured {
-		enabled = true
+		enabled = false
 	}
 	if preference != nil {
 		enabled = *preference
