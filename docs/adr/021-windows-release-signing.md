@@ -146,10 +146,11 @@ Rerunning `release` signs again; rerunning only `verify-windows` signs nothing.
 There is no automatic retry.
 
 The tag, Rekor records, attestations and final Windows ZIP bytes in the handoff
-artifact are public before the owner publishes. Same-run verification checks
+artifact are public before the draft is published. Same-run verification checks
 those transferred bytes; it cannot prove that mutable draft assets remain the
 same. Under vote 7, holzera compares the draft's Windows ZIP hashes with the
-`verify-windows` record in #271's acceptance record; only the owner publishes.
+`verify-windows` record in #271's acceptance record; publication follows the
+owner's decision ([release](../release.md)).
 #271 derives its Windows procedure again after this integration merges.
 Publication, withdrawal, reviewers and rerun authorization stay in #271.
 

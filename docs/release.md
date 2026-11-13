@@ -12,11 +12,11 @@ Windows verification jobs succeed, a separate job publishes a signed, attested
 Linux amd64/arm64 image to `ghcr.io/mateusz-klatt/iris`, under the full tag.
 Stable tags (ref names without `-`) also update `latest`; prereleases do not.
 The image, tag, Rekor entries, attestations and final archive bytes in workflow artifacts
-can be public before the owner publishes the draft. Homebrew, Scoop and winget remain
+can be public before the draft is published. Homebrew, Scoop and winget remain
 `skip_upload: true`. Snapshots and pull requests push no images.
 [ADR 022](adr/022-release-container-image.md) records this extension of D15.
-The intended shipping tag, `v0.1.1`, is a **final release** and the owner's call;
-this configuration does not create that tag or authorize anyone else to create it.
+A final release tag is the owner's call ([release candidate runbook](#release-candidate-runbook));
+this configuration neither creates one nor authorizes anyone to create it.
 The GoReleaser dependency is not part of the application module.
 
 The web tooling pins Vitest and its coverage provider together. The `minimatch` override
@@ -309,9 +309,9 @@ Run 43084453101 met the two-process, same-window condition above. Crossing a
 boundary in another proof does not authorize an automatic retry.
 
 Same-run verification cannot show that mutable draft assets stay unchanged.
-Before the owner publishes, holzera compares the draft's Windows ZIP hashes with
+Before the draft is published, holzera compares the draft's Windows ZIP hashes with
 the `verify-windows` record and records the comparison in #271's acceptance
-record. The owner only publishes. The runbook below derives the Windows procedure
+record. Publication follows the owner's decision ([release candidate runbook](#release-candidate-runbook)). The runbook below derives the Windows procedure
 from merged #273 and retains publication, withdrawal, reviewers and rerun authorization.
 The tag, Rekor entries, attestations and the handoff's final ZIP bytes are already
 public at that point. This integration does not establish SmartScreen reputation
@@ -600,7 +600,7 @@ The owner decisions below are dated 2026-11-11. The rc1 tag is literally `v0.1.0
 - Inspect effective tag creation, update and deletion permissions, including legacy protection and bypass actors; record what is actually restricted. Holzera-only cutting and main/deployment approval are fleet rules, not workflow enforcement (`.github/workflows/release.yml`).
 - Record a named verifier for every OS/architecture. Stop if required signing is absent, skipped or unverifiable, except for unavailable arm64 darwin measurements as described below.
 - Record both measured Windows proofs on 2026-11-11: [43028728881](https://github.com/mateusz-klatt/iris/actions/runs/43028728881) passed with the certificate pin; [43084453101](https://github.com/mateusz-klatt/iris/actions/runs/43084453101) passed all jobs with two helper processes, signing from 19:11:20 to 19:11:28 UTC in one 30-second TOTP window (conclusive). These satisfy vote 7's proof requirement, not rc1 ZIP or publication verification.
-- No session publishes the draft or makes a final, non-rc tag. Only the owner publishes after the acceptance record below passes. These stop/go records do not authorize publication by a session.
+- The owner decides the tag and the publication. He may name one session to carry them out for one release. That session records his order verbatim in this stop/go record and in the acceptance record below. Without that order no session makes a final, non-rc tag or publishes the draft, and these stop/go records do not authorize either. No workflow gate enforces this; the fleet works under his GitHub account.
 
 **Prerelease configuration**
 
@@ -746,7 +746,7 @@ Require `Valid`, a non-null timestamp certificate and signer thumbprint `9C837C6
 Run `iris version` from each native binary (`.\iris.exe version` on Windows), with the arm64 darwin option above. Expect `0.1.0-rc1 (commit <approved-40-char-sha>; source clean; console unverified)`; record actual output.
 An AMD64 Windows host cannot run the arm64 `iris.exe`. On the host used for `v0.1.2` that binary passed the signature checks, and its `iris version` is recorded as **not measured**. The console field proves neither freshness nor completeness (`.goreleaser.yaml`, `builds.ldflags`; `internal/buildinfo/buildinfo.go`).
 Before publishing, the owner reviews the complete acceptance record: approved SHA/run, one complete draft, prerelease flag, tool verification, console/signer/handoff artifacts, all assets/checksums/provenance, both Apple notarizations, Intel Mac Gatekeeper measurements, both Windows signatures/verify job, holzera's two draft ZIP hash comparisons, package metadata and native execution results, including any **not measured** arm64 darwin or Windows checks.
-Only he publishes; a draft nobody publishes remains a draft until deleted.
+He decides the publication. He publishes, or names one session to publish this release, and that session records his order verbatim in the acceptance record. A draft nobody publishes remains a draft until deleted.
 
 **Failure handling and take-back**
 
