@@ -82,8 +82,6 @@ func (c *kimiCommands) check(ctx context.Context, clientVersion string) (binaryI
 	if clientVersion == "" {
 		return info, "Kimi initialization did not name its version"
 	}
-	ctx, cancel := context.WithTimeout(ctx, c.versionTimeout)
-	defer cancel()
 	token, err := c.readSecret(filepath.Join(c.home, "server.token"))
 	if err != nil {
 		return info, "Kimi server token could not be read"
@@ -118,18 +116,20 @@ func (c *kimiCommands) check(ctx context.Context, clientVersion string) (binaryI
 		var health struct {
 			OK bool `json:"ok"`
 		}
-		if err := c.call(ctx, candidate, http.MethodGet, "/api/v1/healthz", nil, &health); err != nil || !health.OK {
-			continue
-		}
-		candidate.token = token
 		var meta struct {
 			ServerID      string `json:"server_id"`
 			ServerVersion string `json:"server_version"`
 		}
-		// Kimi 2.6 uses different ids in the registry and /meta. The registry id is
-		// checked against its filename above; live metadata must have an id and its version.
-		if err := c.call(ctx, candidate, http.MethodGet, "/api/v1/meta", nil, &meta); err != nil ||
-			meta.ServerID == "" || meta.ServerVersion != candidate.version {
+		probe, cancel := context.WithTimeout(ctx, c.versionTimeout)
+		err = c.call(probe, candidate, http.MethodGet, "/api/v1/healthz", nil, &health)
+		if err == nil && health.OK {
+			candidate.token = token
+			// Kimi 2.6 uses different ids in the registry and /meta. The registry id is
+			// checked against its filename above; live metadata must have an id and its version.
+			err = c.call(probe, candidate, http.MethodGet, "/api/v1/meta", nil, &meta)
+		}
+		cancel()
+		if err != nil || !health.OK || meta.ServerID == "" || meta.ServerVersion != candidate.version {
 			continue
 		}
 		info.Path, info.Version = candidate.base, candidate.version
@@ -162,18 +162,18 @@ type kimiAPIError struct{ code int }
 
 func (e *kimiAPIError) Error() string { return fmt.Sprintf("Kimi API error %d", e.code) }
 
-func (c *kimiCommands) call(ctx context.Context, server *kimiServer, method, path string, body, dest any) error {
+func (c *kimiCommands) startCall(ctx context.Context, server *kimiServer, method, path string, body any) (*http.Response, error) {
 	var input io.Reader
 	if body != nil {
 		raw, err := json.Marshal(body)
 		if err != nil {
-			return err
+			return nil, err
 		}
 		input = bytes.NewReader(raw)
 	}
 	req, err := http.NewRequestWithContext(ctx, method, server.base+path, input)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if server.token != "" {
 		req.Header.Set("Authorization", "Bearer "+server.token)
@@ -181,10 +181,10 @@ func (c *kimiCommands) call(ctx context.Context, server *kimiServer, method, pat
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
-	res, err := hubclient.NoRedirects(c.http).Do(req)
-	if err != nil {
-		return err
-	}
+	return hubclient.NoRedirects(c.http).Do(req)
+}
+
+func (c *kimiCommands) finishCall(res *http.Response, dest any) error {
 	defer func() { _ = res.Body.Close() }()
 	raw, err := io.ReadAll(io.LimitReader(res.Body, 65537))
 	if err != nil || len(raw) > 65536 {
@@ -200,6 +200,9 @@ func (c *kimiCommands) call(ctx context.Context, server *kimiServer, method, pat
 	if *envelope.Code != 0 {
 		return &kimiAPIError{code: *envelope.Code}
 	}
+	if res.StatusCode < 200 || res.StatusCode >= 300 {
+		return fmt.Errorf("kimi HTTP status %d", res.StatusCode)
+	}
 	if dest == nil {
 		return nil
 	}
@@ -207,6 +210,14 @@ func (c *kimiCommands) call(ctx context.Context, server *kimiServer, method, pat
 		return errors.New("invalid Kimi response data")
 	}
 	return nil
+}
+
+func (c *kimiCommands) call(ctx context.Context, server *kimiServer, method, path string, body, dest any) error {
+	res, err := c.startCall(ctx, server, method, path, body)
+	if err != nil {
+		return err
+	}
+	return c.finishCall(res, dest)
 }
 
 func (c *kimiCommands) idle(ctx context.Context, session string) (bool, string) {
@@ -247,13 +258,6 @@ func (c *kimiCommands) queue(ctx context.Context, session, message string, start
 	}
 	ctx, cancel := context.WithTimeout(ctx, c.queueTimeout)
 	defer cancel()
-	started, err := start(func() error { return nil })
-	if !started {
-		if err != nil {
-			return commandAnswer{answer: "failed", detail: "Kimi wake admission failed"}
-		}
-		return commandAnswer{answer: "aborted", detail: "Session binding changed before prompt submission"}
-	}
 	id := kimiPromptID(message)
 	var answer struct {
 		PromptID string `json:"prompt_id"`
@@ -263,11 +267,29 @@ func (c *kimiCommands) queue(ctx context.Context, session, message string, start
 			Text string `json:"text"`
 		} `json:"content"`
 	}
-	err = c.call(ctx, c.server, http.MethodPost, "/api/v1/sessions/"+url.PathEscape(session)+"/prompts", map[string]any{
-		"prompt_id": id,
-		"content":   []map[string]string{{"type": "text", "text": message}},
-	}, &answer)
+	var res *http.Response
+	attempted := false
+	_, admissionErr := start(func() error {
+		attempted = true
+		var err error
+		res, err = c.startCall(ctx, c.server, http.MethodPost, "/api/v1/sessions/"+url.PathEscape(session)+"/prompts", map[string]any{
+			"prompt_id": id,
+			"content":   []map[string]string{{"type": "text", "text": message}},
+		})
+		return err
+	})
+	if !attempted {
+		if admissionErr != nil {
+			return commandAnswer{answer: "failed", detail: "Kimi wake admission failed"}
+		}
+		return commandAnswer{answer: "aborted", detail: "Session binding changed before prompt submission"}
+	}
 	result := commandAnswer{started: true}
+	if admissionErr != nil {
+		result.answer, result.detail = "unknown", "Kimi prompt response was not a known outcome"
+		return result
+	}
+	err := c.finishCall(res, &answer)
 	if err == nil && answer.PromptID == id && len(answer.Content) == 1 && answer.Content[0].Type == "text" && answer.Content[0].Text == message {
 		switch answer.Status {
 		case "running", "queued":

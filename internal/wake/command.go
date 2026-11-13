@@ -56,7 +56,7 @@ func canonicalTargetSession(target binding.WakeTarget) (string, bool) {
 		return "", false
 	}
 	id, ok := canonicalSession(raw)
-	if !ok {
+	if !ok || raw != id {
 		return "", false
 	}
 	return "session_" + id, true

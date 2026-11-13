@@ -80,17 +80,22 @@ func kimiMCPConfig(doc map[string]any, iris, home string, preference *bool) erro
 		doc["mcpServers"] = servers
 	}
 	server, _ := servers["iris"].(map[string]any)
-	if server == nil {
-		server = map[string]any{}
-	}
-	server["command"] = iris
-	server["args"] = args
 	env, _ := server["env"].(map[string]any)
+	updated := make(map[string]any, len(server)+3)
+	for key, value := range server {
+		switch key {
+		case "url", "transport", "headers", "bearerTokenEnvVar":
+			continue
+		}
+		updated[key] = value
+	}
+	updated["command"] = iris
+	updated["args"] = args
 	if env == nil {
 		env = map[string]any{}
 	}
 	env["KIMI_CODE_HOME"] = home
-	server["env"] = env
-	servers["iris"] = server
+	updated["env"] = env
+	servers["iris"] = updated
 	return nil
 }

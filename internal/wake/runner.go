@@ -12,7 +12,7 @@ import (
 
 // Runner belongs to one MCP child. Its durable guard belongs to the session, so
 // neither replacing a binding nor restarting this process grants another wake.
-// Construct and run it only when the Codex integration's effective wake preference is enabled.
+// Construct and run it only when the client's effective wake preference is enabled.
 type Runner struct {
 	resolver      targetResolver
 	source        wakeSource

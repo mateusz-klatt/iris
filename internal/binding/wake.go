@@ -18,9 +18,9 @@ func (r *Resolver) Primary() (WakeTarget, bool) {
 	return r.primaryHeld()
 }
 
-// StartIfPrimary admits and starts a command in the same hold that checks its
-// target, so binding replacement or loss cannot slip between those operations.
-// start must only start the command: the caller waits and handles its output
+// StartIfPrimary admits and starts a native operation in the same hold that checks
+// its target, so binding replacement or loss cannot slip between those operations.
+// start must only initiate the operation: the caller waits and handles its output
 // after this method returns. Neither start nor its caller may hold a sessions
 // file lock while entering this method.
 func (r *Resolver) StartIfPrimary(expected WakeTarget, start func() error) (bool, error) {

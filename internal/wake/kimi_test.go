@@ -186,7 +186,14 @@ func TestKimiNativeServerDiscoveryIdleAndPromptQueue(t *testing.T) {
 	admissions := 0
 	answer := f.commands.queue(context.Background(), kimiTestSession, message, func(start func() error) (bool, error) {
 		admissions++
-		return admitKimi(start)
+		admitted, err := admitKimi(start)
+		f.mu.Lock()
+		submitted := len(f.prompts)
+		f.mu.Unlock()
+		if submitted != 1 {
+			t.Error("prompt submission was not initiated inside binding admission")
+		}
+		return admitted, err
 	})
 	if answer.answer != "submitted" || !answer.started || answer.detail != "" || admissions != 1 {
 		t.Fatalf("prompt was not accepted: %+v, admissions %d", answer, admissions)
@@ -298,6 +305,23 @@ func TestKimiNativePreflightFailuresAndCandidateFallback(t *testing.T) {
 	info, detail := fallback.check()
 	if detail != "" || info.Path != fallback.server.URL {
 		t.Fatalf("valid instance did not survive invalid candidates: %+v %q", info, detail)
+	}
+}
+
+func TestKimiNativePreflightGivesEachCandidateItsOwnBudget(t *testing.T) {
+	f := newKimiFake(t)
+	stalled := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		<-r.Context().Done()
+	}))
+	defer stalled.Close()
+	f.writeInstance("z-stalled.json", map[string]any{
+		"server_id": "z-stalled", "host": "127.0.0.1", "port": mustKimiPort(t, stalled.URL),
+		"host_version": kimiTestVersion, "pid": 4242, "started_at": 2000,
+	})
+	f.commands.versionTimeout = 100 * time.Millisecond
+	info, detail := f.check()
+	if detail != "" || info.Path != f.server.URL {
+		t.Fatalf("stalled candidate starved the healthy server: %+v %q", info, detail)
 	}
 }
 
@@ -444,12 +468,11 @@ func TestKimiPromptIDIsDeterministicAndMessageBound(t *testing.T) {
 }
 
 func TestCanonicalTargetSessionAcceptsOnlyKimiSessionUUID(t *testing.T) {
-	upper := "session_" + strings.ToUpper(commandSession)
-	target := binding.WakeTarget{Client: "kimi", SessionID: upper}
+	target := binding.WakeTarget{Client: "kimi", SessionID: kimiTestSession}
 	if got, ok := canonicalTargetSession(target); !ok || got != kimiTestSession {
 		t.Fatalf("canonical Kimi session = %q, %t", got, ok)
 	}
-	for _, invalid := range []string{"", commandSession, "session_not-a-uuid", "other_" + commandSession} {
+	for _, invalid := range []string{"", commandSession, "session_not-a-uuid", "other_" + commandSession, "session_" + strings.ToUpper(commandSession)} {
 		target.SessionID = invalid
 		if got, ok := canonicalTargetSession(target); ok || got != "" {
 			t.Fatalf("invalid Kimi session %q became %q", invalid, got)
@@ -546,6 +569,15 @@ func TestKimiCallRejectsInvalidRequestsAndResponses(t *testing.T) {
 			t.Fatalf("malformed response was accepted: %.20s", raw)
 		}
 	}
+	f.rawResponse = ""
+	statusServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+		writeKimiEnvelope(w, 0, map[string]any{})
+	}))
+	defer statusServer.Close()
+	if err := f.commands.call(context.Background(), &kimiServer{base: statusServer.URL}, http.MethodGet, "/api/v1/meta", nil, nil); err == nil {
+		t.Fatal("a successful envelope with a failed HTTP status was accepted")
+	}
 	f.rawResponse = `{"code":40931}`
 	err := f.commands.call(context.Background(), server, http.MethodGet, "/api/v1/meta", nil, nil)
 	var api *kimiAPIError
@@ -595,7 +627,7 @@ func TestKimiEngineAdmitsCanonicalSessionAndUsesKimiGuard(t *testing.T) {
 	e, resolver, source, now := newEngineTest(t)
 	f := newKimiFake(t)
 	target := binding.WakeTarget{
-		Client: "kimi", SessionID: "session_" + strings.ToUpper(commandSession), Host: "kimi-host",
+		Client: "kimi", SessionID: kimiTestSession, Host: "kimi-host",
 		Bound: binding.Bound{ExecutionID: "kimi-execution", Generation: 2, Rung: 3},
 	}
 	e.target, resolver.target = target, target

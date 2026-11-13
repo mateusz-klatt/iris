@@ -76,6 +76,63 @@ func TestKimiWakePreferenceSurvivesReintegrationAndExplicitChanges(t *testing.T)
 	}
 }
 
+func TestKimiWakeConvertsRemoteMCPToStdio(t *testing.T) {
+	doc := map[string]any{"mcpServers": map[string]any{"iris": map[string]any{
+		"url": "https://example.invalid/mcp", "transport": "http", "headers": map[string]any{"Authorization": "old"},
+		"bearerTokenEnvVar": "OLD_TOKEN", "startupTimeoutMs": 12345,
+		"env": map[string]any{"USER_SETTING": "retained"},
+	}}}
+	if err := kimiMCPConfig(doc, "/opt/iris", "/home/person/.kimi-code", nil); err != nil {
+		t.Fatal(err)
+	}
+	server := doc["mcpServers"].(map[string]any)["iris"].(map[string]any)
+	for _, key := range []string{"url", "transport", "headers", "bearerTokenEnvVar"} {
+		if _, present := server[key]; present {
+			t.Fatalf("remote transport field %q survived stdio conversion: %+v", key, server)
+		}
+	}
+	if server["command"] != "/opt/iris" || server["startupTimeoutMs"] != 12345 ||
+		!reflect.DeepEqual(server["args"], []any{"mcp", "--client", "kimi", "--wake=false"}) {
+		t.Fatalf("remote entry was not converted without losing its settings: %+v", server)
+	}
+	if !reflect.DeepEqual(server["env"], map[string]any{"USER_SETTING": "retained", "KIMI_CODE_HOME": "/home/person/.kimi-code"}) {
+		t.Fatalf("MCP environment was not retained: %+v", server["env"])
+	}
+}
+
+func TestKimiInstallStoresAbsoluteCustomHome(t *testing.T) {
+	layout := testLayout(t)
+	home := filepath.Join(layout.Home, "custom", "kimi")
+	cwd, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	relative, err := filepath.Rel(cwd, home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	layout.Getenv = env(map[string]string{"KIMI_CODE_HOME": relative})
+	client := kimiClient{}
+	if err := client.Install(layout, nil); err != nil {
+		t.Fatal(err)
+	}
+	files, err := client.Files(layout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !filepath.IsAbs(files[0]) || filepath.Dir(files[0]) != home {
+		t.Fatalf("Kimi files did not use the absolute custom home: %v", files)
+	}
+	var doc map[string]any
+	if err := json.Unmarshal([]byte(readFiles(t, files)[1]), &doc); err != nil {
+		t.Fatal(err)
+	}
+	server := doc["mcpServers"].(map[string]any)["iris"].(map[string]any)
+	if got := server["env"].(map[string]any)["KIMI_CODE_HOME"]; got != home {
+		t.Fatalf("stored Kimi home = %q, want %q", got, home)
+	}
+}
+
 func TestKimiWakeReadRejectsBrokenFilesAndMissingHome(t *testing.T) {
 	layout := testLayout(t)
 	files, err := (kimiClient{}).Files(layout)

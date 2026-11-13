@@ -14,7 +14,11 @@ func (kimiClient) Name() string  { return Kimi }
 func (kimiClient) Human() string { return "" }
 
 func (c kimiClient) home(l Layout) (string, error) {
-	return l.envDir("KIMI_CODE_HOME", ".kimi-code")
+	home, err := l.envDir("KIMI_CODE_HOME", ".kimi-code")
+	if err != nil {
+		return "", err
+	}
+	return filepath.Abs(home)
 }
 
 func (c kimiClient) Files(l Layout) ([]string, error) {

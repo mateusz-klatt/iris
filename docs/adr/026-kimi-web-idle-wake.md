@@ -21,8 +21,8 @@ consumption have acceptance evidence. `--wake` opts in and `--wake=false` disabl
 reintegration preserve. Existing bare MCP entries remain off. An existing child keeps its startup
 arguments until its MCP connection restarts.
 
-The integration writes the absolute or inherited `KIMI_CODE_HOME` into the Iris MCP environment.
-It does not write the web token into that environment or into any journal.
+The integration resolves `KIMI_CODE_HOME` to an absolute path in the Iris MCP environment. It does
+not write the web token into that environment or into any journal.
 
 Only the MCP process positively bound by the single-session process rung to a hook-registered
 Kimi session can arm the runner. Fallback registrations, explicit overrides, undecided processes,
@@ -36,7 +36,9 @@ only a literal loopback address, refuses redirects, bounds every response, check
 against its filename, and requires the registry pid to name a live Kimi process no newer than the
 registry start time. It calls `/api/v1/healthz` without credentials before sending the token, then
 requires a nonempty live server id and a matching version through `/api/v1/meta`. Kimi 2.6.0 uses
-different registry and live ids. The server and initialized client versions must match. Iris starts
+different registry and live ids. The server and initialized client versions must match. Each
+candidate has an independent five-second health/metadata budget, so a stalled endpoint cannot
+consume a later candidate's budget; total preflight time grows with the candidate count. Iris starts
 no web server, resumes no session and never calls `:takeover`.
 
 The exact session must answer `/api/v1/sessions/{session_id}` with the same id, `busy:false`,
@@ -67,10 +69,11 @@ Process and health checks reduce accidental token disclosure to stale or reused 
 authenticate the endpoint before the bearer token is sent. A local process imitating the health
 response can still receive it.
 
-Idle observation, binding admission and prompt submission are separate operations. The binding is
-rechecked immediately before the POST, but no binding lock is held through that request. A person
-can start a turn or fetch mail between these steps, so an accepted prompt can run later or find no
-work. Queue acceptance proves neither a completed turn nor an inbox fetch. Iris cannot promise zero
+Idle observation and binding admission are not atomic with prompt submission. The binding is
+rechecked and the POST starts under the binding lock; response headers end that hold and the body
+is read after unlocking. Binding can change after submission starts, and a person can start a turn
+or fetch mail between idle observation and submission, so an accepted prompt can run later or find
+no work. Queue acceptance proves neither a completed turn nor an inbox fetch. Iris cannot promise zero
 billable empty turns. A front-end that retains a `40931` native lock can prevent wake indefinitely;
 active sessions are checked again after 15 seconds, never taken over. Native TUI refresh,
 cross-platform behavior and model cost require separate acceptance evidence.

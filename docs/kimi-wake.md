@@ -33,12 +33,14 @@ iris integrate kimi --wake
 manually configured server opts in with `iris mcp --client kimi --wake`; `--wake=false` disables it.
 Existing bare entries remain disabled. `iris integrate --remove kimi` removes Iris's integration.
 
-For a custom home, the integration writes the same absolute or inherited `KIMI_CODE_HOME` into the
-Iris MCP environment. Start `kimi web` with that home too. When several instances are registered,
+For a custom home, the integration resolves `KIMI_CODE_HOME` to an absolute path in the Iris MCP
+environment. Start `kimi web` with that home too. When several instances are registered,
 Iris tries their loopback endpoints until it finds a live Kimi process consistent with the registry
 pid and start time. It probes `/api/v1/healthz` without credentials before sending the token, then
 requires a valid live server id and a version matching `/api/v1/meta`. Registry and live ids can
-differ in Kimi 2.6.0. The initialized client and server versions must match.
+differ in Kimi 2.6.0. The initialized client and server versions must match. Each candidate has its
+own five-second health/metadata budget, so a stalled endpoint does not consume the next candidate's
+budget; total preflight time grows with the candidate count.
 
 ## What Iris does
 
@@ -73,9 +75,10 @@ do not authenticate the endpoint before the token is sent: a local process imita
 response can still receive it. The token is never intentionally logged.
 
 The idle read, binding admission and prompt submission are not atomic. Binding is checked again
-immediately before the POST, but no binding lock is held through that request. A person can start a
-turn or fetch mail between these steps, so an accepted prompt can run later and find no work. Queue
-acceptance proves neither a completed turn nor an inbox fetch, and Iris cannot guarantee zero empty
+and the POST starts under the binding lock; response headers end that hold and the body is read
+after unlocking. Binding can change after submission starts, and a person can start a turn or fetch
+mail after the idle read, so an accepted prompt can run later and find no work. Queue acceptance
+proves neither a completed turn nor an inbox fetch, and Iris cannot guarantee zero empty
 or billable turns.
 
 An accepted or uncertain wake retains its guard until its exact prompt hook consumes it. Resume
