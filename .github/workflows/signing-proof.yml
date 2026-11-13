@@ -25,7 +25,7 @@ jobs:
           rustup toolchain install 1.99.1 --profile minimal
           cargo +1.99.1 build --release --locked
           sha256sum target/release/ssign >> "$GITHUB_STEP_SUMMARY"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: certum-signer
           path: ssign/target/release/ssign
@@ -40,7 +40,7 @@ jobs:
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -77,7 +77,7 @@ jobs:
         run: |
           "$RUNNER_TEMP/iris-release-tools" sign-windows --arch=amd64 --path="$RUNNER_TEMP/windows/amd64/iris.exe"
           "$RUNNER_TEMP/iris-release-tools" sign-windows --arch=arm64 --path="$RUNNER_TEMP/windows/arm64/iris.exe"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: signed-windows-proof
           path: |

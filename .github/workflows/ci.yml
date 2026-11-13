@@ -17,7 +17,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -97,7 +97,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
       - name: Go-only builds report the missing console and source state
@@ -125,7 +125,7 @@ jobs:
         shell: bash
         env:
           CGO_ENABLED: "0"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ !cancelled() }}
         with:
           name: coverage-${{ matrix.os }}
@@ -153,7 +153,7 @@ jobs:
           - { goos: windows, goarch: arm64 }
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
       - run: go build -trimpath ./cmd/iris
@@ -170,7 +170,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
       - name: Measure 100 real pre-edit hooks (report only, no latency threshold)
@@ -189,7 +189,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -248,8 +248,8 @@ jobs:
           pins = {
               "actions/checkout": "3d3c42e5aac5ba805825da76410c181273ba90b1",
               "actions/setup-node": "949feb2413d6458794dcd2491c4babbbce0c15c1",
-              "actions/setup-go": "40f1582b2485089dde7abd97c1529aa768e1baff",
-              "actions/upload-artifact": "ea165f8d65b6e75b540449e92b4886f43607fa02",
+              "actions/setup-go": "b7ad1dad31e06c5925ef5d2fc7ad053ef454303e",
+              "actions/upload-artifact": "cf430e030ddbb5b0abf93d22962f4752f3646cd9",
               "actions/download-artifact": "9000827ccba6bdab643e8b6fd33ac0654aef8333",
               "sigstore/cosign-installer": "756fe2d284c7292c4e9b62c8a28f1e5629c59532",
               "anchore/sbom-action/download-syft": "66cbf4bc1f1c0d2edc94016e65bc221b6bb0ad6c",
@@ -610,8 +610,8 @@ jobs:
           pins = {
               "actions/checkout": "3d3c42e5aac5ba805825da76410c181273ba90b1",
               "actions/setup-node": "949feb2413d6458794dcd2491c4babbbce0c15c1",
-              "actions/setup-go": "40f1582b2485089dde7abd97c1529aa768e1baff",
-              "actions/upload-artifact": "ea165f8d65b6e75b540449e92b4886f43607fa02",
+              "actions/setup-go": "b7ad1dad31e06c5925ef5d2fc7ad053ef454303e",
+              "actions/upload-artifact": "cf430e030ddbb5b0abf93d22962f4752f3646cd9",
               "actions/download-artifact": "9000827ccba6bdab643e8b6fd33ac0654aef8333",
               "goreleaser/goreleaser-action": "a4f02ab5355a589de60d917a659ce617ed19b3de",
           }
@@ -834,7 +834,7 @@ jobs:
             echo "layers=$(docker image inspect --format '{{json .RootFS.Layers}}' iris-iris:latest)"
           } > deploy-image/iris-image.txt
           cat deploy-image/iris-image.txt
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ github.event_name == 'push' }}
         with:
           name: iris-image-${{ github.sha }}
@@ -846,7 +846,7 @@ jobs:
       # On a pull request the checkout is the merge of its head into main, so that is what this
       # image holds and the commit it names. The name says rehearsal, and a deploy looks only
       # for iris-image-<commit> in a run of a push.
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         if: ${{ github.event_name == 'pull_request' }}
         with:
           name: iris-rehearsal-image-pr${{ github.event.pull_request.number }}-${{ github.event.pull_request.head.sha }}
@@ -862,7 +862,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           fetch-depth: 0 # both PR endpoints and main's full history must be present
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
       # The CI tools under .github are outside ./..., and a pattern skips dot directories,
@@ -875,7 +875,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+      - uses: actions/setup-go@b7ad1dad31e06c5925ef5d2fc7ad053ef454303e # v7.0.0
         with:
           go-version-file: go.mod
       - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
