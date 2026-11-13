@@ -9,6 +9,20 @@ import (
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 )
 
+// The fixed observations of a failed wake step and of a session whose hooks the hub has not
+// seen (ADR 017). Each names the condition and never carries error, command or client text: doctor counts observations
+// by their exact text, so a free-form part would split one cause into many rows.
+const (
+	observedHooksUnseen  = "wake_hooks_unseen"
+	failedHookCheck      = "wake_failed: hook check"
+	failedAttentionRead  = "wake_failed: attention read"
+	failedVersionDiffers = "wake_failed: version differs"
+	failedBinaryCheck    = "wake_failed: binary check"
+	failedIdleCheck      = "wake_failed: idle check"
+	failedQueue          = "wake_failed: queue failed"
+	failedStateFile      = "wake_failed: state file"
+)
+
 // step admits at most one reservation. Every hub read is outside the shared file
 // lock, and both snapshots are compared again by publish before installation.
 func (e *engine) step(ctx context.Context) stepResult {
@@ -27,8 +41,14 @@ func (e *engine) step(ctx context.Context) stepResult {
 		call, cancel := context.WithTimeout(ctx, 5*time.Second)
 		seen, err := e.source.HookSeen(call, e.target)
 		cancel()
-		if err != nil || !seen {
-			e.note("wake_failed")
+		if err != nil {
+			e.note(failedHookCheck)
+			return e.after(30 * time.Second)
+		}
+		if !seen {
+			// No command ran and none failed: the hub has no hook report from this
+			// execution and generation yet, so the session is not eligible for a wake.
+			e.note(observedHooksUnseen)
 			return e.after(30 * time.Second)
 		}
 		e.hookSeen = true
@@ -37,14 +57,18 @@ func (e *engine) step(ctx context.Context) stepResult {
 	if !eligible {
 		return result
 	}
-	info, detail := e.commands.check(ctx, e.clientVersion())
+	info, detail, differs := e.commands.check(ctx, e.clientVersion())
 	if !e.current(ctx) {
 		return stepResult{}
 	}
 	if detail != "" {
 		// Without a validated binary the owning daemon's idle state is unknown.
 		// Retry the check without reserving a wake or spending its allowance.
-		return e.preflightFailure(current, info, detail)
+		reason := failedBinaryCheck
+		if differs {
+			reason = failedVersionDiffers
+		}
+		return e.preflightFailure(current, info, detail, reason)
 	}
 	idleCtx, idleCancel := context.WithTimeout(ctx, 5*time.Second)
 	idle, detail := e.commands.idle(idleCtx, session)
@@ -56,7 +80,7 @@ func (e *engine) step(ctx context.Context) stepResult {
 		if detail == "Codex thread is active" || detail == "Kimi session is active" {
 			return e.after(15 * time.Second)
 		}
-		return e.preflightFailure(current, info, detail)
+		return e.preflightFailure(current, info, detail, failedIdleCheck)
 	}
 	// A busy turn may have fetched its mail or emitted a hook note while the
 	// daemon check ran. Only a new authoritative read after verified idle may
@@ -108,7 +132,7 @@ func (e *engine) step(ctx context.Context) stepResult {
 		}
 		return stepResult{}
 	case "failed":
-		e.note("wake_failed")
+		e.note(failedQueue)
 		return e.failedRetry(next)
 	case "unknown":
 		e.note("wake_unknown")
@@ -119,7 +143,7 @@ func (e *engine) step(ctx context.Context) stepResult {
 // A failed preflight can explain why a wake is deferred without creating a
 // reservation or spending quota. Its publication error must never abort an old
 // attempt: no new attempt exists, even when diagnostic read-back was uncertain.
-func (e *engine) preflightFailure(current stateSnapshot, info binaryInfo, detail string) stepResult {
+func (e *engine) preflightFailure(current stateSnapshot, info binaryInfo, detail, reason string) stepResult {
 	// Only publishing a replacement reservation may retire an old identity's
 	// mark. An operational failure must retain it if attention later regresses.
 	next := current.Document
@@ -127,7 +151,7 @@ func (e *engine) preflightFailure(current stateSnapshot, info binaryInfo, detail
 	if _, err := e.store.publish(current, next); err != nil {
 		return e.fileFailure(err)
 	}
-	e.note("wake_failed")
+	e.note(reason)
 	return e.after(60 * time.Second)
 }
 
@@ -138,7 +162,7 @@ func (e *engine) candidate(ctx context.Context, before stateSnapshot) (document,
 	read, err := e.source.Attention(call, e.target, e.cursor, e.stream)
 	cancel()
 	if err != nil {
-		e.note("wake_failed")
+		e.note(failedAttentionRead)
 		return document{}, stateSnapshot{}, hubclient.Identity{}, e.after(30 * time.Second), false
 	}
 	if !e.current(ctx) {
@@ -236,7 +260,7 @@ func (e *engine) fileFailure(err error) stepResult {
 		e.note("wake_invalid_state")
 		return e.waitFile()
 	}
-	e.note("wake_failed")
+	e.note(failedStateFile)
 	if errors.Is(err, hook.ErrSessionsLocked) || errors.Is(err, errStateChanged) {
 		return e.after(10 * time.Second)
 	}

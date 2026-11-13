@@ -224,7 +224,7 @@ func TestWakeCommands(t *testing.T) {
 		t.Setenv("HOME", filepath.Join(dir, "home sentinel"))
 		t.Setenv("CODEX_HOME", filepath.Join(dir, "custom codex home sentinel"))
 		c.now = func() time.Time { return time.UnixMilli(1760000000123) }
-		info, detail := c.check(context.Background(), commandVersion)
+		info, detail, _ := c.check(context.Background(), commandVersion)
 		if detail != "" || info != (binaryInfo{Path: binary, Version: commandVersion, ClientVersion: commandVersion, CheckedMS: 1760000000123}) {
 			t.Fatalf("matching binary: %+v, %q", info, detail)
 		}
@@ -275,8 +275,8 @@ func TestWakeCommands(t *testing.T) {
 				}
 				t.Setenv("PATH", tc.path)
 				c := newCommands()
-				info, detail := c.check(context.Background(), commandVersion)
-				if c.path != "" || detail != "Codex executable is not available on PATH" || info.Path != "" || info.Version != "" {
+				info, detail, differs := c.check(context.Background(), commandVersion)
+				if c.path != "" || detail != "Codex executable is not available on PATH" || differs || info.Path != "" || info.Version != "" {
 					t.Fatalf("unavailable executable admitted: %+v, %q", info, detail)
 				}
 			})
@@ -285,7 +285,7 @@ func TestWakeCommands(t *testing.T) {
 
 	t.Run("initialize version absent starts no process", func(t *testing.T) {
 		c, record, _ := commandSetup(t, binary, commandScenario{Out: commandSecret})
-		info, detail := c.check(context.Background(), "")
+		info, detail, _ := c.check(context.Background(), "")
 		if detail != "Codex initialization did not name its version" || info.Version != "" {
 			t.Fatalf("missing initialize version: %+v, %q", info, detail)
 		}
@@ -314,9 +314,14 @@ func TestWakeCommands(t *testing.T) {
 		} {
 			t.Run(tc.name, func(t *testing.T) {
 				c, _, _ := commandSetup(t, binary, tc.scenario)
-				info, detail := c.check(context.Background(), commandVersion)
+				info, detail, differs := c.check(context.Background(), commandVersion)
 				if detail != tc.want || (detail == "" && info.Version != commandVersion) || (detail != "" && info.Version != "") {
 					t.Fatalf("version classification: %+v, %q; want %q", info, detail, tc.want)
+				}
+				// Only a version the executable did name, and that is not the client's, is a
+				// version difference; a check that could not read one is not.
+				if differs != strings.HasSuffix(tc.name, "mismatch") {
+					t.Fatalf("%s: version differs = %t", tc.name, differs)
 				}
 				raw, err := json.Marshal(struct {
 					Binary binaryInfo
@@ -342,11 +347,11 @@ func TestWakeCommands(t *testing.T) {
 	t.Run("version timeout and missing binary at execution", func(t *testing.T) {
 		c, _, _ := commandSetup(t, binary, commandScenario{Out: commandSecret, Hang: true})
 		c.versionTimeout = 100 * time.Millisecond
-		if info, detail := c.check(context.Background(), commandVersion); detail != "Codex version command did not complete successfully" || info.Version != "" || strings.Contains(detail, commandSecret) {
+		if info, detail, _ := c.check(context.Background(), commandVersion); detail != "Codex version command did not complete successfully" || info.Version != "" || strings.Contains(detail, commandSecret) {
 			t.Fatalf("version timeout: %+v, %q", info, detail)
 		}
 		c.path = filepath.Join(t.TempDir(), "missing-codex")
-		if info, detail := c.check(context.Background(), commandVersion); detail != "Codex version command did not complete successfully" || info.Version != "" {
+		if info, detail, _ := c.check(context.Background(), commandVersion); detail != "Codex version command did not complete successfully" || info.Version != "" {
 			t.Fatalf("version start failure: %+v, %q", info, detail)
 		}
 	})

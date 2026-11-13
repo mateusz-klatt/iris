@@ -69,6 +69,8 @@ func TestWakeEngineUnavailablePreflightIsQuotaFreeAndRecovers(t *testing.T) {
 			c, _, _ := commandSetup(t, binary, commandScenario{VersionOut: "codex-cli " + commandVersion + "\n", Out: commandAccept + "\n"})
 			c.now, e.commands = e.now, c
 			c.idleRead = func(context.Context, string) (bool, string) { return false, reason }
+			var observed []string
+			e.observe = func(text string) { observed = append(observed, text) }
 			for range 2 {
 				if got := e.step(context.Background()); got != engineDue(*now, time.Minute) {
 					t.Fatalf("unverified status did not back off: %+v", got)
@@ -78,6 +80,9 @@ func TestWakeEngineUnavailablePreflightIsQuotaFreeAndRecovers(t *testing.T) {
 					t.Fatalf("status failure spent quota or lost fixed diagnostics: %+v", d)
 				}
 				*now = now.Add(time.Minute)
+			}
+			if !reflect.DeepEqual(observed, []string{failedIdleCheck, failedIdleCheck}) {
+				t.Fatalf("unverified status was not observed as an idle check failure: %q", observed)
 			}
 			// Interrupted/unavailable checks do not poison the later idle result.
 			c.idleRead = func(context.Context, string) (bool, string) { return true, "" }

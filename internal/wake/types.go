@@ -14,7 +14,9 @@ type targetResolver interface {
 }
 
 type nativeCommands interface {
-	check(context.Context, string) (binaryInfo, string)
+	// check gives the failure detail, empty when the binary is usable, and whether the
+	// failure is that the binary's version differs from the client's.
+	check(context.Context, string) (binaryInfo, string, bool)
 	idle(context.Context, string) (bool, string)
 	queue(context.Context, string, string, func(func() error) (bool, error)) commandAnswer
 }

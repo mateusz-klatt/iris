@@ -169,30 +169,30 @@ func validKimiVersion(version string) bool {
 	return true
 }
 
-func (c *kimiCommands) check(ctx context.Context, clientVersion string) (binaryInfo, string) {
+func (c *kimiCommands) check(ctx context.Context, clientVersion string) (binaryInfo, string, bool) {
 	info := binaryInfo{ClientVersion: clientVersion, CheckedMS: c.now().UnixMilli()}
 	if c.server != nil {
 		c.server.close()
 	}
 	c.server = nil
 	if c.homeFailure != "" {
-		return info, c.homeFailure
+		return info, c.homeFailure, false
 	}
 	if clientVersion == "" || clientVersion == "0.0.0" {
 		resolved, err := c.binaryVersion(ctx)
 		if err != nil {
-			return info, "Kimi executable version could not be determined"
+			return info, "Kimi executable version could not be determined", false
 		}
 		clientVersion = resolved
 		info.ClientVersion = resolved
 	}
 	token, err := c.readSecret(filepath.Join(c.home, "server.token"))
 	if err != nil {
-		return info, "Kimi server token could not be read"
+		return info, "Kimi server token could not be read", false
 	}
 	entries, err := c.readDir(filepath.Join(c.home, "server", "instances"))
 	if err != nil {
-		return info, "Kimi server instances could not be read"
+		return info, "Kimi server instances could not be read", false
 	}
 	sort.Slice(entries, func(i, j int) bool { return entries[i].Name() > entries[j].Name() })
 	versionMismatch := false
@@ -245,12 +245,12 @@ func (c *kimiCommands) check(ctx context.Context, clientVersion string) (binaryI
 			continue
 		}
 		c.server = candidate
-		return info, ""
+		return info, "", false
 	}
 	if versionMismatch {
-		return info, "Kimi executable and server versions differ"
+		return info, "Kimi executable and server versions differ", true
 	}
-	return info, "Kimi web server is unavailable or incompatible"
+	return info, "Kimi web server is unavailable or incompatible", false
 }
 
 func (c *kimiCommands) readSecret(path string) (string, error) {

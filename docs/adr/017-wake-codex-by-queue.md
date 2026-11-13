@@ -485,8 +485,26 @@ no-rollout rejection forms receive those outcomes. Other output, signals, timeou
 is unknown. Raw output is never saved as diagnostic text or written to MCP stdout.
 
 Fixed observations in `hook-observed.log`, event `mcp`, are `wake_root_eligible`,
-`wake_stream_following`, `wake_invalid_state`, `wake_failed`, `wake_unknown` and
-`wake_worker_panic`. Root eligibility and an accepted socket are separate facts; neither proves
+`wake_stream_following`, `wake_invalid_state`, `wake_hooks_unseen`, the `wake_failed` reasons
+below, `wake_unknown` and `wake_worker_panic`. `wake_hooks_unseen` means the hub has no hook
+report from the bound execution and generation, so the session is not yet eligible; nothing ran
+and nothing failed. Each `wake_failed` observation names one condition, never error, command or
+client text, because doctor counts observations by their exact text:
+
+- `wake_failed: hook check`: the hub could not be asked whether the session's hooks were seen.
+- `wake_failed: attention read`: the authoritative attention read failed.
+- `wake_failed: version differs`: the executable named a version other than the client's, as
+  after a CLI update under a running session; restarting that session clears it.
+- `wake_failed: binary check`: any other binary check failure, such as a missing executable,
+  an unreadable version or, for Kimi, an unavailable web server.
+- `wake_failed: idle check`: the session's idle state could not be verified.
+- `wake_failed: queue failed`: the queue command gave a known failure.
+- `wake_failed: state file`: the wake state file could not be read, locked or published.
+
+The hook and attention checks retry after thirty seconds, the binary, version and idle checks
+and a state file failure other than a busy lock or a changed snapshot after sixty seconds.
+
+Root eligibility and an accepted socket are separate facts; neither proves
 a queued turn, prompt consumption or a model's inbox fetch. A recovered worker panic leaves
 MCP tools and heartbeat working. Native acceptance must still join the real incoming delivery,
 already idle same-UUID turn, exact prompt, consumed mark and inbox result, with both default

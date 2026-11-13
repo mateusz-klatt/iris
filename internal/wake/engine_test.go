@@ -185,6 +185,8 @@ func TestWakeEngineSourceEvidenceDeadlinesAndCursor(t *testing.T) {
 		}
 		unlock()
 	}
+	var observed []string
+	e.observe = func(text string) { observed = append(observed, text) }
 	source.seen = false
 	if got := e.step(context.Background()); got != engineDue(*now, 30*time.Second) || source.reads != 0 || e.hookSeen {
 		t.Fatalf("absent hook evidence armed runner: %+v", got)
@@ -196,6 +198,11 @@ func TestWakeEngineSourceEvidenceDeadlinesAndCursor(t *testing.T) {
 	source.hookErr, source.readErr = nil, errors.New(commandSecret)
 	if got := e.step(context.Background()); got != engineDue(*now, 30*time.Second) || !e.hookSeen {
 		t.Fatalf("attention read failure: %+v", got)
+	}
+	// A hub that has seen no hook is a session not yet eligible, not a failed wake, and
+	// each failure names its own check without the error's text.
+	if !reflect.DeepEqual(observed, []string{observedHooksUnseen, failedHookCheck, failedAttentionRead}) {
+		t.Fatalf("hook and attention observations: %q", observed)
 	}
 	source.readErr = nil
 	source.read.Attention.Identity = hubclient.Identity{Known: true}
@@ -352,12 +359,13 @@ func TestWakeEngineFileFailureRetryClassesAndPostReadFailure(t *testing.T) {
 		delay    time.Duration
 		fileWait bool
 		postRead bool
+		observed string
 	}{
-		{"lock budget", hook.ErrSessionsLocked, 10 * time.Second, false, false},
-		{"changed snapshot", errStateChanged, 10 * time.Second, false, false},
-		{"read failure", errors.New(commandSecret), 60 * time.Second, false, false},
-		{"unusable", errStateUnusable, 15 * time.Second, true, false},
-		{"post-read failure", errors.New(commandSecret), 60 * time.Second, false, true},
+		{"lock budget", hook.ErrSessionsLocked, 10 * time.Second, false, false, failedStateFile},
+		{"changed snapshot", errStateChanged, 10 * time.Second, false, false, failedStateFile},
+		{"read failure", errors.New(commandSecret), 60 * time.Second, false, false, failedStateFile},
+		{"unusable", errStateUnusable, 15 * time.Second, true, false, "wake_invalid_state"},
+		{"post-read failure", errors.New(commandSecret), 60 * time.Second, false, true, failedStateFile},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e, _, source, now := newEngineTest(t)
@@ -376,8 +384,8 @@ func TestWakeEngineFileFailureRetryClassesAndPostReadFailure(t *testing.T) {
 			if got := e.step(context.Background()); got != want || (!tc.postRead && (source.hooks != 0 || source.reads != 0)) {
 				t.Fatalf("file failure: %+v, want %+v, source %+v", got, want, source)
 			}
-			if len(observed) != 1 || strings.Contains(observed[0], commandSecret) {
-				t.Fatalf("raw failure reached observation: %q", observed)
+			if !reflect.DeepEqual(observed, []string{tc.observed}) {
+				t.Fatalf("file failure observed %q, want %q", observed, tc.observed)
 			}
 		})
 	}
@@ -436,8 +444,28 @@ func TestWakeEngineBinaryFailuresKeepDiagnosticsWithoutSpendingQuota(t *testing.
 		}
 		*now = now.Add(time.Minute)
 	}
-	if source.hooks != 1 || !reflect.DeepEqual(observed, []string{"wake_failed", "wake_failed", "wake_failed"}) {
+	if source.hooks != 1 || !reflect.DeepEqual(observed, []string{failedBinaryCheck, failedBinaryCheck, failedBinaryCheck}) {
 		t.Fatalf("preflight diagnostics were not bounded fixed observations: %v", observed)
+	}
+}
+
+// A binary that names another version than the client's, as after a CLI update under a running
+// session, is the one check failure a restart of that session fixes, so it has its own reason.
+func TestWakeEngineVersionDifferenceHasItsOwnObservation(t *testing.T) {
+	e, r, _, now := newEngineTest(t)
+	c, _, _ := commandSetup(t, commandBinary(t), commandScenario{VersionOut: "codex-cli 0.166.0\n", Out: commandAccept + "\n"})
+	c.now, e.commands = e.now, engineIdle(c)
+	var observed []string
+	e.observe = func(text string) { observed = append(observed, text) }
+	if got := e.step(context.Background()); got != engineDue(*now, time.Minute) || r.starts != 0 {
+		t.Fatalf("version difference did not back off without a start: %+v, starts %d", got, r.starts)
+	}
+	d := mustSnapshot(t, e.store).Document
+	if len(d.Attempts) != 0 || d.LastFailure == nil || d.LastFailure.Detail != "Codex executable and initialized client versions differ" {
+		t.Fatalf("version difference spent quota or lost its diagnosis: %+v", d)
+	}
+	if !reflect.DeepEqual(observed, []string{failedVersionDiffers}) {
+		t.Fatalf("version difference observed %q", observed)
 	}
 }
 
@@ -524,11 +552,12 @@ func TestWakeEngineProcessAdmissionAndOutcomeMerging(t *testing.T) {
 		name     string
 		scenario commandScenario
 		outcome  string
+		observed []string
 	}{
-		{"submitted", commandScenario{Out: commandAccept + "\n"}, "submitted"},
-		{"stored", commandScenario{Out: commandAccept + "\n", Err: commandWarning + "\n"}, "stored"},
-		{"known rejection", commandScenario{Err: commandReject + "\n", Exit: 1}, "failed"},
-		{"unknown output", commandScenario{Err: commandSecret}, "unknown"},
+		{"submitted", commandScenario{Out: commandAccept + "\n"}, "submitted", nil},
+		{"stored", commandScenario{Out: commandAccept + "\n", Err: commandWarning + "\n"}, "stored", nil},
+		{"known rejection", commandScenario{Err: commandReject + "\n", Exit: 1}, "failed", []string{failedQueue}},
+		{"unknown output", commandScenario{Err: commandSecret}, "unknown", []string{"wake_unknown"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			e, r, source, now := newEngineTest(t)
@@ -571,10 +600,8 @@ func TestWakeEngineProcessAdmissionAndOutcomeMerging(t *testing.T) {
 			if d.Attempts[0].Answer != tc.outcome || d.Attempts[0].AnsweredMS != now.UnixMilli() || strings.Contains(d.Attempts[0].Detail, commandSecret) || d.Binary.Version != commandVersion {
 				t.Fatalf("queue outcome was not safely merged: %+v", d)
 			}
-			for _, reason := range observed {
-				if reason != "wake_failed" && reason != "wake_unknown" {
-					t.Fatalf("unbounded observation: %q", reason)
-				}
+			if !reflect.DeepEqual(observed, tc.observed) {
+				t.Fatalf("queue outcome observed %q, want %q", observed, tc.observed)
 			}
 		})
 	}
