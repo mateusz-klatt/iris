@@ -132,3 +132,11 @@ func TestTheBundleKnowsTheCallObservations(t *testing.T) {
 		}
 	}
 }
+
+// A shim's rebind after a loss (ADR 027) is a kind of its own in the bundle, so a host whose
+// sessions keep losing their generation shows it, rather than an anonymous "other".
+func TestTheBundleKnowsTheRebindObservation(t *testing.T) {
+	if got := observationKind(binding.ObservedRebound); got != binding.ObservedRebound {
+		t.Fatalf("%q is %q", binding.ObservedRebound, got)
+	}
+}

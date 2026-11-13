@@ -181,7 +181,8 @@ The Grok cell is the stdio MCP child. Grok's `monitor` shell does not inherit
 `GROK_SESSION_ID` (measured on 1.0.77). `iris watch --client grok` reads the session id the
 hook stored for that grok process ([ADR 025](adr/025-grok-stop-monitor.md)).
 
-`iris mcp` resolves its Execution at the first tool call, by this chain:
+`iris mcp` resolves its Execution at the first tool call, by this chain, and outside Codex and id
+mode also on its heartbeat tick (see below):
 
 1. `IRIS_EXECUTION`, when a launcher set it.
 2. The client's own session id variable. The variable for the client named on the command line
@@ -226,6 +227,25 @@ while the grace period runs is told Iris is still binding the session and to ret
 A Codex root thread's shim in id mode waits the same grace period on its first bind. No shim in
 id mode registers, adopts or hands over anything, so this fallback and the adoption below belong
 to the chain above alone.
+
+A shim also looks on its heartbeat tick ([ADR 027](adr/027-shim-binds-on-its-tick.md)). Without
+that, one that had no tool call yet, or lost its generation and had no call since, renewed
+nothing. The session then ran on the hook-only lease, and idle past it between hooks it took a new
+generation at every hook: measured, one session took nine in four hours. While a shim holds no
+binding, owns no fallback and has no handover pending, each 20 s tick:
+- looks the session up as a call without a handle would, through rungs 1 to 3;
+- binds only an Execution live at the hub, which the same tick then renews.
+
+The tick never registers, never binds by a handle, never binds an Execution found lost, and never
+decides how calls bind. A failed lookup changes nothing, so a confirmed loss stays confirmed until
+a bind succeeds. The tick is a plain shim's only. These are left as they were:
+- Codex, whose calls can name their session;
+- a process a call put in id mode;
+- `iris watch`, whose own loop binds afresh.
+
+Positive evidence does not say why a client started a process. One started to list tools, or for
+a single turn, that lives past a tick binds its session and puts it on the 60 s lease of D8, as
+a single Iris call always has.
 
 Adoption keeps the original handover source, generation and destination until the hub confirms
 the end. Failed calls retry that same idempotent end, including when it committed but its response
@@ -402,7 +422,7 @@ It stops on stdin EOF or when its immediate OS parent process is gone, checked b
 renewal, so that an orphan cannot keep claims alive. The parent is checked by identity, because
 on Windows a process keeps its parent pid after the parent dies (found by CI). A heartbeat
 reporting a lost generation drops the binding and keeps the MCP process available for a fresh
-bind (D9).
+bind (D9). Its next tick looks for the session's current Execution (D6, ADR 027).
 
 An Execution shown as `active` has not been ended or expired by the hub, including during D9's
 recovery window; the hub does not check whether its client process is alive. Ending a session
@@ -483,11 +503,12 @@ Changes from the reference schema:
    ownership of either file. Measured with a real Claude Code client before this change, a
    session's edits went through unclaimed for up to the full 120 s, and its claims were then
    lost. With a heartbeating `iris mcp` that was one edit. An `iris mcp` binds on its first tool
-   call, and only a bound one heartbeats. A heartbeat that finds its generation lost, as after a
+   call, or, outside Codex and id mode, on its heartbeat tick (D6, ADR 027), and only a bound one
+   heartbeats. A heartbeat that finds its generation lost, as after a
    laptop sleeps past the lease, drops the binding and the process keeps running: a client does
    not restart an MCP server or monitor that exits, so it showed the server as failed and the
-   session went deaf. Legacy tools answer `lost` until a call binds afresh, through the usual
-   rungs, to the session's current Execution. A Codex id-mode root without a cached binding,
+   session went deaf. Legacy tools answer `lost` until the shim's tick or a call binds afresh,
+   through the usual rungs, to the session's current Execution. A Codex id-mode root without a cached binding,
    or a sub-agent lookup, answers `unbound` when its session has no single usable Execution.
    An Execution found lost is never bound again, by
    whatever route it comes back, so no process speaks for a stale identity. `iris watch` says

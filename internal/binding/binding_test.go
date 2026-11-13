@@ -108,7 +108,8 @@ func TestRealOrphanExits(t *testing.T) {
 		defer parent.Close()
 		marker := os.Getenv("IRIS_ORPHAN_PATH")
 		_ = os.WriteFile(marker+".ready", nil, 0600)
-		r := &Resolver{}
+		// No evidence to look by, so its unbound ticks send nothing to a hub it does not have.
+		r := &Resolver{Getenv: func(string) string { return "" }}
 		ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 		defer cancel()
 		r.Maintain(ctx, "shim", time.Millisecond, parent.Alive, func() { _ = os.WriteFile(marker+".stopped", nil, 0600) })
@@ -132,7 +133,9 @@ func TestRealOrphanExits(t *testing.T) {
 
 // A heartbeat that finds the generation gone drops the binding, and the process keeps
 // running: an MCP server or monitor that exits after a laptop sleep is not restarted by its
-// client, which then shows the server as failed, and the session goes deaf.
+// client, which then shows the server as failed, and the session goes deaf. Its later ticks
+// look for the session's current Execution (ADR 027); with no evidence to look by, they send
+// nothing.
 func TestALostHeartbeatDropsTheBindingAndKeepsRunning(t *testing.T) {
 	var requests atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -148,7 +151,7 @@ func TestALostHeartbeatDropsTheBindingAndKeepsRunning(t *testing.T) {
 		_, _ = w.Write([]byte(`{"error":{"code":"lost","message":"generation lost"}}`))
 	}))
 	defer srv.Close()
-	resolver := &Resolver{Hub: &hubclient.Client{Config: config{srv.URL}}, bound: Bound{ExecutionID: "ex", Generation: 7}}
+	resolver := &Resolver{Hub: &hubclient.Client{Config: config{srv.URL}}, Getenv: func(string) string { return "" }, bound: Bound{ExecutionID: "ex", Generation: 7}}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	go func() {
