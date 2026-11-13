@@ -34,12 +34,16 @@ lookup-only bindings and missing native session ids cannot. The hub's binding re
 The runner reads `$KIMI_CODE_HOME/server.token` and candidates under `server/instances/`. It accepts
 only a literal loopback address, refuses redirects, bounds every response, checks the registry id
 against its filename, and requires the registry pid to name a live Kimi process no newer than the
-registry start time. It calls `/api/v1/healthz` without credentials before sending the token, then
-requires a nonempty live server id and a matching version through `/api/v1/meta`. Kimi 2.6.0 uses
-different registry and live ids. The server and initialized client versions must match. Each
-candidate has an independent five-second health/metadata budget, so a stalled endpoint cannot
-consume a later candidate's budget; total preflight time grows with the candidate count. Iris starts
-no web server, resumes no session and never calls `:takeover`.
+registry start time. Linux rejects zombie and dead process states in that lookup. It calls
+`/api/v1/healthz` without credentials before sending the token, then requires a nonempty live server
+id and a matching version through `/api/v1/meta`. Kimi 2.6.0 uses different registry and live ids.
+The server and initialized client versions must match. Each candidate has an independent five-second
+health/metadata budget, so a stalled endpoint cannot consume a later candidate's budget; total
+preflight time grows with the candidate count. Each candidate also has a cloned transport that
+permits one successful dial. Health, metadata, idle reads and the prompt use that connection; if it
+closes, a later call fails rather than reconnecting to a replacement listener. Discarded candidates
+close their idle connections. Iris starts no web server, resumes no session and never calls
+`:takeover`.
 
 The exact session must answer `/api/v1/sessions/{session_id}` with the same id, `busy:false`,
 `main_turn_active:false`, `archived:false` and `pending_interaction:"none"`. Busy, archived,
@@ -57,8 +61,10 @@ another wake. Binding heartbeats continue while the response is pending. The exa
 consumes that guard. Decoding accepts a text string or exactly one text part; composite and
 non-text prompts never match. One automatic wake per attention identity remains the limit.
 
-`40931` is a refusal to retry later, never evidence that Iris may remove a lock. The runner has no
-`:takeover` call. Token text, native error messages and response payloads are not logged.
+`40931` on either the idle read or prompt POST is a non-submission deferral, never evidence that
+Iris may remove a lock. A prompt conflict is recorded as an unspent abort and schedules another idle
+check after 15 seconds. The runner has no `:takeover` call. Token text, native error messages and
+response payloads are not logged.
 
 ## Limits
 
@@ -67,14 +73,17 @@ validation and the live schema are part of the compatibility boundary. Iris does
 server and does not start a closed or unloaded session. After the MCP child ends no listener remains;
 ordinary hooks and durable mail still work.
 
-Process and health checks reduce accidental token disclosure to stale or reused ports, but do not
-authenticate the endpoint before the bearer token is sent. A local process imitating the health
-response can still receive it.
+Process and health checks plus the single-connection transport reduce accidental token disclosure
+to stale or reused ports, but do not authenticate the endpoint before the bearer token is sent. A
+local process imitating the health response on the initial connection can still receive it. Once the
+verified connection closes, wake fails rather than trusting a replacement listener.
 
-Idle observation and binding admission are not atomic with prompt submission. The binding is
-rechecked and the POST is written under the binding lock; response headers and body are awaited
-after unlocking. Binding can change after submission starts, and a person can start a turn or fetch
-mail between idle observation and submission, so an accepted prompt can run later or find
+Idle observation and binding admission are not atomic with prompt submission. Connect and request
+writing have a separate two-second deadline under the binding lock. On timeout Iris cancels the
+request and joins its transport before unlocking, so it cannot be written late. After a write,
+response headers and body are awaited after unlocking, up to the 30-second queue deadline. Binding
+can change after submission starts, and a person can start a turn or fetch mail between idle
+observation and submission, so an accepted prompt can run later or find
 no work. Queue acceptance proves neither a completed turn nor an inbox fetch. Iris cannot promise zero
 billable empty turns. A front-end that retains a `40931` native lock can prevent wake indefinitely;
 active sessions are checked again after 15 seconds, never taken over. Native TUI refresh,
@@ -83,10 +92,13 @@ cross-platform behavior and model cost require separate acceptance evidence.
 ## Verification
 
 Tests use an authenticated fake Kimi HTTP server and the real hub/store. They cover process and
-health verification before token disclosure, version and identity checks, loopback and redirect
-refusal, exact idle evidence, running and queued acceptance, stable idempotency, known refusals
-including `40931`, unknown outcomes and separate Kimi guards. Prompt tests use the real capture's
-shape to prove exact guard consumption and reject composite or non-text parts. Installation tests
+health verification before token disclosure, a real Linux zombie, one connection across all calls,
+reconnect refusal after that connection closes, and transport completion at the short start
+deadline. A real resolver heartbeat completes while the prompt response is held. Further cases cover
+version and identity checks, loopback and redirect refusal, exact idle evidence, running and queued
+acceptance, stable idempotency, known refusals, quota-free `40931` deferral and retry, unknown
+outcomes and separate Kimi guards. Prompt tests use the real capture's shape to prove exact guard
+consumption and reject composite or non-text parts. Installation tests
 cover opt-in, explicit preference persistence, custom homes and broken files. Binding tests prove
 that only the hook session of the single-session client process can arm the runner. No fixture
 invokes `:takeover` or spends model credits.

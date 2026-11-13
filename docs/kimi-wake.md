@@ -40,7 +40,8 @@ pid and start time. It probes `/api/v1/healthz` without credentials before sendi
 requires a valid live server id and a version matching `/api/v1/meta`. Registry and live ids can
 differ in Kimi 2.6.0. The initialized client and server versions must match. Each candidate has its
 own five-second health/metadata budget, so a stalled endpoint does not consume the next candidate's
-budget; total preflight time grows with the candidate count.
+budget; total preflight time grows with the candidate count. Health, metadata, idle reads and the
+prompt share one connection. Iris refuses to reconnect that candidate after the connection closes.
 
 ## What Iris does
 
@@ -59,10 +60,11 @@ not intentionally create another wake. Native `running` and `queued` responses c
 There is one automatic wake per attention identity and one shared retry after a known refusal.
 
 Iris **never calls `:takeover`**. That endpoint is only for a lock left by a process known to be gone.
-A live `40931` conflict defers or refuses the submission; Iris does not remove the other process's
-lock or risk interleaved session history. While attention remains, a session reported active is
-checked again after 15 seconds. A front-end that retains its native lock can therefore prevent wake
-indefinitely; only a session that the native API reports idle and whose prompt it accepts is eligible.
+A live `40931` conflict is a non-submission deferral, including when the prompt POST returns it.
+It spends no wake allowance and schedules another idle check after 15 seconds. Iris does not remove
+the other process's lock or risk interleaved session history. A front-end that retains its native
+lock can prevent wake indefinitely; only a session that the native API reports idle and whose prompt
+it accepts is eligible.
 
 ## Limits and recovery
 
@@ -70,14 +72,17 @@ Iris does not start or supervise `kimi web`, resume a closed session or retain a
 MCP child ends. The API is experimental, so the version check is deliberate. Without a compatible
 server, wake waits and the existing hook notifications and Iris tools continue to work.
 
-The process and health checks reduce accidental token disclosure to a stale or reused port. They
-do not authenticate the endpoint before the token is sent: a local process imitating Kimi's health
-response can still receive it. The token is never intentionally logged.
+The process and health checks plus the single-connection transport reduce accidental token
+disclosure to a stale or reused port. They do not authenticate the initial connection before the
+token is sent: a local process imitating Kimi's health response can still receive it. A closed
+verified connection makes later calls fail instead of reaching a replacement listener. The token is
+never intentionally logged.
 
-The idle read, binding admission and prompt submission are not atomic. Binding is checked again
-and the POST is written under the binding lock; response headers and body are awaited after
-unlocking. Binding can change after submission starts, and a person can start a turn or fetch mail
-after the idle read, so an accepted prompt can run later and find no work. Queue acceptance
+The idle read, binding admission and prompt submission are not atomic. Connect and request writing
+have a separate two-second deadline under the binding lock. On timeout Iris cancels and joins the
+transport before unlocking, so the request cannot be written late. Response headers and body are
+awaited after unlocking. Binding can change after submission starts, and a person can start a turn
+or fetch mail after the idle read, so an accepted prompt can run later and find no work. Queue acceptance
 proves neither a completed turn nor an inbox fetch, and Iris cannot guarantee zero empty
 or billable turns.
 
