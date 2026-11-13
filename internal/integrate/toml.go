@@ -3,7 +3,10 @@ package integrate
 import (
 	"bytes"
 	"fmt"
+	"reflect"
 	"strings"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 const (
@@ -47,6 +50,55 @@ func upsertBlock(existing, block string) (string, error) {
 		base += "\n"
 	}
 	return base + "\n" + block, nil
+}
+
+// adoptTable gives Iris's markers back to its own table after a client rewrote the file without
+// them. Grok saves its config.toml whenever a setting changes, and its writer keeps tables and
+// keys but drops comments and reflows arrays (measured on 1.0.77), so the markers go and
+// upsertBlock would refuse the file as holding a person's own table. Only a file with no
+// markers at all, and a [name] header form, are considered: the table must decode to keys that
+// want has and to want's command and args. It is replaced in place by block; every other line
+// stays as it is. Anything else is returned unchanged, for upsertBlock to refuse as before.
+func adoptTable(existing, name string, want map[string]any, block string) string {
+	if strings.Contains(existing, markerStart) || strings.Contains(existing, markerEnd) {
+		return existing
+	}
+	lines := strings.SplitAfter(existing, "\n")
+	start := -1
+	for i, line := range lines {
+		if n, ok := tableName(line); ok && n == name {
+			if start >= 0 {
+				return existing
+			}
+			start = i
+		}
+	}
+	if start < 0 {
+		return existing
+	}
+	end := len(lines)
+	for i := start + 1; i < len(lines); i++ {
+		if _, ok := tableName(lines[i]); ok || strings.HasPrefix(strings.TrimSpace(lines[i]), "[[") {
+			end = i
+			break
+		}
+	}
+	for end > start+1 && strings.TrimSpace(lines[end-1]) == "" {
+		end--
+	}
+	var got map[string]any
+	if toml.Unmarshal([]byte(strings.Join(lines[start+1:end], "")), &got) != nil {
+		return existing
+	}
+	for key := range got {
+		if _, ok := want[key]; !ok {
+			return existing
+		}
+	}
+	if !reflect.DeepEqual(got["command"], want["command"]) || !reflect.DeepEqual(got["args"], want["args"]) {
+		return existing
+	}
+	return strings.Join(lines[:start], "") + block + strings.Join(lines[end:], "")
 }
 
 // definedOutside reports a table of block that existing already defines, which Iris would
