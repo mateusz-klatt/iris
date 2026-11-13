@@ -118,11 +118,6 @@ func (r *Resolver) primaryHeld() (WakeTarget, bool) {
 			return WakeTarget{}, false
 		}
 		return WakeTarget{SessionID: m.session, Bound: r.bound, Host: r.Host}, true
-	case "kimi":
-		if m == nil || m.mode != legacy || r.own || r.bound.Rung != 3 || r.bound.SessionID == "" {
-			return WakeTarget{}, false
-		}
-		return WakeTarget{SessionID: r.bound.SessionID, Bound: r.bound, Host: r.Host, Client: "kimi"}, true
 	case "antigravity":
 		if m == nil || m.mode != legacy || r.wakeSession == "" || r.own || r.bound.Rung != 3 || r.bound.SessionID != r.wakeSession {
 			return WakeTarget{}, false

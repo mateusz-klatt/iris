@@ -34,11 +34,6 @@ func New(resolver *binding.Resolver, sessions *hook.Sessions, clientVersion func
 	return newRunner(resolver, sessions, clientVersion, observe, newCommands())
 }
 
-// NewKimi uses the local Kimi web server belonging to the MCP process's inherited home.
-func NewKimi(resolver *binding.Resolver, sessions *hook.Sessions, clientVersion func() string, observe func(string)) *Runner {
-	return newRunner(resolver, sessions, clientVersion, observe, newKimiCommands())
-}
-
 func newRunner(resolver *binding.Resolver, sessions *hook.Sessions, clientVersion func() string, observe func(string), commands nativeCommands) *Runner {
 	return &Runner{
 		resolver: resolver, source: hubSource{client: resolver.Hub}, sessions: sessions,

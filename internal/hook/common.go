@@ -59,7 +59,6 @@ func decodeCommon(client Client, eventName string, payload []byte) (Event, error
 		case ClientCodex:
 			_ = json.Unmarshal(p.Prompt, &ev.Prompt)
 		case ClientKimi:
-			ev.Prompt = kimiPromptText(p.Prompt)
 			ev.Steer = p.IsSteer != nil && *p.IsSteer
 		}
 	}
@@ -72,21 +71,6 @@ func decodeCommon(client Client, eventName string, payload []byte) (Event, error
 		return Event{}, errNoSession
 	}
 	return ev, nil
-}
-
-func kimiPromptText(raw json.RawMessage) string {
-	var text string
-	if json.Unmarshal(raw, &text) == nil {
-		return text
-	}
-	var parts []struct {
-		Type string `json:"type"`
-		Text string `json:"text"`
-	}
-	if json.Unmarshal(raw, &parts) != nil || len(parts) != 1 || parts[0].Type != "text" {
-		return ""
-	}
-	return parts[0].Text
 }
 
 func mcpPresent(raw json.RawMessage) bool {
