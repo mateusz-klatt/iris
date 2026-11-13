@@ -16,6 +16,8 @@ import (
 	"strings"
 
 	"github.com/mateusz-klatt/iris/internal/config"
+
+	"github.com/pelletier/go-toml/v2"
 )
 
 const (
@@ -585,12 +587,17 @@ type dryPlugins struct{ Plugins }
 func (dryPlugins) MarketplaceAdd(string) error { return nil }
 func (dryPlugins) Install(string) error        { return nil }
 
-// sameContent compares two renderings of a file. JSON is compared by value, so a client
-// that rewrites its own file with other spacing or key order has not drifted.
+// sameContent compares two renderings of a file. JSON and TOML are compared by value, so a
+// client that rewrites its own file with other spacing, key order, array layout or without
+// comments, as Grok does with Iris's markers in its config.toml, has not drifted.
 func sameContent(existing, next []byte) bool {
 	var a, b any
 	if json.Unmarshal(existing, &a) == nil && json.Unmarshal(next, &b) == nil {
 		return reflect.DeepEqual(a, b)
+	}
+	var x, y map[string]any
+	if toml.Unmarshal(existing, &x) == nil && toml.Unmarshal(next, &y) == nil {
+		return reflect.DeepEqual(x, y)
 	}
 	return false
 }

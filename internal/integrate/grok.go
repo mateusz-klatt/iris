@@ -78,8 +78,9 @@ func (c grokClient) Install(l Layout, _ Plugins) error {
 		return err
 	}
 	block := wrapBlock(fmt.Sprintf("[mcp_servers.iris]\ncommand = %s\nargs = [\"mcp\", \"--client\", \"grok\"]\nenabled = true\n", tomlString(iris)))
+	ours := map[string]any{"command": iris, "args": []any{"mcp", "--client", Grok}, "enabled": true}
 	if err := l.update(Grok, files[1], func(existing []byte) ([]byte, error) {
-		next, err := upsertBlock(string(existing), block)
+		next, err := upsertBlock(adoptTable(string(existing), "mcp_servers.iris", ours, block), block)
 		if err != nil {
 			return nil, err
 		}

@@ -49,6 +49,18 @@ integration installed before this choice existed.
 the notification sentence and says what the Stop ask can and cannot see. Remove deletes that
 exact text. A skill a person replaced is left in place.
 
+### Grok's own saves
+
+Grok rewrites `config.toml` whenever a setting changes, for example the permission mode chosen in
+its UI. Measured on 1.0.77 on macOS: the save keeps every table and key but drops all comments,
+Iris's `# >>> iris >>>` markers among them, and reflows arrays one item per line. Iris therefore
+treats an unmarked `[mcp_servers.iris]` table as its own when its keys are ones Iris writes and its
+command and args decode equal to Iris's. `iris integrate grok` puts the markers back around that
+table in place, leaving every other line as Grok wrote it, and doctor compares the file by its
+decoded value, so a save alone is not drift. A table with other args or another key is a
+person's, and is refused as before. The markers are gone again after Grok's next save; that
+changes nothing Iris reads.
+
 ## Limits
 
 This is a request to the model, not a check and not enforcement. Stop's `backgroundTasks`
