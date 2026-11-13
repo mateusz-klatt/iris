@@ -731,6 +731,32 @@ func TestKimiNativeStartTimeoutFinishesTransportBeforeAdmission(t *testing.T) {
 	}
 }
 
+func TestPinKimiClientDefaultsAndDialFailure(t *testing.T) {
+	for name, client := range map[string]*http.Client{
+		"default client": nil,
+		"custom round tripper": {Transport: kimiRoundTripFunc(func(*http.Request) (*http.Response, error) {
+			return nil, errors.New("unused")
+		})},
+		"transport without dialer": {Transport: &http.Transport{}},
+	} {
+		t.Run(name, func(t *testing.T) {
+			pinned, transport := pinKimiClient(client)
+			if pinned == nil || pinned.Transport != transport || transport.DialContext == nil {
+				t.Fatal("pinned client did not receive its bounded transport")
+			}
+			transport.CloseIdleConnections()
+		})
+	}
+	failure := errors.New("dial failed")
+	_, transport := pinKimiClient(&http.Client{Transport: &http.Transport{DialContext: func(context.Context, string, string) (net.Conn, error) {
+		return nil, failure
+	}}})
+	conn, err := transport.DialContext(context.Background(), "tcp", "127.0.0.1:1")
+	if conn != nil || !errors.Is(err, failure) {
+		t.Fatalf("failed dial was hidden or consumed a connection: %v, %v", conn, err)
+	}
+}
+
 func TestKimiBeginCallHandlesTransportWithoutWriteTrace(t *testing.T) {
 	commands := &kimiCommands{http: &http.Client{Transport: kimiRoundTripFunc(func(*http.Request) (*http.Response, error) {
 		return &http.Response{

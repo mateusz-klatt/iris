@@ -53,24 +53,24 @@ func statEvidence(pid int) (string, int64, error) {
 	if err != nil {
 		return "", 0, err
 	}
-	state, _, start, err := parseStat(string(b))
+	return statEvidenceFrom(string(b), clock)
+}
+
+func statEvidenceFrom(stat string, clock func() (int64, int64, error)) (string, int64, error) {
+	state, _, ticks, err := parseStat(stat)
 	if err != nil {
 		return "", 0, err
 	}
-	start, err = startFrom(string(b), clock)
-	return state, start, err
+	boot, clk, err := clock()
+	if err != nil {
+		return "", 0, err
+	}
+	return state, (boot*clk + ticks) * 1000 / clk, nil
 }
 
 func startFrom(stat string, clock func() (int64, int64, error)) (int64, error) {
-	_, _, ticks, err := parseStat(stat)
-	if err != nil {
-		return 0, err
-	}
-	boot, clk, err := clock()
-	if err != nil {
-		return 0, err
-	}
-	return (boot*clk + ticks) * 1000 / clk, nil
+	_, start, err := statEvidenceFrom(stat, clock)
+	return start, err
 }
 
 func parseStat(s string) (state string, ppid int, startTicks int64, err error) {
