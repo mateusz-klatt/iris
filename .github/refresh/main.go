@@ -104,18 +104,18 @@ func Refresh(root string, src Sources, runner Runner) Report {
 // Print writes the report and returns the exit status: 1 if anything failed.
 func Print(w io.Writer, r Report) int {
 	section := func(title string, lines []string) {
-		fmt.Fprintf(w, "%s:\n", title)
+		_, _ = fmt.Fprintf(w, "%s:\n", title)
 		if len(lines) == 0 {
-			fmt.Fprintln(w, "  none")
+			_, _ = fmt.Fprintln(w, "  none")
 		}
 		for _, l := range lines {
-			fmt.Fprintf(w, "  %s\n", l)
+			_, _ = fmt.Fprintf(w, "  %s\n", l)
 		}
 	}
 	section("Changed", r.Changes)
 	section("Checks", r.Checks)
 	section("Problems", r.Problems)
-	fmt.Fprintln(w, "Nothing was committed. Review the diff and open a pull request. A major action bump is proven only by CI, and pushing workflow changes needs a token with the workflow scope.")
+	_, _ = fmt.Fprintln(w, "Nothing was committed. Review the diff and open a pull request. A major action bump is proven only by CI, and pushing workflow changes needs a token with the workflow scope.")
 	if len(r.Problems) > 0 {
 		return 1
 	}

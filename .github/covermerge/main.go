@@ -34,7 +34,7 @@ func run(args []string, out io.Writer) error {
 	flags.SetOutput(io.Discard)
 	check := flags.Bool("check", false, "list uncovered statements and fail if there are any")
 	if err := flags.Parse(args); err != nil || flags.NArg() == 0 {
-		return errors.New("usage: covermerge [-check] profile...")
+		return errors.New("usage: covermerge [-check] profile [profile ...]")
 	}
 	inputs := make([]io.Reader, 0, flags.NArg())
 	for _, path := range flags.Args() {
@@ -42,7 +42,8 @@ func run(args []string, out io.Writer) error {
 		if err != nil {
 			return err
 		}
-		defer f.Close()
+		// Only read: closing cannot lose anything.
+		defer func() { _ = f.Close() }()
 		inputs = append(inputs, f)
 	}
 	if *check {

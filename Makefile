@@ -72,8 +72,13 @@ GITLEAKS_VERSION ?= v8.30.1
 
 check-all: lint vuln secrets pins
 
+# The CI tools under .github are outside ./..., which skips dot directories, so lint and vet
+# name each one. The list is every directory there with Go files, so a new tool is included.
+GITHUB_TOOLS := $(patsubst %/,./%,$(sort $(dir $(wildcard .github/*/*.go))))
+
 lint:
-	$(GO) run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run ./...
+	$(GO) run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@$(GOLANGCI_LINT_VERSION) run ./... $(GITHUB_TOOLS)
+	$(GO) vet $(GITHUB_TOOLS)
 
 vuln:
 	$(GO) run golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) ./...
