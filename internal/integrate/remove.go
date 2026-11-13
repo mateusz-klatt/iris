@@ -132,7 +132,9 @@ func stripClient(client string) stripFunc {
 		case client == Grok && filepath.Base(path) == "SKILL.md":
 			return stripText(data, []byte(grokSkill))
 		case client == Grok && filepath.Base(path) == grokWakeFile:
-			return stripGrokWake(data)
+			return stripWakeMarker(data)
+		case client == Antigravity && filepath.Base(path) == antigravityWakeFile:
+			return stripWakeMarker(data)
 		case strings.HasSuffix(path, ".toml"):
 			return stripBlock(data)
 		case client == Antigravity && filepath.Base(path) == "settings.json":
@@ -147,9 +149,10 @@ func stripClient(client string) stripFunc {
 	}
 }
 
-// stripGrokWake removes the marker only when it is exactly on or off. Any other text was
-// written by the person and stays, including a file Iris created and they then replaced.
-func stripGrokWake(data []byte) ([]byte, bool, error) {
+// stripWakeMarker removes a local wake marker (Grok or Antigravity) only when it is
+// exactly on or off. Any other text was written by the person and stays, including a
+// file Iris created and they then replaced.
+func stripWakeMarker(data []byte) ([]byte, bool, error) {
 	switch strings.TrimSpace(string(data)) {
 	case "on", "off":
 		return nil, true, nil

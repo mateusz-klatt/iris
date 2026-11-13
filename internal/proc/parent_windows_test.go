@@ -109,3 +109,33 @@ func TestImageNameOfABadHandleIsEmpty(t *testing.T) {
 		t.Fatal(got)
 	}
 }
+
+func TestDetachAndTerminateWindows(t *testing.T) {
+	cmd := exec.Command("cmd.exe", "/c", "exit 0")
+	Detach(cmd)
+	if cmd.SysProcAttr == nil || cmd.SysProcAttr.CreationFlags == 0 {
+		t.Fatalf("Detach flags = %+v", cmd.SysProcAttr)
+	}
+	if err := terminateOS(0x7FFFFFF0, 100); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("missing pid = %v", err)
+	}
+	self, ok := Lookup(os.Getpid())
+	if !ok {
+		t.Fatal("self lookup")
+	}
+	if got, err := Executable(self.PID, self.StartMS); err != nil || !strings.EqualFold(got, self.Name) {
+		t.Fatalf("Executable(self) = %q, %v (want %q)", got, err, self.Name)
+	}
+	if err := terminateOS(self.PID, self.StartMS+1); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("mismatched startMS = %v", err)
+	}
+	child := parentChild(t)
+	snap, ok := Lookup(child.Process.Pid)
+	if !ok {
+		t.Fatal("child lookup")
+	}
+	if err := Terminate(snap.PID, snap.StartMS); err != nil {
+		t.Fatalf("Terminate(child) = %v", err)
+	}
+	_ = child.Wait()
+}

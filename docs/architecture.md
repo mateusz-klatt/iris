@@ -304,6 +304,7 @@ Each client gets the strongest tier it has:
 | Loaded foreground session | Copilot CLI extension runs `iris watch` and submits a fixed automation message through its SDK | Copilot CLI (experimental; [ADR 024](adr/024-copilot-extension-wake.md)) |
 | Loaded idle session | Authenticated web REST prompt after a positive native idle check | Kimi, opt-in while delivery is unproved; [ADR 026](adr/026-kimi-web-idle-wake.md) |
 | Asked at Stop | Model starts a persistent `iris watch` in the `monitor` tool | Grok, enabled by default; [ADR 025](adr/025-grok-stop-monitor.md) |
+| Asked at Stop, loaded idle session | Model starts a detached `iris watch --client antigravity --wake` helper after user approval; helper sends a fixed message through `agy agentapi send-message` | Antigravity, opt-in; [ADR 028](adr/028-antigravity-idle-wake.md) |
 | Instant, armed by the model | `Monitor` tool with a `ws` source | Claude Code |
 | Instant, Iris-owned session | App-server or ACP control of a session Iris started | Codex (measured), Copilot, Cursor, Antigravity, Grok, Kimi (later) |
 | Next turn | Hook context at prompt or post-tool | All, with client-specific limits |
@@ -361,6 +362,28 @@ check of the command. `shutdown` and `channel_closed` are left alone. `iris inte
 reintegration preserve it. A missing marker means on, including integrations installed before
 this choice existed. The [Grok wake guide](grok-wake.md) says what this cannot do. Grok is not
 marked single-session, and its MCP child does not run a wake worker.
+
+Antigravity passes `ANTIGRAVITY_LS_ADDRESS` and `ANTIGRAVITY_CSRF_TOKEN` only to `run_command`
+shells, not to hooks or MCP servers (measured on 1.5.8). When `iris integrate antigravity --wake` is opted into (requiring the default OS-account Iris
+directory; `--no-wake` and `--remove` always also disable and stop helpers in that pinned
+directory), an idle `Stop` (`fullyIdle`, `NO_TOOL_CALL`, `executionNum == 0`,
+`!continuationActive`) on that default directory asks the model once per conversation to start a
+detached `iris watch --client antigravity --wake` helper with `BypassSandbox: true`. Iris writes no
+`command(...)` allow rule, so the user approves the unsandboxed command once per armed conversation;
+a denial or preflight error latches `failed` on that `(agy pid, start_ms)`, never overwriting an
+already-live helper. The helper accepts only that exact `argv`, loads hub configuration from
+the OS account's default Iris directory without environment overrides, resolves `<agy-exe>` from the
+verified `agy` ancestor process image, pins `ANTIGRAVITY_LS_ADDRESS` (`127.0.0.1`, `::1`, or
+`localhost` dialed directly against literal loopback IPs without DNS) to a reachable literal
+loopback `host:port`, keeps `ANTIGRAVITY_CSRF_TOKEN` in scrubbed subprocess `Env` alone, stops
+immediately if `/clear` switches `current_session_id` or `--no-wake` / `--remove` turns wake off,
+and submits a fixed content-free prompt through `<agy-exe> agentapi send-message` when the
+conversation is recorded idle. Because delivery enters `transcript_full.jsonl` as a `SYSTEM` /
+`SYSTEM_MESSAGE` step (`sender=system` in `-i` mode, `sender=<conversationId>` in `-p` mode) without
+firing `BeforeAgent`, both `PostInvocation` and the helper's poll loop advance a bounded `4 MiB`
+transcript cursor to consume the wake guard on exact whole-message match.
+The [Antigravity wake guide](antigravity-wake.md) and [ADR 028](adr/028-antigravity-idle-wake.md)
+record setup and limits.
 
 The runner starts no automatic ten-minute second wake for unchanged attention. Hook reminders
 below remain. Native status and queue admission are not atomic: a person can start a turn or
@@ -856,6 +879,9 @@ the user's `~/.gemini/antigravity-cli/settings.json`, and `--remove` takes out e
 The rule covers the Iris server alone. agy reads it only from the user settings, not from a
 workspace `.gemini/settings.json` (measured), so a per-repository rule is not possible.
 `mcp(iris/whoami)`, `mcp(iris/*)` and `mcp(*)` matched; `mcp(iris)` and `mcp(iris:whoami)` did not.
+`iris integrate antigravity --wake` adds no `command(...)` allow rule, because Antigravity's
+`command(...)` matcher allows argument extension and `env` prefixes outside the sandbox
+([ADR 028](adr/028-antigravity-idle-wake.md)).
 
 `iris doctor` runs offline by default: hub reachable, token valid, client version, configuration
 present and complete, trust state, unknown tools seen, last hook received, and a synthetic canary
@@ -1064,7 +1090,7 @@ The search index is updated in the same transaction.
 | Hooks in headless mode | yes | yes | yes | yes | yes | yes | yes |
 | Project hooks | trust | trust and review | trust | trust | no trust step | trust | none |
 | User hooks need a step | no | review once | no | no | no | no | no |
-| Wake idle session | yes, plugin monitor | owned sessions | owned sessions | owned sessions | owned sessions | Stop-armed monitor ([ADR 025](adr/025-grok-stop-monitor.md)) | web REST after native idle check |
+| Wake idle session | yes, plugin monitor | owned sessions | owned sessions | owned sessions | opt-in Stop-armed helper ([ADR 028](adr/028-antigravity-idle-wake.md)) | Stop-armed monitor ([ADR 025](adr/025-grok-stop-monitor.md)) | web REST after native idle check |
 
 Codex can also write files from JavaScript. Its Code Mode `js` tool, `mcp__node_repl__js`, runs
 code such as `fs.appendFile` (measured on 0.167.0). `gpt-6-luna` used it instead of `apply_patch`

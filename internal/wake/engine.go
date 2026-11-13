@@ -85,7 +85,7 @@ func (e *engine) step(ctx context.Context) stepResult {
 	}
 	if !idle {
 		switch detail {
-		case codexActive, kimiActive:
+		case codexActive, kimiActive, antigravityActive:
 			return e.recheck(last, deferredSessionActive, 15*time.Second)
 		case kimiOccupied:
 			return e.occupied(last, info)
@@ -109,6 +109,9 @@ func (e *engine) step(ctx context.Context) stepResult {
 	at := e.now().UnixMilli()
 	a := attempt{ID: attemptID(), Kind: "queue", Stream: id.Stream, Cursor: id.Cursor, Slot: 0, StartedMS: at, Token: attemptID()}
 	a.Message = promptFor(a.Token)
+	if init, ok := e.commands.(scanInitializer); ok {
+		a.Scan = init.initialScan(session)
+	}
 	next.Binary, next.LastFailure = info, nil
 	next = next.appendAttempt(a)
 	published, err := e.store.publish(current, next)
@@ -138,10 +141,12 @@ func (e *engine) step(ctx context.Context) stepResult {
 	switch answer.answer {
 	case "aborted":
 		switch answer.detail {
-		case kimiActive:
+		case kimiActive, antigravityActive:
 			return e.recheck(last, abortedSessionActive, 15*time.Second)
 		case kimiOccupied:
 			return e.occupied(last, info)
+		case antigravityExeUnavailable:
+			return e.after(60 * time.Second)
 		}
 		return stepResult{}
 	case "failed":
@@ -294,7 +299,11 @@ func (e *engine) after(delay time.Duration) stepResult {
 }
 
 func (e *engine) waitFile() stepResult {
-	return stepResult{Due: e.now().Add(15 * time.Second), FileWait: true}
+	delay := e.filePoll
+	if delay <= 0 {
+		delay = 15 * time.Second
+	}
+	return stepResult{Due: e.now().Add(delay), FileWait: true}
 }
 
 func (e *engine) fileFailure(err error) stepResult {

@@ -241,19 +241,21 @@ func argvEvent(client, file string) string {
 }
 
 const (
-	claudeSession = "b9f244d4-4326-45bf-8c3d-1d249f8f21b2"
-	codexSession  = "01a1adf0-8c32-7dd1-915f-250ba6059254"
-	codexJS       = "01a1b67e-ac49-7970-8edf-65c03ce13fac"
-	copilotA      = "05a1f795-918d-4cfb-aeb2-f17be274e1b8"
-	copilotB      = "5371905e-5625-4681-bcbc-73b28e2669bb"
-	kimiSession   = "session_114df8a5-1263-4744-bd4a-17c39274ffd6"
-	grokParent    = "01a1add0-deb3-7f23-969a-06a73e70b876"
-	grokChild     = "01a1add0-f889-76d3-9b16-1775afd996e6"
-	grokShell     = "01a1add0-8fa6-7132-9db2-85ef40676904"
-	grokMain      = "01a1add1-712e-7e22-a2a9-97ad1e9005b9"
-	agySession    = "4d437c2d-a30c-4479-bc04-0c09ca6ebdc5"
-	cursorSession = "<SESSION_OR_TOOL_ID>"
-	proj          = "/workspace/project"
+	claudeSession  = "b9f244d4-4326-45bf-8c3d-1d249f8f21b2"
+	codexSession   = "01a1adf0-8c32-7dd1-915f-250ba6059254"
+	codexJS        = "01a1b67e-ac49-7970-8edf-65c03ce13fac"
+	copilotA       = "05a1f795-918d-4cfb-aeb2-f17be274e1b8"
+	copilotB       = "5371905e-5625-4681-bcbc-73b28e2669bb"
+	kimiSession    = "session_114df8a5-1263-4744-bd4a-17c39274ffd6"
+	grokParent     = "01a1add0-deb3-7f23-969a-06a73e70b876"
+	grokChild      = "01a1add0-f889-76d3-9b16-1775afd996e6"
+	grokShell      = "01a1add0-8fa6-7132-9db2-85ef40676904"
+	grokMain       = "01a1add1-712e-7e22-a2a9-97ad1e9005b9"
+	agySession     = "4d437c2d-a30c-4479-bc04-0c09ca6ebdc5"
+	agyWakeSession = "ed1e2ecb-6339-4f6c-8851-9d2aad1bbb08"
+	agyWakeProj    = "/tmp/agy-fixture-capture/project"
+	cursorSession  = "<SESSION_OR_TOOL_ID>"
+	proj           = "/workspace/project"
 	// Captured from Claude Code 2.1.319 on Windows 11, where the PowerShell tool exists.
 	claudeWindowsSession = "a2a33065-7989-4987-bb5f-8f6866658a25"
 	projWindows          = `C:\workspace\project`
@@ -270,11 +272,13 @@ const (
 var fixtureWant = map[string]decoded{
 	"antigravity/post_invocation.json":      {kind: KindPostInvocation, session: agySession, cwd: proj},
 	"antigravity/post_tool_use.json":        {kind: KindPostTool, session: agySession, cwd: proj, tool: "write_file", class: ClassEdit, paths: []string{"/workspace/project/test_edit.txt"}, call: "3"},
+	"antigravity/post_tool_use_wake.json":   {kind: KindPostTool, session: agyWakeSession, cwd: agyWakeProj, tool: "run_command", class: ClassShell, command: "/tmp/agy-fixture-capture/project/iris watch --client antigravity --wake", call: "4"},
 	"antigravity/pre_invocation.json":       {kind: KindPreInvocation, session: agySession, cwd: proj},
 	"antigravity/pre_tool_use.json":         {kind: KindPreTool, session: agySession, cwd: proj, tool: "write_file", class: ClassEdit, paths: []string{"/workspace/project/test_edit.txt"}, call: "3"},
 	"antigravity/pre_tool_use_command.json": {kind: KindPreTool, session: agySession, cwd: proj, tool: "run_command", class: ClassShell, command: "ls -l test_edit.txt", call: "5"},
 	"antigravity/session_start.json":        {kind: KindSessionStart, session: agySession, cwd: proj},
 	"antigravity/stop.json":                 {kind: KindStop, session: agySession, cwd: proj},
+	"antigravity/stop_continuation.json":    {kind: KindStop, session: agyWakeSession, cwd: agyWakeProj},
 
 	"claude/PostToolUse-bash.json":                   {kind: KindPostTool, session: claudeSession, cwd: proj, tool: "Bash", class: ClassShell, command: "printf shell_ok", call: "toolu_01ECwF1dVgjgN9pZRc5Veud4"},
 	"claude/PostToolUse-mcp__iris_probe__probe.json": {kind: KindPostTool, session: claudeSession, cwd: proj, tool: "mcp__iris-probe__probe", class: ClassMCP, call: "toolu_01VZQc8PJf7R4RUQzfncvpbL"},

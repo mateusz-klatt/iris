@@ -134,7 +134,7 @@ func (r *Runner) runTarget(ctx context.Context, target binding.WakeTarget) {
 	defer cancel()
 	store := newClientStateStore(r.sessions, target.Client, target.SessionID)
 	e := engine{target: target, resolver: r.resolver, source: r.source, store: store,
-		commands: r.commands, clientVersion: r.clientVersion, now: r.now, observe: r.observe}
+		commands: r.commands, clientVersion: r.clientVersion, now: r.now, observe: r.observe, filePoll: r.filePoll}
 	hints := make(chan struct{}, 1)
 	readerDone := make(chan struct{})
 	go func() {
@@ -165,12 +165,23 @@ func (r *Runner) runTarget(ctx context.Context, target binding.WakeTarget) {
 			pending.hint(r.now(), r.settle)
 		case <-ready:
 			if pending.fileWait {
-				pending = r.pollFile(store)
+				pending = r.pollTargetFile(ctx, target, store)
 			} else {
 				pending.result(e.step(ctx))
 			}
 		}
 	}
+}
+
+func (r *Runner) pollTargetFile(ctx context.Context, target binding.WakeTarget, store *stateStore) schedule {
+	if target.Client == "antigravity" && ctx.Err() == nil {
+		if current, ok := r.resolver.Primary(); ok && current == target {
+			if consumed, hasMore, _ := hook.ScanAntigravityWakeSession(store.sessions, target.SessionID, "", r.now(), time.Second); !consumed && hasMore {
+				return schedule{due: r.now().Add(min(r.filePoll, 50*time.Millisecond)), fileWait: true}
+			}
+		}
+	}
+	return r.pollFile(store)
 }
 
 // While a retained reservation blocks, this is a file-only check. A released

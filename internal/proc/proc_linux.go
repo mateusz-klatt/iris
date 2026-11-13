@@ -30,6 +30,10 @@ func lookupOS(pid int) (Snapshot, bool) {
 	return Snapshot{PID: pid, PPID: ppid, Name: name, StartMS: start}, true
 }
 
+func executableOS(pid int, _ Snapshot) (string, error) {
+	return os.Readlink("/proc/" + strconv.Itoa(pid) + "/exe")
+}
+
 func statusValue(status []byte, key string) string {
 	for _, line := range strings.Split(string(status), "\n") {
 		if strings.HasPrefix(line, key) {

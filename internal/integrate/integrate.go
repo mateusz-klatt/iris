@@ -14,6 +14,8 @@ import (
 	"reflect"
 	"runtime"
 	"strings"
+
+	"github.com/mateusz-klatt/iris/internal/config"
 )
 
 const (
@@ -57,11 +59,12 @@ type Client interface {
 // A nil Getenv or LookPath uses the process environment. Tests set both
 // so a run cannot touch the real home.
 type Layout struct {
-	Home     string
-	StateDir string
-	Getenv   func(string) string
-	LookPath func(string) (string, error)
-	GOOS     string
+	Home            string
+	StateDir        string
+	Getenv          func(string) string
+	LookPath        func(string) (string, error)
+	PinnedConfigDir func() (string, error)
+	GOOS            string
 	// drift, when set, makes update record what it would change instead of writing.
 	drift *[]string
 }
@@ -265,6 +268,34 @@ func (l Layout) envDir(key, fallback string) (string, error) {
 		return v, nil
 	}
 	return l.underHome(fallback)
+}
+
+// IrisConfigDir resolves the Iris configuration directory beside hub.token.
+func (l Layout) IrisConfigDir() (string, error) {
+	if v := strings.TrimSpace(l.getenv("IRIS_TOKEN_FILE")); v != "" {
+		return filepath.Dir(v), nil
+	}
+	switch l.goos() {
+	case "windows":
+		if v := l.getenv("APPDATA"); v != "" {
+			return filepath.Join(v, "iris"), nil
+		}
+		return l.underHome("AppData", "Roaming", "iris")
+	case "darwin":
+		return l.underHome("Library", "Application Support", "iris")
+	default:
+		if v := l.getenv("XDG_CONFIG_HOME"); v != "" {
+			return filepath.Join(v, "iris"), nil
+		}
+		return l.underHome(".config", "iris")
+	}
+}
+
+func (l Layout) pinnedConfigDir() (string, error) {
+	if l.PinnedConfigDir != nil {
+		return l.PinnedConfigDir()
+	}
+	return config.PinnedDir()
 }
 
 // Iris is the stable path from LookPath. Symlinks are not resolved, so a

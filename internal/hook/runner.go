@@ -30,19 +30,22 @@ type Hub interface {
 // Runner executes one hook invocation.
 type Runner struct {
 	// Status, Gitlinks and IndexID stand in for gitinfo's in tests; nil means git itself.
-	Status     func(context.Context, string, gitinfo.Scope, *gitinfo.Attempt) (map[string]string, error)
-	Gitlinks   func(context.Context, string) ([]string, error)
-	IndexID    func(string) (gitinfo.IndexID, error)
-	Now        func() time.Time
-	ClientName string
-	EventName  string
-	Stdin      io.Reader
-	Getenv     func(string) string
-	Hub        Hub
-	Find       func(dir string) (gitinfo.Repo, error)
-	Ancestor   func() (proc.Ancestor, error)
-	Host       func() string
-	Deadline   time.Duration
+	Status          func(context.Context, string, gitinfo.Scope, *gitinfo.Attempt) (map[string]string, error)
+	Gitlinks        func(context.Context, string) ([]string, error)
+	IndexID         func(string) (gitinfo.IndexID, error)
+	Now             func() time.Time
+	ClientName      string
+	EventName       string
+	Stdin           io.Reader
+	Getenv          func(string) string
+	Hub             Hub
+	Find            func(dir string) (gitinfo.Repo, error)
+	Ancestor        func() (proc.Ancestor, error)
+	Host            func() string
+	GOOS            string
+	IrisPath        func() string
+	PinnedConfigDir func() (string, error)
+	Deadline        time.Duration
 	// Memory keeps each session's generation between hook processes. Nil means a file
 	// beside the token.
 	Memory Memory
@@ -137,6 +140,9 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		return FallbackAllow(runner)
 	}
 	state.received(r.canaryReceipt(ev))
+	if out, ok := r.antigravityHook(ev); ok {
+		return r.finish(state, ev, out)
+	}
 	if (ev.Client == ClientCodex || ev.Client == ClientKimi) && ev.Kind == KindPrompt {
 		r.consumeWake(ev)
 	}

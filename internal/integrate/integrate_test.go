@@ -60,6 +60,9 @@ func testLayout(t *testing.T) Layout {
 			}
 			return "", errors.New("not found")
 		},
+		PinnedConfigDir: func() (string, error) {
+			return filepath.Join(home, ".config", "iris"), nil
+		},
 		GOOS: "linux",
 	}
 }

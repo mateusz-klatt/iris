@@ -33,18 +33,19 @@ type failure struct {
 }
 
 type attempt struct {
-	ID         string `json:"id"`
-	Kind       string `json:"kind"`
-	Stream     string `json:"stream"`
-	Cursor     int64  `json:"cursor"`
-	Slot       int    `json:"slot"`
-	StartedMS  int64  `json:"started_ms"`
-	Token      string `json:"token,omitempty"`
-	Message    string `json:"message,omitempty"`
-	Answer     string `json:"answer,omitempty"`
-	AnsweredMS int64  `json:"answered_ms,omitempty"`
-	Detail     string `json:"detail,omitempty"`
-	ConsumedMS int64  `json:"consumed_ms,omitempty"`
+	ID         string                      `json:"id"`
+	Kind       string                      `json:"kind"`
+	Stream     string                      `json:"stream"`
+	Cursor     int64                       `json:"cursor"`
+	Slot       int                         `json:"slot"`
+	StartedMS  int64                       `json:"started_ms"`
+	Token      string                      `json:"token,omitempty"`
+	Message    string                      `json:"message,omitempty"`
+	Scan       *hook.AntigravityScanCursor `json:"scan,omitempty"`
+	Answer     string                      `json:"answer,omitempty"`
+	AnsweredMS int64                       `json:"answered_ms,omitempty"`
+	Detail     string                      `json:"detail,omitempty"`
+	ConsumedMS int64                       `json:"consumed_ms,omitempty"`
 }
 
 type document struct {
@@ -140,13 +141,13 @@ func (d document) valid() bool {
 		}
 		switch a.Kind {
 		case "binary_check":
-			if a.Token != "" || a.Message != "" || a.ConsumedMS != 0 ||
+			if a.Token != "" || a.Message != "" || a.Scan != nil || a.ConsumedMS != 0 ||
 				(a.Answer != "failed" && a.Answer != "aborted") || a.AnsweredMS <= 0 {
 				return false
 			}
 		case "queue":
 			if (a.Token == "") != (a.Message == "") || (a.ConsumedMS == 0 && a.Token == "") ||
-				(a.Answer != "" && a.AnsweredMS <= 0) {
+				(a.Answer != "" && a.AnsweredMS <= 0) || (a.Scan != nil && a.Scan.ScannedOffset < 0) {
 				return false
 			}
 		default:
@@ -371,6 +372,9 @@ func (s *stateStore) answer(id, outcome string, now int64, detail string) error 
 	for i := range next.Attempts {
 		if next.Attempts[i].ID == id {
 			next.Attempts[i].Answer, next.Attempts[i].AnsweredMS, next.Attempts[i].Detail = outcome, now, detail
+			if outcome == "failed" || outcome == "aborted" {
+				next.Attempts[i].Scan = nil
+			}
 			if outcome == "failed" && i == len(next.Attempts)-1 {
 				next.LastFailure = &failure{AtMS: now, Detail: detail}
 			}

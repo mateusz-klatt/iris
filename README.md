@@ -33,6 +33,11 @@ Grok asks its model, at Stop, to keep `iris watch --client grok` running in the 
 Stop sees that a monitor is running, not the command it runs. `iris integrate grok --no-wake`
 records an explicit off choice. See [Grok wake](docs/grok-wake.md).
 
+[Antigravity idle wake](docs/antigravity-wake.md) is opt-in (`iris integrate antigravity --wake`,
+disabled with `--no-wake`). At Stop it asks the model once per conversation to start a detached
+`iris watch --client antigravity --wake` helper, which prompts for interactive approval because Iris
+writes no `command(...)` allow rule, and wakes the idle conversation through `agy agentapi send-message`.
+
 Iris coordinates cooperating agents. It prevents and reports collisions; it is not a sandbox.
 
 ## Installing

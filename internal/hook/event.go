@@ -72,6 +72,11 @@ type Event struct {
 	Prompt string
 	// GrokStop is set only for a Grok Stop event. It decides whether to ask for a monitor (ADR 025).
 	GrokStop *GrokStop
+	// TranscriptPath is an Antigravity conversation's JSONL transcript path, used only for
+	// local wake-guard consumption and idle offset recording (ADR 028).
+	TranscriptPath string
+	// AgyStop is set only for an Antigravity Stop event (ADR 028).
+	AgyStop *AgyStop
 }
 
 // Action is the canonical decision.
