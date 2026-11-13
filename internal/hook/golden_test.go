@@ -373,4 +373,7 @@ var fixtureWant = map[string]decoded{
 	// Captured by kimi-home-iris (Kimi 2.6.1, scratch TUI) right after /clear: a new session id,
 	// and source "startup", not "clear".
 	"kimi/sessionstart_clear.json": {kind: KindSessionStart, session: "session_ed6d97b7-bcca-4709-9357-ce4864358892", cwd: "/workspace/project/hooklab"},
+	// Captured by kimi-home-iris (Kimi 2.6.1, scratch TUI) in the live check that a prompt hook's
+	// output reaches the model (ADR 030); session id and cwd anonymized. It carries session_title.
+	"kimi/userpromptsubmit_hookcheck.json": {kind: KindPrompt, session: "session_redacted", cwd: "/workspace/project"},
 }
