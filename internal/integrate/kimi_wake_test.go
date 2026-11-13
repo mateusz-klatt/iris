@@ -103,14 +103,8 @@ func TestKimiWakeConvertsRemoteMCPToStdio(t *testing.T) {
 func TestKimiInstallStoresAbsoluteCustomHome(t *testing.T) {
 	layout := testLayout(t)
 	home := filepath.Join(layout.Home, "custom", "kimi")
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	relative, err := filepath.Rel(cwd, home)
-	if err != nil {
-		t.Fatal(err)
-	}
+	t.Chdir(layout.Home)
+	relative := filepath.Join("custom", "kimi")
 	layout.Getenv = env(map[string]string{"KIMI_CODE_HOME": relative})
 	client := kimiClient{}
 	if err := client.Install(layout, nil); err != nil {
