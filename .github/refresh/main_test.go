@@ -27,10 +27,18 @@ func fakeRepo(t *testing.T) string {
 		"Makefile": "GOLANGCI_LINT_VERSION ?= v2.15.0\nGOVULNCHECK_VERSION ?= v1.9.0\nGITLEAKS_VERSION ?= v8.30.1\n",
 		".github/workflows/ci.yml": "steps:\n      - uses: actions/checkout@" + oldSHA + " # v4\n" +
 			"      - uses: anchore/sbom-action/download-syft@" + oldSHA + " # v0.24.3\n" +
-			"      - uses: actions/checkout@" + oldSHA + " # v4\n",
-		"Dockerfile":            "FROM --platform=$BUILDPLATFORM busybox:1.38@" + oldImage + " AS data\nFROM gcr.io/distroless/static-debian12:nonroot@" + oldImage + "\n",
-		"go.mod":                "module example\n\ngo 1.27\n\nrequire (\n\tgithub.com/coder/websocket v1.8.13\n\tgolang.org/x/sys v0.49.0 // indirect\n)\n",
-		"web/package-lock.json": `{"packages":{"":{},"node_modules/react":{"version":"19.0.0"},"node_modules/vite":{"version":"7.0.0"},"node_modules/a/node_modules/b":{"version":"1.0.0"}}}`,
+			"      - uses: actions/checkout@" + oldSHA + " # v4\n" +
+			// The release checks assert the commits in pin tables; one table names an action that only
+			// another workflow uses, and one entry names an action no workflow uses.
+			"      - run: |\n          pins = {\n              \"actions/checkout\": \"" + oldSHA + "\",\n" +
+			"              \"anchore/sbom-action/download-syft\": \"" + oldSHA + "\",\n" +
+			"              \"actions/setup-go\": \"" + oldSHA + "\",\n" +
+			"              \"o/unused\": \"" + oldSHA + "\",\n          }\n" +
+			"          again = {\"actions/checkout\": \"" + oldSHA + "\"}\n",
+		".github/workflows/release.yml": "steps:\n      - uses: actions/setup-go@" + oldSHA + " # v5\n",
+		"Dockerfile":                    "FROM --platform=$BUILDPLATFORM busybox:1.38@" + oldImage + " AS data\nFROM gcr.io/distroless/static-debian12:nonroot@" + oldImage + "\n",
+		"go.mod":                        "module example\n\ngo 1.27\n\nrequire (\n\tgithub.com/coder/websocket v1.8.13\n\tgolang.org/x/sys v0.49.0 // indirect\n)\n",
+		"web/package-lock.json":         `{"packages":{"":{},"node_modules/react":{"version":"19.0.0"},"node_modules/vite":{"version":"7.0.0"},"node_modules/a/node_modules/b":{"version":"1.0.0"}}}`,
 	}
 	for name, body := range files {
 		p := filepath.Join(root, filepath.FromSlash(name))
@@ -66,6 +74,12 @@ func fakeSources(t *testing.T) Sources {
 		_, _ = w.Write([]byte(`{"object":{"type":"tag","sha":"` + tagSHA + `"}}`))
 	})
 	mux.HandleFunc("/gh/repos/actions/checkout/git/tags/"+tagSHA, func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"object":{"type":"commit","sha":"` + newSHA + `"}}`))
+	})
+	mux.HandleFunc("/gh/repos/actions/setup-go/releases/latest", func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte(`{"tag_name":"v7.0.0"}`))
+	})
+	mux.HandleFunc("/gh/repos/actions/setup-go/git/ref/tags/v7.0.0", func(w http.ResponseWriter, r *http.Request) {
 		_, _ = w.Write([]byte(`{"object":{"type":"commit","sha":"` + newSHA + `"}}`))
 	})
 	mux.HandleFunc("/gh/repos/anchore/sbom-action/releases/latest", func(w http.ResponseWriter, r *http.Request) {
@@ -155,6 +169,15 @@ func TestRefreshUpdatesEveryPinAndRunsTheChecks(t *testing.T) {
 	if strings.Count(ci, "actions/checkout@"+newSHA+" # v7.0.1") != 2 || !strings.Contains(ci, "anchore/sbom-action/download-syft@"+oldSHA+" # v0.24.3") {
 		t.Fatalf("workflow:\n%s", ci)
 	}
+	// The pin tables follow the uses: lines, including an action only release.yml uses; a current
+	// entry and one for an action nothing uses keep their commits.
+	if strings.Count(ci, `"actions/checkout": "`+newSHA+`"`) != 2 || !strings.Contains(ci, `"actions/setup-go": "`+newSHA+`"`) ||
+		!strings.Contains(ci, `"anchore/sbom-action/download-syft": "`+oldSHA+`"`) || !strings.Contains(ci, `"o/unused": "`+oldSHA+`"`) {
+		t.Fatalf("pin tables:\n%s", ci)
+	}
+	if rel := read(t, root, ".github/workflows/release.yml"); !strings.Contains(rel, "actions/setup-go@"+newSHA+" # v7.0.0") {
+		t.Fatalf("release workflow:\n%s", rel)
+	}
 	if df := read(t, root, "Dockerfile"); !strings.Contains(df, "FROM --platform=$BUILDPLATFORM busybox:1.38@"+newImage+" AS data") || !strings.Contains(df, "static-debian12:nonroot@"+oldImage) {
 		t.Fatalf("Dockerfile:\n%s", df)
 	}
@@ -166,6 +189,9 @@ func TestRefreshUpdatesEveryPinAndRunsTheChecks(t *testing.T) {
 	for _, line := range []string{
 		"Makefile GOLANGCI_LINT_VERSION v2.15.0 -> v2.16.0",
 		"ci.yml actions/checkout -> v7.0.1 (222222222222), major from v4",
+		"ci.yml pin table actions/checkout -> v7.0.1 (222222222222)",
+		"ci.yml pin table actions/setup-go -> v7.0.0 (222222222222)",
+		"release.yml actions/setup-go -> v7.0.0 (222222222222), major from v5",
 		"Dockerfile busybox:1.38 sha256:aaaaaaaaaaaa -> sha256:bbbbbbbbbbbb",
 		"go.mod github.com/coder/websocket v1.8.13 -> v1.8.14",
 		"web react 19.0.0 -> 19.1.0",
@@ -176,8 +202,8 @@ func TestRefreshUpdatesEveryPinAndRunsTheChecks(t *testing.T) {
 			t.Errorf("summary lacks %q:\n%s", line, summary)
 		}
 	}
-	if strings.Count(summary, "actions/checkout") != 1 {
-		t.Errorf("one workflow file reports one change per action:\n%s", summary)
+	if strings.Count(summary, "ci.yml actions/checkout") != 1 || strings.Count(summary, "ci.yml pin table actions/checkout") != 1 {
+		t.Errorf("one workflow file reports one change per action and one per pin-table action:\n%s", summary)
 	}
 	var out bytes.Buffer
 	if code := Print(&out, report); code != 0 || !strings.Contains(out.String(), "Nothing was committed") || !strings.Contains(out.String(), "make check-all: ok") {
@@ -204,6 +230,9 @@ func TestUnreachableSourcesAreReportedNotSwallowed(t *testing.T) {
 	if !strings.Contains(read(t, root, "Makefile"), "GOLANGCI_LINT_VERSION ?= v2.15.0") {
 		t.Fatal("an unchecked pin changed")
 	}
+	if ci := read(t, root, ".github/workflows/ci.yml"); strings.Count(ci, `"actions/checkout": "`+oldSHA+`"`) != 2 || !strings.Contains(ci, `"actions/setup-go": "`+oldSHA+`"`) {
+		t.Fatalf("a pin table moved without a lookup:\n%s", ci)
+	}
 	var out bytes.Buffer
 	if code := Print(&out, report); code != 1 {
 		t.Fatalf("exit %d", code)
@@ -224,6 +253,83 @@ func TestAFailingStepIsReportedWithItsOutput(t *testing.T) {
 		if step == "go get -u ./..." && strings.Contains(strings.Join(*calls, "|"), "go mod tidy") {
 			t.Error("go mod tidy ran after go get failed")
 		}
+	}
+}
+
+// A held module goes back to the version its holder requires after go get -u has moved it, and
+// is left alone when it already has that version, when the holder does not require it, or when
+// the holder is not used at all. A failing graph or downgrade is reported, and go mod tidy does
+// not run after a failed downgrade.
+func TestAHeldModuleStaysAtTheVersionItsHolderRequires(t *testing.T) {
+	const (
+		goMod      = "module example\n\ngo 1.27\n\nrequire (\n\tmodernc.org/sqlite v1.62.0\n\tmodernc.org/libc v1.80.1 // indirect\n)\n"
+		requires   = "example modernc.org/sqlite@v1.62.0\nmodernc.org/sqlite@v1.62.0 modernc.org/mathutil@v1.7.1\nmodernc.org/sqlite@v1.62.0 modernc.org/libc@v1.80.1\n"
+		noLibc     = "example modernc.org/sqlite@v1.62.0\nmodernc.org/sqlite@v1.62.0 modernc.org/mathutil@v1.7.1\n"
+		downgrade  = "go get modernc.org/libc@v1.80.1"
+		heldReport = "go.mod modernc.org/libc held at v1.80.1, the version modernc.org/sqlite v1.62.0 requires"
+	)
+	for _, c := range []struct {
+		name, goMod, graph, fail string
+		moves                    bool     // go get -u moves libc to v1.81.0
+		calls                    []string // the go commands, in order
+		libc, problem            string   // libc's version afterwards; the problem reported, if any
+		held                     bool     // the summary says libc was held
+	}{
+		{"moved past", goMod, requires, "", true, []string{"go get -u ./...", "go mod tidy", "go mod graph", downgrade, "go mod tidy"}, "v1.80.1", "", true},
+		{"already there", goMod, requires, "", false, []string{"go get -u ./...", "go mod tidy", "go mod graph"}, "v1.80.1", "", false},
+		{"not required", goMod, noLibc, "", true, []string{"go get -u ./...", "go mod tidy", "go mod graph"}, "v1.81.0", "", false},
+		{"holder unused", "module example\n\ngo 1.27\n\nrequire modernc.org/libc v1.80.1\n", requires, "", true, []string{"go get -u ./...", "go mod tidy"}, "v1.81.0", "", false},
+		{"graph fails", goMod, requires, "go mod graph", true, []string{"go get -u ./...", "go mod tidy", "go mod graph"}, "v1.81.0", "go mod graph failed: exit status 1\nline 1\nline 2", false},
+		{"downgrade fails", goMod, requires, downgrade, true, []string{"go get -u ./...", "go mod tidy", "go mod graph", downgrade}, "v1.81.0", downgrade + " failed: exit status 1\nline 1\nline 2", false},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			root := t.TempDir()
+			path := filepath.Join(root, "go.mod")
+			if err := os.WriteFile(path, []byte(c.goMod), 0o644); err != nil {
+				t.Fatal(err)
+			}
+			setLibc := func(from, to string) {
+				raw, _ := os.ReadFile(path)
+				_ = os.WriteFile(path, bytes.Replace(raw, []byte("libc "+from), []byte("libc "+to), 1), 0o644)
+			}
+			var calls []string
+			runner := func(dir, name string, args ...string) (string, error) {
+				call := name + " " + strings.Join(args, " ")
+				calls = append(calls, call)
+				if call == c.fail {
+					return "line 1\nline 2\n", errors.New("exit status 1")
+				}
+				switch {
+				case call == "go get -u ./..." && c.moves:
+					setLibc("v1.80.1", "v1.81.0")
+				case call == "go mod graph":
+					return c.graph, nil
+				case call == downgrade:
+					setLibc("v1.81.0", "v1.80.1")
+				}
+				return "", nil
+			}
+			var r Report
+			r.goModules(root, runner)
+			if strings.Join(calls, "|") != strings.Join(c.calls, "|") {
+				t.Errorf("ran %v", calls)
+			}
+			if got := modules(root)["modernc.org/libc"]; got != c.libc {
+				t.Errorf("libc %s, want %s", got, c.libc)
+			}
+			if problems := strings.Join(r.Problems, "\n"); problems != c.problem {
+				t.Errorf("problems %q, want %q", problems, c.problem)
+			}
+			summary := strings.Join(r.Changes, "\n")
+			if strings.Contains(summary, heldReport) != c.held {
+				t.Errorf("summary:\n%s", summary)
+			}
+			// A held module that ends where it began reports no move; one left moved, even by a
+			// failed hold, reports it.
+			if moved := strings.Contains(summary, "go.mod modernc.org/libc v1.80.1 -> v1.81.0"); moved != (c.libc == "v1.81.0") {
+				t.Errorf("summary:\n%s", summary)
+			}
+		})
 	}
 }
 

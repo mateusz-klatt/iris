@@ -1,7 +1,9 @@
 // Command refresh brings the repository's dependencies up to date: Go modules and web
 // packages, the tool pins in the Makefile that
 // Dependabot cannot see, every workflow action re-pinned to the full SHA of its newest release,
-// and the Docker base image digests. It then runs `make test` and `make check-all` and prints
+// together with the pin tables the release checks assert, and the Docker base image digests. A
+// module that must match another's requirement, such as modernc.org/libc for modernc.org/sqlite,
+// stays at that version. It then runs `make test` and `make check-all` and prints
 // what changed. It never commits: the person reads the summary and opens the pull request.
 //
 // Every lookup that fails is reported and makes the exit status 1. A refresh that could not reach
@@ -217,6 +219,37 @@ func (r *Report) actions(root string, src Sources) {
 					r.Changes = append(r.Changes, change)
 				}
 				return m[1] + repo + m[3] + "@" + found[1] + " # " + found[0]
+			})
+		})
+	}
+	r.pinTables(files, latest)
+}
+
+// pinEntry is a line of a pin table that a workflow asserts its actions against, such as
+// `"actions/setup-go": "<commit>",` in ci.yml's release checks. It names an action as a `uses:`
+// line does, without the version.
+var pinEntry = regexp.MustCompile(`"([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)((?:/[^"@\s]*)?)":\s*"([0-9a-f]{40})"`)
+
+// pinTables moves each pin-table entry to the commit its action's `uses:` lines now name, so a
+// refresh does not leave the checks asserting the old commit. It runs after every workflow's
+// `uses:` lines, since a table in one file can name actions that only another file uses. An entry
+// whose repository no `uses:` line named, or whose lookup failed, keeps its commit.
+func (r *Report) pinTables(files []string, latest map[string][2]string) {
+	for _, file := range files {
+		said := map[string]bool{}
+		r.edit(file, func(text string) string {
+			return pinEntry.ReplaceAllStringFunc(text, func(entry string) string {
+				m := pinEntry.FindStringSubmatch(entry)
+				found := latest[m[1]]
+				if found[1] == "" || found[1] == m[3] {
+					return entry
+				}
+				change := fmt.Sprintf("%s pin table %s%s -> %s (%s)", filepath.Base(file), m[1], m[2], found[0], found[1][:12])
+				if !said[change] {
+					said[change] = true
+					r.Changes = append(r.Changes, change)
+				}
+				return strings.Replace(entry, m[3], found[1], 1)
 			})
 		})
 	}
@@ -477,17 +510,69 @@ func (s Sources) getJSON(url string, github bool, dest any) error {
 
 var requireLine = regexp.MustCompile(`(?m)^\s*(?:require\s+)?([a-z0-9./_-]+\.[a-z]+/\S*)\s+(v\S+)(\s+// indirect)?\s*$`)
 
-// goModules updates every module and records which versions moved.
+// heldModules must stay at the version another module requires, however new a release exists.
+// modernc.org/sqlite is validated against exactly the modernc.org/libc its go.mod names
+// ("Fragile modernc.org/libc dependency" in its documentation), and `go get -u` moves libc past it.
+var heldModules = []struct{ module, by string }{
+	{"modernc.org/libc", "modernc.org/sqlite"},
+}
+
+// goModules updates every module, puts back the held ones and records which versions moved.
 func (r *Report) goModules(root string, runner Runner) {
 	before := modules(root)
-	for _, args := range [][]string{{"get", "-u", "./..."}, {"mod", "tidy"}} {
-		if out, err := runner(root, "go", args...); err != nil {
-			r.Problems = append(r.Problems, fmt.Sprintf("go %s failed: %v\n%s", strings.Join(args, " "), err, tail(out)))
-			return
-		}
+	if !r.goSteps(root, runner, []string{"get", "-u", "./..."}, []string{"mod", "tidy"}) {
+		return
 	}
+	r.holdModules(root, runner)
 	after := modules(root)
 	r.Changes = append(r.Changes, moved("go.mod", before, after)...)
+}
+
+// goSteps runs go with each argument list in turn and stops at the first that fails, so go mod
+// tidy never runs on a half-updated go.mod.
+func (r *Report) goSteps(root string, runner Runner, steps ...[]string) bool {
+	for _, args := range steps {
+		if out, err := runner(root, "go", args...); err != nil {
+			r.Problems = append(r.Problems, fmt.Sprintf("go %s failed: %v\n%s", strings.Join(args, " "), err, tail(out)))
+			return false
+		}
+	}
+	return true
+}
+
+// holdModules sets each held module back to the version that the module holding it requires, as
+// `go mod graph` lists the requirement. A held module whose holder is not required is left alone.
+func (r *Report) holdModules(root string, runner Runner) {
+	selected := modules(root)
+	for _, h := range heldModules {
+		by, ok := selected[h.by]
+		if !ok {
+			continue
+		}
+		graph, err := runner(root, "go", "mod", "graph")
+		if err != nil {
+			r.Problems = append(r.Problems, fmt.Sprintf("go mod graph failed: %v\n%s", err, tail(graph)))
+			return
+		}
+		want := required(graph, h.by+"@"+by, h.module)
+		if want == "" || selected[h.module] == want {
+			continue
+		}
+		if r.goSteps(root, runner, []string{"get", h.module + "@" + want}, []string{"mod", "tidy"}) {
+			r.Changes = append(r.Changes, fmt.Sprintf("go.mod %s held at %s, the version %s %s requires", h.module, want, h.by, by))
+		}
+	}
+}
+
+// required is the version of module that from requires in a `go mod graph` listing, or "" when
+// from does not require it.
+func required(graph, from, module string) string {
+	for _, line := range strings.Split(graph, "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), from+" "+module+"@"); ok {
+			return v
+		}
+	}
+	return ""
 }
 
 func modules(root string) map[string]string {
