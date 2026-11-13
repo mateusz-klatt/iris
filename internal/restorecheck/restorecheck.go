@@ -93,8 +93,15 @@ func run(ctx context.Context, backup, scratch, listen string, out io.Writer) err
 	var fresh struct {
 		ExecutionID string `json:"execution_id"`
 	}
-	registered := call(ctx, base, token, "POST", "/v1/sessions", map[string]any{"client": "codex", "host": "restore-check", "session_id": "restore-check", "cwd": "/restore-check", "worktree": "/restore-check", "source": "hook"}, &fresh) == nil
-	c.check(registered && resets(ctx, base, token, fresh.ExecutionID), "a monitor whose cursor is ahead of the restored history gets a reset")
+	// The monitor needs a session that is new to the copy. A fixed session id is not: the scratch
+	// copy an earlier restore-check left holds that check's session, recovering after this start,
+	// and a recovering session refuses a registration that brings no generation.
+	monitor := map[string]any{"client": "codex", "host": "restore-check", "session_id": "restore-check-" + randomToken()[:16], "cwd": "/restore-check", "worktree": "/restore-check", "source": "hook"}
+	if err := call(ctx, base, token, "POST", "/v1/sessions", monitor, &fresh); err != nil {
+		c.check(false, "a new session registers on the restored hub (%v), so its monitor cannot be tested", err)
+	} else {
+		c.check(resets(ctx, base, token, fresh.ExecutionID), "a monitor whose cursor is ahead of the restored history gets a reset")
+	}
 
 	removed, err := s.Sweep(ctx)
 	c.check(err == nil, "the first retention sweep on the copy would remove %d events, %d idempotency records, %d finished claims, %d Executions", removed["events"], removed["operations"], removed["claims"], removed["executions"])
