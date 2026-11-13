@@ -156,9 +156,14 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		hash := sha256.Sum256(payload)
 		ev.ToolCallID = "payload:" + hex.EncodeToString(hash[:])
 	}
-	// Stop asks for a monitor before the repository check. A session outside a git checkout
-	// still needs the wake, and the ask does not call the hub (ADR 025).
+	// Stop asks for a monitor before the repository check. A Grok session outside a git checkout
+	// still needs the wake (ADR 025). Kimi's one-shot watcher is asked for here too (ADR 030), but
+	// only for a session whose SessionStart the hub accepted, which published the session's map.
+	// Neither ask calls the hub.
 	if out, ok := r.grokMonitorAsk(ev); ok {
+		return r.finish(state, ev, out)
+	}
+	if out, ok := r.kimiWakeAsk(ev); ok {
 		return r.finish(state, ev, out)
 	}
 	if shellEvent(ev) {
@@ -330,10 +335,12 @@ func (r Runner) register(ctx context.Context, ev Event, repo gitinfo.Repo) (hubc
 			}
 		}
 	}
-	// The pid file follows a hub acceptance. It is not part of the sessions directory, so a
-	// failed write is not a session-files failure and must not mark the run skipped.
+	// The pid file and the Kimi session map follow a hub acceptance. Neither is part of the
+	// sessions directory, so a failed write is not a session-files failure and must not mark the
+	// run skipped.
 	if err == nil && ev.Kind == KindSessionStart {
 		r.recordGrokSession(ev)
+		r.recordKimiSession(ev)
 	}
 	return sess, err
 }

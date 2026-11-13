@@ -351,6 +351,19 @@ and hook consumption are unproved; fresh integration and bare MCP arguments leav
 explicit choice survives reintegration. The server and closed sessions are not started for the user.
 The [Kimi wake guide](kimi-wake.md) and [ADR 026](adr/026-kimi-web-idle-wake.md) record setup and limits.
 
+[ADR 030](adr/030-kimi-one-shot-wake.md) replaces that route in stages. Each Kimi SessionStart the
+hub accepts records its native session id under `kimi-wake/` in the OS account's Iris directory.
+The record sits beside the pid and start time of its single-session Kimi process, so the one-shot
+watcher binds to that session alone. `/clear` points the process at its new session.
+SessionStart also clears that session's latch, and removes the state of Kimi processes that have
+ended.
+
+When `kimi-wake/preference` reads `on`, Stop asks the model, in the ADR's exact words, to start
+the watcher. It asks again only when no watcher is live and no request is pending. A request that
+no watcher answers within five seconds latches `failed` at the next Stop instead of asking at every
+turn. The ask reads local files and the process table, calls no hub and lets the turn end on any
+failure. Nothing writes the preference yet, and the watcher follows in a later change.
+
 Grok's monitor shell does not inherit `GROK_SESSION_ID` (measured on 1.0.77). After the hub
 accepts a top-level SessionStart, the hook stores the session id beside that grok process's
 pid and start time, and `iris watch --client grok` reads the file when the variable is empty.
