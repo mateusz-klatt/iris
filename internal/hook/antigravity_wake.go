@@ -21,7 +21,7 @@ import (
 	"github.com/mateusz-klatt/iris/internal/proc"
 )
 
-// AntigravityWakeFileName is the opt-in wake marker beside hub.token.
+// AntigravityWakeFileName is the local wake marker beside hub.token.
 const AntigravityWakeFileName = "antigravity-wake"
 
 const (
@@ -51,7 +51,7 @@ func AntigravityWakePath(configDir string) string {
 	return filepath.Join(configDir, AntigravityWakeFileName)
 }
 
-// AntigravityWakeEnabled reports whether Antigravity wake is explicitly enabled ("on").
+// AntigravityWakeEnabled reports whether Antigravity wake is enabled ("on" or "default").
 // Missing, unreadable or "off" markers report false.
 func AntigravityWakeEnabled(configDir string) bool {
 	if configDir == "" {
@@ -61,7 +61,12 @@ func AntigravityWakeEnabled(configDir string) bool {
 	if err != nil {
 		return false
 	}
-	return strings.TrimSpace(string(raw)) == "on"
+	switch strings.TrimSpace(string(raw)) {
+	case "on", "default":
+		return true
+	default:
+		return false
+	}
 }
 
 // AntigravityHelperOwner identifies one detached wake helper instance for a host agy process.

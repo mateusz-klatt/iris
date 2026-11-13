@@ -150,11 +150,11 @@ func stripClient(client string) stripFunc {
 }
 
 // stripWakeMarker removes a local wake marker (Grok or Antigravity) only when it is
-// exactly on or off. Any other text was written by the person and stays, including a
-// file Iris created and they then replaced.
+// exactly on, off or default. Any other text was written by the person and stays,
+// including a file Iris created and they then replaced.
 func stripWakeMarker(data []byte) ([]byte, bool, error) {
 	switch strings.TrimSpace(string(data)) {
-	case "on", "off":
+	case "on", "off", "default":
 		return nil, true, nil
 	default:
 		return data, false, nil

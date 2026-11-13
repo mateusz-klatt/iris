@@ -1,8 +1,8 @@
 # 028: Antigravity idle wake through a model-armed helper
 
-Status: proposed for opt-in implementation on the owner's direction, 2026-11-13. Changes D7 for
-Antigravity only. Extends the single-wake policy of ADR 017 and ADR 023 without changing the other
-clients.
+Status: accepted and verified live on 2026-11-13; amended on 2026-11-13 to turn wake on by default
+on the owner's direction (~20:20 UTC). Changes D7 for Antigravity only. Extends the single-wake
+policy of ADR 017 and ADR 023 without changing the other clients.
 
 ## Problem
 
@@ -73,32 +73,62 @@ All measurements ran on Linux/WSL2 with `agy 1.5.8` (`gemini-3.8-flash-low`) aft
 
 ## Decision
 
-### Opt-in configuration, no automatic command allow rule, and teardown
+### Default-on configuration, three-state marker, no automatic command allow rule, and teardown
 
-Wake for Antigravity is opt-in and off by default. Because Antigravity's `permissions.allow`
-matcher cannot enforce whole-invocation matching without permitting environment assignments or
-appended arguments (measurement 8), **Iris writes no `command(...)` allow rule to `settings.json`**.
-`settings.json` retains only `mcp(iris/*)`, so moving `<iris-path>` leaves no orphaned Iris
-`command(...)` permission rule behind (`iris integrate antigravity` updates hook entries by marker
-as before). With `--wake`, Antigravity keeps its interactive approval prompt for the unsandboxed
-helper command, costing the user one approval per armed conversation (and again after `/clear`,
-which starts a new `conversationId`). Iris offers no flag to write a `command(...)` allow rule
-automatically.
+Following live verification on an interactive own-session `agy 1.5.8` run on Linux/WSL2 on
+2026-11-13 (`Stop` armed the detached helper after one interactive approval prompt, `agy agentapi
+send-message` submitted the fixed Iris notification in `124 ms` at `21:18:01Z` and started a turn
+with zero human input, the wake guard was consumed, and the helper stayed live across a second
+consecutive idle wake at `21:19:28Z`) and the owner's direction of 2026-11-13 at about 20:20 UTC
+(native wake is on by default for every CLI whose implementation is complete and verified live,
+while `--no-wake` disables it and reintegration preserves an explicit choice), **wake for
+Antigravity is on by default when using the OS account's default Iris configuration directory**.
 
-- `iris integrate antigravity --wake` writes a local marker (`on`) beside the Iris configuration,
-  refusing (with both paths named) unless the resolved Iris configuration directory matches the OS
-  account's pinned default directory.
-- Fresh `iris integrate antigravity` leaves wake off; plain `iris integrate antigravity` and
-  `iris setup` preserve an existing explicit `on` or `off` marker.
-- `iris integrate antigravity --no-wake` writes `off` and stops any live Antigravity wake helpers
-  recorded under the helper state directory (verifying `(helper_pid, helper_start_ms)` via
-  `proc.Lookup` before terminating, then conditionally removing their owned records), and always
-  also writes `off` and stops recorded helpers in the pinned default directory idempotently when the
-  environment resolves another location.
-- `iris integrate --remove antigravity` removes the wake marker and likewise stops any live
-  recorded Antigravity wake helpers (and idempotently writes `off` and stops recorded helpers in the
-  pinned default directory when the environment differs), alongside removing `mcp(iris/*)`, hooks
-  and the MCP entry.
+Because Antigravity's `permissions.allow` matcher cannot enforce whole-invocation matching without
+permitting environment assignments or appended arguments (measurement 8), **Iris still writes no
+`command(...)` allow rule to `settings.json`**. `settings.json` retains only `mcp(iris/*)`, so
+moving `<iris-path>` leaves no orphaned Iris `command(...)` permission rule behind (`iris integrate
+antigravity` updates hook entries by marker as before). Turning wake on by default therefore carries
+an explicit interactive cost: **one approval prompt per armed conversation** (and again after
+`/clear`, which starts a new `conversationId`). Iris offers no flag to write a `command(...)` allow
+rule automatically.
+
+To follow the fleet three-state rule (`[decided 20261113-1]`: **explicit on**, **explicit off**,
+**no choice**) so that a marker written by default is never mistaken on disk for an explicit
+`--wake` or `--no-wake` choice, `antigravity-wake` beside `hub.token` records three distinct values:
+
+- **`default` (no choice, wake active):** written by a fresh `iris integrate antigravity`,
+  `iris integrate --all` or `iris setup` when the resolved Iris configuration directory matches the
+  OS account's pinned default directory and no explicit `on` or `off` marker is present. When
+  environment overrides resolve a different directory, plain `iris integrate antigravity` and
+  `iris setup` install hooks, MCP and `mcp(iris/*)` without writing `antigravity-wake`, because the
+  hardened helper runs only against the OS account's default directory.
+- **`on` (explicit on, wake active):** written by `iris integrate antigravity --wake`, refusing
+  (with both paths named) unless the resolved Iris configuration directory matches the OS account's
+  pinned default directory. Plain `iris integrate antigravity` and `iris setup` keep `on` untouched.
+- **`off` (explicit off, wake disabled):** written by `iris integrate antigravity --no-wake`, which
+  also stops any live Antigravity wake helpers recorded under the helper state directory (verifying
+  `(helper_pid, helper_start_ms)` via `proc.Lookup` before terminating, then conditionally removing
+  their owned records), and always also writes `off` and stops recorded helpers in the pinned
+  default directory idempotently when the environment resolves another location. Plain
+  `iris integrate antigravity` and `iris setup` keep `off` untouched.
+- **Missing marker (unintegrated or removed, wake disabled):** evaluates `false` (fail-closed).
+  Unrecognized text in `antigravity-wake` also evaluates `false` in hooks and helpers, is reported
+  as `ErrBroken` by plain `Install` and `Drift`, and is left untouched on `--remove`.
+- **Mapping of prior installations:**
+  - An absent `antigravity-wake` from an earlier opt-in-era plain `iris integrate antigravity` or
+    `iris setup` maps to **no choice**: wake stays off while the file is absent, `iris doctor`
+    reports configuration drift on `antigravity-wake`, and running `iris integrate antigravity` or
+    `iris setup` writes `default`, turning wake on.
+  - An existing `on` written by `iris integrate antigravity --wake` maps to **explicit on** and is
+    kept as `on` with zero drift.
+  - An existing `off` written by `iris integrate antigravity --no-wake` (or written to an untracked
+    or split pinned directory by an earlier `--remove`) maps to **explicit off** and is kept as
+    `off` until `--wake` (or `--remove` followed by a fresh `integrate`).
+- `iris integrate --remove antigravity` removes Iris's wake marker (`default`, `on` or `off`) and
+  likewise stops any live recorded Antigravity wake helpers (and idempotently writes `off` and stops
+  recorded helpers in the pinned default directory when the environment differs or `StateDir` did
+  not track the marker), alongside removing `mcp(iris/*)`, hooks and the MCP entry.
 
 ### Per-process state, authoritative current session, and `Stop` arming request
 
@@ -121,8 +151,8 @@ coordinated under a local file lock within the 50 ms hook budget and without hub
   `arm_requested(session_id)` marker, or a `failed` latch.
 
 Only when the hook's Iris configuration directory matches the OS account's pinned default directory
-and the local wake marker is `on` does `Stop` consider asking for the helper, and only when
-every gate holds:
+and the local wake marker enables wake (`on` or `default`) does `Stop` consider asking for the
+helper, and only when every gate holds:
 
 - `fullyIdle` is `true`;
 - `terminationReason` is `"NO_TOOL_CALL"` (shutdown, cancellation, errors and missing reasons never
@@ -205,10 +235,10 @@ the current `conversationId`), re-verifies `proc.Lookup`, and only then exits `0
 The detached child binds only to the hook-registered Execution of that single-session `agy` process
 whose `session_id` matches `ANTIGRAVITY_CONVERSATION_ID` (never registering a fallback Execution).
 Before **every** binding heartbeat renewal (`Maintain`) and before **every** wake admission, the
-child checks `proc.Lookup(agy_pid)` against `start_ms`, checks that the local wake marker is `on`,
-and checks that the hook-published `current_session_id` for `(agy pid, start_ms)` still equals its
-`ANTIGRAVITY_CONVERSATION_ID` and that the helper entry still names its own
-`(helper_pid, helper_start_ms, attempt_id)`. If any check fails — `agy` exited, `--no-wake` or
+child checks `proc.Lookup(agy_pid)` against `start_ms`, checks that the local wake marker enables
+wake (`on` or `default`), and checks that the hook-published `current_session_id` for
+`(agy pid, start_ms)` still equals its `ANTIGRAVITY_CONVERSATION_ID` and that the helper entry still
+names its own `(helper_pid, helper_start_ms, attempt_id)`. If any check fails — `agy` exited, `--no-wake` or
 `--remove` ran, or `/clear` switched conversations (even though `binding.Resolver` refresh in
 `internal/binding/binding.go` would otherwise retain the cached Execution) — the helper stops at
 once without renewing the old Execution's lease and without sending a wake, removes the helper
@@ -260,7 +290,7 @@ process checks, marker reads and subprocess waits happen **outside** the shared 
 `answer` merges by immutable `attempt.ID` after the command finishes). Final admission right before
 executing `<agy-exe> agentapi send-message <conversationId> <prompt>` requires:
 
-- local wake marker `on`;
+- local wake marker enabled (`on` or `default`);
 - live `agy` process `(pid, start_ms)` whose hook-published `current_session_id` equals
   `ANTIGRAVITY_CONVERSATION_ID` and whose helper record still matches this helper's
   `(helper_pid, helper_start_ms, attempt_id)`;
@@ -367,14 +397,16 @@ helper run **incremental, attempt-associated forward scanning** outside the `ses
 
 ## Verification
 
-Unit and integration tests at 100% statement coverage will verify:
+Unit and integration tests at 100% statement coverage verify:
 
-- `iris integrate antigravity` opt-in (`--wake`), `--no-wake` and `--remove` marker management,
-  absence of any Iris-written `command(...)` allow rule in `settings.json`, and live helper
-  termination on `--no-wake` and `--remove`;
+- `iris integrate antigravity` and `iris setup` default-on (`default`) installation, explicit
+  `--wake` (`on`), `--no-wake` (`off`) and `--remove` three-state marker management, preservation of
+  explicit `on` and `off` choices across reintegration and `setup`, absence of any Iris-written
+  `command(...)` allow rule in `settings.json`, and live helper termination on `--no-wake` and
+  `--remove`;
 - `Stop` arming gates (`fullyIdle`, `terminationReason == "NO_TOOL_CALL"`, `executionNum == 0`,
-  `!continuationActive`, wake marker `on`/`off`, shell quoting / unsafe-path refusal, live helper
-  check via `proc.Lookup`, and D3 fail-open on errors);
+  `!continuationActive`, wake marker `default`/`on`/`off`/missing, shell quoting / unsafe-path
+  refusal, live helper check via `proc.Lookup`, and D3 fail-open on errors);
 - hardened helper preflight: exact `os.Args` enforcement, rejection of `IRIS_HUB_URL` /
   `IRIS_TOKEN_FILE` / `IRIS_EXECUTION` / `XDG_CONFIG_HOME` overrides, `agy` ancestor executable
   resolution (rejecting env/`PATH` overrides and non-regular or deleted files), loopback LS check,
@@ -385,8 +417,8 @@ Unit and integration tests at 100% statement coverage will verify:
   `(helper_pid, helper_start_ms, attempt_id)`, and manual re-arming via `run_command`;
 - hook-published `current_session_id` protected by `superseded_session_ids` against stale trailing
   hooks from retired conversations, checked before every heartbeat renewal and wake admission
-  (`/clear` stops lease renewal and exits the superseded helper immediately), and wake marker `on`
-  re-verified at final admission;
+  (`/clear` stops lease renewal and exits the superseded helper immediately), and enabled wake
+  marker (`on` or `default`) re-verified at final admission;
 - lock-free hub/subprocess execution, `GOTRACEBACK` stripped from detached-helper and `<agy-exe>`
   environments, narrow `"failed"` vs `"unknown"` classification of `agentapi send-message` exits,
   and incremental forward scanning by both `PostInvocation` and helper continuation passes —
