@@ -91,6 +91,24 @@ func TestARestoredHubPassesEveryCheck(t *testing.T) {
 	}
 }
 
+// restore-check can be run on the scratch copy that an earlier restore-check left. That copy holds
+// the earlier check's own session, recovering after the next start, so the monitor check needs a
+// session new to the copy: with a fixed one, the hub refused the registration, and the check
+// failed as though the monitor had not been reset.
+func TestARestoreCheckChecksTheCopyAnEarlierCheckLeft(t *testing.T) {
+	first := filepath.Join(t.TempDir(), "first")
+	var out bytes.Buffer
+	if err := Run(context.Background(), backup(t, false), first, &out); err != nil {
+		t.Fatalf("%v\n%s", err, out.String())
+	}
+	for range 2 {
+		out.Reset()
+		if err := Run(context.Background(), filepath.Join(first, "hub.db"), filepath.Join(t.TempDir(), "again"), &out); err != nil || !strings.Contains(out.String(), "ok   a monitor whose cursor is ahead of the restored history gets a reset") {
+			t.Fatalf("%v\n%s", err, out.String())
+		}
+	}
+}
+
 // It refuses to work anywhere it could overwrite something, and on anything not a database.
 func TestTheRestoreCheckRefusesWhatIsNotACleanCopy(t *testing.T) {
 	src := backup(t, false)
@@ -168,6 +186,10 @@ func TestAnUnreachableHubFailsItsChecks(t *testing.T) {
 	err := Run(context.Background(), backup(t, true), filepath.Join(t.TempDir(), "s"), &out)
 	if err == nil || !strings.Contains(out.String(), "FAIL the restored hub answers status") {
 		t.Fatalf("%v\n%s", err, out.String())
+	}
+	// A session that cannot register is reported as that, not as a monitor that was not reset.
+	if !strings.Contains(out.String(), "FAIL a new session registers on the restored hub") || strings.Contains(out.String(), "gets a reset") {
+		t.Fatalf("a refused registration was blamed on the monitor:\n%s", out.String())
 	}
 }
 
