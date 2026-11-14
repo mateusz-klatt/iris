@@ -437,9 +437,10 @@ to `antigravity-wake`, while `--wake` (`on`) and `--no-wake` (`off`) record expl
 enabled (`default` or `on`), an idle `Stop` (`fullyIdle`, `NO_TOOL_CALL`, `executionNum == 0`,
 `!continuationActive`) on that default directory asks the model once per conversation to start a
 detached `iris watch --client antigravity --wake` helper with `BypassSandbox: true`. Iris writes no
-`command(...)` allow rule, so the user approves the unsandboxed command once per armed conversation;
-a denial or preflight error latches `failed` on that `(agy pid, start_ms)`, never overwriting an
-already-live helper. The helper accepts only that exact `argv`, loads hub configuration from
+`command(...)` allow rule, so arming requires user approval; agy's safety monitors can refuse the
+request before asking the user. A denial or preflight error latches `failed` on that
+`(agy pid, start_ms)`, never overwriting an already-live helper. The helper accepts only that exact
+`argv`, loads hub configuration from
 the OS account's default Iris directory without environment overrides, resolves `<agy-exe>` from the
 verified `agy` ancestor process image, pins `ANTIGRAVITY_LS_ADDRESS` (`127.0.0.1`, `::1`, or
 `localhost` dialed directly against literal loopback IPs without DNS) to a reachable literal
@@ -451,11 +452,23 @@ conversation is recorded idle. Because delivery enters `transcript_full.jsonl` a
 firing `BeforeAgent`, both `PostInvocation` and the helper's poll loop advance a bounded `4 MiB`
 transcript cursor to consume the wake guard on exact whole-message match.
 
-On Windows two more steps are needed, both measured on `agy 1.5.8`.
+On Windows, measured on `agy 1.5.8`:
+
 - agy runs each command in a job that ends with the command and forbids breakaway, so the helper
   is created under the verified `agy` process rather than the command.
-- The helper keeps the command sandbox's desktop, so `agentapi send-message` starts without a
-  console.
+- agy destroys the command's temporary desktop when the command ends. Inheriting that desktop
+  caused `agentapi send-message` to fail loading `user32` with `0xC0000142`; removing the console
+  did not fix it. When the launcher's desktop is another one, Iris creates the helper on
+  `<winsta>\Default` in the same window station (the bare `Default` when agy names the desktop
+  alone, as 1.5.8 does), refusing malformed values. Empty or `Default` values inherit.
+- `agentapi send-message` starts without a console only to avoid a visible console window on
+  `<winsta>\Default`.
+
+Wake depends on agy running in no job and on agy's own desktop being `<winsta>\Default`. Its LLM
+safety monitors can refuse a `Stop`-requested arming without asking the user, and are
+nondeterministic. Iris latches `failed` and does not ask again in that agy process; the user can
+still arm by asking the model to run the command. Iris does not reword its request to get past a
+safety classifier.
 
 The [Antigravity wake guide](antigravity-wake.md) and [ADR 028](adr/028-antigravity-idle-wake.md)
 record setup and limits.

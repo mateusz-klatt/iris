@@ -37,7 +37,6 @@ const (
 var (
 	errAntigravityDeferred = errors.New("antigravity wake deferred")
 	osExecutable           = os.Executable
-	openDevNull            = func() (*os.File, error) { return os.OpenFile(os.DevNull, os.O_RDWR, 0) }
 )
 
 type antigravityOptions struct {
@@ -132,32 +131,13 @@ func verifiedSelfExecutable() (string, error) {
 }
 
 // spawnDetachedProcess starts the helper under parent, the agy process the launcher has
-// already verified. The parent is opened here, only for the spawn, and released after it.
+// already verified. proc.StartDetached opens the parent only for the spawn.
 func spawnDetachedProcess(exe string, args, env []string, parent proc.Ancestor) (int, func(), func(), error) {
-	devNull, err := openDevNull()
+	d, err := proc.StartDetached(exe, args, env, parent.PID, parent.StartMS)
 	if err != nil {
 		return 0, nil, nil, err
 	}
-	defer func() { _ = devNull.Close() }()
-	cmd := exec.Command(exe, args...)
-	cmd.Env = env
-	cmd.Stdin, cmd.Stdout, cmd.Stderr = devNull, devNull, devNull
-	releaseParent, err := proc.DetachUnder(cmd, parent.PID, parent.StartMS)
-	if err != nil {
-		return 0, nil, nil, err
-	}
-	defer releaseParent()
-	if err := cmd.Start(); err != nil {
-		return 0, nil, nil, err
-	}
-	handle := cmd.Process
-	pid := handle.Pid
-	release := func() { _ = handle.Release() }
-	kill := func() {
-		_ = handle.Kill()
-		_, _ = handle.Wait()
-	}
-	return pid, release, kill, nil
+	return d.PID, d.Release, d.Kill, nil
 }
 
 func canonicalAntigravitySession(raw string) (string, bool) {

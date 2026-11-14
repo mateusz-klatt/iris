@@ -11,8 +11,8 @@ and spend model budget.
 Fresh `iris integrate antigravity` and `iris setup` enable Antigravity wake by default when the
 resolved Iris configuration directory matches the OS account's default Iris directory, writing
 `default` to `antigravity-wake` beside `hub.token`. Because Iris never writes a `command(...)` allow
-rule, default-on wake costs **one interactive approval prompt per armed conversation** (and again
-after `/clear`). Override the preference explicitly with:
+rule, default-on wake requires **user approval for each arming** (including after `/clear`). agy's
+safety monitors can refuse the request before a prompt. Override the preference explicitly with:
 
 ```sh
 iris integrate antigravity --no-wake
@@ -61,15 +61,17 @@ an isolated network namespace where the host Language Server is unreachable).
 Iris **never writes a `command(...)` allow rule** to `~/.gemini/antigravity-cli/settings.json`. In
 `agy 1.5.8`, `command(...)` matches by command prefix and allows extra arguments, `VAR=value`
 assignments and `env` wrappers outside the sandbox. Leaving `settings.json` with `"mcp(iris/*)"`
-alone means Antigravity prompts the user once per armed conversation (and again after `/clear`,
-which starts a new `conversationId`). Do not choose a persistent `command(...)` rule for `iris` if
+alone leaves the arming command subject to user approval (including after `/clear`, which starts
+a new `conversationId`). Do not choose a persistent `command(...)` rule for `iris` if
 you want Antigravity's command sandbox to keep gating other `iris` invocations.
 
-On Windows, agy's safety monitor also flags `BypassSandbox: true` and asks for confirmation every
-time the helper is armed, even when a persistent rule matches. The confirmation appeared 35–45 s
-after the request on `agy 1.5.8`. Its "always allow" choice writes the `command(...)` prefix rule
-described above. To keep the sandbox gating other `iris` invocations, allow the helper once each
-time instead.
+On Windows with `agy 1.5.8`, the safety monitors flagged `BypassSandbox: true` and asked for
+confirmation even when a persistent rule matched; the confirmation appeared 35–45 s after the
+request. They also refused a `Stop`-requested arming without asking the user after flagging the
+hook-initiated request as "rogue persistence". Another such request reached the user as a normal
+confirmation, so the monitors are nondeterministic. Iris does not reword its request to get past
+a safety classifier. The "always allow" choice writes the `command(...)` prefix rule described
+above. To keep the sandbox gating other `iris` invocations, allow the helper once each time instead.
 
 `Stop` asks only an interactive session ([ADR 031](adr/031-wake-only-in-interactive-sessions.md)).
 Iris reads the `agy` process's arguments.
@@ -114,7 +116,9 @@ and oversized lines, and consume the wake guard only when the whole notification
 - **No wake before first `Stop`.** Nothing can wake a conversation before its first turn reaches
   `Stop` and arms the helper.
 - **Request, not enforcement.** The model may ignore the `Stop` request or omit
-  `BypassSandbox: true`, and enterprise policies may disallow unsandboxed commands.
+  `BypassSandbox: true`, and enterprise policies may disallow unsandboxed commands. agy's own
+  safety monitors can refuse arming before asking the user. Iris then latches `failed` and does
+  not ask again in that agy process; the user can still arm by asking the model to run the command.
 - **Already-queued messages cannot be recalled.** `--no-wake` and `--remove` terminate live helpers
   and block new submissions, but a message already accepted by `agy` stays in its queue.
 - **Busy-turn race.** Idle state recording and `agentapi send-message` are not atomic; if a turn
@@ -129,8 +133,14 @@ and oversized lines, and consume the wake guard only when the whole notification
 - **Windows.**
   - agy runs each command in a job that ends with the command and forbids breakaway. Iris therefore
     starts the helper under the `agy` process it has verified, not under the command.
-  - The helper keeps the command sandbox's desktop. Iris therefore starts
-    `<agy-exe> agentapi send-message` without a console, because a console program started there
-    died at startup.
-  - Both behaviours were measured on `agy 1.5.8`, and a later agy may change them. See [ADR 028](adr/028-antigravity-idle-wake.md) for the full design and
-  measurements.
+  - agy also gives each command a temporary desktop that it destroys when the command ends.
+    Inheriting that desktop caused `agentapi send-message` to fail loading `user32` with
+    `0xC0000142`; removing the console did not fix it. Iris creates the helper on
+    `<winsta>\Default` when the launcher's desktop is another one (the bare `Default` when agy
+    names the desktop alone, as 1.5.8 does), and refuses malformed values. Empty or `Default`
+    values inherit.
+  - `<agy-exe> agentapi send-message` runs without a console only to avoid opening a visible
+    console window on `<winsta>\Default`.
+  - Wake depends on agy running in no job and on agy's own desktop being `<winsta>\Default`.
+    Both were measured on `agy 1.5.8`; a later agy may change them. See
+    [ADR 028](adr/028-antigravity-idle-wake.md) for the full design and measurements.
