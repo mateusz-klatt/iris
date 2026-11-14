@@ -9,70 +9,74 @@ import (
 	"testing"
 
 	"github.com/mateusz-klatt/iris/internal/hubclient"
+	"github.com/mateusz-klatt/iris/internal/proc"
 )
 
 func TestCursorPrintModeGetsNoFollowUp(t *testing.T) {
 	root := gitRepo(t)
-	env := failureEnv(t)
 	now := hubclient.Attention{Unread: 1, HighWater: 1, Identity: hubclient.Identity{Known: true, Pending: true, Stream: "s", Cursor: 1}}
-	calls := 0
-	prev := cursorCommandLine
-	t.Cleanup(func() { cursorCommandLine = prev })
-	for _, args := range [][]string{{"cursor-agent", "-p", "PING"}, {"cursor-agent", "--print", "PING"}, nil} {
-		cursorCommandLine = func(int, int64) ([]string, error) {
-			if args == nil {
-				return nil, os.ErrNotExist
-			}
-			return args, nil
-		}
+	for _, tc := range []struct {
+		args []string
+		err  error
+		why  string
+	}{
+		{[]string{"cursor-agent", "-p", "PING"}, nil, "print mode"},
+		{[]string{"cursor-agent", "--print", "PING"}, nil, "print mode"},
+		{nil, os.ErrNotExist, "arguments unreadable"},
+	} {
+		env := failureEnv(t)
+		calls := 0
+		readAs(t, tc.args, tc.err, true, nil)
 		before := calls
 		out := Runner{
 			ClientName: "cursor", EventName: "stop",
-			Stdin: strings.NewReader(cursorStopPayload(root, 0)),
-			Hub:   attentionHub{now: &now, calls: &calls}, Getenv: env, after: never, logAfter: never,
+			Stdin:    strings.NewReader(cursorStopPayload(root, 0)),
+			Hub:      attentionHub{now: &now, calls: &calls},
+			Getenv:   env,
+			Ancestor: cursorAncestor,
+			after:    never, logAfter: never,
 		}.Run()
 		if out.Exit != 0 || strings.Contains(string(out.Stdout), "followup_message") || calls != before {
-			t.Fatalf("%v: calls %d->%d %s", args, before, calls, out.Stdout)
+			t.Fatalf("%v: calls %d->%d %s", tc.args, before, calls, out.Stdout)
+		}
+		notCursor := Runner{
+			ClientName: "cursor", EventName: "stop",
+			Stdin: strings.NewReader(cursorStopPayload(root, 0)),
+			Hub:   attentionHub{now: &now, calls: &calls}, Getenv: env,
+			Ancestor: func() (proc.Ancestor, error) {
+				return proc.Ancestor{PID: 1, StartMS: 1, Name: "node"}, nil
+			},
+			after: never, logAfter: never,
+		}.Run()
+		if strings.Contains(string(notCursor.Stdout), "followup_message") {
+			t.Fatal("a process that is not cursor-agent followed up")
+		}
+		seen, err := ReadRecentObservations(env("IRIS_TOKEN_FILE"), 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(seen) == 0 || seen[0].Error != wakeNotAsked+tc.why {
+			t.Fatalf("observed %+v, want %s", seen, tc.why)
 		}
 	}
 }
 
-func TestCursorInteractiveArgs(t *testing.T) {
-	if cursorInteractiveArgs(nil) || cursorInteractiveArgs([]string{"cursor-agent", "-p"}) || cursorInteractiveArgs([]string{"cursor-agent", "--print=hi"}) {
-		t.Fatal("print mode looked interactive")
+func TestCursorModeReadsTheMeasuredGrammar(t *testing.T) {
+	if cursorMode([]string{"cursor-agent", "-p"}) != modePrint || cursorMode([]string{"cursor-agent", "--print"}) != modePrint || cursorMode([]string{"cursor-agent", "-pf"}) != modePrint {
+		t.Fatal("print mode was not print")
 	}
-	if !cursorInteractiveArgs([]string{"cursor-agent", "--trust", "say PING"}) || !cursorInteractiveArgs([]string{"cursor-agent", "--model", "composer-2.5-fast"}) {
-		t.Fatal("an interactive launch was refused")
+	if cursorMode([]string{"cursor-agent", "--print=hi"}) != modeUnknown || cursorMode([]string{"cursor-agent", "--trust=true"}) != modeUnknown || cursorMode([]string{"cursor-agent", "--not-a-flag"}) != modeUnknown || cursorMode([]string{"cursor-agent", "--model"}) != modeUnknown || cursorMode([]string{"cursor-agent", "-H"}) != modeUnknown || cursorMode([]string{"cursor-agent", "-q"}) != modeUnknown {
+		t.Fatal("a rejected flag was accepted")
 	}
-	if cursorInteractiveArgs([]string{"cursor-agent", "--model"}) || cursorInteractiveArgs([]string{"cursor-agent", "--not-a-flag"}) || cursorInteractiveArgs([]string{"cursor-agent", "mcp"}) {
-		t.Fatal("an incomplete, unknown or management command looked interactive")
+	live := []string{"cursor-agent", "--use-system-ca", "/home/klattm/.local/share/cursor-agent/versions/2026.11.13-eacade1/index.js", "--resume"}
+	if cursorMode(live) != modeInput || cursorMode([]string{"cursor-agent", "--trust", "say PING"}) != modeInput || cursorMode([]string{"cursor-agent", "--model", "composer-2.5-fast"}) != modeInput {
+		t.Fatal("an interactive launch was not left to its terminal")
 	}
-	if !cursorInteractiveArgs([]string{"cursor-agent", "agent", "--trust"}) || !cursorInteractiveArgs([]string{"cursor-agent", "--worktree", "wt"}) || !cursorInteractiveArgs([]string{"cursor-agent", "--worktree"}) {
-		t.Fatal("agent and optional worktree should stay interactive")
+	if cursorMode([]string{"cursor-agent", "mcp"}) != modeCommand || cursorMode([]string{"cursor-agent", "agent"}) != modeCommand {
+		t.Fatal("a subcommand looked like a session")
 	}
-	if cursorInteractiveArgs([]string{"cursor-agent", "-H"}) || cursorInteractiveArgs([]string{"cursor-agent", "-q"}) || !cursorInteractiveArgs([]string{"cursor-agent", "-f", "-H", "N: V"}) || !cursorInteractiveArgs([]string{"cursor-agent", "-HName: V"}) || !cursorInteractiveArgs([]string{"cursor-agent", "-w", "wt"}) {
-		t.Fatal("short options were classified wrong")
-	}
-	if cursorInteractiveArgs([]string{"cursor-agent", "-fp"}) {
-		t.Fatal("a grouped -p was interactive")
-	}
-	if !cursorInteractiveArgs([]string{"cursor-agent", "-w"}) || !cursorInteractiveArgs([]string{"cursor-agent", "-w", "-f"}) {
-		t.Fatal("a short worktree flag consumed the next option")
-	}
-	if !cursorInteractiveArgs([]string{"cursor-agent", "--", "prompt"}) {
-		t.Fatal("arguments after -- are the prompt")
-	}
-}
-
-func TestDispatchCursorArgsReportsAnUnreadCommandLine(t *testing.T) {
-	if _, err := dispatchCursorArgs(0, 0); err == nil {
-		t.Fatal("pid 0 returned a command line")
-	}
-	prev := readCursorArgs
-	readCursorArgs = nil
-	t.Cleanup(func() { readCursorArgs = prev })
-	if _, err := dispatchCursorArgs(1, 0); err == nil {
-		t.Fatal("a missing reader returned a command line")
+	if cursorMode([]string{"cursor-agent", "--worktree"}) != modeInput || cursorMode([]string{"cursor-agent", "--worktree", "wt"}) != modeInput || cursorMode([]string{"cursor-agent", "-w"}) != modeInput || cursorMode([]string{"cursor-agent", "-w", "wt"}) != modeInput || cursorMode([]string{"cursor-agent", "-w", "-f"}) != modeInput || cursorMode([]string{"cursor-agent", "-f", "-H", "N: V"}) != modeInput || cursorMode([]string{"cursor-agent", "-HName: V"}) != modeInput || cursorMode([]string{"cursor-agent", "--", "prompt"}) != modeInput {
+		t.Fatal("optional and attached values were misread")
 	}
 }
 
@@ -114,13 +118,13 @@ func cursorStopPayload(root string, loop int) string {
 	return string(raw)
 }
 
+func cursorAncestor() (proc.Ancestor, error) {
+	return proc.Ancestor{PID: 295482, StartMS: 1, Name: "cursor-agent"}, nil
+}
+
 func interactiveCursor(t *testing.T) {
 	t.Helper()
-	prev := cursorCommandLine
-	cursorCommandLine = func(int, int64) ([]string, error) {
-		return []string{"cursor-agent", "--trust"}, nil
-	}
-	t.Cleanup(func() { cursorCommandLine = prev })
+	readAs(t, []string{"cursor-agent", "--use-system-ca", "/versions/index.js", "--resume"}, nil, true, nil)
 }
 
 func TestCursorStopFollowsANewerIdentityOnceAndNeverAFollowUp(t *testing.T) {
@@ -135,7 +139,7 @@ func TestCursorStopFollowsANewerIdentityOnceAndNeverAFollowUp(t *testing.T) {
 		out := Runner{
 			ClientName: "cursor", EventName: "stop",
 			Stdin: strings.NewReader(cursorStopPayload(root, loop)),
-			Hub:   hub, Getenv: env, after: never, logAfter: never,
+			Hub:   hub, Getenv: env, Ancestor: cursorAncestor, after: never, logAfter: never,
 		}.Run()
 		if out.Exit != 0 {
 			t.Fatalf("exit %d: %s", out.Exit, out.Stderr)
@@ -205,9 +209,11 @@ func TestCursorStopStaysQuietWhenWakeIsOffOrTheHubFails(t *testing.T) {
 	interactiveCursor(t)
 	broken := Runner{
 		ClientName: "cursor", EventName: "stop",
-		Stdin:  strings.NewReader(cursorStopPayload(root, 0)),
-		Hub:    failureHub{stage: "session"},
-		Getenv: failureEnv(t), after: never, logAfter: never,
+		Stdin:    strings.NewReader(cursorStopPayload(root, 0)),
+		Hub:      failureHub{stage: "session"},
+		Getenv:   failureEnv(t),
+		Ancestor: cursorAncestor,
+		after:    never, logAfter: never,
 	}.Run()
 	if !cursorWakeOn(nil) || !cursorWakeOn(func(string) string { return "" }) {
 		t.Fatal("an empty home turned wake off")

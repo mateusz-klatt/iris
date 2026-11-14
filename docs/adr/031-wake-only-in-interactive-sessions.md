@@ -80,7 +80,7 @@ child with `detached`, so it has no controlling terminal.
 | Antigravity (agy 1.5.8) | `-p`, `--print`, `--prompt`; any subcommand, `acp` among them | `-i`/`--prompt-interactive`, which needs a terminal (ADR 028, measurement 16); otherwise a terminal for input, because a prompt piped into a bare `agy` runs headless | Done here |
 | Grok (1.0.77) | `-p`/`--single`, `--prompt-file`, `--prompt-json`; any subcommand, `agent` among them | Otherwise a terminal for input; a first positional argument that is not a subcommand is the session's prompt | Done here |
 | Kimi (2.6.1) | `-p`/`--prompt`; any subcommand, `acp` and `web` among them | A terminal for input, the client's own; see "Kimi" below | Done by amendment, before Kimi's default-on (v0.1.4) |
-| Cursor | `cursor-agent -p`/`--print` | | Joins through #338. After this ADR's PR merges, #338 rebases onto it, uses `proc.Args` and `proc.ReadsTerminal` with Cursor's own measured grammar instead of a reader of its own, and sends no `followup_message` in print mode. It adds its row here with its measurements. |
+| Cursor (2026.11.13-eacade1) | `-p`/`--print`; any subcommand, `mcp` and `agent` among them | Otherwise a terminal for input. A positional word that is not a subcommand is a prompt. The process table also carries `--use-system-ca` and the `index.js` launcher; see "Cursor" below | Done in #338 |
 | Copilot (1.0.112) | `copilot -p` | A host with canvases; see "Copilot" below | Done by amendment |
 | Codex | `codex exec` | | Probably safe and unmeasured: an exec thread is `notLoaded` in the app-server daemon, so the worker defers. The probe that settles it: a `codex exec` run that receives attention before it exits, with its answer and the daemon's thread list compared. |
 | Claude | `claude -p` | | The macOS probe settles it: `claude -p "reply with exactly PONG"` on an integrated Mac passes when the answer is unchanged, no `iris watch --client claude` child runs during the call, and the observed log gains nothing beyond the hooks |
@@ -103,6 +103,23 @@ The grammars, as measured:
   Runtimes disagree about a doubled quote (`""`); Rust, which Grok is written in, reads it
   differently. So a command line holding one is refused as unreadable rather than risk hiding a
   print flag.
+
+### Cursor
+
+Measured on 2026-11-14 from `cursor-agent` 2026.11.13-eacade1, using `--help` and parse
+errors that exit before a session, plus the argv of the already running WSL session. No new
+session was started for the grammar.
+- `-p` and `--print` are booleans. `--print=hi` is `unknown option`. `-pf` is print mode
+  (`No prompt provided for print mode`).
+- Booleans refuse `=value`: `--trust=true` is `unknown option`.
+- `--output-format` without a value is `argument missing`. `--not-a-real-flag` and `-Q` are
+  `unknown option`.
+- `--` ends the options. A positional word that is not a subcommand is a prompt, so the
+  session is interactive only when its input is a terminal.
+- The CLI rejects `--use-system-ca`, but a live process's cmdline was
+  `cursor-agent --use-system-ca <version>/index.js --resume`. The wrapper accepts
+  `--use-system-ca` (`--use-system-ca --help` exits 0). The grammar used on that argv treats
+  `--use-system-ca` as a boolean and a positional path as the launcher, not a subcommand.
 
 ### Kimi
 

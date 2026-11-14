@@ -422,8 +422,9 @@ It prints a fixed `followup_message` only when the newest attention identity is 
 one recorded for that session, and only when `loop_count` is 0. Printing records the identity.
 A later `stop` of that follow-up prints nothing. A session that has not started a turn does not
 fire `stop`, so mail that arrives while it sits idle waits for the next prompt. `cursor-agent -p`
-and `--print` get no follow-up: the mode is read from that process's arguments, and an unreadable
-or unknown argument is not treated as interactive. The hook fails
+and `--print` get no follow-up. The mode is the shared interactive check ([ADR 031](adr/031-wake-only-in-interactive-sessions.md)):
+the cursor-agent process's arguments and whether it reads a terminal. An unreadable or unknown
+argument is not interactive, and the observed log says why. The hook fails
 open: a miss prints `{}` and does not deny the stop. A missing marker means on. `iris integrate
 cursor --no-wake` writes off, and a plain reinstall leaves that choice. `--wake` writes on.
 
