@@ -136,8 +136,9 @@ and oversized lines, and consume the wake guard only when the whole notification
   - agy also gives each command a temporary desktop that it destroys when the command ends.
     Inheriting that desktop caused `agentapi send-message` to fail loading `user32` with
     `0xC0000142`; removing the console did not fix it. Iris creates the helper on
-    `<winsta>\Default` when the launcher's desktop is another one, and refuses malformed values
-    and non-default desktop names without a window station. Empty or `Default` values inherit.
+    `<winsta>\Default` when the launcher's desktop is another one (the bare `Default` when agy
+    names the desktop alone, as 1.5.8 does), and refuses malformed values. Empty or `Default`
+    values inherit.
   - `<agy-exe> agentapi send-message` runs without a console only to avoid opening a visible
     console window on `<winsta>\Default`.
   - Wake depends on agy running in no job and on agy's own desktop being `<winsta>\Default`.

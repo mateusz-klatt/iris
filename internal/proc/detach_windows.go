@@ -104,7 +104,15 @@ func targetDesktop(info string) (string, error) {
 		return "", nil
 	}
 	station, desktop, found := strings.Cut(info, `\`)
-	if !found || station == "" || desktop == "" || strings.ContainsAny(desktop, "\\\x00") || strings.ContainsRune(station, 0) {
+	if !found {
+		// A desktop named alone is in the window station the process inherits, which agy does
+		// for its command desktops (measured on agy 1.5.8). Default named alone is in the same one.
+		if strings.ContainsRune(info, 0) {
+			return "", fmt.Errorf("%w: %q", errDesktop, info)
+		}
+		return "Default", nil
+	}
+	if station == "" || desktop == "" || strings.ContainsAny(desktop, "\\\x00") || strings.ContainsRune(station, 0) {
 		return "", fmt.Errorf("%w: %q", errDesktop, info)
 	}
 	if strings.EqualFold(desktop, "Default") {

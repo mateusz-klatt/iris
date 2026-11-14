@@ -326,9 +326,11 @@ and forbids breakaway (measurements 9–11), and the child must outlive the comm
   child's standard handles are null.
 - A refusal fails the spawn and latches `failed`.
 - The child takes `agy`'s job and token. If the launcher's PEB `DesktopInfo` names another desktop,
-  Iris creates the helper on `<winsta>\Default` in that same window station. Empty or `Default`
-  values inherit; a non-default desktop without a window station or a malformed value fails
-  closed. This keeps the helper off the command's temporary desktop (measurement 12).
+  Iris creates the helper on `<winsta>\Default` in that same window station. agy 1.5.8 names
+  its command desktop alone (`exebox-<id>`, without `WinSta0\`); a desktop named alone lies in the
+  inherited window station, so the helper is created on the bare `Default`, in that same station.
+  Empty or `Default` values inherit; a malformed value fails closed. This keeps the helper off
+  the command's temporary desktop (measurement 12).
 - `<agy-exe> agentapi send-message` starts without a console only to avoid a visible console
   window: a console program started by the console-less helper would otherwise get a new one on
   `<winsta>\Default`.
@@ -515,8 +517,8 @@ helper run **incremental, attempt-associated forward scanning** outside the `ses
   confirmation in measurement 13; its "always allow" choice wrote the prefix rule described above.
 - **Windows desktop and job.** Wake depends on agy running in no job and on agy's own desktop
   being `<winsta>\Default`. Both were measured on `agy 1.5.8`, and a later agy may change either.
-  Iris does not discover agy's desktop; it uses the launcher's window station and fails closed
-  when a non-default desktop cannot be placed without guessing that station.
+  Iris does not discover agy's desktop; it uses the launcher's window station, named or
+  inherited, and fails closed on a value it cannot parse.
 
 ## Verification
 

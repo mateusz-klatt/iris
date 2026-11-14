@@ -282,9 +282,9 @@ func TestStartDetachedRefusesBeforeAnythingStarts(t *testing.T) {
 		}
 	}
 
-	replaceDesktopInfo(t, "iris-command-desktop")
+	replaceDesktopInfo(t, `WinSta0\`)
 	_, err := StartDetached(exe, nil, nil, me.PID, me.StartMS)
-	expect("desktop without window station", errDesktop, err)
+	expect("malformed desktop", errDesktop, err)
 	replaceDesktopInfo(t, "")
 
 	_, err = StartDetached(exe+"\x00", nil, nil, me.PID, me.StartMS)
@@ -364,7 +364,9 @@ func TestTargetDesktop(t *testing.T) {
 		{info: "Default"},
 		{info: `WinSta0\exebox-3IMKI5K6IRVFMZCP76RN2SZEYF`, want: `WinSta0\Default`},
 		{info: `Service-0x0-3e7$\exebox-1`, want: `Service-0x0-3e7$\Default`},
-		{info: "exebox-3IMKI5K6IRVFMZCP76RN2SZEYF", refused: true},
+		// agy 1.5.8 names its command desktops alone; the window station is the inherited one.
+		{info: "exebox-W7DZUNVZMBP3XSFQELATKMSQNY", want: "Default"},
+		{info: "exe\x00box", refused: true},
 		{info: `WinSta0\`, refused: true},
 		{info: `\exebox-1`, refused: true},
 		{info: `WinSta0\a\b`, refused: true},

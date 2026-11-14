@@ -459,8 +459,8 @@ On Windows, measured on `agy 1.5.8`:
 - agy destroys the command's temporary desktop when the command ends. Inheriting that desktop
   caused `agentapi send-message` to fail loading `user32` with `0xC0000142`; removing the console
   did not fix it. When the launcher's desktop is another one, Iris creates the helper on
-  `<winsta>\Default` in the same window station, refusing malformed values and non-default desktop
-  names without a window station. Empty or `Default` values inherit.
+  `<winsta>\Default` in the same window station (the bare `Default` when agy names the desktop
+  alone, as 1.5.8 does), refusing malformed values. Empty or `Default` values inherit.
 - `agentapi send-message` starts without a console only to avoid a visible console window on
   `<winsta>\Default`.
 
