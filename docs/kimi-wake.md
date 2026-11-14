@@ -85,8 +85,8 @@ a watcher the model starts anyway, for instance because the user asked for one.
 `--no-wake` and removal stop every watcher whose recorded process id and start time still match a
 running process, wait up to two seconds for it to end, and then latch its session disabled. A stop
 that fails, or a watcher still running after the wait, is reported, and its record is left as it
-is. A watcher that is not stopped notices within 20 seconds that wake is off and ends. Turning wake back on does not reach
-sessions latched this way until they start again or resume.
+is. A watcher that is not stopped notices within 20 seconds that wake is off and ends. Turning
+wake back on does not reach sessions latched this way until they start again or resume.
 
 ## Limits
 
@@ -99,7 +99,9 @@ sessions latched this way until they start again or resume.
   prompt. Nothing starts a closed session.
 - A task that ends during a busy turn opens its turn after that one ends. Empty and duplicate turns
   are possible: a freed claim stays historical and can cost one extra turn.
-- `iris doctor` does not show the preference or the watcher records yet.
+- `iris doctor` shows the preference and one `kimi wake:` line per session's record: a running
+  watcher, a latch and its age, a request not answered yet, or no watcher. It reads local files
+  only, so it proves no delivery.
 - Message bodies are untrusted data. Neither the watcher's line nor Kimi's task notification
   carries them.
 

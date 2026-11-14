@@ -93,6 +93,8 @@ type Result struct {
 	Scope []string
 	// Wake is local Codex configuration and retained-guard diagnostics, never delivery proof.
 	Wake []string
+	// KimiWake is Kimi's wake preference and its watcher records (ADR 030), never delivery proof.
+	KimiWake []string
 	// tokenFile is where the hook logs beside the token are, for a Bundle. Never shown.
 	tokenFile string
 }
@@ -183,6 +185,7 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 	res.LineEndings = lineEndingsLine(ctx, opt.Dir)
 	res.Scope = scopeReport(tokenFile, opt.Now())
 	res.Wake = wakeReport(opt.Layout, tokenFile, opt.Now())
+	res.KimiWake = kimiWakeReport(opt.Layout, opt.Now())
 	var seen map[string]string // nil when doctor could not ask the hub
 	if probe.up && probe.tokenOK {
 		res.Case = caseLine(ctx, hubURL, token, opt.host(), opt.Dir, opt.HTTP)
@@ -291,6 +294,9 @@ func (r Result) Format() string {
 	}
 	for _, line := range r.Wake {
 		fmt.Fprintf(&b, "codex wake: %s\n", line)
+	}
+	for _, line := range r.KimiWake {
+		fmt.Fprintf(&b, "kimi wake: %s\n", line)
 	}
 	if r.Stored {
 		b.WriteString("stored: yes\n")
