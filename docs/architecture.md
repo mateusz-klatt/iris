@@ -412,7 +412,9 @@ Cursor's `stop` hook is an end-of-turn follow-up, not an idle wake ([ADR 029](ad
 It prints a fixed `followup_message` only when the newest attention identity is newer than the
 one recorded for that session, and only when `loop_count` is 0. Printing records the identity.
 A later `stop` of that follow-up prints nothing. A session that has not started a turn does not
-fire `stop`, so mail that arrives while it sits idle waits for the next prompt. The hook fails
+fire `stop`, so mail that arrives while it sits idle waits for the next prompt. `cursor-agent -p`
+and `--print` get no follow-up: the mode is read from that process's arguments, and an unreadable
+or unknown argument is not treated as interactive. The hook fails
 open: a miss prints `{}` and does not deny the stop. A missing marker means on. `iris integrate
 cursor --no-wake` writes off, and a plain reinstall leaves that choice. `--wake` writes on.
 

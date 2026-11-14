@@ -49,7 +49,10 @@ runs still stand: they did not fire `stop`. This run does not replace that resul
 
 ## Decision
 
-The tier is end of turn. An idle session still waits for the next prompt. `stop` fires when
+The tier is end of turn. An idle session still waits for the next prompt.
+`cursor-agent -p` and `--print` get no follow-up. The mode is read from that process's
+arguments, the same way [ADR 031](031-wake-only-in-interactive-sessions.md) reads the other
+clients. Arguments that cannot be read, or that Iris does not know, are not interactive. `stop` fires when
 a turn ends, and it does not fire again while the session sits idle after that. New mail
 during that wait has no `stop` to answer. This cannot wake an already idle session.
 
