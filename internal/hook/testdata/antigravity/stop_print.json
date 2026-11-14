@@ -1,0 +1,17 @@
+{
+  "artifactDirectoryPath": "/home/user/.gemini/antigravity-cli/brain/c10f13b7-426e-4437-ae0c-1ef852cecae8",
+  "continuationActive": false,
+  "conversationId": "c10f13b7-426e-4437-ae0c-1ef852cecae8",
+  "cwd": "/workspace/project",
+  "error": "",
+  "executionNum": 0,
+  "fullyIdle": true,
+  "hookEventName": "Stop",
+  "lastUserInput": "reply with exactly PONG",
+  "modelName": "gemini-3.8-flash-low",
+  "terminationReason": "NO_TOOL_CALL",
+  "transcriptPath": "/home/user/.gemini/antigravity-cli/brain/c10f13b7-426e-4437-ae0c-1ef852cecae8/.system_generated/logs/transcript_full.jsonl",
+  "workspacePaths": [
+    "/workspace/project"
+  ]
+}

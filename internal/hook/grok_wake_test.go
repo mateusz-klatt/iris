@@ -410,6 +410,7 @@ func TestGrokWatchEnvWithoutATokenPathReadsNothing(t *testing.T) {
 
 func TestGrokStopAsksUntilAMonitorExists(t *testing.T) {
 	env := grokGetenv(t, nil)
+	asInteractive(t)
 	block := grokBlock(grokWatchReason)
 	cases := []struct {
 		name   string
@@ -460,6 +461,7 @@ func TestGrokStopAsksUntilAMonitorExists(t *testing.T) {
 				Stdin:      strings.NewReader(strings.ReplaceAll(body, "ROOT", filepath.ToSlash(t.TempDir()))),
 				Hub:        &countingHub{fn: func() { calls++ }},
 				Getenv:     tc.env,
+				Ancestor:   grokProcess,
 				after:      never,
 				logAfter:   never,
 			}.Run()
@@ -480,10 +482,11 @@ func TestGrokStopAsksUntilAMonitorExists(t *testing.T) {
 }
 
 func TestGrokStopFollowsTheLocalWakeMarker(t *testing.T) {
+	asInteractive(t)
 	body := `{"session_id":"s","cwd":"/definitely/not/a/repo","reason":"end_turn","backgroundTasks":[]}`
 	run := func(env func(string) string) Output {
 		t.Helper()
-		return Runner{ClientName: "grok", EventName: "Stop", Stdin: strings.NewReader(body), Getenv: env, after: never, logAfter: never}.Run()
+		return Runner{ClientName: "grok", EventName: "Stop", Stdin: strings.NewReader(body), Getenv: env, Ancestor: grokProcess, after: never, logAfter: never}.Run()
 	}
 	home := t.TempDir()
 	off := filepath.Join(home, "off")

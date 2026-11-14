@@ -35,6 +35,44 @@ type Snapshot struct {
 // Lookup returns one live process using the same platform evidence as the ancestor walk.
 func Lookup(pid int) (Snapshot, bool) { return lookupOS(pid) }
 
+// Args returns the arguments of the live process (pid, startMS), argv[0] first. The identity is
+// checked before and after the read, so a reused pid never lends its arguments. A process can
+// rewrite its own arguments; Iris reads them only to tell a client's interactive session from a
+// print-mode run (ADR 031).
+func Args(pid int, startMS int64) ([]string, error) {
+	return identified(pid, startMS, lookupOS, argsOS)
+}
+
+// ReadsTerminal reports whether the live process (pid, startMS) takes its input from a terminal.
+// On Linux it reads where the process's standard input points. macOS and Windows offer no cheap
+// view of another process's input, so there it reports whether the caller itself has a
+// controlling terminal or a console, as a hook has when the client that started it runs on one
+// (ADR 031). That counts a client whose input was redirected at a terminal as reading from it.
+func ReadsTerminal(pid int, startMS int64) (bool, error) {
+	return identified(pid, startMS, lookupOS, readsTerminalOS)
+}
+
+// identified reads one fact of the live process (pid, startMS). It checks the identity before and
+// after the read, so a pid reused in between does not answer for the process.
+func identified[T any](pid int, startMS int64, get func(int) (Snapshot, bool), read func(int) (T, error)) (T, error) {
+	var zero T
+	same := func() bool {
+		s, ok := get(pid)
+		return ok && s.StartMS == startMS
+	}
+	if pid <= 0 || startMS <= 0 || !same() {
+		return zero, ErrNotFound
+	}
+	v, err := read(pid)
+	if err != nil {
+		return zero, err
+	}
+	if !same() {
+		return zero, ErrNotFound
+	}
+	return v, nil
+}
+
 // Executable resolves the verified regular-file executable of a live process matching (pid, startMS).
 func Executable(pid int, startMS int64) (string, error) {
 	return executableFrom(pid, startMS, lookupOS, executableOS, os.Stat)

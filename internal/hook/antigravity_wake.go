@@ -608,7 +608,10 @@ func (r Runner) antigravityAncestor() (proc.Ancestor, bool) {
 	return a, true
 }
 
-func (r Runner) antigravityHook(ev Event) (Output, bool) {
+// antigravityHook keeps the wake helper's state and, at a Stop that ends an idle turn, asks the
+// model to start the helper. Only an interactive session is asked (ADR 031); for any other, note
+// gets the reason, and no request is recorded.
+func (r Runner) antigravityHook(ev Event, note func(string)) (Output, bool) {
 	if ev.Client != ClientAntigravity || ev.SessionID == CanarySession || !validGrokSession(ev.SessionID) {
 		return Output{}, false
 	}
@@ -702,7 +705,9 @@ func (r Runner) antigravityHook(ev Event) (Output, bool) {
 					procState.Helper = &antigravityHelperRecord{Status: "failed"}
 					procDirty = true
 				case ev.AgyStop.ExecutionNum == 0 && !ev.AgyStop.ContinuationActive:
-					if quoted, ok := quoteAntigravityIrisPath(r.irisBinaryPath(), r.goos()); ok {
+					if ok, why := interactive(anc, agyMode); !ok {
+						note(wakeNotAsked + why)
+					} else if quoted, ok := quoteAntigravityIrisPath(r.irisBinaryPath(), r.goos()); ok {
 						if procState.Helper != nil && procState.Helper.Status == "live" && procState.Helper.SessionID != ev.SessionID && procState.Helper.PID > 0 && procState.Helper.StartMS > 0 {
 							oldPID, oldStart = procState.Helper.PID, procState.Helper.StartMS
 						}

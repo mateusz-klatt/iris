@@ -4,6 +4,10 @@ package proc
 
 import (
 	"bytes"
+	"encoding/binary"
+	"io"
+	"os"
+	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -55,6 +59,54 @@ func executableOS(pid int, _ Snapshot) (string, error) {
 		return "", err
 	}
 	return executablePath(raw), nil
+}
+
+func argsOS(pid int) ([]string, error) {
+	raw, err := unix.SysctlRaw("kern.procargs2", pid)
+	if err != nil {
+		return nil, err
+	}
+	return procargsArgs(raw)
+}
+
+// procargsArgs reads the arguments from a kern.procargs2 buffer: the argument count, the
+// executable path and its NUL padding, then that many NUL-terminated arguments before the
+// environment. A buffer cut short gives none.
+func procargsArgs(raw []byte) ([]string, error) {
+	_, complete, rest := cutProcargs(raw)
+	n := 0
+	if complete {
+		n = int(binary.LittleEndian.Uint32(raw[:4]))
+	}
+	if n <= 0 || n > len(rest) {
+		return nil, ErrNotFound
+	}
+	rest = bytes.TrimLeft(rest, "\x00")
+	args := make([]string, 0, n)
+	for len(args) < n {
+		arg, after, found := bytes.Cut(rest, []byte{0})
+		if !found {
+			return nil, ErrNotFound
+		}
+		args, rest = append(args, string(arg)), after
+	}
+	return args, nil
+}
+
+// openTerminal opens the caller's controlling terminal. Tests replace it.
+var openTerminal = func() (io.Closer, error) {
+	return os.OpenFile("/dev/tty", os.O_RDONLY|syscall.O_NOCTTY, 0)
+}
+
+// readsTerminalOS reports whether the caller has a controlling terminal. macOS gives no cheap view
+// of another process's standard input, and a hook shares its client's terminal (ADR 031).
+func readsTerminalOS(int) (bool, error) {
+	f, err := openTerminal()
+	if err != nil {
+		return false, nil
+	}
+	_ = f.Close()
+	return true, nil
 }
 
 func executablePath(raw []byte) string {

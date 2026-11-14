@@ -78,12 +78,22 @@ func grokBlock(reason string) Output {
 
 // grokMonitorAsk blocks end_turn until a monitor exists, when wake is enabled. ok is false
 // when the hook should continue with its ordinary allow. A wake file that cannot be read
-// does not block (D3): Stop has a 1.5s budget and does not call the hub to decide.
-func (r Runner) grokMonitorAsk(ev Event) (Output, bool) {
+// does not block (D3): Stop has a 1.5s budget and does not call the hub to decide. Only an
+// interactive session is asked (ADR 031); for any other, note gets the reason.
+func (r Runner) grokMonitorAsk(ev Event, note func(string)) (Output, bool) {
 	if ev.GrokStop == nil || !ev.GrokStop.arm() {
 		return Output{}, false
 	}
 	if !r.grokWakeEnabled() {
+		return Output{}, false
+	}
+	anc := r.ancestor()
+	if anc.PID <= 0 || anc.StartMS <= 0 || !isGrokProcess(anc.Name) {
+		note(wakeNotAsked + "no grok process")
+		return Output{}, false
+	}
+	if ok, why := interactive(anc, grokMode); !ok {
+		note(wakeNotAsked + why)
 		return Output{}, false
 	}
 	return grokBlock(grokWatchReason), true
