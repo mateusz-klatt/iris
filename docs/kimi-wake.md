@@ -32,7 +32,10 @@ but the flag does nothing: Iris starts no MCP web worker for any Kimi session.
 
 `--wake` also installs a skill at `skills/iris/SKILL.md` in the Kimi home (`KIMI_CODE_HOME`, or
 `~/.kimi-code`). It tells the model what each end of the task means. Turning wake off or removing
-the integration takes back exactly the text Iris wrote; a copy someone changed stays as it is.
+the integration takes back exactly the text Iris wrote; a copy someone changed stays as it is. A
+file that already holds anything else is left alone, and Iris installs no skill there, because Kimi
+reads a skill's frontmatter only at the top of the file. The request in the prompt and the
+watcher's own lines still say what to do.
 
 ## What Iris does
 
@@ -51,8 +54,10 @@ the integration takes back exactly the text Iris wrote; a copy someone changed s
 
 The first watcher of a session does not wake it for mail that was already waiting; the hooks and the
 inbox cover that. A replacement starts reading where the previous one stopped, so attention that
-arrived in between is not lost. After a wake, attention of the same kind waits out the rest of a
-30-second window, so a burst costs one turn, and mail the model has already fetched wakes nothing.
+arrived in between is not lost. The first new attention after a quiet spell wakes the session at
+once. Attention of the same kind that follows within 30 seconds waits out the rest of that window
+and then wakes it once more, so a burst costs two turns rather than one per event. Mail the model
+has already fetched wakes nothing.
 
 A watcher that ends without attention says why, and the skill asks the model not to start another:
 
@@ -71,8 +76,9 @@ session is latched: Iris stops asking. SessionStart, including a resume, clears 
 a watcher the model starts anyway, for instance because the user asked for one.
 
 `--no-wake` and removal stop every watcher whose recorded process id and start time still match a
-running process, and latch its session disabled. A stop that fails is reported. A watcher that is
-not stopped notices within 20 seconds that wake is off and ends. Turning wake back on does not reach
+running process, wait up to two seconds for it to end, and then latch its session disabled. A stop
+that fails, or a watcher still running after the wait, is reported, and its record is left as it
+is. A watcher that is not stopped notices within 20 seconds that wake is off and ends. Turning wake back on does not reach
 sessions latched this way until they start again or resume.
 
 ## Limits

@@ -15,10 +15,12 @@ import (
 
 // kimiSkill is the native skill of ADR 030. Kimi runs no hook on the turn a finished background task
 // opens, so how to answer the watcher's end has to be in a skill the session already has. Remove
-// deletes this exact text and leaves a skill a person changed.
+// deletes this exact text and leaves a skill a person changed, so a release that changes the text
+// must also take back this one. The frontmatter is YAML: the description is quoted because it
+// holds a colon and a space, which end a plain value.
 const kimiSkill = "---\n" +
 	"name: iris\n" +
-	"description: What the end of Iris's background watcher task means and how to answer it. Use when the task described `Iris: wait for new attention` ends.\n" +
+	"description: \"What the end of Iris's background watcher task means and how to answer it. Use when the task described `Iris: wait for new attention` ends.\"\n" +
 	"---\n" +
 	"\n" +
 	"Iris asks, in a note added to a user prompt, for one background Bash task: command exactly `iris watch --client kimi --once`, description exactly `Iris: wait for new attention`, with run_in_background=true and disable_timeout=true. It ends when Iris has new attention for this session.\n" +
@@ -127,19 +129,15 @@ func kimiLegacyWake(doc map[string]any, iris string) bool {
 	return flags.Parse(args[1:]) == nil && flags.NArg() == 0 && *client == Kimi && *wake
 }
 
-// kimiSkillText adds the skill to the file as Grok's is added. A file that already holds it stays
-// as it is, so reintegration never doubles it, and text a person wrote stays before it, so removal
-// gives that text back.
+// kimiSkillText is what the skill file should hold: the skill where the file is missing or empty,
+// and the file as it is otherwise. Kimi reads a skill's frontmatter only at the top of the file, so
+// the skill cannot follow someone else's text as Grok's does. A file Iris did not write, or one
+// changed since, stays, and Iris installs no skill of its own there.
 func kimiSkillText(existing []byte) []byte {
-	switch {
-	case bytes.Contains(existing, []byte(kimiSkill)):
-		return existing
-	case len(bytes.TrimSpace(existing)) == 0:
+	if len(bytes.TrimSpace(existing)) == 0 {
 		return []byte(kimiSkill)
-	case !bytes.HasSuffix(existing, []byte("\n")):
-		existing = append(existing, '\n')
 	}
-	return append(existing, kimiSkill...)
+	return existing
 }
 
 // kimiMCPConfig points Kimi's iris MCP server at this Iris. The wake choice lives in the

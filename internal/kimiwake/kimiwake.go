@@ -111,6 +111,11 @@ var terminate = proc.Terminate
 // it. A watcher that ends on its own first is skipped. A failed stop is returned, joined, and
 // does not keep the others from stopping. Without a watchers directory no watcher ever ran, and
 // nothing is made.
+//
+// A stop is only asked for: Windows ends a process after TerminateProcess has returned, and a
+// watcher handles SIGTERM before it exits. A record is latched once its watcher has ended, which
+// StopWatchers waits for within budget, because a latch never replaces a live owner. A watcher
+// still running then is reported, and its record is left as it is.
 func (s *Store) StopWatchers(budget time.Duration) error {
 	if _, err := os.Lstat(filepath.Join(s.Root, watchersName)); errors.Is(err, fs.ErrNotExist) {
 		return nil
@@ -135,13 +140,33 @@ func (s *Store) StopWatchers(budget time.Duration) error {
 		return err
 	}
 	var failed []error
-	for i, k := range live {
-		a := attempts[i]
+	var asked []int
+	for i, a := range attempts {
 		if err := terminate(a.PID, a.StartMS); err != nil && !errors.Is(err, proc.ErrNotFound) {
 			failed = append(failed, fmt.Errorf("watcher %d: %w", a.PID, err))
 			continue
 		}
-		failed = append(failed, s.LatchIfFree(k, LatchDisabled, budget))
+		asked = append(asked, i)
+	}
+	// Each round checks every watcher still waited for, so one that does not end cannot use up the
+	// budget of the others.
+	deadline := time.Now().Add(budget)
+	for {
+		var running []int
+		for _, i := range asked {
+			if a := attempts[i]; s.alive(a.PID, a.StartMS) {
+				running = append(running, i)
+				continue
+			}
+			failed = append(failed, s.LatchIfFree(live[i], LatchDisabled, budget))
+		}
+		if asked = running; len(asked) == 0 || !time.Now().Before(deadline) {
+			break
+		}
+		time.Sleep(lockRetry)
+	}
+	for _, i := range asked {
+		failed = append(failed, fmt.Errorf("watcher %d: still running after it was asked to stop", attempts[i].PID))
 	}
 	return errors.Join(failed...)
 }

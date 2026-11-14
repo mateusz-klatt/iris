@@ -14,6 +14,7 @@ import (
 
 	"github.com/mateusz-klatt/iris/internal/kimiwake"
 	"github.com/mateusz-klatt/iris/internal/proc"
+	"go.yaml.in/yaml/v3"
 )
 
 // kimiWatcherEnv makes this test binary, started again, stand in for a live watcher.
@@ -459,25 +460,69 @@ func TestKimiWakeOnNeedsThePinnedConfiguration(t *testing.T) {
 	}
 }
 
-// Iris adds its skill to text a person wrote and takes back only its own text. A skill a person
-// changed is no longer Iris's, so it stays.
-func TestKimiSkillKeepsTextAPersonWrote(t *testing.T) {
+// Kimi reads a skill from a file that starts with YAML frontmatter naming it and saying when to use
+// it. The skill parses as such, with nothing before the frontmatter and no key Kimi does not know.
+func TestKimiSkillIsAValidKimiSkill(t *testing.T) {
+	rest, ok := strings.CutPrefix(kimiSkill, "---\n")
+	front, body, closed := strings.Cut(rest, "\n---\n")
+	if !ok || !closed {
+		t.Fatalf("the skill does not start with frontmatter: %q", kimiSkill)
+	}
+	var meta struct {
+		Name        string `yaml:"name"`
+		Description string `yaml:"description"`
+	}
+	decoder := yaml.NewDecoder(strings.NewReader(front))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&meta); err != nil {
+		t.Fatalf("the frontmatter is not valid YAML: %v", err)
+	}
+	if meta.Name != "iris" || !strings.Contains(meta.Description, "`Iris: wait for new attention`") {
+		t.Fatalf("frontmatter %+v", meta)
+	}
+	for _, want := range []string{"`iris watch --client kimi --once`", "`Iris: wait for new attention`", "run_in_background=true", "disable_timeout=true"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("the body does not name %s", want)
+		}
+	}
+}
+
+// Kimi reads a skill's frontmatter only at the top of the file, so Iris never adds its skill to
+// text it did not write. Such a file, or Iris's skill after a person changed it, stays exactly as
+// it is through --wake, --no-wake and removal. A file that is only blank counts as missing.
+func TestKimiSkillLeavesAFileItDidNotWrite(t *testing.T) {
 	layout := testLayout(t)
 	skill := kimiSkillPath(t, layout)
 	seedFile(t, skill, "# mine")
-	for range 2 {
-		if err := InstallKimiWake(layout, true); err != nil {
+	for _, step := range []func() error{
+		func() error { return InstallKimiWake(layout, true) },
+		func() error { return (kimiClient{}).Install(layout, nil) },
+		func() error { return InstallKimiWake(layout, false) },
+		func() error { return InstallKimiWake(layout, true) },
+		func() error { return (kimiClient{}).Remove(layout, nil) },
+	} {
+		if err := step(); err != nil {
 			t.Fatal(err)
 		}
-		if got := readOrAbsent(t, skill); got != "# mine\n"+kimiSkill {
-			t.Fatalf("skill beside a person's text: %q", got)
+		if got := readOrAbsent(t, skill); got != "# mine" {
+			t.Fatalf("a skill Iris did not write became %q", got)
 		}
 	}
-	if err := InstallKimiWake(layout, false); err != nil {
+
+	blank := testLayout(t)
+	skill = kimiSkillPath(t, blank)
+	seedFile(t, skill, "\n")
+	if err := InstallKimiWake(blank, true); err != nil {
 		t.Fatal(err)
 	}
-	if got := readOrAbsent(t, skill); got != "# mine" {
-		t.Fatalf("turning wake off did not give the person's text back: %q", got)
+	if got := readOrAbsent(t, skill); got != kimiSkill {
+		t.Fatalf("a blank skill file: %q", got)
+	}
+	if err := InstallKimiWake(blank, false); err != nil {
+		t.Fatal(err)
+	}
+	if got := readOrAbsent(t, skill); got != "\n" {
+		t.Fatalf("turning wake off did not give the blank file back: %q", got)
 	}
 
 	changed := testLayout(t)
@@ -492,14 +537,17 @@ func TestKimiSkillKeepsTextAPersonWrote(t *testing.T) {
 	if err := os.WriteFile(skill, []byte(edited), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := InstallKimiWake(changed, false); err != nil {
-		t.Fatal(err)
-	}
-	if err := (kimiClient{}).Remove(changed, nil); err != nil {
-		t.Fatal(err)
-	}
-	if got := readOrAbsent(t, skill); got != edited {
-		t.Fatalf("a changed skill was not kept: %q", got)
+	for _, step := range []func() error{
+		func() error { return InstallKimiWake(changed, false) },
+		func() error { return InstallKimiWake(changed, true) },
+		func() error { return (kimiClient{}).Remove(changed, nil) },
+	} {
+		if err := step(); err != nil {
+			t.Fatal(err)
+		}
+		if got := readOrAbsent(t, skill); got != edited {
+			t.Fatalf("a changed skill became %q", got)
+		}
 	}
 }
 
@@ -567,8 +615,8 @@ func TestKimiDriftReportsASkillWakeOffWouldTakeBack(t *testing.T) {
 }
 
 // startKimiWatcher starts a stand-in watcher and records it, as a watcher records itself, as the
-// live owner of session's record. The channel closes when it has ended.
-func startKimiWatcher(t *testing.T, layout Layout, session string) <-chan struct{} {
+// live owner of session's record. The channel closes when it has ended; the key names the record.
+func startKimiWatcher(t *testing.T, layout Layout, session string) (<-chan struct{}, kimiwake.Key) {
 	t.Helper()
 	bin, err := os.Executable()
 	if err != nil {
@@ -605,15 +653,25 @@ func startKimiWatcher(t *testing.T, layout Layout, session string) <-chan struct
 	if owned, err := (&kimiwake.Store{Root: root}).Own(key, attempt, time.Second); err != nil || !owned {
 		t.Fatalf("recording the stand-in watcher: %v %v", owned, err)
 	}
-	return done
+	return done, key
 }
 
-func waitStopped(t *testing.T, done <-chan struct{}, what string) {
+// assertStopped checks that the watcher has ended and that its record was latched disabled by the
+// time the stop returned.
+func assertStopped(t *testing.T, layout Layout, done <-chan struct{}, key kimiwake.Key, what string) {
 	t.Helper()
 	select {
 	case <-done:
 	case <-time.After(10 * time.Second):
 		t.Fatalf("%s left its watcher running", what)
+	}
+	root, err := KimiWakeRoot(layout)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r, exists, err := (&kimiwake.Store{Root: root}).Read(key, time.Second)
+	if err != nil || !exists || r.Latch == nil || r.Latch.State != kimiwake.LatchDisabled {
+		t.Fatalf("%s left the record %+v (exists %v, %v)", what, r, exists, err)
 	}
 }
 
@@ -624,14 +682,14 @@ func TestKimiWakeOffAndRemovalStopTheLiveWatchers(t *testing.T) {
 	if err := InstallKimiWake(layout, true); err != nil {
 		t.Fatal(err)
 	}
-	done := startKimiWatcher(t, layout, "session_off")
+	done, key := startKimiWatcher(t, layout, "session_off")
 	if err := InstallKimiWake(layout, false); err != nil {
 		t.Fatal(err)
 	}
-	waitStopped(t, done, "--no-wake")
-	done = startKimiWatcher(t, layout, "session_removed")
+	assertStopped(t, layout, done, key, "--no-wake")
+	done, key = startKimiWatcher(t, layout, "session_removed")
 	if err := (kimiClient{}).Remove(layout, nil); err != nil {
 		t.Fatal(err)
 	}
-	waitStopped(t, done, "removal")
+	assertStopped(t, layout, done, key, "removal")
 }

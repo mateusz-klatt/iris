@@ -899,17 +899,34 @@ func TestStopWatchersWithoutStateMakesNone(t *testing.T) {
 }
 
 // Turning wake off stops every watcher a record shows alive, by its pid and start time, and latches
-// its record disabled once it no longer runs. A watcher already gone is skipped. A stop that fails
-// is reported and leaves its record unlatched, without keeping the others from stopping.
+// its record disabled once it no longer runs. A watcher already gone is skipped. A stop that fails,
+// or a watcher that still runs when the budget ends, is reported and leaves its record unlatched,
+// without keeping the others from stopping.
 func TestStopWatchersStopsTheLiveOnesAndLatchesThem(t *testing.T) {
 	s, _, procs := newStore(t)
 	mapSession(t, s, sessionA)
 	live, gone, stubborn := keyFor(sessionA), keyFor(sessionB), Key{PID: kimiPID, StartMS: kimiStart, Session: "session_c"}
+	// The hung watcher's record sorts first, so waiting for one watcher at a time would spend the
+	// whole budget on it and miss the end of the one that stops late.
+	hung := Key{PID: kimiPID, StartMS: kimiStart, Session: "session_0"}
 	put(t, s, live, Record{Version: recordVersion, Attempt: &Attempt{PID: 9001, StartMS: 9002, ID: "live"}})
 	put(t, s, gone, Record{Version: recordVersion, Attempt: &Attempt{PID: 9003, StartMS: 9004, ID: "gone"}})
 	put(t, s, stubborn, Record{Version: recordVersion, Attempt: &Attempt{PID: 9005, StartMS: 9006, ID: "stubborn"}})
+	put(t, s, hung, Record{Version: recordVersion, Attempt: &Attempt{PID: 9007, StartMS: 9008, ID: "hung"}})
 	procs.set(9001, 9002, true)
 	procs.set(9005, 9006, true)
+	procs.set(9007, 9008, true)
+	// Like TerminateProcess, a stop returns while the watcher still runs: it ends a few checks later.
+	checksLeft := -1
+	s.Alive = func(pid int, start int64) bool {
+		if pid == 9001 && checksLeft >= 0 {
+			if checksLeft == 0 {
+				procs.set(pid, start, false)
+			}
+			checksLeft--
+		}
+		return procs[[2]int64{int64(pid), start}]
+	}
 	for _, name := range []string{"notes.json", "1-2.json", "1-2-bad id.json", ".tmp-123"} {
 		if err := os.WriteFile(filepath.Join(s.Root, watchersName, name), []byte("{"), 0o600); err != nil {
 			t.Fatal(err)
@@ -921,15 +938,20 @@ func TestStopWatchersStopsTheLiveOnesAndLatchesThem(t *testing.T) {
 	var stopped []int
 	terminate = func(pid int, start int64) error {
 		stopped = append(stopped, pid)
-		if pid == 9005 {
+		switch pid {
+		case 9005:
 			return errors.New("access denied")
+		case 9001:
+			checksLeft = 3
 		}
-		procs.set(pid, start, false)
 		return nil
 	}
 	t.Cleanup(func() { terminate = defaultTerminate })
-	err := s.StopWatchers(time.Second)
-	if err == nil || !strings.Contains(err.Error(), "watcher 9005") || !slices.Equal(stopped, []int{9001, 9005}) && !slices.Equal(stopped, []int{9005, 9001}) {
+	err := s.StopWatchers(100 * time.Millisecond)
+	slices.Sort(stopped)
+	if err == nil || !strings.Contains(err.Error(), "watcher 9005: access denied") ||
+		!strings.Contains(err.Error(), "watcher 9007: still running") || strings.Contains(err.Error(), "9001") ||
+		!slices.Equal(stopped, []int{9001, 9005, 9007}) {
 		t.Fatalf("%v %v", err, stopped)
 	}
 	if r, _ := recordOf(t, s, live); r.Latch == nil || r.Latch.State != LatchDisabled {
@@ -938,14 +960,23 @@ func TestStopWatchersStopsTheLiveOnesAndLatchesThem(t *testing.T) {
 	if r, _ := recordOf(t, s, gone); r.Latch != nil {
 		t.Fatalf("a record without a live watcher was latched: %+v", r)
 	}
-	if r, _ := recordOf(t, s, stubborn); r.Latch != nil {
-		t.Fatalf("a watcher that could not be stopped was latched: %+v", r)
+	for _, k := range []Key{stubborn, hung} {
+		if r, _ := recordOf(t, s, k); r.Latch != nil || r.Attempt == nil {
+			t.Fatalf("a watcher that did not stop lost its record: %+v", r)
+		}
 	}
-	// A watcher that ended on its own before its stop counts as stopped.
-	procs.set(9005, 9006, true)
-	terminate = func(int, int64) error { return proc.ErrNotFound }
+	// A watcher that ended on its own before its stop counts as stopped, as Terminate reports it.
+	terminate = func(pid int, start int64) error {
+		procs.set(pid, start, false)
+		return proc.ErrNotFound
+	}
 	if err := s.StopWatchers(time.Second); err != nil {
 		t.Fatal(err)
+	}
+	for _, k := range []Key{stubborn, hung} {
+		if r, _ := recordOf(t, s, k); r.Latch == nil || r.Latch.State != LatchDisabled {
+			t.Fatalf("a watcher gone before its stop: %+v", r)
+		}
 	}
 	release, err := s.lock(time.Second)
 	if err != nil {

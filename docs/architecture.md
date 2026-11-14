@@ -360,10 +360,13 @@ writes `default`, which is off until the native acceptance. An integration from 
 recorded the choice in its MCP arguments: `--wake` or `--wake=true` there becomes `on`, and the
 arguments become `mcp --client kimi`. `--wake` requires the environment's configuration directory
 to be the pinned one, because the hooks and the watcher read only that. While the preference is
-`on`, integration also installs a native skill saying what each exit means; otherwise it takes back
-exactly the text it wrote, and a copy someone changed stays. `--no-wake` and removal stop every
-watcher whose recorded pid and start time still match a running process and latch its record
-`disabled`. A watcher that is not stopped finds the preference off at its next 20-second check.
+`on`, integration also installs a native skill saying what each exit means. A skill file that
+already holds other text is left alone and gets none, because Kimi reads a skill's frontmatter only
+at the top of the file. Otherwise integration takes back exactly the text it wrote, and a copy
+someone changed stays. `--no-wake` and removal stop every watcher whose recorded pid and start time
+still match a running process. A stop is asynchronous on Windows, so they wait up to two seconds
+for the watcher to end before they latch its record `disabled`, and they report one still running
+then. A watcher that is not stopped finds the preference off at its next 20-second check.
 
 The watcher, `iris watch --client kimi --once`, accepts only that exact command. It reads the hub
 configuration and its state from the pinned directory, never from its environment, because a model
