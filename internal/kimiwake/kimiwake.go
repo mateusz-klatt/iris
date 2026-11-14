@@ -598,12 +598,14 @@ type Entry struct {
 
 // Records lists the watcher records in file-name order, for a report. It takes no lock and makes
 // nothing: each record is written whole through a rename, so a read sees one version or the next.
-// A state directory that does not exist has no records.
+// A state directory that does not exist has no records. Only Lstat decides that: on Windows,
+// reading a directory whose path is a file also reports that it does not exist.
 func (s *Store) Records() ([]Entry, error) {
-	entries, err := os.ReadDir(filepath.Join(s.Root, watchersName))
-	if errors.Is(err, fs.ErrNotExist) {
+	dir := filepath.Join(s.Root, watchersName)
+	if _, err := os.Lstat(dir); errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
+	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
 	}
