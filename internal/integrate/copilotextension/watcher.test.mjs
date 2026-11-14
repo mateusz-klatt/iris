@@ -277,8 +277,10 @@ test("starts the watcher only in an interactive host", async () => {
             spawn: () => assert.fail(`${name}: a watcher must not start`),
         });
         stop();
+        stop();
         assert.deepEqual(logs, [[notInteractive, { level: "info" }]], name);
         assert.equal(signals.listenerCount("SIGTERM"), 0, name);
+        assert.equal(signals.listenerCount("SIGINT"), 0, name);
         assert.equal(interactiveHost({ capabilities }), false, name);
     }
     assert.equal(interactiveHost({ capabilities: { ui: { canvases: true } } }), true);

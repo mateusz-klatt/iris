@@ -63,8 +63,9 @@ loads it. The `extensions/iris` directory may stay behind, empty.
   rejected, run `iris doctor`.
 - With Copilot's command sandbox on, extensions may run inside it (`sandbox.sandboxExtensions`).
   Whether `iris watch` can then reach the hub was not measured.
-- Measured on Linux with Copilot CLI 1.0.109 only. Other versions, macOS and Windows are not
-  covered.
+- The wake end to end was measured on Linux with Copilot CLI 1.0.109 only. The canvases capability
+  that tells the TUI from `-p` was measured on Linux with 1.0.112. Other versions, macOS and Windows
+  are not covered.
 
 The [measurement record](research/clients/copilot-extension-wake-2026-11-12.md) has the details
 and [ADR 024](adr/024-copilot-extension-wake.md) the decision.
