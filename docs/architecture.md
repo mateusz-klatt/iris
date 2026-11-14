@@ -504,6 +504,16 @@ every agent in the repository, for the console and the claims tool, but `iris wa
 it: before this rule, every release woke every session at the cost of a turn (measured on two
 hosts). A refused explicit claim still returns its conflict, but only after the waiter it leaves
 is committed.
+A session's first monitor has no saved cursor, so it starts at the newest event, and is told about
+mail still waiting. It would therefore miss a path freed for the session before it connected. So
+it starts just before the newest such `claim_available` instead, provided that event is at most an
+hour old and no live claim overlaps its path now. When mail is waiting too, it starts before that
+mail's newest events as well, so the replay announces both and no reset follows. If those events
+are gone or older than an hour, the monitor falls back to the reset, which announces the mail but
+not the path. The replay is at most the agent's last hour of events. It can cost duplicate wakes:
+a prompt hook may already have told the session, a replacement monitor without a saved cursor
+replays the window, and a stale `claim_available` in it names a path no longer free. A reset after
+an expired cursor still counts mail only (see `docs/api.md`).
 
 Commit precedes notification: the event table is the outbox. Delivery is at-least-once with a
 per-consumer cursor. A cursor that has expired gets a reset plus a snapshot, never a silent gap.

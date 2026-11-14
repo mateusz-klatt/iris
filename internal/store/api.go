@@ -5,6 +5,8 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"math"
+	"slices"
 
 	"github.com/mateusz-klatt/iris/internal/buildinfo"
 )
@@ -218,7 +220,10 @@ func (t *transaction) pendingDeliveries(agent string) (int, error) {
 
 // monitorCursor says where a monitor resumes. A new session is a new Execution
 // with no cursor, and it must not hear the agent's whole history again, so it
-// starts at the newest event and is told only about mail still waiting.
+// starts at the newest event and is told about mail still waiting. A path freed
+// for this Execution before its first monitor connected is the exception: the
+// monitor starts just before that event, so the ordinary replay announces it
+// (freedRewind).
 //
 // Only the monitor writes its cursor, through events with its consumer id, and it
 // does so once it has printed everything up to that point. So a cursor here proves
@@ -241,11 +246,74 @@ func (t *transaction) monitorCursor(r Request) (map[string]any, error) {
 	if err = t.row("SELECT COALESCE((SELECT seq FROM sqlite_sequence WHERE name='Event'),0)").Scan(&cursor); err != nil {
 		return nil, err
 	}
-	pending, err := t.pendingDeliveries(e.AgentID)
+	from, err := t.freedRewind(e)
 	if err != nil {
 		return nil, err
 	}
-	return map[string]any{"cursor": cursor, "pending": pending}, nil
+	// The replay announces the waiting mail too when it starts before that mail's newest event,
+	// so the monitor needs no reset. A reset would follow frames the monitor had already
+	// checkpointed past, or count replayed mail a second time. Mail whose event is gone or older
+	// than the bound keeps the reset and the newest event: the reset wakes the session anyway.
+	var pending, stale int
+	var oldest sql.NullInt64
+	if err = t.row(pendingReplaySQL, t.s.clock.Now().Add(-waitLimit).UnixMilli(), e.AgentID).Scan(&pending, &stale, &oldest); err != nil {
+		return nil, err
+	}
+	if from >= cursor || stale > 0 {
+		return map[string]any{"cursor": cursor, "pending": pending}, nil
+	}
+	if oldest.Valid {
+		from = min(from, oldest.Int64-1)
+	}
+	return map[string]any{"cursor": from, "pending": 0}, nil
+}
+
+// pendingReplaySQL counts the agent's waiting mail as pendingDeliveriesSQL does, counts those
+// messages whose newest inbox_changed event is gone or older than the bound, and gives the oldest
+// of those newest events.
+const pendingReplaySQL = `SELECT COUNT(*),COALESCE(SUM(NOT EXISTS(SELECT 1 FROM Event WHERE seq=Delivery.attention_seq AND kind='inbox_changed' AND object_id=Delivery.id AND created_ms>=?)),0),MIN(attention_seq)
+ FROM Delivery WHERE recipient_agent_id=? AND attention=1 AND id NOT IN (SELECT delivery_id FROM Ack)`
+
+// freedRewindSQL lists the paths freed for e within the last waitLimit, newest first.
+const freedRewindSQL = `SELECT seq,object_id FROM Event WHERE agent_id=? AND kind='claim_available' AND execution_id=? AND created_ms>=? ORDER BY seq DESC`
+
+// freedRewind is the cursor just before the newest path freed for e that is still free, or the
+// largest cursor when there is none. Unlike freedPathsSQL, which counts every such event because
+// availability is historical, it skips a path that a live claim now overlaps, whoever holds it, e
+// included: rewinding for that path would wake the session for nothing. The event keeps the path
+// but not whether the wait was exact or prefix, so the path is compared as a prefix, which skips
+// more rather than less. An event older than waitLimit is skipped too, as its waiter would have
+// expired. That bounds the replay to the agent's events of the last hour.
+func (t *transaction) freedRewind(e execution) (int64, error) {
+	rows, err := t.rows(freedRewindSQL, e.AgentID, e.ID, t.s.clock.Now().Add(-waitLimit).UnixMilli())
+	if err != nil {
+		return 0, err
+	}
+	type freed struct {
+		seq int64
+		key string
+	}
+	var fs []freed
+	for rows.Next() {
+		var f freed
+		rows.Scan(&f.seq, &f.key)
+		fs = append(fs, f)
+	}
+	err = rows.Err()
+	_ = rows.Close()
+	if err != nil || len(fs) == 0 {
+		return math.MaxInt64, err
+	}
+	cs, err := t.claimRows(e.Repo)
+	if err != nil {
+		return 0, err
+	}
+	for _, f := range fs {
+		if !slices.ContainsFunc(cs, func(c claim) bool { return overlaps(f.key, "prefix", c.Key, c.Kind) }) {
+			return f.seq - 1, nil
+		}
+	}
+	return math.MaxInt64, nil
 }
 
 const agentEventsSQL = `SELECT seq,kind,kind='inbox_changed' AND object_id NOT IN (SELECT id FROM Delivery WHERE attention=1 AND id NOT IN (SELECT delivery_id FROM Ack)) FROM Event WHERE seq>? AND agent_id=? AND (execution_id IS NULL OR execution_id=?) ORDER BY seq LIMIT ?`
