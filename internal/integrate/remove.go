@@ -10,6 +10,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+
+	"github.com/mateusz-klatt/iris/internal/kimiwake"
 )
 
 // stripFunc returns data without Iris's own entries and reports whether it
@@ -21,6 +23,13 @@ type stripFunc func(path string, data []byte) ([]byte, bool, error)
 // A file that cannot be edited safely stays as it is and stays in the manifest,
 // so a retry can finish it. The other files are still done.
 func (l Layout) unwire(client string, strip stripFunc) error {
+	return l.unwireWhere(client, strip, func(string) bool { return true })
+}
+
+// unwireWhere unwires only the client's files that keep selects, as turning Kimi's wake off takes
+// back its skill and leaves the rest of the integration. A drift check reports the files it would
+// change and changes nothing, not even the manifest.
+func (l Layout) unwireWhere(client string, strip stripFunc, keep func(path string) bool) error {
 	dir, err := l.state()
 	if err != nil {
 		return err
@@ -31,20 +40,43 @@ func (l Layout) unwire(client string, strip stripFunc) error {
 	}
 	var paths []string
 	for path, rec := range m.Files {
-		if rec.Client == client {
+		if rec.Client == client && keep(path) {
 			paths = append(paths, path)
 		}
 	}
 	slices.Sort(paths)
 	var failed []error
 	for _, path := range paths {
+		if l.drift != nil {
+			changes, err := unwireChanges(path, m.Files[path], strip)
+			if err != nil {
+				failed = append(failed, fmt.Errorf("%s: %w", path, err))
+			} else if changes {
+				*l.drift = append(*l.drift, path)
+			}
+			continue
+		}
 		if err := unwireFile(dir, path, m.Files[path], strip); err != nil {
 			failed = append(failed, fmt.Errorf("%s: %w", path, err))
 			continue
 		}
 		delete(m.Files, path)
 	}
+	if l.drift != nil {
+		return errors.Join(failed...)
+	}
 	return errors.Join(append(failed, saveManifest(dir, m))...)
+}
+
+// unwireChanges reports whether unwireFile would write or delete path. A file already gone changes
+// nothing; a file it cannot read or strip is its error.
+func unwireChanges(path string, rec manifestFile, strip stripFunc) (bool, error) {
+	data, absent, err := readExisting(path)
+	if err != nil || absent {
+		return false, err
+	}
+	next, removed, err := strip(path, data)
+	return err == nil && (removed || rec.Created && hasNoContent(next)), err
 }
 
 func unwireFile(stateDir, path string, rec manifestFile, strip stripFunc) error {
@@ -131,6 +163,10 @@ func stripClient(client string) stripFunc {
 		switch {
 		case client == Grok && filepath.Base(path) == "SKILL.md":
 			return stripText(data, []byte(grokSkill))
+		case client == Kimi && filepath.Base(path) == "SKILL.md":
+			return stripText(data, []byte(kimiSkill))
+		case client == Kimi && path == kimiwake.PreferencePath(filepath.Dir(path)):
+			return stripWakeMarker(data)
 		case client == Grok && filepath.Base(path) == grokWakeFile:
 			return stripWakeMarker(data)
 		case client == Antigravity && filepath.Base(path) == antigravityWakeFile:

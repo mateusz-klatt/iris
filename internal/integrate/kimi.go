@@ -1,9 +1,12 @@
 package integrate
 
 import (
+	"errors"
 	"fmt"
 	"path/filepath"
 	"strings"
+
+	"github.com/mateusz-klatt/iris/internal/kimiwake"
 )
 
 func init() { register(kimiClient{}) }
@@ -40,10 +43,30 @@ func (c kimiClient) install(l Layout, wake *bool) error {
 	if err != nil {
 		return err
 	}
-	if _, err := readObject(existingMCP); err != nil {
+	current, err := readObject(existingMCP)
+	if err != nil {
 		return err
 	}
 	iris := l.Iris()
+	// The watcher reads only the OS account's pinned configuration, so wake can be turned on only
+	// where that is the configuration in use.
+	root, err := KimiWakeRoot(l)
+	if err != nil {
+		return err
+	}
+	if wake != nil && *wake {
+		configDir, err := l.IrisConfigDir()
+		if err != nil {
+			return err
+		}
+		if pinned := filepath.Dir(root); !sameConfigDir(l.goos(), configDir, pinned) {
+			return fmt.Errorf("kimi wake requires the default Iris configuration directory %s; current environment resolves %s", pinned, configDir)
+		}
+	}
+	choice, err := kimiChoice(root, current, iris, wake)
+	if err != nil {
+		return err
+	}
 	events := []string{"SessionStart", "UserPromptSubmit", "PreToolUse", "PostToolUse", "Stop", "SessionEnd"}
 	var body strings.Builder
 	for _, event := range events {
@@ -56,16 +79,35 @@ func (c kimiClient) install(l Layout, wake *bool) error {
 			tomlString(event), tomlString(command), eventTimeout(Kimi, event))
 	}
 	block := wrapBlock(strings.TrimRight(body.String(), "\n"))
-	if err := l.update(Kimi, files[0], func(existing []byte) ([]byte, error) {
-		return upsertHooks(existing, block)
-	}); err != nil {
-		return err
+	// The skill comes last, so it never tells the model about a watcher whose files are not there.
+	for _, f := range []struct {
+		path   string
+		render func([]byte) ([]byte, error)
+	}{
+		{files[0], func(existing []byte) ([]byte, error) { return upsertHooks(existing, block) }},
+		{kimiwake.PreferencePath(root), func([]byte) ([]byte, error) { return []byte(choice + "\n"), nil }},
+		{files[1], func(existing []byte) ([]byte, error) {
+			return writeObject(existing, func(doc map[string]any) error {
+				kimiMCPConfig(doc, iris, filepath.Dir(files[0]))
+				return nil
+			})
+		}},
+	} {
+		if err := l.update(Kimi, f.path, f.render); err != nil {
+			return err
+		}
 	}
-	return l.update(Kimi, files[1], func(existing []byte) ([]byte, error) {
-		return writeObject(existing, func(doc map[string]any) error {
-			return kimiMCPConfig(doc, iris, filepath.Dir(files[0]), wake)
-		})
-	})
+	return c.skill(l, filepath.Dir(files[0]), kimiwake.On(choice))
+}
+
+// skill installs the native skill while wake is on, and otherwise takes back the text Iris wrote.
+// A copy a person changed stays.
+func (c kimiClient) skill(l Layout, home string, on bool) error {
+	path := filepath.Join(home, "skills", "iris", "SKILL.md")
+	if on {
+		return l.update(Kimi, path, func(existing []byte) ([]byte, error) { return kimiSkillText(existing), nil })
+	}
+	return l.unwireWhere(Kimi, stripClient(Kimi), func(p string) bool { return p == path })
 }
 
 // upsertHooks refuses a block with an unknown key before it reaches the file,
@@ -78,7 +120,11 @@ func upsertHooks(existing []byte, block string) ([]byte, error) {
 	return []byte(next), err
 }
 
-func (c kimiClient) Remove(l Layout, _ Plugins) error { return l.unwire(Kimi, stripClient(Kimi)) }
+// Remove takes Iris out of Kimi's files and the wake preference, then stops the watchers that
+// removal leaves without a purpose. A failed stop is reported and does not keep the files.
+func (c kimiClient) Remove(l Layout, _ Plugins) error {
+	return errors.Join(l.unwire(Kimi, stripClient(Kimi)), stopKimiWatchers(l))
+}
 
 func (c kimiClient) Canary(l Layout) (Invocation, error) {
 	files, err := c.Files(l)

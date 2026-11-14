@@ -3,6 +3,7 @@ package kimiwake
 import (
 	"bytes"
 	"errors"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -847,45 +848,53 @@ func TestMalformedCoalescingDataIsNoDelay(t *testing.T) {
 	}
 }
 
-// The preference records the choice: none before integration, then default, on or off. Only on
-// enables wake for now; anything else in the file is refused rather than guessed.
+// The preference records the choice: none before integration or in an emptied file, then default,
+// on or off. Only on enables wake for now; anything else in the file is refused rather than guessed.
 func TestThePreferenceRecordsTheChoice(t *testing.T) {
 	s, _, _ := newStore(t)
-	if got, err := Preference(s.Root); err != nil || got != "" {
-		t.Fatalf("before integration: %q %v", got, err)
+	path := PreferencePath(s.Root)
+	if got, err := Preference(s.Root); err != nil || got != "" || path != filepath.Join(s.Root, preferenceName) {
+		t.Fatalf("before integration: %q %v at %s", got, err, path)
 	}
-	for _, value := range []string{PreferenceDefault, PreferenceOff, PreferenceOn} {
-		if err := SetPreference(s.Root, value); err != nil {
+	if err := os.MkdirAll(s.Root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{"", PreferenceDefault, PreferenceOff, PreferenceOn} {
+		if err := os.WriteFile(path, []byte(value+"\n"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if got, err := Preference(s.Root); err != nil || got != value || Enabled(s.Root) != (value == PreferenceOn) {
-			t.Fatalf("%s: %q %v, enabled %v", value, got, err, Enabled(s.Root))
+		if got, err := Preference(s.Root); err != nil || got != value || Enabled(s.Root) != On(value) || On(value) != (value == PreferenceOn) {
+			t.Fatalf("%q: %q %v, enabled %v", value, got, err, Enabled(s.Root))
 		}
 	}
-	if err := SetPreference(s.Root, "maybe"); !errors.Is(err, ErrPreference) {
+	if err := os.WriteFile(path, []byte("maybe\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(filepath.Join(s.Root, preferenceName), []byte("maybe\n"), 0o600); err != nil {
+	if _, err := Preference(s.Root); !errors.Is(err, ErrPreference) || Enabled(s.Root) {
 		t.Fatal(err)
 	}
-	if _, err := Preference(s.Root); !errors.Is(err, ErrPreference) {
+	if err := os.Remove(path); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.Remove(filepath.Join(s.Root, preferenceName)); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.Mkdir(filepath.Join(s.Root, preferenceName), 0o700); err != nil {
+	if err := os.Mkdir(path, 0o700); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := Preference(s.Root); err == nil || errors.Is(err, ErrPreference) {
 		t.Fatalf("an unreadable preference: %v", err)
 	}
-	blocker := filepath.Join(t.TempDir(), "blocker")
-	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+}
+
+// Stopping watchers where none ever ran makes no state: removing an integration that never used
+// wake leaves the pinned directory as it was.
+func TestStopWatchersWithoutStateMakesNone(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "kimi-wake")
+	terminate = func(int, int64) error { t.Fatal("stopped a process without a record"); return nil }
+	t.Cleanup(func() { terminate = defaultTerminate })
+	if err := (&Store{Root: root}).StopWatchers(time.Second); err != nil {
 		t.Fatal(err)
 	}
-	if err := SetPreference(filepath.Join(blocker, "kimi-wake"), PreferenceOn); err == nil {
-		t.Fatal("wrote a preference where no directory can be made")
+	if _, err := os.Lstat(root); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the state directory was made: %v", err)
 	}
 }
 

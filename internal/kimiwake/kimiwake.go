@@ -63,9 +63,16 @@ func Root(pinned string) string { return filepath.Join(pinned, dirName) }
 // enables it. A missing, unreadable or any other file means off, which is the default until the
 // native acceptance passes: "default", a person's lack of an explicit choice, is off for now.
 func Enabled(root string) bool {
-	raw, err := os.ReadFile(filepath.Join(root, preferenceName))
-	return err == nil && strings.TrimSpace(string(raw)) == "on"
+	raw, err := os.ReadFile(PreferencePath(root))
+	return err == nil && On(strings.TrimSpace(string(raw)))
 }
+
+// On reports whether a recorded choice turns wake on. Integration installs the skill by the same
+// rule, so the two never disagree.
+func On(choice string) bool { return choice == PreferenceOn }
+
+// PreferencePath is the preference file under the state directory root.
+func PreferencePath(root string) string { return filepath.Join(root, preferenceName) }
 
 // The preference's values. The file records the choice, as Antigravity's marker does: "default"
 // when the person made none, "on" or "off" when they did. A missing file means not integrated.
@@ -78,9 +85,10 @@ const (
 // ErrPreference is a preference file that holds none of the three values.
 var ErrPreference = errors.New("the Kimi wake preference is not default, on or off")
 
-// Preference reads the recorded choice: "" when there is none yet.
+// Preference reads the recorded choice: "" when there is none, as before integration or after a
+// removal that emptied a file Iris did not create.
 func Preference(root string) (string, error) {
-	raw, err := os.ReadFile(filepath.Join(root, preferenceName))
+	raw, err := os.ReadFile(PreferencePath(root))
 	if errors.Is(err, fs.ErrNotExist) {
 		return "", nil
 	}
@@ -88,25 +96,11 @@ func Preference(root string) (string, error) {
 		return "", err
 	}
 	switch value := strings.TrimSpace(string(raw)); value {
-	case PreferenceDefault, PreferenceOn, PreferenceOff:
+	case "", PreferenceDefault, PreferenceOn, PreferenceOff:
 		return value, nil
 	default:
 		return "", ErrPreference
 	}
-}
-
-// SetPreference records the choice, making and protecting the state directory first.
-func SetPreference(root, value string) error {
-	switch value {
-	case PreferenceDefault, PreferenceOn, PreferenceOff:
-	default:
-		return ErrPreference
-	}
-	s := &Store{Root: root}
-	if err := s.prepare(); err != nil {
-		return err
-	}
-	return replaceText(filepath.Join(root, preferenceName), value)
 }
 
 // terminate stops a process only while its pid and start time still match. Tests replace it.
@@ -115,8 +109,12 @@ var terminate = proc.Terminate
 // StopWatchers stops every watcher a record shows alive, as turning wake off or removing the
 // integration requires, and latches each record it touched disabled once no live watcher holds
 // it. A watcher that ends on its own first is skipped. A failed stop is returned, joined, and
-// does not keep the others from stopping.
+// does not keep the others from stopping. Without a watchers directory no watcher ever ran, and
+// nothing is made.
 func (s *Store) StopWatchers(budget time.Duration) error {
+	if _, err := os.Lstat(filepath.Join(s.Root, watchersName)); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
 	var live []Key
 	var attempts []Attempt
 	err := s.locked(budget, func() error {
@@ -367,14 +365,6 @@ func readRecord(path string) (Record, bool, error) {
 // the old content or the new one and never part of either.
 func replace(path string, v any) error {
 	raw, _ := json.Marshal(v) // Records and session maps are plain values that always encode.
-	return writeWhole(path, raw)
-}
-
-// replaceText writes a one-line text file whole, as replace writes a record.
-func replaceText(path, text string) error { return writeWhole(path, []byte(text)) }
-
-// writeWhole writes raw and a newline through a protected temporary file and a rename.
-func writeWhole(path string, raw []byte) error {
 	f, err := createTemp(filepath.Dir(path), ".tmp-*")
 	if err != nil {
 		return err
