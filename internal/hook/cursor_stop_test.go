@@ -64,6 +64,18 @@ func TestCursorInteractiveArgs(t *testing.T) {
 	}
 }
 
+func TestDispatchCursorArgsReportsAnUnreadCommandLine(t *testing.T) {
+	if _, err := dispatchCursorArgs(0, 0); err == nil {
+		t.Fatal("pid 0 returned a command line")
+	}
+	prev := readCursorArgs
+	readCursorArgs = nil
+	t.Cleanup(func() { readCursorArgs = prev })
+	if _, err := dispatchCursorArgs(1, 0); err == nil {
+		t.Fatal("a missing reader returned a command line")
+	}
+}
+
 func TestCapturedCursorStopIsTheFirstTurn(t *testing.T) {
 	payload, err := os.ReadFile(filepath.Join("testdata", "cursor", "stop.json"))
 	if err != nil {
