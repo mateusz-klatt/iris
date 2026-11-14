@@ -18,6 +18,7 @@ func kimiWakeReport(layout integrate.Layout, now time.Time) []string {
 	if err != nil {
 		return []string{"preference unknown: the OS account's Iris directory could not be found"}
 	}
+	const asks = "a user prompt of an interactive session asks the model to start `iris watch --client kimi --once`; Iris cannot verify the command it runs"
 	var lines []string
 	switch choice, err := kimiwake.Preference(root); {
 	case err != nil:
@@ -26,10 +27,12 @@ func kimiWakeReport(layout integrate.Layout, now time.Time) []string {
 		lines = append(lines, "not integrated, so wake is off")
 	case choice == kimiwake.PreferenceOff:
 		lines = append(lines, "preference off")
+	case choice == kimiwake.PreferenceDefault && !kimiwake.DefaultOn:
+		lines = append(lines, "preference default: off on this platform until Kimi's native acceptance passes here (ADR 030)")
 	case choice == kimiwake.PreferenceDefault:
-		lines = append(lines, "preference default: off until Kimi's native acceptance (ADR 030)")
+		lines = append(lines, "preference default, on here after Kimi's native acceptance (ADR 030): "+asks)
 	default:
-		lines = append(lines, "preference on: a user prompt of an interactive session asks the model to start `iris watch --client kimi --once`; Iris cannot verify the command it runs")
+		lines = append(lines, "preference on: "+asks)
 	}
 	entries, err := (&kimiwake.Store{Root: root}).Records()
 	if err != nil {

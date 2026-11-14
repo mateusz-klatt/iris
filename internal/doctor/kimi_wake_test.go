@@ -33,18 +33,24 @@ func writeJSON(t *testing.T, path string, v any) {
 	}
 }
 
-// The preference line says what is configured, in every state the file can be in.
+// The preference line says what is configured, in every state the file can be in. What "default"
+// means depends on whether Kimi's native acceptance passed on the platform.
 func TestKimiWakeReportNamesThePreference(t *testing.T) {
+	old := kimiwake.DefaultOn
+	t.Cleanup(func() { kimiwake.DefaultOn = old })
 	for _, tc := range []struct {
-		file string
-		want string
+		file      string
+		defaultOn bool
+		want      string
 	}{
-		{"", "not integrated, so wake is off"},
-		{"default\n", "preference default: off until Kimi's native acceptance (ADR 030)"},
-		{"off\n", "preference off"},
-		{"on\n", "preference on: a user prompt of an interactive session asks the model"},
-		{"maybe\n", "preference unreadable, so wake is off"},
+		{"", true, "not integrated, so wake is off"},
+		{"default\n", false, "preference default: off on this platform until Kimi's native acceptance passes here (ADR 030)"},
+		{"default\n", true, "preference default, on here after Kimi's native acceptance (ADR 030): a user prompt of an interactive session asks the model"},
+		{"off\n", true, "preference off"},
+		{"on\n", false, "preference on: a user prompt of an interactive session asks the model"},
+		{"maybe\n", true, "preference unreadable, so wake is off"},
 	} {
+		kimiwake.DefaultOn = tc.defaultOn
 		root := t.TempDir()
 		if tc.file != "" {
 			if err := os.WriteFile(kimiwake.PreferencePath(root), []byte(tc.file), 0o600); err != nil {

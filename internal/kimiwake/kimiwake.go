@@ -13,6 +13,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -59,9 +60,13 @@ var (
 // Root is the state directory inside the pinned Iris configuration directory.
 func Root(pinned string) string { return filepath.Join(pinned, dirName) }
 
-// Enabled reports whether wake is on. Only a preference file whose trimmed text is exactly "on"
-// enables it. A missing, unreadable or any other file means off, which is the default until the
-// native acceptance passes: "default", a person's lack of an explicit choice, is off for now.
+// DefaultOn is what "default", a person's lack of an explicit choice, means on this platform. Kimi's
+// native acceptance passed on Linux with Kimi 2.6.1 (ADR 030), so the default is on there. macOS and
+// Windows stay off until their own acceptance. Tests replace it.
+var DefaultOn = runtime.GOOS == "linux"
+
+// Enabled reports whether wake is on: a preference file whose trimmed text is exactly "on", or
+// exactly "default" where DefaultOn holds. A missing, unreadable or any other file means off.
 func Enabled(root string) bool {
 	raw, err := os.ReadFile(PreferencePath(root))
 	return err == nil && On(strings.TrimSpace(string(raw)))
@@ -69,7 +74,9 @@ func Enabled(root string) bool {
 
 // On reports whether a recorded choice turns wake on. Integration installs the skill by the same
 // rule, so the two never disagree.
-func On(choice string) bool { return choice == PreferenceOn }
+func On(choice string) bool {
+	return choice == PreferenceOn || choice == PreferenceDefault && DefaultOn
+}
 
 // PreferencePath is the preference file under the state directory root.
 func PreferencePath(root string) string { return filepath.Join(root, preferenceName) }

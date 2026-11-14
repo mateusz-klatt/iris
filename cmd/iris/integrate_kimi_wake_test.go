@@ -6,11 +6,24 @@ import (
 
 	"github.com/mateusz-klatt/iris/internal/config"
 	"github.com/mateusz-klatt/iris/internal/integrate"
+	"github.com/mateusz-klatt/iris/internal/kimiwake"
 )
 
 // The command records the choice its flags make, keeps it when they make none, and takes it back
-// with the integration.
+// with the integration. A first integration without a flag records "default", which is on only
+// where Kimi's native acceptance passed.
 func TestIntegrateKimiWakeFlagsAndPreferencePreservation(t *testing.T) {
+	for _, defaultOn := range []bool{false, true} {
+		t.Run(map[bool]string{false: "default off", true: "default on"}[defaultOn], func(t *testing.T) {
+			old := kimiwake.DefaultOn
+			t.Cleanup(func() { kimiwake.DefaultOn = old })
+			kimiwake.DefaultOn = defaultOn
+			integrateKimiWakeFlags(t, defaultOn)
+		})
+	}
+}
+
+func integrateKimiWakeFlags(t *testing.T, defaultOn bool) {
 	home := filepath.Join(t.TempDir(), "kimi")
 	t.Setenv("KIMI_CODE_HOME", home)
 	t.Setenv("IRIS_STATE_DIR", filepath.Join(t.TempDir(), "state"))
@@ -25,7 +38,7 @@ func TestIntegrateKimiWakeFlagsAndPreferencePreservation(t *testing.T) {
 		args    []string
 		enabled bool
 	}{
-		{[]string{"kimi"}, false},
+		{[]string{"kimi"}, defaultOn},
 		{[]string{"kimi", "--no-wake"}, false},
 		{[]string{"kimi"}, false},
 		{[]string{"--wake", "kimi"}, true},

@@ -27,8 +27,9 @@ the Codex wake implementation.
 
 [Kimi wake](docs/kimi-wake.md) asks the session's model to keep one managed background task,
 `iris watch --client kimi --once`, running; it ends when new attention arrives, and Kimi opens a turn
-when it does. Iris cannot verify the command the model runs. Wake is off by default until its native
-acceptance passes; enable it with `iris integrate kimi --wake` and disable it with `--no-wake`.
+when it does. Iris cannot verify the command the model runs. Wake is on by default on Linux, where its
+native acceptance passed, and off on macOS and Windows until theirs; `iris integrate kimi --wake`
+turns it on and `--no-wake` turns it off.
 
 Grok asks its model, at Stop, to keep `iris watch --client grok` running in the monitor tool.
 Stop sees that a monitor is running, not the command it runs. `iris integrate grok --no-wake`
