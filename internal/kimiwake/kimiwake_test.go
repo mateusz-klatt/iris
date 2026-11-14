@@ -1014,13 +1014,18 @@ func TestStopWatchersKeepsToItsBudgetWhileTheLockIsHeld(t *testing.T) {
 		return nil
 	}
 	t.Cleanup(func() { terminate = defaultTerminate })
+	// The budget is checked on a clock that only StopWatchers' own waits move, so a loaded machine
+	// cannot fail it. Waiting the whole budget once is right; a budget per watcher is six of them.
+	now := time.Unix(1_800_000_000, 0)
+	var waited time.Duration
+	clock = func() time.Time { return now }
+	pause = func(d time.Duration) { waited += d; now = now.Add(d) }
+	t.Cleanup(func() { clock, pause = time.Now, time.Sleep })
 	const budget = 200 * time.Millisecond
-	began := time.Now()
 	err := s.StopWatchers(budget)
-	elapsed := time.Since(began)
 	release()
-	if !errors.Is(err, ErrLocked) || elapsed > 4*budget {
-		t.Fatalf("stopping %d watchers while the lock was held: %v after %v", len(keys), err, elapsed)
+	if !errors.Is(err, ErrLocked) || waited < budget || waited > budget+lockRetry {
+		t.Fatalf("stopping %d watchers while the lock was held: %v after waiting %v", len(keys), err, waited)
 	}
 	for _, k := range keys {
 		if r, _ := recordOf(t, s, k); r.Latch != nil {

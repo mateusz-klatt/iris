@@ -48,6 +48,13 @@ var (
 	rename     = os.Rename
 )
 
+// The clock and the pause that lock and stop budgets are measured with. Tests replace them, so a
+// budget is checked by the waits the code asks for and not by how fast a loaded machine runs.
+var (
+	clock = time.Now
+	pause = time.Sleep
+)
+
 // ErrLocked means another process held the state's lock past the caller's budget.
 var ErrLocked = errors.New("the Kimi wake state is locked")
 
@@ -150,8 +157,10 @@ func (s *Store) StopWatchers(budget time.Duration) error {
 	}
 	// Each round checks every watcher still waited for, so one that does not end cannot use up the
 	// budget of the others. A latch waits for the lock only as long as the budget has left: a lock
-	// held elsewhere must not stretch the whole stop to a budget per watcher.
-	deadline := time.Now().Add(budget)
+	// held elsewhere must not stretch the whole stop to a budget per watcher. The records were read
+	// with the directories made and protected, so a latch here only takes the lock. Protecting
+	// them again for every watcher took longer than the budget on a loaded Windows machine.
+	deadline := clock().Add(budget)
 	for {
 		var running []int
 		for _, i := range asked {
@@ -159,12 +168,12 @@ func (s *Store) StopWatchers(budget time.Duration) error {
 				running = append(running, i)
 				continue
 			}
-			failed = append(failed, s.LatchIfFree(live[i], LatchDisabled, time.Until(deadline)))
+			failed = append(failed, s.latchPrepared(live[i], LatchDisabled, deadline.Sub(clock())))
 		}
-		if asked = running; len(asked) == 0 || !time.Now().Before(deadline) {
+		if asked = running; len(asked) == 0 || !clock().Before(deadline) {
 			break
 		}
-		time.Sleep(lockRetry)
+		pause(lockRetry)
 	}
 	for _, i := range asked {
 		failed = append(failed, fmt.Errorf("watcher %d: still running after it was asked to stop", attempts[i].PID))
@@ -340,13 +349,13 @@ func (s *Store) lock(budget time.Duration) (func(), error) {
 	if err != nil {
 		return nil, err
 	}
-	deadline := time.Now().Add(budget)
+	deadline := clock().Add(budget)
 	for tryLock(f) != nil {
-		if !time.Now().Before(deadline) {
+		if !clock().Before(deadline) {
 			_ = f.Close()
 			return nil, ErrLocked
 		}
-		time.Sleep(lockRetry)
+		pause(lockRetry)
 	}
 	return func() {
 		unlock(f)
@@ -558,14 +567,27 @@ func (s *Store) LatchIfFree(k Key, state string, budget time.Duration) error {
 	if !k.valid() {
 		return errKey
 	}
-	return s.locked(budget, func() error {
-		return s.updateHeld(k, func(r *Record, _ bool) bool {
-			if r.Attempt != nil && s.alive(r.Attempt.PID, r.Attempt.StartMS) {
-				return false
-			}
-			r.Latch, r.ArmRequestedMS = &Latch{State: state, AtMS: s.now().UnixMilli()}, 0
-			return true
-		})
+	return s.locked(budget, func() error { return s.latchHeld(k, state) })
+}
+
+// latchPrepared is LatchIfFree for a caller that has made and protected the directories already.
+func (s *Store) latchPrepared(k Key, state string, budget time.Duration) error {
+	unlock, err := s.lock(budget)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return s.latchHeld(k, state)
+}
+
+// latchHeld latches k unless a live watcher holds it. The caller holds the lock.
+func (s *Store) latchHeld(k Key, state string) error {
+	return s.updateHeld(k, func(r *Record, _ bool) bool {
+		if r.Attempt != nil && s.alive(r.Attempt.PID, r.Attempt.StartMS) {
+			return false
+		}
+		r.Latch, r.ArmRequestedMS = &Latch{State: state, AtMS: s.now().UnixMilli()}, 0
+		return true
 	})
 }
 
