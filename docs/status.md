@@ -1,42 +1,46 @@
 # Status
 
-Release status updated 2026-11-12. [v0.1.0](https://github.com/mateusz-klatt/iris/releases/tag/v0.1.0)
-was published at 06:07 UTC from `c4983205cb320a1b4313d114c1b2ab644023e59c`. Its signed release
-workflow [43117855817](https://github.com/mateusz-klatt/iris/actions/runs/43117855817) succeeded.
-Package-manager uploads remain disabled. The next intended `v0.1.1` is a final release on the
-owner's decision; this status does not create or authorize a tag.
+## Release and hub
 
-The Codex wake implementation merged after v0.1.0. Its
-[acceptance record](research/clients/codex-iris-idle-wake-2026-11-12.md) preserves Linux
-default/custom-home daemon evidence and owner-reported macOS TUI evidence for the original
-opt-in runner. [ADR 023](adr/023-default-codex-wake-after-idle-check.md) now changes the default,
-requires a positive native idle check and removes the automatic second native wake. Those
-earlier runs do not validate the new gate or defaults on every platform. Further native and
-cost claims must name their own evidence; implementing a policy is not a new measurement.
+- **The latest release is [v0.1.3](https://github.com/mateusz-klatt/iris/releases/tag/v0.1.3).** It
+  was tagged at `a4d465ff22c349704db294688f02c89007baaf3b` and published on 2026-11-14 from release
+  workflow [43593451996](https://github.com/mateusz-klatt/iris/actions/runs/43593451996). Its
+  assets, checksums, signatures, provenance and image were verified on the draft before it was
+  published. The Windows and macOS signatures were checked on those systems. Package-manager uploads
+  remain disabled.
+- **The public hub** runs at https://iris.klatt.ie behind Apache and Cloudflare (`docs/deploy.md`).
+  It runs the latest release's signed image, or a newer build of `main` deployed between releases.
+  This page does not name the running image. `iris-deploys.log` on the hub's host is the record of
+  what runs: each deployment appends a line there that names the commit and the image, as
+  `docs/deploy.md` describes.
+- **Agents** on macOS, Linux under WSL, and Windows 11 use the hub every day.
 
-The earlier hub latency, shared-worktree, recovery, service and release-rehearsal measurements below were
-last summarized on 2026-11-08, from `main` at `efe0af6` before the repository history rewrite.
-Their commit hashes and PR numbers, including the Windows diagnostic at `993e545`, are retained as
-historical evidence labels; they refer to the history before the rewrite, not revisions of the
-current `main`. The CI and translation notes were updated on 2026-11-09 on `main` at `655526a`.
-The hub's idle CPU note was updated on 2026-11-10 on `main` at `ef67498`. The deployment paragraph
-and console record were updated on 2026-11-11 on `main` at `427703f`.
+The evidence below and its limits are identified where they are stated. Commit hashes and PR
+numbers from before the repository history rewrite of 2026-11-08, such as `993e545`, label that
+evidence. They are not revisions of the current `main`. Anything not measured is listed under "Not
+done or not measured".
 
-The hub runs at https://iris.klatt.ie behind Apache and Cloudflare (`docs/deploy.md`). It was last
-deployed from `main` at `427703f` (#266) on 2026-11-11 at 11:10:51 UTC, after a backup; it was ready
-1.4 s later, with the console open and a restart count of 0. That deploy brought the hub's side of
-the reduced shell scope (ADR 018, migration 022), the attention identity (migration 023) and Go
-1.27.4 for GO-2026-6859. Before it, `d4cae61` (#250) was deployed on 2026-11-10 at 16:49:18 UTC for
-the login cutover. Earlier deployments by the procedure that deploys an image CI built (#243,
-#248) were for `cfcd86a` and `6d555c7` on 2026-11-09 at 19:32 and 19:52 UTC, and for `ef67498` on
-2026-11-10 at 01:55 UTC.
-Each of those runs took a backup before it replaced the container. After the `ef67498` deployment,
-the container and the host CLI reported that commit with a clean source, the container had not
-restarted, and `/v1/status` answered locally and through the public origin.
-The host itself was restarted on 2026-11-09 at 22:14 UTC; the container stopped with exit
-status 0 and Docker started it again when the host came back. Agents on macOS, Linux under WSL, and
-Windows 11 use the hub every day. Evidence and its limits are identified below. Anything not
-measured is listed under "Not done or not measured".
+## Wake by client
+
+Wake starts a turn in an idle session when Iris has new attention for it. Each wake can spend model
+budget, and each mechanism asks the client or its model to do something; none enforces it. Since
+[ADR 031](adr/031-wake-only-in-interactive-sessions.md), Iris arms wake only in an interactive
+session. A print-mode, exec or protocol-server run gets no request.
+
+| Client | Wake | Where it is described |
+|---|---|---|
+| Claude Code | On by default | the plugin's `iris watch` monitor |
+| Codex | On by default, after a positive native idle check | [codex-wake.md](codex-wake.md), [ADR 023](adr/023-default-codex-wake-after-idle-check.md) |
+| Grok | On by default | [grok-wake.md](grok-wake.md), [ADR 025](adr/025-grok-stop-monitor.md) |
+| Antigravity | On by default; agy asks the user to approve each arming | [antigravity-wake.md](antigravity-wake.md), [ADR 028](adr/028-antigravity-idle-wake.md) |
+| Copilot | On only when Copilot CLI's experimental mode is enabled | [copilot-wake.md](copilot-wake.md), [ADR 024](adr/024-copilot-extension-wake.md) |
+| Kimi | Off until its native acceptance passes | [kimi-wake.md](kimi-wake.md), [ADR 030](adr/030-kimi-one-shot-wake.md) |
+| Cursor | Not available yet: the end-of-turn follow-up is under review | [ADR 029](adr/029-cursor-stop-followup.md) |
+
+The Codex default rests on ADR 023's gate. The earlier
+[acceptance record](research/clients/codex-iris-idle-wake-2026-11-12.md) measured the original
+opt-in runner, so it does not validate the new gate or defaults on every platform. Further native
+and cost claims must name their own evidence; implementing a policy is not a new measurement.
 
 ## First milestone
 
@@ -174,11 +178,10 @@ Against the production hub, over TLS:
 - **Remote execution targets are unprotected.** A client whose tools run on a remote host, in a
   container or in a cloud sandbox changes files Iris neither claims nor checks: the hook sees only the
   machine it runs on (ADR 009). Detection waits for a captured remote payload.
-- **Distribution after v0.1.0.** Release archives are published and the signed release workflow
-  succeeded. Package-manager uploads remain disabled. The newer GHCR release-image path was
-  added after that tag's source commit; the earlier release does not prove that later path.
-  Each release must retain its own signatures and verification evidence. A published archive
-  is not evidence for a clean browser-download or package-manager installation on every host.
+- **Distribution.** Releases publish archives, packages and a signed GHCR image, and
+  package-manager uploads remain disabled. Each release must keep its own signatures and
+  verification evidence. A published archive is not evidence for a clean browser-download or
+  package-manager installation on every host.
 - **Not measured:** Defender, the SmartScreen window, Apple silicon, a quarantined browser download
   of a notarized binary starting under Gatekeeper, Gatekeeper's dialog and "Open Anyway", and a Mac
   or PC whose policy forbids unsigned code.
@@ -221,6 +224,3 @@ included, which was the one that had been red. These findings were reviewed and 
 - The session cookie has no `Secure` flag on loopback, where the console is served over HTTP and
   Safari would refuse a `Secure` cookie. Behind the public origin it is `Secure`.
 - HTTP and WebSocket URLs on loopback, for the local hub and the console.
-- Kimi's native web API also uses HTTP only on a literal loopback address. Its base-URL construction
-  in `internal/wake/kimi.go` carries a `NOSONAR` comment for `go:S5332`. The process and health
-  checks before the bearer token neither authenticate the endpoint nor encrypt HTTP; changes need review.
