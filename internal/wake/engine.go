@@ -16,7 +16,6 @@ const (
 	observedHooksUnseen   = "wake_hooks_unseen"
 	deferredSessionActive = "wake_deferred: session active"
 	abortedSessionActive  = "wake_aborted: session active"
-	failedSessionOccupied = "wake_failed: session occupied"
 	failedHookCheck       = "wake_failed: hook check"
 	failedAttentionRead   = "wake_failed: attention read"
 	failedVersionDiffers  = "wake_failed: version differs"
@@ -84,11 +83,8 @@ func (e *engine) step(ctx context.Context) stepResult {
 		return stepResult{}
 	}
 	if !idle {
-		switch detail {
-		case codexActive, kimiActive, antigravityActive:
+		if detail == codexActive || detail == antigravityActive {
 			return e.recheck(last, deferredSessionActive, 15*time.Second)
-		case kimiOccupied:
-			return e.occupied(last, info)
 		}
 		return e.preflightFailure(current, info, detail, failedIdleCheck)
 	}
@@ -141,10 +137,8 @@ func (e *engine) step(ctx context.Context) stepResult {
 	switch answer.answer {
 	case "aborted":
 		switch answer.detail {
-		case kimiActive, antigravityActive:
+		case antigravityActive:
 			return e.recheck(last, abortedSessionActive, 15*time.Second)
-		case kimiOccupied:
-			return e.occupied(last, info)
 		case antigravityExeUnavailable:
 			return e.after(60 * time.Second)
 		}
@@ -159,32 +153,14 @@ func (e *engine) step(ctx context.Context) stepResult {
 }
 
 // recheck tries a lasting condition again after delay. A session can stay active for many
-// checks, and occupied for as long as another Kimi process keeps it open, so the observation is
-// noted only when the previous step did not end in the same one: one line each time the outcome
-// changes, not one per check.
+// checks, so the observation is noted only when the previous step did not end in the same one:
+// one line each time the outcome changes, not one per check.
 func (e *engine) recheck(last, observation string, delay time.Duration) stepResult {
 	if observation != last {
 		e.note(observation)
 	}
 	e.condition = observation
 	return e.after(delay)
-}
-
-// occupied waits on a session whose lock another Kimi process holds. kimi web cannot prompt it
-// while that process keeps it open (kimi 2.6.1 answers 40931, SESSION_OCCUPIED), so this is a
-// refusal that lasts, not a turn that ends: the reason is recorded where inspection reads it,
-// no wake allowance is spent, and the next try waits a minute, like a failed preflight.
-func (e *engine) occupied(last string, info binaryInfo) stepResult {
-	current, err := e.store.snapshot()
-	if err != nil {
-		return e.fileFailure(err)
-	}
-	next := current.Document
-	next.Binary, next.LastFailure = info, &failure{AtMS: e.now().UnixMilli(), Detail: kimiOccupied}
-	if _, err := e.store.publish(current, next); err != nil {
-		return e.fileFailure(err)
-	}
-	return e.recheck(last, failedSessionOccupied, 60*time.Second)
 }
 
 // A failed preflight can explain why a wake is deferred without creating a

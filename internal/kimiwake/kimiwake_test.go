@@ -3,6 +3,7 @@ package kimiwake
 import (
 	"bytes"
 	"errors"
+	"io/fs"
 	"maps"
 	"os"
 	"path/filepath"
@@ -846,6 +847,189 @@ func TestMalformedCoalescingDataIsNoDelay(t *testing.T) {
 		}
 	}
 }
+
+// The preference records the choice: none before integration or in an emptied file, then default,
+// on or off. Only on enables wake for now; anything else in the file is refused rather than guessed.
+func TestThePreferenceRecordsTheChoice(t *testing.T) {
+	s, _, _ := newStore(t)
+	path := PreferencePath(s.Root)
+	if got, err := Preference(s.Root); err != nil || got != "" || path != filepath.Join(s.Root, preferenceName) {
+		t.Fatalf("before integration: %q %v at %s", got, err, path)
+	}
+	if err := os.MkdirAll(s.Root, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{"", PreferenceDefault, PreferenceOff, PreferenceOn} {
+		if err := os.WriteFile(path, []byte(value+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := Preference(s.Root); err != nil || got != value || Enabled(s.Root) != On(value) || On(value) != (value == PreferenceOn) {
+			t.Fatalf("%q: %q %v, enabled %v", value, got, err, Enabled(s.Root))
+		}
+	}
+	if err := os.WriteFile(path, []byte("maybe\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Preference(s.Root); !errors.Is(err, ErrPreference) || Enabled(s.Root) {
+		t.Fatal(err)
+	}
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(path, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Preference(s.Root); err == nil || errors.Is(err, ErrPreference) {
+		t.Fatalf("an unreadable preference: %v", err)
+	}
+}
+
+// Stopping watchers where none ever ran makes no state: removing an integration that never used
+// wake leaves the pinned directory as it was.
+func TestStopWatchersWithoutStateMakesNone(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "kimi-wake")
+	terminate = func(int, int64) error { t.Fatal("stopped a process without a record"); return nil }
+	t.Cleanup(func() { terminate = defaultTerminate })
+	if err := (&Store{Root: root}).StopWatchers(time.Second); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Lstat(root); !errors.Is(err, fs.ErrNotExist) {
+		t.Fatalf("the state directory was made: %v", err)
+	}
+}
+
+// Turning wake off stops every watcher a record shows alive, by its pid and start time, and latches
+// its record disabled once it no longer runs. A watcher already gone is skipped. A stop that fails,
+// or a watcher that still runs when the budget ends, is reported and leaves its record unlatched,
+// without keeping the others from stopping.
+func TestStopWatchersStopsTheLiveOnesAndLatchesThem(t *testing.T) {
+	s, _, procs := newStore(t)
+	mapSession(t, s, sessionA)
+	live, gone, stubborn := keyFor(sessionA), keyFor(sessionB), Key{PID: kimiPID, StartMS: kimiStart, Session: "session_c"}
+	// The hung watcher's record sorts first, so waiting for one watcher at a time would spend the
+	// whole budget on it and miss the end of the one that stops late.
+	hung := Key{PID: kimiPID, StartMS: kimiStart, Session: "session_0"}
+	put(t, s, live, Record{Version: recordVersion, Attempt: &Attempt{PID: 9001, StartMS: 9002, ID: "live"}})
+	put(t, s, gone, Record{Version: recordVersion, Attempt: &Attempt{PID: 9003, StartMS: 9004, ID: "gone"}})
+	put(t, s, stubborn, Record{Version: recordVersion, Attempt: &Attempt{PID: 9005, StartMS: 9006, ID: "stubborn"}})
+	put(t, s, hung, Record{Version: recordVersion, Attempt: &Attempt{PID: 9007, StartMS: 9008, ID: "hung"}})
+	procs.set(9001, 9002, true)
+	procs.set(9005, 9006, true)
+	procs.set(9007, 9008, true)
+	// Like TerminateProcess, a stop returns while the watcher still runs: it ends a few checks later.
+	checksLeft := -1
+	s.Alive = func(pid int, start int64) bool {
+		if pid == 9001 && checksLeft >= 0 {
+			if checksLeft == 0 {
+				procs.set(pid, start, false)
+			}
+			checksLeft--
+		}
+		return procs[[2]int64{int64(pid), start}]
+	}
+	for _, name := range []string{"notes.json", "1-2.json", "1-2-bad id.json", ".tmp-123"} {
+		if err := os.WriteFile(filepath.Join(s.Root, watchersName, name), []byte("{"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(s.recordPath(Key{PID: kimiPID, StartMS: kimiStart, Session: "session_broken"}), []byte("{"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var stopped []int
+	terminate = func(pid int, start int64) error {
+		stopped = append(stopped, pid)
+		switch pid {
+		case 9005:
+			return errors.New("access denied")
+		case 9001:
+			checksLeft = 3
+		}
+		return nil
+	}
+	t.Cleanup(func() { terminate = defaultTerminate })
+	err := s.StopWatchers(100 * time.Millisecond)
+	slices.Sort(stopped)
+	if err == nil || !strings.Contains(err.Error(), "watcher 9005: access denied") ||
+		!strings.Contains(err.Error(), "watcher 9007: still running") || strings.Contains(err.Error(), "9001") ||
+		!slices.Equal(stopped, []int{9001, 9005, 9007}) {
+		t.Fatalf("%v %v", err, stopped)
+	}
+	if r, _ := recordOf(t, s, live); r.Latch == nil || r.Latch.State != LatchDisabled {
+		t.Fatalf("the stopped watcher's record: %+v", r)
+	}
+	if r, _ := recordOf(t, s, gone); r.Latch != nil {
+		t.Fatalf("a record without a live watcher was latched: %+v", r)
+	}
+	for _, k := range []Key{stubborn, hung} {
+		if r, _ := recordOf(t, s, k); r.Latch != nil || r.Attempt == nil {
+			t.Fatalf("a watcher that did not stop lost its record: %+v", r)
+		}
+	}
+	// A watcher that ended on its own before its stop counts as stopped, as Terminate reports it.
+	terminate = func(pid int, start int64) error {
+		procs.set(pid, start, false)
+		return proc.ErrNotFound
+	}
+	if err := s.StopWatchers(time.Second); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []Key{stubborn, hung} {
+		if r, _ := recordOf(t, s, k); r.Latch == nil || r.Latch.State != LatchDisabled {
+			t.Fatalf("a watcher gone before its stop: %+v", r)
+		}
+	}
+	release, err := s.lock(time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer release()
+	if err := s.StopWatchers(20 * time.Millisecond); !errors.Is(err, ErrLocked) {
+		t.Fatal(err)
+	}
+}
+
+// A lock held elsewhere while the stopped watchers end does not stretch the stop to a budget per
+// watcher: each latch waits only for what is left of the one budget. The records stay unlatched,
+// and the stop says why.
+func TestStopWatchersKeepsToItsBudgetWhileTheLockIsHeld(t *testing.T) {
+	s, _, procs := newStore(t)
+	mapSession(t, s, sessionA)
+	var keys []Key
+	for i, session := range []string{"session_a", "session_b", "session_c", "session_d", "session_e", "session_f"} {
+		k := Key{PID: kimiPID, StartMS: kimiStart, Session: session}
+		pid := 9100 + i
+		put(t, s, k, Record{Version: recordVersion, Attempt: &Attempt{PID: pid, StartMS: int64(pid), ID: session}})
+		procs.set(pid, int64(pid), true)
+		keys = append(keys, k)
+	}
+	var release func()
+	terminate = func(pid int, start int64) error {
+		procs.set(pid, start, false)
+		if release == nil {
+			var err error
+			if release, err = s.lock(time.Second); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return nil
+	}
+	t.Cleanup(func() { terminate = defaultTerminate })
+	const budget = 200 * time.Millisecond
+	began := time.Now()
+	err := s.StopWatchers(budget)
+	elapsed := time.Since(began)
+	release()
+	if !errors.Is(err, ErrLocked) || elapsed > 4*budget {
+		t.Fatalf("stopping %d watchers while the lock was held: %v after %v", len(keys), err, elapsed)
+	}
+	for _, k := range keys {
+		if r, _ := recordOf(t, s, k); r.Latch != nil {
+			t.Fatalf("latched without the lock: %+v", r)
+		}
+	}
+}
+
+var defaultTerminate = terminate
 
 // A latch never replaces a live watcher. Without one it latches and supersedes a pending request.
 func TestALatchNeverReplacesALiveWatcher(t *testing.T) {

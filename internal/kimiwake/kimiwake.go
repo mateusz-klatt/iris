@@ -61,10 +61,130 @@ func Root(pinned string) string { return filepath.Join(pinned, dirName) }
 
 // Enabled reports whether wake is on. Only a preference file whose trimmed text is exactly "on"
 // enables it. A missing, unreadable or any other file means off, which is the default until the
-// native acceptance passes.
+// native acceptance passes: "default", a person's lack of an explicit choice, is off for now.
 func Enabled(root string) bool {
-	raw, err := os.ReadFile(filepath.Join(root, preferenceName))
-	return err == nil && strings.TrimSpace(string(raw)) == "on"
+	raw, err := os.ReadFile(PreferencePath(root))
+	return err == nil && On(strings.TrimSpace(string(raw)))
+}
+
+// On reports whether a recorded choice turns wake on. Integration installs the skill by the same
+// rule, so the two never disagree.
+func On(choice string) bool { return choice == PreferenceOn }
+
+// PreferencePath is the preference file under the state directory root.
+func PreferencePath(root string) string { return filepath.Join(root, preferenceName) }
+
+// The preference's values. The file records the choice, as Antigravity's marker does: "default"
+// when the person made none, "on" or "off" when they did. A missing file means not integrated.
+const (
+	PreferenceDefault = "default"
+	PreferenceOn      = "on"
+	PreferenceOff     = "off"
+)
+
+// ErrPreference is a preference file that holds none of the three values.
+var ErrPreference = errors.New("the Kimi wake preference is not default, on or off")
+
+// Preference reads the recorded choice: "" when there is none, as before integration or after a
+// removal that emptied a file Iris did not create.
+func Preference(root string) (string, error) {
+	raw, err := os.ReadFile(PreferencePath(root))
+	if errors.Is(err, fs.ErrNotExist) {
+		return "", nil
+	}
+	if err != nil {
+		return "", err
+	}
+	switch value := strings.TrimSpace(string(raw)); value {
+	case "", PreferenceDefault, PreferenceOn, PreferenceOff:
+		return value, nil
+	default:
+		return "", ErrPreference
+	}
+}
+
+// terminate stops a process only while its pid and start time still match. Tests replace it.
+var terminate = proc.Terminate
+
+// StopWatchers stops every watcher a record shows alive, as turning wake off or removing the
+// integration requires, and latches each record it touched disabled once no live watcher holds
+// it. A watcher that ends on its own first is skipped. A failed stop is returned, joined, and
+// does not keep the others from stopping. Without a watchers directory no watcher ever ran, and
+// nothing is made.
+//
+// A stop is only asked for: Windows ends a process after TerminateProcess has returned, and a
+// watcher handles SIGTERM before it exits. A record is latched once its watcher has ended, which
+// StopWatchers waits for within budget, because a latch never replaces a live owner. A watcher
+// still running then is reported, and its record is left as it is.
+func (s *Store) StopWatchers(budget time.Duration) error {
+	if _, err := os.Lstat(filepath.Join(s.Root, watchersName)); errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	var live []Key
+	var attempts []Attempt
+	err := s.locked(budget, func() error {
+		entries, _ := os.ReadDir(filepath.Join(s.Root, watchersName))
+		for _, e := range entries {
+			k, ok := recordKey(e.Name())
+			if !ok {
+				continue
+			}
+			r, _, err := readRecord(s.recordPath(k))
+			if err == nil && r.Attempt != nil && s.alive(r.Attempt.PID, r.Attempt.StartMS) {
+				live, attempts = append(live, k), append(attempts, *r.Attempt)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	var failed []error
+	var asked []int
+	for i, a := range attempts {
+		if err := terminate(a.PID, a.StartMS); err != nil && !errors.Is(err, proc.ErrNotFound) {
+			failed = append(failed, fmt.Errorf("watcher %d: %w", a.PID, err))
+			continue
+		}
+		asked = append(asked, i)
+	}
+	// Each round checks every watcher still waited for, so one that does not end cannot use up the
+	// budget of the others. A latch waits for the lock only as long as the budget has left: a lock
+	// held elsewhere must not stretch the whole stop to a budget per watcher.
+	deadline := time.Now().Add(budget)
+	for {
+		var running []int
+		for _, i := range asked {
+			if a := attempts[i]; s.alive(a.PID, a.StartMS) {
+				running = append(running, i)
+				continue
+			}
+			failed = append(failed, s.LatchIfFree(live[i], LatchDisabled, time.Until(deadline)))
+		}
+		if asked = running; len(asked) == 0 || !time.Now().Before(deadline) {
+			break
+		}
+		time.Sleep(lockRetry)
+	}
+	for _, i := range asked {
+		failed = append(failed, fmt.Errorf("watcher %d: still running after it was asked to stop", attempts[i].PID))
+	}
+	return errors.Join(failed...)
+}
+
+// recordKey reads the key a record file is named after: "<pid>-<start>-<session>.json".
+func recordKey(name string) (Key, bool) {
+	base, ok := strings.CutSuffix(name, ".json")
+	if !ok {
+		return Key{}, false
+	}
+	fields := strings.SplitN(base, "-", 3)
+	if len(fields) != 3 {
+		return Key{}, false
+	}
+	pid, startMS, ok := entryProcess(fields[0] + "-" + fields[1] + ".json")
+	k := Key{PID: pid, StartMS: startMS, Session: fields[2]}
+	return k, ok && k.valid()
 }
 
 // ValidSession accepts the native session ids Kimi gives, "session_" and a UUID. It rejects

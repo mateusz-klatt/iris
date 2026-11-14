@@ -132,9 +132,11 @@ func inspectionFailureReason(detail string) string {
 		"Codex status proxy exceeded its bound or failed",
 		"Codex queue command could not start",
 		"Codex has no saved rollout for this thread",
+		// The retired ADR 026 web wake wrote these three; wake files from before ADR 030 can
+		// still carry them.
 		"Kimi executable version could not be determined",
 		"Kimi executable and server versions differ",
-		kimiOccupied,
+		"Kimi session is open in another Kimi process",
 		antigravityExeUnavailable,
 		antigravitySendStartFailed,
 		antigravityRejectedWake:
