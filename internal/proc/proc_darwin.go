@@ -4,6 +4,7 @@ package proc
 
 import (
 	"bytes"
+	"encoding/binary"
 
 	"golang.org/x/sys/unix"
 )
@@ -55,6 +56,58 @@ func executableOS(pid int, _ Snapshot) (string, error) {
 		return "", err
 	}
 	return executablePath(raw), nil
+}
+
+func argsOS(pid int) ([]string, error) {
+	raw, err := unix.SysctlRaw("kern.procargs2", pid)
+	if err != nil {
+		return nil, err
+	}
+	return procargsArgs(raw)
+}
+
+// procargsArgs reads the arguments from a kern.procargs2 buffer: the argument count, the
+// executable path and its NUL padding, then that many NUL-terminated arguments before the
+// environment. A buffer cut short gives none.
+func procargsArgs(raw []byte) ([]string, error) {
+	_, complete, rest := cutProcargs(raw)
+	n := 0
+	if complete {
+		n = int(binary.LittleEndian.Uint32(raw[:4]))
+	}
+	if n <= 0 || n > len(rest) {
+		return nil, ErrNotFound
+	}
+	rest = bytes.TrimLeft(rest, "\x00")
+	args := make([]string, 0, n)
+	for len(args) < n {
+		arg, after, found := bytes.Cut(rest, []byte{0})
+		if !found {
+			return nil, ErrNotFound
+		}
+		args, rest = append(args, string(arg)), after
+	}
+	return args, nil
+}
+
+// noDevice is NODEV, the e_tdev of a process without a controlling terminal.
+const noDevice = -1
+
+// kinfoProc reads a process's kinfo_proc. Tests replace it.
+var kinfoProc = func(pid int) (*unix.KinfoProc, error) { return unix.SysctlKinfoProc("kern.proc.pid", pid) }
+
+// readsTerminalOS reports whether the process has a controlling terminal. macOS gives no cheap view
+// of another process's standard input, and Grok 1.0.77 starts its hooks without its terminal, so
+// the hook's own terminal says nothing (ADR 031).
+func readsTerminalOS(pid int) (bool, error) {
+	k, err := kinfoProc(pid)
+	if err != nil {
+		return false, err
+	}
+	if k == nil {
+		return false, ErrNotFound
+	}
+	return k.Eproc.Tdev != noDevice, nil
 }
 
 func executablePath(raw []byte) string {

@@ -34,6 +34,37 @@ func executableOS(pid int, _ Snapshot) (string, error) {
 	return os.Readlink("/proc/" + strconv.Itoa(pid) + "/exe")
 }
 
+func argsOS(pid int) ([]string, error) {
+	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cmdline")
+	if err != nil {
+		return nil, err
+	}
+	return splitArgs(b)
+}
+
+// splitArgs splits a NUL-separated argument block, which ends with a NUL. A kernel process or a
+// zombie has none.
+func splitArgs(b []byte) ([]string, error) {
+	if len(b) == 0 {
+		return nil, ErrNotFound
+	}
+	return strings.Split(strings.TrimSuffix(string(b), "\x00"), "\x00"), nil
+}
+
+func readsTerminalOS(pid int) (bool, error) {
+	target, err := os.Readlink("/proc/" + strconv.Itoa(pid) + "/fd/0")
+	if err != nil {
+		return false, err
+	}
+	return terminalPath(target), nil
+}
+
+// terminalPath reports whether a descriptor's link names a terminal: a pseudo-terminal, a
+// virtual console or serial line, or the console. A pipe, a socket, a file and /dev/null are not.
+func terminalPath(target string) bool {
+	return strings.HasPrefix(target, "/dev/pts/") || strings.HasPrefix(target, "/dev/tty") || target == "/dev/console"
+}
+
 func statusValue(status []byte, key string) string {
 	for _, line := range strings.Split(string(status), "\n") {
 		if strings.HasPrefix(line, key) {

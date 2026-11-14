@@ -1,8 +1,10 @@
 # 028: Antigravity idle wake through a model-armed helper
 
 Status: accepted and verified live on 2026-11-13; amended on 2026-11-13 to turn wake on by default
-on the owner's direction (~20:20 UTC). Changes D7 for Antigravity only. Extends the single-wake
-policy of ADR 017 and ADR 023 without changing the other clients.
+on the owner's direction (~20:20 UTC), and on 2026-11-14 by
+[ADR 031](031-wake-only-in-interactive-sessions.md): `Stop` asks only an interactive session
+(measurement 16). Changes D7 for Antigravity only. Extends the single-wake policy of ADR 017 and
+ADR 023 without changing the other clients.
 
 ## Problem
 
@@ -105,6 +107,39 @@ each one at the keyboard.
 14. **Refused Language Server on Windows.** A refused connection reads `connectex: No connection
     could be made because the target machine actively refused it.` where Unix prints
     `connect: connection refused`.
+16. **Print mode was asked too** (2026-11-14, iris 7850676, agy 1.5.8, marker `default`). holzera
+    sent "reply with exactly PONG" through the delegation bridge's `agy -p`, and `Stop` asked
+    anyway.
+    - Without `--dangerously-skip-permissions`, agy denied the `run_command` and the answer stayed
+      `PONG`. The `arm_requested` record stayed behind for an agy process that had exited.
+    - With it, the command ran, a helper armed for a headless process, and the delegation
+      returned `PONG\nPONG`.
+
+    WSL then measured what could tell the modes apart. It used a scratch workspace with capture
+    hooks, and Iris isolated by a scratch token path and a refused hub port.
+    - **The hook sees no mode.** `Stop`, `PreInvocation` and `PostInvocation` have the same keys
+      under `-p`, a prompt piped into a bare `agy`, and `-i` in a terminal. The three `Stop`
+      captures are `stop_print.json`, `stop_piped.json` and `stop_interactive.json`. The hook
+      environment differs only in `ANTIGRAVITY_CONVERSATION_ID` and the terminal's own variables.
+    - **The grammar.** agy's own parse errors, which start no session, show Go's flag rules:
+      - `-x` and `--x` are the same, and `=value` works.
+      - A flag that takes a value takes the next argument even when it starts with `-`.
+      - The booleans are `-c`/`--continue`, `--dangerously-skip-permissions`,
+        `--disable-slash-commands`, `--new-project`, `--remote-agent`, `--remote-control` and
+        `--sandbox`. Every other root flag takes a value, `-p`/`--print`/`--prompt` and
+        `-i`/`--prompt-interactive` among them.
+      - agy refuses a positional prompt ("Prompts are read only from -p/--print,
+        -i/--prompt-interactive, or stdin"), so its only positional arguments are subcommands,
+        `acp` among them.
+    - **A piped prompt runs headless without a print flag.** `echo … | agy --model …` printed
+      `PONG` and exited.
+    - **`-i` needs a terminal.** Without one, bubbletea fails to open `/dev/tty` and agy exits
+      before any hook runs.
+    - **Where the input points.** In the interactive TUI, agy's fd 0 was `/dev/pts/N`, and the hook
+      had a controlling terminal. In the headless runs, fd 0 was `/dev/null` or a pipe. agy points
+      its own fd 1 and 2 at its log file in every mode.
+    - **Workspace trust.** In an untrusted workspace the `-i` prompt ran behind the trust dialog
+      with only the user's hooks. The workspace hooks loaded after trust was given.
 
 ## Decision
 
@@ -199,7 +234,13 @@ helper, and only when every gate holds:
   or `"` characters (otherwise fail open without asking), the `(agy pid, start_ms)` record is not
   marked `failed` or `arm_requested(conversationId)`, and no live process matching
   `(helper_pid, helper_start_ms)` for this `conversationId` exists (`proc.Lookup`, rejecting dead
-  and zombie states).
+  and zombie states);
+- the `agy` ancestor runs an interactive session
+  ([ADR 031](031-wake-only-in-interactive-sessions.md), measurement 16). Its arguments, read from
+  the process and parsed by agy's grammar, must have no `-p`/`--print`/`--prompt`, no subcommand
+  and no flag Iris does not know. Then either `-i`/`--prompt-interactive` is present, or the
+  process reads a terminal. Otherwise `Stop` records no request, writes
+  `wake not asked: <reason>` to the observed log, and allows.
 
 If `Stop` (`fullyIdle: true`, `terminationReason: "NO_TOOL_CALL"`) instead sees
 `arm_requested(conversationId)` with still no live helper for `conversationId` — covering a model
@@ -407,9 +448,15 @@ helper run **incremental, attempt-associated forward scanning** outside the `ses
   Neither `SessionStart` nor `iris mcp` has the Language Server address or token, so nothing wakes a
   session before its first turn reaches `Stop` and arms the helper. Because Iris writes no
   `command(...)` allow rule, Antigravity prompts the user once per armed conversation (and again
-  after `/clear`, which creates a new `conversationId`) to approve the unsandboxed helper command;
-  in headless `-p` mode without user approval, the request is denied once, latched `failed`, and not
-  repeated.
+  after `/clear`, which creates a new `conversationId`) to approve the unsandboxed helper command.
+  A headless run is not asked at all ([ADR 031](031-wake-only-in-interactive-sessions.md)). Before
+  that, a `-p` run was asked too: denied without `--dangerously-skip-permissions`, and run with it,
+  arming a helper for a headless process and changing the run's answer (measurement 16).
+- **Print mode is told from the process, not from agy.** A flag Iris does not know turns the request
+  off until Iris learns it. On Linux the input check reads agy's own input. On macOS it is whether
+  agy has a controlling terminal, and on Windows whether the hook has a console. So a headless run
+  without a print flag whose process still has one is asked once: for instance, a prompt piped into
+  agy by a person at a terminal (ADR 031).
 - **Choosing "Always allow" in Antigravity weakens the sandbox for that binary.** If a user
   persists a `command(...)` allow rule themselves, Antigravity's matcher permits `VAR=value`
   assignments, `env` wrappers and extra arguments on that binary outside the sandbox (measurement

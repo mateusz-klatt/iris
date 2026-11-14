@@ -147,7 +147,7 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		return FallbackAllow(runner)
 	}
 	state.received(r.canaryReceipt(ev))
-	if out, ok := r.antigravityHook(ev); ok {
+	if out, ok := r.antigravityHook(ev, state.observe); ok {
 		return r.finish(state, ev, out)
 	}
 	if ev.Client == ClientCodex && ev.Kind == KindPrompt {
@@ -161,7 +161,7 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 	}
 	// Stop asks for a monitor before the repository check. A session outside a git checkout
 	// still needs the wake, and the ask does not call the hub (ADR 025).
-	if out, ok := r.grokMonitorAsk(ev); ok {
+	if out, ok := r.grokMonitorAsk(ev, state.observe); ok {
 		return r.finish(state, ev, out)
 	}
 	if shellEvent(ev) {

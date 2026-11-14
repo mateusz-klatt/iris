@@ -141,6 +141,7 @@ func TestAntigravityQuotingAndCommandMatching(t *testing.T) {
 
 func TestAntigravityStopGatesAndFailOpen(t *testing.T) {
 	configDir, _, getenv := agyTestEnv(t)
+	asInteractive(t)
 	anc := func() (proc.Ancestor, error) {
 		return proc.Ancestor{PID: 4001, StartMS: 9001, Name: "agy"}, nil
 	}
@@ -363,6 +364,7 @@ func TestAntigravityStopGatesAndFailOpen(t *testing.T) {
 func TestAntigravityArmingLifecycleSupersededSessionsAndRearm(t *testing.T) {
 	configDir, _, getenv := agyTestEnv(t)
 	enableAgyWake(t, configDir)
+	asInteractive(t)
 
 	const agyPID, agyStart = 5500, int64(77000)
 	anc := func() (proc.Ancestor, error) {

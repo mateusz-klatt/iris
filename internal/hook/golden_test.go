@@ -283,6 +283,10 @@ var fixtureWant = map[string]decoded{
 	"antigravity/session_start.json":        {kind: KindSessionStart, session: agySession, cwd: proj},
 	"antigravity/stop.json":                 {kind: KindStop, session: agySession, cwd: proj},
 	"antigravity/stop_continuation.json":    {kind: KindStop, session: agyWakeSession, cwd: agyWakeProj},
+	// The same Stop of agy 1.5.8 under -p, a prompt piped in, and -i in a terminal (ADR 031).
+	"antigravity/stop_interactive.json": {kind: KindStop, session: "67c3ad56-e149-4fbb-aaf9-90195aaa42e5", cwd: proj},
+	"antigravity/stop_piped.json":       {kind: KindStop, session: "f3172ef0-c7f6-4f31-9901-fec18a1237d5", cwd: proj},
+	"antigravity/stop_print.json":       {kind: KindStop, session: "c10f13b7-426e-4437-ae0c-1ef852cecae8", cwd: proj},
 
 	"claude/PostToolUse-bash.json":                   {kind: KindPostTool, session: claudeSession, cwd: proj, tool: "Bash", class: ClassShell, command: "printf shell_ok", call: "toolu_01ECwF1dVgjgN9pZRc5Veud4"},
 	"claude/PostToolUse-mcp__iris_probe__probe.json": {kind: KindPostTool, session: claudeSession, cwd: proj, tool: "mcp__iris-probe__probe", class: ClassMCP, call: "toolu_01VZQc8PJf7R4RUQzfncvpbL"},

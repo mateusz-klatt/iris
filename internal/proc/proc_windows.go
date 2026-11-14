@@ -3,6 +3,7 @@
 package proc
 
 import (
+	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -55,4 +56,54 @@ func imageName(h windows.Handle) string {
 
 func executableOS(_ int, s Snapshot) (string, error) {
 	return s.Name, nil
+}
+
+// queryCommandLine is NtQueryInformationProcess for ProcessCommandLineInformation, which fills
+// buf with a counted UTF-16 string and its text. Tests replace it.
+var queryCommandLine = func(h windows.Handle, buf []byte) error {
+	var n uint32
+	return windows.NtQueryInformationProcess(h, int32(windows.ProcessCommandLineInformation), unsafe.Pointer(&buf[0]), uint32(len(buf)), &n)
+}
+
+// argsOS splits the process's command line by CommandLineToArgvW's rules. A command line holds at
+// most 32767 UTF-16 code units, so the buffer fits it with its header.
+func argsOS(pid int) ([]string, error) {
+	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
+	if err != nil {
+		return nil, err
+	}
+	// This query-only handle owns no pending writes; closing it cannot affect the result.
+	defer func() { _ = windows.CloseHandle(h) }()
+	buf := make([]byte, 64<<10+int(unsafe.Sizeof(windows.NTUnicodeString{})))
+	if err := queryCommandLine(h, buf); err != nil {
+		return nil, err
+	}
+	return splitCommandLine((*windows.NTUnicodeString)(unsafe.Pointer(&buf[0])).String())
+}
+
+// splitCommandLine splits a command line by CommandLineToArgvW's rules. A doubled quote is
+// refused: runtimes disagree about it, Rust's (Grok's) among them, so the split could hide a flag
+// (ADR 031).
+func splitCommandLine(line string) ([]string, error) {
+	if line == "" || strings.Contains(line, `""`) {
+		return nil, ErrNotFound
+	}
+	return windows.DecomposeCommandLine(line)
+}
+
+// openConsole opens the caller's console input. Tests replace it.
+var openConsole = func() (windows.Handle, error) {
+	name, _ := windows.UTF16PtrFromString("CONIN$")
+	return windows.CreateFile(name, windows.GENERIC_READ|windows.GENERIC_WRITE, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil, windows.OPEN_EXISTING, 0, 0)
+}
+
+// readsTerminalOS reports whether the caller has a console. Windows gives no cheap view of another
+// process's standard input, and a hook shares the console of the client that started it (ADR 031).
+func readsTerminalOS(int) (bool, error) {
+	h, err := openConsole()
+	if err != nil {
+		return false, nil
+	}
+	_ = windows.CloseHandle(h)
+	return true, nil
 }
