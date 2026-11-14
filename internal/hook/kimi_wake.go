@@ -65,8 +65,9 @@ func (r Runner) recordKimiSession(ev Event) {
 // or "" (ADR 030). It asks only when wake is on and no watcher is live, pending or latched for this
 // session; a request the previous turn left unanswered latches instead. A steer, typed into a turn
 // that is still running, starts no turn and neither asks nor judges. It reads local files and the
-// process table only, and any failure asks nothing (D3).
-func (r Runner) kimiArm(ev Event) string {
+// process table only, and any failure asks nothing (D3). Only an interactive session is asked (ADR
+// 031); for any other, note gets the reason and no request is recorded.
+func (r Runner) kimiArm(ev Event, note func(string)) string {
 	if !kimiTopLevel(ev, KindPrompt) || ev.Steer {
 		return ""
 	}
@@ -79,6 +80,11 @@ func (r Runner) kimiArm(ev Event) string {
 	}
 	a, ok := r.kimiProcess()
 	if !ok {
+		note(wakeNotAsked + "no kimi process")
+		return ""
+	}
+	if interactive, why := interactive(a, kimiMode); !interactive {
+		note(wakeNotAsked + why)
 		return ""
 	}
 	ask, err := s.RequestArm(kimiwake.Key{PID: a.PID, StartMS: a.StartMS, Session: ev.SessionID}, hookLockBudget)

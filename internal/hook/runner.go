@@ -219,7 +219,7 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		// (ADR 030): Kimi 2.6.1 never runs Stop hooks. The request is decided before the note,
 		// which records what the session was told. Were the deadline to pass while arming waits
 		// for its lock, after the note, the note would be lost with its attention recorded as told.
-		ask := r.kimiArm(ev)
+		ask := r.kimiArm(ev, state.observe)
 		note := r.attentionNote(ctx, ev, sess.Attention, false, rev)
 		if ask != "" {
 			note = strings.TrimPrefix(note+"\n"+ask, "\n")

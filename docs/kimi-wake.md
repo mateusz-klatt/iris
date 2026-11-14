@@ -45,6 +45,11 @@ watcher's own lines still say what to do.
    `run_in_background=true` and `disable_timeout=true`. It asks only when the hub has accepted the
    session and no watcher for it is running, requested or stopped (latched, below). A prompt typed
    into a running turn starts no turn, so it neither asks nor counts as an answer.
+   It asks only an interactive session ([ADR 031](adr/031-wake-only-in-interactive-sessions.md)):
+   - a `kimi -p` run is not asked, and neither is a subcommand such as `acp`;
+   - otherwise Kimi itself must read a terminal: fd 0 on Linux, its controlling terminal on macOS;
+   - Kimi blanks its own arguments once it runs, so a `kimi -p` typed at a terminal is asked once;
+   - each skipped request is noted as `wake not asked: <reason>` in the observed log.
 3. The watcher looks up the Execution that the hooks registered for that Kimi process and session,
    and only that one. It never registers an Execution of its own, and it keeps the Execution's lease
    alive without counting as a monitor, so prompt reminders go on as before.

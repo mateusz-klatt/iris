@@ -254,6 +254,113 @@ func TestAntigravityStopWithoutAnAgyProcessSaysWhy(t *testing.T) {
 	}
 }
 
+func TestKimiModeReadsEveryFlagForm(t *testing.T) {
+	for _, tc := range []struct {
+		args []string
+		want clientMode
+	}{
+		// Kimi 2.6.1 rewrites its argv once it names itself, so these leave it to the input.
+		{[]string{"kimi-code", "", ""}, modeInput},
+		{[]string{"kimi-code", "", "", "", ""}, modeInput},
+		// Anything else that is not readable as Kimi's grammar is unknown.
+		{[]string{"kimi-code", "", "-p"}, modeUnknown},
+		{[]string{"kimi"}, modeInput},
+		{[]string{"kimi-code"}, modeInput},
+		// Print mode in every spelling.
+		{[]string{"kimi", "-p", "reply with exactly PONG"}, modePrint},
+		{[]string{"kimi", "--prompt", "x"}, modePrint},
+		{[]string{"kimi", "--prompt=x"}, modePrint},
+		{[]string{"kimi", "-px"}, modePrint},
+		{[]string{"kimi", "-cp", "x"}, modePrint},
+		{[]string{"kimi", "-m", "kimi-code/k3.1-pro", "-p", "x"}, modePrint},
+		// A value is the next argument even when it looks like an option.
+		{[]string{"kimi", "-m", "-p"}, modeInput},
+		{[]string{"kimi", "--model", "--prompt"}, modeInput},
+		{[]string{"kimi", "-mp"}, modeInput},
+		{[]string{"kimi", "--add-dir=/srv", "--plan", "-cy"}, modeInput},
+		// An optional session id is taken only from an argument that is not an option.
+		{[]string{"kimi", "-S", "session_638c5a91", "--yolo"}, modeInput},
+		{[]string{"kimi", "-S", "-p", "x"}, modePrint},
+		{[]string{"kimi", "--session=session_638c5a91"}, modeInput},
+		{[]string{"kimi", "--session", "session_638c5a91", "--prompt", "x"}, modePrint},
+		{[]string{"kimi", "-Ssession_638c5a91"}, modeInput},
+		{[]string{"kimi", "--session"}, modeInput},
+		// Subcommands, and what follows --.
+		{[]string{"kimi", "acp"}, modeCommand},
+		{[]string{"kimi", "-m", "m", "web"}, modeCommand},
+		{[]string{"kimi", "--", "acp"}, modeCommand},
+		{[]string{"kimi", "--"}, modeInput},
+		// What Kimi itself refuses, or Iris does not know.
+		{[]string{"kimi", "zzword"}, modeUnknown},
+		{[]string{"kimi", "--plan=zz"}, modeUnknown},
+		{[]string{"kimi", "-m"}, modeUnknown},
+		{[]string{"kimi", "--model"}, modeUnknown},
+		{[]string{"kimi", "--zz-undefined"}, modeUnknown},
+		{[]string{"kimi", "-x"}, modeUnknown},
+	} {
+		if got := kimiMode(tc.args); got != tc.want {
+			t.Errorf("%q: %d, want %d", tc.args, got, tc.want)
+		}
+	}
+}
+
+// Kimi's prompt hook asks only an interactive session. Its own input decides once the argv is
+// rewritten, a readable -p never asks, and no request is recorded for a session not asked.
+func TestKimiPromptAsksOnlyAnInteractiveSession(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		args     []string
+		terminal bool
+		ask      bool
+		why      string
+	}{
+		{"rewritten, at a terminal", []string{"kimi-code", "", ""}, true, true, ""},
+		{"rewritten, not at a terminal", []string{"kimi-code", "", ""}, false, false, "input is not a terminal"},
+		{"readable print mode", []string{"kimi", "-p", "x"}, true, false, "print mode"},
+		{"protocol server", []string{"kimi", "acp"}, true, false, "subcommand"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newKimiHarness(t)
+			h.wake("on")
+			h.start(kimiSession)
+			readAs(t, tc.args, nil, tc.terminal, nil)
+			out := h.prompt(kimiSession)
+			if tc.ask {
+				asked(t, out)
+			} else {
+				quiet(t, out)
+				if r, _ := h.record(kimiSession); r.ArmRequestedMS != 0 {
+					t.Fatalf("a request was recorded: %+v", r)
+				}
+			}
+			seen, err := ReadRecentObservations(h.env("IRIS_TOKEN_FILE"), 10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			notes := []string{}
+			for _, f := range seen {
+				notes = append(notes, f.Error)
+			}
+			want := []string{}
+			if tc.why != "" {
+				want = []string{wakeNotAsked + tc.why}
+			}
+			if !slices.Equal(notes, want) {
+				t.Fatalf("observed %q, want %q", notes, want)
+			}
+		})
+	}
+	h := newKimiHarness(t)
+	h.wake("on")
+	h.start(kimiSession)
+	h.anc = proc.Ancestor{}
+	quiet(t, h.prompt(kimiSession))
+	seen, err := ReadRecentObservations(h.env("IRIS_TOKEN_FILE"), 10)
+	if err != nil || len(seen) != 1 || seen[0].Error != wakeNotAsked+"no kimi process" {
+		t.Fatalf("observed %+v, %v", seen, err)
+	}
+}
+
 // Grok's Stop asks for the monitor only in an interactive session of a grok process. A print-mode
 // run and a process that is not grok are not asked, and the observed log says why.
 func TestGrokStopAsksOnlyAnInteractiveSession(t *testing.T) {
