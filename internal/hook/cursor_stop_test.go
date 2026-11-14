@@ -2,14 +2,67 @@ package hook
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 )
+
+func TestCursorPrintModeGetsNoFollowUp(t *testing.T) {
+	root := gitRepo(t)
+	env := failureEnv(t)
+	now := hubclient.Attention{Unread: 1, HighWater: 1, Identity: hubclient.Identity{Known: true, Pending: true, Stream: "s", Cursor: 1}}
+	calls := 0
+	prev := cursorCommandLine
+	t.Cleanup(func() { cursorCommandLine = prev })
+	for _, args := range [][]string{{"cursor-agent", "-p", "PING"}, {"cursor-agent", "--print", "PING"}, nil} {
+		cursorCommandLine = func(int, int64) ([]string, error) {
+			if args == nil {
+				return nil, os.ErrNotExist
+			}
+			return args, nil
+		}
+		before := calls
+		out := Runner{
+			ClientName: "cursor", EventName: "stop",
+			Stdin: strings.NewReader(cursorStopPayload(root, 0)),
+			Hub:   attentionHub{now: &now, calls: &calls}, Getenv: env, after: never, logAfter: never,
+		}.Run()
+		if out.Exit != 0 || strings.Contains(string(out.Stdout), "followup_message") || calls != before {
+			t.Fatalf("%v: calls %d->%d %s", args, before, calls, out.Stdout)
+		}
+	}
+}
+
+func TestCursorInteractiveArgs(t *testing.T) {
+	if cursorInteractiveArgs(nil) || cursorInteractiveArgs([]string{"cursor-agent", "-p"}) || cursorInteractiveArgs([]string{"cursor-agent", "--print=hi"}) {
+		t.Fatal("print mode looked interactive")
+	}
+	if !cursorInteractiveArgs([]string{"cursor-agent", "--trust", "say PING"}) || !cursorInteractiveArgs([]string{"cursor-agent", "--model", "composer-2.5-fast"}) {
+		t.Fatal("an interactive launch was refused")
+	}
+	if cursorInteractiveArgs([]string{"cursor-agent", "--model"}) || cursorInteractiveArgs([]string{"cursor-agent", "--not-a-flag"}) || cursorInteractiveArgs([]string{"cursor-agent", "mcp"}) {
+		t.Fatal("an incomplete, unknown or management command looked interactive")
+	}
+	if !cursorInteractiveArgs([]string{"cursor-agent", "agent", "--trust"}) || !cursorInteractiveArgs([]string{"cursor-agent", "--worktree", "wt"}) || !cursorInteractiveArgs([]string{"cursor-agent", "--worktree"}) {
+		t.Fatal("agent and optional worktree should stay interactive")
+	}
+	if cursorInteractiveArgs([]string{"cursor-agent", "-H"}) || cursorInteractiveArgs([]string{"cursor-agent", "-q"}) || !cursorInteractiveArgs([]string{"cursor-agent", "-f", "-H", "N: V"}) || !cursorInteractiveArgs([]string{"cursor-agent", "-HName: V"}) || !cursorInteractiveArgs([]string{"cursor-agent", "-w", "wt"}) {
+		t.Fatal("short options were classified wrong")
+	}
+	if cursorInteractiveArgs([]string{"cursor-agent", "-fp"}) {
+		t.Fatal("a grouped -p was interactive")
+	}
+	if !cursorInteractiveArgs([]string{"cursor-agent", "-w"}) || !cursorInteractiveArgs([]string{"cursor-agent", "-w", "-f"}) {
+		t.Fatal("a short worktree flag consumed the next option")
+	}
+	if !cursorInteractiveArgs([]string{"cursor-agent", "--", "prompt"}) {
+		t.Fatal("arguments after -- are the prompt")
+	}
+}
 
 func TestCapturedCursorStopIsTheFirstTurn(t *testing.T) {
 	payload, err := os.ReadFile(filepath.Join("testdata", "cursor", "stop.json"))
@@ -35,11 +88,31 @@ func TestCapturedCursorStopIsTheFirstTurn(t *testing.T) {
 }
 
 func cursorStopPayload(root string, loop int) string {
-	return `{"hook_event_name":"stop","conversation_id":"s","session_id":"s","status":"completed","loop_count":` +
-		strconv.Itoa(loop) + `,"workspace_roots":["` + root + `"]}`
+	raw, err := json.Marshal(map[string]any{
+		"hook_event_name": "stop",
+		"conversation_id": "s",
+		"session_id":      "s",
+		"status":          "completed",
+		"loop_count":      loop,
+		"workspace_roots": []string{root},
+	})
+	if err != nil {
+		panic(err)
+	}
+	return string(raw)
+}
+
+func interactiveCursor(t *testing.T) {
+	t.Helper()
+	prev := cursorCommandLine
+	cursorCommandLine = func(int, int64) ([]string, error) {
+		return []string{"cursor-agent", "--trust"}, nil
+	}
+	t.Cleanup(func() { cursorCommandLine = prev })
 }
 
 func TestCursorStopFollowsANewerIdentityOnceAndNeverAFollowUp(t *testing.T) {
+	interactiveCursor(t)
 	root := gitRepo(t)
 	env := failureEnv(t)
 	now := &hubclient.Attention{}
@@ -117,6 +190,7 @@ func TestCursorStopStaysQuietWhenWakeIsOffOrTheHubFails(t *testing.T) {
 	if out.Exit != 0 || strings.Contains(string(out.Stdout), "followup_message") || calls != 0 {
 		t.Fatalf("off: exit %d calls %d %s", out.Exit, calls, out.Stdout)
 	}
+	interactiveCursor(t)
 	broken := Runner{
 		ClientName: "cursor", EventName: "stop",
 		Stdin:  strings.NewReader(cursorStopPayload(root, 0)),
