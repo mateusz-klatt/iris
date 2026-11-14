@@ -158,9 +158,12 @@ A probe extension placed beside Iris's recorded what the host gives at `joinSess
 
 So the extension starts its watcher only when `session.capabilities.ui.canvases` is exactly `true`.
 Anything else, including a missing value or a getter that throws, means no watcher and nothing
-sent. The session gets one log line, "Iris wake not started: not an interactive session."
-`COPILOT_LOADER_PID` agreed in the measurement, but it is undocumented, and the rule does not use
-it.
+sent. It is not told either. The first version logged one line to the session, but the live check
+on 1.0.112 showed that `copilot -p` prints a session log line into its answer: "● Iris wake not
+started: not an interactive session." followed by `PONG`. So a declined session gets no log line,
+and the extension writes no reason anywhere: it has no channel that stays out of a headless
+answer. `COPILOT_LOADER_PID` agreed in the measurement, but it is undocumented, and the rule does
+not use it.
 
 This is a capability of the host standing in for a mode the SDK does not declare. It fails in two
 directions:
