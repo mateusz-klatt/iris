@@ -80,7 +80,7 @@ child with `detached`, so it has no controlling terminal.
 |---|---|---|---|
 | Antigravity (agy 1.5.8) | `-p`, `--print`, `--prompt`; any subcommand, `acp` among them | `-i`/`--prompt-interactive`, which needs a terminal (ADR 028, measurement 16); otherwise a terminal for input, because a prompt piped into a bare `agy` runs headless | Done here |
 | Grok (1.0.77) | `-p`/`--single`, `--prompt-file`, `--prompt-json`; any subcommand, `agent` among them | Otherwise a terminal for input; a first positional argument that is not a subcommand is the session's prompt | Done here |
-| Kimi | Its print mode | To be measured with the same method | Required before Kimi's default-on (v0.1.4): ADR 030's prompt-hook request would reach `kimi -p` runs the same way. While Kimi's wake is on for its acceptance, no Kimi delegations run on that host. |
+| Kimi (2.6.1) | `-p`/`--prompt`; any subcommand, `acp` and `web` among them | A terminal for input, the client's own; see "Kimi" below | Done by amendment, before Kimi's default-on (v0.1.4) |
 | Cursor | `cursor-agent -p`/`--print` | | Joins through #338. After this ADR's PR merges, #338 rebases onto it, uses `proc.Args` and `proc.ReadsTerminal` with Cursor's own measured grammar instead of a reader of its own, and sends no `followup_message` in print mode. It adds its row here with its measurements. |
 | Copilot | `copilot -p` | | To be measured on WSL, where Copilot's experimental extension is on, after Antigravity and Grok. The extension starts `iris watch --client copilot` wherever Copilot loads it, and sends its enqueued message once the session is idle, so a `copilot -p` run that gets attention before it exits could gain a turn. The fix follows this rule: in a non-interactive session the extension starts no watcher and sends nothing. Not a v0.1.3 blocker unless the turn is measured. |
 | Codex | `codex exec` | | Probably safe and unmeasured: an exec thread is `notLoaded` in the app-server daemon, so the worker defers. The probe that settles it: a `codex exec` run that receives attention before it exits, with its answer and the daemon's thread list compared. |
@@ -104,6 +104,39 @@ The grammars, as measured:
   Runtimes disagree about a doubled quote (`""`); Rust, which Grok is written in, reads it
   differently. So a command line holding one is refused as unreadable rather than risk hiding a
   print flag.
+
+### Kimi
+
+Amended on 2026-11-14, with the coordinator's decision. WSL measured Kimi 2.6.1 in a throwaway
+`KIMI_CODE_HOME`, with Iris isolated.
+- **The prompt hook sees no mode.** `SessionStart` has the same keys under `-p` and in the TUI.
+  `UserPromptSubmit` does too, except that the TUI's carries a `session_title`, which it sets after
+  the first prompt. That is no mode flag. The captures are
+  `internal/hook/testdata/kimi/userpromptsubmit_print.json` and `userpromptsubmit_tui.json`.
+- **Grammar.** Kimi's parser is commander.js, read from its parse errors:
+  - `-p`/`--prompt <prompt>` is print mode.
+  - A required value takes the next argument even when it starts with a dash.
+  - Booleans refuse `=value`. Short options group (`-cy`, `-cp x`) and take attached values
+    (`-px`).
+  - `-S`/`--session [id]` takes a value only when the next argument is not an option.
+  - Positional arguments are subcommands; any other word is an unknown command.
+- **A piped prompt is not headless.** A prompt piped into a bare `kimi` opens the TUI, so only
+  `-p` runs headless.
+- **Kimi blanks its own argv.** A Kimi process started with arguments renames itself, and
+  `/proc/<pid>/cmdline` then reads `kimi-code` followed by an empty string for each argument. That
+  happens for a `-p` run, for a TUI started with flags, and for a long-running session alike. Only
+  a bare `kimi` keeps `kimi`.
+  - That exact form, argv[0] `kimi-code` and every other entry empty, means "flags unreadable,
+    decide by the input". Any other unreadable or unknown argv still means no request.
+  - Readable argv is parsed by the grammar above, and `-p` or a subcommand excludes it.
+- **Kimi starts its hooks without its terminal**, so the hook's own terminal says nothing about
+  Kimi. The input check is the client's own: fd 0 on Linux, and the controlling terminal on macOS.
+  - On Windows, option B checks the hook's console, so it would never ask Kimi. Kimi there depends
+    on option A, the client's `StandardInput`, or on argv from the PEB command line, which is
+    still to be verified on Windows.
+- **The gap.** `kimi -p` typed at a terminal reads a terminal and its argv is blanked, so it is
+  asked once. Its answer may then mention the watcher. The delegation bridges start Kimi
+  detached, with no terminal for input, so they are not asked.
 
 ## Limits
 

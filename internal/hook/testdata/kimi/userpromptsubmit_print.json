@@ -1,0 +1,13 @@
+{
+  "hook_event_name": "UserPromptSubmit",
+  "session_id": "session_4bcb53c5-f66d-4cbf-b741-70f8ad2ac257",
+  "cwd": "/workspace/project",
+  "client_type": "kimi_code_cli",
+  "prompt": [
+    {
+      "type": "text",
+      "text": "reply with exactly PONG"
+    }
+  ],
+  "is_steer": false
+}

@@ -38,6 +38,7 @@ type kimiHarness struct {
 
 func newKimiHarness(t *testing.T) *kimiHarness {
 	t.Helper()
+	asInteractive(t)
 	return &kimiHarness{
 		t: t, pinned: t.TempDir(), repo: gitRepo(t), env: failureEnv(t), now: time.UnixMilli(1_763_000_000_000),
 		anc: proc.Ancestor{PID: kimiWakePID, StartMS: kimiWakeStart, Name: "/home/user/.local/bin/kimi"}, hub: scriptHub{},

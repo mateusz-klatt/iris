@@ -188,6 +188,108 @@ var (
 	clientTerminal = proc.ReadsTerminal
 )
 
+// Kimi's options (Kimi 2.6.1, its --help and parse errors). Its parser is commander: long options
+// with two dashes, short ones with one that may be grouped, a value attached or as the next
+// argument even when that starts with a dash, booleans that refuse a value, and an optional value
+// taken only from a next argument that is not an option. Its positional arguments are subcommands.
+var (
+	kimiBools    = set("auto", "continue", "help", "plan", "version", "yolo")
+	kimiValues   = set("add-dir", "agent", "agent-file", "model", "output-format", "prompt", "skills-dir")
+	kimiOptional = set("session")
+	kimiCommands = set("acp", "app", "doctor", "export", "fork", "help", "import-sessions", "install-desktop", "login", "migrate", "provider", "rc", "remote", "server", "session", "update", "upgrade", "vis", "web")
+)
+
+// kimiRewritten is the argv a Kimi 2.6.1 process leaves after it names itself: "kimi-code" and an
+// empty string for every argument it was given, so its flags cannot be read. That exact form, and
+// no other, leaves the mode to its input; a prompt piped into a bare kimi opens its TUI rather
+// than running headless.
+func kimiRewritten(args []string) bool {
+	if len(args) < 2 || args[0] != "kimi-code" {
+		return false
+	}
+	for _, a := range args[1:] {
+		if a != "" {
+			return false
+		}
+	}
+	return true
+}
+
+// kimiMode reads Kimi's arguments. Kimi has no flag that makes a session interactive, so a session
+// with no print flag or subcommand is interactive only when it reads a terminal.
+func kimiMode(args []string) clientMode {
+	if kimiRewritten(args) {
+		return modeInput
+	}
+	for i := 1; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--":
+			if i+1 < len(args) {
+				return modeCommand
+			}
+			return modeInput
+		case strings.HasPrefix(a, "--"):
+			name, _, attached := strings.Cut(a[2:], "=")
+			switch {
+			case name == "prompt":
+				return modePrint
+			case kimiBools[name] && !attached:
+			case kimiValues[name]:
+				if !attached {
+					if i++; i >= len(args) {
+						return modeUnknown
+					}
+				}
+			case kimiOptional[name]:
+				if !attached && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+					i++
+				}
+			default:
+				return modeUnknown
+			}
+		case len(a) > 1 && a[0] == '-':
+			mode, next := kimiShorts(a[1:], args, i)
+			if mode != modeInput {
+				return mode
+			}
+			i = next
+		case kimiCommands[a]:
+			return modeCommand
+		default:
+			return modeUnknown
+		}
+	}
+	return modeInput
+}
+
+// kimiShorts reads one group of short options at args[i], as grokShorts does for Grok's.
+func kimiShorts(group string, args []string, i int) (clientMode, int) {
+	for j := 0; j < len(group); j++ {
+		switch group[j] {
+		case 'p':
+			return modePrint, i
+		case 'c', 'h', 'V', 'y':
+			continue
+		case 'm':
+			if j+1 == len(group) {
+				if i++; i >= len(args) {
+					return modeUnknown, i
+				}
+			}
+			return modeInput, i
+		case 'S':
+			if j+1 == len(group) && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				i++
+			}
+			return modeInput, i
+		default:
+			return modeUnknown, i
+		}
+	}
+	return modeInput, i
+}
+
 // interactive reports whether the client process anc runs an interactive session, the only kind
 // Iris asks a model to arm wake in. Otherwise why says why not, for the observed log. A process
 // whose arguments or input cannot be read is not interactive: a request that should not have

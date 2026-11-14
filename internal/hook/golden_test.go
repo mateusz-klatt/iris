@@ -380,4 +380,7 @@ var fixtureWant = map[string]decoded{
 	// Captured by kimi-home-iris (Kimi 2.6.1, scratch TUI) in the live check that a prompt hook's
 	// output reaches the model (ADR 030); session id and cwd anonymized. It carries session_title.
 	"kimi/userpromptsubmit_hookcheck.json": {kind: KindPrompt, session: "session_redacted", cwd: "/workspace/project"},
+	// The same prompt of Kimi 2.6.1 under -p and in the TUI (ADR 031).
+	"kimi/userpromptsubmit_print.json": {kind: KindPrompt, session: "session_4bcb53c5-f66d-4cbf-b741-70f8ad2ac257", cwd: "/workspace/project"},
+	"kimi/userpromptsubmit_tui.json":   {kind: KindPrompt, session: "session_bc35525f-b1c1-4178-b638-d5ccccb63fee", cwd: "/workspace/project"},
 }
