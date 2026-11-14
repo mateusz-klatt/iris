@@ -1,0 +1,19 @@
+{
+  "conversation_id": "c07cffe8-203b-4517-8ece-6dd9f9c8f162",
+  "generation_id": "6ebac1fc-e144-4699-8733-8a9efc2a698c",
+  "model": "composer-2.5-fast",
+  "status": "completed",
+  "loop_count": 0,
+  "input_tokens": 9691,
+  "output_tokens": 29,
+  "cache_read_tokens": 4160,
+  "cache_write_tokens": 0,
+  "session_id": "c07cffe8-203b-4517-8ece-6dd9f9c8f162",
+  "hook_event_name": "stop",
+  "cursor_version": "2026.11.11-b912975",
+  "workspace_roots": [
+    "/workspace/project"
+  ],
+  "user_email": "<REDACTED_EMAIL>",
+  "transcript_path": "/workspace/project/transcript.jsonl"
+}

@@ -305,6 +305,7 @@ Each client gets the strongest tier it has:
 | Asked at a user prompt | Model keeps one managed background task, `iris watch --client kimi --once`, whose end opens a turn | Kimi, off until its native acceptance; [ADR 030](adr/030-kimi-one-shot-wake.md) |
 | Asked at Stop | Model starts a persistent `iris watch` in the `monitor` tool | Grok, enabled by default; [ADR 025](adr/025-grok-stop-monitor.md) |
 | Asked at Stop, loaded idle session | Model starts a detached `iris watch --client antigravity --wake` helper after user approval; helper sends a fixed message through `agy agentapi send-message` | Antigravity, enabled by default; [ADR 028](adr/028-antigravity-idle-wake.md) |
+| End of a turn | `stop` prints `followup_message` when attention is newer than told and `loop_count` is 0 | Cursor, on unless `--no-wake`; [ADR 029](adr/029-cursor-stop-followup.md) |
 | Instant, armed by the model | `Monitor` tool with a `ws` source | Claude Code |
 | Instant, Iris-owned session | App-server or ACP control of a session Iris started | Codex (measured), Copilot, Cursor, Antigravity, Grok, Kimi (later) |
 | Next turn | Hook context at prompt or post-tool | All, with client-specific limits |
@@ -415,6 +416,16 @@ Every other outcome has its own exit code and a fixed line saying not to re-arm:
 
 A latch never replaces a live watcher. `iris mcp --client kimi` no longer starts the ADR 026 web
 worker; an old `--wake` is accepted and does nothing.
+
+Cursor's `stop` hook is an end-of-turn follow-up, not an idle wake ([ADR 029](adr/029-cursor-stop-followup.md)).
+It prints a fixed `followup_message` only when the newest attention identity is newer than the
+one recorded for that session, and only when `loop_count` is 0. Printing records the identity.
+A later `stop` of that follow-up prints nothing. A session that has not started a turn does not
+fire `stop`, so mail that arrives while it sits idle waits for the next prompt. `cursor-agent -p`
+and `--print` get no follow-up: the mode is read from that process's arguments, and an unreadable
+or unknown argument is not treated as interactive. The hook fails
+open: a miss prints `{}` and does not deny the stop. A missing marker means on. `iris integrate
+cursor --no-wake` writes off, and a plain reinstall leaves that choice. `--wake` writes on.
 
 Grok's monitor shell does not inherit `GROK_SESSION_ID` (measured on 1.0.77). After the hub
 accepts a top-level SessionStart, the hook stores the session id beside that grok process's

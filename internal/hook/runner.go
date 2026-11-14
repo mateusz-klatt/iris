@@ -225,6 +225,8 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 			note = strings.TrimPrefix(note+"\n"+ask, "\n")
 		}
 		return r.finish(state, ev, Encode(ev, Decision{Action: ActionAllow, Context: note}))
+	case KindStop:
+		return r.cursorStop(ctx, state, ev, repo)
 	case KindSessionEnd:
 		state.at("session")
 		sess, err := r.register(ctx, ev, repo)
@@ -365,6 +367,8 @@ func needsNetwork(ev Event) bool {
 		return true
 	case KindPrompt, KindPreInvocation:
 		return promptEvent(ev) && carriesPromptContext(ev.Client)
+	case KindStop:
+		return ev.Client == ClientCursor
 	case KindPreTool:
 		return ev.ToolClass == ClassEdit
 	default:
