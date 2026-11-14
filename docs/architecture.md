@@ -314,10 +314,10 @@ A request that asks the model to arm wake goes only to an interactive session
 ([ADR 031](adr/031-wake-only-in-interactive-sessions.md)). Grok's and Antigravity's Stop read the
 verified client process. A print-mode run, a subcommand such as a protocol server, or arguments Iris
 cannot read or does not know get no request, and the observed log says why. When the arguments
-leave the mode to the input, the process must read a terminal. Linux checks the client's own
-input. macOS checks whether the client has a controlling terminal, and Windows whether the hook
-has a console. Kimi's request and
-Copilot's extension follow the same rule before their wake is on by default.
+leave the mode to the input, the process must read a terminal. Linux checks the client's own input.
+macOS checks whether the client has a controlling terminal. Windows reads the client's own
+`StandardInput` through its PEB and duplicates it. Kimi's request and Copilot's extension follow
+the same rule before their wake is on by default.
 
 On Claude Code the plugin monitor is the default. It needs no re-arming and fires while the
 session is idle, and it gets `CLAUDE_CODE_SESSION_ID`. The monitor event passes through
