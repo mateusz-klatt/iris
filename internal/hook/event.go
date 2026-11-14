@@ -80,6 +80,9 @@ type Event struct {
 	TranscriptPath string
 	// AgyStop is set only for an Antigravity Stop event (ADR 028).
 	AgyStop *AgyStop
+	// LoopCount is a Cursor stop's follow-up generation. Zero is the turn that
+	// just ended. Above zero, this stop is already a follow-up (ADR 029).
+	LoopCount int
 }
 
 // Action is the canonical decision.

@@ -290,6 +290,92 @@ func kimiShorts(group string, args []string, i int) (clientMode, int) {
 	return modeInput, i
 }
 
+// Cursor's options (cursor-agent 2026.11.13-eacade1, its --help and parse errors, no session
+// started except where noted). Long options have two dashes. Short options have one and may be
+// grouped. A value is attached or the next argument. Booleans refuse =value: --trust=true and
+// --print=hi are both "unknown option". -p/--print is a boolean; -pf is print mode. A missing
+// --output-format value is an error. -- ends the options. A positional word that is not a
+// subcommand is a prompt, so the session stays one that is interactive only on a terminal.
+//
+// The running process is not that parser's argv. A live WSL session's cmdline was
+// `cursor-agent --use-system-ca <version>/index.js --resume`. The CLI rejects --use-system-ca,
+// and --use-system-ca --help exits 0 because the wrapper accepts it. The grammar therefore
+// treats --use-system-ca as a boolean. A positional path is not a subcommand.
+var (
+	cursorBools    = set("use-system-ca", "stream-partial-output", "plan", "force", "yolo", "auto-review", "approve-mcps", "trust", "list-models", "skip-worktree-setup", "help", "version", "continue")
+	cursorValues   = set("api-key", "header", "endpoint", "output-format", "mode", "model", "sandbox", "workspace", "add-dir", "plugin-dir", "worktree-base")
+	cursorOptional = set("resume", "worktree")
+	cursorCommands = set("persist", "install-shell-integration", "uninstall-shell-integration", "login", "logout", "mcp", "plugin", "worker", "status", "whoami", "models", "team", "bedrock", "about", "update", "create-chat", "generate-rule", "rule", "agent", "ls", "resume", "help")
+)
+
+func cursorMode(args []string) clientMode {
+	for i := 1; i < len(args); i++ {
+		a := args[i]
+		switch {
+		case a == "--":
+			return modeInput
+		case strings.HasPrefix(a, "--"):
+			name, _, attached := strings.Cut(a[2:], "=")
+			switch {
+			case (name == "print") && !attached:
+				return modePrint
+			case (name == "print") && attached:
+				return modeUnknown
+			case cursorBools[name] && !attached:
+			case cursorBools[name] && attached:
+				return modeUnknown
+			case cursorValues[name]:
+				if !attached {
+					if i++; i >= len(args) {
+						return modeUnknown
+					}
+				}
+			case cursorOptional[name]:
+				if !attached && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+					i++
+				}
+			default:
+				return modeUnknown
+			}
+		case len(a) > 1 && a[0] == '-':
+			mode, next := cursorShorts(a[1:], args, i)
+			if mode != modeInput {
+				return mode
+			}
+			i = next
+		case cursorCommands[a]:
+			return modeCommand
+		}
+	}
+	return modeInput
+}
+
+func cursorShorts(group string, args []string, i int) (clientMode, int) {
+	for j := 0; j < len(group); j++ {
+		switch group[j] {
+		case 'p':
+			return modePrint, i
+		case 'f', 'h', 'v':
+			continue
+		case 'H', 'e':
+			if j+1 == len(group) {
+				if i++; i >= len(args) {
+					return modeUnknown, i
+				}
+			}
+			return modeInput, i
+		case 'w':
+			if j+1 == len(group) && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				i++
+			}
+			return modeInput, i
+		default:
+			return modeUnknown, i
+		}
+	}
+	return modeInput, i
+}
+
 // interactive reports whether the client process anc runs an interactive session, the only kind
 // Iris asks a model to arm wake in. Otherwise why says why not, for the observed log. A process
 // whose arguments or input cannot be read is not interactive: a request that should not have

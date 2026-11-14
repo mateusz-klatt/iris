@@ -26,8 +26,8 @@ func runIntegrate(args []string) int {
 	fs.SetOutput(os.Stderr)
 	remove := fs.Bool("remove", false, "restore the files Iris wrote")
 	all := fs.Bool("all", false, "every supported client")
-	wake := fs.Bool("wake", false, "enable the native Iris wake runner for Antigravity, Codex, Kimi or Grok")
-	noWake := fs.Bool("no-wake", false, "disable the native Iris wake runner for Antigravity, Codex, Kimi or Grok")
+	wake := fs.Bool("wake", false, "enable the native Iris wake runner for Antigravity, Codex, Cursor, Kimi or Grok")
+	noWake := fs.Bool("no-wake", false, "disable the native Iris wake runner for Antigravity, Codex, Cursor, Kimi or Grok")
 	if err := fs.Parse(integrateFlagArgs(args)); err != nil {
 		return 2
 	}
@@ -45,7 +45,7 @@ func runIntegrate(args []string) int {
 		return 2
 	}
 	if (wakeSet || noWakeSet) && (*all || *remove) {
-		fmt.Fprintln(os.Stderr, "--wake and --no-wake require an Antigravity, Codex, Kimi or Grok install without --all or --remove")
+		fmt.Fprintln(os.Stderr, "--wake and --no-wake require an Antigravity, Codex, Cursor, Kimi or Grok install without --all or --remove")
 		return 2
 	}
 	var names []string
@@ -66,8 +66,8 @@ func runIntegrate(args []string) int {
 		fmt.Fprintln(os.Stderr, "usage: iris integrate [--remove] [--all] <client>")
 		return 2
 	}
-	if (wakeSet || noWakeSet) && names[0] != integrate.Antigravity && names[0] != integrate.Codex && names[0] != integrate.Kimi && names[0] != integrate.Grok {
-		fmt.Fprintln(os.Stderr, "--wake and --no-wake require Antigravity, Codex, Kimi or Grok")
+	if (wakeSet || noWakeSet) && names[0] != integrate.Antigravity && names[0] != integrate.Codex && names[0] != integrate.Cursor && names[0] != integrate.Kimi && names[0] != integrate.Grok {
+		fmt.Fprintln(os.Stderr, "--wake and --no-wake require Antigravity, Codex, Cursor, Kimi or Grok")
 		return 2
 	}
 	layout := integrateLayout()
@@ -97,6 +97,8 @@ func runIntegrate(args []string) int {
 				err = integrate.InstallKimiWake(layout, enabled)
 			case integrate.Grok:
 				err = integrate.InstallGrokWake(layout, enabled)
+			case integrate.Cursor:
+				err = integrate.InstallCursorWake(layout, enabled)
 			default:
 				err = integrate.InstallCodexWake(layout, enabled)
 			}

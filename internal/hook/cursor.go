@@ -17,6 +17,7 @@ func (cursorAdapter) Decode(eventName string, payload []byte) (Event, error) {
 		Command        string          `json:"command"`
 		FilePath       string          `json:"file_path"`
 		MCPServer      string          `json:"mcp_server_name"`
+		LoopCount      int             `json:"loop_count"`
 	}
 	if err := json.Unmarshal(payload, &p); err != nil {
 		return Event{}, err
@@ -32,6 +33,7 @@ func (cursorAdapter) Decode(eventName string, payload []byte) (Event, error) {
 		CWD:        p.CWD,
 		Workspaces: p.WorkspaceRoots,
 		ToolCallID: p.ToolUseID,
+		LoopCount:  p.LoopCount,
 	}
 	if ev.CWD == "" && len(p.WorkspaceRoots) > 0 {
 		ev.CWD = p.WorkspaceRoots[0]
