@@ -53,10 +53,17 @@ record:
   - On Linux, where the process's fd 0 points. It reads the client's own input and recognises a
     terminal by its device path under `/dev`, so a terminal reached through another path counts
     as none.
-  - On macOS and Windows, whether the hook itself has a controlling terminal (`/dev/tty`) or a
-    console (`CONIN$`), which it shares with a client running on one. This is option B, chosen for
-    v0.1.3. The exact check is a follow-up: `proc_pidfdinfo` on macOS, and the process's
-    `StandardInput` checked with `GetConsoleMode` on Windows.
+  - On macOS, whether the client process has a controlling terminal: its `e_tdev` from
+    `kern.proc.pid`, which is not `NODEV`.
+    - The hook's own `/dev/tty` was the first choice, and it failed. Grok 1.0.77 starts its hooks
+      without its terminal. An interactive `grok` on 415d9cc, run over SSH with a pty, was logged
+      "input is not a terminal", while agy 1.5.9's hook opened `/dev/tty`.
+    - The process's own terminal does not depend on how a client spawns its hooks.
+  - On Windows, whether the hook itself has a console (`CONIN$`), which it shares with a client
+    running on one. This is option B, chosen for v0.1.3.
+  - The exact input checks are a follow-up: `proc_pidfdinfo` on macOS, and the process's
+    `StandardInput` checked with `GetConsoleMode` on Windows (option A, measured by Windows' live
+    control).
 - **What cannot be told means no request.** That covers arguments that cannot be read, a flag Iris
   does not know, an input that cannot be read, and a hook whose nearest client process is not the
   client. A request made in a headless run changes its answer, while a request not made only delays
@@ -108,8 +115,9 @@ The grammars, as measured:
   arguments do the work there. The control: a hook of an interactive agy TUI must open `CONIN$`.
   If it cannot, option B would turn Antigravity's wake off on Windows altogether, and Windows needs
   the exact check for v0.1.3. The same measurement includes one headless run without a print flag,
-  to state the gap exactly. macOS confirms that a hook of an interactive TUI opens `/dev/tty`, and
-  that a `-p` run is not asked.
+  to state the gap exactly. It includes an interactive Grok, which may start its hooks without
+  its console as it starts them without its terminal on macOS. macOS confirms that interactive agy
+  and Grok are asked, and that `-p` runs are not.
 - **A flag Iris does not know turns the request off** until Iris learns it. A client release that
   adds a flag disables the request for sessions that use it, and the observed log says
   `wake not asked: unknown argument`.

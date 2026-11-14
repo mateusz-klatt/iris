@@ -315,7 +315,8 @@ A request that asks the model to arm wake goes only to an interactive session
 verified client process. A print-mode run, a subcommand such as a protocol server, or arguments Iris
 cannot read or does not know get no request, and the observed log says why. When the arguments
 leave the mode to the input, the process must read a terminal. Linux checks the client's own
-input. macOS and Windows check whether the hook has a terminal or console. Kimi's request and
+input. macOS checks whether the client has a controlling terminal, and Windows whether the hook
+has a console. Kimi's request and
 Copilot's extension follow the same rule before their wake is on by default.
 
 On Claude Code the plugin monitor is the default. It needs no re-arming and fires while the

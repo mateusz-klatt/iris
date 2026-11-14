@@ -5,9 +5,6 @@ package proc
 import (
 	"bytes"
 	"encoding/binary"
-	"io"
-	"os"
-	"syscall"
 
 	"golang.org/x/sys/unix"
 )
@@ -93,20 +90,24 @@ func procargsArgs(raw []byte) ([]string, error) {
 	return args, nil
 }
 
-// openTerminal opens the caller's controlling terminal. Tests replace it.
-var openTerminal = func() (io.Closer, error) {
-	return os.OpenFile("/dev/tty", os.O_RDONLY|syscall.O_NOCTTY, 0)
-}
+// noDevice is NODEV, the e_tdev of a process without a controlling terminal.
+const noDevice = -1
 
-// readsTerminalOS reports whether the caller has a controlling terminal. macOS gives no cheap view
-// of another process's standard input, and a hook shares its client's terminal (ADR 031).
-func readsTerminalOS(int) (bool, error) {
-	f, err := openTerminal()
+// kinfoProc reads a process's kinfo_proc. Tests replace it.
+var kinfoProc = func(pid int) (*unix.KinfoProc, error) { return unix.SysctlKinfoProc("kern.proc.pid", pid) }
+
+// readsTerminalOS reports whether the process has a controlling terminal. macOS gives no cheap view
+// of another process's standard input, and Grok 1.0.77 starts its hooks without its terminal, so
+// the hook's own terminal says nothing (ADR 031).
+func readsTerminalOS(pid int) (bool, error) {
+	k, err := kinfoProc(pid)
 	if err != nil {
-		return false, nil
+		return false, err
 	}
-	_ = f.Close()
-	return true, nil
+	if k == nil {
+		return false, ErrNotFound
+	}
+	return k.Eproc.Tdev != noDevice, nil
 }
 
 func executablePath(raw []byte) string {

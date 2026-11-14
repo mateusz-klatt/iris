@@ -44,10 +44,11 @@ func Args(pid int, startMS int64) ([]string, error) {
 }
 
 // ReadsTerminal reports whether the live process (pid, startMS) takes its input from a terminal.
-// On Linux it reads where the process's standard input points. macOS and Windows offer no cheap
-// view of another process's input, so there it reports whether the caller itself has a
-// controlling terminal or a console, as a hook has when the client that started it runs on one
-// (ADR 031). That counts a client whose input was redirected at a terminal as reading from it.
+// On Linux it reads where the process's standard input points. macOS offers no cheap view of
+// another process's input, so there it reports whether the process has a controlling terminal.
+// Windows reports whether the caller itself has a console, as a hook has when the client that
+// started it runs on one (ADR 031). Both count a client whose input was redirected at a terminal
+// as reading from it.
 func ReadsTerminal(pid int, startMS int64) (bool, error) {
 	return identified(pid, startMS, lookupOS, readsTerminalOS)
 }

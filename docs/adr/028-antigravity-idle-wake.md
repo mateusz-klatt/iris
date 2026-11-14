@@ -453,10 +453,10 @@ helper run **incremental, attempt-associated forward scanning** outside the `ses
   that, a `-p` run was asked too: denied without `--dangerously-skip-permissions`, and run with it,
   arming a helper for a headless process and changing the run's answer (measurement 16).
 - **Print mode is told from the process, not from agy.** A flag Iris does not know turns the request
-  off until Iris learns it. On Linux the input check reads agy's own input. On macOS and Windows
-  it is whether the hook has a terminal or console, so a headless run without a print flag whose
-  process still has one is asked once: for instance, a prompt piped into agy by a person at a
-  terminal (ADR 031).
+  off until Iris learns it. On Linux the input check reads agy's own input. On macOS it is whether
+  agy has a controlling terminal, and on Windows whether the hook has a console. So a headless run
+  without a print flag whose process still has one is asked once: for instance, a prompt piped into
+  agy by a person at a terminal (ADR 031).
 - **Choosing "Always allow" in Antigravity weakens the sandbox for that binary.** If a user
   persists a `command(...)` allow rule themselves, Antigravity's matcher permits `VAR=value`
   assignments, `env` wrappers and extra arguments on that binary outside the sandbox (measurement

@@ -4,11 +4,12 @@ package proc
 
 import (
 	"errors"
-	"io"
 	"os"
 	"slices"
 	"syscall"
 	"testing"
+
+	"golang.org/x/sys/unix"
 )
 
 // kern.procargs2 holds the argument count, the executable path and its padding, the arguments and
@@ -49,14 +50,10 @@ func TestArgsOSRefusesAnotherUsersProcess(t *testing.T) {
 	}
 }
 
-type closer func() error
-
-func (c closer) Close() error { return c() }
-
-// macOS gives no cheap view of another process's input, so the check is whether this process has a
-// controlling terminal, which a hook shares with the client that started it. The answer matches
-// an independent open of /dev/tty, and a terminal that opens or not decides it.
-func TestReadsTerminalOSOpensTheControllingTerminal(t *testing.T) {
+// macOS gives no cheap view of another process's input, so the check is whether the process has a
+// controlling terminal. For this test it matches an independent open of /dev/tty, launchd has
+// none, and the kernel's e_tdev decides it.
+func TestReadsTerminalOSReadsTheProcessesControllingTerminal(t *testing.T) {
 	f, err := os.OpenFile("/dev/tty", os.O_RDONLY|syscall.O_NOCTTY, 0)
 	if err == nil {
 		_ = f.Close()
@@ -64,14 +61,24 @@ func TestReadsTerminalOSOpensTheControllingTerminal(t *testing.T) {
 	if got, readErr := readsTerminalOS(os.Getpid()); readErr != nil || got != (err == nil) {
 		t.Fatalf("this process: %v %v, /dev/tty %v", got, readErr, err)
 	}
-	defer func(open func() (io.Closer, error)) { openTerminal = open }(openTerminal)
-	openTerminal = func() (io.Closer, error) { return nil, syscall.ENXIO }
-	if got, err := readsTerminalOS(0); err != nil || got {
-		t.Fatalf("no terminal: %v %v", got, err)
+	if got, err := readsTerminalOS(1); err != nil || got {
+		t.Fatalf("launchd: %v %v", got, err)
 	}
-	closed := false
-	openTerminal = func() (io.Closer, error) { return closer(func() error { closed = true; return nil }), nil }
-	if got, err := readsTerminalOS(0); err != nil || !got || !closed {
-		t.Fatalf("a terminal: %v %v, closed %v", got, err, closed)
+	defer func(read func(int) (*unix.KinfoProc, error)) { kinfoProc = read }(kinfoProc)
+	for name, tc := range map[string]struct {
+		k    *unix.KinfoProc
+		err  error
+		want bool
+		fail error
+	}{
+		"no terminal": {k: &unix.KinfoProc{Eproc: unix.Eproc{Tdev: noDevice}}},
+		"a terminal":  {k: &unix.KinfoProc{Eproc: unix.Eproc{Tdev: 0x10000003}}, want: true},
+		"refused":     {err: syscall.EPERM, fail: syscall.EPERM},
+		"no process":  {fail: ErrNotFound},
+	} {
+		kinfoProc = func(int) (*unix.KinfoProc, error) { return tc.k, tc.err }
+		if got, err := readsTerminalOS(7); got != tc.want || !errors.Is(err, tc.fail) {
+			t.Fatalf("%s: %v %v", name, got, err)
+		}
 	}
 }
