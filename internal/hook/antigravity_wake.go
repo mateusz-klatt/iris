@@ -696,7 +696,11 @@ func (r Runner) antigravityHook(ev Event, note func(string)) (Output, bool) {
 				}
 			}
 		case KindStop:
-			if hasAnc && wakeOn && ev.AgyStop != nil && ev.AgyStop.FullyIdle && ev.AgyStop.TerminationReason == "NO_TOOL_CALL" {
+			idleStop := wakeOn && ev.AgyStop != nil && ev.AgyStop.FullyIdle && ev.AgyStop.TerminationReason == "NO_TOOL_CALL"
+			if idleStop && !hasAnc {
+				note(wakeNotAsked + "no agy process")
+			}
+			if hasAnc && idleStop {
 				liveForSession := procState.Helper != nil && procState.Helper.SessionID == ev.SessionID && helperAlive(procState.Helper, lookupAntigravityProc)
 				switch {
 				case liveForSession:

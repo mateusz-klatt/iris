@@ -5,6 +5,7 @@ package proc
 import (
 	"errors"
 	"os"
+	"slices"
 	"testing"
 
 	"golang.org/x/sys/windows"
@@ -29,6 +30,20 @@ func TestArgsReportsAFailedOrEmptyCommandLine(t *testing.T) {
 	}
 	if _, err := argsOS(os.Getpid()); !errors.Is(err, ErrNotFound) {
 		t.Fatalf("an empty command line: %v", err)
+	}
+}
+
+// A doubled quote is split differently by Rust than by the C runtime, so it is refused rather than
+// risk hiding a print flag. Ordinary quoting splits as Go does.
+func TestSplitCommandLineRefusesADoubledQuote(t *testing.T) {
+	for _, line := range []string{`grok.exe --system-prompt "a"" b" --single=PONG`, `agy.exe -p ""`, ""} {
+		if args, err := splitCommandLine(line); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("%s: %q %v", line, args, err)
+		}
+	}
+	args, err := splitCommandLine(`agy.exe -p "reply with exactly PONG" --model m`)
+	if err != nil || !slices.Equal(args, []string{"agy.exe", "-p", "reply with exactly PONG", "--model", "m"}) {
+		t.Fatalf("%q %v", args, err)
 	}
 }
 

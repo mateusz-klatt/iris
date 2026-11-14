@@ -50,7 +50,9 @@ record:
   the read. The client's own grammar parses them.
 - **Whether it reads a terminal**, when the arguments leave the mode to the input, through
   `proc.ReadsTerminal`:
-  - On Linux, where the process's fd 0 points. That is exact.
+  - On Linux, where the process's fd 0 points. It reads the client's own input and recognises a
+    terminal by its device path under `/dev`, so a terminal reached through another path counts
+    as none.
   - On macOS and Windows, whether the hook itself has a controlling terminal (`/dev/tty`) or a
     console (`CONIN$`), which it shares with a client running on one. This is option B, chosen for
     v0.1.3. The exact check is a follow-up: `proc_pidfdinfo` on macOS, and the process's
@@ -89,7 +91,11 @@ The grammars, as measured:
   - `--resume` and `--worktree` take a value only when one is attached or the next argument is
     not an option.
   - `--` ends the options.
-  - Positional arguments are a subcommand or the session's prompt.
+  - Usage is `[PROMPT] [COMMAND]`: the first positional argument is a subcommand or the session's
+    prompt, and one after the prompt is a subcommand.
+- **On Windows the command line is one string.** Iris splits it as the C runtime and Go do. Rust,
+  which Grok is written in, reads a doubled quote (`""`) differently, so a command line holding
+  one is refused as unreadable rather than risk hiding a print flag.
 
 ## Limits
 

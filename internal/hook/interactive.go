@@ -102,8 +102,9 @@ var (
 	grokValues   = set("add-dir", "agent", "agents", "allow", "allowed-tools", "allowedTools", "cwd", "debug-file", "deny", "disallowed-tools", "disallowedTools", "effort", "json-schema", "leader-socket", "max-turns", "model", "output-format", "permission-mode", "prompt-file", "prompt-json", "reasoning-effort", "ref", "rules", "sandbox", "session-id", "single", "system-prompt", "system-prompt-override", "tools", "worktree-ref")
 	grokOptional = set("resume", "worktree")
 	grokPrint    = set("single", "prompt-file", "prompt-json")
-	// grokCommands are Grok's subcommands. A first positional argument that is none of them is
-	// the interactive session's prompt.
+	// grokCommands are Grok's subcommands. Usage is `[PROMPT] [COMMAND]`: a first positional
+	// argument that is none of them is the interactive session's prompt, and one after it is a
+	// subcommand.
 	grokCommands = set("agent", "clone", "completions", "dashboard", "disk-usage", "doctor", "du", "export", "help", "inspect", "leader", "login", "logout", "mcp", "memory", "models", "plugin", "sessions", "setup", "trace", "update", "usage", "v", "version", "worker", "worktree", "wrap")
 )
 
@@ -140,8 +141,11 @@ func grokMode(args []string) clientMode {
 				return mode
 			}
 			i = next
-		case !prompt && grokCommands[a]:
+		case grokCommands[a]:
 			return modeCommand
+		case prompt:
+			// After the prompt, clap reads a positional argument as the subcommand.
+			return modeUnknown
 		default:
 			prompt = true
 		}

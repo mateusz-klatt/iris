@@ -117,7 +117,9 @@ func TestGrokModeReadsEveryFlagForm(t *testing.T) {
 		{[]string{"grok", "agent", "x"}, modeCommand},
 		{[]string{"grok", "--model", "m", "mcp", "list"}, modeCommand},
 		{[]string{"grok", "fix the bug"}, modeInput},
-		{[]string{"grok", "fix", "agent"}, modeInput},
+		{[]string{"grok", "fix", "agent", "serve"}, modeCommand},
+		{[]string{"grok", "fix the bug", "--model", "m", "agent"}, modeCommand},
+		{[]string{"grok", "fix", "two"}, modeUnknown},
 		{[]string{"grok", "-"}, modeInput},
 		{[]string{"grok", "--", "-p"}, modeInput},
 		// What Grok itself refuses, or Iris does not know.
@@ -221,6 +223,34 @@ func TestAntigravityStopAsksOnlyAnInteractiveSession(t *testing.T) {
 				t.Fatalf("observed %q, want %q", notes, want)
 			}
 		})
+	}
+}
+
+// An idle Stop whose agy process cannot be found is not asked, and the observed log says why.
+func TestAntigravityStopWithoutAnAgyProcessSaysWhy(t *testing.T) {
+	configDir, token, getenv := agyTestEnv(t)
+	enableAgyWake(t, configDir)
+	asInteractive(t)
+	payload, err := os.ReadFile(filepath.Join("testdata", "antigravity", "stop_interactive.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := (Runner{
+		ClientName: "antigravity",
+		EventName:  "Stop",
+		Stdin:      bytes.NewReader(payload),
+		Getenv:     getenv,
+		Ancestor:   func() (proc.Ancestor, error) { return proc.Ancestor{}, proc.ErrNotFound },
+		IrisPath:   func() string { return "/usr/local/bin/iris" },
+		after:      never,
+		logAfter:   never,
+	}).Run()
+	if strings.Contains(string(out.Stdout), `"decision":"continue"`) {
+		t.Fatalf("asked without an agy process: %s", out.Stdout)
+	}
+	seen, err := ReadRecentObservations(token, 10)
+	if err != nil || len(seen) != 1 || seen[0].Error != wakeNotAsked+"no agy process" {
+		t.Fatalf("observed %+v, %v", seen, err)
 	}
 }
 

@@ -3,6 +3,7 @@
 package proc
 
 import (
+	"strings"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -77,8 +78,13 @@ func argsOS(pid int) ([]string, error) {
 	if err := queryCommandLine(h, buf); err != nil {
 		return nil, err
 	}
-	line := (*windows.NTUnicodeString)(unsafe.Pointer(&buf[0])).String()
-	if line == "" {
+	return splitCommandLine((*windows.NTUnicodeString)(unsafe.Pointer(&buf[0])).String())
+}
+
+// splitCommandLine splits a command line as the C runtime and Go do. A doubled quote is refused:
+// Rust, which Grok is written in, reads it differently, so the split could hide a flag (ADR 031).
+func splitCommandLine(line string) ([]string, error) {
+	if line == "" || strings.Contains(line, `""`) {
 		return nil, ErrNotFound
 	}
 	return windows.DecomposeCommandLine(line)
