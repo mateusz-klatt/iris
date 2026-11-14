@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 
-import { attentionPrompt, isAttentionLine, runExtension, startWatcher } from "./watcher.mjs";
+import { attentionPrompt, interactiveHost, isAttentionLine, notInteractive, runExtension, startWatcher } from "./watcher.mjs";
 
 function harness(t, { send, log } = {}) {
     const calls = [];
@@ -221,7 +221,13 @@ test("binds the watcher to the joined session and stops it once on SIGINT or SIG
     child.stderr = new PassThrough();
     child.kill = () => calls.push(["kill"]);
     const stop = await runExtension({
-        joinSession: async () => ({ sessionId: "joined-session", on() {}, send: async () => {}, log: async () => {} }),
+        joinSession: async () => ({
+            sessionId: "joined-session",
+            capabilities: { ui: { elicitation: true, canvases: true } },
+            on() {},
+            send: async () => {},
+            log: async () => {},
+        }),
         iris: "/tools/iris",
         signals,
         environment: {},
@@ -238,6 +244,63 @@ test("binds the watcher to the joined session and stops it once on SIGINT or SIG
     signals.emit("SIGINT");
     stop();
     assert.equal(calls.filter((call) => call[0] === "kill").length, 1);
+});
+
+// Copilot CLI 1.0.112 reports canvases true in its TUI and false under -p (ADR 031). Only exactly true
+// starts the watcher; anything else, a getter that throws among it, logs one line and sends nothing.
+test("starts the watcher only in an interactive host", async () => {
+    const throwing = {};
+    Object.defineProperty(throwing, "ui", {
+        get() {
+            throw new Error("capabilities unavailable");
+        },
+    });
+    for (const [name, capabilities] of [
+        ["print mode", { ui: { elicitation: true, canvases: false } }],
+        ["missing", undefined],
+        ["no ui", {}],
+        ["not a boolean", { ui: { canvases: "true" } }],
+        ["throwing", throwing],
+    ]) {
+        const logs = [];
+        const signals = new EventEmitter();
+        const stop = await runExtension({
+            joinSession: async () => ({
+                sessionId: "print-session",
+                capabilities,
+                on: () => assert.fail("no events are watched"),
+                send: () => assert.fail("nothing is sent"),
+                log: async (...args) => logs.push(args),
+            }),
+            iris: "/tools/iris",
+            signals,
+            spawn: () => assert.fail(`${name}: a watcher must not start`),
+        });
+        stop();
+        assert.deepEqual(logs, [[notInteractive, { level: "info" }]], name);
+        assert.equal(signals.listenerCount("SIGTERM"), 0, name);
+        assert.equal(interactiveHost({ capabilities }), false, name);
+    }
+    assert.equal(interactiveHost({ capabilities: { ui: { canvases: true } } }), true);
+});
+
+test("reports a failed log line in a host that is not interactive", async () => {
+    const errors = [];
+    const original = console.error;
+    console.error = (...args) => errors.push(args);
+    try {
+        await runExtension({
+            joinSession: async () => ({ sessionId: "print-session", log: async () => Promise.reject(new Error("closed")) }),
+            iris: "/tools/iris",
+            signals: new EventEmitter(),
+            spawn: () => assert.fail("a watcher must not start"),
+        });
+        await new Promise((resolve) => setImmediate(resolve));
+    } finally {
+        console.error = original;
+    }
+    assert.equal(errors.length, 1);
+    assert.match(errors[0][0], /could not report monitor status/);
 });
 
 test("starts no watcher when the session cannot be joined", async () => {

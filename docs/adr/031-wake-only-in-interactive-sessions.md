@@ -82,7 +82,7 @@ child with `detached`, so it has no controlling terminal.
 | Grok (1.0.77) | `-p`/`--single`, `--prompt-file`, `--prompt-json`; any subcommand, `agent` among them | Otherwise a terminal for input; a first positional argument that is not a subcommand is the session's prompt | Done here |
 | Kimi (2.6.1) | `-p`/`--prompt`; any subcommand, `acp` and `web` among them | A terminal for input, the client's own; see "Kimi" below | Done by amendment, before Kimi's default-on (v0.1.4) |
 | Cursor | `cursor-agent -p`/`--print` | | Joins through #338. After this ADR's PR merges, #338 rebases onto it, uses `proc.Args` and `proc.ReadsTerminal` with Cursor's own measured grammar instead of a reader of its own, and sends no `followup_message` in print mode. It adds its row here with its measurements. |
-| Copilot | `copilot -p` | | To be measured on WSL, where Copilot's experimental extension is on, after Antigravity and Grok. The extension starts `iris watch --client copilot` wherever Copilot loads it, and sends its enqueued message once the session is idle, so a `copilot -p` run that gets attention before it exits could gain a turn. The fix follows this rule: in a non-interactive session the extension starts no watcher and sends nothing. Not a v0.1.3 blocker unless the turn is measured. |
+| Copilot (1.0.112) | `copilot -p` | A host with canvases; see "Copilot" below | Done by amendment |
 | Codex | `codex exec` | | Probably safe and unmeasured: an exec thread is `notLoaded` in the app-server daemon, so the worker defers. The probe that settles it: a `codex exec` run that receives attention before it exits, with its answer and the daemon's thread list compared. |
 | Claude | `claude -p` | | The macOS probe settles it: `claude -p "reply with exactly PONG"` on an integrated Mac passes when the answer is unchanged, no `iris watch --client claude` child runs during the call, and the observed log gains nothing beyond the hooks |
 
@@ -137,6 +137,35 @@ Amended on 2026-11-14, with the coordinator's decision. WSL measured Kimi 2.6.1 
 - **The gap.** `kimi -p` typed at a terminal reads a terminal and its argv is blanked, so it is
   asked once. Its answer may then mention the watcher. The delegation bridges start Kimi
   detached, with no terminal for input, so they are not asked.
+
+### Copilot
+
+Amended on 2026-11-14, with the coordinator's decision.
+
+The extension of ADR 024 is not a hook: Copilot CLI loads it into every session, a `copilot -p`
+run included. Measured on WSL with Copilot CLI 1.0.112, a `copilot -p` run started a child
+`iris watch --client copilot`. Its answer stayed `PONG` only because no attention arrived during
+its 4 s, and a run that received mail could gain the extension's enqueued turn.
+
+A probe extension placed beside Iris's recorded what the host gives at `joinSession`:
+
+| | `copilot -p` | interactive TUI |
+|---|---|---|
+| `session.capabilities.ui.elicitation` | true | true |
+| `session.capabilities.ui.canvases` | false | true |
+| environment `COPILOT_LOADER_PID` | absent | present |
+| the extension's own stdin is a terminal | no | no |
+
+So the extension starts its watcher only when `session.capabilities.ui.canvases` is exactly `true`.
+Anything else, including a missing value or a getter that throws, means no watcher and nothing
+sent. The session gets one log line, "Iris wake not started: not an interactive session."
+`COPILOT_LOADER_PID` agreed in the measurement, but it is undocumented, and the rule does not use
+it.
+
+This is a capability of the host standing in for a mode the SDK does not declare. It fails in two
+directions:
+- a future print mode that gains canvases would start the watcher;
+- a host without canvases, possibly an ACP host, gets no wake.
 
 ## Limits
 

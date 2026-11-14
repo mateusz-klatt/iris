@@ -91,10 +91,32 @@ export function startWatcher({ iris, session, sessionId, spawn = spawnProcess, e
     };
 }
 
+export const notInteractive = "Iris wake not started: not an interactive session.";
+
+// interactiveHost reports whether the session's host is Copilot CLI's interactive UI. The SDK
+// names no mode, so the host's canvas support stands in for one: measured on Copilot CLI 1.0.112,
+// it is true in the TUI and false under -p (ADR 031). Anything but exactly true, including a
+// getter that throws, is not interactive.
+export function interactiveHost(session) {
+    try {
+        return session.capabilities?.ui?.canvases === true;
+    } catch {
+        return false;
+    }
+}
+
 // runExtension is the body of extension.mjs. That entry file supplies only what exists inside
 // Copilot CLI's extension host: the SDK's joinSession and the iris path written at install time.
+// A session that is not interactive, such as a `copilot -p` run, gets no watcher and is never sent
+// anything (ADR 031); it gets one log line saying so.
 export async function runExtension({ joinSession, iris, signals = process, ...options }) {
     const session = await joinSession();
+    if (!interactiveHost(session)) {
+        void session.log(notInteractive, { level: "info" }).catch((error) => {
+            console.error("Iris Copilot extension could not report monitor status", error);
+        });
+        return () => {};
+    }
     const stop = startWatcher({ iris, session, sessionId: session.sessionId, ...options });
     signals.once("SIGINT", stop);
     signals.once("SIGTERM", stop);

@@ -36,6 +36,11 @@ loads it. The `extensions/iris` directory may stay behind, empty.
 
 - It runs only in a live Copilot CLI session that loaded it. It cannot start a closed or unloaded
   session, and it does not wake a machine that is off.
+- It starts its watcher only in an interactive session
+  ([ADR 031](adr/031-wake-only-in-interactive-sessions.md)): a host whose `canvases` capability is
+  `true`, as Copilot CLI's TUI is. A `copilot -p` run reports `false`, gets no watcher and is sent
+  nothing; it logs "Iris wake not started: not an interactive session." The capability stands in
+  for a mode the SDK does not name.
 - A session busy with a turn is not interrupted. The wake is sent after the turn ends.
 - If Copilot accepts a wake but then sends neither `assistant.turn_start` nor `session.idle`,
   the extension keeps the session marked busy. Later wakes are held, not lost, until the next
