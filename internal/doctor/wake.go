@@ -15,7 +15,7 @@ var inspectWakes = wake.Inspect
 
 const wakeRecovery = "Resume a live session so its exact queued prompt hook can consume its guard. Remove the exact guard file only after permanently closing that session and stopping its MCP child; removing a live guard can admit duplicate queue entries."
 const antigravityWakeRecovery = "Continue that agy conversation so a hook can scan its transcript. If the notification never reached it, the guard stays. Remove the exact guard file only after that conversation is permanently closed and its wake helper has stopped; removing a live guard can admit a duplicate notification."
-const neutralWakeRecovery = "Remove the exact guard file only after the session that owns it is permanently closed and its helper or MCP child has stopped; removing a live guard can admit duplicate queue entries."
+const neutralWakeRecovery = "Remove the exact guard file only after the session that owns it is permanently closed and its helper or MCP child has stopped; removing a live guard can admit a duplicate wake."
 const wakeLimits = "Configured idle wake allows one automatic wake per attention identity, with one shared retry after a known queue failure. Retained legacy attempts count toward that same allowance. Outstanding queue guards have no expiry. Existing doctor --live Codex exec probes do not prove idle wake delivery."
 
 func wakeReport(layout integrate.Layout, tokenFile string, now time.Time) []string {

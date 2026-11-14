@@ -269,7 +269,7 @@ func TestDoctorWakeLabelsClientsAndOrdersTheirDiagnostics(t *testing.T) {
 			t.Fatalf("Antigravity recovery lacks %q: %s", want, lines[3])
 		}
 	}
-	if !strings.Contains(lines[4], neutralWakeRecovery) || !strings.Contains(lines[4], "submissions remain blocked") {
+	if !strings.Contains(lines[4], neutralWakeRecovery) || !strings.Contains(lines[4], "submissions remain blocked") || strings.Contains(lines[4], "queue entries") {
 		t.Fatalf("an unusable guard blocks submissions whichever client wrote it: %s", lines[4])
 	}
 	if !strings.Contains(lines[5], neutralWakeRecovery) || strings.Contains(lines[5], "submissions remain blocked") || strings.Contains(lines[5], wakeRecovery) {
