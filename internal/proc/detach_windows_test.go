@@ -72,6 +72,8 @@ func launch(dir string) {
 	}
 	plain := exec.Command(os.Args[0], "-test.run=^TestDetachedHelperModes$")
 	plain.Env = []string{envProbe + "=" + filepath.Join(dir, "kept"), "SYSTEMROOT=" + os.Getenv("SYSTEMROOT")}
+	// Without a console, no console host is created on the launcher's desktop to keep it open.
+	NoConsole(plain)
 	if err := plain.Start(); err != nil {
 		result += "; kept: " + err.Error()
 	} else {
@@ -240,6 +242,14 @@ func TestStartDetachedOutlivesTheDesktopItWasStartedFrom(t *testing.T) {
 		t.Fatalf("CloseDesktop: %v", err)
 	}
 	closed = true
+	// The control proves something only if the desktop is really gone: opening it by name must
+	// fail before either probe is told to load user32.
+	openDesktop := user32.NewProc("OpenDesktopW")
+	gone := true
+	if still, _, _ := openDesktop.Call(uintptr(unsafe.Pointer(&utf16.Encode([]rune(name + "\x00"))[0])), 0, 0, windows.GENERIC_READ); still != 0 {
+		_, _, _ = closeDesktop.Call(still)
+		gone = false
+	}
 	for _, sub := range []string{"moved", "kept"} {
 		if err := os.WriteFile(filepath.Join(dir, sub, "go"), nil, 0o600); err != nil {
 			t.Fatal(err)
@@ -257,11 +267,17 @@ func TestStartDetachedOutlivesTheDesktopItWasStartedFrom(t *testing.T) {
 	if err := windows.GetExitCodeProcess(probes["kept"], &code); err != nil {
 		t.Fatal(err)
 	}
-	if code != 0xC0000142 {
-		got, err := os.ReadFile(filepath.Join(dir, "kept", "probe"))
-		if code != 0 || err != nil || string(got) != "user32 init failed" {
-			t.Fatalf("plain probe: exit=%#x, output=%q, err=%v; want DLL initialization failure", code, got, err)
-		}
+	got, _ := os.ReadFile(filepath.Join(dir, "kept", "probe"))
+	failed := code == 0xC0000142 || (code == 0 && string(got) == "user32 init failed")
+	switch {
+	case failed:
+		t.Log("environment reproduces the dead desktop: control failed DLL init")
+	case gone:
+		// The desktop is confirmed gone, yet a process that kept it loaded user32: the premise of
+		// ADR 028 measurement 12 would be wrong, not merely this environment different.
+		t.Fatalf("plain probe on a desktop confirmed gone: exit=%#x, output=%q; want DLL initialization failure", code, got)
+	default:
+		t.Logf("environment does not reproduce: control loaded user32 (desktop open by name: %v)", !gone)
 	}
 }
 

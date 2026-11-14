@@ -98,6 +98,11 @@ the user at the keyboard. Measurement 15 used a `Stop`-requested arming.
 
     Removing the console changed nothing. PR #340 credited the console for fixing startup; that
     attribution was wrong. The failure was caused by the destroyed desktop.
+
+    The regression test in `internal/proc` repeats this on a fresh desktop. On the measurement
+    host the control fails as above. GitHub's `windows-latest` runner does not reproduce it: there
+    the control loads user32 after the close, so the test only logs the environment there. The
+    evidence for the cause is this host's runs and the live acceptance.
 13. **Approval on Windows.** agy's safety monitor flagged `BypassSandbox: true` at severity 6 on
     every run. It asked the user even when a persistent `command(...)` rule matched, and its
     confirmation appeared 35–45 s after the model's request. Choosing "always allow" in that
