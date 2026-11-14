@@ -1,111 +1,94 @@
-# Kimi notifications while idle
+# Kimi wake
 
-Iris can ask a loaded Kimi session to read its inbox and claims when new attention arrives and its
-native session is verified idle. This uses the local **Kimi Web Server API** and the session's own
-model. Each accepted wake can start a model turn and spend model budget.
+Kimi starts a model turn in an idle session when a background task it manages ends. Iris uses that:
+it asks the session's model to keep one task running, `iris watch --client kimi --once`, which ends
+when Iris has new attention for the session. The turn that its end opens reads the inbox and claims
+and starts the next task. Each wake is a model turn and can spend model budget.
+[ADR 030](adr/030-kimi-one-shot-wake.md) has the decision and the measurements behind it.
 
-## Enable the native server
+**Wake is off by default** until its native acceptance passes. Only Linux with Kimi 2.6.1 has been
+measured, and macOS and Windows need their own acceptance before wake turns on by default there.
 
-Start a server with the same Kimi home as the session, on loopback:
-
-```sh
-kimi web --no-open
-```
-
-Do not use `--dangerous-bypass-auth` for ordinary use. Iris reads the server token from
-`$KIMI_CODE_HOME/server.token`; it does not print it or copy it into the MCP configuration.
-
-Install or update Iris, explicitly enable wake, then restart the Kimi session's MCP connection:
+## Turning it on and off
 
 ```sh
 iris integrate kimi --wake
-```
-
-Fresh integration and a bare `iris mcp --client kimi` leave wake off while native delivery is
-unproved. Disable it again or enable it later with:
-
-```sh
 iris integrate kimi --no-wake
-iris integrate kimi --wake
 ```
 
-`--no-wake` records `--wake=false`. Setup and ordinary reintegration preserve that choice. A
-manually configured server opts in with `iris mcp --client kimi --wake`; `--wake=false` disables it.
-Existing bare entries remain disabled. `iris integrate --remove kimi` removes Iris's integration.
+The choice is recorded in `kimi-wake/preference` in the OS account's default Iris configuration
+directory. The file holds `default` when no choice was made, which is off for now, or `on` or `off`.
+Setup and reintegration keep whatever it holds, so an explicit choice survives them.
+`iris integrate --remove kimi` removes it with the rest of the integration.
 
-For a custom home, the integration resolves `KIMI_CODE_HOME` to an absolute path in the Iris MCP
-environment. Start `kimi web` with that home too. When several instances are registered,
-Iris tries their loopback endpoints until it finds a live Kimi process consistent with the registry
-pid and start time. It probes `/api/v1/healthz` without credentials before sending the token, then
-requires a valid live server id and a version matching `/api/v1/meta`. Registry and live ids can
-differ in Kimi 2.6.0. The client and server versions must match. Kimi 2.6.1 reports `0.0.0` in MCP
-clientInfo, so only that exact sentinel or an empty value triggers a two-second, strictly parsed
-`kimi --version` fallback through PATH. Each candidate has its own five-second health/metadata
-budget, so a stalled endpoint does not consume the next candidate's
-budget; total preflight time grows with the candidate count. Health, metadata, idle reads and the
-prompt share one connection. Iris refuses to reconnect that candidate after the connection closes.
+The hooks and the watcher read only that directory, so `--wake` refuses to run when the environment
+points Iris at another one, as `IRIS_TOKEN_FILE` can. Turning wake off and integrating without it
+work anywhere.
+
+An integration made before ADR 030 kept the choice in Iris's MCP arguments. Reintegration moves it:
+`--wake` or `--wake=true` there becomes `on`, anything else becomes `default`, and the arguments
+become `mcp --client kimi` with no wake choice in them. `iris mcp --client kimi --wake` still starts,
+but the flag does nothing: Iris starts no MCP web worker for any Kimi session.
+
+`--wake` also installs a skill at `skills/iris/SKILL.md` in the Kimi home (`KIMI_CODE_HOME`, or
+`~/.kimi-code`). It tells the model what each end of the task means. Turning wake off or removing
+the integration takes back exactly the text Iris wrote; a copy someone changed stays as it is.
 
 ## What Iris does
 
-The session's Iris MCP child first needs its positive binding to the hook-registered, single-session
-Kimi process. An ordinary Iris tool call establishes it. Fallback, overridden, undecided or
-lookup-only bindings cannot arm wake.
+1. At SessionStart, the hook records the native session id beside the Kimi process that runs it.
+2. At a user prompt that starts a turn, while wake is on, the hook adds a request to the prompt: start
+   one background Bash task with the exact command, the description `Iris: wait for new attention`,
+   `run_in_background=true` and `disable_timeout=true`. It asks only when the hub has accepted the
+   session and no watcher for it is running, requested or stopped (latched, below). A prompt typed
+   into a running turn starts no turn, so it neither asks nor counts as an answer.
+3. The watcher looks up the Execution that the hooks registered for that Kimi process and session,
+   and only that one. It never registers an Execution of its own, and it keeps the Execution's lease
+   alive without counting as a monitor, so prompt reminders go on as before.
+4. When new mail or a freed claim arrives, it prints one fixed line, records how far it has read and
+   exits 0. Kimi opens a turn, and the skill asks the model to use the Iris inbox and claims tools and
+   to start exactly one replacement before that turn ends.
 
-After attention settles, Iris checks the exact session through REST. It must be unarchived and have
-`busy:false`, `main_turn_active:false` and `pending_interaction:"none"`. Busy, locked, unavailable
-or unknown state defers without spending the wake allowance. Iris reads authoritative attention and
-hook state again after the idle check before submitting anything.
+The first watcher of a session does not wake it for mail that was already waiting; the hooks and the
+inbox cover that. A replacement starts reading where the previous one stopped, so attention that
+arrived in between is not lost. After a wake, attention of the same kind waits out the rest of a
+30-second window, so a burst costs one turn, and mail the model has already fetched wakes nothing.
 
-The prompt contains only the fixed Iris notification and a correlation token, never mail bodies.
-Its client-chosen `prompt_id` is a SHA-256 of that exact prompt, so repeating the same request does
-not intentionally create another wake. Native `running` and `queued` responses count as accepted.
-There is one automatic wake per attention identity and one shared retry after a known refusal.
+A watcher that ends without attention says why, and the skill asks the model not to start another:
 
-**A session open in the Kimi TUI cannot be woken this way.** While another Kimi process, such as
-the TUI, holds the session's lock, Kimi 2.6.1 answers `40931`, SESSION_OCCUPIED, and kimi web cannot
-prompt the session until that process exits. Iris records the fixed reason "Kimi session is open
-in another Kimi process", spends no wake allowance and tries again every 60 seconds.
-`hook-observed.log` notes `wake_failed: session occupied` once for the whole time, not on every try.
-A busy session, `40901` on the prompt, is checked again after 15 seconds.
+| Exit | Meaning |
+|---|---|
+| 0 | New attention. Use the inbox and claims tools, then start one replacement. |
+| 10 | Wake is off, the integration was removed, the Kimi process ended or its session changed. |
+| 11 | Another watcher already waits for this session. |
+| 12 | The watcher could not start, for instance because it found no Execution to bind. |
+| 13 | It reached its 24-hour limit. |
+| 14 | The hub no longer has the session. |
+| 15 | Attention may be waiting but could not be recorded: use the inbox and claims tools once. |
 
-Iris **never calls `:takeover`**. That endpoint is only for a lock left by a process known to be gone.
-Iris does not remove the other process's lock or risk interleaved session history. Only a session
-that the native API reports idle and whose prompt it accepts is eligible.
+After 10, 12 or 13, and when a request was not answered by the time of the next user prompt, the
+session is latched: Iris stops asking. SessionStart, including a resume, clears the latch, and so does
+a watcher the model starts anyway, for instance because the user asked for one.
 
-## Limits and recovery
+`--no-wake` and removal stop every watcher whose recorded process id and start time still match a
+running process, and latch its session disabled. A stop that fails is reported. A watcher that is
+not stopped notices within 20 seconds that wake is off and ends. Turning wake back on does not reach
+sessions latched this way until they start again or resume.
 
-Iris does not start or supervise `kimi web`, resume a closed session or retain a listener after the
-MCP child ends. The API is experimental, so the version check is deliberate. Without a compatible
-server, wake waits and the existing hook notifications and Iris tools continue to work.
+## Limits
 
-The process and health checks plus the single-connection transport reduce accidental token
-disclosure to a stale or reused port. They do not authenticate the initial connection before the
-token is sent: a local process imitating Kimi's health response can still receive it. A closed
-verified connection makes later calls fail instead of reaching a replacement listener. The version
-fallback uses the `kimi` binary found on PATH, which can differ from the already running client after
-an upgrade or a PATH change. It does not prove the running process's version; every probe failure or
-server mismatch fails closed without a prompt. The token is never intentionally logged.
+- **This asks the model; it enforces nothing.** The model can ignore the request, run another
+  command, not fetch the mail or not start a replacement. Iris cannot verify the command it runs.
+- If the model does not start a replacement after a wake, nothing wakes the session until the next
+  user prompt asks again. Kimi 2.6.1 runs no hook on the turn a finished task opens and no Stop hook
+  on any turn.
+- `/clear` ends the task and starts a new session id. The new session gets a watcher at its next user
+  prompt. Nothing starts a closed session.
+- A task that ends during a busy turn opens its turn after that one ends. Empty and duplicate turns
+  are possible: a freed claim stays historical and can cost one extra turn.
+- `iris doctor` does not show the preference or the watcher records yet.
+- Message bodies are untrusted data. Neither the watcher's line nor Kimi's task notification
+  carries them.
 
-The idle read, binding admission and prompt submission are not atomic. Connect and request writing
-have a separate two-second deadline under the binding lock. On timeout Iris cancels and joins the
-transport before unlocking, so the request cannot be written late. Response headers and body are
-awaited after unlocking. Binding can change after submission starts, and a person can start a turn
-or fetch mail after the idle read, so an accepted prompt can run later and find no work. Queue acceptance
-proves neither a completed turn nor an inbox fetch, and Iris cannot guarantee zero empty
-or billable turns.
-
-An accepted or uncertain wake retains its guard until its exact prompt hook consumes it. If the
-HTTP response never arrives, the 30-second queue deadline records an unknown outcome; binding
-heartbeats continue while it waits. The deadline does not clear the guard or permit another wake.
-Resume that session first. There is no timeout that clears an outstanding guard. Do not remove a live
-guard or clear all session state to repair it. The current guard-inspection report is the Codex-era
-report; native Kimi arming, TUI refresh and delivery are not proved by `iris doctor --live`.
-
-The shared runner and fake-server protocol tests run without model credits. Tests use the real
-captured prompt shape to verify guard consumption and reject composite or non-text prompts, but no
-API-submitted prompt has yet produced a captured live hook. An isolated real Kimi 2.6.0 server
-accepted the adapter's prompt; without a provider it failed before a model turn, with zero tokens
-and zero cost. Real hook consumption, TUI delivery, cross-platform acceptance and model cost need
-separate evidence. See
-[ADR 026](adr/026-kimi-web-idle-wake.md) for the decision and [Kimi's Server API reference](https://www.kimi.com/code/docs/en/kimi-code-cli/reference/server-api.html)
-for the native protocol.
+The local `kimi web` API that ADR 026 used is not used: it could not reach a session open in the
+Kimi TUI.

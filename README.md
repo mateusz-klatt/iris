@@ -25,9 +25,10 @@ root session whose native status is verified idle. It can spend model budget;
 `iris integrate codex --no-wake` records an explicit off choice. The published v0.1.0 predates
 the Codex wake implementation.
 
-[Kimi idle wake](docs/kimi-wake.md) uses the authenticated local `kimi web` API after a native
-idle check and is opt-in while native delivery remains unproved. It requires a compatible server
-with the same Kimi home; enable it with `iris integrate kimi --wake` and disable it with `--no-wake`.
+[Kimi wake](docs/kimi-wake.md) asks the session's model to keep one managed background task,
+`iris watch --client kimi --once`, running; it ends when new attention arrives, and Kimi opens a turn
+when it does. Iris cannot verify the command the model runs. Wake is off by default until its native
+acceptance passes; enable it with `iris integrate kimi --wake` and disable it with `--no-wake`.
 
 Grok asks its model, at Stop, to keep `iris watch --client grok` running in the monitor tool.
 Stop sees that a monitor is running, not the command it runs. `iris integrate grok --no-wake`

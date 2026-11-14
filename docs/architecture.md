@@ -302,7 +302,7 @@ Each client gets the strongest tier it has:
 | Instant, idle session | Plugin monitor running `iris watch` | Claude Code (measured: 0.3 s from line to model turn) |
 | Loaded idle root | Own queue command after a positive native idle check | Codex, enabled by default; [ADR 023](adr/023-default-codex-wake-after-idle-check.md) |
 | Loaded foreground session | Copilot CLI extension runs `iris watch` and submits a fixed automation message through its SDK | Copilot CLI (experimental; [ADR 024](adr/024-copilot-extension-wake.md)) |
-| Loaded idle session | Authenticated web REST prompt after a positive native idle check | Kimi, opt-in while delivery is unproved; [ADR 026](adr/026-kimi-web-idle-wake.md) |
+| Asked at a user prompt | Model keeps one managed background task, `iris watch --client kimi --once`, whose end opens a turn | Kimi, off until its native acceptance; [ADR 030](adr/030-kimi-one-shot-wake.md) |
 | Asked at Stop | Model starts a persistent `iris watch` in the `monitor` tool | Grok, enabled by default; [ADR 025](adr/025-grok-stop-monitor.md) |
 | Asked at Stop, loaded idle session | Model starts a detached `iris watch --client antigravity --wake` helper after user approval; helper sends a fixed message through `agy agentapi send-message` | Antigravity, enabled by default; [ADR 028](adr/028-antigravity-idle-wake.md) |
 | Instant, armed by the model | `Monitor` tool with a `ws` source | Claude Code |
@@ -337,21 +337,9 @@ Other CLI versions, macOS, Windows and Copilot's command sandbox were not measur
 extension writes carries a digest header, so Iris replaces or removes only a file it wrote and
 nobody edited.
 
-Kimi's MCP child follows the hook-registered session found through its single-session client
-process. A compatible `kimi web` using the same home is required: Iris validates the registered
-Kimi process, probes its unauthenticated health endpoint before sending `server.token` and verifies
-live metadata and matching versions. An empty or `0.0.0` MCP client version falls back to a strictly
-parsed, two-second `kimi --version` through PATH; this does not prove the running binary's identity.
-Iris reads the exact session's native idle state before submitting a fixed prompt with an idempotent
-`prompt_id`. The candidate's transport refuses a
-second connection after preflight. Prompt connect/write has a two-second deadline under binding
-admission; the response wait is outside that lock. Busy, locked or unknown state defers
-without quota. Iris never calls `:takeover` on a live session. Wake is opt-in while native delivery
-and hook consumption are unproved; fresh integration and bare MCP arguments leave it off, and an
-explicit choice survives reintegration. The server and closed sessions are not started for the user.
-The [Kimi wake guide](kimi-wake.md) and [ADR 026](adr/026-kimi-web-idle-wake.md) record setup and limits.
-
-[ADR 030](adr/030-kimi-one-shot-wake.md) replaces that route in stages. Each Kimi SessionStart the
+Kimi wakes through [ADR 030](adr/030-kimi-one-shot-wake.md)'s one-shot watcher; the
+[Kimi wake guide](kimi-wake.md) records setup and limits. ADR 026's route through the local
+`kimi web` API is retired: it could not reach a session open in the TUI. Each Kimi SessionStart the
 hub accepts records its native session id under `kimi-wake/` in the OS account's Iris directory.
 The record sits beside the pid and start time of its single-session Kimi process, so the one-shot
 watcher binds to that session alone. `/clear` points the process at its new session.
@@ -364,8 +352,18 @@ at the end of a turn. The prompt asks only when no watcher is live and no reques
 request still pending at the next such prompt was not answered, so it latches `failed` instead of
 asking at every turn. A steer typed into a running turn neither asks nor judges. No prompt hook runs
 on a task-notification turn, so re-arming after an attention exit rests on the model. The ask reads
-local files and the process table, calls no hub and asks nothing on any failure. Nothing writes the
-preference yet; the integration follows in a later change.
+local files and the process table, calls no hub and asks nothing on any failure.
+
+Integration writes the preference and keeps it in its manifest. `--wake` writes `on`, `--no-wake`
+writes `off`, and integration without either keeps the recorded choice or, where there is none,
+writes `default`, which is off until the native acceptance. An integration from before ADR 030
+recorded the choice in its MCP arguments: `--wake` or `--wake=true` there becomes `on`, and the
+arguments become `mcp --client kimi`. `--wake` requires the environment's configuration directory
+to be the pinned one, because the hooks and the watcher read only that. While the preference is
+`on`, integration also installs a native skill saying what each exit means; otherwise it takes back
+exactly the text it wrote, and a copy someone changed stays. `--no-wake` and removal stop every
+watcher whose recorded pid and start time still match a running process and latch its record
+`disabled`. A watcher that is not stopped finds the preference off at its next 20-second check.
 
 The watcher, `iris watch --client kimi --once`, accepts only that exact command. It reads the hub
 configuration and its state from the pinned directory, never from its environment, because a model
@@ -1155,7 +1153,7 @@ The search index is updated in the same transaction.
 | Hooks in headless mode | yes | yes | yes | yes | yes | yes | yes |
 | Project hooks | trust | trust and review | trust | trust | no trust step | trust | none |
 | User hooks need a step | no | review once | no | no | no | no | no |
-| Wake idle session | yes, plugin monitor | owned sessions | owned sessions | owned sessions | Stop-armed helper ([ADR 028](adr/028-antigravity-idle-wake.md)) | Stop-armed monitor ([ADR 025](adr/025-grok-stop-monitor.md)) | web REST after native idle check |
+| Wake idle session | yes, plugin monitor | owned sessions | owned sessions | owned sessions | Stop-armed helper ([ADR 028](adr/028-antigravity-idle-wake.md)) | Stop-armed monitor ([ADR 025](adr/025-grok-stop-monitor.md)) | prompt-armed one-shot task ([ADR 030](adr/030-kimi-one-shot-wake.md)), off by default |
 
 Codex can also write files from JavaScript. Its Code Mode `js` tool, `mcp__node_repl__js`, runs
 code such as `fs.appendFile` (measured on 0.167.0). `gpt-6-luna` used it instead of `apply_patch`
