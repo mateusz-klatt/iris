@@ -108,22 +108,33 @@ func executableFrom(
 	return exe, nil
 }
 
-// DetachUnder configures cmd to run detached from the caller, as a child of the live process
-// (pid, startMS). It refuses when that process no longer matches. Call release after cmd.Start.
-//
-// On Windows the child is created under that process instead of the caller, so it takes that
-// process's job and token rather than the caller's. A command that agy runs is in a job that ends
-// with the command and forbids breakaway, so a helper it starts would otherwise die with it
-// (ADR 028). The child still takes the caller's desktop. Unix keeps the caller as the parent: a
-// new session already separates the child, and (pid, startMS) is only checked.
-func DetachUnder(cmd *exec.Cmd, pid int, startMS int64) (release func(), err error) {
-	return detachUnderOS(cmd, pid, startMS)
+// Detached is a process that StartDetached created. Release forgets it and leaves it running;
+// Kill stops it and waits for it. Call either Release or Kill, once.
+type Detached struct {
+	PID     int
+	Release func()
+	Kill    func()
 }
 
-// NoConsole starts cmd without a console. On Windows a console program started from a process
-// on another desktop, such as one in agy's command sandbox, can fail to initialize while
-// attaching a new console, and dies with 0xC0000142 before it runs. Without a console it runs,
-// and the pipes set on cmd still carry its output. Unix has no consoles and leaves cmd as it is.
+// StartDetached starts exe with args and env detached from the caller, with its standard streams
+// discarded, as a child of the live process (pid, startMS). It refuses, before anything starts,
+// when that process no longer matches.
+//
+// On Windows the process is created under (pid, startMS) instead of the caller, so it takes that
+// process's job and token rather than the caller's. A command that agy runs sits in a job that
+// ends with the command and forbids breakaway, and on a desktop of its own that ends with it too
+// (ADR 028). So when the caller's desktop is not its window station's Default desktop, where agy
+// runs, the process is placed there; a desktop that cannot be read that way refuses the start. On
+// Unix the caller stays the parent: a new session already separates the process, and (pid,
+// startMS) is only checked.
+func StartDetached(exe string, args, env []string, pid int, startMS int64) (Detached, error) {
+	return startDetachedOS(exe, args, env, pid, startMS)
+}
+
+// NoConsole starts cmd without a console. On Windows a console program started by a process
+// that has none, such as the detached Antigravity helper, would otherwise get a console window of
+// its own on the user's desktop. Without one it runs unseen, and the pipes set on cmd still carry
+// its output. On Unix it leaves cmd unchanged.
 func NoConsole(cmd *exec.Cmd) { noConsoleOS(cmd) }
 
 // Terminate stops a live process only when its platform identity still matches (pid, startMS).

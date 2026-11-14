@@ -353,14 +353,6 @@ func TestAntigravitySpawnDetachedProcessAndLoopbackValidation(t *testing.T) {
 	if _, _, _, err := spawnDetachedProcess(filepath.Join(t.TempDir(), "missing"), nil, nil, parent); err == nil {
 		t.Fatal("missing executable succeeded")
 	}
-	// openDevNull error.
-	origNull := openDevNull
-	openDevNull = func() (*os.File, error) { return nil, errors.New("devnull err") }
-	_, _, _, err = spawnDetachedProcess(exe, nil, nil, parent)
-	openDevNull = origNull
-	if err == nil {
-		t.Fatal("openDevNull error ignored")
-	}
 
 	// Loopback validation rejects non-host:port, non-localhost hostnames, non-loopback IPs, IPv4-in-IPv6, zones, bad ports, and closed ports,
 	// while pinning localhost:<port> directly to a literal loopback IP without DNS.
