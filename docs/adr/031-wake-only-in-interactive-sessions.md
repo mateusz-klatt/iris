@@ -59,11 +59,10 @@ record:
       without its terminal. An interactive `grok` on 415d9cc, run over SSH with a pty, was logged
       "input is not a terminal", while agy 1.5.9's hook opened `/dev/tty`.
     - The process's own terminal does not depend on how a client spawns its hooks.
-  - On Windows, whether the hook itself has a console (`CONIN$`), which it shares with a client
-    running on one. This is option B, chosen for v0.1.3.
-  - The exact input checks are a follow-up: `proc_pidfdinfo` on macOS, and the process's
-    `StandardInput` checked with `GetConsoleMode` on Windows (option A, measured by Windows' live
-    control).
+  - On Windows, the process's own `StandardInput`, read through its PEB and duplicated into the
+    hook. Only a character handle whose `GetConsoleMode` succeeds is a terminal: pipes, files and
+    NUL are not. A null or invalid handle is not a terminal; failure to open, read or duplicate is
+    an unreadable input. This is option A.
 - **What cannot be told means no request.** That covers arguments that cannot be read, a flag Iris
   does not know, an input that cannot be read, and a hook whose nearest client process is not the
   client. A request made in a headless run changes its answer, while a request not made only delays
@@ -107,17 +106,16 @@ The grammars, as measured:
 
 ## Limits
 
-- **macOS and Windows count a terminal, not the client's input.** A headless run with no print flag
-  whose process still has a terminal or console is asked once: for instance, a prompt piped into
-  agy by a person at a terminal. Linux checks the input itself.
-- **Windows needs a positive control before option B ships there.** The bridges do not detach on
-  Windows, so a bridge child inherits the bridge's console, and `CONIN$` is weak evidence; the
-  arguments do the work there. The control: a hook of an interactive agy TUI must open `CONIN$`.
-  If it cannot, option B would turn Antigravity's wake off on Windows altogether, and Windows needs
-  the exact check for v0.1.3. The same measurement includes one headless run without a print flag,
-  to state the gap exactly. It includes an interactive Grok, which may start its hooks without
-  its console as it starts them without its terminal on macOS. macOS confirms that interactive agy
-  and Grok are asked, and that `-p` runs are not.
+- **macOS counts a terminal, not the client's input.** A headless run with no print flag whose
+  process still has a terminal is asked once: for instance, a prompt piped into agy by a person at
+  a terminal. Linux and Windows check the input itself. macOS confirms that interactive agy and
+  Grok are asked, and that `-p` runs are not.
+- **Windows may need a shared console for a positive answer.** `GetConsoleMode` on the duplicated
+  handle may succeed only when the hook shares the client's console. This is unmeasured; the
+  Windows live control measures it for interactive agy and interactive Grok. Without a shared
+  console the answer is false, so there is no ask.
+- **The Windows check targets windows/amd64 and windows/arm64.** A WOW64 target may make the PEB
+  read fail, which means no ask.
 - **A flag Iris does not know turns the request off** until Iris learns it. A client release that
   adds a flag disables the request for sessions that use it, and the observed log says
   `wake not asked: unknown argument`.
@@ -136,4 +134,5 @@ The grammars, as measured:
 - Live checks:
   - WSL: a delegated `agy -p` and `grok -p` return their answers unchanged and leave no record.
   - antigravity-home-iris: its interactive session still arms once.
-  - Windows and macOS: the controls above, on the branch's build.
+  - Windows: an interactive agy still arms once, and a bare agy with piped input is not asked.
+  - macOS: the controls above, on the branch's build.
