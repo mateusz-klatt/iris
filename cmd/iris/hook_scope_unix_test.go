@@ -56,6 +56,19 @@ func gitRunning(t *testing.T, pid int, limit time.Duration) string {
 	}
 }
 
+// The cold hook's shell budget and whole-run deadline. The cold run measures whether a slow full
+// status trips the breaker and is remembered, not how fast a loaded runner starts processes, and
+// every timing condition that could refuse the trip scales with the budget: git must start with
+// half of it left, before it ends, and before the run's own deadline. With the real 300 ms
+// loopback budget, CI once ended this run with no breaker. The stand-in's full status still
+// sleeps far past this budget, so it is still killed. The real values are held where no process
+// start is timed: TestTheShellBudgetFollowsWhereTheHubIs holds the 300 ms loopback budget, and
+// TestABreakerTripsOnlyWhenGitWasTheSlowPart holds the half-budget rule (internal/hook).
+const (
+	coldShellBudget = 3 * time.Second
+	coldDeadline    = 10 * time.Second
+)
+
 // A real `iris hook` whose full git status cannot finish in its budget exits on time with valid
 // output and leaves no git running, and the trip it wrote outlives it: the next hook process
 // runs a reduced status and sends its snapshot on the scoped route (ADR 018).
@@ -73,7 +86,8 @@ func TestAHookThatTripsLeavesTheNextOneReduced(t *testing.T) {
 			hookShellDeadline = time.Minute
 			os.Exit(runHookIO(args, os.Stdin, os.Stdout, os.Stderr, os.Getenv, time.Minute))
 		}
-		os.Exit(runHook(args))
+		hookShellDeadline = coldShellBudget
+		os.Exit(runHookIO(args, os.Stdin, os.Stdout, os.Stderr, os.Getenv, coldDeadline))
 	}
 	realGit, err := exec.LookPath("git")
 	if err != nil {
@@ -138,7 +152,7 @@ func TestAHookThatTripsLeavesTheNextOneReduced(t *testing.T) {
 	payload, _ := json.Marshal(map[string]any{"session_id": "trip", "cwd": super, "tool_name": "Bash", "tool_use_id": "t", "tool_input": map[string]string{"command": "make"}})
 	exe, _ := os.Executable()
 	// runChild runs one real hook process. An unhurried one gets a minute for its whole run and
-	// for its shell reconcile, in place of the real 1.5 s and 300 ms budgets.
+	// for its shell reconcile; the cold one gets coldDeadline and coldShellBudget.
 	runChild := func(event string, unhurried bool) (string, time.Duration) {
 		t.Helper()
 		cmd := exec.Command(exe, "-test.run=^TestAHookThatTripsLeavesTheNextOneReduced$")
@@ -179,10 +193,10 @@ func TestAHookThatTripsLeavesTheNextOneReduced(t *testing.T) {
 		t.Fatalf("stand-in logged %q", calls)
 	}
 
-	// The cold trip: the full status passes the loopback budget and is killed. The time includes
+	// The cold trip: the full status passes the cold budget and is killed. The time includes
 	// starting the test binary, so it allows a second beyond the hook's own deadline.
 	out, took := runChild("PreToolUse", false)
-	if out != "{}\n" || took > hook.DefaultDeadline+time.Second {
+	if out != "{}\n" || took > coldDeadline+time.Second {
 		t.Fatalf("first hook: %q in %v", out, took)
 	}
 	if calls := readGitLog(); !strings.Contains(calls, "--ignore-submodules=untracked") || strings.Contains(calls, "--ignore-submodules=dirty") {
@@ -204,7 +218,7 @@ func TestAHookThatTripsLeavesTheNextOneReduced(t *testing.T) {
 		t.Fatalf("breakers %v", breakers)
 	}
 	hints := hook.ScopeHints(token, time.Now())
-	if len(hints) != 1 || !hints[0].Due || !strings.Contains(hints[0].Reason, "300ms") {
+	if len(hints) != 1 || !hints[0].Due || !strings.Contains(hints[0].Reason, coldShellBudget.String()) {
 		t.Fatalf("hints %+v", hints)
 	}
 
