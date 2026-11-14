@@ -2,9 +2,9 @@
 
 ## Release and hub
 
-- **The latest release is [v0.1.3](https://github.com/mateusz-klatt/iris/releases/tag/v0.1.3).** It
-  was tagged at `a4d465ff22c349704db294688f02c89007baaf3b` and published on 2026-11-14 from release
-  workflow [43593451996](https://github.com/mateusz-klatt/iris/actions/runs/43593451996). Its
+- **The latest release is [v0.1.4](https://github.com/mateusz-klatt/iris/releases/tag/v0.1.4).** It
+  was tagged at `eaf49bb21249af4b696e70cc36b38ba8830364c0` and published on 2026-11-14 from release
+  workflow [43628053270](https://github.com/mateusz-klatt/iris/actions/runs/43628053270). Its
   assets, checksums, signatures, provenance and image were verified on the draft before it was
   published. The Windows and macOS signatures were checked on those systems. Package-manager uploads
   remain disabled.
