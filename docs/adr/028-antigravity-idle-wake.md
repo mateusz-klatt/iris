@@ -73,9 +73,9 @@ All measurements ran on Linux/WSL2 with `agy 1.5.8` (`gemini-3.8-flash-low`) aft
    - Even `command(regex:\A<escaped-cmd>\z)` rejected `env FOO=1 <cmd>` **while still allowing
      `FOO=1 <cmd>` and `--extra` outside the sandbox**.
 
-The Windows measurements ran on Windows 11 with `agy 1.5.8` on 2026-11-14. They used a scratch
-`-i` conversation and manual `run_command` calls with `BypassSandbox: true`, and the user approved
-each one at the keyboard.
+The Windows measurements ran on Windows 11 with `agy 1.5.8` on 2026-11-14. Measurements 9–14 used
+a scratch `-i` conversation and manual `run_command` calls with `BypassSandbox: true`, approved by
+the user at the keyboard. Measurement 15 used a `Stop`-requested arming.
 
 9. **Command job.** `run_command` runs each command in a job, on its own desktop
    `WinSta0\exebox-<id>`. `agy.exe`, its MCP child and the hook processes are in no job. A child
@@ -87,18 +87,17 @@ each one at the keyboard.
 11. **Reparenting.** A helper created under the verified `agy` process, through
     `PROC_THREAD_ATTRIBUTE_PARENT_PROCESS`, had `agy.exe` as its parent, was in no job and outlived
     the command.
-12. **Desktop.** The reparented helper kept the desktop of the process that created it.
-    - `<agy-exe> agentapi send-message`, started from that helper, died at startup with
-      `0xC0000142` (`STATUS_DLL_INIT_FAILED`) and wrote nothing. The attempt was classified
-      `unknown` within 47–55 ms, and nothing was queued.
-    - Started without a console (`DETACHED_PROCESS`), it answered `submitted` in 182 ms. The wake
-      arrived as a `SYSTEM_MESSAGE` with `sender=system` and opened a turn, the guard was consumed
-      12.7 s later, and the woken model fetched its inbox and replied. The helper submitted 10.1 s
-      after the message was created, which is the settle period.
-    - `--no-wake` stopped the helper 0.12 s after the command ran. When `agy` closed, the helper
-      exited by itself 0.46 s later.
-    - `QueryFullProcessImageName` resolved `C:\Users\<user>\AppData\Local\agy\bin\agy.exe` from
-      the `agy` ancestor.
+12. **Desktop lifetime.** The reparented helper inherited the launcher's
+    `WinSta0\exebox-<id>` desktop name. agy destroys that desktop when the command ends. Three
+    cases reproduced the cause:
+    - With that desktop closed before the helper spawned `<agy-exe> agentapi send-message`, the
+      child failed to load `user32`: `0xC0000142` (`STATUS_DLL_INIT_FAILED`), or without a console,
+      `panic: Failed to load user32: A dynamic link library (DLL) initialization routine failed.`
+    - With the desktop kept open, the child worked.
+    - With the helper on `WinSta0\Default`, the child worked after the command's desktop closed.
+
+    Removing the console changed nothing. PR #340 credited the console for fixing startup; that
+    attribution was wrong. The failure was caused by the destroyed desktop.
 13. **Approval on Windows.** agy's safety monitor flagged `BypassSandbox: true` at severity 6 on
     every run. It asked the user even when a persistent `command(...)` rule matched, and its
     confirmation appeared 35–45 s after the model's request. Choosing "always allow" in that
@@ -107,6 +106,14 @@ each one at the keyboard.
 14. **Refused Language Server on Windows.** A refused connection reads `connectex: No connection
     could be made because the target machine actively refused it.` where Unix prints
     `connect: connection refused`.
+15. **Safety-monitor refusal before user confirmation.** On Windows on 2026-11-14 at about
+    00:06 UTC, with `agy 1.5.8` and wake marker `default`, agy's own pre-tool hook refused a
+    `Stop`-requested arming without asking the user. Its LLM safety monitors flagged
+    `BypassSandbox` at severity 6 and the hook-initiated request at severity 5 ("rogue
+    persistence"). Iris latched `failed` and does not ask again in that agy process. The user can
+    still arm by asking the model to run the command. An earlier `Stop`-requested arming reached
+    the user as a normal confirmation, so the monitors are nondeterministic. Iris does not reword
+    its request to get past a safety classifier.
 16. **Print mode was asked too** (2026-11-14, iris 7850676, agy 1.5.8, marker `default`). holzera
     sent "reply with exactly PONG" through the delegation bridge's `agy -p`, and `Stop` asked
     anyway.
@@ -159,9 +166,10 @@ permitting environment assignments or appended arguments (measurement 8), **Iris
 `command(...)` allow rule to `settings.json`**. `settings.json` retains only `mcp(iris/*)`, so
 moving `<iris-path>` leaves no orphaned Iris `command(...)` permission rule behind (`iris integrate
 antigravity` updates hook entries by marker as before). Turning wake on by default therefore carries
-an explicit interactive cost: **one approval prompt per armed conversation** (and again after
-`/clear`, which starts a new `conversationId`). Iris offers no flag to write a `command(...)` allow
-rule automatically.
+an explicit interactive cost: **user approval for each arming** (including after `/clear`, which
+starts a new `conversationId`). On Windows, agy's safety monitors can refuse the request before
+asking the user (measurement 15). Iris offers no flag to write a `command(...)` allow rule
+automatically.
 
 To follow the fleet three-state rule (`[decided 20261113-1]`: **explicit on**, **explicit off**,
 **no choice**) so that a marker written by default is never mistaken on disk for an explicit
@@ -275,7 +283,7 @@ trusts caller-supplied arguments, executable paths or Iris configuration overrid
    host `agy` ancestor `(pid, start_ms)`:
    - on Linux, `os.Readlink("/proc/<pid>/exe")` (rejecting `" (deleted)"`), verified via `os.Stat`
      as an absolute path to an existing regular file;
-   - on Windows (`QueryFullProcessImageName` in `internal/proc`, measured live, measurement 12)
+   - on Windows (`QueryFullProcessImageName` in `internal/proc`, measured live)
      and macOS (`proc_pidpath` / `kern.procargs2` executable path, unmeasured live for
      Antigravity wake), resolved from the `agy` ancestor process and verified as an absolute
      existing regular file, failing closed otherwise.
@@ -302,7 +310,7 @@ trusts caller-supplied arguments, executable paths or Iris configuration overrid
 If preflight passes and `(agy pid, start_ms)` already holds a live `(helper_pid, helper_start_ms)`
 for this `conversationId`, the parent preserves that live entry untouched and exits `0`. Otherwise,
 within a bounded 2-second startup budget, the parent generates a 128-bit `attempt_id`, spawns the
-detached child in a new session (`stdin`, `stdout`, `stderr` on `os.DevNull`), looks up
+detached child with discarded standard streams, looks up
 `(helper_pid, helper_start_ms)` via `proc.Lookup`, durably writes and syncs
 `(helper_pid, helper_start_ms, session_id, attempt_id)` under the helper lock (replacing only a
 missing, dead, `arm_requested`, `failed` or superseded-`session_id` entry, never a live helper for
@@ -311,14 +319,21 @@ the current `conversationId`), re-verifies `proc.Lookup`, and only then exits `0
 On Windows the child is created under the verified `agy` process instead of the launcher, through
 `PROC_THREAD_ATTRIBUTE_PARENT_PROCESS`. agy runs each command in a job that ends with the command
 and forbids breakaway (measurements 9–11), and the child must outlive the command.
+
 - The launcher opens `agy` only for the spawn, with `PROCESS_CREATE_PROCESS` and
-  `PROCESS_DUP_HANDLE`. On that same handle it checks `start_ms` and that `agy` is still running,
-  and it releases the handle after the spawn.
+  `PROCESS_QUERY_LIMITED_INFORMATION`. On that same handle it checks `start_ms` and that `agy` is
+  still running, and it releases the handle after the spawn. No handles are inherited, and the
+  child's standard handles are null.
 - A refusal fails the spawn and latches `failed`.
-- The child takes `agy`'s job and token, but it keeps the launcher's desktop, which is the command
-  sandbox's own. That is why `<agy-exe> agentapi send-message` starts without a console
-  (measurement 12).
-- On Unix the launcher stays the parent; the new session already separates the child.
+- The child takes `agy`'s job and token. If the launcher's PEB `DesktopInfo` names another desktop,
+  Iris creates the helper on `<winsta>\Default` in that same window station. Empty or `Default`
+  values inherit; a non-default desktop without a window station or a malformed value fails
+  closed. This keeps the helper off the command's temporary desktop (measurement 12).
+- `<agy-exe> agentapi send-message` starts without a console only to avoid a visible console
+  window: a console program started by the console-less helper would otherwise get a new one on
+  `<winsta>\Default`.
+- On Unix the launcher stays the parent; a new session separates the child, and its standard
+  streams go to `/dev/null`.
 
 The detached child binds only to the hook-registered Execution of that single-session `agy` process
 whose `session_id` matches `ANTIGRAVITY_CONVERSATION_ID` (never registering a fallback Execution).
@@ -444,14 +459,15 @@ helper run **incremental, attempt-associated forward scanning** outside the `ses
 
 ## Limits
 
-- **No wake before arming, and one interactive approval + shell step per armed conversation.**
+- **No wake before arming, and an interactive approval + shell step per armed conversation.**
   Neither `SessionStart` nor `iris mcp` has the Language Server address or token, so nothing wakes a
   session before its first turn reaches `Stop` and arms the helper. Because Iris writes no
-  `command(...)` allow rule, Antigravity prompts the user once per armed conversation (and again
-  after `/clear`, which creates a new `conversationId`) to approve the unsandboxed helper command.
-  A headless run is not asked at all ([ADR 031](031-wake-only-in-interactive-sessions.md)). Before
-  that, a `-p` run was asked too: denied without `--dangerously-skip-permissions`, and run with it,
-  arming a helper for a headless process and changing the run's answer (measurement 16).
+  `command(...)` allow rule, the unsandboxed helper command needs user approval (including after
+  `/clear`, which creates a new `conversationId`); agy's safety monitors can refuse it before a
+  prompt (measurement 15). A headless run is not asked at all
+  ([ADR 031](031-wake-only-in-interactive-sessions.md)). Before that, a `-p` run was asked too:
+  denied without `--dangerously-skip-permissions`, and run with it, arming a helper for a
+  headless process and changing the run's answer (measurement 16).
 - **Print mode is told from the process, not from agy.** A flag Iris does not know turns the request
   off until Iris learns it. On Linux the input check reads agy's own input. On macOS it is whether
   agy has a controlling terminal, and on Windows whether the hook has a console. So a headless run
@@ -487,15 +503,20 @@ helper run **incremental, attempt-associated forward scanning** outside the `ses
   `IRIS_HUB_URL` and `IRIS_TOKEN_FILE` environment overrides, non-default Iris locations configured
   only through environment variables (rather than `client.json` in the OS account's default config
   directory) cannot use Antigravity wake. Measurements ran with `agy 1.5.8` on Linux/WSL2 and on
-  Windows 11 (measurements 9–14). On macOS, process-image lookup and wake delivery have not been
+  Windows 11 (measurements 9–15). On macOS, process-image lookup and wake delivery have not been
   measured live.
-- **Windows asks every time.** On Windows, agy's safety monitor asks for confirmation of every
-  arming, even when a persistent `command(...)` rule matches, and the confirmation appears 35–45 s
-  after the request (measurement 13). Its "always allow" choice writes the prefix rule described
-  above.
-- **Windows desktop and job.** On Windows the helper lives on the command sandbox's desktop. It
-  depends on two agy behaviours: that agy itself runs in no job, and that a console-less program
-  can run on that desktop. Both were measured on `agy 1.5.8`, and a later agy may change either.
+- **Windows safety monitors can refuse arming without asking the user.** A `Stop`-requested
+  arming with marker `default` was refused by agy's own pre-tool hook after its LLM monitors
+  flagged `BypassSandbox` (severity 6) and the hook-initiated request (severity 5, "rogue
+  persistence"). Another such request reached the user as a normal confirmation, so the monitors
+  are nondeterministic (measurement 15). Iris latches `failed` and does not ask again in that agy
+  process; the user can still arm by asking the model to run the command. Iris does not reword
+  its request to get past a safety classifier. A persistent `command(...)` rule did not suppress
+  confirmation in measurement 13; its "always allow" choice wrote the prefix rule described above.
+- **Windows desktop and job.** Wake depends on agy running in no job and on agy's own desktop
+  being `<winsta>\Default`. Both were measured on `agy 1.5.8`, and a later agy may change either.
+  Iris does not discover agy's desktop; it uses the launcher's window station and fails closed
+  when a non-default desktop cannot be placed without guessing that station.
 
 ## Verification
 
