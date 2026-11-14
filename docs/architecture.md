@@ -302,7 +302,7 @@ Each client gets the strongest tier it has:
 | Instant, idle session | Plugin monitor running `iris watch` | Claude Code (measured: 0.3 s from line to model turn) |
 | Loaded idle root | Own queue command after a positive native idle check | Codex, enabled by default; [ADR 023](adr/023-default-codex-wake-after-idle-check.md) |
 | Loaded foreground session | Copilot CLI extension runs `iris watch` and submits a fixed automation message through its SDK | Copilot CLI (experimental; [ADR 024](adr/024-copilot-extension-wake.md)) |
-| Asked at a user prompt | Model keeps one managed background task, `iris watch --client kimi --once`, whose end opens a turn | Kimi, off until its native acceptance; [ADR 030](adr/030-kimi-one-shot-wake.md) |
+| Asked at a user prompt | Model keeps one managed background task, `iris watch --client kimi --once`, whose end opens a turn | Kimi, on by default on Linux after its native acceptance, off on macOS and Windows until theirs; [ADR 030](adr/030-kimi-one-shot-wake.md) |
 | Asked at Stop | Model starts a persistent `iris watch` in the `monitor` tool | Grok, enabled by default; [ADR 025](adr/025-grok-stop-monitor.md) |
 | Asked at Stop, loaded idle session | Model starts a detached `iris watch --client antigravity --wake` helper after user approval; helper sends a fixed message through `agy agentapi send-message` | Antigravity, enabled by default; [ADR 028](adr/028-antigravity-idle-wake.md) |
 | Instant, armed by the model | `Monitor` tool with a `ws` source | Claude Code |
@@ -1188,7 +1188,7 @@ The search index is updated in the same transaction.
 | Hooks in headless mode | yes | yes | yes | yes | yes | yes | yes |
 | Project hooks | trust | trust and review | trust | trust | no trust step | trust | none |
 | User hooks need a step | no | review once | no | no | no | no | no |
-| Wake idle session | yes, plugin monitor | owned sessions | owned sessions | owned sessions | Stop-armed helper ([ADR 028](adr/028-antigravity-idle-wake.md)) | Stop-armed monitor ([ADR 025](adr/025-grok-stop-monitor.md)) | prompt-armed one-shot task ([ADR 030](adr/030-kimi-one-shot-wake.md)), off by default |
+| Wake idle session | yes, plugin monitor | owned sessions | owned sessions | owned sessions | Stop-armed helper ([ADR 028](adr/028-antigravity-idle-wake.md)) | Stop-armed monitor ([ADR 025](adr/025-grok-stop-monitor.md)) | prompt-armed one-shot task ([ADR 030](adr/030-kimi-one-shot-wake.md)), on by default on Linux only |
 
 Codex can also write files from JavaScript. Its Code Mode `js` tool, `mcp__node_repl__js`, runs
 code such as `fs.appendFile` (measured on 0.167.0). `gpt-6-luna` used it instead of `apply_patch`

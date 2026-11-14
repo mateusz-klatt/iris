@@ -112,7 +112,8 @@ func noTemporaries(t *testing.T, s *Store) {
 	}
 }
 
-// Only the trimmed text "on" enables wake; anything else, including no file, is the default, off.
+// The trimmed text "on" enables wake, and no file or any text other than "on" or "default" means
+// off. What "default" means depends on the platform (TestTheDefaultFollowsThePlatformsAcceptance).
 func TestOnlyAnExplicitOnEnablesWake(t *testing.T) {
 	pinned := t.TempDir()
 	root := Root(pinned)
@@ -849,7 +850,8 @@ func TestMalformedCoalescingDataIsNoDelay(t *testing.T) {
 }
 
 // The preference records the choice: none before integration or in an emptied file, then default,
-// on or off. Only on enables wake for now; anything else in the file is refused rather than guessed.
+// on or off. On enables wake, and default does where DefaultOn holds; anything else in the file is
+// refused rather than guessed.
 func TestThePreferenceRecordsTheChoice(t *testing.T) {
 	s, _, _ := newStore(t)
 	path := PreferencePath(s.Root)
@@ -859,12 +861,16 @@ func TestThePreferenceRecordsTheChoice(t *testing.T) {
 	if err := os.MkdirAll(s.Root, 0o700); err != nil {
 		t.Fatal(err)
 	}
-	for _, value := range []string{"", PreferenceDefault, PreferenceOff, PreferenceOn} {
-		if err := os.WriteFile(path, []byte(value+"\n"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if got, err := Preference(s.Root); err != nil || got != value || Enabled(s.Root) != On(value) || On(value) != (value == PreferenceOn) {
-			t.Fatalf("%q: %q %v, enabled %v", value, got, err, Enabled(s.Root))
+	for _, defaultOn := range []bool{false, true} {
+		withDefault(t, defaultOn)
+		for _, value := range []string{"", PreferenceDefault, PreferenceOff, PreferenceOn} {
+			if err := os.WriteFile(path, []byte(value+"\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			want := value == PreferenceOn || value == PreferenceDefault && defaultOn
+			if got, err := Preference(s.Root); err != nil || got != value || Enabled(s.Root) != On(value) || On(value) != want {
+				t.Fatalf("default on %v, %q: %q %v, enabled %v", defaultOn, value, got, err, Enabled(s.Root))
+			}
 		}
 	}
 	if err := os.WriteFile(path, []byte("maybe\n"), 0o600); err != nil {

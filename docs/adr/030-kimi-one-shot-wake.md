@@ -4,7 +4,9 @@ Status: accepted on 2026-11-13 (holzera). Supersedes ADR 026 entirely; no MCP we
 for any Kimi session. The implementation follows in its own PR. Wake stays off until the native
 acceptance passes, then becomes the default (owner, 2026-11-13). Amended on 2026-11-13 by fleet vote
 20261113-2. Kimi 2.6.1 never runs Stop hooks (see "Kimi 2.6.1 does not run Stop"), so the request to
-arm the watcher is made on UserPromptSubmit instead.
+arm the watcher is made on UserPromptSubmit instead. The native acceptance passed on Linux on
+2026-11-14 (see "Native acceptance on Linux"), so wake is on by default there. macOS and Windows stay
+off until their own acceptance.
 
 ## Problem
 
@@ -393,3 +395,100 @@ Run `make test`, `make race`, `make cov`, `make cov-check`, `make check-all` and
 before implementation review. Record real model turns separately from fixtures, including platform,
 client version, latency and observed cost. No implementation is authorized by this draft before
 review.
+
+## Native acceptance on Linux
+
+Measured on 2026-11-14 on Linux under WSL2:
+- Kimi 2.6.1 with the model `kimi-code/k3.1-pro`, and Iris 0.1.3 (`a4d465f`);
+- fresh scratch TUIs in a worktree of their own, started after `iris integrate kimi --wake`, in
+  `--auto` mode;
+- a separate session in the same repository that sent the mail and held the claim.
+
+Items 1 to 4 passed.
+
+1. **Arming, binding, duplicate and `/clear`.**
+   - A user prompt that did not mention wake carried the request verbatim. The model started one
+     managed task with the exact command and description, `run_in_background:true` and
+     `disable_timeout:true`, as a direct child of the Kimi process.
+   - The record named that process's pid, its start time and the native session. The hub had one
+     hook-registered Execution for the session, no fallback, and `watch_seen_ms` 0.
+   - A second watcher, started at the user's request, exited 11 after 27 ms with "Iris: another
+     watcher already waits for this session. Do not start another." The first watcher and its record
+     were unchanged.
+   - Kimi held that failure's notification until the user's turn ended, then opened a separate
+     `task` turn. That turn ran no prompt hook, and the model started nothing. The next user prompt
+     carried no request.
+   - At `/clear`, Kimi ran SessionEnd, and the hub ended the old Execution, before SessionStart for
+     the new session. The old task ended as killed, with its watcher exiting 10, and no notification
+     followed in either session. The old record latched disabled and kept its checkpoint.
+   - The new session's first prompt carried the request again and armed a watcher under the new key,
+     with a fresh initial checkpoint. The hub again had one Execution for it and no fallback.
+2. **One message.**
+   - The watcher exited 0 between 100 and 169 ms after the hub committed the message, a range
+     because the commit falls between the send and its answer. Kimi's `turn.prompt` followed 1 ms
+     after the exit, with `origin.kind:"task"` and `trigger:"notify"`.
+   - The notification was a `<notification … type="task.completed" source_kind="background_task">`
+     block with the title "Background process completed" and an `output-file` path. The output
+     file held "Iris: new attention. Use the Iris inbox and claims tools, then start one replacement
+     watcher as Iris asked."
+   - The model read the output, fetched with the inbox tool and armed exactly one replacement before
+     the turn ended.
+3. **A freed claim, and a message in the completion-to-re-arm gap.**
+   - A Write to a path another session held was refused before the tool ran.
+   - The watcher exited 0 between 112 and 182 ms after the release. The woken turn fetched the inbox
+     and the claims and armed one replacement.
+   - A second message was committed within 58 ms after that exit and 14 s before the replacement
+     started.
+     The woken turn's inbox fetch returned it. The replacement replayed it, found it fetched and
+     checkpointed without waking, and no further turn followed.
+   - The freed path's emitted identity stayed below the replacement's checkpoint and did not repeat.
+     The next user prompt's hook note named it once more ("Iris: 1 path you were refused is free."),
+     because availability is historical.
+4. **Outcomes.**
+   - Exit 0 is shown in items 2 and 3. A non-zero exit gave `type="task.failed"` with Severity
+     warning: the duplicate's 11, and the opt-out's 10.
+   - A notification during a busy turn, measured twice: once while the model was generating, and
+     once during a 40-second foreground command. Each was held and opened a separate turn after the
+     active one, and that turn fetched and armed one replacement.
+   - `/clear`: see item 1.
+   - Opt-out. `--no-wake` stopped every recorded watcher on the host within the command. Each exited
+     10 with "Iris: wake is off for this session, or its process or session changed. Do not start
+     another watcher." Their sessions were latched disabled, the skill was taken back, and neither
+     model started a replacement. `--wake` restored the preference and the skill, and the latched
+     sessions stayed unarmed until their next SessionStart.
+   - A duplicate does not re-arm: see item 1.
+   - Prompt reminders while armed. Mail committed before a new session's first snapshot did not wake
+     it. The next user prompt carried "Iris: 5 unread messages. Use the inbox and claims tools."
+     while the watcher was armed. Mail committed after a first snapshot woke the session at once.
+
+**Cost.** Nine task-notification turns made 3 or 4 model calls each:
+
+| Tokens per turn | Median | Range |
+|---|---|---|
+| Uncached input | 2303 | 1309–3195 |
+| Cached input | 96768 | — |
+| Output | 451 | 325–1195 |
+
+Each turn took 12.7 to 62.4 seconds, the longest including a 40-second foreground command.
+
+**Kimi's default mode.** In `manual` ("Ask") mode:
+- the arming Bash asked for approval, and its turn stayed open until the user answered;
+- a woken turn asked before each Iris tool call and before the re-arm;
+- after "Approve for this session" for the Iris inbox, claims and ack tools and for
+  `iris watch --client kimi --once`, the next wake ran without asking.
+
+**Not produced live; the implementation tests cover them:**
+- a failed old SessionEnd at `/clear`, and the genuine ambiguity it can cause. In each of the three
+  `/clear` runs, the old session's agent had ended before the new session started;
+- exits 12, 13 and 14. Every non-zero line the watcher prints ends with "Do not start another", which
+  was observed for 10 and 11;
+- an Ask-mode re-arm left unanswered;
+- whether Ask-mode session approvals survive `/clear` or a restart.
+
+**Seen in operation:**
+- Kimi reloads `mcp.json` and skills while it runs. After an integration rewrites `mcp.json`, a new
+  `iris mcp` runs beside the old one until Kimi restarts.
+- After `/clear` the session's Iris agent name changed, once to a `-2` name and once back to the
+  original one.
+- One Kimi process in `manual` mode started four `iris mcp` processes. That session was not checked on
+  the hub. The two `--auto` sessions that were checked had no fallback Execution.

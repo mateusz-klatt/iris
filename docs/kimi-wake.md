@@ -6,8 +6,10 @@ when Iris has new attention for the session. The turn that its end opens reads t
 and starts the next task. Each wake is a model turn and can spend model budget.
 [ADR 030](adr/030-kimi-one-shot-wake.md) has the decision and the measurements behind it.
 
-**Wake is off by default** until its native acceptance passes. Only Linux with Kimi 2.6.1 has been
-measured, and macOS and Windows need their own acceptance before wake turns on by default there.
+**Wake is on by default on Linux**, where its native acceptance passed with Kimi 2.6.1 on
+2026-11-14 ([ADR 030](adr/030-kimi-one-shot-wake.md#native-acceptance-on-linux)). It stays off by
+default on macOS and Windows until each passes its own acceptance. An explicit `--wake` or
+`--no-wake` means the same everywhere.
 
 ## Turning it on and off
 
@@ -17,8 +19,11 @@ iris integrate kimi --no-wake
 ```
 
 The choice is recorded in `kimi-wake/preference` in the OS account's default Iris configuration
-directory. The file holds `default` when no choice was made, which is off for now, or `on` or `off`.
-Setup and reintegration keep whatever it holds, so an explicit choice survives them.
+directory. The file holds `default` when no choice was made, which is on on Linux and off on macOS
+and Windows, or `on` or `off`. Setup and reintegration keep whatever it holds, so an explicit choice
+survives them. An integration that recorded `default` before wake became the default on Linux turns
+wake on there when Iris is upgraded, but has no skill yet. `iris doctor` reports that file as
+differing from what integration installs, and `iris integrate kimi` adds it.
 `iris integrate --remove kimi` removes it with the rest of the integration.
 
 The hooks and the watcher read only that directory, so `--wake` refuses to run when the environment
@@ -30,12 +35,18 @@ An integration made before ADR 030 kept the choice in Iris's MCP arguments. Rein
 become `mcp --client kimi` with no wake choice in them. `iris mcp --client kimi --wake` still starts,
 but the flag does nothing: Iris starts no MCP web worker for any Kimi session.
 
-`--wake` also installs a skill at `skills/iris/SKILL.md` in the Kimi home (`KIMI_CODE_HOME`, or
-`~/.kimi-code`). It tells the model what each end of the task means. Turning wake off or removing
-the integration takes back exactly the text Iris wrote; a copy someone changed stays as it is. A
-file that already holds anything else is left alone, and Iris installs no skill there, because Kimi
-reads a skill's frontmatter only at the top of the file. The request in the prompt and the
-watcher's own lines still say what to do.
+While wake is on, by `--wake` or by the default, integration also installs a skill at
+`skills/iris/SKILL.md` in the Kimi home (`KIMI_CODE_HOME`, or `~/.kimi-code`). It tells the model
+what each end of the task means. Turning wake off or removing the integration takes back exactly the
+text Iris wrote; a copy someone changed stays as it is. A file that already holds anything else is
+left alone, and Iris installs no skill there, because Kimi reads a skill's frontmatter only at the
+top of the file. The request in the prompt and the watcher's own lines still say what to do.
+
+Kimi 2.6.1 reloads skills and `mcp.json` while it runs. After `--no-wake` the skill is gone from a
+running session too: a model that then asks for it is told it does not exist, and the watcher's own
+line still says not to start another. When integration rewrites `mcp.json`, Kimi starts a new
+`iris mcp` beside the old one and leaves the old one running. Restart Kimi after integrating, so
+that it runs only the current configuration.
 
 ## What Iris does
 
@@ -88,6 +99,21 @@ that fails, or a watcher still running after the wait, is reported, and its reco
 is. A watcher that is not stopped notices within 20 seconds that wake is off and ends. Turning
 wake back on does not reach sessions latched this way until they start again or resume.
 
+## Kimi's permission modes
+
+The native acceptance ran in `--auto`, Kimi's "Never Ask" mode, where nothing waits for approval. In
+Kimi's default mode, `manual` ("Ask"), measured with Kimi 2.6.1:
+
+- The arming Bash asks for approval, with the choices Approve once, Approve for this session, Reject
+  and Reject with feedback. Until it is answered the turn stays open and no watcher runs.
+- A woken turn also asks before each Iris tool call (inbox, claims, ack) and before the re-arm, so a
+  wake with nobody at the terminal stops at its first Iris call, before any re-arm.
+- After "Approve for this session" for the Iris inbox, claims and ack tools and for
+  `iris watch --client kimi --once`, the next wake ran without asking. Those approvals belong to the
+  session; whether they survive `/clear` or a restart is not measured.
+
+`--yolo`, Kimi's "Ask When Needed" mode, is not measured.
+
 ## Limits
 
 - **This asks the model; it enforces nothing.** The model can ignore the request, run another
@@ -95,8 +121,13 @@ wake back on does not reach sessions latched this way until they start again or 
 - If the model does not start a replacement after a wake, nothing wakes the session until the next
   user prompt asks again. Kimi 2.6.1 runs no hook on the turn a finished task opens and no Stop hook
   on any turn.
-- `/clear` ends the task and starts a new session id. The new session gets a watcher at its next user
-  prompt. Nothing starts a closed session.
+- `/clear` ends the task, which Kimi records as killed, and starts a new session id. Kimi runs
+  SessionEnd for the old session and SessionStart for the new one at once. The new session gets a
+  watcher at its next user prompt, and nothing of the old record carries over. Nothing starts a
+  closed session.
+- After `/clear` the session's Iris agent name can change: measured, once to a `-2` name and once back
+  to the original name. Mail addressed to the previous name can therefore reach an ended mailbox or
+  a later session.
 - A task that ends during a busy turn opens its turn after that one ends. Empty and duplicate turns
   are possible: a freed claim stays historical and can cost one extra turn.
 - `iris doctor` shows the preference and one `kimi wake:` line per session's record: a running

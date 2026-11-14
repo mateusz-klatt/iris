@@ -73,9 +73,18 @@ func kimiServer(t *testing.T, path string) map[string]any {
 }
 
 // The preference is the only record of the choice. Integration without a flag keeps it, --wake and
-// --no-wake change it, the MCP arguments carry none, and the skill is there only while wake is on.
-// Removal takes all of it back.
+// --no-wake change it, the MCP arguments carry none, and the skill is there only while wake is on,
+// which a fresh "default" is where Kimi's native acceptance passed. Removal takes all of it back.
 func TestKimiWakePreferenceSurvivesReintegrationAndExplicitChanges(t *testing.T) {
+	for _, defaultOn := range []bool{false, true} {
+		t.Run(map[bool]string{false: "default off", true: "default on"}[defaultOn], func(t *testing.T) {
+			withKimiDefault(t, defaultOn)
+			kimiWakePreferenceSteps(t, defaultOn)
+		})
+	}
+}
+
+func kimiWakePreferenceSteps(t *testing.T, defaultOn bool) {
 	layout := testLayout(t)
 	customHome := filepath.Join(layout.Home, "custom-kimi")
 	layout.Getenv = env(map[string]string{"KIMI_CODE_HOME": customHome})
@@ -89,7 +98,7 @@ func TestKimiWakePreferenceSurvivesReintegrationAndExplicitChanges(t *testing.T)
 	if err := client.Install(layout, nil); err != nil {
 		t.Fatal(err)
 	}
-	assertKimiWake(t, layout, true, false)
+	assertKimiWake(t, layout, true, defaultOn)
 	server := kimiServer(t, files[1])
 	if !reflect.DeepEqual(server["args"], []any{"mcp", "--client", "kimi"}) || server["env"].(map[string]any)["KIMI_CODE_HOME"] != customHome {
 		t.Fatalf("fresh MCP entry: %+v", server)
@@ -97,8 +106,12 @@ func TestKimiWakePreferenceSurvivesReintegrationAndExplicitChanges(t *testing.T)
 	if got := kimiPreference(t, layout); got != "default\n" {
 		t.Fatalf("fresh preference %q", got)
 	}
-	if got := readOrAbsent(t, skill); got != "absent" {
-		t.Fatalf("the skill came without wake: %q", got)
+	freshSkill := "absent"
+	if defaultOn {
+		freshSkill = kimiSkill
+	}
+	if got := readOrAbsent(t, skill); got != freshSkill {
+		t.Fatalf("fresh skill %q with default on %v", got, defaultOn)
 	}
 	server["startupTimeoutMs"] = 12345
 	server["env"].(map[string]any)["USER_SETTING"] = "retained"
@@ -120,7 +133,7 @@ func TestKimiWakePreferenceSurvivesReintegrationAndExplicitChanges(t *testing.T)
 		if err := step.install(); err != nil {
 			t.Fatalf("%s: %v", step.name, err)
 		}
-		on := step.want == kimiwake.PreferenceOn
+		on := kimiwake.On(step.want)
 		assertKimiWake(t, layout, true, on)
 		wantSkill := "absent"
 		if on {
@@ -162,8 +175,18 @@ func TestKimiWakePreferenceSurvivesReintegrationAndExplicitChanges(t *testing.T)
 
 // An integration from before ADR 030 recorded wake in Iris's MCP arguments. Without a flag a
 // recorded preference stays, and otherwise only an old --wake or --wake=true becomes on
-// ([decided 20261113-1]). Afterwards the arguments name no wake at all.
+// ([decided 20261113-1]). Afterwards the arguments name no wake at all. The skill follows what the
+// recorded choice means on the platform, so a "default" brings it only where the default is on.
 func TestKimiWakeMigratesTheChoiceInOldMCPArguments(t *testing.T) {
+	for _, defaultOn := range []bool{false, true} {
+		t.Run(map[bool]string{false: "default off", true: "default on"}[defaultOn], func(t *testing.T) {
+			withKimiDefault(t, defaultOn)
+			kimiWakeMigrations(t)
+		})
+	}
+}
+
+func kimiWakeMigrations(t *testing.T) {
 	on, off, def := kimiwake.PreferenceOn, kimiwake.PreferenceOff, kimiwake.PreferenceDefault
 	bare := []any{"mcp", "--client", "kimi"}
 	wake := []any{"mcp", "--client", "kimi", "--wake"}
@@ -217,7 +240,7 @@ func TestKimiWakeMigratesTheChoiceInOldMCPArguments(t *testing.T) {
 				t.Fatalf("migrated MCP entry %+v", server)
 			}
 			wantSkill := "absent"
-			if tc.want == on {
+			if kimiwake.On(tc.want) {
 				wantSkill = kimiSkill
 			}
 			if got := readOrAbsent(t, kimiSkillPath(t, layout)); got != wantSkill {
