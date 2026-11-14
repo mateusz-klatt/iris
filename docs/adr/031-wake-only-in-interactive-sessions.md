@@ -74,7 +74,7 @@ child with `detached`, so it has no controlling terminal.
 | Antigravity (agy 1.5.8) | `-p`, `--print`, `--prompt`; any subcommand, `acp` among them | `-i`/`--prompt-interactive`, which needs a terminal (ADR 028, measurement 16); otherwise a terminal for input, because a prompt piped into a bare `agy` runs headless | Done here |
 | Grok (1.0.77) | `-p`/`--single`, `--prompt-file`, `--prompt-json`; any subcommand, `agent` among them | Otherwise a terminal for input; a first positional argument that is not a subcommand is the session's prompt | Done here |
 | Kimi | Its print mode | To be measured with the same method | Required before Kimi's default-on (v0.1.4): ADR 030's prompt-hook request would reach `kimi -p` runs the same way. While Kimi's wake is on for its acceptance, no Kimi delegations run on that host. |
-| Cursor | `cursor-agent -p` | | #338's `followup_message` must not fire in print mode; cursor-home-iris-2 adds that before #338 is armed |
+| Cursor | `cursor-agent -p`/`--print` | | Joins through #338. After this ADR's PR merges, #338 rebases onto it, uses `proc.Args` and `proc.ReadsTerminal` with Cursor's own measured grammar instead of a reader of its own, and sends no `followup_message` in print mode. It adds its row here with its measurements. |
 | Copilot | `copilot -p` | | To be measured on WSL, where Copilot's experimental extension is on, after Antigravity and Grok. The extension starts `iris watch --client copilot` wherever Copilot loads it, and sends its enqueued message once the session is idle, so a `copilot -p` run that gets attention before it exits could gain a turn. The fix follows this rule: in a non-interactive session the extension starts no watcher and sends nothing. Not a v0.1.3 blocker unless the turn is measured. |
 | Codex | `codex exec` | | Probably safe and unmeasured: an exec thread is `notLoaded` in the app-server daemon, so the worker defers. The probe that settles it: a `codex exec` run that receives attention before it exits, with its answer and the daemon's thread list compared. |
 | Claude | `claude -p` | | The macOS probe settles it: `claude -p "reply with exactly PONG"` on an integrated Mac passes when the answer is unchanged, no `iris watch --client claude` child runs during the call, and the observed log gains nothing beyond the hooks |
@@ -93,9 +93,10 @@ The grammars, as measured:
   - `--` ends the options.
   - Usage is `[PROMPT] [COMMAND]`: the first positional argument is a subcommand or the session's
     prompt, and one after the prompt is a subcommand.
-- **On Windows the command line is one string.** Iris splits it as the C runtime and Go do. Rust,
-  which Grok is written in, reads a doubled quote (`""`) differently, so a command line holding
-  one is refused as unreadable rather than risk hiding a print flag.
+- **On Windows the command line is one string.** Iris splits it by `CommandLineToArgvW`'s rules.
+  Runtimes disagree about a doubled quote (`""`); Rust, which Grok is written in, reads it
+  differently. So a command line holding one is refused as unreadable rather than risk hiding a
+  print flag.
 
 ## Limits
 

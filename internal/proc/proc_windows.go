@@ -65,7 +65,7 @@ var queryCommandLine = func(h windows.Handle, buf []byte) error {
 	return windows.NtQueryInformationProcess(h, int32(windows.ProcessCommandLineInformation), unsafe.Pointer(&buf[0]), uint32(len(buf)), &n)
 }
 
-// argsOS splits the process's command line as the C runtime and Go do. A command line holds at
+// argsOS splits the process's command line by CommandLineToArgvW's rules. A command line holds at
 // most 32767 UTF-16 code units, so the buffer fits it with its header.
 func argsOS(pid int) ([]string, error) {
 	h, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION, false, uint32(pid))
@@ -81,8 +81,9 @@ func argsOS(pid int) ([]string, error) {
 	return splitCommandLine((*windows.NTUnicodeString)(unsafe.Pointer(&buf[0])).String())
 }
 
-// splitCommandLine splits a command line as the C runtime and Go do. A doubled quote is refused:
-// Rust, which Grok is written in, reads it differently, so the split could hide a flag (ADR 031).
+// splitCommandLine splits a command line by CommandLineToArgvW's rules. A doubled quote is
+// refused: runtimes disagree about it, Rust's (Grok's) among them, so the split could hide a flag
+// (ADR 031).
 func splitCommandLine(line string) ([]string, error) {
 	if line == "" || strings.Contains(line, `""`) {
 		return nil, ErrNotFound
