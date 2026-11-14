@@ -51,6 +51,7 @@ type attempt struct {
 type document struct {
 	Version     int        `json:"version"`
 	Rev         int64      `json:"rev"`
+	Client      string     `json:"client,omitempty"`
 	Binary      binaryInfo `json:"binary,omitempty"`
 	LastFailure *failure   `json:"last_failure,omitempty"`
 	Attempts    []attempt  `json:"attempts"`
@@ -268,6 +269,7 @@ func (s *stateStore) snapshotLocked() (stateSnapshot, error) {
 // prepare does directory protection and every potentially slow file sync outside the shared
 // sessions lock. The temporary file is private before its first byte is written.
 func (s *stateStore) prepare(d document) (string, []byte, error) {
+	d.Client = s.client
 	if !d.valid() {
 		return "", nil, errStateUnusable
 	}

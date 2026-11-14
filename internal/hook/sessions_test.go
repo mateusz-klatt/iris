@@ -324,7 +324,7 @@ func TestSessionsLockRefusesProtectionFailureAndClosesTheFile(t *testing.T) {
 
 func TestSessionsWakePathKeepsReservationFieldsThroughHookConsumption(t *testing.T) {
 	s := newSessions(t)
-	const body = `{"version":1,"mark":{"stream":"stream","cursor":5},"attempts":[` +
+	const body = `{"version":1,"client":"codex","mark":{"stream":"stream","cursor":5},"attempts":[` +
 		`{"id":"old","kind":"queue","slot":0,"token":"old-token","message":"old prompt","answer":"submitted","consumed_ms":1,"extra":{"detail":true}},` +
 		`{"id":"current","kind":"queue","slot":1,"token":"current-token","message":"current prompt","written_ms":200,"extra":[1,2,3]}],"extra":"envelope"}`
 	writeWake(t, s.memory, "codex", "session", body)
@@ -344,7 +344,7 @@ func TestSessionsWakePathKeepsReservationFieldsThroughHookConsumption(t *testing
 	if current["id"] != "current" || current["kind"] != "queue" || current["token"] != "current-token" || current["message"] != "current prompt" || current["extra"] == nil || current["consumed_ms"] != float64(s.memory.now().UnixMilli()) {
 		t.Fatalf("consumption lost current reservation fields: %v", current)
 	}
-	if doc["extra"] != "envelope" || doc["mark"] == nil {
+	if doc["extra"] != "envelope" || doc["mark"] == nil || doc["client"] != "codex" {
 		t.Fatalf("consumption lost envelope fields: %v", doc)
 	}
 }

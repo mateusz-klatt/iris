@@ -110,6 +110,16 @@ and oversized lines, and consume the wake guard only when the whole notification
 `SYSTEM` / `SYSTEM_MESSAGE` envelope (`sender=<conversationId>` in headless `-p` mode or
 `sender=system` in interactive `-i` mode on `agy 1.5.8`).
 
+The runner records its client in each guard's optional top-level `client` field for doctor
+diagnostics; this field does not affect guard validity. `iris doctor` labels Antigravity guards
+`antigravity wake:`. A guard without a readable recorded client is labelled `wake guard:` and says
+`client not recorded`; an unrecognized value says `client not recognized`.
+
+For an outstanding Antigravity guard, continue that agy conversation so a hook can scan its
+transcript. If the notification never reached the conversation, the guard stays. Remove the exact
+guard file only after that conversation is permanently closed and its wake helper has stopped;
+removing a live guard can admit a duplicate notification.
+
 ## Limits
 
 - **No wake before first `Stop`.** Nothing can wake a conversation before its first turn reaches

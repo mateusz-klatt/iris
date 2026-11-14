@@ -1,9 +1,13 @@
 package doctor
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -58,7 +62,7 @@ func TestDoctorWakeConfigurationNeverClaimsArmingOrDelivery(t *testing.T) {
 
 func TestDoctorWakeGuardSummariesAreBoundedAndRecoveryRequiresClosedSession(t *testing.T) {
 	now := time.Unix(1800000000, 0)
-	base := wake.Inspection{Path: "/private/guard\nname", Status: "usable", Attempts: 1, Kind: "queue", Outcome: "unknown", Outstanding: true, StartedMS: now.Add(-11 * time.Minute).UnixMilli(), Slot0: 2}
+	base := wake.Inspection{Path: "/private/guard\nname", Status: "usable", Client: "codex", Attempts: 1, Kind: "queue", Outcome: "unknown", Outstanding: true, StartedMS: now.Add(-11 * time.Minute).UnixMilli(), Slot0: 2}
 	for _, tc := range []struct {
 		name   string
 		change func(*wake.Inspection)
@@ -68,14 +72,18 @@ func TestDoctorWakeGuardSummariesAreBoundedAndRecoveryRequiresClosedSession(t *t
 		g.Kind = "binary_check"
 		g.Outcome = "failed"
 		g.Slot0 = 1
-	}, "known binary check failure"}, {"abort", func(g *wake.Inspection) { g.Outstanding = false; g.Outcome = "aborted" }, "queue attempt (aborted)"}, {"empty", func(g *wake.Inspection) { g.Outstanding = false; g.Kind = "" }, "no attempts"}, {"malformed", func(g *wake.Inspection) { g.Status = "unusable" }, "unusable; submissions remain blocked"}, {"unreadable", func(g *wake.Inspection) { g.Status = "unreadable" }, "unreadable; submissions remain blocked"}} {
+	}, "known binary check failure"}, {"abort", func(g *wake.Inspection) { g.Outstanding = false; g.Outcome = "aborted" }, "queue attempt (aborted)"}, {"empty", func(g *wake.Inspection) { g.Outstanding = false; g.Kind = "" }, "no attempts"}, {"malformed", func(g *wake.Inspection) { g.Status, g.Client = "unusable", "" }, "unusable; client not recorded; submissions remain blocked"}, {"unreadable", func(g *wake.Inspection) { g.Status, g.Client = "unreadable", "" }, "unreadable; client not recorded; submissions remain blocked"}} {
 		g := base
 		tc.change(&g)
 		line := wakeGuardLine(g, now)
 		if !strings.Contains(line, tc.want) || strings.Contains(line, "\n") {
 			t.Fatalf("%s: unsafe guard summary %q", tc.name, line)
 		}
-		if g.Outstanding || g.Status != "usable" {
+		if g.Status != "usable" {
+			if !strings.Contains(line, neutralWakeRecovery) || strings.Contains(line, wakeRecovery) {
+				t.Fatalf("an unreadable guard got another client's recovery: %s", line)
+			}
+		} else if g.Outstanding {
 			for _, limit := range []string{"Resume a live session", "only after permanently closing that session and stopping its MCP child", "removing a live guard can admit duplicate queue entries"} {
 				if !strings.Contains(line, limit) {
 					t.Fatalf("unsafe recovery guidance lacks %q: %s", limit, line)
@@ -124,7 +132,7 @@ func TestDoctorWakeSharesItsSingleAllowanceWithRetainedLegacyAttempts(t *testing
 		{"both ledgers spent", 2, 2, "spent", "spent", "spent"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			line := wakeGuardLine(wake.Inspection{Path: "guard", Status: "usable", Slot0: tc.slot0, Slot1: tc.slot1}, time.Now())
+			line := wakeGuardLine(wake.Inspection{Path: "guard", Status: "usable", Client: "codex", Slot0: tc.slot0, Slot1: tc.slot1}, time.Now())
 			want := "initial accounting " + tc.initial + ", retained legacy accounting " + tc.legacy + "; automatic wake allowance " + tc.allowance
 			if !strings.Contains(line, want) || strings.Contains(line, "repeat wake allowance") {
 				t.Fatalf("doctor offers a separate or incorrect wake allowance: %s", line)
@@ -151,7 +159,7 @@ func TestDoctorWakeReadOnlyDiagnosticsAreLocalAndKeepOfflineExit(t *testing.T) {
 		t.Fatalf("offline doctor created wake state: %v", err)
 	}
 	text := res.Format()
-	if !strings.Contains(text, "codex wake: "+res.Wake[0]+"\n") {
+	if !strings.Contains(text, res.Wake[0]+"\n") {
 		t.Fatal("local wake diagnosis was omitted")
 	}
 	if strings.Contains((Result{}).Format(), "codex wake:") {
@@ -188,7 +196,7 @@ func TestDoctorWakeReadsActualDefaultAndRetainedGuardWithoutSecrets(t *testing.T
 	if err := os.MkdirAll(filepath.Dir(guard), 0700); err != nil {
 		t.Fatal(err)
 	}
-	body := []byte(`{"version":1,"rev":1,"attempts":[{"id":"00000000000000000000000000000001","kind":"queue","stream":"stream","cursor":1,"slot":0,"started_ms":100,"token":"PRIVATE_TOKEN","message":"PRIVATE_PROMPT","answer":"PRIVATE_OUTCOME","answered_ms":101,"detail":"PRIVATE_DETAIL"}],"last_failure":{"at_ms":102,"detail":"PRIVATE_FAILURE"}}`)
+	body := []byte(`{"version":1,"rev":1,"client":"codex","attempts":[{"id":"00000000000000000000000000000001","kind":"queue","stream":"stream","cursor":1,"slot":0,"started_ms":100,"token":"PRIVATE_TOKEN","message":"PRIVATE_PROMPT","answer":"PRIVATE_OUTCOME","answered_ms":101,"detail":"PRIVATE_DETAIL"}],"last_failure":{"at_ms":102,"detail":"PRIVATE_FAILURE"}}`)
 	if err := os.WriteFile(guard, body, 0600); err != nil {
 		t.Fatal(err)
 	}
@@ -224,5 +232,96 @@ func TestDoctorWakeReadsExplicitDisableAfterOrdinaryReintegration(t *testing.T) 
 	lines := wakeReport(layout, filepath.Join(home, "hub.token"), time.Now())
 	if len(lines) != 1 || !strings.Contains(lines[0], "idle wake explicitly disabled") {
 		t.Fatalf("doctor disagrees with the preserved MCP opt-out: %v", lines)
+	}
+}
+
+func TestDoctorWakeLabelsClientsAndOrdersTheirDiagnostics(t *testing.T) {
+	config, inspect := wakeConfiguration, inspectWakes
+	t.Cleanup(func() { wakeConfiguration, inspectWakes = config, inspect })
+	wakeConfiguration = func(integrate.Layout) (bool, bool, error) { return true, true, nil }
+	now := time.Unix(1800000000, 0)
+	inspectWakes = func(string) ([]wake.Inspection, error) {
+		return []wake.Inspection{
+			{Path: "antigravity", Status: "usable", Client: "antigravity", Kind: "queue", Outcome: "unknown", Outstanding: true, StartedMS: now.UnixMilli()},
+			{Path: "unknown", Status: "usable", Client: "unrecognized", Kind: "queue", Outcome: "unknown", Outstanding: true, StartedMS: now.UnixMilli()},
+			{Path: "codex", Status: "usable", Client: "codex", Kind: "queue", Outstanding: true, StartedMS: now.UnixMilli()},
+			{Path: "old", Status: "unusable"},
+		}, nil
+	}
+	lines := wakeReport(integrate.Layout{}, "token", now)
+	if len(lines) != 6 {
+		t.Fatalf("wake report lines: %v", lines)
+	}
+	for i, prefix := range []string{
+		"codex wake: configured tier:",
+		`codex wake: guard "codex":`,
+		"codex wake: Configured idle wake",
+		`antigravity wake: guard "antigravity": outstanding queue wake (unknown), age 0s; retained`,
+		`wake guard: "old": unusable; client not recorded; submissions remain blocked.`,
+		`wake guard: "unknown": outstanding queue wake (unknown), age 0s; client not recognized; retained`,
+	} {
+		if !strings.HasPrefix(lines[i], prefix) {
+			t.Fatalf("line %d = %q, want prefix %q; all lines: %v", i, lines[i], prefix, lines)
+		}
+	}
+	for _, want := range []string{"Continue that agy conversation", "notification never reached it", "conversation is permanently closed and its wake helper has stopped"} {
+		if !strings.Contains(lines[3], want) {
+			t.Fatalf("Antigravity recovery lacks %q: %s", want, lines[3])
+		}
+	}
+	if !strings.Contains(lines[4], neutralWakeRecovery) || !strings.Contains(lines[4], "submissions remain blocked") || strings.Contains(lines[4], "queue entries") {
+		t.Fatalf("an unusable guard blocks submissions whichever client wrote it: %s", lines[4])
+	}
+	if !strings.Contains(lines[5], neutralWakeRecovery) || strings.Contains(lines[5], "submissions remain blocked") || strings.Contains(lines[5], wakeRecovery) {
+		t.Fatalf("a guard of an unrecognized client got a recovery it cannot support: %s", lines[5])
+	}
+	if !strings.Contains(lines[1], wakeRecovery) {
+		t.Fatalf("Codex recovery changed: %s", lines[1])
+	}
+	if text := (Result{Wake: lines}).Format(); !strings.Contains(text, strings.Join(lines, "\n")+"\n") {
+		t.Fatalf("doctor changed complete wake lines: %s", text)
+	}
+	wakeConfiguration = func(integrate.Layout) (bool, bool, error) { return true, false, nil }
+	for _, line := range wakeReport(integrate.Layout{}, "token", now) {
+		if strings.Contains(line, wakeLimits) {
+			t.Fatalf("disabled Codex wake printed its limits: %s", line)
+		}
+	}
+}
+
+func TestDoctorWakeDiagnosticsNeverEnterTheHubReport(t *testing.T) {
+	layout := doctorLayout(t)
+	token := filepath.Join(layout.Home, "hub.token")
+	if err := os.WriteFile(token, []byte("secret\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	guard := hook.NewSessions(token).WakePath("codex", "session")
+	if err := os.MkdirAll(filepath.Dir(guard), 0700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(guard, []byte(`{"version":1,"rev":0,"attempts":[]}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	var stored []byte
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/ui/doctor" {
+			stored, _ = io.ReadAll(r.Body)
+		}
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+	res, err := Run(context.Background(), Options{Layout: layout, HubURL: srv.URL, TokenFile: token, HTTP: srv.Client()})
+	if err != nil || !res.Stored {
+		t.Fatalf("doctor did not store its report: %+v, %v", res, err)
+	}
+	if len(res.Wake) != 2 || !strings.Contains(res.Wake[1], "client not recorded") {
+		t.Fatalf("local guard diagnostic missing: %v", res.Wake)
+	}
+	want, err := json.Marshal(res.Report)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(stored, want) || bytes.Contains(stored, []byte("client not recorded")) || bytes.Contains(stored, []byte(guard)) {
+		t.Fatalf("hub report differs from Report or contains local wake diagnostics: %s", stored)
 	}
 }

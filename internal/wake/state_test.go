@@ -711,3 +711,74 @@ func TestStateRetiredIdentityAnswerCannotRecreateItsLedger(t *testing.T) {
 		t.Fatal("late retired result changed the new ledger")
 	}
 }
+
+func TestStateStoresRecordTheirClientOnPublishAndAnswerMerge(t *testing.T) {
+	for _, client := range []string{"codex", "antigravity"} {
+		t.Run(client, func(t *testing.T) {
+			s := newClientStateStore(hook.NewSessions(filepath.Join(t.TempDir(), "token")), client, "session")
+			a := testAttempt(1, "queue", "")
+			mustPublish(t, s, mustSnapshot(t, s), testDocument(a))
+			for _, stage := range []string{"publish", "answer merge"} {
+				if stage == "answer merge" {
+					if err := s.answer(a.ID, "unknown", 102, ""); err != nil {
+						t.Fatal(err)
+					}
+				}
+				got := mustSnapshot(t, s)
+				var fields map[string]json.RawMessage
+				if err := json.Unmarshal([]byte(got.Raw), &fields); err != nil {
+					t.Fatal(err)
+				}
+				var recorded string
+				if err := json.Unmarshal(fields["client"], &recorded); err != nil || recorded != client || got.Document.Client != client {
+					t.Fatalf("%s recorded client %q in document and %q in JSON: %v", stage, got.Document.Client, recorded, err)
+				}
+			}
+		})
+	}
+}
+
+func TestStateOldGuardStaysUsableAndNextPublishRecordsClient(t *testing.T) {
+	s := testStore(t)
+	old := testDocument()
+	old.Attempts = []attempt{}
+	writeState(t, s, old)
+	before := mustSnapshot(t, s)
+	if before.Document.Client != "" || !before.Document.valid() {
+		t.Fatalf("old guard was not usable without a client: %+v", before.Document)
+	}
+	mustPublish(t, s, before, before.Document.appendAttempt(testAttempt(1, "queue", "")))
+	got := mustSnapshot(t, s)
+	if got.Document.Client != "codex" || !got.Document.valid() {
+		t.Fatalf("rewrite did not add a diagnostic client: %+v", got.Document)
+	}
+}
+
+func TestStateOlderRunnerRewriteDropsClientWithoutMakingGuardUnusable(t *testing.T) {
+	s := testStore(t)
+	a := testAttempt(1, "queue", "unknown")
+	mustPublish(t, s, mustSnapshot(t, s), testDocument(a))
+	var older struct {
+		Version  int       `json:"version"`
+		Rev      int64     `json:"rev"`
+		Attempts []attempt `json:"attempts"`
+	}
+	if err := json.Unmarshal([]byte(mustSnapshot(t, s).Raw), &older); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(older)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(s.path(), raw, 0600); err != nil {
+		t.Fatal(err)
+	}
+	got := mustSnapshot(t, s)
+	if !got.Document.valid() || got.Document.Client != "" || got.Document.outstanding() == nil {
+		t.Fatalf("older runner made its rewritten guard unusable: %+v", got.Document)
+	}
+	inspection := inspectDocument(s.path(), raw)
+	if inspection.Status != "usable" || inspection.Client != "" {
+		t.Fatalf("client dropped by an older runner was not reported absent: %+v", inspection)
+	}
+}

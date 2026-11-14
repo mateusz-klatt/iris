@@ -14,6 +14,8 @@ var wakeConfiguration = integrate.CodexWake
 var inspectWakes = wake.Inspect
 
 const wakeRecovery = "Resume a live session so its exact queued prompt hook can consume its guard. Remove the exact guard file only after permanently closing that session and stopping its MCP child; removing a live guard can admit duplicate queue entries."
+const antigravityWakeRecovery = "Continue that agy conversation so a hook can scan its transcript. If the notification never reached it, the guard stays. Remove the exact guard file only after that conversation is permanently closed and its wake helper has stopped; removing a live guard can admit a duplicate notification."
+const neutralWakeRecovery = "Remove the exact guard file only after the session that owns it is permanently closed and its helper or MCP child has stopped; removing a live guard can admit a duplicate wake."
 const wakeLimits = "Configured idle wake allows one automatic wake per attention identity, with one shared retry after a known queue failure. Retained legacy attempts count toward that same allowance. Outstanding queue guards have no expiry. Existing doctor --live Codex exec probes do not prove idle wake delivery."
 
 func wakeReport(layout integrate.Layout, tokenFile string, now time.Time) []string {
@@ -29,31 +31,53 @@ func wakeReport(layout integrate.Layout, tokenFile string, now time.Time) []stri
 	default:
 		tier = "configured tier: hooks and idle wake (default); current arming and delivery are unverified"
 	}
-	lines := []string{tier}
-	guards, err := inspectWakes(tokenFile)
-	if err != nil {
+	lines := []string{"codex wake: " + tier}
+	guards, inspectErr := inspectWakes(tokenFile)
+	for _, client := range []string{"codex", "antigravity"} {
+		for _, guard := range guards {
+			if guard.Client == client {
+				lines = append(lines, wakeGuardLine(guard, now))
+			}
+		}
+		if client == "codex" && enabled {
+			lines = append(lines, "codex wake: "+wakeLimits)
+		}
+	}
+	for _, client := range []string{"", "unrecognized"} {
+		for _, guard := range guards {
+			if guard.Client == client {
+				lines = append(lines, wakeGuardLine(guard, now))
+			}
+		}
+	}
+	if inspectErr != nil {
 		detail := "guard inspection unavailable; retained guards may block submissions"
-		if errors.Is(err, hook.ErrSessionsLocked) {
+		if errors.Is(inspectErr, hook.ErrSessionsLocked) {
 			detail = "guard inspection busy; retained guards may block submissions"
 		}
-		lines = append(lines, detail)
-	}
-	for _, guard := range guards {
-		lines = append(lines, wakeGuardLine(guard, now))
-	}
-	if enabled {
-		lines = append(lines, wakeLimits)
+		lines = append(lines, "wake guard: "+detail)
 	}
 	return lines
 }
 
 func wakeGuardLine(guard wake.Inspection, now time.Time) string {
+	// A guard that cannot be read records no client it can be trusted for. Codex and Antigravity
+	// share the runner, which waits on such a guard without submitting, so either way it blocks.
 	if guard.Status != "usable" {
 		state := "unusable"
 		if guard.Status == "unreadable" {
 			state = "unreadable"
 		}
-		return fmt.Sprintf("guard %q: %s; submissions remain blocked. %s", guard.Path, state, wakeRecovery)
+		return fmt.Sprintf("wake guard: %q: %s; client not recorded; submissions remain blocked. %s", guard.Path, state, neutralWakeRecovery)
+	}
+	prefix, recovery, clientNote := "wake guard:", neutralWakeRecovery, "; client not recorded"
+	switch guard.Client {
+	case "codex":
+		prefix, recovery, clientNote = "codex wake: guard", wakeRecovery, ""
+	case "antigravity":
+		prefix, recovery, clientNote = "antigravity wake: guard", antigravityWakeRecovery, ""
+	case "unrecognized":
+		clientNote = "; client not recognized"
 	}
 	state := "no attempts"
 	if guard.Kind != "" {
@@ -76,7 +100,7 @@ func wakeGuardLine(guard wake.Inspection, now time.Time) string {
 			state = fmt.Sprintf("%s attempt (%s); bounded accounting retained", guard.Kind, guard.Outcome)
 		}
 	}
-	line := fmt.Sprintf("guard %q: %s; retained attempts %d/5; initial accounting %s, retained legacy accounting %s; automatic wake allowance %s", guard.Path, state, guard.Attempts, wakeAccounting(guard.Slot0), wakeAccounting(guard.Slot1), wakeAllowance(min(2, guard.Slot0+guard.Slot1)))
+	line := fmt.Sprintf("%s %q: %s%s; retained attempts %d/5; initial accounting %s, retained legacy accounting %s; automatic wake allowance %s", prefix, guard.Path, state, clientNote, guard.Attempts, wakeAccounting(guard.Slot0), wakeAccounting(guard.Slot1), wakeAllowance(min(2, guard.Slot0+guard.Slot1)))
 	if guard.CheckedMS > 0 {
 		line += fmt.Sprintf("; last binary check %s, path %q, binary version %q, client version %q", time.UnixMilli(guard.CheckedMS).UTC().Format(time.RFC3339), guard.BinaryPath, guard.BinaryVersion, guard.ClientVersion)
 	}
@@ -88,7 +112,7 @@ func wakeGuardLine(guard wake.Inspection, now time.Time) string {
 		line += "; last recorded failure " + time.UnixMilli(guard.FailureMS).UTC().Format(time.RFC3339) + ": " + reason
 	}
 	if guard.Outstanding {
-		line += ". " + wakeRecovery
+		line += ". " + recovery
 	}
 	return line
 }

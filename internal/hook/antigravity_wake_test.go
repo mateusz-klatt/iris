@@ -963,6 +963,7 @@ func writeWakeTestDoc(t *testing.T, wakePath string, attempts []map[string]any) 
 	}
 	raw, err := json.Marshal(map[string]any{
 		"version":  1,
+		"client":   "antigravity",
 		"attempts": attempts,
 	})
 	if err != nil {
@@ -1111,6 +1112,10 @@ func TestAntigravityIncrementalScannerEdgesAndMerge(t *testing.T) {
 	if err != nil || consumed || !hasMore {
 		t.Fatalf("pass 1 = consumed=%v hasMore=%v err=%v", consumed, hasMore, err)
 	}
+	progress, ok := readWake(wakePath)
+	if !ok || attemptText(progress.fields, "client") != "antigravity" {
+		t.Fatal("cursor progress dropped the guard's recorded client")
+	}
 
 	// Continuation passes (simulating helper poll loop catching up after session returned to idle):
 	// walks across remaining oversized line, hits half-line budget cut on wakeLine without advancing past line start,
@@ -1129,7 +1134,7 @@ func TestAntigravityIncrementalScannerEdgesAndMerge(t *testing.T) {
 
 	// Verify att-live has consumed_ms set AND old-attempt had token/message/answer/scan forgotten!
 	d, ok := readWake(wakePath)
-	if !ok || attemptTime(d.attempts[1], "consumed_ms") != now.UnixMilli() {
+	if !ok || attemptTime(d.attempts[1], "consumed_ms") != now.UnixMilli() || attemptText(d.fields, "client") != "antigravity" {
 		t.Fatalf("wake doc after consume = %+v", d)
 	}
 	if _, hasScan := d.attempts[0]["scan"]; hasScan {
