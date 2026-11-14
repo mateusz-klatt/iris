@@ -81,10 +81,9 @@ Iris reads the `agy` process's arguments.
   prompt from standard input and runs headless.
 - A flag Iris does not know, or arguments it cannot read, also mean no request.
 
-Each skipped request is noted as `wake not asked: <reason>` in the observed log. On Linux the
-terminal check reads agy's own input. On macOS it asks whether the agy process has a controlling
-terminal, and on Windows whether the hook has a console. So a prompt piped into agy by a person at
-a terminal is asked once there.
+Each skipped request is noted as `wake not asked: <reason>` in the observed log. On Linux and
+Windows the terminal check reads agy's own input. On macOS it asks whether the agy process has a
+controlling terminal, so there a prompt piped into agy by a person at a terminal is asked once.
 
 If the prompt is denied, ignored or fails preflight, Iris latches `failed` on that
 `(agy pid, start_ms)` process record. Because the latch is

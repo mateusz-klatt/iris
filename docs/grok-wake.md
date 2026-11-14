@@ -18,9 +18,10 @@ Iris reads the grok process's arguments.
 - A flag Iris does not know, arguments it cannot read, or a hook whose nearest process is not grok
   also mean no request.
 
-The observed log notes each skipped request as `wake not asked: <reason>`. On Linux the terminal
-check reads grok's own input. On macOS it asks whether the grok process has a controlling
-terminal: Grok starts its hooks without one. On Windows it asks whether the hook has a console.
+The observed log notes each skipped request as `wake not asked: <reason>`. On Linux and Windows
+the terminal check reads grok's own input. On macOS it asks whether the grok process has a
+controlling terminal: Grok starts its hooks without one. Interactive Grok on Windows is unmeasured
+([ADR 031](adr/031-wake-only-in-interactive-sessions.md)).
 
 The watch process does not inherit `GROK_SESSION_ID`. The hook records the session id for the
 grok process, and `iris watch --client grok` reads it when the variable is empty. A session

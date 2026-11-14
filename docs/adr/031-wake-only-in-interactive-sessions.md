@@ -176,9 +176,11 @@ directions:
   a terminal. Linux and Windows check the input itself. macOS confirms that interactive agy and
   Grok are asked, and that `-p` runs are not.
 - **Windows may need a shared console for a positive answer.** `GetConsoleMode` on the duplicated
-  handle may succeed only when the hook shares the client's console. This is unmeasured; the
-  Windows live control measures it for interactive agy and interactive Grok. Without a shared
-  console the answer is false, so there is no ask.
+  handle may succeed only when the hook shares the client's console. On agy 1.5.9 (Windows 11) the
+  hook of an interactive agy gets a positive answer and is asked, and `echo … | agy` is not.
+  Interactive Grok on Windows is unmeasured: on Grok 1.0.77 its agent never accepted a prompt
+  (`prompt.ack_timeout`), so no turn ended. Whether its hooks share the console, and so whether it
+  is asked, is unknown. Without a shared console the answer is false, so there is no ask.
 - **The Windows check targets windows/amd64 and windows/arm64.** A WOW64 target may make the PEB
   read fail, which means no ask.
 - **A flag Iris does not know turns the request off** until Iris learns it. A client release that
@@ -199,5 +201,6 @@ directions:
 - Live checks:
   - WSL: a delegated `agy -p` and `grok -p` return their answers unchanged and leave no record.
   - antigravity-home-iris: its interactive session still arms once.
-  - Windows: an interactive agy still arms once, and a bare agy with piped input is not asked.
+  - Windows, agy 1.5.9: an interactive agy still arms once, and a bare agy with piped input is not
+    asked. Interactive Grok is unmeasured there: on Grok 1.0.77 its agent did not accept a prompt.
   - macOS: the controls above, on the branch's build.
