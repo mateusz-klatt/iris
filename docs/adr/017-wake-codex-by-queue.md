@@ -424,13 +424,15 @@ a restored hub keeps its stream id and takes the event sequence back instead (AD
   [the queue record](../research/clients/codex-mcp-queue-2026-11-10.md), shows that the field
   holds the queued text unchanged.
 - The wake file is JSON with `version` 1 and `attempts`, at `sessions/wake/<name>`; the planned
-  runner writes it. A hook sets only an attempt's `consumed_ms` and keeps every other field as it
-  finds it. When it writes the file, the token, message and answer of attempts consumed more than
-  30 days ago go from it, and nothing else does. The wake files sit apart from the files that
-  pruning reads: no hook lists their directory, and nothing removes one, because a file's spent
-  slots must outlast mail nobody fetches. The planned runner must make that directory with
-  protection of its own: on Windows a told-state write beside 20,000 wake files took 2.2 s when
-  the directory inherited the sessions directory's protection, and 1.9 ms when it had its own.
+  runner writes it. Its optional top-level `client` records which client's store wrote the guard;
+  this is diagnostic only and does not affect validity. A hook sets only an attempt's `consumed_ms`
+  and keeps every other field as it finds it. When it writes the file, the token, message and answer
+  of attempts consumed more than 30 days ago go from it, and nothing else does. The wake files sit
+  apart from the files that pruning reads: no hook lists their directory, and nothing removes one,
+  because a file's spent slots must outlast mail nobody fetches. The planned runner must make that
+  directory with protection of its own: on Windows a told-state write beside 20,000 wake files took
+  2.2 s when the directory inherited the sessions directory's protection, and 1.9 ms when it had its
+  own.
 - What this cannot do: show that a note reached the model (decision 2); say the second note from
   an edit or shell hook; or keep the wake files few. Taking a wake file to be about 1 KB with its
   attempts, a host where 50 sessions a day arm the runner keeps about 18,000 files and 18 MB a

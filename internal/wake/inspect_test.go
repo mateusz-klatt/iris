@@ -254,3 +254,22 @@ func TestInspectClassifiesListLockReadAndConcurrentRemoval(t *testing.T) {
 		})
 	}
 }
+
+func TestInspectMapsOnlyTheRecordedClient(t *testing.T) {
+	for _, tc := range []struct {
+		recorded, want string
+	}{{"codex", "codex"}, {"antigravity", "antigravity"}, {"", ""}, {"Codex", "unrecognized"}, {"other", "unrecognized"}} {
+		d := testDocument(testAttempt(1, "queue", "unknown"))
+		d.Client = tc.recorded
+		d.Binary.Path = "/opt/codex"
+		got := inspectDocument("guard", inspectionBytes(t, d))
+		if got.Status != "usable" || got.Client != tc.want {
+			t.Fatalf("recorded client %q produced %+v, want client %q", tc.recorded, got, tc.want)
+		}
+	}
+	for _, body := range []string{"broken", `{"version":2,"rev":0,"client":"codex","attempts":[]}`} {
+		if got := inspectDocument("guard", []byte(body)); got.Status != "unusable" || got.Client != "" {
+			t.Fatalf("unusable guard exposed a client: %+v", got)
+		}
+	}
+}

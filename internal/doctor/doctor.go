@@ -91,7 +91,7 @@ type Result struct {
 	// Scope is the shell scope of each worktree whose breaker tripped, followed by what reduced
 	// scope cannot do (ADR 018). Empty where none tripped, and always on Windows.
 	Scope []string
-	// Wake is local Codex configuration and retained-guard diagnostics, never delivery proof.
+	// Wake is local Codex configuration and client-labelled guard diagnostics, never delivery proof.
 	Wake []string
 	// KimiWake is Kimi's wake preference and its watcher records (ADR 030), never delivery proof.
 	KimiWake []string
@@ -293,7 +293,7 @@ func (r Result) Format() string {
 		fmt.Fprintf(&b, "shell scope: %s\n", line)
 	}
 	for _, line := range r.Wake {
-		fmt.Fprintf(&b, "codex wake: %s\n", line)
+		fmt.Fprintf(&b, "%s\n", line)
 	}
 	for _, line := range r.KimiWake {
 		fmt.Fprintf(&b, "kimi wake: %s\n", line)

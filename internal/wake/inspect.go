@@ -14,7 +14,7 @@ import (
 // Inspection is local diagnostic metadata. It carries no prompt, correlation token, message
 // content, stream identity, unrecognized diagnostic detail or raw document bytes.
 type Inspection struct {
-	Path, Status                             string
+	Path, Status, Client                     string
 	Attempts                                 int
 	Kind, Outcome                            string
 	Outstanding                              bool
@@ -97,6 +97,13 @@ func inspectDocument(path string, body []byte) Inspection {
 		return result
 	}
 	result.Status, result.Attempts = "usable", len(d.Attempts)
+	switch d.Client {
+	case "codex", "antigravity":
+		result.Client = d.Client
+	case "":
+	default:
+		result.Client = "unrecognized"
+	}
 	result.Slot0, result.Slot1 = d.quota(0), d.quota(1)
 	result.BinaryPath, result.BinaryVersion, result.ClientVersion, result.CheckedMS = d.Binary.Path, d.Binary.Version, d.Binary.ClientVersion, d.Binary.CheckedMS
 	if d.LastFailure != nil {
