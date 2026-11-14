@@ -32,7 +32,7 @@ session. A print-mode, exec or protocol-server run gets no request.
 | Claude Code | On by default | the plugin's `iris watch` monitor |
 | Codex | On by default, after a positive native idle check | [codex-wake.md](codex-wake.md), [ADR 023](adr/023-default-codex-wake-after-idle-check.md) |
 | Grok | On by default | [grok-wake.md](grok-wake.md), [ADR 025](adr/025-grok-stop-monitor.md) |
-| Antigravity | On by default; agy asks the user to approve each arming | [antigravity-wake.md](antigravity-wake.md), [ADR 028](adr/028-antigravity-idle-wake.md) |
+| Antigravity | On by default; whether agy asks before each arming depends on its permission mode | [antigravity-wake.md](antigravity-wake.md), [ADR 028](adr/028-antigravity-idle-wake.md) |
 | Copilot | On only when Copilot CLI's experimental mode is enabled | [copilot-wake.md](copilot-wake.md), [ADR 024](adr/024-copilot-extension-wake.md) |
 | Kimi | On by default on Linux, where its native acceptance passed with Kimi 2.6.1; off on macOS and Windows until theirs. In Kimi's default Ask mode every arming and every Iris call in a woken turn waits for approval, unless the user approves them for the session. | [kimi-wake.md](kimi-wake.md), [ADR 030](adr/030-kimi-one-shot-wake.md#native-acceptance-on-linux) |
 | Cursor | Not available yet: the end-of-turn follow-up is under review | [ADR 029](adr/029-cursor-stop-followup.md) |

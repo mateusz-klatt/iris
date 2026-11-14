@@ -10,9 +10,11 @@ and spend model budget.
 
 Fresh `iris integrate antigravity` and `iris setup` enable Antigravity wake by default when the
 resolved Iris configuration directory matches the OS account's default Iris directory, writing
-`default` to `antigravity-wake` beside `hub.token`. Because Iris never writes a `command(...)` allow
-rule, default-on wake requires **user approval for each arming** (including after `/clear`). agy's
-safety monitors can refuse the request before a prompt. Override the preference explicitly with:
+`default` to `antigravity-wake` beside `hub.token`. Iris never writes a `command(...)` allow rule,
+and it does not decide whether agy asks the user before each arming (including after `/clear`).
+agy's permission mode and its safety monitors decide that: agy may ask, run the arming command
+without asking, or refuse it before a prompt (see [Approval and arming](#approval-and-arming)).
+Override the preference explicitly with:
 
 ```sh
 iris integrate antigravity --no-wake
@@ -60,10 +62,29 @@ an isolated network namespace where the host Language Server is unreachable).
 
 Iris **never writes a `command(...)` allow rule** to `~/.gemini/antigravity-cli/settings.json`. In
 `agy 1.5.8`, `command(...)` matches by command prefix and allows extra arguments, `VAR=value`
-assignments and `env` wrappers outside the sandbox. Leaving `settings.json` with `"mcp(iris/*)"`
-alone leaves the arming command subject to user approval (including after `/clear`, which starts
-a new `conversationId`). Do not choose a persistent `command(...)` rule for `iris` if
-you want Antigravity's command sandbox to keep gating other `iris` invocations.
+assignments and `env` wrappers outside the sandbox. Do not choose a persistent `command(...)` rule
+for `iris` if you want Antigravity's command sandbox to keep gating other `iris` invocations.
+
+Whether the arming command waits for user approval (including after `/clear`, which starts a new
+`conversationId`) depends on agy's permission mode and its safety monitors. Iris does not decide
+it, and leaving `settings.json` with `"mcp(iris/*)"` alone does not guarantee a prompt.
+
+Measured on macOS on 2026-11-14 with `agy 1.5.9`, in an interactive session whose status bar
+showed `auto` (a mode not set in `settings.json`), agy asked nothing:
+
+- The `Stop`-requested arming ran with `BypassSandbox: true` without a prompt.
+- As a control, the model ran `iris version`. With `BypassSandbox: false` the sandbox refused it
+  (`operation not permitted`, exit 127). The model retried with `BypassSandbox: true`, and the
+  command ran without a prompt although no allow rule matched it.
+- The transcript shows delays it does not explain. The bypassed `iris version` started 36 s after
+  the model's step, and the sandboxed attempt 35 s after its step. The arming command ran 44 s
+  from start to completion.
+
+That run cannot show what a `command(...)` rule changes. The host had
+`command(<iris-path> watch --client antigravity --wake)` in `settings.json`, but in that mode agy
+asked nothing either way, so the rule's own effect is unmeasured. It also shows that in that mode
+the sandbox does not gate other `iris` invocations, because the model can request the bypass
+itself.
 
 On Windows with `agy 1.5.8`, the safety monitors flagged `BypassSandbox: true` and asked for
 confirmation even when a persistent rule matched; the confirmation appeared 35–45 s after the
