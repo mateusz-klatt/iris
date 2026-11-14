@@ -165,7 +165,8 @@ func stripClient(client string) stripFunc {
 			return stripText(data, []byte(grokSkill))
 		case client == Kimi && filepath.Base(path) == "SKILL.md":
 			return stripText(data, []byte(kimiSkill))
-		case client == Kimi && path == kimiwake.PreferencePath(filepath.Dir(path)):
+		case client == Kimi && filepath.Base(path) == filepath.Base(kimiwake.PreferencePath("")):
+			// The wake preference is the only Kimi file of that name.
 			return stripWakeMarker(data)
 		case client == Grok && filepath.Base(path) == grokWakeFile:
 			return stripWakeMarker(data)

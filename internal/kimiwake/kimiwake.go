@@ -586,6 +586,45 @@ func (s *Store) Read(k Key, budget time.Duration) (r Record, exists bool, err er
 	return readRecord(s.recordPath(k))
 }
 
+// Entry is one watcher record as a report shows it: its key, the record, whether its watcher and its
+// Kimi process still run, and why it could not be read, if it could not.
+type Entry struct {
+	Key        Key
+	Record     Record
+	Watching   bool
+	KimiAlive  bool
+	Unreadable error
+}
+
+// Records lists the watcher records in file-name order, for a report. It takes no lock and makes
+// nothing: each record is written whole through a rename, so a read sees one version or the next.
+// A state directory that does not exist has no records.
+func (s *Store) Records() ([]Entry, error) {
+	entries, err := os.ReadDir(filepath.Join(s.Root, watchersName))
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []Entry
+	for _, e := range entries {
+		k, ok := recordKey(e.Name())
+		if !ok {
+			continue
+		}
+		r, _, err := readRecord(s.recordPath(k))
+		out = append(out, Entry{
+			Key:        k,
+			Record:     r,
+			Watching:   err == nil && r.Attempt != nil && s.alive(r.Attempt.PID, r.Attempt.StartMS),
+			KimiAlive:  s.alive(k.PID, k.StartMS),
+			Unreadable: err,
+		})
+	}
+	return out, nil
+}
+
 // pruneStart picks where in the listing a pruning pass begins, from 0 to n-1. Starting at a random
 // place means the live entries early in the listing cannot use up every pass's limit and keep the
 // ended entries after them from ever being checked. Tests replace it.
