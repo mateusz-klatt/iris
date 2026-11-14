@@ -988,6 +988,47 @@ func TestStopWatchersStopsTheLiveOnesAndLatchesThem(t *testing.T) {
 	}
 }
 
+// A lock held elsewhere while the stopped watchers end does not stretch the stop to a budget per
+// watcher: each latch waits only for what is left of the one budget. The records stay unlatched,
+// and the stop says why.
+func TestStopWatchersKeepsToItsBudgetWhileTheLockIsHeld(t *testing.T) {
+	s, _, procs := newStore(t)
+	mapSession(t, s, sessionA)
+	var keys []Key
+	for i, session := range []string{"session_a", "session_b", "session_c", "session_d", "session_e", "session_f"} {
+		k := Key{PID: kimiPID, StartMS: kimiStart, Session: session}
+		pid := 9100 + i
+		put(t, s, k, Record{Version: recordVersion, Attempt: &Attempt{PID: pid, StartMS: int64(pid), ID: session}})
+		procs.set(pid, int64(pid), true)
+		keys = append(keys, k)
+	}
+	var release func()
+	terminate = func(pid int, start int64) error {
+		procs.set(pid, start, false)
+		if release == nil {
+			var err error
+			if release, err = s.lock(time.Second); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return nil
+	}
+	t.Cleanup(func() { terminate = defaultTerminate })
+	const budget = 200 * time.Millisecond
+	began := time.Now()
+	err := s.StopWatchers(budget)
+	elapsed := time.Since(began)
+	release()
+	if !errors.Is(err, ErrLocked) || elapsed > 4*budget {
+		t.Fatalf("stopping %d watchers while the lock was held: %v after %v", len(keys), err, elapsed)
+	}
+	for _, k := range keys {
+		if r, _ := recordOf(t, s, k); r.Latch != nil {
+			t.Fatalf("latched without the lock: %+v", r)
+		}
+	}
+}
+
 var defaultTerminate = terminate
 
 // A latch never replaces a live watcher. Without one it latches and supersedes a pending request.

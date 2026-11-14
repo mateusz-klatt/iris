@@ -149,7 +149,8 @@ func (s *Store) StopWatchers(budget time.Duration) error {
 		asked = append(asked, i)
 	}
 	// Each round checks every watcher still waited for, so one that does not end cannot use up the
-	// budget of the others.
+	// budget of the others. A latch waits for the lock only as long as the budget has left: a lock
+	// held elsewhere must not stretch the whole stop to a budget per watcher.
 	deadline := time.Now().Add(budget)
 	for {
 		var running []int
@@ -158,7 +159,7 @@ func (s *Store) StopWatchers(budget time.Duration) error {
 				running = append(running, i)
 				continue
 			}
-			failed = append(failed, s.LatchIfFree(live[i], LatchDisabled, budget))
+			failed = append(failed, s.LatchIfFree(live[i], LatchDisabled, time.Until(deadline)))
 		}
 		if asked = running; len(asked) == 0 || !time.Now().Before(deadline) {
 			break

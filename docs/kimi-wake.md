@@ -56,8 +56,8 @@ The first watcher of a session does not wake it for mail that was already waitin
 inbox cover that. A replacement starts reading where the previous one stopped, so attention that
 arrived in between is not lost. The first new attention after a quiet spell wakes the session at
 once. Attention of the same kind that follows within 30 seconds waits out the rest of that window
-and then wakes it once more, so a burst costs two turns rather than one per event. Mail the model
-has already fetched wakes nothing.
+and can then cause one more wake, not one per event. Mail and claims are counted separately, and
+mail the model has already fetched wakes nothing.
 
 A watcher that ends without attention says why, and the skill asks the model not to start another:
 
