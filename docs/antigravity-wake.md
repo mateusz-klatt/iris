@@ -141,6 +141,8 @@ and oversized lines, and consume the wake guard only when the whole notification
     values inherit.
   - `<agy-exe> agentapi send-message` runs without a console only to avoid opening a visible
     console window on `<winsta>\Default`.
+  - A console window that flashes when agy starts belongs to agy's own background updater
+    (`agy --bg-updater`, measured on agy 1.5.9). Iris starts nothing before the first prompt.
   - Wake depends on agy running in no job and on agy's own desktop being `<winsta>\Default`.
     Both were measured on `agy 1.5.8`; a later agy may change them. See
     [ADR 028](adr/028-antigravity-idle-wake.md) for the full design and measurements.
