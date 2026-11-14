@@ -437,8 +437,9 @@ to `antigravity-wake`, while `--wake` (`on`) and `--no-wake` (`off`) record expl
 enabled (`default` or `on`), an idle `Stop` (`fullyIdle`, `NO_TOOL_CALL`, `executionNum == 0`,
 `!continuationActive`) on that default directory asks the model once per conversation to start a
 detached `iris watch --client antigravity --wake` helper with `BypassSandbox: true`. Iris writes no
-`command(...)` allow rule, so arming requires user approval; agy's safety monitors can refuse the
-request before asking the user. A denial or preflight error latches `failed` on that
+`command(...)` allow rule and does not decide whether arming asks the user: agy's permission mode
+and safety monitors do, and they can also refuse the request before asking (in `auto` mode on
+macOS, `agy 1.5.9` asked nothing). A denial or preflight error latches `failed` on that
 `(agy pid, start_ms)`, never overwriting an already-live helper. The helper accepts only that exact
 `argv`, loads hub configuration from
 the OS account's default Iris directory without environment overrides, resolves `<agy-exe>` from the

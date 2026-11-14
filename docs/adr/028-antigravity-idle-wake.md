@@ -176,6 +176,12 @@ starts a new `conversationId`). On Windows, agy's safety monitors can refuse the
 asking the user (measurement 15). Iris offers no flag to write a `command(...)` allow rule
 automatically.
 
+On 2026-11-14 that cost turned out to depend on agy, not on Iris. Whether agy asks before an
+arming depends on its permission mode and its safety monitors. On macOS with `agy 1.5.9`, in a
+session whose status bar showed `auto`, neither the `Stop`-requested arming nor an unmatched
+`BypassSandbox: true` command asked the user. The measurement is in
+[Approval and arming](../antigravity-wake.md#approval-and-arming).
+
 To follow the fleet three-state rule (`[decided 20261113-1]`: **explicit on**, **explicit off**,
 **no choice**) so that a marker written by default is never mistaken on disk for an explicit
 `--wake` or `--no-wake` choice, `antigravity-wake` beside `hub.token` records three distinct values:
@@ -471,10 +477,12 @@ helper run **incremental, attempt-associated forward scanning** outside the `ses
   session before its first turn reaches `Stop` and arms the helper. Because Iris writes no
   `command(...)` allow rule, the unsandboxed helper command needs user approval (including after
   `/clear`, which creates a new `conversationId`); agy's safety monitors can refuse it before a
-  prompt (measurement 15). A headless run is not asked at all
-  ([ADR 031](031-wake-only-in-interactive-sessions.md)). Before that, a `-p` run was asked too:
-  denied without `--dangerously-skip-permissions`, and run with it, arming a helper for a
-  headless process and changing the run's answer (measurement 16).
+  prompt (measurement 15). As measured on 2026-11-14, that approval depends on agy's permission
+  mode: in `auto` mode on macOS, `agy 1.5.9` asked nothing
+  ([Approval and arming](../antigravity-wake.md#approval-and-arming)). A headless run is not
+  asked at all ([ADR 031](031-wake-only-in-interactive-sessions.md)). Before that, a `-p` run was
+  asked too: denied without `--dangerously-skip-permissions`, and run with it, arming a helper for
+  a headless process and changing the run's answer (measurement 16).
 - **Print mode is told from the process, not from agy.** A flag Iris does not know turns the request
   off until Iris learns it. On Linux and Windows the input check reads agy's own input. On macOS it
   is whether agy has a controlling terminal, so there a headless run without a print flag whose
