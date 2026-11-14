@@ -71,6 +71,41 @@ All measurements ran on Linux/WSL2 with `agy 1.5.8` (`gemini-3.8-flash-low`) aft
    - Even `command(regex:\A<escaped-cmd>\z)` rejected `env FOO=1 <cmd>` **while still allowing
      `FOO=1 <cmd>` and `--extra` outside the sandbox**.
 
+The Windows measurements ran on Windows 11 with `agy 1.5.8` on 2026-11-14. They used a scratch
+`-i` conversation and manual `run_command` calls with `BypassSandbox: true`, and the user approved
+each one at the keyboard.
+
+9. **Command job.** `run_command` runs each command in a job, on its own desktop
+   `WinSta0\exebox-<id>`. `agy.exe`, its MCP child and the hook processes are in no job. A child
+   that the command started with `CREATE_NEW_PROCESS_GROUP | DETACHED_PROCESS` was gone as soon as
+   the command completed. The launcher had already taken its success path, and `PostToolUse`
+   latched `failed`.
+10. **Breakaway refused.** With `CREATE_BREAKAWAY_FROM_JOB` added, `CreateProcess` was refused:
+    agy's job does not allow breakaway.
+11. **Reparenting.** A helper created under the verified `agy` process, through
+    `PROC_THREAD_ATTRIBUTE_PARENT_PROCESS`, had `agy.exe` as its parent, was in no job and outlived
+    the command.
+12. **Desktop.** The reparented helper kept the desktop of the process that created it.
+    - `<agy-exe> agentapi send-message`, started from that helper, died at startup with
+      `0xC0000142` (`STATUS_DLL_INIT_FAILED`) and wrote nothing. The attempt was classified
+      `unknown` within 47–55 ms, and nothing was queued.
+    - Started without a console (`DETACHED_PROCESS`), it answered `submitted` in 182 ms. The wake
+      arrived as a `SYSTEM_MESSAGE` with `sender=system` and opened a turn, the guard was consumed
+      12.7 s later, and the woken model fetched its inbox and replied. The helper submitted 10.1 s
+      after the message was created, which is the settle period.
+    - `--no-wake` stopped the helper 0.12 s after the command ran. When `agy` closed, the helper
+      exited by itself 0.46 s later.
+    - `QueryFullProcessImageName` resolved `C:\Users\<user>\AppData\Local\agy\bin\agy.exe` from
+      the `agy` ancestor.
+13. **Approval on Windows.** agy's safety monitor flagged `BypassSandbox: true` at severity 6 on
+    every run. It asked the user even when a persistent `command(...)` rule matched, and its
+    confirmation appeared 35–45 s after the model's request. Choosing "always allow" in that
+    confirmation wrote `command(<iris-path> watch --client antigravity --wake)` into
+    `settings.json`; agy did not write it otherwise.
+14. **Refused Language Server on Windows.** A refused connection reads `connectex: No connection
+    could be made because the target machine actively refused it.` where Unix prints
+    `connect: connection refused`.
+
 ## Decision
 
 ### Default-on configuration, three-state marker, no automatic command allow rule, and teardown
@@ -199,8 +234,8 @@ trusts caller-supplied arguments, executable paths or Iris configuration overrid
    host `agy` ancestor `(pid, start_ms)`:
    - on Linux, `os.Readlink("/proc/<pid>/exe")` (rejecting `" (deleted)"`), verified via `os.Stat`
      as an absolute path to an existing regular file;
-   - on Windows (`QueryFullProcessImageName` in `internal/proc`, unmeasured live for Antigravity
-     wake) and macOS (`proc_pidpath` / `kern.procargs2` executable path, unmeasured live for
+   - on Windows (`QueryFullProcessImageName` in `internal/proc`, measured live, measurement 12)
+     and macOS (`proc_pidpath` / `kern.procargs2` executable path, unmeasured live for
      Antigravity wake), resolved from the `agy` ancestor process and verified as an absolute
      existing regular file, failing closed otherwise.
 4. **Loopback Language Server check.** Require non-empty `ANTIGRAVITY_CONVERSATION_ID` and
@@ -231,6 +266,18 @@ detached child in a new session (`stdin`, `stdout`, `stderr` on `os.DevNull`), l
 `(helper_pid, helper_start_ms, session_id, attempt_id)` under the helper lock (replacing only a
 missing, dead, `arm_requested`, `failed` or superseded-`session_id` entry, never a live helper for
 the current `conversationId`), re-verifies `proc.Lookup`, and only then exits `0`.
+
+On Windows the child is created under the verified `agy` process instead of the launcher, through
+`PROC_THREAD_ATTRIBUTE_PARENT_PROCESS`. agy runs each command in a job that ends with the command
+and forbids breakaway (measurements 9–11), and the child must outlive the command.
+- The launcher opens `agy` only for the spawn, with `PROCESS_CREATE_PROCESS` and
+  `PROCESS_DUP_HANDLE`. On that same handle it checks `start_ms` and that `agy` is still running,
+  and it releases the handle after the spawn.
+- A refusal fails the spawn and latches `failed`.
+- The child takes `agy`'s job and token, but it keeps the launcher's desktop, which is the command
+  sandbox's own. That is why `<agy-exe> agentapi send-message` starts without a console
+  (measurement 12).
+- On Unix the launcher stays the parent; the new session already separates the child.
 
 The detached child binds only to the hook-registered Execution of that single-session `agy` process
 whose `session_id` matches `ANTIGRAVITY_CONVERSATION_ID` (never registering a fallback Execution).
@@ -392,8 +439,16 @@ helper run **incremental, attempt-associated forward scanning** outside the `ses
   until `agy` restarts. Because the helper ignores `HOME`, `XDG_CONFIG_HOME`, `APPDATA`,
   `IRIS_HUB_URL` and `IRIS_TOKEN_FILE` environment overrides, non-default Iris locations configured
   only through environment variables (rather than `client.json` in the OS account's default config
-  directory) cannot use Antigravity wake. Measurements ran on Linux/WSL2 with `agy 1.5.8`; macOS and
-  Windows process-image lookups and wake delivery remain unmeasured live.
+  directory) cannot use Antigravity wake. Measurements ran with `agy 1.5.8` on Linux/WSL2 and on
+  Windows 11 (measurements 9–14). On macOS, process-image lookup and wake delivery have not been
+  measured live.
+- **Windows asks every time.** On Windows, agy's safety monitor asks for confirmation of every
+  arming, even when a persistent `command(...)` rule matches, and the confirmation appears 35–45 s
+  after the request (measurement 13). Its "always allow" choice writes the prefix rule described
+  above.
+- **Windows desktop and job.** On Windows the helper lives on the command sandbox's desktop. It
+  depends on two agy behaviours: that agy itself runs in no job, and that a console-less program
+  can run on that desktop. Both were measured on `agy 1.5.8`, and a later agy may change either.
 
 ## Verification
 

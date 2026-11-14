@@ -11,15 +11,23 @@ import (
 )
 
 func TestDetachAndTerminateUnix(t *testing.T) {
+	self, ok := Lookup(os.Getpid())
+	if !ok {
+		t.Fatal("self lookup failed")
+	}
 	cmd := exec.Command(os.Args[0], "-test.run=^TestUnixSleepHelper$")
 	cmd.Env = append(os.Environ(), "IRIS_PROC_UNIX_SLEEP=1")
-	Detach(cmd)
+	release, err := DetachUnder(cmd, self.PID, self.StartMS)
+	if err != nil {
+		t.Fatalf("DetachUnder(self) = %v", err)
+	}
 	if cmd.SysProcAttr == nil || !cmd.SysProcAttr.Setsid {
-		t.Fatalf("Detach SysProcAttr = %+v", cmd.SysProcAttr)
+		t.Fatalf("DetachUnder SysProcAttr = %+v", cmd.SysProcAttr)
 	}
 	if err := cmd.Start(); err != nil {
 		t.Fatal(err)
 	}
+	release()
 	t.Cleanup(func() {
 		_ = cmd.Process.Kill()
 		_ = cmd.Wait()
@@ -37,6 +45,31 @@ func TestDetachAndTerminateUnix(t *testing.T) {
 	}
 	if err := terminateSignal(123, func(int, syscall.Signal) error { return syscall.EPERM }); !errors.Is(err, syscall.EPERM) {
 		t.Fatalf("EPERM should propagate: %v", err)
+	}
+}
+
+func TestDetachUnderRefusesAParentThatNoLongerMatches(t *testing.T) {
+	self, ok := Lookup(os.Getpid())
+	if !ok {
+		t.Fatal("self lookup failed")
+	}
+	cmd := exec.Command(os.Args[0])
+	if _, err := DetachUnder(cmd, self.PID, self.StartMS+1); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("DetachUnder(another start time) = %v", err)
+	}
+	if _, err := DetachUnder(cmd, 0, self.StartMS); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("DetachUnder(pid 0) = %v", err)
+	}
+	if cmd.SysProcAttr != nil {
+		t.Fatalf("a refused parent still configured the command: %+v", cmd.SysProcAttr)
+	}
+}
+
+func TestNoConsoleLeavesAUnixCommandAsItIs(t *testing.T) {
+	cmd := exec.Command(os.Args[0])
+	NoConsole(cmd)
+	if cmd.SysProcAttr != nil {
+		t.Fatalf("NoConsole changed a Unix command: %+v", cmd.SysProcAttr)
 	}
 }
 

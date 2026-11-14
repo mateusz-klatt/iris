@@ -52,7 +52,7 @@ type antigravityOptions struct {
 	selfPID          func() int
 	irisExecutable   func() (string, error)
 	dialLS           func(context.Context, string, string) (net.Conn, error)
-	spawnDetached    func(string, []string, []string) (int, func(), func(), error)
+	spawnDetached    func(string, []string, []string, proc.Ancestor) (int, func(), func(), error)
 	startupBudget    time.Duration
 	handshakeTimeout time.Duration
 	handshakePoll    time.Duration
@@ -131,7 +131,9 @@ func verifiedSelfExecutable() (string, error) {
 	return exe, nil
 }
 
-func spawnDetachedProcess(exe string, args, env []string) (int, func(), func(), error) {
+// spawnDetachedProcess starts the helper under parent, the agy process the launcher has
+// already verified. The parent is opened here, only for the spawn, and released after it.
+func spawnDetachedProcess(exe string, args, env []string, parent proc.Ancestor) (int, func(), func(), error) {
 	devNull, err := openDevNull()
 	if err != nil {
 		return 0, nil, nil, err
@@ -140,7 +142,11 @@ func spawnDetachedProcess(exe string, args, env []string) (int, func(), func(), 
 	cmd := exec.Command(exe, args...)
 	cmd.Env = env
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = devNull, devNull, devNull
-	proc.Detach(cmd)
+	releaseParent, err := proc.DetachUnder(cmd, parent.PID, parent.StartMS)
+	if err != nil {
+		return 0, nil, nil, err
+	}
+	defer releaseParent()
 	if err := cmd.Start(); err != nil {
 		return 0, nil, nil, err
 	}
@@ -278,7 +284,7 @@ func runAntigravityParent(parentCtx context.Context, opts antigravityOptions) er
 		antigravityHelperEnv + "=" + fmt.Sprintf("%d:%d:%s", anc.PID, anc.StartMS, id),
 	}, runtimeEnv...)
 
-	helperPID, release, kill, err := opts.spawnDetached(selfExe, []string{"watch", "--client", "antigravity", "--wake"}, childEnv)
+	helperPID, release, kill, err := opts.spawnDetached(selfExe, []string{"watch", "--client", "antigravity", "--wake"}, childEnv, anc)
 	if err != nil {
 		latchFailed()
 		return errors.New("antigravity wake helper could not start")
@@ -523,6 +529,7 @@ func (c *antigravityCommands) queue(ctx context.Context, session, message string
 		}
 		cmd = exec.CommandContext(ctx, exe, "agentapi", "send-message", session, message)
 		cmd.Env = c.agentEnv
+		proc.NoConsole(cmd)
 		cmd.Stdout, cmd.Stderr = out, errs
 		cmd.WaitDelay = c.waitDelay
 		return cmd.Start()
@@ -569,9 +576,16 @@ func classifyAntigravitySend(session string, stdout, stderr []byte, result error
 	return "unknown", "Antigravity send-message response was not a known outcome"
 }
 
+// isDeterministicAntigravityRejection names failures that happen before anything is queued. A
+// refused connection reads `connect: connection refused` on Unix and, from agy on Windows,
+// `connectex: No connection could be made because the target machine actively refused it.`
+// (measured with agy 1.5.8). Go formats Windows errors in English first, so that text does not
+// follow the system language.
 func isDeterministicAntigravityRejection(errText string) bool {
 	return strings.Contains(errText, "code = Unauthenticated") ||
 		strings.Contains(errText, "code = InvalidArgument") ||
 		strings.Contains(errText, "code = NotFound") ||
-		(strings.Contains(errText, "code = Unavailable") && strings.Contains(errText, "connect: connection refused"))
+		(strings.Contains(errText, "code = Unavailable") &&
+			(strings.Contains(errText, "connect: connection refused") ||
+				strings.Contains(errText, "connectex: No connection could be made because the target machine actively refused it")))
 }
