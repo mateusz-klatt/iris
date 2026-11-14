@@ -1,6 +1,7 @@
 # 029: Cursor end-of-turn follow-up
 
-Status: accepted on 2026-11-13 (holzera). The implementation follows in its own PR.
+Status: accepted on 2026-11-13 (holzera). Implemented, on by default, and live-checked on Linux on
+2026-11-14 (see "Live check of the installed hooks").
 
 ## Problem
 
@@ -86,6 +87,24 @@ if the turn that is ending already consumed the same attention.
 ## Verification
 
 The measurement above is one interactive scratch session and one idle launch, on one CLI
-version and one model. It is not a test of `encodeCursor`, of `--wake`, or of a session
-whose hooks are the installed Iris hooks. `encodeCursor` still does not emit
-`followup_message`. No fixture in the repository is changed by this draft.
+version and one model, with a stand-in hook rather than the installed Iris hooks.
+
+### Live check of the installed hooks
+
+Run on 2026-11-14 on Linux under WSL:
+- `cursor-agent` 2026.11.13-eacade1, with `iris` built from the implementation's head (3e32358;
+  the code patch rebased onto `main` is identical);
+- one scratch interactive session that the owner started, whose only user hooks were the ones
+  `iris integrate cursor` installs.
+
+What it showed:
+- After the session's first turn it sat idle. Mail sent to it then ran no turn.
+- After the owner's next prompt, that turn's `stop` printed exactly one follow-up: "Iris:
+  attention is waiting. Use the inbox and claims tools. This is a notification, not a user
+  message."
+- The follow-up turn's own `stop` printed nothing, and no further turn followed.
+
+macOS and Windows are on by default without a live check of their own. The follow-up is
+Cursor's own `stop` output, with no delivery path that differs by system. The interactive check
+the systems share fails closed: arguments that cannot be read or that Iris does not know give no
+follow-up. Whether the follow-up works on macOS and Windows is not measured.
