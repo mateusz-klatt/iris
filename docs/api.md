@@ -407,9 +407,44 @@ Frames never carry message text. Kinds so far: `inbox_changed`, `claim_released`
 path is free (D7). `claim_released` goes to every agent in the repository and is not a wake.
 
 A monitor (`consumer_id=iris-watch`) with no saved cursor starts at the newest event, because a new
-session is a new Execution and must not hear the agent's history again. If undelivered mail is
-waiting it gets one `reset`. `pending` in the `/v1/events` response counts mail nobody has fetched;
-it does not count mail that was fetched and not yet acknowledged.
+session is a new Execution and must not hear the agent's history again. There is one exception: a
+path freed for this Execution before its first monitor connected. The monitor then starts just
+before the newest such `claim_available` and replays from there. The event must be at most an hour
+old, the time a wait lasts, and its path must still be free: no live claim may overlap it, the
+session's own included. The event does not record whether the wait was exact or prefix, so the path
+is compared as a prefix.
+
+When undelivered mail is waiting too, the start moves before the oldest of those messages' newest
+`inbox_changed` events as well. The replay then announces that mail and the path in cursor order,
+and the monitor gets no `reset`. A reset would not work here. A monitor moves its cursor to the
+newest event on a reset, so a reset first would skip the replay. A reset after it would arrive
+once the monitor had saved a cursor past the replay, and would count the replayed mail again. If
+any waiting message's newest event is gone or older than an hour, the monitor instead starts at
+the newest event and gets the `reset`. That wakes the session for the mail, but the freed path is
+not announced.
+
+The replay sends every event of the agent's after its start, so at most the last hour of them.
+Mail fetched in that window goes out as `inbox_read`, not as new mail. An older qualifying event can
+also replay newer `claim_available` events whose paths have been taken again since.
+
+Without a freed path, a monitor with waiting mail gets one `reset`, as before. `pending` in the
+`/v1/events` response counts mail nobody has fetched; it does not count mail that was fetched and
+not yet acknowledged.
+
+The cost is possible duplicate wakes, not only one:
+- A prompt hook may already have told the session about the path.
+- A replacement monitor for the same Execution, whose predecessor ended before it saved a cursor,
+  hears the window again.
+- A stale `claim_available` inside the window is a line about a path no longer free.
+- A message still waiting with two `inbox_changed` events in the window can be announced twice.
+  That happens when its fetch was lost and requeued. The second line comes after the 30-second
+  window, and only if the mail is still waiting.
+
+That is the price of never losing a wake.
+
+A monitor whose cursor has expired, or whose stream has changed, gets a reset with a snapshot. That
+snapshot counts mail only. A `claim_available` lost that way, pruned or from before a restore, is
+not announced. Its path may have been taken again since, and the claims tool shows who holds what.
 
 `POST /v1/wake-tickets` takes `{"execution_id":"...","generation":1}`, and returns
 `{"url":"ws://...","protocols":["iris.wake","<ticket>"],"expires_at":"..."}`.
