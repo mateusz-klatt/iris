@@ -106,8 +106,9 @@ var (
 
 // readsTerminalOS reports whether pid's own standard input is a console input handle. A null or
 // invalid handle is not a terminal. GetConsoleMode on a duplicated console handle may succeed only
-// when the caller shares that console; the Windows control in ADR 031 measures whether a hook of an
-// interactive agy does. Without a shared console the answer is false, so Iris does not ask for wake.
+// when the caller shares that console; in ADR 031's Windows control the hook of an interactive agy
+// got a positive answer. Without a shared console the answer is false, so Iris does not ask
+// for wake.
 func readsTerminalOS(pid int) (bool, error) {
 	process, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION|windows.PROCESS_VM_READ|windows.PROCESS_DUP_HANDLE, false, uint32(pid))
 	if err != nil {
@@ -120,13 +121,16 @@ func readsTerminalOS(pid int) (bool, error) {
 	if err := queryBasicInformation(process, &info); err != nil {
 		return false, err
 	}
-	var parameters *windows.RTL_USER_PROCESS_PARAMETERS
+	// ProcessParameters is an address in the other process. It stays a uintptr: held in a Go
+	// pointer type, a value that happened to fall inside this process's heap could make the
+	// garbage collector fail fatally.
+	var parameters uintptr
 	parametersAddress := uintptr(unsafe.Pointer(info.PebBaseAddress)) + unsafe.Offsetof(windows.PEB{}.ProcessParameters)
 	if err := readProcessMemory(process, parametersAddress, (*byte)(unsafe.Pointer(&parameters)), unsafe.Sizeof(parameters), nil); err != nil {
 		return false, err
 	}
 	var input windows.Handle
-	inputAddress := uintptr(unsafe.Pointer(parameters)) + unsafe.Offsetof(windows.RTL_USER_PROCESS_PARAMETERS{}.StandardInput)
+	inputAddress := parameters + unsafe.Offsetof(windows.RTL_USER_PROCESS_PARAMETERS{}.StandardInput)
 	if err := readProcessMemory(process, inputAddress, (*byte)(unsafe.Pointer(&input)), unsafe.Sizeof(input), nil); err != nil {
 		return false, err
 	}
