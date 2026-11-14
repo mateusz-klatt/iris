@@ -3,7 +3,7 @@ import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import test from "node:test";
 
-import { attentionPrompt, isAttentionLine, runExtension, startWatcher } from "./watcher.mjs";
+import { attentionPrompt, interactiveHost, isAttentionLine, runExtension, startWatcher } from "./watcher.mjs";
 
 function harness(t, { send, log } = {}) {
     const calls = [];
@@ -221,7 +221,13 @@ test("binds the watcher to the joined session and stops it once on SIGINT or SIG
     child.stderr = new PassThrough();
     child.kill = () => calls.push(["kill"]);
     const stop = await runExtension({
-        joinSession: async () => ({ sessionId: "joined-session", on() {}, send: async () => {}, log: async () => {} }),
+        joinSession: async () => ({
+            sessionId: "joined-session",
+            capabilities: { ui: { elicitation: true, canvases: true } },
+            on() {},
+            send: async () => {},
+            log: async () => {},
+        }),
         iris: "/tools/iris",
         signals,
         environment: {},
@@ -239,6 +245,48 @@ test("binds the watcher to the joined session and stops it once on SIGINT or SIG
     stop();
     assert.equal(calls.filter((call) => call[0] === "kill").length, 1);
 });
+
+// Copilot CLI 1.0.112 reports canvases true in its TUI and false under -p (ADR 031). Only exactly true
+// starts the watcher; anything else, a getter that throws among it, starts, sends and logs nothing,
+// because under -p a log line lands in the printed answer.
+test("starts the watcher only in an interactive host", async () => {
+    const throwing = {};
+    Object.defineProperty(throwing, "ui", {
+        get() {
+            throw new Error("capabilities unavailable");
+        },
+    });
+    for (const [name, capabilities] of [
+        ["print mode", { ui: { elicitation: true, canvases: false } }],
+        ["missing", undefined],
+        ["no ui", {}],
+        ["not a boolean", { ui: { canvases: "true" } }],
+        ["throwing", throwing],
+    ]) {
+        const logs = [];
+        const signals = new EventEmitter();
+        const stop = await runExtension({
+            joinSession: async () => ({
+                sessionId: "print-session",
+                capabilities,
+                on: () => assert.fail("no events are watched"),
+                send: () => assert.fail("nothing is sent"),
+                log: async (...args) => logs.push(args),
+            }),
+            iris: "/tools/iris",
+            signals,
+            spawn: () => assert.fail(`${name}: a watcher must not start`),
+        });
+        stop();
+        stop();
+        assert.deepEqual(logs, [], name);
+        assert.equal(signals.listenerCount("SIGTERM"), 0, name);
+        assert.equal(signals.listenerCount("SIGINT"), 0, name);
+        assert.equal(interactiveHost({ capabilities }), false, name);
+    }
+    assert.equal(interactiveHost({ capabilities: { ui: { canvases: true } } }), true);
+});
+
 
 test("starts no watcher when the session cannot be joined", async () => {
     const signals = new EventEmitter();
