@@ -91,19 +91,61 @@ func splitCommandLine(line string) ([]string, error) {
 	return windows.DecomposeCommandLine(line)
 }
 
-// openConsole opens the caller's console input. Tests replace it.
-var openConsole = func() (windows.Handle, error) {
-	name, _ := windows.UTF16PtrFromString("CONIN$")
-	return windows.CreateFile(name, windows.GENERIC_READ|windows.GENERIC_WRITE, windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE, nil, windows.OPEN_EXISTING, 0, 0)
-}
+// The process and handle operations are package-level seams for failures that tests cannot
+// otherwise induce in a live child.
+var (
+	queryBasicInformation = func(h windows.Handle, info *windows.PROCESS_BASIC_INFORMATION) error {
+		var n uint32
+		return windows.NtQueryInformationProcess(h, int32(windows.ProcessBasicInformation), unsafe.Pointer(info), uint32(unsafe.Sizeof(*info)), &n)
+	}
+	readProcessMemory = windows.ReadProcessMemory
+	duplicateHandle   = windows.DuplicateHandle
+	getFileType       = windows.GetFileType
+	getConsoleMode    = windows.GetConsoleMode
+)
 
-// readsTerminalOS reports whether the caller has a console. Windows gives no cheap view of another
-// process's standard input, and a hook shares the console of the client that started it (ADR 031).
-func readsTerminalOS(int) (bool, error) {
-	h, err := openConsole()
+// readsTerminalOS reports whether pid's own standard input is a console input handle. A null or
+// invalid handle is not a terminal. GetConsoleMode on a duplicated console handle may succeed only
+// when the caller shares that console; the Windows control in ADR 031 measures whether a hook of an
+// interactive agy does. Without a shared console the answer is false, so Iris does not ask for wake.
+func readsTerminalOS(pid int) (bool, error) {
+	process, err := windows.OpenProcess(windows.PROCESS_QUERY_LIMITED_INFORMATION|windows.PROCESS_VM_READ|windows.PROCESS_DUP_HANDLE, false, uint32(pid))
 	if err != nil {
+		return false, err
+	}
+	// The process handle and the duplicated input handle own no pending writes.
+	defer func() { _ = windows.CloseHandle(process) }()
+
+	var info windows.PROCESS_BASIC_INFORMATION
+	if err := queryBasicInformation(process, &info); err != nil {
+		return false, err
+	}
+	var parameters *windows.RTL_USER_PROCESS_PARAMETERS
+	parametersAddress := uintptr(unsafe.Pointer(info.PebBaseAddress)) + unsafe.Offsetof(windows.PEB{}.ProcessParameters)
+	if err := readProcessMemory(process, parametersAddress, (*byte)(unsafe.Pointer(&parameters)), unsafe.Sizeof(parameters), nil); err != nil {
+		return false, err
+	}
+	var input windows.Handle
+	inputAddress := uintptr(unsafe.Pointer(parameters)) + unsafe.Offsetof(windows.RTL_USER_PROCESS_PARAMETERS{}.StandardInput)
+	if err := readProcessMemory(process, inputAddress, (*byte)(unsafe.Pointer(&input)), unsafe.Sizeof(input), nil); err != nil {
+		return false, err
+	}
+	if input == 0 || input == windows.InvalidHandle {
 		return false, nil
 	}
-	_ = windows.CloseHandle(h)
+
+	var duplicated windows.Handle
+	if err := duplicateHandle(process, input, windows.CurrentProcess(), &duplicated, 0, false, windows.DUPLICATE_SAME_ACCESS); err != nil {
+		return false, err
+	}
+	defer func() { _ = windows.CloseHandle(duplicated) }()
+	kind, err := getFileType(duplicated)
+	if err != nil || kind != windows.FILE_TYPE_CHAR {
+		return false, nil
+	}
+	var mode uint32
+	if err := getConsoleMode(duplicated, &mode); err != nil {
+		return false, nil
+	}
 	return true, nil
 }
