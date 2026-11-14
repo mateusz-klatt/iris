@@ -1,6 +1,8 @@
 # 025: Ask Grok to keep an Iris monitor running
 
-Status: accepted on the owner's direction, 2026-11-12. Changes D7 for Grok only.
+Status: accepted on the owner's direction, 2026-11-12. Changes D7 for Grok only. Amended on
+2026-11-14 by [ADR 031](031-wake-only-in-interactive-sessions.md): Stop asks only an interactive
+session, never a print-mode run such as `grok -p`.
 
 ## Problem
 

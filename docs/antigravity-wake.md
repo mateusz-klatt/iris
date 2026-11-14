@@ -71,8 +71,20 @@ after the request on `agy 1.5.8`. Its "always allow" choice writes the `command(
 described above. To keep the sandbox gating other `iris` invocations, allow the helper once each
 time instead.
 
-If the prompt is denied, ignored, fails preflight or runs in headless `-p` mode without interactive
-approval, Iris latches `failed` on that `(agy pid, start_ms)` process record. Because the latch is
+`Stop` asks only an interactive session ([ADR 031](adr/031-wake-only-in-interactive-sessions.md)).
+Iris reads the `agy` process's arguments.
+- A run with `-p`, `--print` or `--prompt`, or with a subcommand such as `acp`, gets no request.
+- A run with `-i` is interactive.
+- A run without either is interactive only when it reads a terminal, because agy reads a piped
+  prompt from standard input and runs headless.
+- A flag Iris does not know, or arguments it cannot read, also mean no request.
+
+Each skipped request is noted as `wake not asked: <reason>` in the observed log. On Linux the
+terminal check reads agy's own input. On macOS and Windows it asks whether the hook has a terminal
+or console, so a prompt piped into agy by a person at a terminal is asked once there.
+
+If the prompt is denied, ignored or fails preflight, Iris latches `failed` on that
+`(agy pid, start_ms)` process record. Because the latch is
 per `(agy pid, start_ms)` rather than per conversation, `Stop` does not ask again on that `agy`
 process — including after `/clear` — until either `'<iris-exe>' watch --client antigravity --wake`
 is run manually in `run_command` with `BypassSandbox: true` and starts a live helper, or `agy`
