@@ -79,3 +79,57 @@ func TestNilClientVersionCallbackLeavesToolsUsable(t *testing.T) {
 		t.Fatalf("nil observer affected tools: %+v, failed %v", out, failed)
 	}
 }
+
+// A client of MCP 2026-07-28 has no initialize handshake: it discovers the server and names
+// itself in each request's _meta. The meta below is what Codex 0.171.0 sent, captured on a host,
+// to the `iris mcp` that served its thread's tools and never saw an initialize.
+func TestClientVersionIsObservedFromStatelessRequests(t *testing.T) {
+	const meta = `"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"codex-mcp-client","title":"Codex","version":"0.171.0"},"io.modelcontextprotocol/clientCapabilities":{"experimental":{"codex/auth-change":{}},"extensions":{"codex/connection-lease":{}},"elicitation":{"form":{},"url":{}}}}`
+	for _, tc := range []struct {
+		name, method, params, want string
+	}{
+		{"discovery", "server/discover", `{` + meta + `}`, "0.171.0"},
+		{"tool list", "tools/list", `{` + meta + `}`, "0.171.0"},
+		{"tool call", "tools/call", `{"name":"nope","arguments":{},` + meta + `}`, "0.171.0"},
+		{"no client info", "tools/list", `{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28"}}`, ""},
+		{"empty version", "tools/list", `{"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientInfo":{"name":"codex-mcp-client","version":""}}}`, ""},
+		{"another request", "ping", `{}`, ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			versions := make(chan string, 4)
+			serverSide, clientSide := mcp.NewInMemoryTransports()
+			server, err := New(nil, WithClientVersion(func(v string) { versions <- v })).Connect(ctx, serverSide, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = server.Close() })
+			client, err := clientSide.Connect(ctx)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = client.Close() })
+			id, err := jsonrpc.MakeID(float64(1))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if err := client.Write(ctx, &jsonrpc.Request{ID: id, Method: tc.method, Params: json.RawMessage(tc.params)}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := client.Read(ctx); err != nil {
+				t.Fatal(err)
+			}
+			select {
+			case got := <-versions:
+				if got != tc.want {
+					t.Fatalf("client version %q, want %q", got, tc.want)
+				}
+			default:
+				if tc.want != "" {
+					t.Fatal("the stateless request's version was not observed")
+				}
+			}
+		})
+	}
+}
