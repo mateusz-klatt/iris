@@ -46,9 +46,13 @@ func TestCheckLinkedWorktreesWithoutRemote(t *testing.T) {
 	if out := call(t, s, "check", r); out["message"] == "" {
 		t.Fatal("local linked worktree missed claim", out)
 	}
+	// The same path on another host is no checkout the hub knows: the guard says so and allocates
+	// nothing (ADR 032), instead of answering from the first host's claims.
 	r.Host = "different-host"
-	if out := call(t, s, "check", r); out["message"] != "" {
-		t.Fatal("machine-relative path crossed hosts", out)
+	repositories := count(t, s, "SELECT COUNT(*) FROM Repository")
+	expectError(t, s, "check", r, "not_found")
+	if count(t, s, "SELECT COUNT(*) FROM Repository") != repositories {
+		t.Fatal("the guard allocated a repository")
 	}
 }
 

@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/mateusz-klatt/iris/internal/backup"
@@ -16,7 +17,10 @@ import (
 	"github.com/mateusz-klatt/iris/internal/store"
 )
 
-const adminUsage = "usage: iris admin forget (--repository <id> | --agent <name>) [--dry-run]\n       iris admin merge --from <id> --into <id> [--dry-run]\n       iris admin contact --repository <id> (<agent> | --clear)\n       iris admin backup <hub database> <new backup file>\n       iris admin restore-check <backup file> <empty scratch directory>\n       iris admin mark-restored <restored hub database>\n       iris admin console (create | reset | activate) <username> < password-file"
+const adminUsage = "usage: iris admin forget (--repository <id> | --agent <name>) [--dry-run]\n       iris admin merge --from <id> --into <id> [--dry-run]\n       iris admin unalias --repository <id> [--dry-run] (<alias>... | - < alias-file)\n       iris admin contact --repository <id> (<agent> | --clear)\n       iris admin backup <hub database> <new backup file>\n       iris admin restore-check <backup file> <empty scratch directory>\n       iris admin mark-restored <restored hub database>\n       iris admin console (create | reset | activate) <username> < password-file"
+
+// adminStdin is what "iris admin unalias --repository <id> -" reads its aliases from.
+var adminStdin io.Reader = os.Stdin
 
 func runAdmin(args []string) error {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
@@ -46,6 +50,34 @@ func adminCommand(ctx context.Context, client *hubclient.Client, args []string, 
 			return errors.New(adminUsage)
 		}
 		route, body = "/v1/admin/merge", map[string]any{"from_repository_id": *from, "into_repository_id": *into, "dry_run": *dryRun}
+	case "unalias":
+		// The owner's repair for aliases a repository learned from another checkout (ADR 032).
+		// A lone "-" reads the aliases from standard input, one a line: a checkout alias holds
+		// quotes that a shell would otherwise have to carry.
+		fs := flag.NewFlagSet("admin unalias", flag.ContinueOnError)
+		fs.SetOutput(io.Discard)
+		repository := fs.String("repository", "", "repository id")
+		dryRun := fs.Bool("dry-run", false, "report what would be removed and change nothing")
+		if err := fs.Parse(args[1:]); err != nil || *repository == "" || fs.NArg() == 0 {
+			return errors.New(adminUsage)
+		}
+		aliases := fs.Args()
+		if len(aliases) == 1 && aliases[0] == "-" {
+			raw, err := io.ReadAll(adminStdin)
+			if err != nil {
+				return err
+			}
+			aliases = nil
+			for _, line := range strings.Split(string(raw), "\n") {
+				if line = strings.TrimSpace(line); line != "" {
+					aliases = append(aliases, line)
+				}
+			}
+			if len(aliases) == 0 {
+				return errors.New(adminUsage)
+			}
+		}
+		route, body = "/v1/admin/unalias", map[string]any{"repository_id": *repository, "aliases": aliases, "dry_run": *dryRun}
 	case "backup":
 		// Local too: it reads the database file the hub serves, on the hub's machine, while
 		// the hub runs.

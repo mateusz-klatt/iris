@@ -14,8 +14,20 @@ func (t *transaction) check(r Request) (map[string]any, error) {
 	if err := t.canonicalWorktree(&r); err != nil {
 		return nil, err
 	}
-	repo, err := t.repository(r)
+	// The guard never allocates a repository (ADR 032). One it allocated would hold no claims,
+	// so its answer would read as a check that found no conflicts, and it would be one more
+	// candidate for the next checkout there. A checkout it cannot place is said to be so.
+	repo, ambiguous, err := t.resolveRepository(r)
 	if err != nil {
+		return nil, err
+	}
+	if ambiguous && repo == "" {
+		return nil, fail("ambiguous", "the hub cannot tell which repository this checkout belongs to, so its claims were not checked; ask the owner to repair the split with iris admin merge")
+	}
+	if repo == "" {
+		return nil, fail("not_found", "no repository on the hub is known for this checkout yet, so there are no claims to check it against")
+	}
+	if err = t.adoptRepository(r, repo); err != nil {
 		return nil, err
 	}
 	out, err := t.checkPaths(repo, r.Host, r.Worktree, r.Paths)

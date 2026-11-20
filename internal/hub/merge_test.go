@@ -52,3 +52,27 @@ func TestMergeRequiresOwnerAndPreservesBindings(t *testing.T) {
 	request(t, s, "POST", "/v1/admin/merge", body, 404)
 	request(t, s, "POST", "/v1/admin/merge", "not an object", 400)
 }
+
+// The owner's unalias route removes exact alias mappings; a host token is refused (ADR 032).
+func TestUnaliasRequiresOwner(t *testing.T) {
+	_, s := setup(t)
+	a := register(t, s, 1)
+	repo := a["repository_id"].(string)
+	body := map[string]any{"repository_id": repo, "aliases": []string{"remote:example.com/none"}, "dry_run": true}
+	raw, _ := json.Marshal(body)
+	host := request(t, s, "POST", "/v1/tokens", map[string]string{"host": "laptop"}, 200)["token"].(string)
+	r, _ := http.NewRequest("POST", s.URL+"/v1/admin/unalias", strings.NewReader(string(raw)))
+	r.Header.Set("Authorization", "Bearer "+host)
+	resp, err := s.Client().Do(r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("unalias authority: got %d", resp.StatusCode)
+	}
+	plan := request(t, s, "POST", "/v1/admin/unalias", body, 200)
+	if plan["dry_run"] != true || len(plan["absent"].([]any)) != 1 {
+		t.Fatal(plan)
+	}
+}

@@ -48,25 +48,29 @@ func TestRepositoryGuardReusesCheckoutContinuityAndClaims(t *testing.T) {
 	}
 }
 
-func TestRepositoryGuardEstablishesAndInvalidatesCheckoutContinuity(t *testing.T) {
+// The guard never allocates (ADR 032): at an ambiguous checkout with no recorded outcome it says
+// it cannot tell, and records nothing. A registration there records the outcome, which the guard
+// then reuses. A known-root guard still clears continuity that points elsewhere.
+func TestRepositoryGuardReusesButNeverEstablishesAmbiguousCheckoutContinuity(t *testing.T) {
 	s, _, _ := testStore(t)
 	r := rewriteRegistration("guard-host", "old", "old")
 	old := call(t, s, "sessions", r)
 	r.SessionID, r.RootCommit = "current", "current"
 	current := call(t, s, "sessions", r)
 	r.RootCommit = ""
-	call(t, s, "check", r)
-	var recorded string
 	alias := checkoutRepositoryAlias(r)
-	if err := s.db.QueryRow("SELECT repository_id FROM RepositoryAlias WHERE alias=?", alias).Scan(&recorded); err != nil {
-		t.Fatal(err)
+	repositories := count(t, s, "SELECT COUNT(*) FROM Repository")
+	expectError(t, s, "check", r, "ambiguous")
+	if count(t, s, "SELECT COUNT(*) FROM Repository") != repositories || count(t, s, "SELECT COUNT(*) FROM RepositoryAlias WHERE alias=?", alias) != 0 {
+		t.Fatal("an unknown-root guard allocated a repository or recorded continuity")
 	}
+	r.SessionID = "registers"
+	recorded := call(t, s, "sessions", r)["repository_id"]
 	if recorded == old["repository_id"] || recorded == current["repository_id"] {
-		t.Fatal("an unknown-root guard chose an ambiguous historical identity")
+		t.Fatal("an unknown-root registration chose an ambiguous historical identity")
 	}
-	r.SessionID = "after-guard"
-	if got := call(t, s, "sessions", r); got["repository_id"] != recorded {
-		t.Fatal("a session did not reuse the guard's explicit checkout resolution")
+	if out := call(t, s, "check", r); out["message"] != "" {
+		t.Fatal("the guard did not reuse the registration's checkout outcome", out)
 	}
 	r.RootCommit = "current"
 	call(t, s, "check", r)

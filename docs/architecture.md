@@ -750,8 +750,11 @@ path, shared git directory and remote (ADR 012). Without that record, the first
 such request allocates one isolated repository; it never chooses an ambiguous
 historical row. A known-root resolution clears a checkout outcome pointing
 elsewhere. Refreshing an active Execution does not redirect checkout continuity;
-the commit guard uses the same resolution as registration. This cannot discover
-an unknown rewrite, join hosts or repair existing splits.
+the commit guard uses the same resolution as registration but never allocates: a checkout it
+cannot place is refused as `ambiguous` or `not_found` (ADR 032). A repeated registration learns
+aliases only from the Execution's own worktree, and an unknown-root allocation forced by ambiguous
+candidates is isolated: it learns no alias another repository holds until it learns a root. This
+cannot discover an unknown rewrite, join hosts or repair existing splits.
 `git@host:owner/repo.git`, `ssh://` and `https://` are one remote. That covers the normal case across machines. Spellings that depend on one machine,
 such as SSH aliases, `insteadOf` rewrites and relative remotes, stay scoped to that host and
 path. A match on root commit alone, which is what forks look like, and unresolved
@@ -759,7 +762,8 @@ contradictions are only suggestions for a human. Without a remote the identity i
 local to the path. Repeated registration learns aliases but preserves its active
 Execution, mailbox and claims. A changed known root requires operator repair.
 
-`iris admin merge --from <id> --into <id> [--dry-run]` explicitly repairs an existing
+`iris admin unalias --repository <id> [--dry-run]` removes exact aliases a repository learned from
+another checkout (ADR 032). `iris admin merge --from <id> --into <id> [--dry-run]` explicitly repairs an existing
 split, using the owner token and one transaction. It preserves mail, history,
 Execution identities and all alias spellings. Mailboxes stay distinct and retain
 their names; colliding mailbox slots receive deterministic free slots. Live

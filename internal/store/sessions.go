@@ -73,10 +73,12 @@ type Request struct {
 	RepositoryID   string   `json:"repository_id"`
 	FromRepository string   `json:"from_repository_id,omitempty"`
 	IntoRepository string   `json:"into_repository_id,omitempty"`
-	After          int64    `json:"after"`
-	Limit          int      `json:"limit"`
-	ConsumerID     string   `json:"consumer_id"`
-	Stream         string   `json:"stream"`
+	// Aliases names the exact alias mappings an owner unalias removes from RepositoryID.
+	Aliases    []string `json:"aliases,omitempty"`
+	After      int64    `json:"after"`
+	Limit      int      `json:"limit"`
+	ConsumerID string   `json:"consumer_id"`
+	Stream     string   `json:"stream"`
 	// Attention asks an events read for the attention block (ADR 017). Codex's planned wake will
 	// ask; a watch socket's own reads never do.
 	Attention bool `json:"attention"`
@@ -239,47 +241,76 @@ func (t *transaction) repositoryCandidate(aliases []string, root string) (repo s
 	return unknown, false, nil
 }
 
-func (t *transaction) repository(r Request) (string, error) {
-	aliases := localRepositoryAliases(r)
-	repo, ambiguous, err := t.repositoryCandidate(aliases, r.RootCommit)
+// resolveRepository finds the repository a checkout belongs to without allocating one. It
+// answers "" when no existing repository is safe to choose, and says whether candidates were
+// ambiguous, the remote's included.
+func (t *transaction) resolveRepository(r Request) (repo string, ambiguous bool, err error) {
+	repo, ambiguous, err = t.repositoryCandidate(localRepositoryAliases(r), r.RootCommit)
 	if err != nil {
-		return "", err
+		return "", false, err
 	}
-	checkout := checkoutRepositoryAlias(r)
 	if repo == "" && ambiguous && r.RootCommit == "" {
-		repo, _, err = t.repositoryCandidate([]string{checkout}, "")
-		if err != nil {
-			return "", err
+		if repo, _, err = t.repositoryCandidate([]string{checkoutRepositoryAlias(r)}, ""); err != nil {
+			return "", false, err
 		}
 	}
 	if remote := remoteAlias(r.RemoteURL); repo == "" && !ambiguous && remote != "" {
-		repo, _, err = t.repositoryCandidate([]string{remote}, r.RootCommit)
-		if err != nil {
-			return "", err
-		}
+		return t.repositoryCandidate([]string{remote}, r.RootCommit)
+	}
+	return repo, ambiguous, nil
+}
+
+// repository resolves a registering checkout's repository, allocating one when none is safe
+// to choose. An unknown-root allocation forced by ambiguous candidates is isolated (ADR 032):
+// learning the shared aliases would make it one more candidate, so the next checkout there
+// would be ambiguous and allocate again.
+func (t *transaction) repository(r Request) (string, error) {
+	repo, ambiguous, err := t.resolveRepository(r)
+	if err != nil {
+		return "", err
 	}
 	if repo == "" {
 		repo = id("rp_")
 		if _, err = t.exec("INSERT INTO Repository(id,case_policy,root_commit,name) VALUES(?,'folded',?,?)", repo, r.RootCommit, repositoryName(r.RemoteURL, r.Worktree)); err != nil {
 			return "", err
 		}
+		if ambiguous && r.RootCommit == "" {
+			if _, err = t.exec("INSERT INTO RepositoryAlias VALUES(?,?)", isolatedAlias(repo), repo); err != nil {
+				return "", err
+			}
+		}
 	}
-	if err = t.rememberRepository(r, repo); err != nil {
-		return "", err
+	return repo, t.adoptRepository(r, repo)
+}
+
+// isolatedAlias marks repo as isolated in the alias storage, as the checkout alias records
+// continuity there (ADR 012). It names repo itself, so a merge that carries it into another
+// repository leaves a mapping that marks nothing, and no lookup ever asks for it.
+func isolatedAlias(repo string) string { return "isolated:" + repo }
+
+// adoptRepository records what a resolution of r to repo learned: its aliases, and the
+// checkout continuity of an unknown-root request.
+func (t *transaction) adoptRepository(r Request, repo string) error {
+	if err := t.rememberRepository(r, repo); err != nil {
+		return err
 	}
 	// Registration and the commit guard resolve checkout continuity. A refresh
 	// of an older active Execution must not redirect it after an observed rewrite.
-	if _, err = t.exec("DELETE FROM RepositoryAlias WHERE alias=? AND repository_id<>?", checkout, repo); err != nil {
-		return "", err
+	checkout := checkoutRepositoryAlias(r)
+	if _, err := t.exec("DELETE FROM RepositoryAlias WHERE alias=? AND repository_id<>?", checkout, repo); err != nil {
+		return err
 	}
 	if r.RootCommit == "" {
-		_, err = t.exec("INSERT OR IGNORE INTO RepositoryAlias VALUES(?,?)", checkout, repo)
+		_, err := t.exec("INSERT OR IGNORE INTO RepositoryAlias VALUES(?,?)", checkout, repo)
+		return err
 	}
-	return repo, err
+	return nil
 }
 
 // rememberRepository publishes newly learned identity for both a new session and
 // a repeated registration of an existing Execution. It never changes a known root.
+// An isolated repository takes no alias that another repository holds (ADR 032). A known
+// root ends its isolation, and it then publishes its aliases as any repository does.
 func (t *transaction) rememberRepository(r Request, repo string) error {
 	aliases := localRepositoryAliases(r)
 	if remote := remoteAlias(r.RemoteURL); remote != "" {
@@ -290,9 +321,20 @@ func (t *transaction) rememberRepository(r Request, repo string) error {
 		if _, err := t.exec("UPDATE Repository SET root_commit=? WHERE id=? AND root_commit=''", r.RootCommit, repo); err != nil {
 			return err
 		}
+		if _, err := t.exec("DELETE FROM RepositoryAlias WHERE alias=? AND repository_id=?", isolatedAlias(repo), repo); err != nil {
+			return err
+		}
+	}
+	var isolated int
+	if err := t.row("SELECT COUNT(*) FROM RepositoryAlias WHERE alias=? AND repository_id=?", isolatedAlias(repo), repo).Scan(&isolated); err != nil {
+		return err
+	}
+	learn := "INSERT OR IGNORE INTO RepositoryAlias VALUES(?1,?2)"
+	if isolated != 0 {
+		learn = "INSERT OR IGNORE INTO RepositoryAlias SELECT ?1,?2 WHERE NOT EXISTS (SELECT 1 FROM RepositoryAlias WHERE alias=?1 AND repository_id<>?2)"
 	}
 	for _, alias := range aliases {
-		if _, err := t.exec("INSERT OR IGNORE INTO RepositoryAlias VALUES(?,?)", alias, repo); err != nil {
+		if _, err := t.exec(learn, alias, repo); err != nil {
 			return err
 		}
 	}
@@ -340,15 +382,21 @@ func (t *transaction) session(r Request) (map[string]any, error) {
 		if e.Recovery.Valid && r.Generation != e.Generation {
 			return nil, fail("lost", "recovery requires the prior session generation")
 		}
-		var root string
-		if err := t.row("SELECT root_commit FROM Repository WHERE id=?", e.Repo).Scan(&root); err != nil {
-			return nil, err
-		}
-		if root != "" && r.RootCommit != "" && root != r.RootCommit {
-			return nil, fail("conflict", "this active Execution belongs to another repository history; end the session or ask the owner to repair the split with iris admin merge")
-		}
-		if err := t.rememberRepository(r, e.Repo); err != nil {
-			return nil, err
+		// A hook reports the checkout of the event it saw, which can be another repository: a
+		// submodule, or another project the agent ran a command in. Its root and aliases describe
+		// that checkout, not this Execution's, so they are checked and learned only from the
+		// Execution's own worktree (ADR 032). The Execution and its lease carry on either way.
+		if r.Worktree == e.Worktree {
+			var root string
+			if err := t.row("SELECT root_commit FROM Repository WHERE id=?", e.Repo).Scan(&root); err != nil {
+				return nil, err
+			}
+			if root != "" && r.RootCommit != "" && root != r.RootCommit {
+				return nil, fail("conflict", "this active Execution belongs to another repository history; end the session or ask the owner to repair the split with iris admin merge")
+			}
+			if err := t.rememberRepository(r, e.Repo); err != nil {
+				return nil, err
+			}
 		}
 		// A hook speaks for the client process that runs the session now. A session resumed in a
 		// new process within its lease, after an exit without SessionEnd, keeps its Execution,
