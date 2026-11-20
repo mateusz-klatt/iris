@@ -224,7 +224,13 @@ function HostReport({ report }: { report: DoctorReport }) {
   );
 }
 
-export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
+// The shortest time between the starts of two refreshes that watch frames cause. A frame that
+// finds no refresh running starts one at once; frames during one ask for a single more, which
+// starts when it ends and this long after it began. A hub whose cursor moved twice a second
+// otherwise had the console refetch without end, aborting the slowest reads every time.
+const frameRefreshGap = 2000;
+
+export function App({ connect = watchUi, refreshGap = frameRefreshGap }: { connect?: typeof watchUi; refreshGap?: number } = {}) {
   const { t } = useTranslation();
   const [authentication, setAuthentication] = useState<"loading" | "closed" | "login" | "error">("loading");
   const [session, setSession] = useState<AccountSession | null>(null);
@@ -270,14 +276,14 @@ export function App({ connect = watchUi }: { connect?: typeof watchUi } = {}) {
     if (currentGeneration === sessionGeneration.current) signedOut(changed);
   }, [currentGeneration, signedOut]);
   if (session !== null) {
-    return <Console key={session.account.id} connect={connect} session={session} onSession={updateSession} onSignedOut={endSession} />;
+    return <Console key={session.account.id} connect={connect} refreshGap={refreshGap} session={session} onSession={updateSession} onSignedOut={endSession} />;
   }
   if (authentication === "login") return <main>{passwordChanged ? <p role="status">{t("account.passwordSaved")}</p> : null}<Login onLogin={setSession} /></main>;
   return <main className="content"><p role={authentication === "loading" ? "status" : "alert"}>{t(authentication === "error" ? "accountUi.sessionError" : authentication === "closed" ? "accountUi.consoleClosed" : "accountUi.sessionLoading")}</p>
     {authentication !== "loading" ? <button type="button" onClick={() => { setAuthentication("loading"); setAttempt((value) => value + 1); }}>{t("accountUi.retry")}</button> : null}</main>;
 }
 
-function Console({ connect, session, onSession, onSignedOut }: { connect: typeof watchUi; session: AccountSession; onSession: (session: AccountSession) => void; onSignedOut: (passwordChanged?: boolean) => void }) {
+function Console({ connect, refreshGap, session, onSession, onSignedOut }: { connect: typeof watchUi; refreshGap: number; session: AccountSession; onSession: (session: AccountSession) => void; onSignedOut: (passwordChanged?: boolean) => void }) {
   const { t } = useTranslation();
   const member = session.account.role === "member";
   const [locale, setLocale] = useState<SupportedLocale>("en");
@@ -399,13 +405,40 @@ function Console({ connect, session, onSession, onSignedOut }: { connect: typeof
   // revision changes only to retry after an error, which reconnects too.
   useEffect(() => {
     const requests = overviewRequest;
-    void reload();
+    let closed = false;
+    let running = false;
+    let again = false;
+    let started = 0;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    // One refresh at a time. The first load is one too, so a frame during it waits for it.
+    const refresh = (frame: boolean) => {
+      running = true;
+      started = Date.now();
+      if (frame) {
+        setThreadRevision((value) => value + 1);
+      }
+      void reload().finally(() => {
+        running = false;
+        if (closed || !again) {
+          return;
+        }
+        again = false;
+        timer = setTimeout(() => {
+          timer = undefined;
+          refresh(true);
+        }, Math.max(0, started + refreshGap - Date.now()));
+      });
+    };
+    refresh(false);
     const stop = connect((frame: WatchFrame) => {
-      if (frame.kind.length === 0) {
+      if (frame.kind.length === 0 || timer !== undefined) {
         return;
       }
-      void reload();
-      setThreadRevision((value) => value + 1);
+      if (running) {
+        again = true;
+        return;
+      }
+      refresh(true);
     }, (status) => {
       // A refused session ends the watch; the operator is shown how to sign in again.
       if (status === "unauthorized") {
@@ -417,9 +450,11 @@ function Console({ connect, session, onSession, onSignedOut }: { connect: typeof
     return () => {
       // A load still in flight lands on a closed view, so it is dropped.
       requests.current++;
+      closed = true;
+      clearTimeout(timer);
       stop();
     };
-  }, [connect, reload, revision, onUnauthorized, session]);
+  }, [connect, reload, refreshGap, revision, onUnauthorized, session]);
 
   useEffect(() => {
     if (phase !== "ready") {

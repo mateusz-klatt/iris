@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { getDeliveryProblems, type DeliveryProblems as Problems } from "./api";
@@ -21,22 +21,50 @@ export function DeliveryProblems({ repositoryId, revision, onOpenThread }: Props
   const [problems, setProblems] = useState<Problems | null>(null);
   const [failed, setFailed] = useState(false);
 
+  // A new revision does not abort a read in flight: the read can take longer than the hub
+  // takes to change again, and aborting it each time meant the list never arrived. It reads
+  // once more when it ends if the revision moved. Another repository or closing does abort.
+  const latest = useRef(revision);
+  // The repository's effect below sets this. On the first render it runs before that effect,
+  // which then makes the first read itself, so there is nothing to read again yet.
+  const readAgain = useRef(() => {});
+  useEffect(() => {
+    latest.current = revision;
+    readAgain.current();
+  }, [revision]);
   useEffect(() => {
     const controller = new AbortController();
-    getDeliveryProblems(repositoryId, controller.signal).then(
-      (value) => {
-        setProblems(value);
-        setFailed(false);
-      },
-      () => {
-        if (controller.signal.aborted) {
-          return;
-        }
-        setFailed(true);
-      },
-    );
+    let running = false;
+    const load = () => {
+      running = true;
+      const asked = latest.current;
+      void getDeliveryProblems(repositoryId, controller.signal)
+        .then(
+          (value) => {
+            setProblems(value);
+            setFailed(false);
+          },
+          () => {
+            if (!controller.signal.aborted) {
+              setFailed(true);
+            }
+          },
+        )
+        .finally(() => {
+          running = false;
+          if (!controller.signal.aborted && latest.current !== asked) {
+            load();
+          }
+        });
+    };
+    readAgain.current = () => {
+      if (!running) {
+        load();
+      }
+    };
+    load();
     return () => controller.abort();
-  }, [repositoryId, revision]);
+  }, [repositoryId]);
 
   if (failed) {
     return (

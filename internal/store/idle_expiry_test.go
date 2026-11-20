@@ -57,7 +57,10 @@ func TestTokenUseBookkeepingStaysQuietButRevocationNotifies(t *testing.T) {
 	}
 }
 
-func TestHeartbeatNotifiesScopedRevisionObserversWithoutAGlobalEvent(t *testing.T) {
+// A heartbeat still wakes the streams, because its last_seen_ms write changed a row (ADR 016), but
+// it moves no console revision: a cursor that followed presence refetched the console without end.
+// The console's watch sends a frame only when the cursor moves, so the woken stream sends none.
+func TestHeartbeatWakesObserversWithoutMovingAConsoleRevisionOrAGlobalEvent(t *testing.T) {
 	s, clock, _ := testStore(t)
 	r, _ := session(t, s, 1)
 	a := newSessionAccount(t, s, "heartbeat-observer", "operator")
@@ -73,8 +76,8 @@ func TestHeartbeatNotifiesScopedRevisionObserversWithoutAGlobalEvent(t *testing.
 	r.Source = "shim"
 	call(t, s, "heartbeat", r)
 	var after, sameHigh int64
-	if err := s.db.QueryRow("SELECT revision FROM ConsoleRevision WHERE account_id=?", a.ID).Scan(&after); err != nil || after <= before {
-		t.Fatalf("heartbeat did not advance its visible scoped revision: %d then %d: %v", before, after, err)
+	if err := s.db.QueryRow("SELECT revision FROM ConsoleRevision WHERE account_id=?", a.ID).Scan(&after); err != nil || after != before {
+		t.Fatalf("heartbeat moved a console revision: %d then %d: %v", before, after, err)
 	}
 	if err := s.db.QueryRow("SELECT seq FROM sqlite_sequence WHERE name='Event'").Scan(&sameHigh); err != nil || sameHigh != high {
 		t.Fatalf("heartbeat synthesized a global event: %d then %d: %v", high, sameHigh, err)
@@ -82,7 +85,7 @@ func TestHeartbeatNotifiesScopedRevisionObserversWithoutAGlobalEvent(t *testing.
 	select {
 	case <-changes:
 	default:
-		t.Fatal("heartbeat revision changed without waking its observers")
+		t.Fatal("a heartbeat that changed a row did not wake the streams")
 	}
 }
 

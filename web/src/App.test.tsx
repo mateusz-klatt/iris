@@ -773,17 +773,20 @@ describe("Iris operator console", () => {
     expect(await screen.findByRole("heading", { name: "My messages" })).toBeVisible();
   });
 
+  // A frame's refresh and a reload the operator asks for can overlap; the older answer, success
+  // or failure, never replaces the newer one.
   it("keeps the newer overview when an older request finishes afterwards", async () => {
+    const user = userEvent.setup({ delay: null });
     let calls = 0;
-    const first = deferred<Response>();
+    const older = deferred<Response>();
     let onFrame: ((frame: WatchFrame) => void) | undefined;
     server.use(
       http.get("*/v1/ui/overview", () => {
         calls += 1;
-        if (calls === 1) {
-          return first.promise;
+        if (calls === 2) {
+          return older.promise;
         }
-        return HttpResponse.json(emptyOverview);
+        return HttpResponse.json(calls === 1 ? sessionOverview : emptyOverview);
       }),
     );
     render(
@@ -794,25 +797,29 @@ describe("Iris operator console", () => {
         }}
       />,
     );
-
-    await waitFor(() => expect(calls).toBe(1));
+    expect(await screen.findByRole("heading", { name: "My messages" })).toBeVisible();
     onFrame?.({ cursor: 2, kind: "changed" });
-    expect(await screen.findByRole("status")).toHaveTextContent("Waiting for the first session.");
+    await waitFor(() => expect(calls).toBe(2));
+    await user.click(screen.getByRole("button", { name: "Diagnostics" }));
+    await user.click(screen.getByRole("button", { name: "Reload the last doctor report" }));
+    await waitFor(() => expect(calls).toBe(3));
+    expect(await screen.findByText("Waiting for the first session.")).toBeInTheDocument();
     await act(async () => {
-      first.resolve(HttpResponse.json(sessionOverview));
+      older.resolve(HttpResponse.json(sessionOverview));
     });
-    expect(screen.getByRole("status")).toHaveTextContent("Waiting for the first session.");
+    expect(screen.getByText("Waiting for the first session.")).toBeInTheDocument();
   });
 
   it("ignores an older overview failure once a newer request has succeeded", async () => {
+    const user = userEvent.setup({ delay: null });
     let calls = 0;
-    const first = deferred<Response>();
+    const older = deferred<Response>();
     let onFrame: ((frame: WatchFrame) => void) | undefined;
     server.use(
       http.get("*/v1/ui/overview", () => {
         calls += 1;
-        if (calls === 1) {
-          return first.promise;
+        if (calls === 2) {
+          return older.promise;
         }
         return HttpResponse.json(sessionOverview);
       }),
@@ -825,15 +832,124 @@ describe("Iris operator console", () => {
         }}
       />,
     );
+    expect(await screen.findByRole("heading", { name: "My messages" })).toBeVisible();
+    onFrame?.({ cursor: 2, kind: "changed" });
+    await waitFor(() => expect(calls).toBe(2));
+    await user.click(screen.getByRole("button", { name: "Diagnostics" }));
+    await user.click(screen.getByRole("button", { name: "Reload the last doctor report" }));
+    await waitFor(() => expect(calls).toBe(3));
+    await act(async () => {
+      older.resolve(new HttpResponse(null, { status: 500 }));
+    });
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
 
+  // A hub whose cursor moves twice a second must not make the console refetch twice a second.
+  it("waits for a running refresh and then refreshes once for every frame that came during it", async () => {
+    let calls = 0;
+    const first = deferred<Response>();
+    let onFrame: ((frame: WatchFrame) => void) | undefined;
+    server.use(
+      http.get("*/v1/ui/overview", () => {
+        calls += 1;
+        return calls === 1 ? first.promise : HttpResponse.json(sessionOverview);
+      }),
+    );
+    render(
+      <App
+        refreshGap={0}
+        connect={(frame) => {
+          onFrame = frame;
+          return () => undefined;
+        }}
+      />,
+    );
+    await waitFor(() => expect(calls).toBe(1));
+    for (let cursor = 2; cursor < 6; cursor++) {
+      onFrame?.({ cursor, kind: "changed" });
+    }
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(calls).toBe(1);
+    await act(async () => {
+      first.resolve(HttpResponse.json(sessionOverview));
+    });
+    await waitFor(() => expect(calls).toBe(2));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(calls).toBe(2);
+  });
+
+  it("starts the refresh a frame asked for no sooner than the gap after the last one began", async () => {
+    let calls = 0;
+    const second = deferred<Response>();
+    let onFrame: ((frame: WatchFrame) => void) | undefined;
+    server.use(
+      http.get("*/v1/ui/overview", () => {
+        calls += 1;
+        return calls === 2 ? second.promise : HttpResponse.json(sessionOverview);
+      }),
+    );
+    render(
+      <App
+        refreshGap={400}
+        connect={(frame) => {
+          onFrame = frame;
+          return () => undefined;
+        }}
+      />,
+    );
+    expect(await screen.findByRole("heading", { name: "My messages" })).toBeVisible();
+    await new Promise((resolve) => setTimeout(resolve, 450));
+    // Long after the first load, a frame refreshes at once.
+    onFrame?.({ cursor: 2, kind: "changed" });
+    await waitFor(() => expect(calls).toBe(2));
+    const began = Date.now();
+    onFrame?.({ cursor: 3, kind: "changed" });
+    await act(async () => {
+      second.resolve(HttpResponse.json(sessionOverview));
+    });
+    // A frame while the asked-for refresh waits adds nothing to it.
+    onFrame?.({ cursor: 4, kind: "changed" });
+    await waitFor(() => expect(calls).toBe(3), { timeout: 2000 });
+    expect(Date.now() - began).toBeGreaterThanOrEqual(350);
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    expect(calls).toBe(3);
+  });
+
+  it("asks nothing more of a closed console, whether its refresh was running or waiting", async () => {
+    let calls = 0;
+    const first = deferred<Response>();
+    let onFrame: ((frame: WatchFrame) => void) | undefined;
+    server.use(
+      http.get("*/v1/ui/overview", () => {
+        calls += 1;
+        return calls === 1 ? first.promise : HttpResponse.json(sessionOverview);
+      }),
+    );
+    const connect = (frame: (value: WatchFrame) => void) => {
+      onFrame = frame;
+      return () => undefined;
+    };
+    const running = render(<App refreshGap={0} connect={connect} />);
     await waitFor(() => expect(calls).toBe(1));
     onFrame?.({ cursor: 2, kind: "changed" });
-    expect(await screen.findByRole("heading", { name: "My messages" })).toBeVisible();
+    running.unmount();
     await act(async () => {
-      first.resolve(new HttpResponse(null, { status: 500 }));
+      first.resolve(HttpResponse.json(sessionOverview));
     });
-    expect(screen.getByRole("heading", { name: "My messages" })).toBeVisible();
-    expect(screen.queryByRole("alert")).toBeNull();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(calls).toBe(1);
+
+    const waiting = render(<App refreshGap={60000} connect={connect} />);
+    expect(await screen.findByRole("heading", { name: "My messages" })).toBeVisible();
+    const settled = calls;
+    onFrame?.({ cursor: 3, kind: "changed" });
+    onFrame?.({ cursor: 4, kind: "changed" });
+    await waitFor(() => expect(calls).toBe(settled + 1));
+    // The refresh ends and the one frame 4 asked for waits for the gap when the console closes.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    waiting.unmount();
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(calls).toBe(settled + 1);
   });
 
   it("does not refresh for an empty watch kind and shows a reconnecting feed", async () => {
