@@ -1,4 +1,4 @@
-import { render, screen, within } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { describe, expect, it } from "vitest";
@@ -102,5 +102,65 @@ describe("delivery problems", () => {
     server.use(http.get("*/v1/ui/deliveries", () => new HttpResponse(null, { status: 401 })));
     render(<App connect={() => () => {}} />);
     expect(await screen.findByLabelText("Username")).toBeVisible();
+  });
+});
+
+// The hub's revision can move faster than this read takes. Aborting it on each move meant the
+// list never arrived, so a move waits for the read and asks for one more; another repository
+// still aborts it.
+describe("delivery problems across revisions", () => {
+  function held() {
+    const reads: { search: string; aborted: () => boolean; answer: (response: Response) => void }[] = [];
+    server.use(
+      http.get("*/v1/ui/deliveries", ({ request }) => {
+        let answer: (response: Response) => void = () => undefined;
+        const response = new Promise<Response>((resolve) => {
+          answer = resolve;
+        });
+        reads.push({ search: new URL(request.url).search, aborted: () => request.signal.aborted, answer });
+        return response;
+      }),
+    );
+    return reads;
+  }
+
+  it("finishes a read when the revision moves, then reads once more", async () => {
+    const reads = held();
+    const view = render(<DeliveryProblemsPanel repositoryId="rp_iris" revision={0} onOpenThread={() => {}} />);
+    await waitFor(() => expect(reads).toHaveLength(1));
+    view.rerender(<DeliveryProblemsPanel repositoryId="rp_iris" revision={1} onOpenThread={() => {}} />);
+    view.rerender(<DeliveryProblemsPanel repositoryId="rp_iris" revision={2} onOpenThread={() => {}} />);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(reads).toHaveLength(1);
+    expect(reads[0]!.aborted()).toBe(false);
+    await act(async () => {
+      reads[0]!.answer(HttpResponse.json(problems));
+    });
+    await waitFor(() => expect(reads).toHaveLength(2));
+    await act(async () => {
+      reads[1]!.answer(HttpResponse.json(problems));
+    });
+    expect(await screen.findByRole("region", { name: "Delivery problems" })).toBeVisible();
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(reads).toHaveLength(2);
+    // With no read running, a move reads at once.
+    view.rerender(<DeliveryProblemsPanel repositoryId="rp_iris" revision={3} onOpenThread={() => {}} />);
+    await waitFor(() => expect(reads).toHaveLength(3));
+  });
+
+  it("aborts the read for a repository it no longer shows, without saying it failed", async () => {
+    const reads = held();
+    const view = render(<DeliveryProblemsPanel repositoryId="rp_iris" revision={0} onOpenThread={() => {}} />);
+    await waitFor(() => expect(reads).toHaveLength(1));
+    view.rerender(<DeliveryProblemsPanel repositoryId="rp_other" revision={1} onOpenThread={() => {}} />);
+    await waitFor(() => expect(reads).toHaveLength(2));
+    expect(reads[0]!.aborted()).toBe(true);
+    expect(reads[1]!.search).toContain("rp_other");
+    await act(async () => {
+      reads[1]!.answer(HttpResponse.json({ ...problems, messages: [] }));
+    });
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    expect(reads).toHaveLength(2);
+    expect(screen.queryByRole("alert")).toBeNull();
   });
 });

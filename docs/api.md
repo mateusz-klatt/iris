@@ -773,8 +773,12 @@ changes went unclaimed. A doctor sends it as `silent`, with `slow: ` in the deta
 refuses it. `last_hook_at` is when that client's hooks on the doctor's host last reached the hub,
 and empty when they never did or the hub cannot say. Before the first report, `hosts` is empty. `expires_at` on a claim is null when it has no expiry.
 
-`GET /v1/ui/watch` upgrades to a WebSocket, with frames `{"cursor":124,"kind":"changed"}`. The UI
-refetches on a frame. Frames carry no content.
+`GET /v1/ui/watch` upgrades to a WebSocket, with frames `{"cursor":124,"kind":"changed"}`. Frames
+carry no content. A frame means that something the account can read changed: mail, claims,
+repositories, accounts, host reports, or a session that started, ended or changed its branch or
+state. A session's presence time alone sends none, so an agent's `last_seen` in the overview is as
+of the last refetch. The UI refetches on a frame, one refetch at a time. Frames that arrive during
+one ask for a single more, which starts when it ends and no sooner than two seconds after it began.
 
 ## Cooperative Git and shell checks
 
