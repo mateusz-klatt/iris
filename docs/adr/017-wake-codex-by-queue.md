@@ -487,8 +487,12 @@ if its abort cannot be saved, an unanswered queue stays blocking and a binary fa
 counted. An actual failed `cmd.Start` counts as a known failure rather than a free abort.
 
 The binary is resolved once to an absolute path. Before every submission, `--version` must
-match the MCP initialize version exactly, within five seconds, one-second WaitDelay and four
-KiB combined output. Queue execution has thirty seconds, one-second WaitDelay and separate
+match the MCP client's version exactly, within five seconds, one-second WaitDelay and four
+KiB combined output. That version comes from the initialize handshake, or, for a client of MCP
+2026-07-28 or later, from the client info a discovery or tool request names in its `_meta`
+(SEP-2575). Codex 0.171.0 serves a thread's tools over such a connection, with no initialize;
+before Iris read the `_meta`, every check there failed as "Codex initialization did not name its
+version" (measured 2026-11-20). Queue execution has thirty seconds, one-second WaitDelay and separate
 sixty-four KiB output caps. Only complete measured success, stored-warning and same-thread
 no-rollout rejection forms receive those outcomes. Other output, signals, timeout or overflow
 is unknown. Raw output is never saved as diagnostic text or written to MCP stdout.

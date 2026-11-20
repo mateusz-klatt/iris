@@ -73,7 +73,10 @@ type Option func(*options)
 
 // WithClientVersion observes the client's initialize version after initialization
 // completes. Missing clientInfo or an empty version is reported as an empty string.
-// A nil callback disables the observation.
+// A client of MCP 2026-07-28 or later has no initialize handshake: it discovers the server
+// with server/discover and names itself in each request's _meta (SEP-2575). Codex 0.171.0
+// connects so for its thread's tools. Its version is observed from those requests whenever
+// they name one. A nil callback disables the observation.
 func WithClientVersion(observe func(string)) Option {
 	return func(o *options) { o.clientVersion = observe }
 }
@@ -96,6 +99,9 @@ func New(resolver *binding.Resolver, opts ...Option) *mcp.Server {
 		}
 	}
 	server := mcp.NewServer(&mcp.Implementation{Name: "iris", Version: buildinfo.String()}, sdkOptions)
+	if o.clientVersion != nil {
+		server.AddReceivingMiddleware(requestClientVersion(o.clientVersion))
+	}
 	specs := []struct {
 		name, description string
 		fields            map[string]string
@@ -426,4 +432,27 @@ func derivedKey(name string, body map[string]any, at time.Time) string {
 	raw, _ := json.Marshal(fields) // maps marshal in key order, so the hash is stable
 	sum := sha256.Sum256(raw)
 	return "derived:" + hex.EncodeToString(sum[:16])
+}
+
+// requestClientVersion observes the version a stateless request names in its _meta. The SDK's
+// ClientInfo falls back to the session's initialize parameters, which an initialized session
+// has set before any discovery or tool request, so a legacy client is observed as before.
+func requestClientVersion(observe func(string)) mcp.Middleware {
+	return func(next mcp.MethodHandler) mcp.MethodHandler {
+		return func(ctx context.Context, method string, req mcp.Request) (mcp.Result, error) {
+			var info *mcp.Implementation
+			switch r := req.(type) {
+			case *mcp.ServerRequest[*mcp.DiscoverParams]:
+				info = r.ClientInfo()
+			case *mcp.ServerRequest[*mcp.ListToolsParams]:
+				info = r.ClientInfo()
+			case *mcp.ServerRequest[*mcp.CallToolParamsRaw]:
+				info = r.ClientInfo()
+			}
+			if info != nil && info.Version != "" {
+				observe(info.Version)
+			}
+			return next(ctx, method, req)
+		}
+	}
 }
