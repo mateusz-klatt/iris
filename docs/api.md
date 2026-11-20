@@ -783,8 +783,10 @@ one ask for a single more, which starts when it ends and no sooner than two seco
 ## Cooperative Git and shell checks
 
 `POST /v1/guard/check` accepts `host`, `worktree`, `common_dir`, `remote_url`,
-`root_commit` and repository-relative `paths`. It creates no Execution and takes no
-claims. The response contains `message` and `conflicts`; a nonempty message means a
+`root_commit` and repository-relative `paths`. It creates no Execution, takes no
+claims and allocates no repository: a checkout it cannot place returns `ambiguous` when several
+repositories could be it and `not_found` when none is known, and the CLI then warns and allows
+the commit (ADR 032). The response contains `message` and `conflicts`; a nonempty message means a
 live claim overlaps a path in another host/worktree. Repository case policy and
 prefix boundaries apply. Same-worktree claims are excluded. Git's staged rename
 source and destination are both checked by the CLI.
@@ -878,6 +880,15 @@ or hyphens, starting with a letter or digit. An active duplicate returns `confli
 `DELETE /v1/tokens/{name}` revokes immediately and is idempotent for an existing name.
 A revoked name can be added again with a fresh secret. The legacy file token is
 rotated through its file rather than this API.
+
+## Removing aliases
+
+`POST /v1/admin/unalias` takes `{"repository_id":"...","aliases":["..."]}` and
+`"dry_run":true` to report without removing. It removes those exact alias mappings from that
+repository and no other's mapping of the same alias. The response names `removed`, the aliases
+the repository held, and `absent`, the ones it did not. Only the owner token may call it.
+`iris admin unalias --repository <id> [--dry-run] (<alias>... | -)` prints the response; a lone
+`-` reads the aliases from standard input, one a line (ADR 032).
 
 ## Removing records
 

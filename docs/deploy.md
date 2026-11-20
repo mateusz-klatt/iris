@@ -511,6 +511,12 @@ history and must never be used as a substitute.
    the copy after applying. The hub's ordinary restart recovery and retention
    apply to this copy; its running clients cannot reattach to a scratch token.
 
+   A repository that learned aliases from another checkout (ADR 032), such as a submodule's path
+   or another project's remote, keeps them after a merge. List them in the copy and plan their
+   removal with `iris admin unalias --repository <id> --dry-run -`, which reads the aliases one a
+   line from standard input. Apply it in the copy and check that a new worktree registers in the
+   repository it belongs to.
+
 4. Resolve any refusal before the real run. Overlapping live claims between
    unrelated Executions refuse the entire operation, including case-folded and
    prefix overlaps. Ask the holders to finish or release, or deliberately revoke

@@ -1,6 +1,8 @@
 # 012: Repository identity after a history rewrite
 
-Status: accepted.
+Status: accepted. Amended by [ADR 032](032-repository-identity-learning-and-isolation.md): a repeated
+registration learns only from the Execution's own worktree, an ambiguous unknown-root allocation
+is isolated, and the commit guard no longer allocates or establishes continuity.
 
 ## Problem
 

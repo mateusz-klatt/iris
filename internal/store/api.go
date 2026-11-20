@@ -31,7 +31,8 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 		// Within Call, only "expire" also cleans up console sessions by their expiry time.
 		// A merge plan and a refused merge must leave even expired leases and
 		// delivery attempts untouched. The merge checks liveness without expiring.
-		if operation != "merge" {
+		// An unalias plan likewise changes nothing.
+		if operation != "merge" && operation != "unalias" {
 			if err := t.expire(); err != nil {
 				return err
 			}
@@ -146,6 +147,8 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 			out, err = t.forget(r)
 		case "merge":
 			out, err = t.mergeRepositories(r)
+		case "unalias":
+			out, err = t.unalias(r)
 		case "monitor_cursor":
 			out, err = t.monitorCursor(r)
 		case "validate":
