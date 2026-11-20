@@ -1133,6 +1133,24 @@ describe("Iris operator console", () => {
     expect(await screen.findByRole("button", { name: /Filtered only/ })).toBeVisible();
   });
 
+  it("lists inactive agents in the activity filter only on request", async () => {
+    const user = userEvent.setup();
+    const ended = { ...sessionOverview.agents[0]!, id: "ag_ended", name: "codex-old-worktree", state: "ended" };
+    server.use(http.get("*/v1/ui/overview", () => HttpResponse.json({ ...sessionOverview, agents: [...sessionOverview.agents, ended] })));
+    await showSession();
+    await user.click(screen.getByRole("button", { name: "All activity" }));
+    const filter = screen.getByRole("combobox", { name: "Agent" });
+    expect(within(filter).getByRole("option", { name: "claude-host" })).toBeInTheDocument();
+    expect(within(filter).queryByRole("option", { name: "codex-old-worktree" })).toBeNull();
+    await user.click(screen.getByRole("checkbox", { name: "Include inactive agents" }));
+    await user.selectOptions(filter, "codex-old-worktree");
+    await user.click(screen.getByRole("checkbox", { name: "Include inactive agents" }));
+    expect(within(filter).getByRole("option", { name: "codex-old-worktree" })).toBeInTheDocument();
+    expect(filter).toHaveValue("codex-old-worktree");
+    await user.click(screen.getByRole("button", { name: /^My messages/ }));
+    expect(screen.queryByRole("checkbox", { name: "Include inactive agents" })).toBeNull();
+  });
+
   it("drops a thread that arrives after the reader has left it", async () => {
     const user = userEvent.setup();
     const pending = deferred<Response>();

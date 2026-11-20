@@ -32,6 +32,30 @@ describe("recipient selection", () => {
     expect(screen.getByRole("checkbox", { name: /claude-host/ })).toBeVisible();
   });
 
+  it("lists inactive agents only on request, and keeps a chosen one listed", async () => {
+    const ended = { ...sessionOverview.agents[0]!, id: "ag_ended", name: "codex-old-worktree", state: "ended" };
+    const lost = { ...sessionOverview.agents[0]!, id: "ag_lost", name: "kimi-lost", state: "lost" };
+    function Form({ initial }: { initial: string[] }) {
+      const [selected, setSelected] = useState<string[]>(initial);
+      return <RecipientPicker agents={[...sessionOverview.agents, ended, lost]} selected={selected} onChange={setSelected} />;
+    }
+    const user = userEvent.setup();
+    const { unmount } = render(<Form initial={[]} />);
+    expect(screen.getByRole("checkbox", { name: /claude-host/ })).toBeVisible();
+    expect(screen.queryByRole("checkbox", { name: /codex-old-worktree/ })).toBeNull();
+    expect(screen.queryByRole("checkbox", { name: /kimi-lost/ })).toBeNull();
+    await user.click(screen.getByRole("checkbox", { name: "Include inactive agents" }));
+    await user.click(screen.getByRole("checkbox", { name: /codex-old-worktree/ }));
+    expect(screen.getByRole("checkbox", { name: /kimi-lost/ })).toBeVisible();
+    await user.click(screen.getByRole("checkbox", { name: "Include inactive agents" }));
+    expect(screen.getByRole("checkbox", { name: /codex-old-worktree/ })).toBeChecked();
+    expect(screen.queryByRole("checkbox", { name: /kimi-lost/ })).toBeNull();
+    unmount();
+    render(<Form initial={["ag_lost"]} />);
+    expect(screen.getByRole("checkbox", { name: /kimi-lost/ })).toBeChecked();
+    expect(screen.queryByRole("alert")).toBeNull();
+  });
+
   it("does not silently select an agent recreated under the same name", () => {
     const changed = vi.fn();
     const { rerender } = render(<RecipientPicker agents={sessionOverview.agents} selected={["ag_claude"]} onChange={changed} />);
