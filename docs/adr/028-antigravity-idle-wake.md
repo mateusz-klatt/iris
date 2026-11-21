@@ -291,10 +291,12 @@ trusts caller-supplied arguments, executable paths or Iris configuration overrid
    command environment cannot redirect the hub URL, bearer token path, wake marker or session
    directory.
 3. **Executable from the `agy` ancestor process only.** The helper never reads
-   `ANTIGRAVITY_AGENTAPI_EXE` or `PATH`. It takes the executable path exclusively from the verified
+   `ANTIGRAVITY_AGENTAPI_EXE` or `PATH`. It takes the executable exclusively from the verified
    host `agy` ancestor `(pid, start_ms)`:
-   - on Linux, `os.Readlink("/proc/<pid>/exe")` (rejecting `" (deleted)"`), verified via `os.Stat`
-     as an absolute path to an existing regular file;
+   - on Linux, `os.Readlink("/proc/<pid>/exe")`, verified via `os.Stat` as an absolute path to an
+     existing regular file—or, when `/proc/<pid>/exe` ends in `" (deleted)"` after an in-place
+     update, resolved via the verified `/proc/<pid>/exe` descriptor fallback (`proc.OpenExecutable`,
+     see the 2026-11-21 addendum);
    - on Windows (`QueryFullProcessImageName` in `internal/proc`, measured live)
      and macOS (`proc_pidpath` / `kern.procargs2` executable path, unmeasured live for
      Antigravity wake), resolved from the `agy` ancestor process and verified as an absolute
@@ -412,7 +414,9 @@ executing `<agy-exe> agentapi send-message <conversationId> <prompt>` requires:
   `ANTIGRAVITY_CONVERSATION_ID` and whose helper record still matches this helper's
   `(helper_pid, helper_start_ms, attempt_id)`;
 - local idle `true` for `(antigravity, conversationId)`;
-- `<agy-exe>` from the `agy` ancestor process still an existing regular file.
+- `<agy-exe>` from the `agy` ancestor process still resolves to a verified regular file (or, on
+  Linux when `/proc/<pid>/exe` is marked `" (deleted)"`, an open regular-file descriptor to that
+  running image; see the 2026-11-21 addendum).
 
 Any unmet check defers (or exits if disabled/superseded) without spending wake quota. One automatic
 wake per attention identity remains the limit, using the fixed, content-free Iris notification and
@@ -621,5 +625,8 @@ ran.
   boundary against same-OS-user processes, which are already inside Iris's same-user trust boundary
   (D12).
 - Executing the unlinked descriptor still runs the old `agy` binary image until `agy` restarts.
+- `agentapi` runs with `/proc/self/fd/3` as both its exec path and `argv[0]`. `agy 1.5.14` was
+  verified live, but a client or later version that locates resources through `argv[0]` could
+  behave differently.
 - A successful `agentapi send-message` only queues the notification in `agy`; it does not prove
   that the model acts on it.

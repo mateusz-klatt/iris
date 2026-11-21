@@ -102,10 +102,12 @@ Hard rules for `iris hook`, because failure semantics differ between clients:
    create that directory in the foreground, so a hook failure goes unlogged only if the
    configuration directory does not exist (for example, if it was removed or hooks were configured
    without running `iris integrate`). When `IRIS_TOKEN_FILE` is unset and `client.json` is
-   unreadable or stalls past the 15 ms lookup budget, the entry falls back to `hook-failures.log`
-   beside the default token path rather than a relocated `token_file` inside `client.json`. When
-   `client.json` relocates `token_file` into another directory, `iris doctor` (and
-   `iris doctor --bundle`) reads both the relocated and default logs and merges them by time. A
+   unreadable or stalls past the 15 ms lookup budget, `iris integrate` creates only the default
+   fallback directory (leaving any relocated directory named inside `client.json` uncreated), and
+   the hook recorder likewise falls back to `hook-failures.log` beside the default token path
+   rather than a relocated `token_file` inside `client.json`. When `client.json` relocates
+   `token_file` into another directory, `iris doctor` (and `iris doctor --bundle`) reads both the
+   relocated and default logs and merges them by time. A
    failure graded `silent` is described as a fail-open in the last 24 hours, warning that edits may
    have gone unclaimed. This history cannot establish current client downtime or identify which
    edits went unclaimed. A silent fail-open once hid a real bypass: Copilot sends no tool call id,

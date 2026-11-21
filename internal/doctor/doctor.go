@@ -183,8 +183,8 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 	for _, c := range integrate.All() {
 		res.Report.Clients = append(res.Report.Clients, checkClient(ctx, opt, c))
 	}
-	if err := applyFailuresFrom(&res, tokenFile, fallbackTokenFile, opt.Now()); err != nil && res.HubDetail == "" {
-		res.HubDetail = "failure log: " + err.Error()
+	if err := applyFailuresFrom(&res, tokenFile, fallbackTokenFile, opt.Now()); err != nil {
+		res.HubDetail = joinDetail(res.HubDetail, "failure log: "+err.Error())
 	}
 	for i := range res.Report.Clients {
 		applyVersion(&res.Report.Clients[i])

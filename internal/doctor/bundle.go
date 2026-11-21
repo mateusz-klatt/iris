@@ -29,6 +29,8 @@ type Bundle struct {
 	CaseWarning  bool           `json:"case_warning"`
 	// LineEndingsWarning says doctor printed a line endings warning, without its counts.
 	LineEndingsWarning bool `json:"line_endings_warning"`
+	// PartialLogs is true when reading a failure or observation log failed, so counts may be incomplete.
+	PartialLogs bool `json:"partial_logs"`
 }
 
 // BundleIris is the build and platform of this iris.
@@ -87,9 +89,10 @@ func NewBundle(res Result, version string, now time.Time) Bundle {
 		status := oneOf(c.Status, StatusOK, StatusNotConfigured, StatusNeedsHuman, StatusSilent, StatusSlow)
 		b.Clients = append(b.Clients, BundleClient{Client: client, Status: status, Version: bareVersion(c.Version)})
 	}
-	// A log that cannot be read leaves its counts empty; doctor's own report says why.
-	failures, _ := readMergedLog(res.tokenFile, res.fallbackTokenFile, hook.ReadRecentFailures)
-	observations, _ := readMergedLog(res.tokenFile, res.fallbackTokenFile, hook.ReadRecentObservations)
+	// Keep counts from every readable log, and flag PartialLogs when any read failed.
+	failures, failErr := readMergedLog(res.tokenFile, res.fallbackTokenFile, hook.ReadRecentFailures)
+	observations, obsErr := readMergedLog(res.tokenFile, res.fallbackTokenFile, hook.ReadRecentObservations)
+	b.PartialLogs = failErr != nil || obsErr != nil
 	b.Failures = counts(failures, now, func(f hook.Failure) string { return hook.FailureCategory(f.Error) })
 	b.Observations = counts(observations, now, func(f hook.Failure) string { return observationKind(f.Error) })
 	return b

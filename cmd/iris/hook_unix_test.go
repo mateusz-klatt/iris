@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -233,7 +234,7 @@ func TestIntegrateDoesNotHangOnStalledClientConfig(t *testing.T) {
 	}
 	home := t.TempDir()
 	t.Setenv("HOME", home)
-	t.Setenv("XDG_CONFIG_HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", filepath.Join(home, "xdg"))
 	t.Setenv("IRIS_TOKEN_FILE", "")
 	t.Setenv("CODEX_HOME", filepath.Join(home, "codex"))
 	t.Setenv("IRIS_STATE_DIR", filepath.Join(home, "state"))
@@ -250,6 +251,19 @@ func TestIntegrateDoesNotHangOnStalledClientConfig(t *testing.T) {
 	if err := unix.Mkfifo(filepath.Join(irisDir, "client.json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	readNames := func(dir string) []string {
+		entries, err := os.ReadDir(dir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		names := make([]string, 0, len(entries))
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		return names
+	}
+	beforeHome := readNames(home)
+	beforeCfgBase := readNames(cfgBase)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
@@ -270,5 +284,20 @@ func TestIntegrateDoesNotHangOnStalledClientConfig(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(home, "codex", "hooks.json")); err != nil {
 		t.Fatalf("codex hooks.json missing: %v", err)
+	}
+	// The FIFO fixture requires irisDir to exist beforehand (absent-directory creation with
+	// 0700 is covered by TestIntegrateCreatesResolvedTokenDirectoryWith0700 in cli_test.go).
+	// Verify integrate left irisDir intact and created only codex and state under home (no
+	// relocated directory under home or os.UserConfigDir()).
+	if info, err := os.Stat(irisDir); err != nil || !info.IsDir() {
+		t.Fatalf("default fallback iris directory missing: info=%v err=%v", info, err)
+	}
+	wantHome := append(slices.Clone(beforeHome), "codex", "state")
+	slices.Sort(wantHome)
+	if gotHome := readNames(home); !slices.Equal(gotHome, wantHome) {
+		t.Fatalf("unexpected directories under home after stalled integrate: got %v, want %v", gotHome, wantHome)
+	}
+	if gotCfg := readNames(cfgBase); !slices.Equal(gotCfg, beforeCfgBase) {
+		t.Fatalf("unexpected directories under config base after stalled integrate: got %v, want %v", gotCfg, beforeCfgBase)
 	}
 }

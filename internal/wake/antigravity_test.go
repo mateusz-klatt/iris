@@ -123,6 +123,7 @@ func newAgyTestHarness(t *testing.T, convID string) *agyTestHarness {
 	hubSrv.Config.Handler = hub.New(s, "secret-hub-token", []string{hubSrv.Listener.Addr().String()})
 	hubSrv.Start()
 	t.Cleanup(hubSrv.Close)
+	t.Cleanup(hubclient.HTTPClient().CloseIdleConnections)
 
 	tokenPath := filepath.Join(configDir, "hub.token")
 	if err := os.WriteFile(tokenPath, []byte("secret-hub-token\n"), 0o600); err != nil {
