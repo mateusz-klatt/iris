@@ -309,7 +309,7 @@ func (r Runner) shellReduced(ctx context.Context, hub scopedShellHub, plain shel
 			}
 			r.fullSucceeded(state, repo)
 			state.at("shell reconcile")
-			out, err = plain.Reconcile(ctx, hubclient.ReconcileRequest{ExecutionID: s.ExecutionID, Generation: s.Generation, Kind: phase, Status: taken})
+			out, err = plain.Reconcile(ctx, reconcileRequest(s.ExecutionID, s.Generation, phase, taken, repo))
 			return out, false, err
 		}
 		sess = &s
@@ -338,7 +338,7 @@ func (r Runner) shellReduced(ctx context.Context, hub scopedShellHub, plain shel
 	scope := hubclient.Scope{Mode: "dirty", Submodules: set}
 	if sess != nil {
 		state.at("shell reconcile")
-		out, err = hub.ReconcileScoped(ctx, hubclient.ScopedRequest{ReconcileRequest: hubclient.ReconcileRequest{ExecutionID: sess.ExecutionID, Generation: sess.Generation, Kind: phase, Status: taken}, Scope: scope})
+		out, err = hub.ReconcileScoped(ctx, hubclient.ScopedRequest{ReconcileRequest: reconcileRequest(sess.ExecutionID, sess.Generation, phase, taken, repo), Scope: scope})
 	} else {
 		state.at("shell session")
 		out, err = r.reconcileScopedSession(ctx, hub, ev, repo, phase, taken, scope)

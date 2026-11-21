@@ -693,7 +693,9 @@ Changes from the reference schema:
 
 ### D10. Claim semantics
 
-Claims apply to a repository across all worktrees and branches. Branch and worktree are
+Claims apply to a repository across all worktrees and branches. A claim lies in the repository
+of its file: the innermost checkout that contains it, which for a submodule's file is the
+submodule's, wherever the session was started (ADR 033). Branch and worktree are
 context, not an exemption: two worktrees editing one file will meet at merge time, which is
 exactly the collision Iris exists to prevent. A narrower policy can be added per repository.
 
@@ -772,6 +774,11 @@ and distinct nonempty contacts refuse the merge. The destination's identity wins
 a source-only contact transfers. Dry run reports the move without expiring leases
 or changing any record. It is a snapshot, so applying checks again.
 
+A hook places each path of an edit in the innermost checkout that contains it, and a hub that
+names `file_claims` claims each file in that checkout's repository: one it resolves, or one it
+allocates when nothing matches, never one it would have to choose among ambiguous candidates
+(ADR 033).
+
 Hooks work out the worktree root and remote by reading `.git` files directly, because spawning
 `git` on each hook is too slow, particularly on Windows. Root discovery follows at
 most 128 loose first-parent commits; packed, long or unreadable histories report
@@ -798,8 +805,9 @@ was already dirty therefore goes unseen. A submodule is a single path in its sup
 shows ` M` once its tracked content changes, and nothing finer. Files that are only untracked
 inside a submodule are left out (`--ignore-submodules=untracked`). Scanning large submodules
 for them took one measured repository from 20 ms to 5.5 s, far past the budget, and a
-reconcile past its budget detects nothing at all. A command run inside the submodule is
-reconciled against the submodule's own repository, untracked files included.
+reconcile past its budget detects nothing at all. A status the hook took in another checkout,
+such as a submodule its working directory moved into, is not attributed: the hub keeps the
+Execution's baseline and takes, renews and releases nothing for it (ADR 033).
 
 [ADR 018](adr/018-reduced-reconcile-scope.md) adds a reduced snapshot, for a worktree whose full
 status does not fit its budget. Its status runs with `--ignore-submodules=dirty`, which also

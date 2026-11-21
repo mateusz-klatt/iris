@@ -255,7 +255,8 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 			return state.fail(failNoPaths, allow)
 		}
 		paths, from, to := r.claimPaths(repo, ev)
-		if len(paths) == 0 {
+		groups := r.fileGroups(repo, ev)
+		if len(groups) == 0 {
 			return r.finish(state, ev, Encode(ev, Decision{Action: ActionAllow}))
 		}
 		// Touch needs an execution id. The hook only has the client session id,
@@ -271,14 +272,23 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 			return state.fail(err, r.failOpen(state, ev, err, allow))
 		}
 		state.at("touch")
-		touch, err := r.Hub.Touch(ctx, hubclient.TouchRequest{
-			ExecutionID: sess.ExecutionID,
-			Generation:  sess.Generation,
-			ToolCallID:  ev.ToolCallID,
-			Paths:       paths,
-			RenameFrom:  from,
-			RenameTo:    to,
-		})
+		var touch hubclient.TouchResponse
+		if files, ok := r.Hub.(fileTouchHub); ok && hubclient.FileClaimsCapable(sess.Capabilities) {
+			// Each file is claimed in the repository of the checkout it lies in (ADR 033).
+			touch, err = files.TouchFiles(ctx, hubclient.TouchFilesRequest{ExecutionID: sess.ExecutionID, Generation: sess.Generation, ToolCallID: ev.ToolCallID, Groups: groups})
+		} else if len(paths) == 0 {
+			// An older hub takes paths of the event's checkout only, and none of these is.
+			return r.finish(state, ev, Encode(ev, Decision{Action: ActionAllow}))
+		} else {
+			touch, err = r.Hub.Touch(ctx, hubclient.TouchRequest{
+				ExecutionID: sess.ExecutionID,
+				Generation:  sess.Generation,
+				ToolCallID:  ev.ToolCallID,
+				Paths:       paths,
+				RenameFrom:  from,
+				RenameTo:    to,
+			})
+		}
 		if err != nil {
 			return state.fail(err, r.failOpen(state, ev, err, allow))
 		}

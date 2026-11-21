@@ -132,6 +132,26 @@ type TouchResponse struct {
 	Attention Attention `json:"attention"`
 }
 
+// ClaimGroup is one checkout's share of a grouped touch (ADR 033): the paths of a tool call that
+// lie in that checkout, relative to its worktree, with what the hook read of the checkout.
+type ClaimGroup struct {
+	Worktree   string   `json:"worktree"`
+	WorktreeID string   `json:"worktree_id,omitempty"`
+	CommonDir  string   `json:"common_dir,omitempty"`
+	RemoteURL  string   `json:"remote_url,omitempty"`
+	RootCommit string   `json:"root_commit,omitempty"`
+	Paths      []string `json:"paths"`
+}
+
+// TouchFilesRequest is a pre-edit touch whose paths are grouped by the checkout each file lies
+// in, so the hub claims every file in its own repository (ADR 033).
+type TouchFilesRequest struct {
+	ExecutionID string       `json:"execution_id"`
+	Generation  int          `json:"generation"`
+	ToolCallID  string       `json:"tool_call_id"`
+	Groups      []ClaimGroup `json:"groups"`
+}
+
 // Client calls the hub. A non-nil HTTP client is used as-is; otherwise defaultClient, whose
 // transport drops dead pooled connections, is used and the request context carries the
 // deadline.
@@ -156,6 +176,19 @@ func (c *Client) RegisterSession(ctx context.Context, req SessionRequest) (Sessi
 func (c *Client) Touch(ctx context.Context, req TouchRequest) (TouchResponse, error) {
 	var resp TouchResponse
 	if err := c.post(ctx, "/v1/claims/touch", req, &resp); err != nil {
+		return TouchResponse{}, err
+	}
+	if resp.Action == "" {
+		return TouchResponse{}, ErrNoAction
+	}
+	return resp, nil
+}
+
+// TouchFiles calls POST /v1/claims/touch/files. Only a hub that names file_claims takes it; an
+// older one refuses the route.
+func (c *Client) TouchFiles(ctx context.Context, req TouchFilesRequest) (TouchResponse, error) {
+	var resp TouchResponse
+	if err := c.post(ctx, "/v1/claims/touch/files", req, &resp); err != nil {
 		return TouchResponse{}, err
 	}
 	if resp.Action == "" {
@@ -349,6 +382,12 @@ type ReconcileRequest struct {
 	Generation  int               `json:"generation"`
 	Kind        string            `json:"kind"` // before records a baseline; after compares and records it.
 	Status      map[string]string `json:"status"`
+	// The checkout the status was taken in. A hub that names file_claims attributes nothing from a
+	// checkout that is not the Execution's (ADR 033); an older hub ignores these.
+	Worktree   string `json:"worktree,omitempty"`
+	WorktreeID string `json:"worktree_id,omitempty"`
+	RemoteURL  string `json:"remote_url,omitempty"`
+	RootCommit string `json:"root_commit,omitempty"`
 }
 
 // The two reconcile routes. A request to either is sent once; see sentOnce.
@@ -393,6 +432,12 @@ func (c *Client) ReconcileSession(ctx context.Context, req ShellSessionRequest) 
 // snapshots on POST /v1/shell/scoped (ADR 018).
 func ShellScopeCapable(capabilities []string) bool {
 	return slices.Contains(capabilities, "shell_scope")
+}
+
+// FileClaimsCapable is whether a registration answer names file_claims: that hub takes a grouped
+// touch on POST /v1/claims/touch/files (ADR 033).
+func FileClaimsCapable(capabilities []string) bool {
+	return slices.Contains(capabilities, "file_claims")
 }
 
 // Scope is what a reduced snapshot did not look into: its status ran with

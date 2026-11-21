@@ -285,7 +285,9 @@ func TestAShellStatusFromAnotherCheckoutIsNotAttributed(t *testing.T) {
 	}
 	for rows.Next() {
 		var p string
-		rows.Scan(&p)
+		if err := rows.Scan(&p); err != nil {
+			t.Fatal(err)
+		}
 		held = append(held, p)
 	}
 	_ = rows.Close()
