@@ -254,7 +254,7 @@ func (t *transaction) touch(r Request) (map[string]any, error) {
 			v["path"] = p
 			conflicts = append(conflicts, v)
 			// The holder's release of this path is what this session waits for.
-			if err = t.wait(e, pathKey(p, policy), "exact"); err != nil {
+			if err = t.wait(e, e.Repo, pathKey(p, policy), "exact"); err != nil {
 				return nil, err
 			}
 		}
@@ -293,7 +293,7 @@ func (t *transaction) touch(r Request) (map[string]any, error) {
 			}
 		}
 		for _, p := range normalized {
-			if err = t.took(e, pathKey(p, policy)); err != nil {
+			if err = t.took(e, e.Repo, pathKey(p, policy)); err != nil {
 				return nil, err
 			}
 		}
@@ -395,7 +395,7 @@ func (t *transaction) explicit(r Request) (map[string]any, error) {
 			}
 			v["path"] = p
 			conflicts = append(conflicts, v)
-			if err = t.wait(e, key, r.Kind); err != nil {
+			if err = t.wait(e, e.Repo, key, r.Kind); err != nil {
 				return nil, err
 			}
 		}
@@ -405,7 +405,7 @@ func (t *transaction) explicit(r Request) (map[string]any, error) {
 		t.refused = &Error{"conflict", "claim overlaps another Execution", map[string]any{"conflicts": conflicts}}
 		return nil, nil
 	}
-	if err = t.took(e, key); err != nil {
+	if err = t.took(e, e.Repo, key); err != nil {
 		return nil, err
 	}
 	expiry := sql.NullInt64{}
@@ -455,21 +455,38 @@ func (t *transaction) release(r Request) (map[string]any, error) {
 			return nil, fail("conflict", "invalid fence token")
 		}
 	}
-	q := "UPDATE Claim SET revoked_ms=? WHERE execution_id=? AND revoked_ms IS NULL"
-	args := []any{t.s.clock.Now().UnixMilli(), e.ID}
+	where := " WHERE execution_id=? AND revoked_ms IS NULL"
+	args := []any{e.ID}
 	if !r.All {
-		q += " AND fence=?"
+		where += " AND fence=?"
 		args = append(args, r.Fence)
 	}
-	res, err := t.exec(q, args...)
+	// A claim lies in the repository of its file, which need not be e's own (ADR 033), so each
+	// repository it freed is told, and its waiters woken.
+	rows, err := t.rows("SELECT DISTINCT repository_id FROM Claim"+where+" ORDER BY repository_id", args...)
 	if err != nil {
 		return nil, err
 	}
-	n, _ := res.RowsAffected() // SQLite always reports affected rows
-	if n > 0 {
-		err = t.released(e.Repo, e.ID)
+	var repos []string
+	for rows.Next() {
+		var repo string
+		rows.Scan(&repo)
+		repos = append(repos, repo)
 	}
-	return map[string]any{}, err
+	err = rows.Err()
+	_ = rows.Close()
+	if err != nil {
+		return nil, err
+	}
+	if _, err = t.exec("UPDATE Claim SET revoked_ms=?"+where, append([]any{t.s.clock.Now().UnixMilli()}, args...)...); err != nil {
+		return nil, err
+	}
+	for _, repo := range repos {
+		if err = t.released(repo, e.ID); err != nil {
+			return nil, err
+		}
+	}
+	return map[string]any{}, nil
 }
 
 // released records a release for every agent in repo, which the console and

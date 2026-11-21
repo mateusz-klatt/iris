@@ -20,8 +20,9 @@ const maxScopeSubmodules = 500
 
 // shellCapabilities is what a registration answer names: a hook sends a reduced snapshot only
 // to a hub that names shell_scope, and only on the scoped route, which an older hub refuses
-// (ADR 018 decision 3). Each answer gets its own slice.
-func shellCapabilities() []string { return []string{"shell_scope"} }
+// (ADR 018 decision 3). It sends a grouped touch only to a hub that names file_claims, on the
+// grouped route, which an older hub refuses too (ADR 033). Each answer gets its own slice.
+func shellCapabilities() []string { return []string{"shell_scope", "file_claims"} }
 
 // validScope checks a reduced snapshot's scope. The mode is the only one a reduced status runs
 // with: never all, which hides even a submodule commit staged in the superproject. The paths are

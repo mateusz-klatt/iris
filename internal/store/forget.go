@@ -40,9 +40,11 @@ func (t *transaction) forget(r Request) (map[string]any, error) {
 	if known == 0 {
 		return nil, fail("not_found", "no such repository or agent")
 	}
+	// A repository's claims include those another repository's sessions hold on its files (ADR
+	// 033), and the Claim delete below takes them too, so they count as in use as well.
 	inUse := executions.twice("SELECT (SELECT COUNT(*) FROM Execution WHERE state='active' AND id IN (%[1]s))," +
-		"(SELECT COUNT(*) FROM Claim WHERE revoked_ms IS NULL AND execution_id IN (%[1]s))")
-	if err := t.row(inUse.q, inUse.args...).Scan(&active, &claims); err != nil {
+		"(SELECT COUNT(*) FROM Claim WHERE revoked_ms IS NULL AND (execution_id IN (%[1]s) OR (?<>'' AND repository_id=?)))")
+	if err := t.row(inUse.q, append(inUse.args, repo, repo)...).Scan(&active, &claims); err != nil {
 		return nil, err
 	}
 	if active > 0 || claims > 0 {

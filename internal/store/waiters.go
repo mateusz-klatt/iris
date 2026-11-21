@@ -13,19 +13,21 @@ import (
 // hour has moved on, and a wake then would be noise.
 const waitLimit = time.Hour
 
-// wait records that e was refused key, of kind exact or prefix. It lasts
-// waitLimit whatever the blocking claim's expiry: that expiry is itself a
-// release, and a wait that ended with it could not hear about it.
-func (t *transaction) wait(e execution, key, kind string) error {
+// wait records that e was refused key, of kind exact or prefix, in repo: the repository of the
+// claim that refused it, which for a file in another checkout is not e's own (ADR 033). It lasts
+// waitLimit whatever the blocking claim's expiry: that expiry is itself a release, and a wait
+// that ended with it could not hear about it. One Execution keeps one wait per key and kind, as
+// an older hub's table requires, so a later wait on the same key in another repository moves it.
+func (t *transaction) wait(e execution, repo, key, kind string) error {
 	until := t.s.clock.Now().Add(waitLimit).UnixMilli()
 	_, err := t.exec(`INSERT INTO Waiter(execution_id,repository_id,path_key,kind,expires_ms) VALUES(?,?,?,?,?)
- ON CONFLICT(execution_id,path_key,kind) DO UPDATE SET expires_ms=MAX(Waiter.expires_ms,excluded.expires_ms)`, e.ID, e.Repo, key, kind, until)
+ ON CONFLICT(execution_id,path_key,kind) DO UPDATE SET expires_ms=MAX(Waiter.expires_ms,excluded.expires_ms),repository_id=excluded.repository_id`, e.ID, repo, key, kind, until)
 	return err
 }
 
-// took clears e's waits on key once it holds it.
-func (t *transaction) took(e execution, key string) error {
-	_, err := t.exec("DELETE FROM Waiter WHERE execution_id=? AND path_key=?", e.ID, key)
+// took clears e's waits on key in repo once it holds it there.
+func (t *transaction) took(e execution, repo, key string) error {
+	_, err := t.exec("DELETE FROM Waiter WHERE execution_id=? AND repository_id=? AND path_key=?", e.ID, repo, key)
 	return err
 }
 
