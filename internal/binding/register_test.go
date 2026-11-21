@@ -2,15 +2,20 @@ package binding
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"sync"
 	"testing"
 	"testing/synctest"
 	"time"
 
+	"github.com/mateusz-klatt/iris/internal/gitinfo"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 	"github.com/mateusz-klatt/iris/internal/proc"
 )
@@ -122,5 +127,64 @@ func TestAnOwnExecutionIsKeptUntilTheHooksAppears(t *testing.T) {
 	r.adopt(context.Background())
 	if !r.own || r.bound != mine {
 		t.Fatalf("gave up %+v for nothing: %+v", mine, r.bound)
+	}
+}
+
+// A directory with no .git above it registers on the outside route; a hub without that route
+// takes the same request on the session route and is said once; and a checkout Iris cannot read
+// registers nothing (ADR 034).
+func TestAnOwnExecutionOutsideGitRegistersOnItsRoute(t *testing.T) {
+	hub := &scriptedHub{binds: []string{"unbound"}}
+	r := resolverFor(t, hub, "grok", map[string]string{"GROK_SESSION_ID": "s"}, proc.Ancestor{})
+	if _, err := r.Resolve(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(hub.routes) != 1 || hub.routes[0] != "/v1/sessions/outside" || hub.session.Worktree != "" || hub.session.CommonDir != "" {
+		t.Fatalf("%v %+v", hub.routes, hub.session)
+	}
+	older := &scriptedHub{binds: []string{"unbound", "unbound"}, older: true}
+	var said []string
+	r = resolverFor(t, older, "grok", map[string]string{"GROK_SESSION_ID": "s"}, proc.Ancestor{})
+	r.Observe = func(text string) { said = append(said, text) }
+	if _, err := r.Resolve(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	r.bound = Bound{}
+	if _, err := r.Resolve(context.Background(), ""); err != nil {
+		t.Fatal(err)
+	}
+	if len(older.routes) != 2 || older.routes[0] != "/v1/sessions" || len(said) != 1 || said[0] != ObservedOlderHub {
+		t.Fatalf("routes %v, said %v", older.routes, said)
+	}
+	unreadable := &scriptedHub{binds: []string{"unbound"}}
+	r = resolverFor(t, unreadable, "grok", map[string]string{"GROK_SESSION_ID": "s"}, proc.Ancestor{})
+	if err := os.WriteFile(filepath.Join(r.CWD, ".git"), []byte("not a link\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := r.Resolve(context.Background(), ""); !errors.Is(err, gitinfo.ErrUnreadable) || len(unreadable.routes) != 0 {
+		t.Fatalf("%v %v", err, unreadable.routes)
+	}
+}
+
+// A binding of an Execution outside git says so; a refresh from a hub that omits it, as an older
+// one does, clears it.
+func TestTheOutsideFlagFollowsTheHub(t *testing.T) {
+	var outside bool
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		answer := map[string]any{"execution_id": "ex", "generation": 1}
+		if outside {
+			answer["outside_git"] = true
+		}
+		_ = json.NewEncoder(w).Encode(answer)
+	}))
+	t.Cleanup(srv.Close)
+	r := &Resolver{Hub: &hubclient.Client{Config: config{srv.URL}}, Client: "codex", Host: "host", bound: Bound{ExecutionID: "ex", Generation: 1}}
+	outside = true
+	if b, err := r.refresh(context.Background()); err != nil || !b.Outside {
+		t.Fatalf("%+v %v", b, err)
+	}
+	outside = false
+	if b, err := r.refresh(context.Background()); err != nil || b.Outside {
+		t.Fatalf("%+v %v", b, err)
 	}
 }

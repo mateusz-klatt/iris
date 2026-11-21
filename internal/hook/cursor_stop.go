@@ -2,6 +2,7 @@ package hook
 
 import (
 	"context"
+	"errors"
 	"os"
 	"path"
 	"path/filepath"
@@ -35,6 +36,9 @@ func (r Runner) cursorStop(ctx context.Context, state *runState, ev Event, repo 
 	state.at("session")
 	rev := r.toldRevision(ev)
 	sess, err := r.register(ctx, ev, repo)
+	if errors.Is(err, errOlderHub) {
+		return r.finish(state, ev, quiet)
+	}
 	if err != nil {
 		return state.fail(err, quiet)
 	}

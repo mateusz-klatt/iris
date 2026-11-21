@@ -89,7 +89,10 @@ Hard rules for `iris hook`, because failure semantics differ between clients:
    hook that stalls before its own deadline can act, or a hung process: on Antigravity that
    still denies every tool for as long as it lasts.
 4. Non-mutating tools return without touching the network.
-5. Outside a git worktree the hook does nothing.
+5. Outside a git worktree the hook registers, renews, tells attention and ends the session on
+   the outside route, and an edit or a shell command there makes no request and takes no claim
+   (ADR 034). A hub without that route gets nothing, as before. `iris doctor`'s canary, which runs
+   in an empty directory, reaches no hub.
 6. Every fallback to allow caused by a failure is recorded in `hook-failures.log`, without payload
    content, and `iris doctor` reports it. A failure graded `silent` is described as a fail-open in the
    last 24 hours, warning that edits may have gone unclaimed. This history cannot establish current
@@ -792,6 +795,8 @@ most 128 loose first-parent commits; packed, long or unreadable histories report
 an unknown root. It cannot distinguish a history rewrite in that case. Paths are stored repository-relative
 with forward slashes, with a per-repository case policy, and `..` escapes are rejected.
 Antigravity runs hooks in `.agents/`, so its adapter takes the root from `workspacePaths`.
+A `.git` that discovery finds but cannot stat, read or parse is a failure of its own, never the
+absence of a checkout, so its session is not taken for one outside git (ADR 034).
 
 ### D12. Shell edits
 

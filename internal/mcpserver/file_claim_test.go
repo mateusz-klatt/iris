@@ -107,3 +107,13 @@ func TestTheClaimToolRefusesToPlaceFromAnAbsentWorktree(t *testing.T) {
 		t.Fatalf("%v %v, calls %v", out, failed, f.calls)
 	}
 }
+
+// A session outside git takes no claim: the tool says so before it reads the filesystem, and
+// nothing reaches the hub (ADR 034).
+func TestTheClaimToolRefusesASessionOutsideGit(t *testing.T) {
+	f := &fakeHub{reply: `{}`, bind: `{"execution_id":"ex","generation":3,"repository_id":"rp","worktree":"/nowhere/at/all","capabilities":["file_claims"],"outside_git":true}`}
+	out, failed := use(t, connect(t, f), "claim", map[string]any{"kind": "exact", "path": "frontend/src/x.ts", "key": "k"})
+	if !failed || !strings.Contains(fmt.Sprint(out), "outside any git checkout") || strings.Contains(fmt.Sprint(out), "not a directory") || len(f.calls) != 0 {
+		t.Fatalf("%v %v, calls %v", out, failed, f.calls)
+	}
+}

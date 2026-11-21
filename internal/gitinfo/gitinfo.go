@@ -5,13 +5,18 @@ import (
 	"compress/zlib"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 )
 
-// ErrNotRepo means start is not inside a git worktree.
+// ErrNotRepo means start is not inside a git worktree: no .git lies above it.
 var ErrNotRepo = errors.New("not a git worktree")
+
+// ErrUnreadable means a .git lies above start but cannot be stat'ed, read or parsed. Such a
+// directory is in a checkout Iris cannot place, not outside git (ADR 034).
+var ErrUnreadable = errors.New("a .git above this directory cannot be read")
 
 // Repo is the identity a hook can learn without executing git.
 type Repo struct {
@@ -37,9 +42,16 @@ func Find(start string) (Repo, error) {
 	for {
 		gitPath := filepath.Join(dir, ".git")
 		info, statErr := os.Stat(gitPath)
-		if statErr == nil {
+		// A .git that is there but cannot be followed, as a dangling link or one this user may
+		// not stat, is not the absence of one: reading it as a file fails as unreadable.
+		present := statErr == nil || !errors.Is(statErr, fs.ErrNotExist)
+		if !present {
+			_, err = os.Lstat(gitPath)
+			present = err == nil
+		}
+		if present {
 			gitDir := gitPath
-			if !info.IsDir() {
+			if statErr != nil || !info.IsDir() {
 				gitDir, err = readGitdirFile(gitPath)
 				if err != nil {
 					return Repo{}, err
@@ -82,16 +94,16 @@ func readRepo(worktree, gitDir string) (Repo, error) {
 func readGitdirFile(path string) (string, error) {
 	b, err := os.ReadFile(path)
 	if err != nil {
-		return "", ErrNotRepo
+		return "", ErrUnreadable
 	}
 	line := strings.TrimSpace(string(b))
 	const prefix = "gitdir:"
 	if !strings.HasPrefix(line, prefix) {
-		return "", ErrNotRepo
+		return "", ErrUnreadable
 	}
 	gitDir := strings.TrimSpace(line[len(prefix):])
 	if gitDir == "" {
-		return "", ErrNotRepo
+		return "", ErrUnreadable
 	}
 	if !filepath.IsAbs(gitDir) {
 		gitDir = filepath.Join(filepath.Dir(path), gitDir)

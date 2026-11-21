@@ -21,6 +21,15 @@ import (
 const DefaultDeadline = 1500 * time.Millisecond
 
 // Hub is the subset of the hub API a hook calls.
+// outsideHub registers a session outside git, as hubclient.Client does (ADR 034).
+type outsideHub interface {
+	RegisterOutsideSession(context.Context, hubclient.SessionRequest) (hubclient.SessionResponse, error)
+}
+
+// errOlderHub is a hub without the outside route. It is no failure: the hook allows the event and
+// registers nothing, as a hook did outside git before ADR 034.
+var errOlderHub = errors.New("the hub has no route for sessions outside git")
+
 type Hub interface {
 	RegisterSession(ctx context.Context, req hubclient.SessionRequest) (hubclient.SessionResponse, error)
 	Touch(ctx context.Context, req hubclient.TouchRequest) (hubclient.TouchResponse, error)
@@ -172,10 +181,10 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 	if err != nil && !errors.Is(err, gitinfo.ErrNotRepo) {
 		return state.fail(err, allow)
 	}
-	if err != nil {
-		return r.finish(state, ev, Encode(ev, Decision{Action: ActionAllow}))
-	}
-	if !needsNetwork(ev) {
+	// Outside git the hook registers, renews, tells attention and ends the session on the outside
+	// route, and an edit there makes no request: it takes no claim (ADR 034). repo is then empty.
+	// iris doctor's canary runs in an empty directory so that it reaches no hub, and still does not.
+	if !needsNetwork(ev) || (err != nil && (ev.Kind == KindPreTool || ev.SessionID == CanarySession)) {
 		return r.finish(state, ev, Encode(ev, Decision{Action: ActionAllow}))
 	}
 	if r.Hub == nil {
@@ -188,6 +197,9 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		// What the session was told is read before the hub answers; see attentionNote.
 		rev := r.toldRevision(ev)
 		sess, err := r.register(ctx, ev, repo)
+		if errors.Is(err, errOlderHub) {
+			return r.finish(state, ev, Encode(ev, Decision{Action: ActionAllow}))
+		}
 		if err != nil {
 			return state.fail(err, r.failOpen(state, ev, err, allow))
 		}
@@ -200,7 +212,7 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		}
 		var notes []string
 		// Once per session, not per subagent: the hint is about the repository.
-		if ev.Kind == KindSessionStart && guard.NeedsHint(repo) {
+		if ev.Kind == KindSessionStart && repo.Worktree != "" && guard.NeedsHint(repo) {
 			notes = append(notes, guard.Hint)
 		}
 		// The session context states the unread count and the freed paths, so those counts count
@@ -212,6 +224,9 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		state.at("session")
 		rev := r.toldRevision(ev)
 		sess, err := r.register(ctx, ev, repo)
+		if errors.Is(err, errOlderHub) {
+			return r.finish(state, ev, Encode(ev, Decision{Action: ActionAllow}))
+		}
 		if err != nil {
 			return state.fail(err, r.failOpen(state, ev, err, allow))
 		}
@@ -230,6 +245,9 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 	case KindSessionEnd:
 		state.at("session")
 		sess, err := r.register(ctx, ev, repo)
+		if errors.Is(err, errOlderHub) {
+			return r.finish(state, ev, Encode(ev, Decision{Action: ActionAllow}))
+		}
 		if err != nil {
 			return state.fail(err, allow)
 		}
@@ -274,6 +292,11 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		}
 		if err != nil {
 			return state.fail(err, r.failOpen(state, ev, err, allow))
+		}
+		if sess.OutsideGit {
+			// The session began outside git and stays attached there, even after a git init:
+			// it takes no claim, so nothing is asked of the hub (ADR 034).
+			return r.finish(state, ev, Encode(ev, Decision{Action: ActionAllow}))
 		}
 		state.at("touch")
 		var touch hubclient.TouchResponse
@@ -341,12 +364,25 @@ func (r Runner) register(ctx context.Context, ev Event, repo gitinfo.Repo) (hubc
 	if m != nil {
 		req.Generation = m.Recall(string(ev.Client), ev.SessionID)
 	}
-	sess, err := r.Hub.RegisterSession(ctx, req)
+	send := r.Hub.RegisterSession
+	if repo.Worktree == "" {
+		// A session outside git registers on its own route (ADR 034). A hub without it refuses as
+		// errOlderHub, and the event is allowed with nothing registered, as before.
+		outside, ok := r.Hub.(outsideHub)
+		if !ok {
+			return hubclient.SessionResponse{}, errOlderHub
+		}
+		send = outside.RegisterOutsideSession
+	}
+	sess, err := send(ctx, req)
 	if req.Generation != 0 && ev.Kind != KindSessionEnd && hubclient.IsCode(err, "lost") {
 		m.Forget(string(ev.Client), ev.SessionID)
 		req.RetryGeneration = req.Generation
 		req.Generation = 0
-		sess, err = r.Hub.RegisterSession(ctx, req)
+		sess, err = send(ctx, req)
+	}
+	if hubclient.OlderHub(err) && repo.Worktree == "" {
+		return hubclient.SessionResponse{}, errOlderHub
 	}
 	if err == nil {
 		r.learnScope(sess.Capabilities)

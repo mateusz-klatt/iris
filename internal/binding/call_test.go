@@ -64,7 +64,7 @@ func (h *callHub) answer(path string, req map[string]any) (string, string) {
 			return "", "lost"
 		}
 		return ex, ""
-	case path == "/v1/sessions":
+	case path == "/v1/sessions" || path == "/v1/sessions/outside":
 		h.registered++
 		return "ex_registered", ""
 	}

@@ -21,6 +21,8 @@ type scriptedHub struct {
 	register string   // error code for /v1/sessions, or ""
 	bound    []map[string]any
 	session  *hubclient.SessionRequest
+	routes   []string // the registration routes called, in order
+	older    bool     // answer the outside route as a hub from before ADR 034 does
 }
 
 func (h *scriptedHub) fail(w http.ResponseWriter, code string) {
@@ -43,10 +45,16 @@ func (h *scriptedHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"execution_id": "ex_bound", "generation": 3})
-	case "/v1/sessions":
+	case "/v1/sessions", "/v1/sessions/outside":
+		if h.older && r.URL.Path == "/v1/sessions/outside" {
+			w.WriteHeader(http.StatusNotFound)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"code": "not_found", "message": "unknown API route"}})
+			return
+		}
 		var got hubclient.SessionRequest
 		_ = json.NewDecoder(r.Body).Decode(&got)
 		h.session = &got
+		h.routes = append(h.routes, r.URL.Path)
 		if h.register != "" {
 			h.fail(w, h.register)
 			return

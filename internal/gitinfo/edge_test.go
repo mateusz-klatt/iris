@@ -52,6 +52,8 @@ func TestFindRejectsADeletedWorkingDirectory(t *testing.T) {
 	}
 }
 
+// A .git file that names no git directory is a checkout Iris cannot read, not the absence of one:
+// a session there must not be taken for one outside git (ADR 034).
 func TestGitFileThatIsNotALink(t *testing.T) {
 	for name, body := range map[string]string{
 		"no prefix": "something else\n",
@@ -60,7 +62,7 @@ func TestGitFileThatIsNotALink(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			root := t.TempDir()
 			writeFile(t, filepath.Join(root, ".git"), body)
-			if _, err := Find(root); !errors.Is(err, ErrNotRepo) {
+			if _, err := Find(root); !errors.Is(err, ErrUnreadable) {
 				t.Fatal(err)
 			}
 		})
@@ -69,7 +71,7 @@ func TestGitFileThatIsNotALink(t *testing.T) {
 
 func TestGitFileThatCannotBeRead(t *testing.T) {
 	missing := filepath.Join(t.TempDir(), ".git")
-	if _, err := readGitdirFile(missing); !errors.Is(err, ErrNotRepo) {
+	if _, err := readGitdirFile(missing); !errors.Is(err, ErrUnreadable) {
 		t.Fatal(err)
 	}
 }

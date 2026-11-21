@@ -3,6 +3,7 @@
 package gitinfo
 
 import (
+	"errors"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -38,5 +39,16 @@ func TestAWorktreeHasOneIDThroughEveryPath(t *testing.T) {
 	}
 	if missing := directoryID(filepath.Join(root, "missing")); missing != "" {
 		t.Fatalf("a missing directory has id %q", missing)
+	}
+}
+
+// A .git link whose target is gone is there, so its directory is not outside git (ADR 034).
+func TestADanglingGitLinkCannotBeRead(t *testing.T) {
+	root := t.TempDir()
+	if err := os.Symlink(filepath.Join(root, "gone"), filepath.Join(root, ".git")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := Find(filepath.Join(root)); !errors.Is(err, ErrUnreadable) {
+		t.Fatal(err)
 	}
 }

@@ -31,6 +31,9 @@ type Bound struct {
 	// neither.
 	Worktree     string       `json:"worktree,omitempty"`
 	Capabilities Capabilities `json:"capabilities,omitempty"`
+	// Outside says the Execution belongs to its host's context of sessions outside git, which
+	// takes no claim (ADR 034). An older hub never says so.
+	Outside bool `json:"outside_git,omitempty"`
 }
 
 // Capabilities is what a hub takes beyond version one, as its answers list it. It is kept as one
@@ -81,6 +84,10 @@ type Resolver struct {
 	// pending keeps an unconfirmed handover's original source and destination.
 	// Its /end may have committed even when the response never arrived.
 	pending *handover
+
+	// olderHub is set when this process had to register outside git on the legacy route, and
+	// olderHubSaid once Observe has been told so (ADR 034).
+	olderHub, olderHubSaid bool
 
 	// Observe receives an observation's fixed text for doctor. cmd/iris wires it to the hook
 	// package's bounded writer; nil drops it. It is called outside every lock.
@@ -155,9 +162,20 @@ func (e *LostError) Unwrap() []error { return []error{errLost, e.Cause} }
 // IRIS_EXECUTION, a handle argument, or the hub's answer.
 func (r *Resolver) Resolve(ctx context.Context, handle string) (Bound, error) {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	return r.resolveHeld(ctx, handle)
+	b, err := r.resolveHeld(ctx, handle)
+	say := r.olderHub && !r.olderHubSaid
+	r.olderHubSaid = r.olderHubSaid || say
+	r.mu.Unlock()
+	if say {
+		r.observe(ObservedOlderHub)
+	}
+	return b, err
 }
+
+// ObservedOlderHub is the observation, for doctor, of a session outside git that registered on
+// the legacy route because its hub has no outside route: the hub makes a project of its folder
+// until it is upgraded (ADR 034). It is fixed text and says nothing of which folder.
+const ObservedOlderHub = "registered outside git on the legacy route: the hub is older than ADR 034"
 
 // resolveHeld is Resolve with mu held.
 func (r *Resolver) resolveHeld(ctx context.Context, handle string) (Bound, error) {
@@ -185,7 +203,7 @@ func (r *Resolver) refresh(ctx context.Context) (Bound, error) {
 	b := r.bound
 	// A bind answer names the worktree and capabilities when its hub has them. One rolled back
 	// since names neither, and the binding must not keep offering it a route it refuses (ADR 033).
-	b.Worktree, b.Capabilities = "", ""
+	b.Worktree, b.Capabilities, b.Outside = "", "", false
 	if err := r.Hub.Do(ctx, "POST", "/v1/bind", map[string]any{"execution": b.ExecutionID, "client": r.Client, "host": r.Host}, &b); err != nil {
 		return Bound{}, err
 	}
@@ -233,19 +251,31 @@ func (r *Resolver) orRegister(ctx context.Context, handle string, b Bound, err e
 // appears (see adopt).
 func (r *Resolver) register(ctx context.Context, session string, a proc.Ancestor, single bool, rung int) (Bound, error) {
 	req := hubclient.SessionRequest{Client: r.Client, SessionID: session, Host: r.Host, CWD: r.CWD, Source: "mcp", ClientPID: a.PID, ClientPIDStartMS: a.StartMS, SingleSession: single}
-	if repo, err := gitinfo.Find(r.CWD); err == nil {
+	repo, err := gitinfo.Find(r.CWD)
+	var response hubclient.SessionResponse
+	switch {
+	case err == nil:
 		req.CommonDir = repo.CommonDir
 		req.Worktree = repo.Worktree
 		req.WorktreeID = repo.WorktreeID
 		req.RemoteURL = repo.RemoteURL
 		req.RootCommit = repo.RootCommit
 		req.Branch = repo.Branch
+		response, err = r.Hub.RegisterSession(ctx, req)
+	case errors.Is(err, gitinfo.ErrNotRepo):
+		// Only a directory with no .git above it is outside git; a checkout Iris cannot read
+		// fails the registration instead (ADR 034). A hub without the outside route takes the
+		// same request on the session route, as before, and makes a project of the folder.
+		response, err = r.Hub.RegisterOutsideSession(ctx, req)
+		if hubclient.OlderHub(err) {
+			r.olderHub = true
+			response, err = r.Hub.RegisterSession(ctx, req)
+		}
 	}
-	response, err := r.Hub.RegisterSession(ctx, req)
 	if err != nil {
 		return Bound{}, err
 	}
-	b := Bound{ExecutionID: response.ExecutionID, Generation: response.Generation, RepositoryID: response.RepositoryID, Agent: response.Agent, SessionID: session, Rung: rung, Worktree: response.Worktree, Capabilities: Capabilities(strings.Join(response.Capabilities, "\n"))}
+	b := Bound{ExecutionID: response.ExecutionID, Generation: response.Generation, RepositoryID: response.RepositoryID, Agent: response.Agent, SessionID: session, Rung: rung, Worktree: response.Worktree, Capabilities: Capabilities(strings.Join(response.Capabilities, "\n")), Outside: response.OutsideGit}
 	r.bound, r.own = b, true
 	return b, nil
 }
@@ -403,6 +433,8 @@ func (r *Resolver) Maintain(ctx context.Context, source string, interval time.Du
 			// Decode over the previous binding: older hubs return only lease_ms on an
 			// ordinary heartbeat, and omit all binding fields, including its local rung.
 			fresh := b
+			// A heartbeat answer says outside git when its hub knows contexts (ADR 034).
+			fresh.Outside = false
 			err := r.Hub.Do(call, "POST", "/v1/executions/"+b.ExecutionID+"/heartbeat", map[string]any{"generation": b.Generation, "source": source}, &fresh)
 			cancel()
 			if err == nil {
