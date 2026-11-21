@@ -795,9 +795,10 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
                   {mailScope === "all" ? <label>{t("operator.agent")}
                     <select value={agent} onChange={(event) => { setAgent(event.target.value); clearThread(); }}>
                       <option value="">{t("operator.all")}</option>
-                      {sessions.map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}
+                      {sessions.filter((item) => showInactive || item.state === "active" || item.name === agent).map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}
                     </select>
                   </label> : null}
+                  {mailScope === "all" ? <label><input type="checkbox" checked={showInactive} onChange={(event) => setShowInactive(event.target.checked)} />{t("console.showInactive")}</label> : null}
                   <button type="submit" className="primary-button">{t("search.submit")}</button>
                 </form>
                 <div className="mailbox-layout" data-reading={selectedId !== null ? "yes" : "no"}>

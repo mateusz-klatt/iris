@@ -10,14 +10,18 @@ export function RecipientPicker({ agents, selected, onChange, allowHuman = true 
 }) {
   const { t } = useTranslation();
   const [query, setQuery] = useState("");
+  const [inactive, setInactive] = useState(false);
   const search = useId();
-  const choices = [...(allowHuman ? [{ id: "human", name: "human", client: "human", host: "" }] : []), ...agents];
+  // Inactive agents are listed on request; an agent already chosen stays listed either way.
+  const listed = agents.filter((agent) => inactive || agent.state === "active" || selected.includes(agent.id));
+  const choices = [...(allowHuman ? [{ id: "human", name: "human", client: "human", host: "" }] : []), ...listed];
   const matches = choices.filter((agent) => `${agent.name} ${agent.client} ${agent.host}`.toLowerCase().includes(query.toLowerCase().trim()));
   const missing = selected.filter((id) => !choices.some((agent) => agent.id === id));
   return <fieldset className="recipient-picker">
     <legend>{t("operator.recipients")}</legend>
     <label htmlFor={search}>{t("compose.recipientSearch")}</label>
     <input id={search} type="search" value={query} onChange={(event) => setQuery(event.target.value)} />
+    <label><input type="checkbox" checked={inactive} onChange={(event) => setInactive(event.target.checked)} />{t("console.showInactive")}</label>
     <div className="recipient-options">
       {matches.map((agent) => <label key={agent.id} className="recipient-option">
         <input type="checkbox" checked={selected.includes(agent.id)} onChange={(event) => onChange(event.target.checked ? [...selected, agent.id] : selected.filter((id) => id !== agent.id))} />
