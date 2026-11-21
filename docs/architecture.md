@@ -94,7 +94,12 @@ Hard rules for `iris hook`, because failure semantics differ between clients:
    (ADR 034). A hub without that route gets nothing, as before. `iris doctor`'s canary, which runs
    in an empty directory, reaches no hub.
 6. Every fallback to allow caused by a failure is recorded in `hook-failures.log`, without payload
-   content, and `iris doctor` reports it. A failure graded `silent` is described as a fail-open in the
+   content, and `iris doctor` reports it. The recorder writes only beside an existing configuration
+   directory and never creates it, so on a fresh host with no Iris configuration directory yet,
+   hook failures go unlogged until `iris setup`, `iris serve` or token placement creates that
+   directory. When `client.json` is unreadable or stalls past the recorder's brief lookup budget,
+   an entry falls back to `IRIS_TOKEN_FILE` or the default token directory rather than a relocated
+   `token_file` inside `client.json`. A failure graded `silent` is described as a fail-open in the
    last 24 hours, warning that edits may have gone unclaimed. This history cannot establish current
    client downtime or identify which edits went unclaimed. A silent fail-open once hid a real bypass:
    Copilot sends no tool call id, the hub refused the request, and the edit went through a live claim.
