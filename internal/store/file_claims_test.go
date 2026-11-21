@@ -432,6 +432,7 @@ func TestWorktreeSpellingsOfOneDirectoryAreTheSame(t *testing.T) {
 		{"/src/app", "/src/app/", true},
 		{"/src/App", "/src/app", false},
 		{`C:\Repo`, `D:\Repo`, false},
+		{`/src/a\b`, "/src/a/b", false},
 	} {
 		if got := sameWorktree(c.a, c.b); got != c.same {
 			t.Errorf("sameWorktree(%q, %q) = %v", c.a, c.b, got)
@@ -483,12 +484,12 @@ func TestAGroupedReplaySurvivesAMergeOfItsRepository(t *testing.T) {
 	}
 }
 
-// Migration 27 drops every full shell baseline once: one from before ADR 033 has no recorded
-// checkout, so it may have been taken in another checkout than its Execution's.
-func TestMigration27DropsUnprovenFullBaselines(t *testing.T) {
+// No full shell baseline crosses a hub start: one an older hub wrote names no checkout, so it may
+// have been taken in another checkout than its Execution's (ADR 033).
+func TestAFullBaselineDoesNotCrossAHubStart(t *testing.T) {
 	s, clock, file := testStore(t)
 	a, _ := session(t, s, 1)
-	if _, err := s.db.Exec(`INSERT INTO ShellSnapshot VALUES(?,'{"src/x.ts":" M"}'); PRAGMA user_version=26;`, a.ExecutionID); err != nil {
+	if _, err := s.db.Exec(`INSERT INTO ShellSnapshot VALUES(?,'{"src/x.ts":" M"}')`, a.ExecutionID); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Close(); err != nil {
@@ -499,8 +500,38 @@ func TestMigration27DropsUnprovenFullBaselines(t *testing.T) {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	var version, kept int
-	if err = s.db.QueryRow("SELECT (SELECT user_version FROM pragma_user_version),(SELECT COUNT(*) FROM ShellSnapshot)").Scan(&version, &kept); err != nil || version != latestVersion || kept != 0 {
-		t.Fatalf("version %d, %d baselines kept, %v", version, kept, err)
+	var kept int
+	if err = s.db.QueryRow("SELECT COUNT(*) FROM ShellSnapshot").Scan(&kept); err != nil || kept != 0 {
+		t.Fatalf("%d baselines kept, %v", kept, err)
+	}
+}
+
+// The session's own worktree teaches its repository what a registration from elsewhere could not:
+// a remote it learned since, here, so a later clone with that remote joins it.
+func TestTheSessionsOwnWorktreeTeachesItsRepository(t *testing.T) {
+	s, _, _ := testStore(t)
+	out := call(t, s, "sessions", Request{Client: "codex", Host: "host", SessionID: "local", Cwd: "/src/app", Worktree: "/src/app", RootCommit: "app-root", Source: "hook"})
+	own := Request{ExecutionID: out["execution_id"].(string), Generation: out["generation"].(int64)}
+	group := ClaimGroup{Worktree: "/src/app", RemoteURL: "https://github.com/example/app.git", RootCommit: "app-root", Paths: []string{"main.go"}}
+	call(t, s, "touch_files", filesTouch(own, "learn", group))
+	if _, repo := register(t, s, "clone", "/elsewhere/app", "https://github.com/example/app.git", "app-root"); repo != out["repository_id"] {
+		t.Fatalf("the clone joined %s, want %s", repo, out["repository_id"])
+	}
+}
+
+// A grouped replay survives an owner's merge of the file's repository followed by a restart: the
+// grant's fence row names the repository the merge moved it to, and the recovered claim there,
+// under its new fence, is the same grant.
+func TestAGroupedReplaySurvivesAMergeAndARestart(t *testing.T) {
+	s, clock, file := testStore(t)
+	parent, _ := register(t, s, "parent", "/src/snapper", superRemote, "snapper-root")
+	request := filesTouch(parent, "merged-restarted", submodule("src/x.ts"))
+	from := grantedIn(call(t, s, "touch_files", request))["src/x.ts"]
+	_, into := register(t, s, "frontend", "/work/frontend", "https://github.com/example/frontend-copy.git", "")
+	call(t, s, "merge", mergeRequest(from, into, false))
+	reopened := restart(t, s, file, clock)
+	call(t, reopened, "sessions", Request{Client: "codex", Host: "host", SessionID: "parent", Cwd: "/src/snapper", Worktree: "/src/snapper", Generation: parent.Generation})
+	if replay := call(t, reopened, "touch_files", request); replay["action"] != "allow" {
+		t.Fatalf("replay after the merge and the restart: %v", replay)
 	}
 }

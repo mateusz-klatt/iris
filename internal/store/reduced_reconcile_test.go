@@ -148,9 +148,10 @@ func TestReportedPathsCompareAsInFullScope(t *testing.T) {
 	}
 }
 
-// A start clears every reduced baseline and keeps the full ones: whichever hub ran in between,
-// the first reduced snapshot after a start only sets a baseline (ADR 018).
-func TestReducedBaselinesDoNotCrossAStart(t *testing.T) {
+// A start clears every baseline: whichever hub ran in between, the first snapshot after a start
+// only sets a baseline. Reduced ones never crossed a start (ADR 018), and full ones no longer do,
+// as an older hub's name no checkout (ADR 033).
+func TestBaselinesDoNotCrossAStart(t *testing.T) {
 	s, clock, file := testStore(t)
 	a, _ := session(t, s, 1)
 	b, _ := session(t, s, 2)
@@ -158,7 +159,7 @@ func TestReducedBaselinesDoNotCrossAStart(t *testing.T) {
 	call(t, s, "reconcile_scoped", reduced(b, "before", map[string]string{"y": " M"}, "lib"))
 	reopened := restart(t, s, file, clock)
 	var fulls, reduceds int
-	if err := reopened.db.QueryRow("SELECT (SELECT COUNT(*) FROM ShellSnapshot),(SELECT COUNT(*) FROM ReducedShellSnapshot)").Scan(&fulls, &reduceds); err != nil || fulls != 1 || reduceds != 0 {
+	if err := reopened.db.QueryRow("SELECT (SELECT COUNT(*) FROM ShellSnapshot),(SELECT COUNT(*) FROM ReducedShellSnapshot)").Scan(&fulls, &reduceds); err != nil || fulls != 0 || reduceds != 0 {
 		t.Fatalf("after a start: %d full, %d reduced, %v", fulls, reduceds, err)
 	}
 }
@@ -182,7 +183,7 @@ func restart(t *testing.T, s *Store, file string, clock *fakeClock) *Store {
 // reads and writes ShellSnapshot only. After a reduced write its next reconcile finds no
 // baseline, so it never reads a reduced map as full, and its deletes of snapshots and Executions
 // still succeed, the cascade taking the reduced rows. The next new start clears what it left in
-// the reduced table, and its full snapshot is the baseline.
+// both tables, so neither its full snapshot nor a reduced one is anyone's baseline (ADR 033).
 func TestAnOlderHubNeverReadsAReducedMap(t *testing.T) {
 	s, clock, file := testStore(t)
 	shell, _ := session(t, s, 1)
@@ -217,9 +218,9 @@ func TestAnOlderHubNeverReadsAReducedMap(t *testing.T) {
 		t.Fatalf("the cascade left %d reduced rows: %v", left, err)
 	}
 	reopened := restart(t, s, file, clock)
-	var reduceds int
-	if err := reopened.db.QueryRow("SELECT (SELECT status_json FROM ShellSnapshot WHERE execution_id=?),(SELECT COUNT(*) FROM ReducedShellSnapshot)", shell.ExecutionID).Scan(&raw, &reduceds); err != nil || raw != `{"top":" M"}` || reduceds != 0 {
-		t.Fatalf("after the new start: %q, %d reduced, %v", raw, reduceds, err)
+	var fulls, reduceds int
+	if err := reopened.db.QueryRow("SELECT (SELECT COUNT(*) FROM ShellSnapshot),(SELECT COUNT(*) FROM ReducedShellSnapshot)").Scan(&fulls, &reduceds); err != nil || fulls != 0 || reduceds != 0 {
+		t.Fatalf("after the new start: %d full, %d reduced, %v", fulls, reduceds, err)
 	}
 }
 

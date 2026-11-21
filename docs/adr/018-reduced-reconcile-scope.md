@@ -171,6 +171,8 @@ Each change below was made by the pull request that implemented it.
   map as full, and its first reconcile finds no baseline.
 - The cost: the first reduced snapshot after any hub start only sets a baseline and attributes
   nothing.
+- Since ADR 033, full baselines do not cross a hub start either: one an older hub wrote names no
+  checkout, so it may be another checkout's.
 
 **The trip, from four facts** (the hook's side; amends decision 4).
 - A trip needs all four: a full status whose git started; the reconcile's own deadline passed

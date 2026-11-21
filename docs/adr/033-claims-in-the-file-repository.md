@@ -71,8 +71,9 @@ project, "whether one works in the snapper-frontend checkout or in the submodule
    repository names that repository in the message, because its path is relative to a checkout the
    session may know as a submodule directory. The rename ends of a call are plain paths of their
    groups. A replay is allowed only while each grant is still held. It may be held as the same
-   claim, by its fence, which an owner's merge keeps. It may also be held as a claim on the same
-   path in the same repository, which a recovery keeps while it renumbers fences. A claim of the
+   claim, which its fence finds in whatever repository an owner's merge moved it to. It may also be
+   held as a live claim on the same path in that repository, which a recovery keeps while it
+   renumbers fences. A claim of the
    same name in another repository never counts, for a plain touch's replay either. The grouped
    route keeps its own retry namespace, so a plain touch's retry hash is unchanged.
 3. **The hub places a group without learning from the session.** It resolves the group's checkout
@@ -108,8 +109,10 @@ project, "whether one works in the snapper-frontend checkout or in the submodule
    shared-worktree check runs first, so it still clears the baselines of a worktree another live
    Execution shares. An older hook's Execution-only status names no checkout and is reconciled as
    before. No snapshot table changes, because an older hub writes those tables by position.
-   Migration 027 drops the full baselines once: one written before this change records no checkout,
-   so it may be another checkout's. Each session's next shell command sets a new baseline. Claims
+   No full baseline crosses a hub start any more, as no reduced one did (ADR 018): one an older
+   hub wrote records no checkout, so it may be another checkout's, and that holds after a
+   rollback and forward again too. Each session's first shell command after a start sets a new
+   baseline and attributes nothing. Claims
    made from another checkout by edit tools stay until release, expiry or the end of the Execution.
 6. **Explicit claims will follow the same rule.** The MCP `claim` tool takes a path relative to the
    session's repository. A path below a checked-out submodule or nested checkout, found on disk

@@ -173,7 +173,9 @@ func (t *transaction) fileRepository(e execution, g ClaimGroup) (string, error) 
 		if root != "" && r.RootCommit != "" && root != r.RootCommit {
 			return "", fail("conflict", "this active Execution belongs to another repository history; end the session or ask the owner to repair the split with iris admin merge")
 		}
-		return e.Repo, nil
+		// It is the Execution's own worktree, so its repository learns from it as a registration
+		// from there would (ADR 032), without redirecting any checkout continuity.
+		return e.Repo, t.rememberRepository(r, e.Repo)
 	}
 	repo, ambiguous, err := t.resolveRepository(r)
 	if err != nil || (repo == "" && ambiguous) {
@@ -268,10 +270,10 @@ func (t *transaction) grantFiles(e execution, places []*filePlace) ([]map[string
 }
 
 // stillHeld refuses the replay of an allowed grouped touch whose claims have since expired or
-// been released: a replay cannot grant permission again. A grant still holds when e has a live
-// claim of the current epoch that is either the very claim, by its fence, which an owner's merge
-// of the repository keeps, or one on the same path in the same repository, which is what a
-// recovery after a restart or a restore keeps while it renumbers fences (D10). A claim of the same
+// been released: a replay cannot grant permission again. A grant is looked up by its fence first:
+// that claim row stays, revoked or not, and an owner's merge moves it to the repository the grant
+// now lies in. A grant still holds when e has a live claim of the current epoch on the same path in
+// that repository, which a recovery keeps while it renumbers fences (D10). A claim of the same
 // name in another repository is another file and never counts.
 func (t *transaction) stillHeld(e execution, cached map[string]any) error {
 	if cached["action"] != "allow" {
@@ -279,13 +281,17 @@ func (t *transaction) stillHeld(e execution, cached map[string]any) error {
 	}
 	for _, g := range cached["granted"].([]any) {
 		grant := g.(map[string]any)
+		repo := grant["repository_id"].(string)
+		if err := t.row("SELECT repository_id FROM Claim WHERE fence=? AND execution_id=?", grant["fence"], e.ID).Scan(&repo); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return err
+		}
 		var policy string
-		if err := t.row("SELECT case_policy FROM Repository WHERE id=?", grant["repository_id"]).Scan(&policy); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		if err := t.row("SELECT case_policy FROM Repository WHERE id=?", repo).Scan(&policy); err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
 		k := pathKey(grant["path"].(string), policy)
 		var n int
-		if err := t.row("SELECT COUNT(*) FROM Claim WHERE execution_id=? AND revoked_ms IS NULL AND boot_epoch=? AND (fence=? OR (repository_id=? AND (path_key=? OR (kind='prefix' AND (path_key='' OR substr(?,1,length(path_key)+1)=path_key||'/')))))", e.ID, t.s.epoch, grant["fence"], grant["repository_id"], k, k).Scan(&n); err != nil {
+		if err := t.row("SELECT COUNT(*) FROM Claim WHERE execution_id=? AND repository_id=? AND revoked_ms IS NULL AND boot_epoch=? AND (path_key=? OR (kind='prefix' AND (path_key='' OR substr(?,1,length(path_key)+1)=path_key||'/')))", e.ID, repo, t.s.epoch, k, k).Scan(&n); err != nil {
 			return err
 		}
 		if n == 0 {
@@ -316,14 +322,15 @@ func stricter(a, b string) string {
 	return a
 }
 
-// sameWorktree is whether two worktree paths spell one directory: separators and a trailing slash
-// aside and, with a drive letter, without regard to case, as Windows reads them. A POSIX path stays
-// case-sensitive.
+// sameWorktree is whether two worktree paths spell one directory. A path with a drive letter is a
+// Windows one: its separators, a trailing separator and its case are folded, as Windows reads it.
+// A POSIX path loses only a trailing slash, and keeps its case and any backslash, which there is a
+// character of a name.
 func sameWorktree(a, b string) bool {
-	a = strings.TrimRight(strings.ReplaceAll(a, "\\", "/"), "/")
-	b = strings.TrimRight(strings.ReplaceAll(b, "\\", "/"), "/")
-	if len(a) >= 2 && a[1] == ':' {
-		return strings.EqualFold(a, b)
+	windows := func(p string) bool { return len(p) >= 2 && p[1] == ':' }
+	if windows(a) || windows(b) {
+		fold := func(p string) string { return strings.TrimRight(strings.ReplaceAll(p, "\\", "/"), "/") }
+		return strings.EqualFold(fold(a), fold(b))
 	}
-	return a == b
+	return strings.TrimRight(a, "/") == strings.TrimRight(b, "/")
 }
