@@ -235,17 +235,26 @@ func (t *transaction) overview() (map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
+		kind, host := "repository", ""
 		for rows.Next() {
 			var a string
 			rows.Scan(&a)
 			aliases = append(aliases, a)
+			if rest, ok := strings.CutPrefix(a, outsidePrefix); ok {
+				kind, host = "outside", rest
+			}
 		}
 		err = rows.Err()
 		_ = rows.Close()
 		if err != nil {
 			return nil, err
 		}
-		repository := map[string]any{"id": id, "name": name, "aliases": aliases}
+		// The console lists a host's context of sessions outside git apart from the projects
+		// (ADR 034, decision 8).
+		repository := map[string]any{"id": id, "name": name, "aliases": aliases, "kind": kind}
+		if host != "" {
+			repository["host"] = host
+		}
 		// This describes the current console controls; each mutation still checks
 		// authority in its own transaction. Legacy link sessions have no account.
 		if t.console != nil {

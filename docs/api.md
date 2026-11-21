@@ -71,6 +71,15 @@ first checks after `high_water` has reached its remembered cursor cannot tell. R
 touch and shell reconcile requests, and to events reads with `attention=1`, carry the same block
 (ADR 017).
 
+`POST /v1/sessions/outside` registers a session that runs outside any git checkout, with the same
+fields less the checkout's: a request that names a `worktree`, `common_dir`, `worktree_id`,
+`remote_url` or `root_commit` is refused with `bad_request`. A request on `POST /v1/sessions` that
+names none of them is taken the same way, as older clients send it. Such a session belongs to its
+host's context, one record for every session outside git on that host, and its answer, like every
+bind and heartbeat answer of its Execution, carries `"outside_git":true`. An active Execution keeps
+its record whichever route reattaches it. A hub from before this route answers `not_found` with
+"unknown API route" (ADR 034).
+
 For recovery after a hub restart, reattach with the same `session_id` and the last returned
 `generation`. A recovering session without that generation returns `lost`; an expired
 generation cannot be reattached. `generation:0` starts or resumes a non-recovering session.
@@ -730,13 +739,14 @@ to literal loopback.
 
 `GET /v1/ui/overview` returns everything the first screen needs:
 
-Each visible repository also has `console_access`,
+Each repository names its `kind`: `repository`, or `outside` for a host's context of sessions
+outside git, which also names its `host` (ADR 034). Each visible repository also has `console_access`,
 either `ro` or `rw` (`rw` for an operator).
 It is presentation metadata, not authorization supplied by the browser. Member
 queries remain scoped by current grants in the store transaction.
 
 ```json
-{"repositories":[{"id":"rp_...","name":"iris","aliases":["..."]}],
+{"repositories":[{"id":"rp_...","name":"iris","aliases":["..."],"kind":"repository"}],
  "agents":[{"id":"ag_...","name":"...","client":"claude","host":"...","repository_id":"rp_...",
             "worktree":"...","branch":"main","state":"active","last_seen":"...","unread":0}],
  "claims":[{"fence":1,"repository_id":"rp_...","path":"...","kind":"exact","holder":"...",
@@ -931,6 +941,10 @@ or hyphens, starting with a letter or digit. An active duplicate returns `confli
 A revoked name can be added again with a fresh secret. The legacy file token is
 rotated through its file rather than this API.
 
+An Execution in a host's context of sessions outside git takes no claim: `POST /v1/claims/touch`,
+`/v1/claims/touch/files`, `/v1/claims`, `/v1/claims/files` and every shell reconciliation answer
+`outside_git` (HTTP 400), before any replay, wait or conflict. Release and end stay open (ADR 034).
+
 ## Removing aliases
 
 `POST /v1/admin/unalias` takes `{"repository_id":"...","aliases":["..."]}` and
@@ -938,7 +952,21 @@ rotated through its file rather than this API.
 repository and no other's mapping of the same alias. The response names `removed`, the aliases
 the repository held, and `absent`, the ones it did not. Only the owner token may call it.
 `iris admin unalias --repository <id> [--dry-run] (<alias>... | -)` prints the response; a lone
-`-` reads the aliases from standard input, one a line (ADR 032).
+`-` reads the aliases from standard input, one a line (ADR 032). The `outside:<host>` marker of a
+host's context is refused with `conflict` (ADR 034).
+
+## Moving folder projects
+
+`POST /v1/admin/merge/outside` takes `{"from_repository_id":"...","into_repository_id":"..."}` and
+`"dry_run":true`, and moves a folder project, the record a hub from before ADR 034 made for a
+session outside git, into its host's context. It answers as `POST /v1/admin/merge` does, with
+`"outside":true` and `dropped`: the source's `aliases`, `waiters` and `shell_snapshots`, which it
+deletes instead of moving. It refuses with `conflict` a source that has a root, an alias other
+than its host's `local:` and root-less `checkout:` aliases, a session of another host, an active
+or recovering session, or a live claim in it, and with `bad_request` a pair that is not a folder
+project and a context. `POST /v1/admin/merge` refuses any pair with a context. Only the owner
+token may call it. `iris admin merge --outside --from <id> --into <id> [--dry-run]` prints the
+response.
 
 ## Removing records
 

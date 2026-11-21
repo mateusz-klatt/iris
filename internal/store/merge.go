@@ -15,7 +15,13 @@ func (t *transaction) mergeRepository(repo string) (mergeRepository, error) {
 
 // mergeRepositories repairs only an operator-selected pair. Discovery never
 // invokes it, and a dry run uses the same checks and snapshot without any writes.
-func (t *transaction) mergeRepositories(r Request) (map[string]any, error) {
+func (t *transaction) mergeRepositories(r Request) (map[string]any, error) { return t.merge(r, false) }
+
+// mergeOutside moves an owner-selected folder project into its host's context of sessions outside
+// git, on a route an older hub does not have (ADR 034, decision 9).
+func (t *transaction) mergeOutside(r Request) (map[string]any, error) { return t.merge(r, true) }
+
+func (t *transaction) merge(r Request, outside bool) (map[string]any, error) {
 	from, into := r.FromRepository, r.IntoRepository
 	if from == "" || into == "" || from == into {
 		return nil, fail("bad_request", "from_repository_id and into_repository_id must name distinct repositories")
@@ -27,6 +33,20 @@ func (t *transaction) mergeRepositories(r Request) (map[string]any, error) {
 	destination, err := t.mergeRepository(into)
 	if err != nil {
 		return nil, err
+	}
+	fromHost, err := t.outsideHost(from)
+	if err != nil {
+		return nil, err
+	}
+	intoHost, err := t.outsideHost(into)
+	if err != nil {
+		return nil, err
+	}
+	if !outside && (fromHost != "" || intoHost != "") {
+		return nil, fail("conflict", "a context of sessions outside git takes part only in iris admin merge --outside, which moves a folder project into it")
+	}
+	if outside && (intoHost == "" || fromHost != "") {
+		return nil, fail("bad_request", "iris admin merge --outside moves a folder project into a host's context of sessions outside git")
 	}
 	// Repair cannot infer whether combining two histories is appropriate for a
 	// member. Both grant modes must be reviewed and removed before any move.
@@ -46,6 +66,11 @@ func (t *transaction) mergeRepositories(r Request) (map[string]any, error) {
 	}
 	if err = t.mergeClaimCheck(from, into, destination.policy); err != nil {
 		return nil, err
+	}
+	if outside {
+		if err = t.folderProject(from, intoHost, source.root); err != nil {
+			return nil, err
+		}
 	}
 	agents, changes, err := t.mergeAgentSlots(from, into)
 	if err != nil {
@@ -86,13 +111,37 @@ func (t *transaction) mergeRepositories(r Request) (map[string]any, error) {
 	if contact.Valid {
 		contactID = contact.String
 	}
+	dropped := map[string]any{}
+	if outside {
+		if dropped, err = t.folderLeftovers(from); err != nil {
+			return nil, err
+		}
+		dropped["aliases"] = aliases
+		coalesced = 0
+	}
 	out := map[string]any{"from_repository_id": from, "into_repository_id": into, "dry_run": r.DryRun,
 		"counts": counts, "aliases": aliases, "coalesced_aliases": coalesced, "slot_changes": changes,
 		"contact_agent_id": contactID, "removed_repositories": 1, "created_events": 1,
 		"from_repository": map[string]any{"id": from, "name": source.name, "root_commit": source.root, "case_policy": source.policy, "conflict_action": source.action},
 		"into_repository": map[string]any{"id": into, "name": destination.name, "root_commit": destination.root, "case_policy": destination.policy, "conflict_action": destination.action}}
+	if outside {
+		out["outside"], out["dropped"] = true, dropped
+	}
 	if r.DryRun {
 		return out, nil
+	}
+	if outside {
+		// A context holds no coordination state, so the folder's waits and shell baselines go
+		// rather than move (ADR 034).
+		for _, statement := range []string{
+			"DELETE FROM Waiter WHERE repository_id=?1 OR execution_id IN (SELECT id FROM Execution WHERE repository_id=?1)",
+			"DELETE FROM ShellSnapshot WHERE execution_id IN (SELECT id FROM Execution WHERE repository_id=?1)",
+			"DELETE FROM ReducedShellSnapshot WHERE execution_id IN (SELECT id FROM Execution WHERE repository_id=?1)",
+		} {
+			if _, err = t.exec(statement, from); err != nil {
+				return nil, err
+			}
+		}
 	}
 	for _, a := range agents {
 		if _, err = t.exec("UPDATE Agent SET repository_id=?,slot=? WHERE id=?", into, a.slot, a.id); err != nil {
@@ -104,7 +153,8 @@ func (t *transaction) mergeRepositories(r Request) (map[string]any, error) {
 			return nil, err
 		}
 	}
-	if _, err = t.exec("INSERT OR IGNORE INTO RepositoryAlias(alias,repository_id) SELECT alias,? FROM RepositoryAlias WHERE repository_id=?", into, from); err != nil {
+	// A context learns no folder's alias (ADR 034).
+	if _, err = t.exec("INSERT OR IGNORE INTO RepositoryAlias(alias,repository_id) SELECT alias,? FROM RepositoryAlias WHERE repository_id=? AND NOT ?", into, from, outside); err != nil {
 		return nil, err
 	}
 	if _, err = t.exec("DELETE FROM RepositoryAlias WHERE repository_id=?", from); err != nil {

@@ -698,6 +698,8 @@ of its file: the innermost checkout that contains it, which for a submodule's fi
 submodule's, wherever the session was started (ADR 033). Branch and worktree are
 context, not an exemption: two worktrees editing one file will meet at merge time, which is
 exactly the collision Iris exists to prevent. A narrower policy can be added per repository.
+A session outside any git checkout takes no claim at all: it belongs to its host's context of
+sessions outside git, which is for mail only (ADR 034).
 
 A claim is `exact` or `prefix`, on repository-relative POSIX paths, with overlap at component
 boundaries, so that `src` does not cover `src2`. Globs are not supported, and paths that do not
@@ -761,7 +763,10 @@ cannot discover an unknown rewrite, join hosts or repair existing splits.
 such as SSH aliases, `insteadOf` rewrites and relative remotes, stay scoped to that host and
 path. A match on root commit alone, which is what forks look like, and unresolved
 contradictions are only suggestions for a human. Without a remote the identity is
-local to the path. Repeated registration learns aliases but preserves its active
+local to the path. A session outside any git checkout has no repository identity: it belongs to its
+host's context, a record marked `outside:<host>` that learns no alias and that git resolution never
+finds, and an active Execution keeps its record across the two kinds (ADR 034). Repeated
+registration learns aliases but preserves its active
 Execution, mailbox and claims. A changed known root requires operator repair.
 
 `iris admin unalias --repository <id> [--dry-run]` removes exact aliases a repository learned from
@@ -770,7 +775,9 @@ split, using the owner token and one transaction. It preserves mail, history,
 Execution identities and all alias spellings. Mailboxes stay distinct and retain
 their names; colliding mailbox slots receive deterministic free slots. Live
 overlapping claims between unrelated Executions, incompatible repository policies
-and distinct nonempty contacts refuse the merge. The destination's identity wins;
+and distinct nonempty contacts refuse the merge, and so does a host's context of sessions outside
+git: `iris admin merge --outside` moves a quiet folder project, as hubs before ADR 034 made for such
+sessions, into its host's context and drops the folder's aliases. The destination's identity wins;
 a source-only contact transfers. Dry run reports the move without expiring leases
 or changing any record. It is a snapshot, so applying checks again.
 

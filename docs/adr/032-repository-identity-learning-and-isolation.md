@@ -76,5 +76,6 @@ source-to-destination map is reviewed before it is applied.
 - Rule 1 does not change which Execution a hook's paths are attributed to. A command whose
   relative paths belong to another checkout was still reconciled against the Execution's
   repository; ADR 033 decision 5 ends that.
-- A non-git directory, or one re-initialised as a new repository each time, has a new root each
-  time, and different roots are different identities (ADR 012).
+- A directory re-initialised as a new repository each time has a new root each time, and
+  different roots are different identities (ADR 012). A directory outside git has no root at all:
+  since ADR 034 its sessions belong to their host's context, which has no repository identity.

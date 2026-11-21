@@ -46,6 +46,10 @@ func (t *transaction) reconcile(r Request) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if e.Outside {
+		// A shell reconciliation that registered its session refuses as a whole (ADR 034).
+		return nil, noClaims()
+	}
 	out, err := t.reconcileChanges(e, r)
 	if err != nil {
 		return nil, err

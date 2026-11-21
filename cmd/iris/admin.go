@@ -17,7 +17,7 @@ import (
 	"github.com/mateusz-klatt/iris/internal/store"
 )
 
-const adminUsage = "usage: iris admin forget (--repository <id> | --agent <name>) [--dry-run]\n       iris admin merge --from <id> --into <id> [--dry-run]\n       iris admin unalias --repository <id> [--dry-run] (<alias>... | - < alias-file)\n       iris admin contact --repository <id> (<agent> | --clear)\n       iris admin backup <hub database> <new backup file>\n       iris admin restore-check <backup file> <empty scratch directory>\n       iris admin mark-restored <restored hub database>\n       iris admin console (create | reset | activate) <username> < password-file"
+const adminUsage = "usage: iris admin forget (--repository <id> | --agent <name>) [--dry-run]\n       iris admin merge [--outside] --from <id> --into <id> [--dry-run]\n       iris admin unalias --repository <id> [--dry-run] (<alias>... | - < alias-file)\n       iris admin contact --repository <id> (<agent> | --clear)\n       iris admin backup <hub database> <new backup file>\n       iris admin restore-check <backup file> <empty scratch directory>\n       iris admin mark-restored <restored hub database>\n       iris admin console (create | reset | activate) <username> < password-file"
 
 // adminStdin is what "iris admin unalias --repository <id> -" reads its aliases from.
 var adminStdin io.Reader = os.Stdin
@@ -46,10 +46,16 @@ func adminCommand(ctx context.Context, client *hubclient.Client, args []string, 
 		from := fs.String("from", "", "source repository id")
 		into := fs.String("into", "", "destination repository id")
 		dryRun := fs.Bool("dry-run", false, "report what would move and change nothing")
+		// --outside moves a folder project into its host's context of sessions outside git, on a
+		// route of its own that an older hub refuses instead of running an ordinary merge (ADR 034).
+		outside := fs.Bool("outside", false, "move a folder project into its host's context of sessions outside git")
 		if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 0 || *from == "" || *into == "" || *from == *into {
 			return errors.New(adminUsage)
 		}
 		route, body = "/v1/admin/merge", map[string]any{"from_repository_id": *from, "into_repository_id": *into, "dry_run": *dryRun}
+		if *outside {
+			route = "/v1/admin/merge/outside"
+		}
 	case "unalias":
 		// The owner's repair for aliases a repository learned from another checkout (ADR 032).
 		// A lone "-" reads the aliases from standard input, one a line: a checkout alias holds
