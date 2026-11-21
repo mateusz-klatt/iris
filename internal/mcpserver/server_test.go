@@ -35,11 +35,16 @@ type fakeHub struct {
 	calls  []seen
 	reply  string
 	status int
+	bind   string // the /v1/bind answer, when not the default
 }
 
 func (f *fakeHub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if r.URL.Path == "/v1/bind" {
-		_, _ = w.Write([]byte(`{"execution_id":"ex","generation":3,"repository_id":"rp"}`))
+		answer := f.bind
+		if answer == "" {
+			answer = `{"execution_id":"ex","generation":3,"repository_id":"rp"}`
+		}
+		_, _ = w.Write([]byte(answer))
 		return
 	}
 	raw, _ := io.ReadAll(r.Body)

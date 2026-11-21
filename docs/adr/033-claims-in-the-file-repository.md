@@ -1,7 +1,7 @@
 # ADR 033: A claim belongs to the repository of its file
 
 Status: accepted, 2026-11-21. Amends D10, D11 and D12. Decision 5 replaces ADR 032's limit on
-shell attribution. Decision 6, for explicit claims, is decided here and ships in a later change.
+shell attribution. Decision 6, for explicit claims, shipped in the change after the first.
 
 ## Context
 
@@ -114,12 +114,31 @@ project, "whether one works in the snapper-frontend checkout or in the submodule
    rollback and forward again too. Each session's first snapshot after a start only sets a new
    baseline; the next one is compared with it as before. Claims
    made from another checkout by edit tools stay until release, expiry or the end of the Execution.
-6. **Explicit claims will follow the same rule.** The MCP `claim` tool takes a path relative to the
-   session's repository. A path below a checked-out submodule or nested checkout, found on disk
-   from the Execution's worktree, is to be claimed in that checkout's repository, relative to it.
-   That needs the Execution's worktree and the hub's capabilities in the MCP binding, and a grouped
-   explicit claim route. Until that change ships, an explicit claim stays in the session's
-   repository.
+6. **Explicit claims follow the same rule.** The MCP `claim` tool takes a path relative to the
+   session's repository, as before. Every binding answer now names the Execution's worktree and
+   the hub's capabilities. With them, the MCP server places the path on disk from that worktree,
+   by the walk of decision 1. A path below a checked-out submodule or other nested checkout goes on
+   `POST /v1/claims/files`, with that checkout and the path relative to it. The hub places the
+   checkout as in decision 3 and makes the claim there:
+   - An ambiguous checkout is refused as `ambiguous`.
+   - The submodule's directory itself, and a prefix that contains it, stay in the session's
+     repository, as do the paths of the session's own checkout.
+   - The path is sent as the session gave it, relative to its repository, with the checkout's
+     place in the session's worktree as its prefix. The hub validates it as it does any explicit
+     claim's, then takes the prefix off; a path that does not lie below it is refused. In a
+     Windows checkout, one with a drive letter, its names first lose the trailing dots and spaces
+     Windows strips, as the hook's paths do. Aliases
+     such as `./frontend/src` are placed like `frontend/src`. A path that leaves the worktree, `.`
+     for the whole repository, or one with a backslash or a drive goes on the plain route
+     unchanged, where the hub judges it as it always has.
+   - A bound worktree that is not a directory on the MCP server's host fails the claim with that
+     reason, rather than claiming a submodule's path in the superproject.
+   - An older hub, or a binding that names no worktree, gets the plain claim it gets today. A
+     binding bound again over an older hub's answer forgets the newer hub's worktree and
+     capabilities. Until it binds again, a hub rolled back under a running MCP server refuses the
+     grouped route, and the claim fails rather than being misplaced.
+   - The replay of an explicit claim is checked by its fence, as before. A merge keeps the fence;
+     after a recovery the replay is `lost`, because its release token belongs to the old fence.
 7. **Mixed versions keep working.** The hub names `file_claims` in the capabilities of every
    registration answer. A hook sends a grouped touch only to a hub that named it in the same
    call's registration. Otherwise it sends the plain touch it sends today, and sends no touch for an

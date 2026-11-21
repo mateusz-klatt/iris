@@ -5,9 +5,11 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -24,7 +26,38 @@ type Bound struct {
 	Agent        hubclient.Agent `json:"agent"`
 	SessionID    string          `json:"session_id,omitempty"`
 	Rung         int             `json:"binding_rung"`
+	// Worktree and Capabilities are the Execution's worktree and what its hub takes, from which an
+	// explicit claim's path is placed in the checkout that holds it (ADR 033). An older hub names
+	// neither.
+	Worktree     string       `json:"worktree,omitempty"`
+	Capabilities Capabilities `json:"capabilities,omitempty"`
 }
+
+// Capabilities is what a hub takes beyond version one, as its answers list it. It is kept as one
+// value, in the hub's order, so a binding stays comparable (see StartIfPrimary).
+type Capabilities string
+
+// UnmarshalJSON reads the hub's list.
+func (c *Capabilities) UnmarshalJSON(raw []byte) error {
+	var list []string
+	if err := json.Unmarshal(raw, &list); err != nil {
+		return err
+	}
+	*c = Capabilities(strings.Join(list, "\n"))
+	return nil
+}
+
+// MarshalJSON writes it back as the hub's list.
+func (c Capabilities) MarshalJSON() ([]byte, error) { return json.Marshal(c.List()) }
+
+// List is the hub's list.
+func (c Capabilities) List() []string {
+	if c == "" {
+		return []string{}
+	}
+	return strings.Split(string(c), "\n")
+}
+
 type Resolver struct {
 	Hub               *hubclient.Client
 	Client, Host, CWD string
@@ -150,6 +183,9 @@ func (r *Resolver) resolveHeld(ctx context.Context, handle string) (Bound, error
 // the binding as it was; only a heartbeat confirms a loss.
 func (r *Resolver) refresh(ctx context.Context) (Bound, error) {
 	b := r.bound
+	// A bind answer names the worktree and capabilities when its hub has them. One rolled back
+	// since names neither, and the binding must not keep offering it a route it refuses (ADR 033).
+	b.Worktree, b.Capabilities = "", ""
 	if err := r.Hub.Do(ctx, "POST", "/v1/bind", map[string]any{"execution": b.ExecutionID, "client": r.Client, "host": r.Host}, &b); err != nil {
 		return Bound{}, err
 	}
@@ -209,7 +245,7 @@ func (r *Resolver) register(ctx context.Context, session string, a proc.Ancestor
 	if err != nil {
 		return Bound{}, err
 	}
-	b := Bound{ExecutionID: response.ExecutionID, Generation: response.Generation, RepositoryID: response.RepositoryID, Agent: response.Agent, SessionID: session, Rung: rung}
+	b := Bound{ExecutionID: response.ExecutionID, Generation: response.Generation, RepositoryID: response.RepositoryID, Agent: response.Agent, SessionID: session, Rung: rung, Worktree: response.Worktree, Capabilities: Capabilities(strings.Join(response.Capabilities, "\n"))}
 	r.bound, r.own = b, true
 	return b, nil
 }

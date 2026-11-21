@@ -328,12 +328,22 @@ func (t *transaction) claimLimit(e execution, extra int) error {
 func (t *transaction) fenceToken(c claim) string {
 	return fmt.Sprintf("%s:%d:%d:%s", t.s.stream, c.Epoch, c.Fence, c.Execution)
 }
-func (t *transaction) explicit(r Request) (map[string]any, error) {
+func (t *transaction) explicit(r Request) (map[string]any, error) { return t.explicitIn(r, "claim") }
+
+// explicitFile is an explicit claim on a path of another checkout than the Execution's own, such
+// as a submodule's, made relative to that checkout and claimed in its repository (ADR 033).
+func (t *transaction) explicitFile(r Request) (map[string]any, error) {
+	return t.explicitIn(r, "claim_files")
+}
+
+// explicitIn makes an explicit claim, in the Execution's repository on route claim, or in the
+// repository of the request's checkout on route claim_files, which an older hub refuses.
+func (t *transaction) explicitIn(r Request, route string) (map[string]any, error) {
 	e, err := t.live(r.ExecutionID, r.Generation)
 	if err != nil {
 		return nil, err
 	}
-	out, found, err := t.cached(e, r.Key, "claim", r)
+	out, found, err := t.cached(e, r.Key, route, r)
 	if err != nil {
 		return nil, err
 	}
@@ -357,7 +367,19 @@ func (t *transaction) explicit(r Request) (map[string]any, error) {
 	if r.TTLS < 0 || r.TTLS > 86400*365 {
 		return nil, fail("bad_request", "ttl_s is outside the supported range")
 	}
-	policy, _, err := t.policy(e.Repo)
+	repo := e.Repo
+	if route == "claim_files" {
+		if r.Checkout == nil {
+			return nil, fail("bad_request", "checkout is required")
+		}
+		if repo, err = t.fileRepository(e, *r.Checkout); err != nil {
+			return nil, err
+		}
+		if repo == "" {
+			return nil, fail("ambiguous", "the hub cannot tell which repository this checkout belongs to, so the path was not claimed; ask the owner to repair the split with iris admin merge")
+		}
+	}
+	policy, _, err := t.policy(repo)
 	if err != nil {
 		return nil, err
 	}
@@ -368,8 +390,22 @@ func (t *transaction) explicit(r Request) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if route == "claim_files" {
+		// The path was validated as the session gave it, relative to its repository. Below the
+		// checkout's place in that worktree, it is the checkout's own path (ADR 033). A Windows
+		// checkout's names lose the trailing dots and spaces Windows strips, as the hook's paths
+		// and the checkout's prefix already have.
+		if w := r.Checkout.Worktree; len(w) >= 2 && w[1] == ':' {
+			p = win32Path(p)
+		}
+		rest, ok := strings.CutPrefix(p, r.Checkout.Prefix+"/")
+		if r.Checkout.Prefix == "" || !ok {
+			return nil, fail("bad_request", "the path does not lie in its checkout")
+		}
+		p = rest
+	}
 	key := pathKey(p, policy)
-	cs, err := t.claimRows(e.Repo)
+	cs, err := t.claimRows(repo)
 	if err != nil {
 		return nil, err
 	}
@@ -397,7 +433,7 @@ func (t *transaction) explicit(r Request) (map[string]any, error) {
 			}
 			v["path"] = p
 			conflicts = append(conflicts, v)
-			if err = t.wait(e, e.Repo, key, r.Kind); err != nil {
+			if err = t.wait(e, repo, key, r.Kind); err != nil {
 				return nil, err
 			}
 		}
@@ -407,7 +443,7 @@ func (t *transaction) explicit(r Request) (map[string]any, error) {
 		t.refused = &Error{"conflict", "claim overlaps another Execution", map[string]any{"conflicts": conflicts}}
 		return nil, nil
 	}
-	if err = t.took(e, e.Repo, key); err != nil {
+	if err = t.took(e, repo, key); err != nil {
 		return nil, err
 	}
 	expiry := sql.NullInt64{}
@@ -426,15 +462,15 @@ func (t *transaction) explicit(r Request) (map[string]any, error) {
 		if err = t.claimLimit(e, 1); err != nil {
 			return nil, err
 		}
-		res, err := t.exec("INSERT INTO Claim(execution_id,repository_id,kind,path,path_key,origin,boot_epoch,expires_ms) VALUES(?,?,?,?,?,'explicit',?,?)", e.ID, e.Repo, r.Kind, p, key, t.s.epoch, expiry)
+		res, err := t.exec("INSERT INTO Claim(execution_id,repository_id,kind,path,path_key,origin,boot_epoch,expires_ms) VALUES(?,?,?,?,?,'explicit',?,?)", e.ID, repo, r.Kind, p, key, t.s.epoch, expiry)
 		if err != nil {
 			return nil, err
 		}
 		f, _ := res.LastInsertId() // modernc SQLite always provides the last inserted rowid
-		c = claim{Fence: f, Execution: e.ID, Repo: e.Repo, Kind: r.Kind, Path: p, Origin: "explicit", Epoch: t.s.epoch, Expiry: expiry}
+		c = claim{Fence: f, Execution: e.ID, Repo: repo, Kind: r.Kind, Path: p, Origin: "explicit", Epoch: t.s.epoch, Expiry: expiry}
 	}
 	out = map[string]any{"fence": c.Fence, "token": t.fenceToken(c), "expires_at": timestamp(c.Expiry)}
-	if err = t.remember(e, r.Key, "claim", r, out); err != nil {
+	if err = t.remember(e, r.Key, route, r, out); err != nil {
 		return nil, err
 	}
 	return out, nil

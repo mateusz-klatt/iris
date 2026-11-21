@@ -535,3 +535,80 @@ func TestAGroupedReplaySurvivesAMergeAndARestart(t *testing.T) {
 		t.Fatalf("replay after the merge and the restart: %v", replay)
 	}
 }
+
+// An explicit claim on a submodule's path, sent with that checkout, is taken in the submodule's
+// repository, where the submodule's own sessions meet it. An ambiguous checkout is refused, and the
+// grouped route needs its checkout.
+func TestAnExplicitClaimInASubmoduleLiesInItsRepository(t *testing.T) {
+	s, _, _ := testStore(t)
+	call(t, s, "sessions", rewriteRegistration("host", "old", "old"))
+	call(t, s, "sessions", rewriteRegistration("host", "current", "current"))
+	parent, _ := register(t, s, "parent", "/src/snapper", superRemote, "snapper-root")
+	child, childRepo := register(t, s, "child", "/src/frontend", frontendRemote, "frontend-root")
+	sub := submodule()
+	sub.Prefix = "frontend"
+	r := claimRequest(parent, "planned", "frontend/src", "prefix")
+	r.Checkout = &sub
+	out := call(t, s, "claim_files", r)
+	var repo string
+	if err := s.db.QueryRow("SELECT repository_id FROM Claim WHERE fence=?", out["fence"]).Scan(&repo); err != nil || repo != childRepo {
+		t.Fatalf("claimed in %q, want %q, %v", repo, childRepo, err)
+	}
+	if again := call(t, s, "claim_files", r); number(again["fence"]) != number(out["fence"]) {
+		t.Fatalf("a replay answered %v, first %v", again, out)
+	}
+	if refused := call(t, s, "touch", touchRequest(child, "child-edit", "src/x.ts")); refused["action"] != "deny" {
+		t.Fatalf("the child's edit under the parent's explicit claim: %v", refused)
+	}
+	expectError(t, s, "claim_files", claimRequest(child, "child-claims", "src/x.ts", "exact"), "bad_request")
+	other, _ := register(t, s, "other", "/src/snapper", superRemote, "snapper-root")
+	held := claimRequest(other, "other-blocked", "frontend/src/x.ts", "exact")
+	held.Checkout = &sub
+	expectError(t, s, "claim_files", held, "conflict")
+	nested := ClaimGroup{Worktree: "/src/snapper/vendor/iris", RemoteURL: rewriteRemote, Prefix: "vendor/iris"}
+	ambiguous := claimRequest(parent, "ambiguous", "vendor/iris/main.go", "exact")
+	ambiguous.Checkout = &nested
+	expectError(t, s, "claim_files", ambiguous, "ambiguous")
+	// The path is validated as given, and must lie below the checkout's place.
+	for _, path := range []string{"frontend/../x.ts", "docs/a.md", "frontend"} {
+		bad := claimRequest(parent, "bad-"+path, path, "exact")
+		bad.Checkout = &sub
+		expectError(t, s, "claim_files", bad, "bad_request")
+	}
+	unplaced := sub
+	unplaced.Prefix = ""
+	bare := claimRequest(parent, "no-prefix", "frontend/src/y.ts", "exact")
+	bare.Checkout = &unplaced
+	expectError(t, s, "claim_files", bare, "bad_request")
+}
+
+// On a Windows checkout, an explicit claim's names lose the trailing dots and spaces Windows strips,
+// as the hook's paths do, so the two meet; a POSIX checkout keeps such names as they are.
+func TestAnExplicitClaimInAWindowsCheckoutFoldsWin32Names(t *testing.T) {
+	s, _, _ := testStore(t)
+	out := call(t, s, "sessions", Request{Client: "codex", Host: "host", SessionID: "win", Cwd: `C:\snapper`, Worktree: `C:\snapper`, RemoteURL: superRemote, RootCommit: "snapper-root", Source: "hook"})
+	win := Request{ExecutionID: out["execution_id"].(string), Generation: out["generation"].(int64)}
+	sub := ClaimGroup{Worktree: `C:\snapper\frontend`, RemoteURL: frontendRemote, RootCommit: "frontend-root", Prefix: "frontend"}
+	for path, want := range map[string]string{"frontend./src./x.ts": "src/x.ts", "frontend/src /y.ts": "src/y.ts"} {
+		r := claimRequest(win, "win-"+path, path, "exact")
+		r.Checkout = &sub
+		fence := call(t, s, "claim_files", r)["fence"]
+		var stored string
+		if err := s.db.QueryRow("SELECT path FROM Claim WHERE fence=?", fence).Scan(&stored); err != nil || stored != want {
+			t.Fatalf("%q stored as %q, want %q, %v", path, stored, want, err)
+		}
+	}
+	parent, _ := register(t, s, "parent", "/src/snapper", superRemote, "snapper-root")
+	posix := submodule()
+	posix.Prefix = "frontend"
+	r := claimRequest(parent, "posix", "frontend/src./z.ts", "exact")
+	r.Checkout = &posix
+	fence := call(t, s, "claim_files", r)["fence"]
+	var stored string
+	if err := s.db.QueryRow("SELECT path FROM Claim WHERE fence=?", fence).Scan(&stored); err != nil || stored != "src./z.ts" {
+		t.Fatalf("a POSIX name was folded to %q, %v", stored, err)
+	}
+	if got := win32Path("a/.../b."); got != "a/.../b" {
+		t.Fatalf("win32Path: %q", got)
+	}
+}

@@ -49,6 +49,8 @@ type SessionResponse struct {
 	Attention    Attention `json:"attention"`
 	// Capabilities names what the hub accepts beyond version one; see ShellScopeCapable.
 	Capabilities []string `json:"capabilities"`
+	// Worktree is the Execution's own worktree, as the hub recorded it; an older hub names none.
+	Worktree string `json:"worktree,omitempty"`
 }
 
 // Attention is what still needs the session's attention: deliveries that still need a wake, and

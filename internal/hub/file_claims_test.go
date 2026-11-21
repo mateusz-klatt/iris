@@ -30,3 +30,22 @@ func TestAGroupedTouchHasARouteOfItsOwn(t *testing.T) {
 		t.Fatalf("another checkout of the submodule was not refused: %v", refused)
 	}
 }
+
+// An explicit claim on another checkout's path has a route of its own too, and a session's binding
+// names its worktree and the hub's capabilities.
+func TestAnExplicitFileClaimHasARouteOfItsOwn(t *testing.T) {
+	_, s := setup(t)
+	a := register(t, s, 1)
+	bound := request(t, s, "POST", "/v1/bind", map[string]any{"execution": a["execution_id"], "client": "codex", "host": "host"}, 200)
+	if bound["worktree"] != "/repo/1" || len(bound["capabilities"].([]any)) != 2 {
+		t.Fatalf("binding: %v", bound)
+	}
+	r := authority(a)
+	r["key"] = "planned"
+	r["kind"] = "prefix"
+	r["path"] = "frontend/src"
+	r["checkout"] = map[string]any{"worktree": "/repo/1/frontend", "remote_url": "https://example.com/team/frontend.git", "root_commit": "frontend-root", "prefix": "frontend"}
+	if out := request(t, s, "POST", "/v1/claims/files", r, 200); out["fence"] == nil {
+		t.Fatalf("answer: %v", out)
+	}
+}
