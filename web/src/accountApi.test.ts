@@ -21,7 +21,6 @@ describe("account browser API", () => {
       http.get("*/v1/ui/accounts", ({ request }) => {
         expect(request.headers.get("X-Iris-CSRF")).toBe(session.csrf);
         expect(request.credentials).toBe("same-origin");
-        expect(request.cache).toBe("no-store");
         return HttpResponse.json({ accounts: [account] });
       }),
       http.put("*/v1/ui/accounts/:id/access", async ({ request, params }) => {
@@ -32,7 +31,10 @@ describe("account browser API", () => {
       }),
     );
     await getSession();
+    const sent = vi.spyOn(globalThis, "fetch");
     expect(await listAccounts()).toEqual([account]);
+    // msw 3 does not carry a request's cache mode to the handler, so it is read where it is sent.
+    expect(sent).toHaveBeenCalledWith(expect.any(URL), expect.objectContaining({ cache: "no-store" }));
     expect(await updateAccess("ca target/with slash", edit)).toMatchObject({ ...edit, edit_revision: 4 });
   });
 
@@ -113,7 +115,6 @@ describe("account browser API", () => {
         expect(request.headers.get("X-Iris-CSRF")).toBe(`iris-challenge-${attempts}`);
         expect(await request.json()).toEqual({ username: "Iris operator", password: "unmodified password  " });
         expect(request.credentials).toBe("same-origin");
-        expect(request.cache).toBe("no-store");
         expect(new URL(request.url).origin).toBe(window.location.origin);
         return attempts === 1 ? new HttpResponse(null, { status: 401 }) : HttpResponse.json({ authenticated: true });
       }),
@@ -123,10 +124,16 @@ describe("account browser API", () => {
       }),
     );
     const storage = vi.spyOn(Storage.prototype, "setItem");
+    const sent = vi.spyOn(globalThis, "fetch");
     await expect(login("Iris operator", "unmodified password  ")).rejects.toEqual(new ApiError(401));
     await expect(login("Iris operator", "unmodified password  ")).resolves.toEqual(session);
     expect(challenges).toBe(2);
     expect(storage).not.toHaveBeenCalled();
+    const logins = sent.mock.calls.filter(([, init]) => init?.method === "POST");
+    expect(logins).toHaveLength(2);
+    for (const [, init] of logins) {
+      expect(init).toMatchObject({ cache: "no-store", credentials: "same-origin" });
+    }
   });
 
   it("preserves correspondence locale and uses the current revision and session CSRF for profile edits", async () => {
