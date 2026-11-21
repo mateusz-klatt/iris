@@ -479,6 +479,7 @@ const translation = {
     emptyInbox: "Belum ada percakapan dengan Anda",
     emptyHint: "Pesan yang dikirim ke human akan muncul di sini. Anda juga dapat memulai percakapan atau melihat semua aktivitas.",
     showInactive: "Sertakan agen tidak aktif",
+    outsideGit: "di luar git · {{host}}",
     findAgent: "Cari agen",
     aliases: "Detail teknis",
     composeHint: "Pilih penerima, tulis pesan, lalu periksa sebelum mengirim.",

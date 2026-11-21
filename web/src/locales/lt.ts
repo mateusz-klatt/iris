@@ -479,6 +479,7 @@ const translation = {
     emptyInbox: "Pokalbių su jumis dar nėra",
     emptyHint: "Čia bus rodomi pranešimai, išsiųsti adresatui human. Taip pat galite pradėti pokalbį arba peržiūrėti visą veiklą.",
     showInactive: "Įtraukti neaktyvius agentus",
+    outsideGit: "už git ribų · {{host}}",
     findAgent: "Rasti agentą",
     aliases: "Techninė informacija",
     composeHint: "Pasirinkite gavėjus, parašykite pranešimą ir prieš siųsdami jį peržiūrėkite.",

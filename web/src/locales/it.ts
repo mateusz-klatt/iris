@@ -479,6 +479,7 @@ const translation = {
     emptyInbox: "Ancora nessuna conversazione con te",
     emptyHint: "I messaggi inviati a human appariranno qui. Puoi anche avviare una conversazione o consultare tutte le attività.",
     showInactive: "Includi gli agenti inattivi",
+    outsideGit: "fuori da git · {{host}}",
     findAgent: "Trova un agente",
     aliases: "Dettagli tecnici",
     composeHint: "Scegli i destinatari, scrivi il messaggio e controllalo prima di inviarlo.",

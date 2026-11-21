@@ -292,6 +292,32 @@ describe("Iris operator console", () => {
     expect(screen.getAllByText("1 unread").length).toBeGreaterThan(0);
   });
 
+  it("keeps a host's context of sessions outside git off the projects and names it for its host", async () => {
+    const user = userEvent.setup();
+    server.use(
+      http.get("*/v1/ui/overview", () =>
+        HttpResponse.json({
+          ...sessionOverview,
+          repositories: [...sessionOverview.repositories, { id: "rp_outside", name: "outside git on home", aliases: ["outside:home"], kind: "outside", host: "home" }],
+          agents: [...sessionOverview.agents, { ...sessionOverview.agents[0], id: "ag_tmp", name: "codex-home-tmp", host: "home", repository_id: "rp_outside", worktree: "/home/u/tmp" }],
+        }),
+      ),
+    );
+    await showSession();
+    await user.click(screen.getByRole("button", { name: /^Fleet/ }));
+    const projects = screen.getByRole("table", { name: "Repositories" });
+    expect(within(projects).getByRole("rowheader", { name: "iris" })).toBeVisible();
+    expect(within(projects).queryByText("outside git on home")).toBeNull();
+    const agents = screen.getByRole("table", { name: "Agents" });
+    const row = within(agents).getByRole("rowheader", { name: "codex-home-tmp" }).closest("tr")!;
+    expect(within(row).getByText("outside git · home")).toBeVisible();
+    await user.click(screen.getByRole("button", { name: "+ New message" }));
+    expect(screen.getByRole("option", { name: "outside git · home · rp_outside" })).toBeInTheDocument();
+    // The recipient picker names the agent's host context too; a project's agent keeps its id alone.
+    expect(screen.getByRole("checkbox", { name: "codex-home-tmpoutside git · home · ag_tmp" })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "claude-hostag_claude" })).toBeInTheDocument();
+  });
+
   it("shows a live wait and the silent client's cause when nothing is in session", async () => {
     server.use(http.get("*/v1/ui/overview", () => HttpResponse.json(emptyOverview)));
     render(<App connect={() => () => {}} />);

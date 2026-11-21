@@ -479,6 +479,7 @@ const translation = {
     emptyInbox: "Sarunu ar jums vēl nav",
     emptyHint: "Šeit parādīsies ziņojumi, kas nosūtīti adresātam human. Varat arī sākt sarunu vai pārlūkot visu aktivitāti.",
     showInactive: "Iekļaut neaktīvos aģentus",
+    outsideGit: "ārpus git · {{host}}",
     findAgent: "Atrast aģentu",
     aliases: "Tehniskā informācija",
     composeHint: "Izvēlieties adresātus, uzrakstiet ziņojumu un pārbaudiet to pirms sūtīšanas.",

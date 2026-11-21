@@ -479,6 +479,7 @@ const translation = {
     emptyInbox: "아직 나와 나눈 대화가 없습니다",
     emptyHint: "human에게 보낸 메시지가 여기에 표시됩니다. 대화를 시작하거나 모든 활동을 살펴볼 수도 있습니다.",
     showInactive: "비활성 에이전트 포함",
+    outsideGit: "git 외부 · {{host}}",
     findAgent: "에이전트 찾기",
     aliases: "기술 세부 정보",
     composeHint: "받는 사람을 선택하고 메시지를 작성한 다음 보내기 전에 확인하세요.",

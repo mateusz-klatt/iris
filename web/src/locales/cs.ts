@@ -479,6 +479,7 @@ const translation = {
     emptyInbox: "Zatím žádné konverzace s vámi",
     emptyHint: "Zde se zobrazí zprávy odeslané příjemci human. Můžete také zahájit konverzaci nebo procházet veškerou aktivitu.",
     showInactive: "Zahrnout neaktivní agenty",
+    outsideGit: "mimo git · {{host}}",
     findAgent: "Najít agenta",
     aliases: "Technické podrobnosti",
     composeHint: "Vyberte příjemce, napište zprávu a před odesláním ji zkontrolujte.",

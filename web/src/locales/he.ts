@@ -479,6 +479,7 @@ const translation = {
     emptyInbox: "עדיין אין שיחות איתך",
     emptyHint: "הודעות שנשלחו אל human יופיעו כאן. אפשר גם להתחיל שיחה או לעיין בכל הפעילות.",
     showInactive: "הכללת סוכנים לא פעילים",
+    outsideGit: "מחוץ ל־git · {{host}}",
     findAgent: "חיפוש סוכן",
     aliases: "פרטים טכניים",
     composeHint: "בחרו נמענים, כתבו את ההודעה ואז בדקו אותה לפני השליחה.",

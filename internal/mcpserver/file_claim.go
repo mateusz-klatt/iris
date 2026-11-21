@@ -18,7 +18,13 @@ import (
 // does any explicit claim's and only then takes the prefix off. A path at the session's own level,
 // the submodule's directory itself included, stays with the session's repository, as does one that
 // does not stay inside the worktree, and any path an older hub or an older binding cannot place.
+//
+// A session outside git takes no claim at all, so its claim is refused before the filesystem is
+// read, as the hub would refuse it (ADR 034).
 func fileClaim(b binding.Bound, raw string) (map[string]any, bool, error) {
+	if b.Outside {
+		return nil, false, &hubclient.Error{Code: "outside_git", Message: "this session runs outside any git checkout, so it takes no claims; start a session in the checkout to claim its files"}
+	}
 	if !hubclient.FileClaimsCapable(b.Capabilities.List()) || b.Worktree == "" || strings.ContainsAny(raw, "\\:") {
 		return nil, false, nil
 	}

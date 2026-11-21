@@ -128,3 +128,45 @@ func TestIsCodeLooksThroughWrapping(t *testing.T) {
 		t.Fatal("only a hub error with that code matches")
 	}
 }
+
+// A session outside git registers on its own route. A hub without that route answers not_found
+// with "unknown API route", which OlderHub tells from every other refusal (ADR 034).
+func TestAnOutsideSessionRegistersOnItsRoute(t *testing.T) {
+	older := false
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path != "/v1/sessions/outside":
+			w.WriteHeader(http.StatusTeapot)
+		case older:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":{"code":"not_found","message":"unknown API route"}}`))
+		default:
+			_, _ = w.Write([]byte(`{"execution_id":"ex_1","generation":1,"outside_git":true}`))
+		}
+	}))
+	defer srv.Close()
+	c := &Client{Config: staticConfig{url: srv.URL, token: "tok"}}
+	sess, err := c.RegisterOutsideSession(context.Background(), SessionRequest{Client: "codex", SessionID: "s"})
+	if err != nil || sess.ExecutionID != "ex_1" || !sess.OutsideGit {
+		t.Fatalf("%+v %v", sess, err)
+	}
+	older = true
+	_, err = c.RegisterOutsideSession(context.Background(), SessionRequest{Client: "codex", SessionID: "s"})
+	if !OlderHub(err) || !OlderHub(fmt.Errorf("register: %w", err)) {
+		t.Fatalf("an older hub was not recognised: %v", err)
+	}
+	for _, other := range []error{&Error{Code: "not_found", Message: "unknown repository"}, &Error{Code: "unauthorized", Message: "unknown API route"}, context.DeadlineExceeded} {
+		if OlderHub(other) {
+			t.Fatalf("%v taken for an older hub", other)
+		}
+	}
+}
+
+func TestAnOutsideRegistrationWithoutAnExecutionFails(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { _, _ = w.Write([]byte(`{}`)) }))
+	defer srv.Close()
+	c := &Client{Config: staticConfig{url: srv.URL, token: "tok"}}
+	if _, err := c.RegisterOutsideSession(context.Background(), SessionRequest{}); !errors.Is(err, ErrNoExecution) {
+		t.Fatal(err)
+	}
+}

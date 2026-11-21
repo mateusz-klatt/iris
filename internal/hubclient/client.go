@@ -51,6 +51,9 @@ type SessionResponse struct {
 	Capabilities []string `json:"capabilities"`
 	// Worktree is the Execution's own worktree, as the hub recorded it; an older hub names none.
 	Worktree string `json:"worktree,omitempty"`
+	// OutsideGit says the Execution belongs to its host's context of sessions outside git, which
+	// takes no claim (ADR 034). An older hub never says so.
+	OutsideGit bool `json:"outside_git,omitempty"`
 }
 
 // Attention is what still needs the session's attention: deliveries that still need a wake, and
@@ -172,6 +175,27 @@ func (c *Client) RegisterSession(ctx context.Context, req SessionRequest) (Sessi
 		return SessionResponse{}, ErrNoExecution
 	}
 	return resp, nil
+}
+
+// RegisterOutsideSession calls POST /v1/sessions/outside for a session outside any git checkout,
+// whose request names no checkout (ADR 034). A hub from before that route answers so that
+// OlderHub says it.
+func (c *Client) RegisterOutsideSession(ctx context.Context, req SessionRequest) (SessionResponse, error) {
+	var resp SessionResponse
+	if err := c.post(ctx, "/v1/sessions/outside", req, &resp); err != nil {
+		return SessionResponse{}, err
+	}
+	if resp.ExecutionID == "" {
+		return SessionResponse{}, ErrNoExecution
+	}
+	return resp, nil
+}
+
+// OlderHub says err is a hub's answer to a route it does not have, and nothing else: not an
+// authentication failure, a timeout or any other error.
+func OlderHub(err error) bool {
+	var e *Error
+	return errors.As(err, &e) && e.Code == "not_found" && e.Message == "unknown API route"
 }
 
 // Touch calls POST /v1/claims/touch.

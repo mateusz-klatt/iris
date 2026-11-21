@@ -1,9 +1,11 @@
 // Account list and conflict presentation adapted from the owner's UI export, ADR 014.
 import { useEffect, useRef, useState, type FormEvent, type RefObject } from "react";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 
 import { ApiError, type Repository } from "./api";
 import { getSession, listAccounts, updateAccess, type AccountSession, type ConsoleAccessAccount, type ConsoleGrant } from "./accountApi";
+import { recordName } from "./recordName";
 import "./access.css";
 
 interface AccessProps {
@@ -15,8 +17,9 @@ interface AccessProps {
 type AccessInput = Parameters<typeof updateAccess>[1];
 
 // Names are not unique and can be empty, so a grant is always offered against the id.
-function repositoryLabel(repository: Repository): string {
-  return repository.name === "" ? repository.id : `${repository.name} · ${repository.id}`;
+function repositoryLabel(repository: Repository, t: TFunction): string {
+  const name = recordName(repository, t);
+  return name === "" ? repository.id : `${name} · ${repository.id}`;
 }
 
 function grantKey(grants: ConsoleGrant[]): string {
@@ -201,8 +204,8 @@ function AccessForm({ account, repositories, lastOperator, saving, heading, onSa
       {role === "operator" ? <p>{t("access.operatorHint")}</p> : null}
       {role === "member" ? <fieldset disabled={saving} className="iris-access-grants"><legend>{t("operator.repositories")}</legend>
         {repositories.length === 0 ? <p>{t("operator.none")}</p> : repositories.map((repository) => <label key={repository.id}>
-          <span>{repositoryLabel(repository)}</span>
-          <select aria-label={t("access.assignment", { repository: repositoryLabel(repository) })} value={grants.find((grant) => grant.repository_id === repository.id)?.mode ?? ""}
+          <span>{repositoryLabel(repository, t)}</span>
+          <select aria-label={t("access.assignment", { repository: repositoryLabel(repository, t) })} value={grants.find((grant) => grant.repository_id === repository.id)?.mode ?? ""}
             onChange={(event) => {
               const remaining = grants.filter((grant) => grant.repository_id !== repository.id);
               const mode = event.target.value;

@@ -9,6 +9,9 @@ export interface Repository {
   id: string;
   name: string;
   aliases: string[];
+  /** `outside` is a host's context of sessions outside git, which names its host (ADR 034). */
+  kind?: "repository" | "outside";
+  host?: string;
   /** Current account capability, checked again by the store. */
   console_access?: "ro" | "rw";
 }

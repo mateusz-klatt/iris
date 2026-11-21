@@ -82,6 +82,12 @@ describe("operator access editor", () => {
     expect(screen.queryByText("The last enabled operator cannot be disabled or demoted.")).not.toBeInTheDocument();
   });
 
+  it("offers a grant to a host's context of sessions outside git under its host's name", async () => {
+    setup(session, [...repositories, { id: "rp_outside", name: "outside git on home", aliases: ["outside:home"], kind: "outside", host: "home" }]);
+    await chooseMember();
+    expect(screen.getByLabelText("outside git · home · rp_outside access")).toHaveValue("");
+  });
+
   it("saves explicit repository grants with the selected account revision, including no grant", async () => {
     setup();
     await chooseMember();

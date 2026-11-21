@@ -93,8 +93,8 @@ Two further problems follow from the same records:
    outside context carry `outside_git: true`. The client keeps it in its binding with the worktree
    and capabilities, and clears it when an answer omits it, as an older hub's does. The MCP `claim`
    tool refuses such a binding before it reads the filesystem, and says to start the session in a
-   checkout. A hook whose session is attached to a context takes no claim either, even after a
-   `git init` there, and says why once.
+   checkout. A hook whose session is attached to a context sends no claim for an edit either,
+   even after a `git init` there, and allows it.
 
 7. **Hooks register outside git.** D3 rule 5 becomes: outside a git worktree, the hook registers
    on the outside route at session start, at a sub-agent's start, at a prompt where its client has
@@ -105,6 +105,9 @@ Two further problems follow from the same records:
    only on all of its existing evidence: a positive root binding, the exact Execution and
    generation, a hook having reached the hub, the user's preference, native idle evidence, fresh
    attention and no outstanding submission (ADR 017, 023).
+
+   `iris doctor`'s canary runs in an empty directory so that it reaches no hub, and outside git it
+   still makes no request.
 
    A hub without the route answers `not_found` with "unknown API route". On that answer, and only
    on it, a hook allows the event and registers nothing, and `iris mcp` or `iris watch` falls back
