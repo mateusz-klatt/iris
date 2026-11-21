@@ -194,6 +194,26 @@ and stale acknowledgements in a context; the binding flag set and cleared; the h
 its older-hub answer; and the repair's every precondition, its dry run and its atomic apply. Every
 new statement propagates execution, query and row failures under the fault driver.
 
+## Live check
+
+On 2026-11-21 at 15:24 UTC, on Linux (holzera), the released 0.1.8 binary ran as Claude Code's
+hooks (`iris hook --client claude`) against the production hub, on the signed v0.1.8 image. The
+session ran in a scratch directory with no `.git` above it.
+
+| Step | Event | Answer | Record |
+| --- | --- | --- | --- |
+| 1 | SessionStart | session context naming `claude-holzera-adr034-live` | an Agent and Execution in the new record `outside git on holzera` |
+| 2 | PreToolUse: Write of a file in that directory | allow, with no request to the hub | no claim |
+| 3 | SessionEnd | allow | the Execution ended |
+
+The context and its ended agent were left in place, because the next session outside git on that
+host joins the same record. The backup taken before the hub upgrade held seven repositories, each
+with a `gitdir:` and a `remote:` alias. There was no folder project left to repair, because the
+owner had merged or forgotten them by hand on 2026-11-20.
+
+Not checked live: the hub's refusal of each claim route, the MCP `claim` tool's refusal, an older
+client or an older hub, the console labels, and the repair. Tests cover them; see Verification.
+
 ## Changes
 
 - ADR 032 says a directory outside git has no root, not a new one each time.
