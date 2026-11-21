@@ -14,11 +14,13 @@ import (
 	"slices"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/mateusz-klatt/iris/internal/gitinfo"
 	"github.com/mateusz-klatt/iris/internal/hook"
+	"github.com/mateusz-klatt/iris/internal/hubclient"
 	"github.com/mateusz-klatt/iris/internal/proc"
 )
 
@@ -108,6 +110,7 @@ func TestAntigravityWakeSurvivesInPlaceUpdateViaDeletedDescriptor(t *testing.T) 
 		executable: proc.OpenExecutable,
 		now:        func() time.Time { return time.UnixMilli(2000) },
 	}
+	hubclient.HTTPClient().CloseIdleConnections()
 	beforeFDs := openFDCount(t)
 	for range 15 {
 		info, det, differs := checkOnly.check(context.Background(), "")
@@ -277,11 +280,17 @@ func TestAntigravityWakeDeletedDescriptorStartFailureClosesFD(t *testing.T) {
 		waitDelay:    time.Second,
 	}
 
+	var startErr error
+	hubclient.HTTPClient().CloseIdleConnections()
 	beforeFDs := openFDCount(t)
 	failAns := cmds.queue(context.Background(), convID, "Iris wake after in-place update", func(start func() error) (bool, error) {
-		err := start()
-		return err == nil, err
+		startErr = start()
+		return startErr == nil, startErr
 	})
+	var pathErr *os.PathError
+	if !errors.Is(startErr, syscall.EACCES) || !errors.As(startErr, &pathErr) || pathErr.Path != "/proc/self/fd/3" {
+		t.Fatalf("real deleted-fd Start error = %v, want PathError(/proc/self/fd/3) with EACCES", startErr)
+	}
 	if failAns.answer != "failed" || failAns.detail != antigravityExeDeleted || failAns.started {
 		t.Fatalf("real deleted-fd Start failure = %+v, want failed with %q", failAns, antigravityExeDeleted)
 	}
