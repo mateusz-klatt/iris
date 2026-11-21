@@ -8,13 +8,16 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
 
 	"golang.org/x/sys/unix"
 
+	"github.com/mateusz-klatt/iris/internal/binding"
 	"github.com/mateusz-klatt/iris/internal/hook"
+	"github.com/mateusz-klatt/iris/internal/hubclient"
 )
 
 // A hook whose client.json never answers still exits within its deadline with the client's allow
@@ -125,4 +128,72 @@ func TestStalledDefaultClientConfigLogsDeadlineFailure(t *testing.T) {
 	if err != nil || len(entries) != 1 || entries[0].Client != "claude" || entries[0].Event != "SessionStart" || entries[0].Stage != "session" || entries[0].Error != "hook deadline exceeded" {
 		t.Fatalf("failures = %+v, err = %v", entries, err)
 	}
+}
+
+// Once iris mcp starts, replacing client.json with an unreadable/stalling FIFO must neither
+// divert observations nor leak stalled-read goroutines across repeated observations.
+func TestMCPObserverDoesNotReadStalledClientConfig(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", home)
+	t.Setenv("IRIS_TOKEN_FILE", "")
+	t.Setenv("IRIS_EXECUTION", "")
+
+	defaultToken, _, err := (hubclient.EnvConfig{}).BaseTokenPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	relocatedDir := filepath.Join(home, "relocated")
+	if err := os.MkdirAll(relocatedDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	relocatedToken := filepath.Join(relocatedDir, "hub.token")
+	cfgPath := filepath.Join(filepath.Dir(defaultToken), "client.json")
+	if err := hubclient.WriteConfig(cfgPath, hubclient.FileConfig{
+		Hub:       "http://127.0.0.1:1",
+		TokenFile: relocatedToken,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	origWorker := newMCPWakeWorker
+	t.Cleanup(func() { newMCPWakeWorker = origWorker })
+	observeCh := make(chan func(string), 1)
+	newMCPWakeWorker = func(_ *binding.Resolver, _ *hook.Sessions, _ func() string, observe func(string)) mcpWakeWorker {
+		observeCh <- observe
+		return mcpWakeFunction(func(ctx context.Context) { <-ctx.Done() })
+	}
+
+	session, done := connectMCPCommand(t, []string{"--client", "codex"}, "0.167.0")
+	observe := <-observeCh
+
+	if err := os.Remove(cfgPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Mkfifo(cfgPath, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	before := runtime.NumGoroutine()
+	const count = 20
+	for range count {
+		observe("wake_stream_following")
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		if entries, err := hook.ReadRecentObservations(relocatedToken, count+5); err == nil && len(entries) == count {
+			break
+		}
+		if time.Now().After(deadline) {
+			entries, err := hook.ReadRecentObservations(relocatedToken, count+5)
+			t.Fatalf("relocated observations = %d (%v), want %d", len(entries), err, count)
+		}
+	}
+	if entries, err := hook.ReadRecentObservations(defaultToken, 10); err != nil || len(entries) != 0 {
+		t.Fatalf("default log unexpectedly written on stalled client.json: %+v, err=%v", entries, err)
+	}
+	if after := runtime.NumGoroutine(); after >= before+count/2 {
+		t.Fatalf("goroutines grew from %d to %d across %d observations", before, after, count)
+	}
+	_ = session.Close()
+	waitMCPCommand(t, done)
 }

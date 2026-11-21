@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -422,5 +423,35 @@ func TestAppendFailureDoesNotRecreateRemovedDirectory(t *testing.T) {
 	<-written
 	if _, statErr := os.Stat(ephemeral); !errors.Is(statErr, os.ErrNotExist) {
 		t.Fatalf("abandoned recorder recreated removed directory: stat err = %v", statErr)
+	}
+}
+
+func TestPinnedObserverPerformsZeroConfigReads(t *testing.T) {
+	token := filepath.Join(t.TempDir(), "hub.token")
+	var reads atomic.Int32
+	r := Runner{
+		ClientName: "codex",
+		EventName:  "mcp",
+		Getenv: func(key string) string {
+			if key == "IRIS_TOKEN_FILE" {
+				return token
+			}
+			return ""
+		},
+		readConfig: func(string) ([]byte, error) {
+			reads.Add(1)
+			return nil, os.ErrNotExist
+		},
+		logAfter: never,
+	}
+	for range 5 {
+		r.record(stageObserved, "wake_stream_following", nil)
+	}
+	if got := reads.Load(); got != 0 {
+		t.Fatalf("pinned observer read client.json %d times, want 0", got)
+	}
+	entries, err := ReadRecentObservations(token, 10)
+	if err != nil || len(entries) != 5 {
+		t.Fatalf("observations = %+v, err = %v", entries, err)
 	}
 }

@@ -14,6 +14,7 @@ import (
 
 	"github.com/mateusz-klatt/iris/internal/binding"
 	"github.com/mateusz-klatt/iris/internal/hook"
+	"github.com/mateusz-klatt/iris/internal/hubclient"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
 
@@ -268,4 +269,83 @@ func TestMCPWakeUnboundStdioEOFLeavesNoNetworkOrSessionFiles(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(filepath.Dir(token), "sessions")); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("an unbound wake created session files: %v", err)
 	}
+}
+
+func TestMCPObserverPinsResolvedTokenAndSkipsConfigRereads(t *testing.T) {
+	home := t.TempDir()
+	for _, key := range []string{"HOME", "USERPROFILE", "AppData", "XDG_CONFIG_HOME"} {
+		t.Setenv(key, home)
+	}
+	t.Setenv("IRIS_TOKEN_FILE", "")
+	t.Setenv("IRIS_EXECUTION", "")
+
+	defaultToken, _, err := (hubclient.EnvConfig{}).BaseTokenPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	relocatedDir := filepath.Join(home, "relocated")
+	if err := os.MkdirAll(relocatedDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	relocatedToken := filepath.Join(relocatedDir, "hub.token")
+	cfgPath := filepath.Join(filepath.Dir(defaultToken), "client.json")
+	if err := hubclient.WriteConfig(cfgPath, hubclient.FileConfig{
+		Hub:       "http://127.0.0.1:1",
+		TokenFile: relocatedToken,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	origObs, origWorker := mcpObserver, newMCPWakeWorker
+	t.Cleanup(func() { mcpObserver, newMCPWakeWorker = origObs, origWorker })
+	var capturedGetenv func(string) string
+	mcpObserver = func(getenv func(string) string, client string) func(string) {
+		capturedGetenv = getenv
+		return origObs(getenv, client)
+	}
+	observeCh := make(chan func(string), 1)
+	newMCPWakeWorker = func(_ *binding.Resolver, _ *hook.Sessions, _ func() string, observe func(string)) mcpWakeWorker {
+		observeCh <- observe
+		return mcpWakeFunction(func(ctx context.Context) { <-ctx.Done() })
+	}
+
+	session, done := connectMCPCommand(t, []string{"--client", "codex"}, "0.167.0")
+	observe := <-observeCh
+	if capturedGetenv == nil || capturedGetenv("IRIS_TOKEN_FILE") != relocatedToken || capturedGetenv("HOME") != "" {
+		t.Fatalf("observer env was not pinned to resolved token: got IRIS_TOKEN_FILE=%q HOME=%q", capturedGetenv("IRIS_TOKEN_FILE"), capturedGetenv("HOME"))
+	}
+
+	// Overwrite client.json to point elsewhere after MCP started: repeated observations
+	// must keep writing to the pinned relocated log without re-reading client.json.
+	otherDir := filepath.Join(home, "other")
+	if err := os.MkdirAll(otherDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	otherToken := filepath.Join(otherDir, "hub.token")
+	if err := hubclient.WriteConfig(cfgPath, hubclient.FileConfig{
+		Hub:       "http://127.0.0.1:1",
+		TokenFile: otherToken,
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	for range 5 {
+		observe("wake_stream_following")
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		if entries, err := hook.ReadRecentObservations(relocatedToken, 10); err == nil && len(entries) == 5 {
+			break
+		}
+		if time.Now().After(deadline) {
+			entries, err := hook.ReadRecentObservations(relocatedToken, 10)
+			t.Fatalf("pinned observations = %d (%v), want 5", len(entries), err)
+		}
+	}
+	for name, path := range map[string]string{"other": otherToken, "default": defaultToken} {
+		if entries, err := hook.ReadRecentObservations(path, 10); err != nil || len(entries) != 0 {
+			t.Fatalf("%s log unexpectedly received entries after config rewrite: %+v, err=%v", name, entries, err)
+		}
+	}
+	_ = session.Close()
+	waitMCPCommand(t, done)
 }

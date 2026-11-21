@@ -97,6 +97,9 @@ type Result struct {
 	KimiWake []string
 	// tokenFile is where the hook logs beside the token are, for a Bundle. Never shown.
 	tokenFile string
+	// fallbackTokenFile is the default token path when client.json relocated token_file to
+	// another directory, so a Bundle also reads entries logged during slow client.json reads.
+	fallbackTokenFile string
 }
 
 // Options configures one offline doctor run. RunLive is separate because it calls a model.
@@ -154,7 +157,8 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 	if opt.VersionTimeout == 0 {
 		opt.VersionTimeout = versionTimeout
 	}
-	resolved := (hubclient.EnvConfig{Getenv: opt.Layout.GetenvOr, DefaultTokenFile: defaultTokenFile(opt.Layout)}).Load()
+	defaultToken := defaultTokenFile(opt.Layout)
+	resolved := (hubclient.EnvConfig{Getenv: opt.Layout.GetenvOr, DefaultTokenFile: defaultToken}).Load()
 	hubURL, source := resolved.HubURL(), resolved.Source
 	if opt.HubURL != "" {
 		hubURL = opt.HubURL
@@ -167,15 +171,19 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 	if opt.TokenFile != "" {
 		tokenFile = opt.TokenFile
 	}
+	fallbackTokenFile := ""
+	if opt.TokenFile == "" || filepath.Clean(opt.TokenFile) == filepath.Clean(resolved.TokenFile) {
+		fallbackTokenFile = defaultToken
+	}
 	token, tokenReadErr := readToken(tokenFile)
 	probe := probeHub(ctx, hubURL, token, tokenReadErr, opt.HTTP)
-	res := Result{tokenFile: tokenFile, HubURL: hubURL, HubSource: source, HubUp: probe.up, TokenOK: probe.tokenOK, TokenUnchecked: probe.unchecked, TokenUnavailable: probe.unavailable, TokenDetail: probe.tokenDetail, HubDetail: probe.detail, DatabaseBytes: probe.databaseBytes}
+	res := Result{tokenFile: tokenFile, fallbackTokenFile: fallbackTokenFile, HubURL: hubURL, HubSource: source, HubUp: probe.up, TokenOK: probe.tokenOK, TokenUnchecked: probe.unchecked, TokenUnavailable: probe.unavailable, TokenDetail: probe.tokenDetail, HubDetail: probe.detail, DatabaseBytes: probe.databaseBytes}
 	res.Report.CheckedAt = opt.Now().UTC()
 	res.Report.Host = opt.host()
 	for _, c := range integrate.All() {
 		res.Report.Clients = append(res.Report.Clients, checkClient(ctx, opt, c))
 	}
-	if err := applyFailures(&res, tokenFile, opt.Now()); err != nil && res.HubDetail == "" {
+	if err := applyFailuresFrom(&res, tokenFile, fallbackTokenFile, opt.Now()); err != nil && res.HubDetail == "" {
 		res.HubDetail = "failure log: " + err.Error()
 	}
 	for i := range res.Report.Clients {
@@ -427,14 +435,18 @@ const slowLimit = 10
 // row keeps its status and says how many were skipped and what that may delay (ADR 017). An entry
 // proves that a hook ran, so it counts even when doctor found no configuration.
 func applyFailures(res *Result, tokenFile string, now time.Time) error {
+	return applyFailuresFrom(res, tokenFile, "", now)
+}
+
+func applyFailuresFrom(res *Result, tokenFile, fallbackTokenFile string, now time.Time) error {
 	if strings.TrimSpace(tokenFile) == "" {
 		return nil
 	}
-	entries, err := hook.ReadRecentFailures(tokenFile, failureRead)
+	entries, err := readMergedLog(tokenFile, fallbackTokenFile, hook.ReadRecentFailures)
 	if err != nil {
 		return err
 	}
-	seen, err := hook.ReadRecentObservations(tokenFile, failureRead)
+	seen, err := readMergedLog(tokenFile, fallbackTokenFile, hook.ReadRecentObservations)
 	if err != nil {
 		return err
 	}
@@ -566,6 +578,29 @@ func brokenText(entries []hook.Failure) string {
 // failureRead is how many log entries doctor reads: enough to count past slowLimit for every
 // client at once, and still within the 64 KiB the log keeps.
 const failureRead = 500
+
+// readMergedLog reads recent entries beside primary and, when fallback names a different
+// directory (as when client.json relocates token_file), beside fallback as well, merging both
+// logs in chronological order and retaining the newest failureRead entries.
+func readMergedLog(primary, fallback string, read func(string, int) ([]hook.Failure, error)) ([]hook.Failure, error) {
+	entries, err := read(primary, failureRead)
+	if err != nil {
+		return nil, err
+	}
+	if strings.TrimSpace(fallback) == "" || filepath.Clean(filepath.Dir(fallback)) == filepath.Clean(filepath.Dir(primary)) {
+		return entries, nil
+	}
+	extra, err := read(fallback, failureRead)
+	if err != nil {
+		return nil, err
+	}
+	entries = append(entries, extra...)
+	sort.SliceStable(entries, func(i, j int) bool { return entries[i].Time.Before(entries[j].Time) })
+	if len(entries) > failureRead {
+		entries = entries[len(entries)-failureRead:]
+	}
+	return entries, nil
+}
 
 func joinDetail(detail, note string) string {
 	if detail == "" {

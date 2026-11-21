@@ -19,6 +19,8 @@ import (
 	"time"
 
 	"github.com/mateusz-klatt/iris/internal/buildinfo"
+	"github.com/mateusz-klatt/iris/internal/hook"
+	"github.com/mateusz-klatt/iris/internal/hubclient"
 	"github.com/mateusz-klatt/iris/internal/integrate"
 	"github.com/mateusz-klatt/iris/internal/proc"
 	"github.com/mateusz-klatt/iris/internal/service"
@@ -635,5 +637,111 @@ func TestGuardRecordsTheStableIris(t *testing.T) {
 		if got := guardIris(tc.onPath, tc.self, tc.goos); got != tc.want {
 			t.Errorf("guardIris(%q, %s) = %q, want %q", tc.onPath, tc.goos, got, tc.want)
 		}
+	}
+}
+
+func TestIntegrateCreatesResolvedTokenDirectoryWith0700(t *testing.T) {
+	home := t.TempDir()
+	for _, key := range []string{"HOME", "USERPROFILE", "XDG_CONFIG_HOME", "AppData", "APPDATA"} {
+		t.Setenv(key, home)
+	}
+	t.Setenv("IRIS_TOKEN_FILE", "")
+	t.Setenv("CODEX_HOME", filepath.Join(home, "codex"))
+	t.Setenv("IRIS_STATE_DIR", filepath.Join(home, "state"))
+	t.Setenv("PATH", t.TempDir())
+
+	cfgDir, err := (integrate.Layout{}).IrisConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Removing an integration must not create the Iris configuration directory.
+	capture(t, func() {
+		if code := runIntegrate([]string{"codex", "--remove"}); code != 0 {
+			t.Fatalf("remove on fresh home = %d", code)
+		}
+	})
+	if _, err := os.Stat(cfgDir); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("--remove created config dir: %v", err)
+	}
+
+	// Plain `iris integrate codex` creates the configuration directory with 0700 so early
+	// hook failures are logged even before `iris setup` or `iris serve` runs.
+	capture(t, func() {
+		if code := runIntegrate([]string{"codex"}); code != 0 {
+			t.Fatalf("integrate codex = %d", code)
+		}
+	})
+	info, err := os.Stat(cfgDir)
+	if err != nil || !info.IsDir() {
+		t.Fatalf("config dir missing after integrate: %v", err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o700 {
+		t.Fatalf("config dir mode = %o, want 700", info.Mode().Perm())
+	}
+	out := (hook.Runner{
+		ClientName: "codex",
+		EventName:  "PreToolUse",
+		Stdin:      strings.NewReader("{"),
+		Getenv:     os.Getenv,
+	}).Run()
+	if out.Exit != 0 {
+		t.Fatalf("failing hook exit = %d", out.Exit)
+	}
+	tokenFile := filepath.Join(cfgDir, "hub.token")
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		if entries, err := hook.ReadRecentFailures(tokenFile, 5); err == nil && len(entries) == 1 {
+			break
+		}
+		if time.Now().After(deadline) {
+			entries, err := hook.ReadRecentFailures(tokenFile, 5)
+			t.Fatalf("early hook failure was not recorded after integrate: %+v, err=%v", entries, err)
+		}
+	}
+
+	// When client.json relocates token_file into another directory, `iris integrate` creates
+	// that relocated directory too.
+	relocatedDir := filepath.Join(home, "relocated-cfg")
+	relocatedToken := filepath.Join(relocatedDir, "hub.token")
+	if err := hubclient.WriteConfig(filepath.Join(cfgDir, "client.json"), hubclient.FileConfig{
+		Hub:       "http://127.0.0.1:7878",
+		TokenFile: relocatedToken,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	capture(t, func() {
+		if code := runIntegrate([]string{"codex"}); code != 0 {
+			t.Fatalf("integrate with relocated token_file = %d", code)
+		}
+	})
+	info, err = os.Stat(relocatedDir)
+	if err != nil || !info.IsDir() {
+		t.Fatalf("relocated token dir missing after integrate: %v", err)
+	}
+	if runtime.GOOS != "windows" && info.Mode().Perm() != 0o700 {
+		t.Fatalf("relocated token dir mode = %o, want 700", info.Mode().Perm())
+	}
+
+	// A blocked token directory fails integrate with exit 1 and reports the error.
+	blocker := filepath.Join(home, "not-a-dir")
+	if err := os.WriteFile(blocker, []byte("x"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("IRIS_TOKEN_FILE", filepath.Join(blocker, "hub.token"))
+	_, errText := capture(t, func() {
+		if code := runIntegrate([]string{"codex"}); code != 1 {
+			t.Fatalf("blocked config dir exit = %d, want 1", code)
+		}
+	})
+	if !strings.Contains(errText, "config dir:") {
+		t.Fatalf("blocked config dir stderr = %q", errText)
+	}
+
+	// Unresolvable configuration directory returns an error.
+	for _, key := range []string{"HOME", "USERPROFILE", "XDG_CONFIG_HOME", "AppData", "APPDATA", "IRIS_TOKEN_FILE"} {
+		t.Setenv(key, "")
+	}
+	if err := ensureIntegrateConfigDir(integrate.Layout{Getenv: func(string) string { return "" }}); err == nil {
+		t.Fatal("expected error when configuration directory cannot be resolved")
 	}
 }

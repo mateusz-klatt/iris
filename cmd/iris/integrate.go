@@ -5,9 +5,11 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 
 	"github.com/mateusz-klatt/iris/internal/hook"
+	"github.com/mateusz-klatt/iris/internal/hubclient"
 	"github.com/mateusz-klatt/iris/internal/integrate"
 )
 
@@ -73,6 +75,7 @@ func runIntegrate(args []string) int {
 	layout := integrateLayout()
 	plugins := integrate.ExecPlugins{}
 	code := 0
+	integrated := false
 	for _, name := range names {
 		// names are Canonical or integrate.Names, both of which ByName resolves.
 		c, _ := integrate.ByName(name)
@@ -114,12 +117,34 @@ func runIntegrate(args []string) int {
 			fmt.Printf("removed %s\n", name)
 			continue
 		}
+		integrated = true
 		fmt.Printf("integrated %s\n", name)
 		if step := humanStep(c, layout); step != "" {
 			fmt.Printf("%s: %s\n", name, step)
 		}
 	}
+	if integrated {
+		if err := ensureIntegrateConfigDir(layout); err != nil {
+			fmt.Fprintf(os.Stderr, "config dir: %v\n", err)
+			code = 1
+		}
+	}
 	return code
+}
+
+// ensureIntegrateConfigDir creates the resolved Iris token directory with 0700 in the
+// foreground so early hook failures are recorded after standalone `iris integrate`,
+// without the hook recorder creating directories from an abandoned goroutine.
+func ensureIntegrateConfigDir(layout integrate.Layout) error {
+	dir, err := layout.IrisConfigDir()
+	if err != nil {
+		return err
+	}
+	tokenPath, _ := (hubclient.EnvConfig{
+		Getenv:           layout.GetenvOr,
+		DefaultTokenFile: filepath.Join(dir, "hub.token"),
+	}).TokenPath()
+	return os.MkdirAll(filepath.Dir(tokenPath), 0o700)
 }
 
 // humanStep is what a person must still do before the client runs Iris, read as doctor reads it:

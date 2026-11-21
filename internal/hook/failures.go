@@ -419,8 +419,8 @@ func appendFailure(tokenFile string, entry Failure) error {
 	}
 	// Log only beside an existing configuration directory. Creating missing directories here
 	// would let an abandoned recorder goroutine recreate a directory after a test or user
-	// removed it; a fresh host without an Iris configuration directory yet gets no failure
-	// log until setup, serve or token placement creates that directory.
+	// removed it; foreground `iris integrate`, `iris setup`, `iris serve` or token placement
+	// creates that directory.
 	// Only a special file is refused here. Anything Lstat cannot inspect, opening reports.
 	if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
 		return errors.New("failure log is not a regular file")

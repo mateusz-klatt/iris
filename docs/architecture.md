@@ -82,31 +82,38 @@ Hard rules for `iris hook`, because failure semantics differ between clients:
 
 1. Everything is caught. A failure of any kind produces that client's valid allow output.
 2. The exit code is non-zero only for a deliberate deny on a client whose contract requires it.
-3. A 1.5 s internal deadline ends the hook; the client-side timeout is set to 3 s explicitly,
-   because defaults reach 600 s. Antigravity's is 10 s, because there a timeout kills the hook
-   and fails the tool call, MCP tools included (measured on 1.5.3), and no guard can turn that
-   into an allow. With 10 s the internal deadline fails open long before. What remains is a
-   hook that stalls before its own deadline can act, or a hung process: on Antigravity that
-   still denies every tool for as long as it lasts.
+3. A 1.5 s internal deadline ends the hook's work, followed by up to 50 ms for best-effort failure
+   logging before the allow output is written (about 1.55 s total); the client-side timeout is set
+   to 3 s explicitly, because defaults reach 600 s. Antigravity's is 10 s, because there a
+   timeout kills the hook and fails the tool call, MCP tools included (measured on 1.5.3), and no
+   guard can turn that into an allow. With 10 s the internal deadline fails open long before. What
+   remains is a hook that stalls before its own deadline can act, or a hung process: on Antigravity
+   that still denies every tool for as long as it lasts.
 4. Non-mutating tools return without touching the network.
 5. Outside a git worktree the hook registers, renews, tells attention and ends the session on
    the outside route, and an edit or a shell command there makes no request and takes no claim
    (ADR 034). A hub without that route gets nothing, as before. `iris doctor`'s canary, which runs
    in an empty directory, reaches no hub.
 6. Every fallback to allow caused by a failure is recorded in `hook-failures.log`, without payload
-   content, and `iris doctor` reports it. The recorder writes only beside an existing configuration
-   directory and never creates it, so on a fresh host with no Iris configuration directory yet,
-   hook failures go unlogged until `iris setup`, `iris serve` or token placement creates that
-   directory. When `client.json` is unreadable or stalls past the recorder's brief lookup budget,
-   an entry falls back to `IRIS_TOKEN_FILE` or the default token directory rather than a relocated
-   `token_file` inside `client.json`. A failure graded `silent` is described as a fail-open in the
-   last 24 hours, warning that edits may have gone unclaimed. This history cannot establish current
-   client downtime or identify which edits went unclaimed. A silent fail-open once hid a real bypass:
-   Copilot sends no tool call id, the hub refused the request, and the edit went through a live claim.
-   Unknown tools and cross-loads are not failures, but doctor reports them too, from
-   `hook-observed.log` (gap review C4). Neither is a session-file operation a hook skipped, such
-   as a told state its lock budget kept it from writing: the hook's allow or deny is unaffected,
-   and doctor counts them beside the row's status (ADR 017).
+   content, and `iris doctor` reports it. Recording runs under a 50 ms post-deadline budget (with
+   any `client.json` lookup bounded to 15 ms inside it), so on a timeout the allow output arrives
+   up to 50 ms after the 1.5 s deadline. The recorder writes only beside an existing configuration
+   directory and never creates it; `iris integrate`, `iris setup`, `iris serve` and token placement
+   create that directory in the foreground, so a hook failure goes unlogged only if the
+   configuration directory does not exist (for example, if it was removed or hooks were configured
+   without running `iris integrate`). When `IRIS_TOKEN_FILE` is unset and `client.json` is
+   unreadable or stalls past the 15 ms lookup budget, the entry falls back to `hook-failures.log`
+   beside the default token path rather than a relocated `token_file` inside `client.json`. When
+   `client.json` relocates `token_file` into another directory, `iris doctor` (and
+   `iris doctor --bundle`) reads both the relocated and default logs and merges them by time. A
+   failure graded `silent` is described as a fail-open in the last 24 hours, warning that edits may
+   have gone unclaimed. This history cannot establish current client downtime or identify which
+   edits went unclaimed. A silent fail-open once hid a real bypass: Copilot sends no tool call id,
+   the hub refused the request, and the edit went through a live claim. Unknown tools and
+   cross-loads are not failures, but doctor reports them too, from `hook-observed.log` (gap review
+   C4), using the same relocated-plus-default merge. Neither is a session-file operation a hook
+   skipped, such as a told state its lock budget kept it from writing: the hook's allow or deny is
+   unaffected, and doctor counts them beside the row's status (ADR 017).
 7. A client that provides no tool call id gets one derived from a hash of the raw payload.
 
 A hook is a new process, so every call starts with DNS, TCP and TLS. Against the public hub a lost
