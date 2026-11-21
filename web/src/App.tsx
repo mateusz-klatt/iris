@@ -347,6 +347,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   // A host's context of sessions outside git is no project; its agents and mail stay (ADR 034).
   const projects = overview?.repositories.filter((repository) => repository.kind !== "outside") ?? [];
   const canSend = !member || writableRepositories.some((repository) => repository.id === repositoryId);
+  const outsideScopes = Object.fromEntries((overview?.repositories ?? []).filter((repository) => repository.kind === "outside").map((repository) => [repository.id, recordName(repository, t)]));
   const recipientAgents = member ? sessions.filter((agent) => writableRepositories.some((repository) => repository.id === agent.repository_id)) : sessions;
   const validRecipients = (draft: Draft) => recipientsOf(draft.to).every((id) => (!member && id === "human") || recipientAgents.some((agent) => agent.id === id));
   const replyVisible = !member || thread?.messages.some((message) => message.id === reply.replyTo) === true;
@@ -862,7 +863,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
                     }}
                   >
                     <h3>{t("operator.reply")}</h3>
-                    {member ? <RecipientPicker agents={recipientAgents} selected={recipientsOf(reply.to)} allowHuman={false} onChange={(ids) => setReply(edited(reply, { to: ids.join(", ") }))} /> : <label>
+                    {member ? <RecipientPicker agents={recipientAgents} scopes={outsideScopes} selected={recipientsOf(reply.to)} allowHuman={false} onChange={(ids) => setReply(edited(reply, { to: ids.join(", ") }))} /> : <label>
                       {t("operator.recipients")}
                       <input value={reply.to} onChange={(event) => setReply(edited(reply, { to: event.target.value }))} />
                     </label>}
@@ -1016,7 +1017,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
                     {(member ? writableRepositories : overview.repositories).map((repository) => <option key={repository.id} value={repository.id}>{recordName(repository, t)} · {repository.id}</option>)}
                   </select>
                 </label>
-                <RecipientPicker agents={recipientAgents} allowHuman={!member} selected={composeRecipients} onChange={(ids) => setCompose(edited(compose, { to: ids.join(", ") }))} />
+                <RecipientPicker agents={recipientAgents} scopes={outsideScopes} allowHuman={!member} selected={composeRecipients} onChange={(ids) => setCompose(edited(compose, { to: ids.join(", ") }))} />
                 <label>
                   {t("operator.subject")}
                   <input value={compose.subject} onChange={(event) => setCompose(edited(compose, { subject: event.target.value }))} />

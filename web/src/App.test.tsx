@@ -313,6 +313,9 @@ describe("Iris operator console", () => {
     expect(within(row).getByText("outside git · home")).toBeVisible();
     await user.click(screen.getByRole("button", { name: "+ New message" }));
     expect(screen.getByRole("option", { name: "outside git · home · rp_outside" })).toBeInTheDocument();
+    // The recipient picker names the agent's host context too; a project's agent keeps its id alone.
+    expect(screen.getByRole("checkbox", { name: "codex-home-tmpoutside git · home · ag_tmp" })).toBeInTheDocument();
+    expect(screen.getByRole("checkbox", { name: "claude-hostag_claude" })).toBeInTheDocument();
   });
 
   it("shows a live wait and the silent client's cause when nothing is in session", async () => {

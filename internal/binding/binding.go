@@ -268,8 +268,9 @@ func (r *Resolver) register(ctx context.Context, session string, a proc.Ancestor
 		// same request on the session route, as before, and makes a project of the folder.
 		response, err = r.Hub.RegisterOutsideSession(ctx, req)
 		if hubclient.OlderHub(err) {
-			r.olderHub = true
 			response, err = r.Hub.RegisterSession(ctx, req)
+			// Said only once the legacy registration it reports has happened.
+			r.olderHub = r.olderHub || err == nil
 		}
 	}
 	if err != nil {

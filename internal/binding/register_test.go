@@ -142,10 +142,16 @@ func TestAnOwnExecutionOutsideGitRegistersOnItsRoute(t *testing.T) {
 	if len(hub.routes) != 1 || hub.routes[0] != "/v1/sessions/outside" || hub.session.Worktree != "" || hub.session.CommonDir != "" {
 		t.Fatalf("%v %+v", hub.routes, hub.session)
 	}
-	older := &scriptedHub{binds: []string{"unbound", "unbound"}, older: true}
+	older := &scriptedHub{binds: []string{"unbound", "unbound", "unbound"}, older: true, register: "denied"}
 	var said []string
 	r = resolverFor(t, older, "grok", map[string]string{"GROK_SESSION_ID": "s"}, proc.Ancestor{})
 	r.Observe = func(text string) { said = append(said, text) }
+	// A legacy registration the hub refuses is not reported as made.
+	if _, err := r.Resolve(context.Background(), ""); !IsCode(err, "denied") || len(said) != 0 {
+		t.Fatalf("%v, said %v", err, said)
+	}
+	older.register = ""
+	older.routes = nil
 	if _, err := r.Resolve(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
