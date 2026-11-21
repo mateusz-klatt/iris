@@ -49,7 +49,7 @@ project, "whether one works in the snapper-frontend checkout or in the submodule
    submodule, a nested repository and another project's checkout are each their own. The path is
    made relative to that worktree. A nested `.git` that cannot be read leaves its paths with the
    event's checkout, as before. A path in no checkout takes no claim, as a session outside git
-   takes none (D3, rule 5). `frontend/src/x.ts` belongs to the submodule. The gitlink `frontend`
+   takes none (D3, rule 5; since ADR 034, no path of such a session takes one). `frontend/src/x.ts` belongs to the submodule. The gitlink `frontend`
    itself, and a prefix that contains it, belong to the superproject.
 2. **One tool call is one grouped touch.** A hook whose hub names `file_claims` sends every edit as
    groups on `POST /v1/claims/touch/files`. Each group names one checkout, the event's own

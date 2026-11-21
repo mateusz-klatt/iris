@@ -511,6 +511,10 @@ history and must never be used as a substitute.
    the copy after applying. The hub's ordinary restart recovery and retention
    apply to this copy; its running clients cannot reattach to a scratch token.
 
+   A folder project, the record a hub before ADR 034 made for a session outside git, moves into
+   its host's context with `iris admin merge --outside --from <folder-id> --into <context-id>`,
+   rehearsed the same way. Its dry run lists the aliases, waits and shell baselines it drops.
+
    A repository that learned aliases from another checkout (ADR 032), such as a submodule's path
    or another project's remote, keeps them after a merge. List them in the copy and plan their
    removal with `iris admin unalias --repository <id> --dry-run -`, which reads the aliases one a

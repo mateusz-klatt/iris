@@ -5,6 +5,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -64,11 +65,18 @@ func TestStalledAdoptionDoesNotReplaceALiveGeneration(t *testing.T) {
 					}
 					return ""
 				}, Ancestor: func() (proc.Ancestor, error) { return proc.Ancestor{PID: 42, StartMS: 77}, nil }}
+				// The session runs in a checkout, so its fallback Execution may claim (ADR 034).
+				if err := os.MkdirAll(filepath.Join(r.CWD, ".git"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(r.CWD, ".git", "HEAD"), []byte("ref: refs/heads/main\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
 				before, err := r.Resolve(ctx, "")
 				if err != nil || !r.own || before.Generation != 1 {
 					t.Fatalf("fallback registration: %+v, own %v, err %v", before, r.own, err)
 				}
-				hook := store.Request{Client: "claude", Host: "host", SessionID: "running", Cwd: r.CWD, Source: "hook", ClientPID: 42, ClientPIDStartMS: 77}
+				hook := store.Request{Client: "claude", Host: "host", SessionID: "running", Cwd: r.CWD, Worktree: r.CWD, Source: "hook", ClientPID: 42, ClientPIDStartMS: 77}
 				if stage == "handover" {
 					// On Claude resume the MCP's session id can differ from the hook's.
 					late := hook

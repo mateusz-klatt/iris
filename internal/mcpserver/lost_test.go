@@ -369,7 +369,8 @@ func TestReleasedClaimReplayExplainsRecoveryWithoutLosingTheSession(t *testing.T
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = s.Close() })
-	registration, err := s.Call(context.Background(), "sessions", store.Request{Client: "claude", Host: "h", SessionID: "s", Cwd: t.TempDir()})
+	dir := t.TempDir()
+	registration, err := s.Call(context.Background(), "sessions", store.Request{Client: "claude", Host: "h", SessionID: "s", Cwd: dir, Worktree: dir})
 	if err != nil {
 		t.Fatal(err)
 	}

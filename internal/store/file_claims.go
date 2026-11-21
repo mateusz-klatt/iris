@@ -39,6 +39,9 @@ func (t *transaction) touchFiles(r Request) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if e.Outside {
+		return nil, noClaims()
+	}
 	if r.ToolCallID == "" {
 		return nil, fail("bad_request", "tool_call_id is required")
 	}

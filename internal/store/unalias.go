@@ -1,5 +1,7 @@
 package store
 
+import "strings"
+
 // unalias removes exact alias mappings from one repository: the owner's repair for aliases a
 // repository learned from another checkout, a submodule or another project (ADR 032). It
 // removes only that repository's mapping of each alias, never another repository's mapping of
@@ -14,6 +16,11 @@ func (t *transaction) unalias(r Request) (map[string]any, error) {
 	}
 	if known == 0 {
 		return nil, fail("not_found", "unknown repository")
+	}
+	for _, alias := range r.Aliases {
+		if strings.HasPrefix(alias, outsidePrefix) {
+			return nil, fail("conflict", "the marker of a host's context of sessions outside git cannot be removed (ADR 034)")
+		}
 	}
 	removed, absent := []string{}, []string{}
 	seen := map[string]bool{}

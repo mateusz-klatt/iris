@@ -55,7 +55,7 @@ func TestGenerationBumpLogsItsCauseWithoutSessionContent(t *testing.T) {
 		}
 		return out
 	}
-	registration := map[string]any{"client": "sensitive-client", "session_id": "sensitive-session", "host": "sensitive-host", "cwd": "/sensitive-path", "source": "hook", "body": "sensitive-body"}
+	registration := map[string]any{"client": "sensitive-client", "session_id": "sensitive-session", "host": "sensitive-host", "cwd": "/sensitive-path", "worktree": "/sensitive-path", "source": "hook", "body": "sensitive-body"}
 	first := call("POST", "/v1/sessions", registration, 200)
 	initialID := first["execution_id"].(string)
 	for range 5 {

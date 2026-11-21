@@ -32,7 +32,7 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 		// A merge plan and a refused merge must leave even expired leases and
 		// delivery attempts untouched. The merge checks liveness without expiring.
 		// An unalias plan likewise changes nothing.
-		if operation != "merge" && operation != "unalias" {
+		if operation != "merge" && operation != "merge_outside" && operation != "unalias" {
 			if err := t.expire(); err != nil {
 				return err
 			}
@@ -90,6 +90,8 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 			out, err = t.check(r)
 		case "sessions":
 			out, err = t.session(r)
+		case "sessions_outside":
+			out, err = t.sessionOutside(r)
 		case "bind":
 			out, err = t.bind(r)
 		case "heartbeat":
@@ -149,6 +151,8 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 			out, err = t.hooksSeen(r.Host)
 		case "forget":
 			out, err = t.forget(r)
+		case "merge_outside":
+			out, err = t.mergeOutside(r)
 		case "merge":
 			out, err = t.mergeRepositories(r)
 		case "unalias":
@@ -177,25 +181,26 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 		default:
 			return fail("not_found", "unknown operation")
 		}
-		if err == nil && (operation == "sessions" || operation == "heartbeat") {
+		registers := operation == "sessions" || operation == "sessions_outside"
+		if err == nil && (registers || operation == "heartbeat") {
 			ex := r.ExecutionID
-			if operation == "sessions" {
+			if registers {
 				ex, _ = out["execution_id"].(string)
 			}
 			_, err = t.exec("UPDATE Execution SET last_seen_ms=? WHERE id=?", t.s.clock.Now().UnixMilli(), ex)
 		}
 		// Only hooks register with source hook, claim automatically or reconcile a shell, so
 		// these say when this client's hooks last reached the hub. A heartbeat does not.
-		if err == nil && (operation == "touch" || operation == "touch_files" || operation == "reconcile" || operation == "reconcile_scoped" || (operation == "sessions" && r.Source == "hook")) {
+		if err == nil && (operation == "touch" || operation == "touch_files" || operation == "reconcile" || operation == "reconcile_scoped" || (registers && r.Source == "hook")) {
 			ex := r.ExecutionID
-			if operation == "sessions" {
+			if registers {
 				ex, _ = out["execution_id"].(string)
 			}
 			_, err = t.exec("UPDATE Execution SET hook_seen_ms=? WHERE id=?", t.s.clock.Now().UnixMilli(), ex)
 		}
 		if err == nil {
 			switch operation {
-			case "sessions", "end", "touch", "touch_files", "claim", "claim_files", "release", "messages", "ack":
+			case "sessions", "sessions_outside", "end", "touch", "touch_files", "claim", "claim_files", "release", "messages", "ack":
 				err = t.event("", "", "changed", "")
 			}
 		}
