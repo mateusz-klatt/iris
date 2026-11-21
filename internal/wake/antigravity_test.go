@@ -43,6 +43,10 @@ type fakeLSResponse struct {
 }
 
 func TestMain(m *testing.M) {
+	if len(os.Args) == 2 && os.Args[1] == "fake-agy-sleep" {
+		time.Sleep(time.Minute)
+		os.Exit(0)
+	}
 	if len(os.Args) >= 2 && os.Args[1] == "watch" {
 		if len(os.Args) == 5 && slices.Equal(os.Args[1:5], []string{"watch", "--client", "antigravity", "--wake"}) && os.Getenv("ANTIGRAVITY_CSRF_TOKEN") == "sleep-for-spawn-test" {
 			time.Sleep(10 * time.Second)
@@ -269,7 +273,9 @@ func (h *agyTestHarness) baseOptions(convID, csrf string) antigravityOptions {
 	opts.ancestor = func() (proc.Ancestor, error) {
 		return proc.Ancestor{PID: h.agyPID, StartMS: h.agyStartMS, Name: "agy"}, nil
 	}
-	opts.executable = func(int, int64) (string, error) { return h.selfExe, nil }
+	opts.executable = func(int, int64) (*proc.ProcessExecutable, error) {
+		return &proc.ProcessExecutable{Path: h.selfExe}, nil
+	}
 	opts.irisExecutable = func() (string, error) { return h.selfExe, nil }
 	opts.host = "test-host"
 	opts.cwd = "/repo"
@@ -447,7 +453,10 @@ func TestAntigravityParentPreflightOwnershipScrubbingAndFailureLatch(t *testing.
 		}
 	})
 	checkPreflightFail("executable missing", func(o *antigravityOptions) {
-		o.executable = func(int, int64) (string, error) { return "", proc.ErrNotFound }
+		o.executable = func(int, int64) (*proc.ProcessExecutable, error) { return nil, proc.ErrNotFound }
+	})
+	checkPreflightFail("executable deleted", func(o *antigravityOptions) {
+		o.executable = func(int, int64) (*proc.ProcessExecutable, error) { return nil, proc.ErrExecutableDeleted }
 	})
 	checkPreflightFail("empty csrf", func(o *antigravityOptions) {
 		base := o.getenv
@@ -920,7 +929,7 @@ func TestAntigravityClassificationFinalAdmissionDeferralsAndStateEdges(t *testin
 		configDir:    h.configDir,
 		owner:        hook.AntigravityHelperOwner{AgyPID: h.agyPID, AgyStartMS: h.agyStartMS, SessionID: convID},
 		agentEnv:     []string{"ANTIGRAVITY_LS_ADDRESS=" + h.lsAddr, "ANTIGRAVITY_CSRF_TOKEN=tok", "GOCOVERDIR=" + t.TempDir()},
-		executable:   func(int, int64) (string, error) { return "", proc.ErrNotFound },
+		executable:   func(int, int64) (*proc.ProcessExecutable, error) { return nil, proc.ErrNotFound },
 		now:          func() time.Time { return time.UnixMilli(1000) },
 		queueTimeout: 40 * time.Millisecond,
 		waitDelay:    10 * time.Millisecond,
@@ -928,7 +937,13 @@ func TestAntigravityClassificationFinalAdmissionDeferralsAndStateEdges(t *testin
 	if _, det, differs := cmds.check(context.Background(), ""); det != antigravityExeUnavailable || differs {
 		t.Fatalf("missing exe check = %q, %v", det, differs)
 	}
-	cmds.executable = func(int, int64) (string, error) { return h.selfExe, nil }
+	cmds.executable = func(int, int64) (*proc.ProcessExecutable, error) { return nil, proc.ErrExecutableDeleted }
+	if _, det, differs := cmds.check(context.Background(), ""); det != antigravityExeDeleted || differs {
+		t.Fatalf("deleted exe check = %q, %v", det, differs)
+	}
+	cmds.executable = func(int, int64) (*proc.ProcessExecutable, error) {
+		return &proc.ProcessExecutable{Path: h.selfExe}, nil
+	}
 	if info, det, differs := cmds.check(context.Background(), ""); det != "" || differs || info.Path != h.selfExe {
 		t.Fatalf("healthy check = %+v, %q, %v", info, det, differs)
 	}
@@ -960,14 +975,23 @@ func TestAntigravityClassificationFinalAdmissionDeferralsAndStateEdges(t *testin
 		"conversationId": convID, "executionNum": 0, "continuationActive": false, "fullyIdle": true, "terminationReason": "NO_TOOL_CALL",
 	})
 
-	// Final admission when executable disappeared -> aborted with antigravityExeUnavailable.
-	cmds.executable = func(int, int64) (string, error) { return "", proc.ErrNotFound }
+	// Final admission when executable disappeared -> aborted with antigravityExeUnavailable,
+	// or antigravityExeDeleted when deleted-exe fallback failed.
+	cmds.executable = func(int, int64) (*proc.ProcessExecutable, error) { return nil, proc.ErrNotFound }
 	ans = cmds.queue(context.Background(), convID, "msg", func(start func() error) (bool, error) {
 		err := start()
 		return err == nil, err
 	})
 	if ans.answer != "aborted" || ans.detail != antigravityExeUnavailable {
 		t.Fatalf("missing exe final admission = %+v", ans)
+	}
+	cmds.executable = func(int, int64) (*proc.ProcessExecutable, error) { return nil, proc.ErrExecutableDeleted }
+	ans = cmds.queue(context.Background(), convID, "msg", func(start func() error) (bool, error) {
+		err := start()
+		return err == nil, err
+	})
+	if ans.answer != "aborted" || ans.detail != antigravityExeDeleted {
+		t.Fatalf("deleted exe final admission = %+v", ans)
 	}
 
 	// Final admission when StartIfPrimary rejects binding change (or alive=false via antigravityTargetResolver).
@@ -1011,8 +1035,11 @@ func TestAntigravityClassificationFinalAdmissionDeferralsAndStateEdges(t *testin
 		t.Fatalf("alive=false at StartIfPrimary = %+v, canceled=%v", ans, canceled)
 	}
 
-	// cmd.Start OS error (non-existent binary path) -> failed with antigravitySendStartFailed.
-	cmds.executable = func(int, int64) (string, error) { return filepath.Join(t.TempDir(), "missing-agy"), nil }
+	// cmd.Start OS error (non-existent binary path) -> failed with antigravitySendStartFailed,
+	// or antigravityExeDeleted with restart guidance when starting a deleted-image fallback fails.
+	cmds.executable = func(int, int64) (*proc.ProcessExecutable, error) {
+		return &proc.ProcessExecutable{Path: filepath.Join(t.TempDir(), "missing-agy")}, nil
+	}
 	ans = cmds.queue(context.Background(), convID, "msg", func(start func() error) (bool, error) {
 		err := start()
 		return err == nil, err
@@ -1020,9 +1047,21 @@ func TestAntigravityClassificationFinalAdmissionDeferralsAndStateEdges(t *testin
 	if ans.answer != "failed" || ans.detail != antigravitySendStartFailed {
 		t.Fatalf("cmd.Start OS failure = %+v", ans)
 	}
+	cmds.executable = func(int, int64) (*proc.ProcessExecutable, error) {
+		return &proc.ProcessExecutable{Path: filepath.Join(t.TempDir(), "missing-agy (deleted)"), Deleted: true}, nil
+	}
+	ans = cmds.queue(context.Background(), convID, "msg", func(start func() error) (bool, error) {
+		err := start()
+		return err == nil, err
+	})
+	if ans.answer != "failed" || ans.detail != antigravityExeDeleted {
+		t.Fatalf("deleted cmd.Start OS failure = %+v", ans)
+	}
 
 	// Timeout / bound exceeded -> unknown.
-	cmds.executable = func(int, int64) (string, error) { return h.selfExe, nil }
+	cmds.executable = func(int, int64) (*proc.ProcessExecutable, error) {
+		return &proc.ProcessExecutable{Path: h.selfExe}, nil
+	}
 	h.mu.Lock()
 	h.nextResp = func(fakeLSRequest) fakeLSResponse { return fakeLSResponse{SleepMS: 250} }
 	h.mu.Unlock()
@@ -1034,13 +1073,13 @@ func TestAntigravityClassificationFinalAdmissionDeferralsAndStateEdges(t *testin
 		t.Fatalf("timeout classification = %+v", ans)
 	}
 
-	// Engine aborted retry delays for antigravityActive (15s) and antigravityExeUnavailable (60s),
-	// canonicalTargetSession uppercase rejection, state.go Scan validation & clearing on failed/aborted,
-	// and inspect.go Antigravity failure reasons.
+	// Engine aborted retry delays for antigravityActive (15s), antigravityExeUnavailable (60s)
+	// and antigravityExeDeleted (60s), canonicalTargetSession uppercase rejection, state.go
+	// Scan validation & clearing on failed/aborted, and inspect.go Antigravity failure reasons.
 	if _, ok := canonicalTargetSession(binding.WakeTarget{Client: "antigravity", SessionID: strings.ToUpper(convID)}); ok {
 		t.Fatal("canonicalTargetSession accepted uppercase Antigravity UUID")
 	}
-	for _, reason := range []string{antigravityExeUnavailable, antigravitySendStartFailed, antigravityRejectedWake} {
+	for _, reason := range []string{antigravityExeUnavailable, antigravityExeDeleted, antigravitySendStartFailed, antigravityRejectedWake} {
 		if got := inspectionFailureReason(reason); got != reason {
 			t.Fatalf("inspectionFailureReason(%q) = %q", reason, got)
 		}
@@ -1106,6 +1145,11 @@ func TestAntigravityClassificationFinalAdmissionDeferralsAndStateEdges(t *testin
 	resExe := eng.step(context.Background())
 	if !resExe.Due.Equal(nowTS.Add(60 * time.Second)) {
 		t.Fatalf("antigravityExeUnavailable abort delay = %v, want +60s", resExe.Due)
+	}
+	fakeCmds.queueAns = commandAnswer{answer: "aborted", detail: antigravityExeDeleted}
+	resDel := eng.step(context.Background())
+	if !resDel.Due.Equal(nowTS.Add(60 * time.Second)) {
+		t.Fatalf("antigravityExeDeleted abort delay = %v, want +60s", resDel.Due)
 	}
 	fakeCmds.queueAns = commandAnswer{answer: "aborted", detail: antigravityActive}
 	resAct := eng.step(context.Background())

@@ -120,6 +120,10 @@ func TestInspectFailureReasonsRecognizeOnlyExactPreSubmissionDiagnostics(t *test
 		"Kimi executable version could not be determined",
 		"Kimi executable and server versions differ",
 		"Kimi session is open in another Kimi process",
+		antigravityExeUnavailable,
+		antigravityExeDeleted,
+		antigravitySendStartFailed,
+		antigravityRejectedWake,
 	} {
 		d := testDocument(testAttempt(1, "binary_check", "failed"))
 		d.LastFailure = &failure{AtMS: 200, Detail: reason}

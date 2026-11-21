@@ -29,6 +29,7 @@ import (
 const (
 	antigravityActive          = "Antigravity session is active"
 	antigravityExeUnavailable  = "Antigravity executable is unavailable"
+	antigravityExeDeleted      = "the running agy executable was deleted, commonly by an in-place update; restart agy if wake stays unavailable"
 	antigravitySendStartFailed = "Antigravity send-message command could not start"
 	antigravityRejectedWake    = "Antigravity rejected the wake message"
 	antigravityHelperEnv       = "IRIS_AGY_HELPER"
@@ -46,7 +47,7 @@ type antigravityOptions struct {
 	runtimeEnv       func() ([]string, error)
 	ancestor         func() (proc.Ancestor, error)
 	lookup           func(int) (proc.Snapshot, bool)
-	executable       func(int, int64) (string, error)
+	executable       func(int, int64) (*proc.ProcessExecutable, error)
 	terminate        func(int, int64) error
 	selfPID          func() int
 	irisExecutable   func() (string, error)
@@ -78,7 +79,7 @@ func defaultAntigravityOptions() antigravityOptions {
 		runtimeEnv:       hubclient.PinnedRuntimeEnv,
 		ancestor:         proc.Nearest,
 		lookup:           proc.Lookup,
-		executable:       proc.Executable,
+		executable:       proc.OpenExecutable,
 		terminate:        proc.Terminate,
 		selfPID:          os.Getpid,
 		irisExecutable:   verifiedSelfExecutable,
@@ -229,10 +230,12 @@ func runAntigravityParent(parentCtx context.Context, opts antigravityOptions) er
 		latchFailed()
 		return errors.New("antigravity session ancestor is unavailable")
 	}
-	if _, err := opts.executable(anc.PID, anc.StartMS); err != nil {
+	img, err := opts.executable(anc.PID, anc.StartMS)
+	if err != nil {
 		latchFailed()
-		return errors.New("antigravity executable is unavailable")
+		return errors.New(antigravityExeFailure(err))
 	}
+	_ = img.Close()
 	csrf := opts.getenv("ANTIGRAVITY_CSRF_TOKEN")
 	if !validAntigravitySecret(csrf) {
 		latchFailed()
@@ -449,19 +452,27 @@ type antigravityCommands struct {
 	configDir    string
 	owner        hook.AntigravityHelperOwner
 	agentEnv     []string
-	executable   func(int, int64) (string, error)
+	executable   func(int, int64) (*proc.ProcessExecutable, error)
 	now          func() time.Time
 	queueTimeout time.Duration
 	waitDelay    time.Duration
 }
 
+func antigravityExeFailure(err error) string {
+	if errors.Is(err, proc.ErrExecutableDeleted) {
+		return antigravityExeDeleted
+	}
+	return antigravityExeUnavailable
+}
+
 func (c *antigravityCommands) check(_ context.Context, _ string) (binaryInfo, string, bool) {
 	info := binaryInfo{CheckedMS: c.now().UnixMilli()}
-	exe, err := c.executable(c.owner.AgyPID, c.owner.AgyStartMS)
+	img, err := c.executable(c.owner.AgyPID, c.owner.AgyStartMS)
 	if err != nil {
-		return info, antigravityExeUnavailable, false
+		return info, antigravityExeFailure(err), false
 	}
-	info.Path = exe
+	info.Path = img.Path
+	_ = img.Close()
 	return info, "", false
 }
 
@@ -492,29 +503,35 @@ func (c *antigravityCommands) queue(ctx context.Context, session, message string
 	out, errs := &limitedOutput{limit: 64 << 10}, &limitedOutput{limit: 64 << 10}
 	var cmd *exec.Cmd
 	abortDetail := "Session binding changed before message submission"
+	startFailedDetail := antigravitySendStartFailed
 	started, err := start(func() error {
 		conv, ok := hook.ReadAntigravityConvState(c.configDir, session)
 		if !ok || !conv.Idle {
 			abortDetail = antigravityActive
 			return errAntigravityDeferred
 		}
-		exe, exeErr := c.executable(c.owner.AgyPID, c.owner.AgyStartMS)
+		img, exeErr := c.executable(c.owner.AgyPID, c.owner.AgyStartMS)
 		if exeErr != nil {
-			abortDetail = antigravityExeUnavailable
+			abortDetail = antigravityExeFailure(exeErr)
 			return errAntigravityDeferred
 		}
-		cmd = exec.CommandContext(ctx, exe, "agentapi", "send-message", session, message)
+		defer func() { _ = img.Close() }()
+		cmd = img.Command(ctx, "agentapi", "send-message", session, message)
 		cmd.Env = c.agentEnv
 		proc.NoConsole(cmd)
 		cmd.Stdout, cmd.Stderr = out, errs
 		cmd.WaitDelay = c.waitDelay
-		return cmd.Start()
+		startErr := cmd.Start()
+		if startErr != nil && img.Deleted {
+			startFailedDetail = antigravityExeDeleted
+		}
+		return startErr
 	})
 	if !started {
 		if err == nil || errors.Is(err, errAntigravityDeferred) {
 			return commandAnswer{answer: "aborted", detail: abortDetail}
 		}
-		return commandAnswer{answer: "failed", detail: antigravitySendStartFailed}
+		return commandAnswer{answer: "failed", detail: startFailedDetail}
 	}
 	err = cmd.Wait()
 	if ctx.Err() != nil || out.overflow || errs.overflow {

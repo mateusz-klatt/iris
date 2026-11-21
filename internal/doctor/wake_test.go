@@ -325,3 +325,26 @@ func TestDoctorWakeDiagnosticsNeverEnterTheHubReport(t *testing.T) {
 		t.Fatalf("hub report differs from Report or contains local wake diagnostics: %s", stored)
 	}
 }
+
+func TestDoctorWakeReportsDeletedAntigravityExecutableWithRestartAdvice(t *testing.T) {
+	home := t.TempDir()
+	token := filepath.Join(home, "hub.token")
+	layout := integrate.Layout{Home: home, Getenv: func(string) string { return "" }}
+	guard := hook.NewSessions(token).WakePath("antigravity", "e28a6164-6409-4810-b8ee-df8202a16a0a")
+	if err := os.MkdirAll(filepath.Dir(guard), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	const wantReason = "the running agy executable was deleted, commonly by an in-place update; restart agy if wake stays unavailable"
+	body := []byte(`{"version":1,"rev":1,"client":"antigravity","binary":{"path":"/home/user/.local/bin/agy.1795283135508816615.old (deleted)","checked_ms":1000},"last_failure":{"at_ms":2000,"detail":"` + wantReason + `"},"attempts":[]}`)
+	if err := os.WriteFile(guard, body, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	lines := wakeReport(layout, token, time.Unix(1800000000, 0))
+	text := strings.Join(lines, "\n")
+	if !strings.Contains(text, `antigravity wake: guard`) || !strings.Contains(text, ": "+wantReason) {
+		t.Fatalf("doctor did not render deleted-exe Antigravity wake guidance:\n%s", text)
+	}
+	if strings.Contains(text, "Unrecognized wake failure") {
+		t.Fatalf("deleted-exe failure fell back to unrecognized:\n%s", text)
+	}
+}

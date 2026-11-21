@@ -145,6 +145,7 @@ func inspectionFailureReason(detail string) string {
 		"Kimi executable and server versions differ",
 		"Kimi session is open in another Kimi process",
 		antigravityExeUnavailable,
+		antigravityExeDeleted,
 		antigravitySendStartFailed,
 		antigravityRejectedWake:
 		return detail

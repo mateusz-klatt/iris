@@ -1,6 +1,7 @@
 package proc
 
 import (
+	"context"
 	"errors"
 	"os"
 	"os/exec"
@@ -107,6 +108,20 @@ func TestExecutableAndTerminateValidation(t *testing.T) {
 	exe, err := Executable(self.PID, self.StartMS)
 	if err != nil || !filepath.IsAbs(exe) {
 		t.Fatalf("Executable(self) = %q, %v", exe, err)
+	}
+	img, err := OpenExecutable(self.PID, self.StartMS)
+	if err != nil || img.Path != exe || img.Deleted {
+		t.Fatalf("OpenExecutable(self) = %+v, %v", img, err)
+	}
+	cmd := img.Command(context.Background(), "-test.run=^$")
+	if cmd.Path != img.Path || len(cmd.ExtraFiles) != 0 {
+		t.Fatalf("non-deleted Command = path %q extraFiles %d", cmd.Path, len(cmd.ExtraFiles))
+	}
+	if err := img.Close(); err != nil {
+		t.Fatalf("Close(path-backed) = %v", err)
+	}
+	if err := (*ProcessExecutable)(nil).Close(); err != nil {
+		t.Fatalf("Close(nil) = %v", err)
 	}
 	dir := t.TempDir()
 	reg := filepath.Join(dir, "agy")
