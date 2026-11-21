@@ -304,7 +304,7 @@ Each client gets the strongest tier it has:
 | Loaded foreground session | Copilot CLI extension runs `iris watch` and submits a fixed automation message through its SDK | Copilot CLI (experimental; [ADR 024](adr/024-copilot-extension-wake.md)) |
 | Asked at a user prompt | Model keeps one managed background task, `iris watch --client kimi --once`, whose end opens a turn | Kimi, on by default on Linux after its native acceptance, off on macOS and Windows until theirs; [ADR 030](adr/030-kimi-one-shot-wake.md) |
 | Asked at Stop | Model starts a persistent `iris watch` in the `monitor` tool | Grok, enabled by default; [ADR 025](adr/025-grok-stop-monitor.md) |
-| Asked at Stop, loaded idle session | Model starts a detached `iris watch --client antigravity --wake` helper after user approval; helper sends a fixed message through `agy agentapi send-message` | Antigravity, enabled by default; [ADR 028](adr/028-antigravity-idle-wake.md) |
+| Asked at Stop, loaded idle session | Model starts a detached `iris watch --client antigravity --wake` helper, which agy may ask the user to approve depending on its permission mode; helper sends a fixed message through `agy agentapi send-message` | Antigravity, enabled by default; [ADR 028](adr/028-antigravity-idle-wake.md) |
 | End of a turn | `stop` prints `followup_message` when attention is newer than told and `loop_count` is 0 | Cursor, on unless `--no-wake`; [ADR 029](adr/029-cursor-stop-followup.md) |
 | Instant, armed by the model | `Monitor` tool with a `ws` source | Claude Code |
 | Instant, Iris-owned session | App-server or ACP control of a session Iris started | Codex (measured), Copilot, Cursor, Antigravity, Grok, Kimi (later) |

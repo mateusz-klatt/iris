@@ -2,12 +2,13 @@
 
 ## Release and hub
 
-- **The latest release is [v0.1.4](https://github.com/mateusz-klatt/iris/releases/tag/v0.1.4).** It
-  was tagged at `eaf49bb21249af4b696e70cc36b38ba8830364c0` and published on 2026-11-14 from release
-  workflow [43628053270](https://github.com/mateusz-klatt/iris/actions/runs/43628053270). Its
+- **The latest release is [v0.1.7](https://github.com/mateusz-klatt/iris/releases/tag/v0.1.7).** It
+  was tagged at `2c9be89c09595c464391117b6b0871cdc6b5a209` and published on 2026-11-21 from release
+  workflow [44862728349](https://github.com/mateusz-klatt/iris/actions/runs/44862728349). Its
   assets, checksums, signatures, provenance and image were verified on the draft before it was
-  published. The Windows and macOS signatures were checked on those systems. Package-manager uploads
-  remain disabled.
+  published. The release workflow checked the Windows signatures on a Windows runner; the macOS
+  signatures were not checked on a Mac for this release. Package-manager uploads remain disabled.
+  v0.1.5 (`a4568f8`) and v0.1.6 (`8e194cf`) came before it, on 2026-11-14 and 2026-11-21.
 - **The public hub** runs at https://iris.klatt.ie behind Apache and Cloudflare (`docs/deploy.md`).
   It runs the latest release's signed image, or a newer build of `main` deployed between releases.
   This page does not name the running image. `iris-deploys.log` on the hub's host is the record of
