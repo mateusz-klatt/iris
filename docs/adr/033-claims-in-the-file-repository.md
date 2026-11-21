@@ -55,7 +55,8 @@ project, "whether one works in the snapper-frontend checkout or in the submodule
    groups on `POST /v1/claims/touch/files`. Each group names one checkout, the event's own
    included: its canonical worktree, worktree id, shared git directory, remote and root commit,
    with its paths. The hub recognises the Execution's own worktree, through the worktree id as
-   for registration (D6), and keeps the Execution's repository for it. Every other group is
+   for registration (D6) and with Windows spellings folded, and keeps the Execution's repository
+   for it, after the same known-root check a registration from there makes. Every other group is
    placed by decision 3. Then, in one transaction:
    - The hub de-duplicates paths by repository and case-folded key, then checks every path of
      every group.
@@ -69,8 +70,11 @@ project, "whether one works in the snapper-frontend checkout or in the submodule
    Grants, ignored paths and conflicts name their repository. A conflict outside the Execution's
    repository names that repository in the message, because its path is relative to a checkout the
    session may know as a submodule directory. The rename ends of a call are plain paths of their
-   groups. A replay is allowed only while each grant is still held in the repository it was granted
-   in. The grouped route keeps its own retry namespace, so a plain touch's retry hash is unchanged.
+   groups. A replay is allowed only while each grant is still held. It may be held as the same
+   claim, by its fence, which an owner's merge keeps. It may also be held as a claim on the same
+   path in the same repository, which a recovery keeps while it renumbers fences. A claim of the
+   same name in another repository never counts, for a plain touch's replay either. The grouped
+   route keeps its own retry namespace, so a plain touch's retry hash is unchanged.
 3. **The hub places a group without learning from the session.** It resolves the group's checkout
    with the registration rules (D11, ADR 012), scoped to the Execution's host:
    - A repository it resolves to is used and learns that checkout's aliases. That is the
@@ -100,10 +104,13 @@ project, "whether one works in the snapper-frontend checkout or in the submodule
 5. **A shell status from another checkout is not attributed.** The hook names the checkout each
    status was taken in, on the session route as before and now on the Execution route too. When
    that checkout is not the Execution's worktree, after the worktree id is folded in, the hub
-   keeps its baseline as it was. It takes, renews and releases nothing for that status. An older
-   hook's Execution-only status names no checkout and is reconciled as before. No snapshot table
-   changes: an older hub writes those tables by position. Claims made from another checkout by edit
-   tools stay until release, expiry or the end of the Execution.
+   keeps its baseline as it was. It takes, renews and releases nothing for that status. The
+   shared-worktree check runs first, so it still clears the baselines of a worktree another live
+   Execution shares. An older hook's Execution-only status names no checkout and is reconciled as
+   before. No snapshot table changes, because an older hub writes those tables by position.
+   Migration 027 drops the full baselines once: one written before this change records no checkout,
+   so it may be another checkout's. Each session's next shell command sets a new baseline. Claims
+   made from another checkout by edit tools stay until release, expiry or the end of the Execution.
 6. **Explicit claims will follow the same rule.** The MCP `claim` tool takes a path relative to the
    session's repository. A path below a checked-out submodule or nested checkout, found on disk
    from the Execution's worktree, is to be claimed in that checkout's repository, relative to it.
@@ -129,9 +136,15 @@ project, "whether one works in the snapper-frontend checkout or in the submodule
   Execution's worktree, so a superproject session's claim on a submodule file refuses that
   session's own commit in the submodule. The refusal stays, with its instruction to release first:
   the guard cannot tell who runs `git commit`.
-- The hook reads more `.git` entries: one walk per distinct directory of an edit, and the files of
-  any other checkout it finds. Inside the event's worktree the walk only checks for nested `.git`
-  entries up to that worktree. It runs inside the hook's 1.5 s deadline and fails open.
+- The hook reads more `.git` entries:
+  - It walks up from each directory of an edit, once per directory per call, and reads each other
+    checkout it finds once.
+  - Inside the event's worktree the walk only checks for nested `.git` entries up to that worktree.
+  - It looks before registering only when the event's checkout holds none of the paths. Otherwise it
+    looks only after a hub has named `file_claims`.
+
+  The walk runs inside the hook's 1.5 s deadline and fails open; its cost has not been measured
+  on a slow filesystem.
 
 ## Limits
 
@@ -144,3 +157,10 @@ project, "whether one works in the snapper-frontend checkout or in the submodule
 - A checkout the hub finds ambiguous takes no claim until the owner repairs the split (ADR 032).
 - A submodule that is not checked out has no `.git` entry, so its paths belong to the superproject.
 - Claims made before this change stay where they were taken until they expire or are released.
+- An availability event records the freed path, not its repository. When a monitor reconnects and
+  catches up, the path is compared with live claims in the session's own repository only. A path
+  freed in another repository can therefore be woken for once more after it was taken again, or
+  not be replayed when the session's own repository has a live claim of the same name. The live
+  event, sent when the path is freed, is not affected.
+- One Execution keeps one wait per path key and kind, so a wait on the same key in a second
+  repository replaces the first.

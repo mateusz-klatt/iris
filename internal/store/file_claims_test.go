@@ -1,6 +1,7 @@
 package store
 
 import (
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -393,5 +394,113 @@ func TestTheStricterOfTwoConflictingPoliciesDecides(t *testing.T) {
 	}
 	if out := call(t, s, "touch_files", filesTouch(parent, "warn-first", own, submodule("src/x.ts"))); out["action"] != "deny" {
 		t.Fatalf("warn then deny: %v", out)
+	}
+}
+
+// A plain touch's replay counts only a claim in the session's own repository: a claim of the same
+// name the session holds in another repository is another file, and must not let a replay through
+// a conflict that arose in between.
+func TestAPlainReplayIgnoresTheSameNameInAnotherRepository(t *testing.T) {
+	s, _, _ := testStore(t)
+	parent, _ := register(t, s, "parent", "/src/snapper", superRemote, "snapper-root")
+	plain := touchRequest(parent, "plain", "src/x.ts")
+	call(t, s, "touch", plain)
+	call(t, s, "release", Request{ExecutionID: parent.ExecutionID, Generation: parent.Generation, All: true})
+	call(t, s, "touch_files", filesTouch(parent, "grouped", submodule("src/x.ts")))
+	other, _ := register(t, s, "other", "/src/snapper", superRemote, "snapper-root")
+	call(t, s, "touch", touchRequest(other, "other", "src/x.ts"))
+	expectError(t, s, "touch", plain, "lost")
+}
+
+// The session's own checkout keeps the history check of a registration from there: a group of its
+// worktree with another known root is refused, not claimed in the old history's repository.
+func TestTheSessionsOwnWorktreeMustStillBeItsHistory(t *testing.T) {
+	s, _, _ := testStore(t)
+	parent, _ := register(t, s, "parent", "/src/snapper", superRemote, "snapper-root")
+	rewritten := ClaimGroup{Worktree: "/src/snapper", RemoteURL: superRemote, RootCommit: "rewritten-root", Paths: []string{"README.md"}}
+	expectError(t, s, "touch_files", filesTouch(parent, "rewritten", rewritten), "conflict")
+}
+
+// A worktree is the session's own however its separators, a trailing slash or, with a drive
+// letter, its case are spelled; a POSIX path differing in case is another directory.
+func TestWorktreeSpellingsOfOneDirectoryAreTheSame(t *testing.T) {
+	for _, c := range []struct {
+		a, b string
+		same bool
+	}{
+		{`C:\Repo`, "c:/repo/", true},
+		{"/src/app", "/src/app/", true},
+		{"/src/App", "/src/app", false},
+		{`C:\Repo`, `D:\Repo`, false},
+	} {
+		if got := sameWorktree(c.a, c.b); got != c.same {
+			t.Errorf("sameWorktree(%q, %q) = %v", c.a, c.b, got)
+		}
+	}
+	s, _, _ := testStore(t)
+	out := call(t, s, "sessions", Request{Client: "codex", Host: "host", SessionID: "win", Cwd: `C:\Repo`, Worktree: `C:\Repo`, RemoteURL: superRemote, RootCommit: "snapper-root", Source: "hook"})
+	win := Request{ExecutionID: out["execution_id"].(string), Generation: out["generation"].(int64)}
+	snap := func(kind string, status map[string]string) map[string]any {
+		r := win
+		r.Kind, r.Status, r.Worktree = kind, status, "c:/repo"
+		return call(t, s, "reconcile", r)
+	}
+	snap("before", map[string]string{})
+	if got := snap("after", map[string]string{"main.go": " M"})["claimed"]; !reflect.DeepEqual(got, []string{"main.go"}) {
+		t.Fatalf("another spelling of the worktree claimed %v", got)
+	}
+}
+
+// A status from another checkout still clears the baselines of a worktree that another live
+// Execution now shares, so a later status cannot attribute that Execution's changes.
+func TestAForeignStatusStillClearsASharedWorktreesBaselines(t *testing.T) {
+	s, _, _ := testStore(t)
+	a, _ := register(t, s, "a", "/src/snapper", superRemote, "snapper-root")
+	before := a
+	before.Kind, before.Status, before.Worktree = "before", map[string]string{}, "/src/snapper"
+	call(t, s, "reconcile", before)
+	register(t, s, "b", "/src/snapper", superRemote, "snapper-root")
+	foreign := a
+	foreign.Kind, foreign.Status, foreign.Worktree = "after", map[string]string{"src/x.ts": " M"}, "/src/snapper/frontend"
+	call(t, s, "reconcile", foreign)
+	var kept int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM ShellSnapshot WHERE execution_id=?", a.ExecutionID).Scan(&kept); err != nil || kept != 0 {
+		t.Fatalf("%d baselines kept, %v", kept, err)
+	}
+}
+
+// A replay of a grouped touch survives the owner's merge of the file's repository, because its
+// grants are checked by fence, which the merge keeps.
+func TestAGroupedReplaySurvivesAMergeOfItsRepository(t *testing.T) {
+	s, _, _ := testStore(t)
+	parent, _ := register(t, s, "parent", "/src/snapper", superRemote, "snapper-root")
+	request := filesTouch(parent, "merged", submodule("src/x.ts"))
+	from := grantedIn(call(t, s, "touch_files", request))["src/x.ts"]
+	_, into := register(t, s, "frontend", "/work/frontend", "https://github.com/example/frontend-copy.git", "")
+	call(t, s, "merge", mergeRequest(from, into, false))
+	if replay := call(t, s, "touch_files", request); replay["action"] != "allow" {
+		t.Fatalf("replay after the merge: %v", replay)
+	}
+}
+
+// Migration 27 drops every full shell baseline once: one from before ADR 033 has no recorded
+// checkout, so it may have been taken in another checkout than its Execution's.
+func TestMigration27DropsUnprovenFullBaselines(t *testing.T) {
+	s, clock, file := testStore(t)
+	a, _ := session(t, s, 1)
+	if _, err := s.db.Exec(`INSERT INTO ShellSnapshot VALUES(?,'{"src/x.ts":" M"}'); PRAGMA user_version=26;`, a.ExecutionID); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(file, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = s.Close() })
+	var version, kept int
+	if err = s.db.QueryRow("SELECT (SELECT user_version FROM pragma_user_version),(SELECT COUNT(*) FROM ShellSnapshot)").Scan(&version, &kept); err != nil || version != latestVersion || kept != 0 {
+		t.Fatalf("version %d, %d baselines kept, %v", version, kept, err)
 	}
 }

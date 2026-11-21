@@ -40,12 +40,7 @@ func (r Runner) fileGroups(repo gitinfo.Repo, ev Event) []hubclient.ClaimGroup {
 			}
 			abs = joinPath(base, abs)
 		}
-		dir := filepath.Dir(abs)
-		place, known := places[dir]
-		if !known {
-			place = r.placeOf(dir, repo)
-			places[dir] = place
-		}
+		place := r.placeOf(filepath.Dir(abs), repo, places)
 		rel, err := gitinfo.Relative(place.Worktree, abs)
 		if err != nil || rel == "" {
 			continue
@@ -68,28 +63,41 @@ func (r Runner) fileGroups(repo gitinfo.Repo, ev Event) []hubclient.ClaimGroup {
 // placeOf is the checkout that holds dir. Walking up, it stops at repo's worktree, which it
 // already knows, or at the first directory with a .git entry, which it reads as the hook reads
 // any checkout (D11). A directory it cannot place, or whose checkout cannot be read, is repo's.
-func (r Runner) placeOf(dir string, repo gitinfo.Repo) gitinfo.Repo {
+// places remembers the answer for every directory the walk passed, so one call reads each
+// directory and each checkout once, however many of its paths share them.
+func (r Runner) placeOf(dir string, repo gitinfo.Repo, places map[string]gitinfo.Repo) gitinfo.Repo {
 	find := r.Find
 	if find == nil {
 		find = gitinfo.Find
 	}
+	var passed []string
+	place := repo
 	for d := dir; ; {
+		if known, ok := places[d]; ok {
+			place = known
+			break
+		}
+		passed = append(passed, d)
 		// Relative refuses the root itself, so the root is the directory whose .git is ".git".
 		if rel, err := gitinfo.Relative(repo.Worktree, filepath.Join(d, ".git")); err == nil && rel == ".git" {
-			return repo
+			break
 		}
 		if _, err := os.Lstat(filepath.Join(d, ".git")); err == nil {
 			if found, err := find(d); err == nil {
-				return found
+				place = found
 			}
-			return repo
+			break
 		}
 		parent := filepath.Dir(d)
 		if parent == d {
-			return repo
+			break
 		}
 		d = parent
 	}
+	for _, d := range passed {
+		places[d] = place
+	}
+	return place
 }
 
 // reconcileRequest names the checkout a shell status was taken in, so a hub that names

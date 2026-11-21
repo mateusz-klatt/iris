@@ -255,9 +255,13 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 			return state.fail(failNoPaths, allow)
 		}
 		paths, from, to := r.claimPaths(repo, ev)
-		groups := r.fileGroups(repo, ev)
-		if len(groups) == 0 {
-			return r.finish(state, ev, Encode(ev, Decision{Action: ActionAllow}))
+		// Other checkouts are looked for before registering only when the event's own holds none
+		// of the paths: then they alone decide whether the edit needs the hub at all.
+		var groups []hubclient.ClaimGroup
+		if len(paths) == 0 {
+			if groups = r.fileGroups(repo, ev); len(groups) == 0 {
+				return r.finish(state, ev, Encode(ev, Decision{Action: ActionAllow}))
+			}
 		}
 		// Touch needs an execution id. The hook only has the client session id,
 		// so it reattaches through POST /v1/sessions, which is defined as idempotent.
@@ -275,6 +279,9 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		var touch hubclient.TouchResponse
 		if files, ok := r.Hub.(fileTouchHub); ok && hubclient.FileClaimsCapable(sess.Capabilities) {
 			// Each file is claimed in the repository of the checkout it lies in (ADR 033).
+			if groups == nil {
+				groups = r.fileGroups(repo, ev)
+			}
 			touch, err = files.TouchFiles(ctx, hubclient.TouchFilesRequest{ExecutionID: sess.ExecutionID, Generation: sess.Generation, ToolCallID: ev.ToolCallID, Groups: groups})
 		} else if len(paths) == 0 {
 			// An older hub takes paths of the event's checkout only, and none of these is.

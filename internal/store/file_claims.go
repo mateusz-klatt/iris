@@ -1,6 +1,8 @@
 package store
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
 	"strings"
 	"time"
@@ -161,7 +163,16 @@ func (t *transaction) fileRepository(e execution, g ClaimGroup) (string, error) 
 	if err := t.canonicalWorktree(&r); err != nil {
 		return "", err
 	}
-	if r.Worktree == e.Worktree {
+	if sameWorktree(r.Worktree, e.Worktree) {
+		// The Execution's checkout still has to be the history its repository records, as a
+		// registration from there checks: an event from elsewhere did not check it.
+		var root string
+		if err := t.row("SELECT root_commit FROM Repository WHERE id=?", e.Repo).Scan(&root); err != nil {
+			return "", err
+		}
+		if root != "" && r.RootCommit != "" && root != r.RootCommit {
+			return "", fail("conflict", "this active Execution belongs to another repository history; end the session or ask the owner to repair the split with iris admin merge")
+		}
 		return e.Repo, nil
 	}
 	repo, ambiguous, err := t.resolveRepository(r)
@@ -235,10 +246,13 @@ func (t *transaction) grantFiles(e execution, places []*filePlace) ([]map[string
 	for _, p := range places {
 		for _, path := range p.paths {
 			k := pathKey(path, p.policy)
-			if c, ok := p.reuse[path]; !ok {
-				if _, err := t.exec("INSERT INTO Claim(execution_id,repository_id,kind,path,path_key,origin,boot_epoch,expires_ms) VALUES(?,?,'exact',?,?,'auto',?,?)", e.ID, p.repo, path, k, t.s.epoch, expiry); err != nil {
+			c, ok := p.reuse[path]
+			if !ok {
+				res, err := t.exec("INSERT INTO Claim(execution_id,repository_id,kind,path,path_key,origin,boot_epoch,expires_ms) VALUES(?,?,'exact',?,?,'auto',?,?)", e.ID, p.repo, path, k, t.s.epoch, expiry)
+				if err != nil {
 					return nil, err
 				}
+				c.Fence, _ = res.LastInsertId() // SQLite always reports the rowid it assigned
 			} else if c.Origin == "auto" {
 				if _, err := t.exec("UPDATE Claim SET expires_ms=? WHERE fence=?", expiry, c.Fence); err != nil {
 					return nil, err
@@ -247,31 +261,31 @@ func (t *transaction) grantFiles(e execution, places []*filePlace) ([]map[string
 			if err := t.took(e, p.repo, k); err != nil {
 				return nil, err
 			}
-			granted = append(granted, map[string]any{"repository_id": p.repo, "path": path})
+			granted = append(granted, map[string]any{"repository_id": p.repo, "path": path, "fence": c.Fence})
 		}
 	}
 	return granted, nil
 }
 
 // stillHeld refuses the replay of an allowed grouped touch whose claims have since expired or
-// been released: a replay cannot grant permission again. Each grant is checked in its own
-// repository, under that repository's case policy.
+// been released: a replay cannot grant permission again. A grant still holds when e has a live
+// claim of the current epoch that is either the very claim, by its fence, which an owner's merge
+// of the repository keeps, or one on the same path in the same repository, which is what a
+// recovery after a restart or a restore keeps while it renumbers fences (D10). A claim of the same
+// name in another repository is another file and never counts.
 func (t *transaction) stillHeld(e execution, cached map[string]any) error {
 	if cached["action"] != "allow" {
 		return nil
 	}
-	grants, _ := cached["granted"].([]any)
-	for _, g := range grants {
-		grant, _ := g.(map[string]any)
-		repo, _ := grant["repository_id"].(string)
-		path, _ := grant["path"].(string)
-		policy, _, err := t.policy(repo)
-		if err != nil {
+	for _, g := range cached["granted"].([]any) {
+		grant := g.(map[string]any)
+		var policy string
+		if err := t.row("SELECT case_policy FROM Repository WHERE id=?", grant["repository_id"]).Scan(&policy); err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		k := pathKey(path, policy)
+		k := pathKey(grant["path"].(string), policy)
 		var n int
-		if err = t.row("SELECT COUNT(*) FROM Claim WHERE execution_id=? AND repository_id=? AND (path_key=? OR (kind='prefix' AND (path_key='' OR substr(?,1,length(path_key)+1)=path_key||'/'))) AND revoked_ms IS NULL AND boot_epoch=?", e.ID, repo, k, k, t.s.epoch).Scan(&n); err != nil {
+		if err := t.row("SELECT COUNT(*) FROM Claim WHERE execution_id=? AND revoked_ms IS NULL AND boot_epoch=? AND (fence=? OR (repository_id=? AND (path_key=? OR (kind='prefix' AND (path_key='' OR substr(?,1,length(path_key)+1)=path_key||'/')))))", e.ID, t.s.epoch, grant["fence"], grant["repository_id"], k, k).Scan(&n); err != nil {
 			return err
 		}
 		if n == 0 {
@@ -300,4 +314,16 @@ func stricter(a, b string) string {
 		return b
 	}
 	return a
+}
+
+// sameWorktree is whether two worktree paths spell one directory: separators and a trailing slash
+// aside and, with a drive letter, without regard to case, as Windows reads them. A POSIX path stays
+// case-sensitive.
+func sameWorktree(a, b string) bool {
+	a = strings.TrimRight(strings.ReplaceAll(a, "\\", "/"), "/")
+	b = strings.TrimRight(strings.ReplaceAll(b, "\\", "/"), "/")
+	if len(a) >= 2 && a[1] == ':' {
+		return strings.EqualFold(a, b)
+	}
+	return a == b
 }

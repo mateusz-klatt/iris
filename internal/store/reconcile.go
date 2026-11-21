@@ -59,13 +59,6 @@ func (t *transaction) reconcileChanges(e execution, r Request) (map[string]any, 
 		return nil, fail("bad_request", "reconciliation kind must be before or after")
 	}
 	empty := map[string]any{"message": "", "conflicts": []map[string]any{}}
-	// A status taken in another checkout, such as a submodule or another project the session's
-	// working directory moved into, says nothing about this Execution's worktree (ADR 033). It
-	// neither replaces the baseline nor takes, renews or releases a claim. An older client names
-	// no worktree here, and its status is taken as before.
-	if foreign, err := t.foreignWorktree(e, r); err != nil || foreign {
-		return empty, err
-	}
 	var count int
 	var err error
 	if err = t.row("SELECT COUNT(*) FROM Execution WHERE repository_id=? AND host_id=? AND worktree=? AND state='active'", e.Repo, e.Host, e.Worktree).Scan(&count); err != nil {
@@ -79,6 +72,13 @@ func (t *transaction) reconcileChanges(e execution, r Request) (map[string]any, 
 			}
 		}
 		return empty, nil
+	}
+	// A status taken in another checkout, such as a submodule or another project the session's
+	// working directory moved into, says nothing about this Execution's worktree (ADR 033). It
+	// neither replaces the baseline nor takes, renews or releases a claim. An older client names
+	// no worktree here, and its status is taken as before.
+	if foreign, err := t.foreignWorktree(e, r); err != nil || foreign {
+		return empty, err
 	}
 	for p := range r.Status {
 		if _, err = cleanPath(p, "exact", false); err != nil {
@@ -295,5 +295,5 @@ func (t *transaction) foreignWorktree(e execution, r Request) (bool, error) {
 			worktree = first
 		}
 	}
-	return worktree != e.Worktree, nil
+	return !sameWorktree(worktree, e.Worktree), nil
 }

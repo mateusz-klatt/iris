@@ -175,7 +175,9 @@ func (t *transaction) touch(r Request) (map[string]any, error) {
 				for _, p := range grants {
 					var n int
 					key := pathKey(p.(string), policy)
-					err = t.row("SELECT COUNT(*) FROM Claim WHERE execution_id=? AND (path_key=? OR (kind='prefix' AND (path_key='' OR substr(?,1,length(path_key)+1)=path_key||'/'))) AND revoked_ms IS NULL AND boot_epoch=?", e.ID, key, key, t.s.epoch).Scan(&n)
+					// Only a claim in e's repository counts: e may hold the same name in another
+					// repository's checkout (ADR 033), which is another file.
+					err = t.row("SELECT COUNT(*) FROM Claim WHERE execution_id=? AND repository_id=? AND (path_key=? OR (kind='prefix' AND (path_key='' OR substr(?,1,length(path_key)+1)=path_key||'/'))) AND revoked_ms IS NULL AND boot_epoch=?", e.ID, e.Repo, key, key, t.s.epoch).Scan(&n)
 					if err != nil {
 						return nil, err
 					}
