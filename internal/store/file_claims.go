@@ -19,6 +19,9 @@ type ClaimGroup struct {
 	RemoteURL  string   `json:"remote_url,omitempty"`
 	RootCommit string   `json:"root_commit,omitempty"`
 	Paths      []string `json:"paths"`
+	// Prefix is where an explicit claim's checkout lies in the session's worktree; the claim's path
+	// is relative to the session's repository and starts with it.
+	Prefix string `json:"prefix,omitempty"`
 }
 
 // filePlace is one repository's share of a grouped touch.
@@ -333,4 +336,16 @@ func sameWorktree(a, b string) bool {
 		return strings.EqualFold(fold(a), fold(b))
 	}
 	return strings.TrimRight(a, "/") == strings.TrimRight(b, "/")
+}
+
+// win32Path drops the trailing dots and spaces that Win32 removes from each name of a path. A name
+// made only of them is left alone, as Win32 does not reduce it to nothing.
+func win32Path(p string) string {
+	parts := strings.Split(p, "/")
+	for i, part := range parts {
+		if t := strings.TrimRight(part, ". "); t != "" {
+			parts[i] = t
+		}
+	}
+	return strings.Join(parts, "/")
 }

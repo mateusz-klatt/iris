@@ -231,6 +231,23 @@ attributed: its baseline is kept and no claim is taken, renewed or released.
 It returns `{"fence":12,"token":"...","expires_at":null}`, or 409 `conflict` with the conflicts in
 `details`.
 
+`POST /v1/claims/files` makes the same explicit claim on a path of another checkout than the
+Execution's own, such as a submodule's (ADR 033). It takes `checkout`, with the fields of a touch
+group but no `paths`, and the checkout's `prefix`: where it lies in the session's worktree. `path`
+is relative to the session's repository, as for a plain claim, and must lie below the prefix:
+
+```json
+{"execution_id":"ex_...","generation":1,"key":"...","kind":"prefix","path":"frontend/src",
+ "checkout":{"worktree":"/src/app/frontend","common_dir":"/src/app/.git/modules/frontend",
+             "remote_url":"...","prefix":"frontend"},"repo_wide":false,"ttl_s":0}
+```
+
+The path is validated as a plain claim's, then the prefix is taken off. The checkout is placed as a
+touch group's is, and the claim is made in its repository. A checkout
+the hub finds ambiguous is refused with `ambiguous`. Every binding answer (`POST /v1/sessions`,
+`POST /v1/bind`) names the Execution's `worktree` and the hub's `capabilities`, from which an MCP
+server places an explicit claim's path.
+
 `POST /v1/claims/release` takes `{"execution_id":"...","generation":1,"fence":12}`, or `"all":true`. An optional `token` validates the complete stream/epoch fence returned
 by explicit claim creation. Generation and ownership are always checked.
 

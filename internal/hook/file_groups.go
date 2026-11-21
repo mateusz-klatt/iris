@@ -2,7 +2,6 @@ package hook
 
 import (
 	"context"
-	"os"
 	"path/filepath"
 
 	"github.com/mateusz-klatt/iris/internal/gitinfo"
@@ -60,44 +59,13 @@ func (r Runner) fileGroups(repo gitinfo.Repo, ev Event) []hubclient.ClaimGroup {
 	return groups
 }
 
-// placeOf is the checkout that holds dir. Walking up, it stops at repo's worktree, which it
-// already knows, or at the first directory with a .git entry, which it reads as the hook reads
-// any checkout (D11). A directory it cannot place, or whose checkout cannot be read, is repo's.
-// places remembers the answer for every directory the walk passed, so one call reads each
-// directory and each checkout once, however many of its paths share them.
+// placeOf is the checkout that holds dir, as gitinfo.Place finds it, read with the runner's finder.
 func (r Runner) placeOf(dir string, repo gitinfo.Repo, places map[string]gitinfo.Repo) gitinfo.Repo {
 	find := r.Find
 	if find == nil {
 		find = gitinfo.Find
 	}
-	var passed []string
-	place := repo
-	for d := dir; ; {
-		if known, ok := places[d]; ok {
-			place = known
-			break
-		}
-		passed = append(passed, d)
-		// Relative refuses the root itself, so the root is the directory whose .git is ".git".
-		if rel, err := gitinfo.Relative(repo.Worktree, filepath.Join(d, ".git")); err == nil && rel == ".git" {
-			break
-		}
-		if _, err := os.Lstat(filepath.Join(d, ".git")); err == nil {
-			if found, err := find(d); err == nil {
-				place = found
-			}
-			break
-		}
-		parent := filepath.Dir(d)
-		if parent == d {
-			break
-		}
-		d = parent
-	}
-	for _, d := range passed {
-		places[d] = place
-	}
-	return place
+	return gitinfo.Place(dir, repo, find, places)
 }
 
 // reconcileRequest names the checkout a shell status was taken in, so a hub that names

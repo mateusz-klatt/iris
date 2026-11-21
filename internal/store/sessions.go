@@ -60,22 +60,25 @@ type Request struct {
 	RenameTo    string   `json:"rename_to"`
 	// Groups are a grouped touch's paths by the checkout each file lies in (ADR 033). It is left
 	// out of every other request, so their retry hashes stay as before.
-	Groups         []ClaimGroup `json:"groups,omitempty"`
-	Kind           string       `json:"kind"`
-	Path           string       `json:"path"`
-	RepoWide       bool         `json:"repo_wide"`
-	TTLS           int64        `json:"ttl_s"`
-	Fence          int64        `json:"fence"`
-	All            bool         `json:"all"`
-	Token          string       `json:"token"`
-	To             []string     `json:"to"`
-	Subject        string       `json:"subject"`
-	Body           string       `json:"body"`
-	Attempt        int64        `json:"attempt"`
-	Handled        bool         `json:"handled"`
-	RepositoryID   string       `json:"repository_id"`
-	FromRepository string       `json:"from_repository_id,omitempty"`
-	IntoRepository string       `json:"into_repository_id,omitempty"`
+	Groups []ClaimGroup `json:"groups,omitempty"`
+	// Checkout is the checkout of an explicit claim's path on the grouped route, whose Paths it
+	// leaves out (ADR 033).
+	Checkout       *ClaimGroup `json:"checkout,omitempty"`
+	Kind           string      `json:"kind"`
+	Path           string      `json:"path"`
+	RepoWide       bool        `json:"repo_wide"`
+	TTLS           int64       `json:"ttl_s"`
+	Fence          int64       `json:"fence"`
+	All            bool        `json:"all"`
+	Token          string      `json:"token"`
+	To             []string    `json:"to"`
+	Subject        string      `json:"subject"`
+	Body           string      `json:"body"`
+	Attempt        int64       `json:"attempt"`
+	Handled        bool        `json:"handled"`
+	RepositoryID   string      `json:"repository_id"`
+	FromRepository string      `json:"from_repository_id,omitempty"`
+	IntoRepository string      `json:"into_repository_id,omitempty"`
 	// Aliases names the exact alias mappings an owner unalias removes from RepositoryID.
 	Aliases    []string `json:"aliases,omitempty"`
 	After      int64    `json:"after"`
@@ -128,8 +131,11 @@ func (t *transaction) live(ex string, generation int64) (execution, error) {
 	}
 	return e, nil
 }
+
+// bound is what an Execution's binding tells its MCP server: its identity, and its worktree with
+// the hub's capabilities, from which an explicit claim's path is placed in its checkout (ADR 033).
 func bound(e execution) map[string]any {
-	return map[string]any{"execution_id": e.ID, "generation": e.Generation, "repository_id": e.Repo, "agent": map[string]any{"id": e.AgentID, "name": e.Name}, "session_id": e.Session}
+	return map[string]any{"execution_id": e.ID, "generation": e.Generation, "repository_id": e.Repo, "agent": map[string]any{"id": e.AgentID, "name": e.Name}, "session_id": e.Session, "worktree": e.Worktree, "capabilities": shellCapabilities()}
 }
 
 var safePart = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)

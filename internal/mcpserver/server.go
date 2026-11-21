@@ -282,6 +282,16 @@ func call(ctx context.Context, h *hubclient.Client, b binding.Bound, primary boo
 		body["ttl_s"] = in.TTLS
 		body["repo_wide"] = in.RepoWide
 		body["key"] = in.Key
+		// A path below another checkout, such as a submodule, is claimed in that checkout's
+		// repository, relative to it, on the route an older hub refuses (ADR 033).
+		checkout, ok, err := fileClaim(b, in.Path)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			path = "/v1/claims/files"
+			body["checkout"] = checkout
+		}
 	case "release":
 		path = "/v1/claims/release"
 		body["fence"] = in.Fence
