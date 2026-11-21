@@ -470,6 +470,7 @@ const translation = {
     emptyInbox: "尚無與您的對話",
     emptyHint: "傳送給 human 的訊息會顯示在這裡。您也可以開始對話或瀏覽所有活動。",
     showInactive: "包含目前未運作的代理程式",
+    outsideGit: "git 之外 · {{host}}",
     findAgent: "尋找代理程式",
     aliases: "技術詳細資料",
     composeHint: "選擇收件者、撰寫訊息，然後在傳送前檢查。",

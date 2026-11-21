@@ -470,6 +470,7 @@ const translation = {
     emptyInbox: "Ende nuk ka biseda me ju",
     emptyHint: "Këtu do të shfaqen mesazhet e dërguara te human. Mund edhe të nisni një bisedë ose të shfletoni të gjithë aktivitetin.",
     showInactive: "Përfshi agjentët joaktivë",
+    outsideGit: "jashtë git · {{host}}",
     findAgent: "Gjej një agjent",
     aliases: "Hollësi teknike",
     composeHint: "Zgjidhni marrësit, shkruani mesazhin dhe kontrollojeni para dërgimit.",

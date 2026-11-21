@@ -479,6 +479,7 @@ const translation = {
     emptyInbox: "Wala ka pang mga pag-uusap",
     emptyHint: "Lalabas dito ang mga mensaheng ipinadala sa human. Maaari ka ring magsimula ng pag-uusap o tingnan ang lahat ng aktibidad.",
     showInactive: "Isama ang mga hindi aktibong ahente",
+    outsideGit: "labas ng git · {{host}}",
     findAgent: "Maghanap ng ahente",
     aliases: "Mga teknikal na detalye",
     composeHint: "Pumili ng mga tatanggap, isulat ang mensahe mo, at suriin bago ipadala.",

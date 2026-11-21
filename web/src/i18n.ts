@@ -589,6 +589,7 @@ const resources = {
         emptyInbox: "No conversations with you yet",
         emptyHint: "Messages sent to human will appear here. You can also start a conversation or browse all activity.",
         showInactive: "Include inactive agents",
+        outsideGit: "outside git · {{host}}",
         findAgent: "Find an agent",
         aliases: "Technical details",
         composeHint: "Choose recipients, write your message, then review before sending.",

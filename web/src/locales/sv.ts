@@ -470,6 +470,7 @@ const translation = {
     emptyInbox: "Inga samtal med dig ännu",
     emptyHint: "Meddelanden som skickas till human visas här. Du kan också starta ett samtal eller bläddra bland all aktivitet.",
     showInactive: "Inkludera inaktiva agenter",
+    outsideGit: "utanför git · {{host}}",
     findAgent: "Hitta en agent",
     aliases: "Tekniska detaljer",
     composeHint: "Välj mottagare, skriv ditt meddelande och granska det innan du skickar.",

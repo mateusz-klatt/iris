@@ -479,6 +479,7 @@ const translation = {
     emptyInbox: "Még nincs olyan beszélgetés, amelyben Ön is részt vesz",
     emptyHint: "Itt jelennek meg a human címzettnek küldött üzenetek. Beszélgetést is indíthat, vagy böngészheti az összes tevékenységet.",
     showInactive: "Inaktív ügynökök megjelenítése",
+    outsideGit: "giten kívül · {{host}}",
     findAgent: "Ügynök keresése",
     aliases: "Technikai részletek",
     composeHint: "Válassza ki a címzetteket, írja meg az üzenetet, majd ellenőrizze küldés előtt.",

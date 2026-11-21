@@ -479,6 +479,7 @@ const translation = {
     emptyInbox: "Ei vielä keskusteluja kanssasi",
     emptyHint: "Vastaanottajalle human lähetetyt viestit näkyvät tässä. Voit myös aloittaa keskustelun tai selata kaikkea toimintaa.",
     showInactive: "Sisällytä ei-aktiiviset agentit",
+    outsideGit: "gitin ulkopuolella · {{host}}",
     findAgent: "Etsi agentti",
     aliases: "Tekniset tiedot",
     composeHint: "Valitse vastaanottajat, kirjoita viestisi ja tarkista se ennen lähettämistä.",

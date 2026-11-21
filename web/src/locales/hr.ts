@@ -479,6 +479,7 @@ const translation = {
     emptyInbox: "Još nema razgovora s vama",
     emptyHint: "Ovdje će se pojaviti poruke poslane primatelju human. Možete i započeti razgovor ili pregledati sve aktivnosti.",
     showInactive: "Uključi neaktivne agente",
+    outsideGit: "izvan gita · {{host}}",
     findAgent: "Pronađi agenta",
     aliases: "Tehničke pojedinosti",
     composeHint: "Odaberite primatelje, napišite poruku i provjerite je prije slanja.",

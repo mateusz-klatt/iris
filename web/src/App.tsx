@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
+import type { TFunction } from "i18next";
 
 import {
   ApiError,
@@ -42,6 +43,7 @@ import { clearAccountSession, ConsoleClosedError, getSession, logout, updateProf
 import Login from "./Login";
 import Account from "./Account";
 import AccessPanel from "./access";
+import { recordName } from "./recordName";
 import "./app.css";
 import "./console.css";
 
@@ -153,8 +155,9 @@ function formatWhen(value: string): string {
   }).format(date);
 }
 
-function repositoryName(overview: Overview, id: string): string {
-  return overview.repositories.find((repository) => repository.id === id)?.name ?? id;
+function repositoryName(overview: Overview, id: string, t: TFunction): string {
+  const repository = overview.repositories.find((item) => item.id === id);
+  return repository === undefined ? id : recordName(repository, t);
 }
 
 function statusKey(status: DoctorStatus): `operator.${"statusOk" | "statusNotConfigured" | "statusNeedsHuman" | "statusSilent" | "statusSlow"}` {
@@ -341,6 +344,8 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const [signingOut, setSigningOut] = useState(false);
   const [localeSaving, setLocaleSaving] = useState(false);
   const writableRepositories = overview?.repositories.filter((repository) => repository.console_access === "rw") ?? [];
+  // A host's context of sessions outside git is no project; its agents and mail stay (ADR 034).
+  const projects = overview?.repositories.filter((repository) => repository.kind !== "outside") ?? [];
   const canSend = !member || writableRepositories.some((repository) => repository.id === repositoryId);
   const recipientAgents = member ? sessions.filter((agent) => writableRepositories.some((repository) => repository.id === agent.repository_id)) : sessions;
   const validRecipients = (draft: Draft) => recipientsOf(draft.to).every((id) => (!member && id === "human") || recipientAgents.some((agent) => agent.id === id));
@@ -665,7 +670,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const composeSendable = canSend && sendable(compose) && validRecipients(compose);
   const activeAgents = sessions.filter((item) => item.state === "active");
   const visibleAgents = sessions.filter((item) => (showInactive || item.state === "active") &&
-    `${item.name} ${item.host} ${item.client} ${item.branch} ${repositoryName(overview!, item.repository_id)}`.toLowerCase().includes(agentSearch.toLowerCase().trim()));
+    `${item.name} ${item.host} ${item.client} ${item.branch} ${repositoryName(overview!, item.repository_id, t)}`.toLowerCase().includes(agentSearch.toLowerCase().trim()));
   const clearThread = () => {
     replyReview.stop();
     composeReview.stop();
@@ -789,7 +794,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
                   <label>{t("operator.repository")}
                     <select value={repositoryId} onChange={(event) => { setRepositoryId(event.target.value); clearThread(); }}>
                       <option value="">{t("operator.all")}</option>
-                      {overview.repositories.map((repository) => <option key={repository.id} value={repository.id}>{repository.name} · {repository.id}</option>)}
+                      {overview.repositories.map((repository) => <option key={repository.id} value={repository.id}>{recordName(repository, t)} · {repository.id}</option>)}
                     </select>
                   </label>
                   {mailScope === "all" ? <label>{t("operator.agent")}
@@ -837,7 +842,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
                       <header>
                         <strong>{message.sender_account_id ? t("accountUi.sharedAuthor", { person: message.sender_display_name || message.sender_username, sender: message.sender }) : message.sender}</strong>
                         {overview !== null && message.repository_id !== undefined && message.repository_id !== repositoryId ? (
-                          <span className="message-repository">{repositoryName(overview, message.repository_id)}</span>
+                          <span className="message-repository">{repositoryName(overview, message.repository_id, t)}</span>
                         ) : null}
                         <small>
                           {t("message.to")}: {message.recipients.map((recipient) => `${recipient.name} (${recipient.state})`).join(", ")}
@@ -922,7 +927,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
                   <h2>{t("operator.repositories")}</h2>
                   <span>{t("operator.unread", { count: overview.human_unread })}</span>
                 </div>
-                {overview.repositories.length === 0 ? <p>{t("operator.none")}</p> : (
+                {projects.length === 0 ? <p>{t("operator.none")}</p> : (
                   <table className="stack-table">
                     <caption className="sr-only">{t("operator.repositories")}</caption>
                     <thead>
@@ -932,7 +937,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
                       </tr>
                     </thead>
                     <tbody>
-                      {overview.repositories.map((repository) => (
+                      {projects.map((repository) => (
                         <tr key={repository.id}>
                           <th scope="row">{repository.name}</th>
                           <td><details className="repository-details"><summary>{t("console.aliases")}</summary><code>{repository.id}</code><ul>{repository.aliases.map((alias) => <li key={alias}>{alias}</li>)}</ul></details></td>
@@ -970,7 +975,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
                             <td>
                               {item.host} · {item.client} · {item.state}<br />{item.branch}
                             </td>
-                            <td>{repositoryName(overview, item.repository_id)}</td>
+                            <td>{repositoryName(overview, item.repository_id, t)}</td>
                             {!member ? <td data-health={health?.status ?? "none"}>{health === undefined ? t("operator.noHostReport") : t(statusKey(health.status))}</td> : null}
                           </tr>
                         );
@@ -1008,7 +1013,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
                 <label>{t("console.composeRepository")}
                   <select value={repositoryId} onChange={(event) => { setRepositoryId(event.target.value); clearThread(); }}>
                     {!member ? <option value="">{t("console.automaticRepository")}</option> : null}
-                    {(member ? writableRepositories : overview.repositories).map((repository) => <option key={repository.id} value={repository.id}>{repository.name} · {repository.id}</option>)}
+                    {(member ? writableRepositories : overview.repositories).map((repository) => <option key={repository.id} value={repository.id}>{recordName(repository, t)} · {repository.id}</option>)}
                   </select>
                 </label>
                 <RecipientPicker agents={recipientAgents} allowHuman={!member} selected={composeRecipients} onChange={(ids) => setCompose(edited(compose, { to: ids.join(", ") }))} />

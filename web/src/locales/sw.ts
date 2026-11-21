@@ -470,6 +470,7 @@ const translation = {
     emptyInbox: "Bado hakuna mazungumzo yanayokuhusisha",
     emptyHint: "Jumbe zilizotumwa kwa human zitaonekana hapa. Unaweza pia kuanza mazungumzo au kuvinjari shughuli zote.",
     showInactive: "Jumuisha mawakala wasiotumika",
+    outsideGit: "nje ya git · {{host}}",
     findAgent: "Tafuta wakala",
     aliases: "Maelezo ya kiufundi",
     composeHint: "Chagua wapokeaji, andika ujumbe wako, kisha ukague kabla ya kutuma.",

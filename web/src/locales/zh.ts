@@ -470,6 +470,7 @@ const translation = {
     emptyInbox: "尚无与您的会话",
     emptyHint: "发送给 human 的消息会显示在这里。您也可以开始会话或浏览所有活动。",
     showInactive: "包含非活动代理",
+    outsideGit: "git 之外 · {{host}}",
     findAgent: "查找代理",
     aliases: "技术详情",
     composeHint: "选择收件人、撰写消息，然后在发送前检查。",

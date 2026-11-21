@@ -470,6 +470,7 @@ const translation = {
     emptyInbox: "Henüz sizinle yapılan bir konuşma yok",
     emptyHint: "human alıcısına gönderilen iletiler burada görünür. Ayrıca bir konuşma başlatabilir veya tüm etkinliklere göz atabilirsiniz.",
     showInactive: "Etkin olmayan ajanları da göster",
+    outsideGit: "git dışında · {{host}}",
     findAgent: "Ajan bul",
     aliases: "Teknik ayrıntılar",
     composeHint: "Alıcıları seçin, iletinizi yazın ve göndermeden önce kontrol edin.",

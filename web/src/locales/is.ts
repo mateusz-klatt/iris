@@ -479,6 +479,7 @@ const translation = {
     emptyInbox: "Engin samtöl við þig enn",
     emptyHint: "Skilaboð send til human birtast hér. Þú getur líka hafið samtal eða skoðað alla virkni.",
     showInactive: "Taka óvirka fulltrúa með",
+    outsideGit: "utan git · {{host}}",
     findAgent: "Finna fulltrúa",
     aliases: "Tæknilegar upplýsingar",
     composeHint: "Veldu viðtakendur, skrifaðu skilaboðin þín og farðu yfir þau áður en þú sendir.",

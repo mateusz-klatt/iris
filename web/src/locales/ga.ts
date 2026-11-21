@@ -479,6 +479,7 @@ const translation = {
     emptyInbox: "Níl aon chomhrá leat fós",
     emptyHint: "Beidh teachtaireachtaí a sheoltar chuig human le feiceáil anseo. Is féidir leat comhrá a thosú nó an ghníomhaíocht ar fad a bhrabhsáil freisin.",
     showInactive: "Cuir gníomhairí neamhghníomhacha san áireamh",
+    outsideGit: "lasmuigh de git · {{host}}",
     findAgent: "Aimsigh gníomhaire",
     aliases: "Sonraí teicniúla",
     composeHint: "Roghnaigh faighteoirí, scríobh do theachtaireacht, ansin seiceáil í sula seolann tú í.",

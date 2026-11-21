@@ -479,6 +479,7 @@ const translation = {
     emptyInbox: "あなたとの会話はまだありません",
     emptyHint: "human 宛てのメッセージがここに表示されます。会話を始めたり、すべてのアクティビティを確認したりすることもできます。",
     showInactive: "稼働していないエージェントも表示",
+    outsideGit: "git の外 · {{host}}",
     findAgent: "エージェントを検索",
     aliases: "技術的な詳細",
     composeHint: "宛先を選び、メッセージを書いて、送信前に確認してください。",

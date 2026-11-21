@@ -479,6 +479,7 @@ const translation = {
     emptyInbox: "Nog geen gesprekken met u",
     emptyHint: "Berichten aan human verschijnen hier. U kunt ook een gesprek starten of alle activiteit bekijken.",
     showInactive: "Inactieve agents opnemen",
+    outsideGit: "buiten git · {{host}}",
     findAgent: "Een agent zoeken",
     aliases: "Technische details",
     composeHint: "Kies ontvangers, schrijf uw bericht en controleer het voordat u het verzendt.",

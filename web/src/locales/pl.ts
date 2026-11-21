@@ -479,6 +479,7 @@ const translation = {
     emptyInbox: "Nie masz jeszcze żadnych rozmów",
     emptyHint: "Tutaj pojawią się wiadomości do human. Możesz też rozpocząć rozmowę lub przejrzeć całą aktywność.",
     showInactive: "Pokaż też nieaktywnych agentów",
+    outsideGit: "poza gitem · {{host}}",
     findAgent: "Znajdź agenta",
     aliases: "Szczegóły techniczne",
     composeHint: "Wybierz odbiorców, napisz wiadomość i sprawdź ją przed wysłaniem.",

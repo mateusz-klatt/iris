@@ -470,6 +470,7 @@ const translation = {
     emptyInbox: "Chưa có cuộc trò chuyện nào với bạn",
     emptyHint: "Tin nhắn gửi đến human sẽ xuất hiện tại đây. Bạn cũng có thể bắt đầu cuộc trò chuyện hoặc xem mọi hoạt động.",
     showInactive: "Bao gồm tác nhân không hoạt động",
+    outsideGit: "ngoài git · {{host}}",
     findAgent: "Tìm tác nhân",
     aliases: "Chi tiết kỹ thuật",
     composeHint: "Chọn người nhận, viết tin nhắn rồi kiểm tra trước khi gửi.",
