@@ -106,12 +106,14 @@ type execution struct {
 	Recovery                                                                sql.NullInt64
 	Parent                                                                  sql.NullString
 	Single, Heartbeat                                                       bool
+	// Outside says e belongs to its host's context of sessions outside git (ADR 034).
+	Outside bool
 }
 
-const executionSelect = `SELECT e.id,e.agent_id,e.repository_id,e.host_id,e.client,e.session_id,e.worktree,e.branch,e.state,a.name,e.generation,e.boot_epoch,e.deadline_tick_ms,e.client_pid,e.client_pid_start_ms,e.recovery_deadline,e.parent_id,e.single_session,e.heartbeat_mode FROM Execution e JOIN Agent a ON a.id=e.agent_id `
+const executionSelect = `SELECT e.id,e.agent_id,e.repository_id,e.host_id,e.client,e.session_id,e.worktree,e.branch,e.state,a.name,e.generation,e.boot_epoch,e.deadline_tick_ms,e.client_pid,e.client_pid_start_ms,e.recovery_deadline,e.parent_id,e.single_session,e.heartbeat_mode,EXISTS(SELECT 1 FROM RepositoryAlias o WHERE o.alias='outside:'||e.host_id AND o.repository_id=e.repository_id) FROM Execution e JOIN Agent a ON a.id=e.agent_id `
 
 func (e *execution) fields() []any {
-	return []any{&e.ID, &e.AgentID, &e.Repo, &e.Host, &e.Client, &e.Session, &e.Worktree, &e.Branch, &e.State, &e.Name, &e.Generation, &e.Epoch, &e.Deadline, &e.PID, &e.PIDStart, &e.Recovery, &e.Parent, &e.Single, &e.Heartbeat}
+	return []any{&e.ID, &e.AgentID, &e.Repo, &e.Host, &e.Client, &e.Session, &e.Worktree, &e.Branch, &e.State, &e.Name, &e.Generation, &e.Epoch, &e.Deadline, &e.PID, &e.PIDStart, &e.Recovery, &e.Parent, &e.Single, &e.Heartbeat, &e.Outside}
 }
 
 func scanExecution(row interface{ Scan(...any) error }) (e execution, err error) {
@@ -134,8 +136,15 @@ func (t *transaction) live(ex string, generation int64) (execution, error) {
 
 // bound is what an Execution's binding tells its MCP server: its identity, and its worktree with
 // the hub's capabilities, from which an explicit claim's path is placed in its checkout (ADR 033).
+//
+// An Execution outside git also says so, and its MCP server refuses a claim before it reads the
+// filesystem (ADR 034).
 func bound(e execution) map[string]any {
-	return map[string]any{"execution_id": e.ID, "generation": e.Generation, "repository_id": e.Repo, "agent": map[string]any{"id": e.AgentID, "name": e.Name}, "session_id": e.Session, "worktree": e.Worktree, "capabilities": shellCapabilities()}
+	out := map[string]any{"execution_id": e.ID, "generation": e.Generation, "repository_id": e.Repo, "agent": map[string]any{"id": e.AgentID, "name": e.Name}, "session_id": e.Session, "worktree": e.Worktree, "capabilities": shellCapabilities()}
+	if e.Outside {
+		out["outside_git"] = true
+	}
+	return out
 }
 
 var safePart = regexp.MustCompile(`[^a-zA-Z0-9_-]+`)
@@ -218,7 +227,9 @@ func (t *transaction) repositoryCandidate(aliases []string, root string) (repo s
 		args[i] = alias
 	}
 	marks := strings.TrimSuffix(strings.Repeat("?,", len(aliases)), ",")
-	rows, err := t.rows("SELECT DISTINCT r.id,r.root_commit FROM RepositoryAlias a JOIN Repository r ON r.id=a.repository_id WHERE a.alias IN ("+marks+")", args...)
+	// A host's context of sessions outside git carries no git alias, and is never a candidate even
+	// if one was learned for it before this release (ADR 034).
+	rows, err := t.rows("SELECT DISTINCT r.id,r.root_commit FROM RepositoryAlias a JOIN Repository r ON r.id=a.repository_id WHERE a.alias IN ("+marks+") AND NOT EXISTS (SELECT 1 FROM RepositoryAlias o WHERE o.repository_id=r.id AND substr(o.alias,1,8)='outside:')", args...)
 	if err != nil {
 		return "", false, err
 	}
@@ -373,7 +384,17 @@ func (t *transaction) resume(e *execution, strong bool) (int64, error) {
 	_, err := t.exec("UPDATE Claim SET revoked_ms=? WHERE execution_id=? AND revoked_ms IS NULL AND boot_epoch<>?", t.s.clock.Now().UnixMilli(), e.ID, t.s.epoch)
 	return lease, err
 }
+
+// session registers a session on the session route. A request that names no checkout at all is
+// an older client's registration outside git (ADR 034, decision 2).
 func (t *transaction) session(r Request) (map[string]any, error) {
+	return t.register(r, outsideShape(r))
+}
+
+// register registers a session in its checkout's repository, or with outside in its host's
+// context. An active Execution keeps its record either way: mail and claims never move silently,
+// and nothing is learned across the two kinds (ADR 034, decisions 2 and 4).
+func (t *transaction) register(r Request, outside bool) (map[string]any, error) {
 	if r.Client == "" || r.SessionID == "" || r.Host == "" || r.Cwd == "" {
 		return nil, fail("bad_request", "client, session_id, host and cwd are required")
 	}
@@ -395,7 +416,7 @@ func (t *transaction) session(r Request) (map[string]any, error) {
 		// submodule, or another project the agent ran a command in. Its root and aliases describe
 		// that checkout, not this Execution's, so they are checked and learned only from the
 		// Execution's own worktree (ADR 032). The Execution and its lease carry on either way.
-		if r.Worktree == e.Worktree {
+		if !outside && !e.Outside && r.Worktree == e.Worktree {
 			var root string
 			if err := t.row("SELECT root_commit FROM Repository WHERE id=?", e.Repo).Scan(&root); err != nil {
 				return nil, err
@@ -430,7 +451,12 @@ func (t *transaction) session(r Request) (map[string]any, error) {
 	if r.Generation != 0 {
 		return nil, fail("lost", "expired generations cannot be revived")
 	}
-	repo, err := t.repository(r)
+	var repo string
+	if outside {
+		repo, err = t.outsideContext(r.Host)
+	} else {
+		repo, err = t.repository(r)
+	}
 	if err != nil {
 		return nil, err
 	}

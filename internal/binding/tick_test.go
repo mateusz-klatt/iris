@@ -762,7 +762,7 @@ func (l *liveHub) hook(t *testing.T, remembered *int64, req store.Request) map[s
 	return out
 }
 
-var hookS = store.Request{Client: "claude", SessionID: "S", Host: "host", Cwd: "/repo", Source: "hook"}
+var hookS = store.Request{Client: "claude", SessionID: "S", Host: "host", Cwd: "/repo", Worktree: "/repo", Source: "hook"}
 
 // The case that cost a Grok session nine generations in four hours (ADR 027): a hook every 30
 // minutes, no tool call, and a live shim. Before, the shim renewed nothing, so the hook-only

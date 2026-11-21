@@ -156,6 +156,9 @@ func (t *transaction) touch(r Request) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	if e.Outside {
+		return nil, noClaims()
+	}
 	key := "touch:" + r.ToolCallID
 	if r.ToolCallID == "" {
 		return nil, fail("bad_request", "tool_call_id is required")
@@ -342,6 +345,9 @@ func (t *transaction) explicitIn(r Request, route string) (map[string]any, error
 	e, err := t.live(r.ExecutionID, r.Generation)
 	if err != nil {
 		return nil, err
+	}
+	if e.Outside {
+		return nil, noClaims()
 	}
 	out, found, err := t.cached(e, r.Key, route, r)
 	if err != nil {

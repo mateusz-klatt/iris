@@ -57,7 +57,7 @@ func TestMCPStdio(t *testing.T) {
 	// The session's hook is its only registrar; the MCP then binds to that Execution.
 	host, _ := os.Hostname()
 	cwd, _ := os.Getwd()
-	if _, err = s.Call(ctx, "sessions", store.Request{Client: "claude", Host: host, SessionID: "mcp-only-test", Cwd: cwd, Source: "hook"}); err != nil {
+	if _, err = s.Call(ctx, "sessions", store.Request{Client: "claude", Host: host, SessionID: "mcp-only-test", Cwd: cwd, Worktree: cwd, Source: "hook"}); err != nil {
 		t.Fatal(err)
 	}
 	tools, err := session.ListTools(ctx, nil)

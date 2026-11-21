@@ -22,7 +22,7 @@ func TestAFirstMonitorPrintsAPathFreedBeforeItOnce(t *testing.T) {
 	defer cancel()
 	gens := map[string]int64{}
 	register := func(session string) (string, string) {
-		out, err := h.store.Call(ctx, "sessions", store.Request{Client: "claude", Host: "host", SessionID: session, Cwd: "/repo", Source: "hook"})
+		out, err := h.store.Call(ctx, "sessions", store.Request{Client: "claude", Host: "host", SessionID: session, Cwd: "/repo", Worktree: "/repo", Source: "hook"})
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -75,7 +75,7 @@ func TestTouchDeduplicatesAndAllowsFamily(t *testing.T) {
 	s, _, _ := testStore(t)
 	a, _ := session(t, s, 1)
 	call(t, s, "claim", claimRequest(a, "parent", "shared", "exact"))
-	child := call(t, s, "sessions", Request{Client: "codex", SessionID: "child", Host: "host", Cwd: "/repo/w1", ParentSessionID: "1"})
+	child := call(t, s, "sessions", Request{Client: "codex", SessionID: "child", Host: "host", Cwd: "/repo/w1", Worktree: "/repo/w1", RemoteURL: "https://example.com/team/project.git", RootCommit: "root", ParentSessionID: "1"})
 	r := Request{ExecutionID: child["execution_id"].(string), Generation: 1, ToolCallID: "family", Paths: []string{"shared", "shared"}}
 	if out := call(t, s, "touch", r); out["action"] != "allow" || len(out["granted"].([]string)) != 1 {
 		t.Fatal(out)

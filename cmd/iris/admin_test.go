@@ -57,10 +57,12 @@ func TestAdminUsage(t *testing.T) {
 
 func TestAdminMergeSendsThePlanAndApplyRequests(t *testing.T) {
 	var got []map[string]any
+	var paths []string
 	client := tokenClient(t, func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/v1/admin/merge" || r.Method != "POST" {
+		if r.Method != "POST" {
 			t.Errorf("%s %s", r.Method, r.URL.Path)
 		}
+		paths = append(paths, r.URL.Path)
 		var body map[string]any
 		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
 			t.Error(err)
@@ -73,6 +75,10 @@ func TestAdminMergeSendsThePlanAndApplyRequests(t *testing.T) {
 		if dry {
 			args = append(args, "--dry-run")
 		}
+		if !dry {
+			// The folder-project repair has a route of its own (ADR 034).
+			args = append(args, "--outside")
+		}
 		var out bytes.Buffer
 		if err := adminCommand(context.Background(), client, args, &out); err != nil {
 			t.Fatal(err)
@@ -84,6 +90,9 @@ func TestAdminMergeSendsThePlanAndApplyRequests(t *testing.T) {
 	}
 	if len(got) != 2 || got[0]["from_repository_id"] != "rp_split" || got[0]["into_repository_id"] != "rp_canonical" || got[0]["dry_run"] != true || got[1]["dry_run"] != false {
 		t.Fatal(got)
+	}
+	if len(paths) != 2 || paths[0] != "/v1/admin/merge" || paths[1] != "/v1/admin/merge/outside" {
+		t.Fatal(paths)
 	}
 }
 

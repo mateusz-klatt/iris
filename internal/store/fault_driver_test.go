@@ -107,7 +107,7 @@ func installFaultDriver(t *testing.T, s *Store, file string) *storageFault {
 }
 
 func TestStorageFailuresRollBackAndRetry(t *testing.T) {
-	for _, op := range []string{"sessions", "session-resume", "session-resume-new-process", "session-resume-learns-root", "session-remote-learns-root", "session-checkout-continuity", "session-checkout-rewrite", "session-isolated", "heartbeat-recovery", "session-new-slot", "session-learns-root", "touch-cached", "touch-conflict", "claim-conflict", "check-known", "policy", "bind", "heartbeat", "end", "end-handover", "touch", "claim", "claim-reuse", "claim-cached", "release", "claims", "messages", "message-repo", "contact", "message-cached", "inbox", "ack", "ack-handled", "inbox-receipt", "receipt-sweep", "receipts", "read_body", "agents", "agents-all", "hooks_seen", "events", "events-reset", "status", "validate", "monitor_cursor", "check", "check-alias", "session-alias", "reconcile", "reconcile-release", "reconcile-session", "reconcile-scoped", "reconcile-scoped-compare", "reconcile-full-after-scoped", "reconcile-shared", "ui_overview", "ui_deliveries", "ui_threads", "ui_threads-human", "ui_thread", "ui_read", "ui_messages", "ui_messages-existing-human", "ui_messages-cached", "ui_messages-merged-cached", "ui_messages-retired-cached", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_events", "expire", "sweep", "forget", "forget-repository", "history", "thread", "read_message_body", "merge", "merge-dry-run", "unalias", "unalias-dry-run", "touch-files", "touch-files-known", "touch-files-conflict", "touch-files-cached", "release-foreign", "reconcile-foreign", "claim-files", "claim-files-reuse"} {
+	for _, op := range []string{"sessions", "session-resume", "session-resume-new-process", "session-resume-learns-root", "session-remote-learns-root", "session-checkout-continuity", "session-checkout-rewrite", "session-isolated", "heartbeat-recovery", "session-new-slot", "session-learns-root", "touch-cached", "touch-conflict", "claim-conflict", "check-known", "policy", "bind", "heartbeat", "end", "end-handover", "touch", "claim", "claim-reuse", "claim-cached", "release", "claims", "messages", "message-repo", "contact", "message-cached", "inbox", "ack", "ack-handled", "inbox-receipt", "receipt-sweep", "receipts", "read_body", "agents", "agents-all", "hooks_seen", "events", "events-reset", "status", "validate", "monitor_cursor", "check", "check-alias", "session-alias", "reconcile", "reconcile-release", "reconcile-session", "reconcile-scoped", "reconcile-scoped-compare", "reconcile-full-after-scoped", "reconcile-shared", "ui_overview", "ui_deliveries", "ui_threads", "ui_threads-human", "ui_thread", "ui_read", "ui_messages", "ui_messages-existing-human", "ui_messages-cached", "ui_messages-merged-cached", "ui_messages-retired-cached", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_events", "expire", "sweep", "forget", "forget-repository", "history", "thread", "read_message_body", "merge", "merge-dry-run", "unalias", "unalias-dry-run", "touch-files", "touch-files-known", "touch-files-conflict", "touch-files-cached", "release-foreign", "reconcile-foreign", "claim-files", "claim-files-reuse", "sessions-outside", "sessions-outside-known", "merge-outside", "merge-outside-dry-run"} {
 		t.Run(op, func(t *testing.T) {
 			s, clock, file := testStore(t)
 			a, ar := session(t, s, 1)
@@ -493,6 +493,29 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 					t.Fatal(err)
 				}
 				r = mergeRequest(otherID, repo, op == "merge-dry-run")
+			case "sessions-outside", "sessions-outside-known":
+				// A host's context is made by its first session outside git, found by the next (ADR 034).
+				route = "sessions_outside"
+				if op == "sessions-outside-known" {
+					call(t, s, "sessions_outside", Request{Client: "codex", Host: "home", SessionID: "first", Cwd: "/home/first", Source: "hook"})
+				}
+				r = Request{Client: "codex", Host: "home", SessionID: "outside", Cwd: "/home/tmp", Source: "hook"}
+			case "merge-outside", "merge-outside-dry-run":
+				// A quiet folder project with mail, a wait and a shell baseline moves into its
+				// host's context, which takes none of its aliases (ADR 034, decision 9).
+				route = "merge_outside"
+				folder := call(t, s, "sessions", Request{Client: "codex", Host: "home", SessionID: "folder", Cwd: "/home/scripts", Worktree: "/home/scripts", Source: "mcp"})
+				folderRequest := Request{ExecutionID: folder["execution_id"].(string), Generation: folder["generation"].(int64)}
+				historySend(t, s, folderRequest, name, "folder-mail", "", "folder", "folder mail survives")
+				call(t, s, "end", folderRequest)
+				if _, err := s.db.Exec("INSERT INTO Waiter VALUES(?,?,'waiting','exact',0)", folderRequest.ExecutionID, folder["repository_id"]); err != nil {
+					t.Fatal(err)
+				}
+				if _, err := s.db.Exec("INSERT INTO ShellSnapshot VALUES(?,'{}')", folderRequest.ExecutionID); err != nil {
+					t.Fatal(err)
+				}
+				outside := call(t, s, "sessions_outside", Request{Client: "codex", Host: "home", SessionID: "context", Cwd: "/home/tmp", Source: "hook"})
+				r = Request{FromRepository: folder["repository_id"].(string), IntoRepository: outside["repository_id"].(string), DryRun: op == "merge-outside-dry-run"}
 			}
 			invoke := func() (map[string]any, error) {
 				if op == "policy" {
