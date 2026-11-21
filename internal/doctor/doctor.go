@@ -442,14 +442,8 @@ func applyFailuresFrom(res *Result, tokenFile, fallbackTokenFile string, now tim
 	if strings.TrimSpace(tokenFile) == "" {
 		return nil
 	}
-	entries, err := readMergedLog(tokenFile, fallbackTokenFile, hook.ReadRecentFailures)
-	if err != nil {
-		return err
-	}
-	seen, err := readMergedLog(tokenFile, fallbackTokenFile, hook.ReadRecentObservations)
-	if err != nil {
-		return err
-	}
+	entries, failErr := readMergedLog(tokenFile, fallbackTokenFile, hook.ReadRecentFailures)
+	seen, obsErr := readMergedLog(tokenFile, fallbackTokenFile, hook.ReadRecentObservations)
 	entries = append(entries, seen...)
 	broken := map[string][]hook.Failure{}
 	degraded := map[string]int{}
@@ -502,7 +496,7 @@ func applyFailuresFrom(res *Result, tokenFile, fallbackTokenFile string, now tim
 		}
 		row.unusable = observed[row.Client][binding.ObservedUnusable] > 0
 	}
-	return nil
+	return errors.Join(failErr, obsErr)
 }
 
 // unusableHint says what doctor's own evidence makes of calls that named a session without a
@@ -579,27 +573,30 @@ func brokenText(entries []hook.Failure) string {
 // client at once, and still within the 64 KiB the log keeps.
 const failureRead = 500
 
-// readMergedLog reads recent entries beside primary and, when fallback names a different
+// sameDir reports whether two file paths reside in the same directory, either lexically or
+// through filesystem links/aliases (such as symlinks or /var vs /private/var).
+func sameDir(a, b string) bool {
+	dirA, dirB := filepath.Clean(filepath.Dir(a)), filepath.Clean(filepath.Dir(b))
+	return dirA == dirB || sameFile(dirA, dirB)
+}
+
+// readMergedLog reads recent entries beside primary and, when fallback resides in a different
 // directory (as when client.json relocates token_file), beside fallback as well, merging both
-// logs in chronological order and retaining the newest failureRead entries.
+// logs in chronological order and retaining the newest failureRead entries. Entries from any
+// readable log are returned alongside any read error from the other log so partial diagnostics
+// are never discarded.
 func readMergedLog(primary, fallback string, read func(string, int) ([]hook.Failure, error)) ([]hook.Failure, error) {
-	entries, err := read(primary, failureRead)
-	if err != nil {
-		return nil, err
+	entries, primaryErr := read(primary, failureRead)
+	if strings.TrimSpace(fallback) == "" || sameDir(primary, fallback) {
+		return entries, primaryErr
 	}
-	if strings.TrimSpace(fallback) == "" || filepath.Clean(filepath.Dir(fallback)) == filepath.Clean(filepath.Dir(primary)) {
-		return entries, nil
-	}
-	extra, err := read(fallback, failureRead)
-	if err != nil {
-		return nil, err
-	}
+	extra, fallbackErr := read(fallback, failureRead)
 	entries = append(entries, extra...)
 	sort.SliceStable(entries, func(i, j int) bool { return entries[i].Time.Before(entries[j].Time) })
 	if len(entries) > failureRead {
 		entries = entries[len(entries)-failureRead:]
 	}
-	return entries, nil
+	return entries, errors.Join(primaryErr, fallbackErr)
 }
 
 func joinDetail(detail, note string) string {

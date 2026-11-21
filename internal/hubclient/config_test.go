@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestConfigPrecedence(t *testing.T) {
@@ -111,5 +112,39 @@ func TestBaseAndEnvTokenPathSkipClientConfig(t *testing.T) {
 	}
 	if got, err := withFile.TokenPath(); err != nil || got != filepath.Join(dir, "other.token") {
 		t.Fatalf("TokenPath() with client.json = (%q, %v)", got, err)
+	}
+	if got, err := withEnv.BoundedTokenPath(15*time.Millisecond, nil); err != nil || got != explicit {
+		t.Fatalf("BoundedTokenPath(env) = (%q, %v), want (%q, nil)", got, err, explicit)
+	}
+	if got, err := withFile.BoundedTokenPath(time.Second, nil); err != nil || got != filepath.Join(dir, "other.token") {
+		t.Fatalf("BoundedTokenPath(file) = (%q, %v)", got, err)
+	}
+	entered := make(chan struct{})
+	unblock := make(chan struct{})
+	done := make(chan struct{})
+	defer func() {
+		close(unblock)
+		<-done
+	}()
+	stalled := EnvConfig{
+		DefaultTokenFile: token,
+		Getenv:           func(string) string { return "" },
+		ReadFile: func(string) ([]byte, error) {
+			defer close(done)
+			close(entered)
+			<-unblock
+			return nil, os.ErrNotExist
+		},
+	}
+	got, err := stalled.BoundedTokenPath(15*time.Millisecond, func(time.Duration) <-chan time.Time {
+		c := make(chan time.Time)
+		go func() {
+			<-entered
+			close(c)
+		}()
+		return c
+	})
+	if err != nil || got != token {
+		t.Fatalf("BoundedTokenPath(stalled) = (%q, %v), want (%q, nil)", got, err, token)
 	}
 }

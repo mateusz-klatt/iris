@@ -131,8 +131,60 @@ func TestStalledDefaultClientConfigLogsDeadlineFailure(t *testing.T) {
 }
 
 // Once iris mcp starts, replacing client.json with an unreadable/stalling FIFO must neither
-// divert observations nor leak stalled-read goroutines across repeated observations.
+// divert observations nor leak stalled-read goroutines across repeated observations. It runs
+// in a child process so any regressed FIFO reader dies with the child before t.TempDir cleanup.
 func TestMCPObserverDoesNotReadStalledClientConfig(t *testing.T) {
+	if os.Getenv("IRIS_TEST_HOOK_CHILD") == "1" {
+		defaultToken, _, err := (hubclient.EnvConfig{}).BaseTokenPath()
+		if err != nil {
+			t.Fatal(err)
+		}
+		relocatedToken := os.Getenv("IRIS_CHILD_RELOCATED_TOKEN")
+		cfgPath := filepath.Join(filepath.Dir(defaultToken), "client.json")
+
+		origWorker := newMCPWakeWorker
+		t.Cleanup(func() { newMCPWakeWorker = origWorker })
+		observeCh := make(chan func(string), 1)
+		newMCPWakeWorker = func(_ *binding.Resolver, _ *hook.Sessions, _ func() string, observe func(string)) mcpWakeWorker {
+			observeCh <- observe
+			return mcpWakeFunction(func(ctx context.Context) { <-ctx.Done() })
+		}
+
+		session, done := connectMCPCommand(t, []string{"--client", "codex"}, "0.167.0")
+		observe := <-observeCh
+
+		if err := os.Remove(cfgPath); err != nil {
+			t.Fatal(err)
+		}
+		if err := unix.Mkfifo(cfgPath, 0o600); err != nil {
+			t.Fatal(err)
+		}
+
+		before := runtime.NumGoroutine()
+		const count = 20
+		for range count {
+			observe("wake_stream_following")
+		}
+		for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+			if entries, err := hook.ReadRecentObservations(relocatedToken, count+5); err == nil && len(entries) == count {
+				break
+			}
+			if time.Now().After(deadline) {
+				entries, err := hook.ReadRecentObservations(relocatedToken, count+5)
+				t.Fatalf("relocated observations = %d (%v), want %d", len(entries), err, count)
+			}
+		}
+		if entries, err := hook.ReadRecentObservations(defaultToken, 10); err != nil || len(entries) != 0 {
+			t.Fatalf("default log unexpectedly written on stalled client.json: %+v, err=%v", entries, err)
+		}
+		if after := runtime.NumGoroutine(); after >= before+count/2 {
+			t.Fatalf("goroutines grew from %d to %d across %d observations", before, after, count)
+		}
+		_ = session.Close()
+		waitMCPCommand(t, done)
+		return
+	}
+
 	home := t.TempDir()
 	t.Setenv("HOME", home)
 	t.Setenv("XDG_CONFIG_HOME", home)
@@ -156,44 +208,67 @@ func TestMCPObserverDoesNotReadStalledClientConfig(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	origWorker := newMCPWakeWorker
-	t.Cleanup(func() { newMCPWakeWorker = origWorker })
-	observeCh := make(chan func(string), 1)
-	newMCPWakeWorker = func(_ *binding.Resolver, _ *hook.Sessions, _ func() string, observe func(string)) mcpWakeWorker {
-		observeCh <- observe
-		return mcpWakeFunction(func(ctx context.Context) { <-ctx.Done() })
-	}
-
-	session, done := connectMCPCommand(t, []string{"--client", "codex"}, "0.167.0")
-	observe := <-observeCh
-
-	if err := os.Remove(cfgPath); err != nil {
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	exe, err := os.Executable()
+	if err != nil {
 		t.Fatal(err)
 	}
-	if err := unix.Mkfifo(cfgPath, 0o600); err != nil {
+	cmd := exec.CommandContext(ctx, exe, "-test.run=^TestMCPObserverDoesNotReadStalledClientConfig$")
+	cmd.Env = append(os.Environ(), "IRIS_TEST_HOOK_CHILD=1", "IRIS_CHILD_RELOCATED_TOKEN="+relocatedToken)
+	out, err := cmd.CombinedOutput()
+	if ctx.Err() != nil {
+		t.Fatalf("MCP observer stalled on FIFO client.json:\n%s", out)
+	}
+	if err != nil {
+		t.Fatalf("child failed (%v):\n%s", err, out)
+	}
+}
+
+// Standalone `iris integrate` must not hang when client.json is a stalled FIFO; it falls back
+// to the default token directory after its brief lookup budget.
+func TestIntegrateDoesNotHangOnStalledClientConfig(t *testing.T) {
+	if os.Getenv("IRIS_TEST_HOOK_CHILD") == "1" {
+		os.Exit(runIntegrate([]string{"codex"}))
+	}
+	home := t.TempDir()
+	t.Setenv("HOME", home)
+	t.Setenv("XDG_CONFIG_HOME", home)
+	t.Setenv("IRIS_TOKEN_FILE", "")
+	t.Setenv("CODEX_HOME", filepath.Join(home, "codex"))
+	t.Setenv("IRIS_STATE_DIR", filepath.Join(home, "state"))
+	t.Setenv("PATH", t.TempDir())
+
+	cfgBase, err := os.UserConfigDir()
+	if err != nil {
+		t.Fatal(err)
+	}
+	irisDir := filepath.Join(cfgBase, "iris")
+	if err := os.MkdirAll(irisDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := unix.Mkfifo(filepath.Join(irisDir, "client.json"), 0o600); err != nil {
 		t.Fatal(err)
 	}
 
-	before := runtime.NumGoroutine()
-	const count = 20
-	for range count {
-		observe("wake_stream_following")
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+	exe, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
 	}
-	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
-		if entries, err := hook.ReadRecentObservations(relocatedToken, count+5); err == nil && len(entries) == count {
-			break
-		}
-		if time.Now().After(deadline) {
-			entries, err := hook.ReadRecentObservations(relocatedToken, count+5)
-			t.Fatalf("relocated observations = %d (%v), want %d", len(entries), err, count)
-		}
+	cmd := exec.CommandContext(ctx, exe, "-test.run=^TestIntegrateDoesNotHangOnStalledClientConfig$")
+	cmd.Env = append(os.Environ(), "IRIS_TEST_HOOK_CHILD=1")
+	var out, errBuf bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &errBuf
+	err = cmd.Run()
+	if ctx.Err() != nil {
+		t.Fatalf("iris integrate hung on stalled client.json FIFO; stdout=%q stderr=%q", out.String(), errBuf.String())
 	}
-	if entries, err := hook.ReadRecentObservations(defaultToken, 10); err != nil || len(entries) != 0 {
-		t.Fatalf("default log unexpectedly written on stalled client.json: %+v, err=%v", entries, err)
+	if err != nil || !strings.Contains(out.String(), "integrated codex") || errBuf.Len() != 0 {
+		t.Fatalf("integrate on stalled client.json = %v, stdout=%q, stderr=%q", err, out.String(), errBuf.String())
 	}
-	if after := runtime.NumGoroutine(); after >= before+count/2 {
-		t.Fatalf("goroutines grew from %d to %d across %d observations", before, after, count)
+	if _, err := os.Stat(filepath.Join(home, "codex", "hooks.json")); err != nil {
+		t.Fatalf("codex hooks.json missing: %v", err)
 	}
-	_ = session.Close()
-	waitMCPCommand(t, done)
 }

@@ -311,28 +311,7 @@ func (r Runner) recordFailure(stage string, err error, shape *PayloadShape) {
 // default token directory. When client.json is unreadable or stalled, an entry lands beside
 // the default token path rather than any relocated token_file inside it.
 func (r Runner) logTokenPath() (string, error) {
-	fallback, fromEnv, err := (hubclient.EnvConfig{Getenv: r.Getenv}).BaseTokenPath()
-	if err != nil || fromEnv {
-		return fallback, err
-	}
-	ch := make(chan string, 1)
-	go func() {
-		ch <- (hubclient.EnvConfig{
-			Getenv:           func(string) string { return "" },
-			ReadFile:         r.readConfig,
-			DefaultTokenFile: fallback,
-		}).Load().TokenFile
-	}()
-	after := r.configAfter
-	if after == nil {
-		after = time.After
-	}
-	select {
-	case path := <-ch:
-		return path, nil
-	case <-after(failureConfigBudget):
-		return fallback, nil
-	}
+	return (hubclient.EnvConfig{Getenv: r.Getenv, ReadFile: r.readConfig}).BoundedTokenPath(failureConfigBudget, r.configAfter)
 }
 
 // record appends one entry to the log doctor reads, within the log's small budget.

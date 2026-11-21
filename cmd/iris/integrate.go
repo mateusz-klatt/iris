@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/mateusz-klatt/iris/internal/hook"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
@@ -132,9 +133,12 @@ func runIntegrate(args []string) int {
 	return code
 }
 
+const integrateConfigBudget = 15 * time.Millisecond
+
 // ensureIntegrateConfigDir creates the resolved Iris token directory with 0700 in the
 // foreground so early hook failures are recorded after standalone `iris integrate`,
-// without the hook recorder creating directories from an abandoned goroutine.
+// without the hook recorder creating directories from an abandoned goroutine and without
+// blocking indefinitely if client.json stalls.
 func ensureIntegrateConfigDir(layout integrate.Layout) error {
 	dir, err := layout.IrisConfigDir()
 	if err != nil {
@@ -143,7 +147,7 @@ func ensureIntegrateConfigDir(layout integrate.Layout) error {
 	tokenPath, _ := (hubclient.EnvConfig{
 		Getenv:           layout.GetenvOr,
 		DefaultTokenFile: filepath.Join(dir, "hub.token"),
-	}).TokenPath()
+	}).BoundedTokenPath(integrateConfigBudget, nil)
 	return os.MkdirAll(filepath.Dir(tokenPath), 0o700)
 }
 

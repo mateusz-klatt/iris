@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 )
 
 const DefaultHubURL = "http://127.0.0.1:7878"
@@ -162,6 +163,34 @@ func (e EnvConfig) TokenPath() (string, error) {
 	}
 	return e.Load().TokenPath()
 }
+
+// BoundedTokenPath resolves the token path without blocking indefinitely on client.json.
+// When IRIS_TOKEN_FILE is set, client.json is not read. Otherwise client.json is read
+// within budget; if that stalls, the default token path is returned.
+func (e EnvConfig) BoundedTokenPath(budget time.Duration, after func(time.Duration) <-chan time.Time) (string, error) {
+	fallback, fromEnv, err := e.BaseTokenPath()
+	if err != nil || fromEnv {
+		return fallback, err
+	}
+	ch := make(chan string, 1)
+	go func() {
+		ch <- (EnvConfig{
+			Getenv:           func(string) string { return "" },
+			ReadFile:         e.ReadFile,
+			DefaultTokenFile: fallback,
+		}).Load().TokenFile
+	}()
+	if after == nil {
+		after = time.After
+	}
+	select {
+	case path := <-ch:
+		return path, nil
+	case <-after(budget):
+		return fallback, nil
+	}
+}
+
 func (e EnvConfig) Token() (string, error) { return e.Load().Token() }
 
 // Hooks a test uses to force a write or close failure on the temp file.

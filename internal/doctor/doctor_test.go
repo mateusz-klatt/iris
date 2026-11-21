@@ -423,14 +423,142 @@ func TestDoctorMergesRelocatedAndFallbackLogsByTime(t *testing.T) {
 		t.Fatalf("merged window did not retain newest entries chronologically: first=%+v last=%+v", merged[0], merged[len(merged)-1])
 	}
 
-	// An unreadable fallback log is reported instead of silently dropped.
+	// An unreadable fallback failure log reports its error while preserving readable primary
+	// failure and observation diagnostics in both doctor.Run and NewBundle.
+	if err := os.WriteFile(filepath.Join(relocatedDir, "hook-failures.log"), []byte(relocatedFail), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.Remove(filepath.Join(filepath.Dir(defaultToken), "hook-failures.log")); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.Mkdir(filepath.Join(filepath.Dir(defaultToken), "hook-failures.log"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := readMergedLog(relocatedToken, defaultToken, hook.ReadRecentFailures); err == nil {
-		t.Fatal("unreadable fallback log was ignored")
+	resPartialFail, err := Run(context.Background(), Options{Layout: layout, HTTP: srv.Client(), Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(resPartialFail.HubDetail, "failure log:") {
+		t.Fatalf("unreadable fallback failure log was not reported in HubDetail: %+v", resPartialFail)
+	}
+	var partialCodex, partialClaude ClientReport
+	for _, row := range resPartialFail.Report.Clients {
+		switch row.Client {
+		case integrate.Codex:
+			partialCodex = row
+		case integrate.Claude:
+			partialClaude = row
+		}
+	}
+	if partialCodex.Status != StatusSilent || !strings.Contains(partialCodex.Detail, "PreToolUse decode: invalid JSON at byte 1") {
+		t.Fatalf("unreadable fallback failure log hid primary failure: %+v", partialCodex)
+	}
+	if !strings.Contains(partialClaude.Detail, "unknown tool alpha (1)") {
+		t.Fatalf("unreadable fallback failure log hid primary observation: %+v", partialClaude)
+	}
+	partialFailBundle := NewBundle(resPartialFail, "v1.0.0", now)
+	if len(partialFailBundle.Failures) != 1 || partialFailBundle.Failures[0].Count != 1 {
+		t.Fatalf("bundle dropped primary failure on unreadable fallback failure log: %+v", partialFailBundle.Failures)
+	}
+
+	// Restore fallback failure log and make fallback observed log unreadable: doctor and bundle
+	// must report the read error while keeping primary failure and primary observation diagnostics.
+	if err := os.Remove(filepath.Join(filepath.Dir(defaultToken), "hook-failures.log")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(filepath.Join(filepath.Dir(defaultToken), "hook-observed.log")); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Mkdir(filepath.Join(filepath.Dir(defaultToken), "hook-observed.log"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	resPartialObs, err := Run(context.Background(), Options{Layout: layout, HTTP: srv.Client(), Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(resPartialObs.HubDetail, "failure log:") {
+		t.Fatalf("unreadable fallback observed log was not reported in HubDetail: %+v", resPartialObs)
+	}
+	partialCodex, partialClaude = ClientReport{}, ClientReport{}
+	for _, row := range resPartialObs.Report.Clients {
+		switch row.Client {
+		case integrate.Codex:
+			partialCodex = row
+		case integrate.Claude:
+			partialClaude = row
+		}
+	}
+	if partialCodex.Status != StatusSilent || !strings.Contains(partialCodex.Detail, "PreToolUse decode: invalid JSON at byte 1") {
+		t.Fatalf("unreadable fallback observed log hid primary failure: %+v", partialCodex)
+	}
+	if !strings.Contains(partialClaude.Detail, "unknown tool alpha (1)") {
+		t.Fatalf("unreadable fallback observed log hid primary observation: %+v", partialClaude)
+	}
+	partialObsBundle := NewBundle(resPartialObs, "v1.0.0", now)
+	if len(partialObsBundle.Failures) != 1 || len(partialObsBundle.Observations) != 1 || partialObsBundle.Observations[0].Count != 1 {
+		t.Fatalf("bundle dropped primary diagnostics on unreadable fallback observed log: failures=%+v observations=%+v", partialObsBundle.Failures, partialObsBundle.Observations)
+	}
+}
+
+func TestDoctorDoesNotDoubleCountAliasedSymlinkLogDirectory(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+	defer srv.Close()
+
+	home := t.TempDir()
+	layout := integrate.Layout{
+		Home:     home,
+		GOOS:     "linux",
+		Getenv:   func(string) string { return "" },
+		LookPath: func(string) (string, error) { return "", os.ErrNotExist },
+	}
+	defaultToken := defaultTokenFile(layout)
+	defaultDir := filepath.Dir(defaultToken)
+	if err := os.MkdirAll(defaultDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	aliasDir := filepath.Join(home, "iris-alias")
+	if err := os.Symlink(defaultDir, aliasDir); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("symlink unavailable on Windows: %v", err)
+		}
+		t.Fatal(err)
+	}
+	aliasToken := filepath.Join(aliasDir, "hub.token")
+	if err := hubclient.WriteConfig(filepath.Join(defaultDir, "client.json"), hubclient.FileConfig{
+		Hub:       srv.URL,
+		TokenFile: aliasToken,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(defaultToken, []byte("secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	// Six degraded reconciliations are below slowLimit (10). Doubling via the symlink alias
+	// would report 12 and flip the client to StatusSlow.
+	now := time.Date(2026, 11, 21, 12, 0, 0, 0, time.UTC)
+	degradedLine := fmt.Sprintf(`{"time":%q,"client":"codex","event":"post_tool","stage":"shell status","error":"shell reconciliation passed its deadline"}`+"\n", now.Add(-10*time.Minute).Format(time.RFC3339))
+	if err := os.WriteFile(filepath.Join(defaultDir, "hook-failures.log"), []byte(strings.Repeat(degradedLine, 6)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	res, err := Run(context.Background(), Options{Layout: layout, HTTP: srv.Client(), Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var codex ClientReport
+	for _, row := range res.Report.Clients {
+		if row.Client == integrate.Codex {
+			codex = row
+		}
+	}
+	if codex.Status == StatusSlow || !strings.Contains(codex.Detail, "degraded: 6 shell reconciliation(s)") {
+		t.Fatalf("symlink-aliased log directory double-counted entries: %+v", codex)
+	}
+	bundle := NewBundle(res, "v1.0.0", now)
+	if len(bundle.Failures) != 1 || bundle.Failures[0].Count != 6 {
+		t.Fatalf("bundle double-counted symlink-aliased failures: %+v", bundle.Failures)
 	}
 }
