@@ -111,8 +111,8 @@ project, "whether one works in the snapper-frontend checkout or in the submodule
    before. No snapshot table changes, because an older hub writes those tables by position.
    No full baseline crosses a hub start any more, as no reduced one did (ADR 018): one an older
    hub wrote records no checkout, so it may be another checkout's, and that holds after a
-   rollback and forward again too. Each session's first shell command after a start sets a new
-   baseline and attributes nothing. Claims
+   rollback and forward again too. Each session's first snapshot after a start only sets a new
+   baseline; the next one is compared with it as before. Claims
    made from another checkout by edit tools stay until release, expiry or the end of the Execution.
 6. **Explicit claims will follow the same rule.** The MCP `claim` tool takes a path relative to the
    session's repository. A path below a checked-out submodule or nested checkout, found on disk
