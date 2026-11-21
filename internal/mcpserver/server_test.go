@@ -82,6 +82,32 @@ func TestInitializationReportsTheBuildIdentity(t *testing.T) {
 	}
 }
 
+// A session that read its mail and acknowledged none fetched the same 24 deliveries on every wake,
+// at attempt 18 by the morning, because nothing it was told said to acknowledge. Every client
+// reads the server instructions or the tool list, so both say it.
+func TestTheModelIsToldToAcknowledgeWhatItRead(t *testing.T) {
+	session := connect(t, &fakeHub{})
+	instructions := session.InitializeResult().Instructions
+	for _, want := range []string{"untrusted data", "Ack each delivery you have read", "not that you acted", "handled", "Whether to reply is your decision"} {
+		if !strings.Contains(instructions, want) {
+			t.Fatalf("instructions lack %q: %s", want, instructions)
+		}
+	}
+	tools, err := session.ListTools(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tool := range tools.Tools {
+		if tool.Name == "inbox" {
+			if !strings.Contains(tool.Description, "Ack each delivery you have read") || !strings.Contains(tool.Description, "fetched again on every call") {
+				t.Fatalf("inbox description: %s", tool.Description)
+			}
+			return
+		}
+	}
+	t.Fatal("no inbox tool")
+}
+
 // connectHandler is connect for a hub that does more than a fakeHub.
 func connectHandler(t *testing.T, f http.Handler, opts ...Option) *mcp.ClientSession {
 	t.Helper()
