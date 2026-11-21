@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"flag"
-	"os"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -63,7 +62,9 @@ func runMCP(args []string) error {
 	config := hubclient.NewConfig()
 	resolver := binding.New(&hubclient.Client{Config: config}, *client)
 	// What a tool call's ids show goes to the log doctor reads, within a hook's small budget.
-	resolver.Observe = mcpObserver(os.Getenv, *client)
+	// Pin the resolved token path so long-lived observations never re-read client.json.
+	observeEnv := map[string]string{"IRIS_TOKEN_FILE": config.TokenFile}
+	resolver.Observe = mcpObserver(func(k string) string { return observeEnv[k] }, *client)
 	workers.Add(1)
 	go func() { defer workers.Done(); resolver.Maintain(ctx, "shim", 20*time.Second, parent.Alive, cancel) }()
 	var options []mcpserver.Option

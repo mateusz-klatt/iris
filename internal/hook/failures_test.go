@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -287,5 +288,170 @@ func TestMalformedClientConfigStillLogsTheFailure(t *testing.T) {
 	}
 	if entries[0].Stage == "" || entries[0].Client != "kimi" {
 		t.Fatal(entries[0])
+	}
+}
+
+func TestRecordFailureUsesRelocatedTokenFileFromClientConfig(t *testing.T) {
+	home := t.TempDir()
+	for _, key := range []string{"HOME", "XDG_CONFIG_HOME", "AppData"} {
+		t.Setenv(key, home)
+	}
+	fallback, _, err := (hubclient.EnvConfig{Getenv: func(string) string { return "" }}).BaseTokenPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	relocated := filepath.Join(t.TempDir(), "hub.token")
+	if err := hubclient.WriteConfig(filepath.Join(filepath.Dir(fallback), "client.json"), hubclient.FileConfig{
+		Hub:       "http://127.0.0.1:7878",
+		TokenFile: relocated,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	out := (Runner{
+		ClientName: "claude",
+		EventName:  "PreToolUse",
+		Stdin:      strings.NewReader("{"),
+		Getenv:     func(string) string { return "" },
+		after:      never,
+		logAfter:   never,
+	}).Run()
+	assertAllow(t, ClientClaude, out)
+	entries, err := ReadRecentFailures(relocated, 10)
+	if err != nil || len(entries) != 1 || entries[0].Stage != "decode" || entries[0].Client != "claude" {
+		t.Fatalf("relocated log = %+v, err = %v", entries, err)
+	}
+	defaultEntries, err := ReadRecentFailures(fallback, 10)
+	if err != nil || len(defaultEntries) != 0 {
+		t.Fatalf("default log unexpectedly written: %+v, err = %v", defaultEntries, err)
+	}
+}
+
+func TestRecordFailureFallsBackWhenClientConfigStalls(t *testing.T) {
+	home := t.TempDir()
+	for _, key := range []string{"HOME", "XDG_CONFIG_HOME", "AppData"} {
+		t.Setenv(key, home)
+	}
+	fallback, _, err := (hubclient.EnvConfig{Getenv: func(string) string { return "" }}).BaseTokenPath()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(filepath.Dir(fallback), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	entered := make(chan struct{})
+	unblock := make(chan struct{})
+	readDone := make(chan struct{})
+	defer func() {
+		close(unblock)
+		<-readDone
+	}()
+	stalled := func(time.Duration) <-chan time.Time {
+		c := make(chan time.Time)
+		go func() {
+			<-entered
+			close(c)
+		}()
+		return c
+	}
+	out := (Runner{
+		ClientName: "claude",
+		EventName:  "SessionStart",
+		Stdin:      strings.NewReader("{"),
+		Getenv:     func(string) string { return "" },
+		readConfig: func(string) ([]byte, error) {
+			defer close(readDone)
+			close(entered)
+			<-unblock
+			return nil, os.ErrNotExist
+		},
+		after:       never,
+		logAfter:    never,
+		configAfter: stalled,
+	}).Run()
+	assertAllow(t, ClientClaude, out)
+	entries, err := ReadRecentFailures(fallback, 10)
+	if err != nil || len(entries) != 1 || entries[0].Stage != "decode" || entries[0].Client != "claude" {
+		t.Fatalf("fallback log = %+v, err = %v", entries, err)
+	}
+}
+
+func TestAppendFailureDoesNotRecreateRemovedDirectory(t *testing.T) {
+	removedRoot := filepath.Join(t.TempDir(), "iris-test-home-removed")
+	removedDir := filepath.Join(removedRoot, "iris")
+	token := filepath.Join(removedDir, "hub.token")
+	err := appendFailure(token, Failure{Time: time.Now().UTC(), Client: "claude", Event: "SessionStart", Stage: "session", Error: "hook deadline exceeded"})
+	if !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("appendFailure error = %v, want os.ErrNotExist", err)
+	}
+	if _, statErr := os.Stat(removedRoot); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("missing directory was created: stat err = %v", statErr)
+	}
+
+	// An abandoned recorder goroutine that finishes after its home directory is removed
+	// must not recreate that directory.
+	ephemeral := filepath.Join(t.TempDir(), "iris-test-home-ephemeral")
+	if err := os.MkdirAll(ephemeral, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	ephemeralToken := filepath.Join(ephemeral, "hub.token")
+	unblock := make(chan struct{})
+	written := make(chan struct{})
+	expired := func(time.Duration) <-chan time.Time {
+		c := make(chan time.Time)
+		close(c)
+		return c
+	}
+	out := (Runner{
+		ClientName: "claude",
+		EventName:  "SessionStart",
+		Stdin:      strings.NewReader("{"),
+		Getenv: func(key string) string {
+			<-unblock
+			if key == "IRIS_TOKEN_FILE" {
+				return ephemeralToken
+			}
+			return ""
+		},
+		logAfter: expired,
+		logged:   func() { close(written) },
+	}).Run()
+	assertAllow(t, ClientClaude, out)
+	if err := os.RemoveAll(ephemeral); err != nil {
+		t.Fatal(err)
+	}
+	close(unblock)
+	<-written
+	if _, statErr := os.Stat(ephemeral); !errors.Is(statErr, os.ErrNotExist) {
+		t.Fatalf("abandoned recorder recreated removed directory: stat err = %v", statErr)
+	}
+}
+
+func TestPinnedObserverPerformsZeroConfigReads(t *testing.T) {
+	token := filepath.Join(t.TempDir(), "hub.token")
+	var reads atomic.Int32
+	r := Runner{
+		ClientName: "codex",
+		EventName:  "mcp",
+		Getenv: func(key string) string {
+			if key == "IRIS_TOKEN_FILE" {
+				return token
+			}
+			return ""
+		},
+		readConfig: func(string) ([]byte, error) {
+			reads.Add(1)
+			return nil, os.ErrNotExist
+		},
+		logAfter: never,
+	}
+	for range 5 {
+		r.record(stageObserved, "wake_stream_following", nil)
+	}
+	if got := reads.Load(); got != 0 {
+		t.Fatalf("pinned observer read client.json %d times, want 0", got)
+	}
+	entries, err := ReadRecentObservations(token, 10)
+	if err != nil || len(entries) != 5 {
+		t.Fatalf("observations = %+v, err = %v", entries, err)
 	}
 }

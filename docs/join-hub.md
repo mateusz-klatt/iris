@@ -187,7 +187,8 @@ unclaimed", followed by the failure, count and time. This records a hook that ra
 after a failure; it does not mean the client was never heard from or is down now. The warning can
 remain alongside a newer successful `last hook` time. Doctor cannot tell which edits went unclaimed
 from this log. `hook-failures.log` beside the token file keeps the failure, and the warning clears
-once the entry is more than 24 hours old.
+once the entry is more than 24 hours old. When `client.json` relocates `token_file` into another
+directory, doctor also reads the default configuration directory's logs and merges them by time.
 
 Doctor also prints a `case policy:` line when the repository you run it in is case-sensitive at the
 hub, which is only by an explicit opt-out (ADR 003), while this checkout folds case, as git records in

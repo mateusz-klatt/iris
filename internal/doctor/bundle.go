@@ -88,8 +88,8 @@ func NewBundle(res Result, version string, now time.Time) Bundle {
 		b.Clients = append(b.Clients, BundleClient{Client: client, Status: status, Version: bareVersion(c.Version)})
 	}
 	// A log that cannot be read leaves its counts empty; doctor's own report says why.
-	failures, _ := hook.ReadRecentFailures(res.tokenFile, failureRead)
-	observations, _ := hook.ReadRecentObservations(res.tokenFile, failureRead)
+	failures, _ := readMergedLog(res.tokenFile, res.fallbackTokenFile, hook.ReadRecentFailures)
+	observations, _ := readMergedLog(res.tokenFile, res.fallbackTokenFile, hook.ReadRecentObservations)
 	b.Failures = counts(failures, now, func(f hook.Failure) string { return hook.FailureCategory(f.Error) })
 	b.Observations = counts(observations, now, func(f hook.Failure) string { return observationKind(f.Error) })
 	return b

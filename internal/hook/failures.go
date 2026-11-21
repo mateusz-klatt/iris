@@ -21,8 +21,11 @@ import (
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 )
 
-const failureLogLimit = 64 << 10
-const failureLogBudget = 5 * time.Millisecond
+const (
+	failureLogLimit     = 64 << 10
+	failureLogBudget    = 50 * time.Millisecond
+	failureConfigBudget = 15 * time.Millisecond
+)
 
 // Failure is a payload-free diagnostic for doctor. Time is in UTC.
 type Failure struct {
@@ -301,6 +304,16 @@ func (r Runner) recordFailure(stage string, err error, shape *PayloadShape) {
 	r.record(stage, failureText(err), shape)
 }
 
+// logTokenPath resolves the token file whose directory holds hook-failures.log without
+// blocking indefinitely on a stalled client.json. IRIS_TOKEN_FILE wins over client.json,
+// so client.json is not read when it is set. Otherwise client.json may relocate token_file,
+// so it is read within failureConfigBudget; if that stalls, logging falls back to the
+// default token directory. When client.json is unreadable or stalled, an entry lands beside
+// the default token path rather than any relocated token_file inside it.
+func (r Runner) logTokenPath() (string, error) {
+	return (hubclient.EnvConfig{Getenv: r.Getenv, ReadFile: r.readConfig}).BoundedTokenPath(failureConfigBudget, r.configAfter)
+}
+
 // record appends one entry to the log doctor reads, within the log's small budget.
 func (r Runner) record(stage, text string, shape *PayloadShape) {
 	// Logging is best effort. A slow disk, permissions failure or competing writer
@@ -312,7 +325,7 @@ func (r Runner) record(stage, text string, shape *PayloadShape) {
 		}
 		defer close(done)
 		defer func() { _ = recover() }()
-		token, errPath := (hubclient.EnvConfig{Getenv: r.Getenv}).TokenPath()
+		token, errPath := r.logTokenPath()
 		if errPath != nil {
 			return
 		}
@@ -383,9 +396,10 @@ func appendFailure(tokenFile string, entry Failure) error {
 	if entry.Observed() {
 		path = observedPath(tokenFile)
 	}
-	if err := os.MkdirAll(filepath.Dir(path), 0700); err != nil {
-		return err
-	}
+	// Log only beside an existing configuration directory. Creating missing directories here
+	// would let an abandoned recorder goroutine recreate a directory after a test or user
+	// removed it; foreground `iris integrate`, `iris setup`, `iris serve` or token placement
+	// creates that directory.
 	// Only a special file is refused here. Anything Lstat cannot inspect, opening reports.
 	if info, err := os.Lstat(path); err == nil && !info.Mode().IsRegular() {
 		return errors.New("failure log is not a regular file")

@@ -5,6 +5,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestConfigPrecedence(t *testing.T) {
@@ -66,5 +67,84 @@ func TestConfigErrReportsWhatTokenPathTolerates(t *testing.T) {
 	}
 	if r.ConfigErr() == nil {
 		t.Fatal("a malformed client.json was not reported")
+	}
+}
+
+func TestBaseAndEnvTokenPathSkipClientConfig(t *testing.T) {
+	dir := t.TempDir()
+	token := filepath.Join(dir, "hub.token")
+	explicit := filepath.Join(dir, "explicit.token")
+	noRead := func(path string) ([]byte, error) {
+		t.Fatalf("unexpected read of %s", path)
+		return nil, nil
+	}
+	withEnv := EnvConfig{
+		DefaultTokenFile: token,
+		Getenv: func(k string) string {
+			if k == "IRIS_TOKEN_FILE" {
+				return explicit
+			}
+			return ""
+		},
+		ReadFile: noRead,
+	}
+	if got, fromEnv, err := withEnv.BaseTokenPath(); err != nil || !fromEnv || got != explicit {
+		t.Fatalf("BaseTokenPath() = (%q, %v, %v), want (%q, true, nil)", got, fromEnv, err, explicit)
+	}
+	if got, err := withEnv.TokenPath(); err != nil || got != explicit {
+		t.Fatalf("TokenPath() = (%q, %v), want (%q, nil)", got, err, explicit)
+	}
+	withoutEnv := EnvConfig{
+		DefaultTokenFile: token,
+		Getenv:           func(string) string { return "" },
+		ReadFile:         noRead,
+	}
+	if got, fromEnv, err := withoutEnv.BaseTokenPath(); err != nil || fromEnv || got != token {
+		t.Fatalf("BaseTokenPath() = (%q, %v, %v), want (%q, false, nil)", got, fromEnv, err, token)
+	}
+	if err := WriteConfig(filepath.Join(dir, "client.json"), FileConfig{Hub: "https://file.example", TokenFile: "other.token"}); err != nil {
+		t.Fatal(err)
+	}
+	withFile := EnvConfig{
+		DefaultTokenFile: token,
+		Getenv:           func(string) string { return "" },
+		ReadFile:         os.ReadFile,
+	}
+	if got, err := withFile.TokenPath(); err != nil || got != filepath.Join(dir, "other.token") {
+		t.Fatalf("TokenPath() with client.json = (%q, %v)", got, err)
+	}
+	if got, err := withEnv.BoundedTokenPath(15*time.Millisecond, nil); err != nil || got != explicit {
+		t.Fatalf("BoundedTokenPath(env) = (%q, %v), want (%q, nil)", got, err, explicit)
+	}
+	if got, err := withFile.BoundedTokenPath(time.Second, nil); err != nil || got != filepath.Join(dir, "other.token") {
+		t.Fatalf("BoundedTokenPath(file) = (%q, %v)", got, err)
+	}
+	entered := make(chan struct{})
+	unblock := make(chan struct{})
+	done := make(chan struct{})
+	defer func() {
+		close(unblock)
+		<-done
+	}()
+	stalled := EnvConfig{
+		DefaultTokenFile: token,
+		Getenv:           func(string) string { return "" },
+		ReadFile: func(string) ([]byte, error) {
+			defer close(done)
+			close(entered)
+			<-unblock
+			return nil, os.ErrNotExist
+		},
+	}
+	got, err := stalled.BoundedTokenPath(15*time.Millisecond, func(time.Duration) <-chan time.Time {
+		c := make(chan time.Time)
+		go func() {
+			<-entered
+			close(c)
+		}()
+		return c
+	})
+	if err != nil || got != token {
+		t.Fatalf("BoundedTokenPath(stalled) = (%q, %v), want (%q, nil)", got, err, token)
 	}
 }

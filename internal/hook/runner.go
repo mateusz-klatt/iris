@@ -71,6 +71,10 @@ type Runner struct {
 	// logAfter starts the failure log budget, as after starts the deadline. Tests that read the
 	// log pass one that never fires, so Run returns only once the entry is written.
 	logAfter func(time.Duration) <-chan time.Time
+	// configAfter starts the failure recorder's client.json read budget. Nil means time.After.
+	configAfter func(time.Duration) <-chan time.Time
+	// readConfig reads client.json for the failure recorder. Nil means os.ReadFile.
+	readConfig func(string) ([]byte, error)
 	// logged runs once the failure write has finished, even after Run has returned.
 	logged func()
 	// arming runs as a Kimi prompt's arming decision starts (ADR 030). Tests hold it there to pass
