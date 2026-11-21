@@ -171,6 +171,9 @@ removing a live guard can admit a duplicate notification.
     boundary against same-OS-user processes (already inside the same-user trust boundary).
   - The unlinked image executed from that descriptor is still the old `agy` binary code until `agy`
     restarts.
+  - `agentapi` runs with `/proc/self/fd/3` as both its exec path and `argv[0]`. `agy 1.5.14` was
+    verified live, but a client or later version that locates resources through `argv[0]` could
+    behave differently.
   - Queuing a message via `agentapi send-message` does not prove the model acts on it.
   Measurements ran with `agy 1.5.8` on Linux/WSL2 and on Windows 11 (and deleted-descriptor live
   verification with `agy 1.5.14` on Linux/WSL2); macOS has not been measured live.

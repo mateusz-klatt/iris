@@ -54,7 +54,6 @@ func openFDCount(t *testing.T) int {
 
 func TestAntigravityWakeSurvivesInPlaceUpdateViaDeletedDescriptor(t *testing.T) {
 	const convID = "e28a6164-6409-4810-b8ee-df8202a16a0a"
-	h := newAgyTestHarness(t, convID)
 
 	binDir := t.TempDir()
 	fakeAgy := filepath.Join(binDir, "agy")
@@ -95,6 +94,30 @@ func TestAntigravityWakeSurvivesInPlaceUpdateViaDeletedDescriptor(t *testing.T) 
 		t.Fatal(err)
 	}
 
+	// Check exact descriptor cleanup across repeated check() calls before starting any
+	// httptest servers that open background sockets.
+	checkOnly := &antigravityCommands{
+		owner: hook.AntigravityHelperOwner{
+			AgyPID:     agySnap.PID,
+			AgyStartMS: agySnap.StartMS,
+			SessionID:  convID,
+		},
+		executable: proc.OpenExecutable,
+		now:        func() time.Time { return time.UnixMilli(2000) },
+	}
+	beforeFDs := openFDCount(t)
+	for range 15 {
+		info, det, differs := checkOnly.check(context.Background(), "")
+		if det != "" || differs || !strings.HasSuffix(info.Path, " (deleted)") {
+			t.Fatalf("check(deleted) = info=%+v det=%q differs=%v", info, det, differs)
+		}
+	}
+	if afterFDs := openFDCount(t); afterFDs != beforeFDs {
+		t.Fatalf("check() leaked file descriptors: before=%d after=%d", beforeFDs, afterFDs)
+	}
+
+	h := newAgyTestHarness(t, convID)
+
 	// Mark the conversation idle so antigravityCommands.queue admits the wake.
 	owner := hook.AntigravityHelperOwner{
 		AgyPID:        h.agyPID,
@@ -134,18 +157,6 @@ func TestAntigravityWakeSurvivesInPlaceUpdateViaDeletedDescriptor(t *testing.T) 
 		waitDelay:    time.Second,
 	}
 
-	// Repeated check() calls must verify the deleted image and close the descriptor each time.
-	beforeFDs := openFDCount(t)
-	for range 15 {
-		info, det, differs := cmds.check(context.Background(), "")
-		if det != "" || differs || !strings.HasSuffix(info.Path, " (deleted)") {
-			t.Fatalf("check(deleted) = info=%+v det=%q differs=%v", info, det, differs)
-		}
-	}
-	if afterFDs := openFDCount(t); afterFDs >= beforeFDs+10 {
-		t.Fatalf("check() leaked file descriptors: before=%d after=%d", beforeFDs, afterFDs)
-	}
-
 	// queue() must execute the old deleted image via /proc/self/fd/3 and never invoke the decoy.
 	const wakeMsg = "Iris wake after in-place update"
 	ans := cmds.queue(context.Background(), convID, wakeMsg, func(start func() error) (bool, error) {
@@ -164,6 +175,48 @@ func TestAntigravityWakeSurvivesInPlaceUpdateViaDeletedDescriptor(t *testing.T) 
 	}
 	if _, err := os.Stat(decoyMarker); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("decoy at original path ran instead of old image: stat err = %v", err)
+	}
+
+	// Real descriptor-backed Start failure: strip execute bits from a running deleted image so
+	// proc.OpenExecutable succeeds with a real open descriptor, then execve(/proc/self/fd/3)
+	// fails with EACCES and queue() reports antigravityExeDeleted while closing the descriptor.
+	noExecAgy := filepath.Join(binDir, "agy-noexec")
+	copyWakeTestBinary(t, noExecAgy)
+	noExecChild := exec.Command(noExecAgy, "fake-agy-sleep")
+	if err := noExecChild.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = noExecChild.Process.Kill()
+		_ = noExecChild.Wait()
+	})
+	noExecSnap, ok := proc.Lookup(noExecChild.Process.Pid)
+	if !ok || noExecSnap.StartMS <= 0 {
+		t.Fatalf("noexec child lookup failed: %+v %v", noExecSnap, ok)
+	}
+	if err := os.Chmod(noExecAgy, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	noExecOld := noExecAgy + ".old"
+	if err := os.Rename(noExecAgy, noExecOld); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(noExecOld); err != nil {
+		t.Fatal(err)
+	}
+	noExecCmds := *cmds
+	noExecCmds.owner.AgyPID = noExecSnap.PID
+	noExecCmds.owner.AgyStartMS = noExecSnap.StartMS
+	beforeStartFailFDs := openFDCount(t)
+	failAns := noExecCmds.queue(context.Background(), convID, wakeMsg, func(start func() error) (bool, error) {
+		err := start()
+		return err == nil, err
+	})
+	if failAns.answer != "failed" || failAns.detail != antigravityExeDeleted || failAns.started {
+		t.Fatalf("real deleted-fd Start failure = %+v, want failed with %q", failAns, antigravityExeDeleted)
+	}
+	if afterStartFailFDs := openFDCount(t); afterStartFailFDs != beforeStartFailFDs {
+		t.Fatalf("failed Start on deleted descriptor leaked fds: before=%d after=%d", beforeStartFailFDs, afterStartFailFDs)
 	}
 
 	// Once fake agy exits, check() reports unavailable (process gone, not deleted-image error).

@@ -397,8 +397,8 @@ func TestDoctorMergesRelocatedAndFallbackLogsByTime(t *testing.T) {
 	}
 
 	bundle := NewBundle(res, "v1.0.0", now)
-	if len(bundle.Failures) != 2 || len(bundle.Observations) != 1 || bundle.Observations[0].Count != 2 {
-		t.Fatalf("bundle missed merged relocated+fallback counts: failures=%+v observations=%+v", bundle.Failures, bundle.Observations)
+	if bundle.PartialLogs || len(bundle.Failures) != 2 || len(bundle.Observations) != 1 || bundle.Observations[0].Count != 2 {
+		t.Fatalf("bundle missed merged relocated+fallback counts: partial=%v failures=%+v observations=%+v", bundle.PartialLogs, bundle.Failures, bundle.Observations)
 	}
 
 	// Merging more than failureRead entries across both logs keeps the newest failureRead entries by time.
@@ -457,8 +457,17 @@ func TestDoctorMergesRelocatedAndFallbackLogsByTime(t *testing.T) {
 		t.Fatalf("unreadable fallback failure log hid primary observation: %+v", partialClaude)
 	}
 	partialFailBundle := NewBundle(resPartialFail, "v1.0.0", now)
-	if len(partialFailBundle.Failures) != 1 || partialFailBundle.Failures[0].Count != 1 {
-		t.Fatalf("bundle dropped primary failure on unreadable fallback failure log: %+v", partialFailBundle.Failures)
+	if !partialFailBundle.PartialLogs || len(partialFailBundle.Failures) != 1 || partialFailBundle.Failures[0].Count != 1 {
+		t.Fatalf("bundle dropped primary failure or PartialLogs on unreadable fallback failure log: partial=%v failures=%+v", partialFailBundle.PartialLogs, partialFailBundle.Failures)
+	}
+
+	// When the hub is also unreachable, HubDetail keeps both the hub failure and the log-read error.
+	resOfflineAndLogErr, err := Run(context.Background(), Options{Layout: layout, HubURL: "http://127.0.0.1:1", HTTP: srv.Client(), Now: func() time.Time { return now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(resOfflineAndLogErr.HubDetail, "hub unreachable") || !strings.Contains(resOfflineAndLogErr.HubDetail, "failure log:") {
+		t.Fatalf("HubDetail dropped either hub error or log-read error: %q", resOfflineAndLogErr.HubDetail)
 	}
 
 	// Restore fallback failure log and make fallback observed log unreadable: doctor and bundle
@@ -495,8 +504,8 @@ func TestDoctorMergesRelocatedAndFallbackLogsByTime(t *testing.T) {
 		t.Fatalf("unreadable fallback observed log hid primary observation: %+v", partialClaude)
 	}
 	partialObsBundle := NewBundle(resPartialObs, "v1.0.0", now)
-	if len(partialObsBundle.Failures) != 1 || len(partialObsBundle.Observations) != 1 || partialObsBundle.Observations[0].Count != 1 {
-		t.Fatalf("bundle dropped primary diagnostics on unreadable fallback observed log: failures=%+v observations=%+v", partialObsBundle.Failures, partialObsBundle.Observations)
+	if !partialObsBundle.PartialLogs || len(partialObsBundle.Failures) != 1 || len(partialObsBundle.Observations) != 1 || partialObsBundle.Observations[0].Count != 1 {
+		t.Fatalf("bundle dropped primary diagnostics or PartialLogs on unreadable fallback observed log: partial=%v failures=%+v observations=%+v", partialObsBundle.PartialLogs, partialObsBundle.Failures, partialObsBundle.Observations)
 	}
 }
 

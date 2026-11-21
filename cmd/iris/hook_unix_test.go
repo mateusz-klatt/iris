@@ -271,4 +271,19 @@ func TestIntegrateDoesNotHangOnStalledClientConfig(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, "codex", "hooks.json")); err != nil {
 		t.Fatalf("codex hooks.json missing: %v", err)
 	}
+	if info, err := os.Stat(irisDir); err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
+		t.Fatalf("default fallback iris directory not present with 0700: info=%v err=%v", info, err)
+	}
+	// Only the client, state, and default fallback iris directories exist under home.
+	entries, err := os.ReadDir(home)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	if strings.Join(names, ",") != "codex,iris,state" {
+		t.Fatalf("unexpected directories under home after stalled integrate: %v", names)
+	}
 }
