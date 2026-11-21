@@ -74,7 +74,7 @@ source-to-destination map is reviewed before it is applied.
   never finds it through them. That is the purpose: it was allocated because those aliases could
   not tell.
 - Rule 1 does not change which Execution a hook's paths are attributed to. A command whose
-  relative paths belong to another checkout is still reconciled against the Execution's
-  repository.
+  relative paths belong to another checkout was still reconciled against the Execution's
+  repository; ADR 033 decision 5 ends that.
 - A non-git directory, or one re-initialised as a new repository each time, has a new root each
   time, and different roots are different identities (ADR 012).

@@ -3,6 +3,7 @@ package store
 import (
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -71,6 +72,13 @@ func (t *transaction) reconcileChanges(e execution, r Request) (map[string]any, 
 			}
 		}
 		return empty, nil
+	}
+	// A status taken in another checkout, such as a submodule or another project the session's
+	// working directory moved into, says nothing about this Execution's worktree (ADR 033). It
+	// neither replaces the baseline nor takes, renews or releases a claim. An older client names
+	// no worktree here, and its status is taken as before.
+	if foreign, err := t.foreignWorktree(e, r); err != nil || foreign {
+		return empty, err
 	}
 	for p := range r.Status {
 		if _, err = cleanPath(p, "exact", false); err != nil {
@@ -260,10 +268,32 @@ func (t *transaction) autoClaim(e execution, paths []string) ([]string, int, err
 		claimed = append(claimed, p)
 	}
 	for _, p := range claimed {
-		if err = t.took(e, pathKey(p, policy)); err != nil {
+		if err = t.took(e, e.Repo, pathKey(p, policy)); err != nil {
 			return nil, 0, err
 		}
 	}
 	sort.Strings(claimed)
 	return claimed, skipped, nil
+}
+
+// foreignWorktree is whether r's status came from a checkout other than e's worktree. Another
+// path to e's directory, which the host first named by the same worktree id for the same
+// repository, is e's worktree (D6). It only reads, so a request that leaves out the remote or
+// the root cannot rewrite what the host's registrations recorded.
+func (t *transaction) foreignWorktree(e execution, r Request) (bool, error) {
+	if r.Worktree == "" {
+		return false, nil
+	}
+	worktree := r.Worktree
+	if r.WorktreeID != "" {
+		var first, remote, root string
+		err := t.row("SELECT worktree,remote_url,root_commit FROM WorktreeAlias WHERE host_id=? AND worktree_id=?", e.Host, r.WorktreeID).Scan(&first, &remote, &root)
+		if err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return false, err
+		}
+		if err == nil && remote == r.RemoteURL && root == r.RootCommit {
+			worktree = first
+		}
+	}
+	return !sameWorktree(worktree, e.Worktree), nil
 }

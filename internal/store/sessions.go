@@ -50,29 +50,32 @@ type Request struct {
 	Exclude string `json:"exclude"`
 	// HandOver names the Execution that ending this one hands its unacknowledged mail to: the
 	// session's hook's, when an MCP ends the Execution it had to register itself.
-	HandOver       string   `json:"hand_over"`
-	ExecutionID    string   `json:"execution_id"`
-	Generation     int64    `json:"generation"`
-	Key            string   `json:"key"`
-	ToolCallID     string   `json:"tool_call_id"`
-	Paths          []string `json:"paths"`
-	RenameFrom     string   `json:"rename_from"`
-	RenameTo       string   `json:"rename_to"`
-	Kind           string   `json:"kind"`
-	Path           string   `json:"path"`
-	RepoWide       bool     `json:"repo_wide"`
-	TTLS           int64    `json:"ttl_s"`
-	Fence          int64    `json:"fence"`
-	All            bool     `json:"all"`
-	Token          string   `json:"token"`
-	To             []string `json:"to"`
-	Subject        string   `json:"subject"`
-	Body           string   `json:"body"`
-	Attempt        int64    `json:"attempt"`
-	Handled        bool     `json:"handled"`
-	RepositoryID   string   `json:"repository_id"`
-	FromRepository string   `json:"from_repository_id,omitempty"`
-	IntoRepository string   `json:"into_repository_id,omitempty"`
+	HandOver    string   `json:"hand_over"`
+	ExecutionID string   `json:"execution_id"`
+	Generation  int64    `json:"generation"`
+	Key         string   `json:"key"`
+	ToolCallID  string   `json:"tool_call_id"`
+	Paths       []string `json:"paths"`
+	RenameFrom  string   `json:"rename_from"`
+	RenameTo    string   `json:"rename_to"`
+	// Groups are a grouped touch's paths by the checkout each file lies in (ADR 033). It is left
+	// out of every other request, so their retry hashes stay as before.
+	Groups         []ClaimGroup `json:"groups,omitempty"`
+	Kind           string       `json:"kind"`
+	Path           string       `json:"path"`
+	RepoWide       bool         `json:"repo_wide"`
+	TTLS           int64        `json:"ttl_s"`
+	Fence          int64        `json:"fence"`
+	All            bool         `json:"all"`
+	Token          string       `json:"token"`
+	To             []string     `json:"to"`
+	Subject        string       `json:"subject"`
+	Body           string       `json:"body"`
+	Attempt        int64        `json:"attempt"`
+	Handled        bool         `json:"handled"`
+	RepositoryID   string       `json:"repository_id"`
+	FromRepository string       `json:"from_repository_id,omitempty"`
+	IntoRepository string       `json:"into_repository_id,omitempty"`
 	// Aliases names the exact alias mappings an owner unalias removes from RepositoryID.
 	Aliases    []string `json:"aliases,omitempty"`
 	After      int64    `json:"after"`

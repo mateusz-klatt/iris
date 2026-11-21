@@ -188,6 +188,39 @@ In a conflict, `path` is the path as requested and `claimed_path` is the holder'
 Claims compare by a key that ignores case and Unicode form, as `docs/adr/003-path-identity.md`
 describes, and always display the path as written.
 
+`POST /v1/claims/touch/files` is the same check-and-claim for paths grouped by the checkout each
+file lies in (ADR 033). A hub that takes it names `file_claims` in the `capabilities` of its
+registration answers; an older hub refuses the route.
+
+```json
+{"execution_id":"ex_...","generation":1,"tool_call_id":"...",
+ "groups":[{"worktree":"/src/app","worktree_id":"...","common_dir":"/src/app/.git",
+            "remote_url":"...","root_commit":"...","paths":["README.md"]},
+           {"worktree":"/src/app/frontend","common_dir":"/src/app/.git/modules/frontend",
+            "remote_url":"...","paths":["src/x.ts"]}]}
+```
+
+Each group's paths are relative to its worktree. The group of the Execution's own worktree is
+claimed in its repository; every other group in the repository its checkout resolves to, or one
+allocated for it when nothing matches. A checkout that is ambiguous takes no claim, and its
+worktree is listed in `unclaimed`. The whole call is one transaction, as for a plain touch: a
+conflict in any group grants nothing. `granted`, `ignored` and each conflict name their
+`repository_id`:
+
+```json
+{"action":"deny","granted":[],"ignored":[],"unclaimed":[],
+ "conflicts":[{"repository_id":"rp_...","path":"src/x.ts","claimed_path":"src/x.ts",
+               "holder":"codex-host-frontend","origin":"auto","expires_at":"...","fence":9}],
+ "message":"Iris: src/x.ts is held by codex-host-frontend in repository frontend until ..."}
+```
+
+The action is the strictest policy among the repositories that had a conflict. A retry with the
+same `tool_call_id` returns the first answer while its grants are still held, as for a plain touch.
+
+A shell reconcile names the checkout its status was taken in, with `worktree`, `worktree_id`,
+`remote_url` and `root_commit`. A status from a checkout other than the Execution's is not
+attributed: its baseline is kept and no claim is taken, renewed or released.
+
 `POST /v1/claims` makes an explicit claim:
 
 ```json

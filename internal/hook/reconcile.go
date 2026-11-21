@@ -233,7 +233,7 @@ func (r Runner) shellFull(ctx context.Context, hub shellHub, ev Event, repo giti
 		r.fullSucceeded(state, repo)
 	}
 	state.at("shell reconcile")
-	out, err = hub.Reconcile(ctx, hubclient.ReconcileRequest{ExecutionID: sess.ExecutionID, Generation: sess.Generation, Kind: phase, Status: taken})
+	out, err = hub.Reconcile(ctx, reconcileRequest(sess.ExecutionID, sess.Generation, phase, taken, repo))
 	return out, false, err
 }
 

@@ -114,12 +114,12 @@ func TestAnUnreportedSubmoduleNeverLeaves(t *testing.T) {
 func TestRegistrationAnswersNameTheShellScope(t *testing.T) {
 	s, _, _ := testStore(t)
 	_, out := session(t, s, 1)
-	if !reflect.DeepEqual(out["capabilities"], []string{"shell_scope"}) {
+	if !reflect.DeepEqual(out["capabilities"], []string{"shell_scope", "file_claims"}) {
 		t.Fatalf("session answer: %v", out["capabilities"])
 	}
 	register := Request{Client: "codex", Host: "host", Cwd: "/repo/w2", Worktree: "/repo/w2", RemoteURL: "https://example.com/team/project.git", RootCommit: "root", SessionID: "2", Source: "hook", Kind: "before", Status: map[string]string{}}
 	answer := call(t, s, "reconcile", register)["session"].(map[string]any)
-	if !reflect.DeepEqual(answer["capabilities"], []string{"shell_scope"}) {
+	if !reflect.DeepEqual(answer["capabilities"], []string{"shell_scope", "file_claims"}) {
 		t.Fatalf("shell answer: %v", answer["capabilities"])
 	}
 	// Each answer has its own slice, so changing one cannot change the next.
