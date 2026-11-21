@@ -8,7 +8,7 @@ configure({ asyncUtilTimeout: 5000 });
 import { resetFixtures, server } from "./server";
 import { clearAccountSession } from "../accountApi";
 
-beforeAll(() => server.listen({ onUnhandledRequest: "error" }));
+beforeAll(() => server.listen({ onUnhandledFrame: "error" }));
 
 afterEach(() => {
   cleanup();
