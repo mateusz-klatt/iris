@@ -906,11 +906,15 @@ describe("Iris operator console", () => {
 
   it("starts the refresh a frame asked for no sooner than the gap after the last one began", async () => {
     let calls = 0;
+    let thirdAt = 0;
     const second = deferred<Response>();
     let onFrame: ((frame: WatchFrame) => void) | undefined;
     server.use(
       http.get("*/v1/ui/overview", () => {
         calls += 1;
+        if (calls === 3) {
+          thirdAt = Date.now();
+        }
         return calls === 2 ? second.promise : HttpResponse.json(sessionOverview);
       }),
     );
@@ -925,10 +929,11 @@ describe("Iris operator console", () => {
     );
     expect(await screen.findByRole("heading", { name: "My messages" })).toBeVisible();
     await new Promise((resolve) => setTimeout(resolve, 450));
-    // Long after the first load, a frame refreshes at once.
+    // Long after the first load, a frame refreshes at once. Measure from before the frame
+    // asks for the refresh, so waitFor polling or handler latency cannot eat into the gap.
+    const began = Date.now();
     onFrame?.({ cursor: 2, kind: "changed" });
     await waitFor(() => expect(calls).toBe(2));
-    const began = Date.now();
     onFrame?.({ cursor: 3, kind: "changed" });
     await act(async () => {
       second.resolve(HttpResponse.json(sessionOverview));
@@ -936,7 +941,7 @@ describe("Iris operator console", () => {
     // A frame while the asked-for refresh waits adds nothing to it.
     onFrame?.({ cursor: 4, kind: "changed" });
     await waitFor(() => expect(calls).toBe(3), { timeout: 2000 });
-    expect(Date.now() - began).toBeGreaterThanOrEqual(350);
+    expect(thirdAt - began).toBeGreaterThanOrEqual(350);
     await new Promise((resolve) => setTimeout(resolve, 500));
     expect(calls).toBe(3);
   });
