@@ -16,6 +16,10 @@ import (
 // ErrNotFound means the walk ran out of ancestors before it found one.
 var ErrNotFound = errors.New("no ancestor process")
 
+// ErrExecutableDeleted means a live process's executable was unlinked after start and could
+// not be opened from its running image.
+var ErrExecutableDeleted = errors.New("process executable was deleted")
+
 // Ancestor is the process a hook records at session start.
 type Ancestor struct {
 	PID     int
@@ -73,6 +77,15 @@ func identified[T any](pid int, startMS int64, get func(int) (Snapshot, bool), r
 	return v, nil
 }
 
+// ProcessExecutable is a verified executable of a live process, backed either by its regular
+// file path or, on Linux after an in-place update unlinked the running binary, by an open
+// descriptor to that running image. Always call Close when done.
+type ProcessExecutable struct {
+	Path    string
+	Deleted bool
+	exeHandle
+}
+
 // Executable resolves the verified regular-file executable of a live process matching (pid, startMS).
 func Executable(pid int, startMS int64) (string, error) {
 	return executableFrom(pid, startMS, lookupOS, executableOS, os.Stat)
@@ -85,26 +98,55 @@ func executableFrom(
 	readExe func(int, Snapshot) (string, error),
 	stat func(string) (os.FileInfo, error),
 ) (string, error) {
+	img, err := openExecutableFrom(pid, startMS, get, readExe, stat, func(int, int64, string, func(int) (Snapshot, bool)) (*ProcessExecutable, error) {
+		return nil, ErrNotFound
+	})
+	if err != nil {
+		return "", err
+	}
+	return img.Path, nil
+}
+
+// OpenExecutable resolves the verified regular-file executable of a live process matching
+// (pid, startMS). On Linux, when /proc/<pid>/exe ends in " (deleted)", it opens /proc/<pid>/exe,
+// verifies a regular file via fstat, rechecks (pid, startMS), and returns a descriptor-backed
+// handle whose Command runs that descriptor via ExtraFiles and /proc/self/fd/3 rather than a
+// path on disk. On other platforms a deleted executable path returns ErrExecutableDeleted.
+func OpenExecutable(pid int, startMS int64) (*ProcessExecutable, error) {
+	return openExecutableFrom(pid, startMS, lookupOS, executableOS, os.Stat, openDeletedExeOS)
+}
+
+func openExecutableFrom(
+	pid int,
+	startMS int64,
+	get func(int) (Snapshot, bool),
+	readExe func(int, Snapshot) (string, error),
+	stat func(string) (os.FileInfo, error),
+	openDeleted func(int, int64, string, func(int) (Snapshot, bool)) (*ProcessExecutable, error),
+) (*ProcessExecutable, error) {
 	if pid <= 0 || startMS <= 0 {
-		return "", ErrNotFound
+		return nil, ErrNotFound
 	}
 	snap, ok := get(pid)
 	if !ok || snap.StartMS != startMS {
-		return "", ErrNotFound
+		return nil, ErrNotFound
 	}
 	exe, err := readExe(pid, snap)
-	if err != nil || exe == "" || strings.HasSuffix(exe, " (deleted)") || !filepath.IsAbs(exe) {
-		return "", ErrNotFound
+	if err != nil || exe == "" || !filepath.IsAbs(exe) {
+		return nil, ErrNotFound
+	}
+	if strings.HasSuffix(exe, " (deleted)") {
+		return openDeleted(pid, startMS, exe, get)
 	}
 	info, err := stat(exe)
 	if err != nil || !info.Mode().IsRegular() {
-		return "", ErrNotFound
+		return nil, ErrNotFound
 	}
 	after, ok := get(pid)
 	if !ok || after.StartMS != startMS {
-		return "", ErrNotFound
+		return nil, ErrNotFound
 	}
-	return exe, nil
+	return &ProcessExecutable{Path: exe}, nil
 }
 
 // Detached is a process that StartDetached created. Release forgets it and leaves it running;

@@ -3,10 +3,13 @@
 package proc
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
+	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -167,5 +170,216 @@ func TestLookupRejectsAZombie(t *testing.T) {
 	}
 	if got, ok := Lookup(cmd.Process.Pid); ok {
 		t.Fatalf("zombie was accepted as live: %+v", got)
+	}
+}
+
+func TestProcDeletedExeChild(t *testing.T) {
+	switch os.Getenv("IRIS_PROC_DELETED_MODE") {
+	case "sleep":
+		time.Sleep(time.Minute)
+		os.Exit(0)
+	case "record":
+		out := os.Getenv("IRIS_PROC_RECORD_OUT")
+		tag := os.Getenv("IRIS_PROC_RECORD_TAG")
+		body := tag + "\n" + strings.Join(os.Args[1:], "\n") + "\n"
+		if err := os.WriteFile(out, []byte(body), 0o600); err != nil {
+			os.Exit(2)
+		}
+		os.Exit(0)
+	}
+}
+
+func copyTestExecutable(t *testing.T, dst string) {
+	t.Helper()
+	src, err := os.Executable()
+	if err != nil {
+		t.Fatal(err)
+	}
+	in, err := os.Open(src)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = in.Close() }()
+	out, err := os.OpenFile(dst, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o755)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.Copy(out, in); err != nil {
+		_ = out.Close()
+		t.Fatal(err)
+	}
+	if err := out.Close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestOpenExecutableSurvivesDeletedBinaryAndNeverRunsDecoy(t *testing.T) {
+	dir := t.TempDir()
+	fakeAgy := filepath.Join(dir, "agy")
+	copyTestExecutable(t, fakeAgy)
+
+	child := exec.Command(fakeAgy, "-test.run=^TestProcDeletedExeChild$")
+	child.Env = append(os.Environ(), "IRIS_PROC_DELETED_MODE=sleep")
+	if err := child.Start(); err != nil {
+		t.Fatal(err)
+	}
+	childWaited := false
+	stopChild := func() {
+		if childWaited {
+			return
+		}
+		childWaited = true
+		_ = child.Process.Kill()
+		_ = child.Wait()
+	}
+	t.Cleanup(stopChild)
+
+	snap, ok := Lookup(child.Process.Pid)
+	if !ok || snap.StartMS <= 0 {
+		t.Fatalf("child lookup failed: %+v %v", snap, ok)
+	}
+
+	// Simulate an in-place update: rename the running binary, unlink it, and place a decoy
+	// executable at the original path.
+	oldPath := fakeAgy + ".1795283135508816615.old"
+	if err := os.Rename(fakeAgy, oldPath); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(oldPath); err != nil {
+		t.Fatal(err)
+	}
+	decoyMarker := filepath.Join(dir, "decoy-ran")
+	decoy := "#!/bin/sh\necho DECOY > " + strconv.Quote(decoyMarker) + "\nexit 42\n"
+	if err := os.WriteFile(fakeAgy, []byte(decoy), 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	target, err := os.Readlink("/proc/" + strconv.Itoa(snap.PID) + "/exe")
+	if err != nil || !strings.HasSuffix(target, " (deleted)") {
+		t.Fatalf("expected deleted /proc/<pid>/exe, got %q (%v)", target, err)
+	}
+
+	// Path-only Executable still rejects a deleted image.
+	if _, err := Executable(snap.PID, snap.StartMS); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("Executable(deleted) = %v, want ErrNotFound", err)
+	}
+
+	img, err := OpenExecutable(snap.PID, snap.StartMS)
+	if err != nil || !img.Deleted || img.Path != target || img.file == nil {
+		t.Fatalf("OpenExecutable(deleted) = %+v, %v", img, err)
+	}
+	rawFD := img.file
+
+	recordOut := filepath.Join(dir, "recorded.txt")
+	cmd := img.Command(context.Background(), "-test.run=^TestProcDeletedExeChild$")
+	if cmd.Path != "/proc/self/fd/3" || len(cmd.ExtraFiles) != 1 || cmd.ExtraFiles[0] != rawFD {
+		_ = img.Close()
+		t.Fatalf("deleted Command = path %q extraFiles %v", cmd.Path, cmd.ExtraFiles)
+	}
+	cmd.Env = append(os.Environ(),
+		"IRIS_PROC_DELETED_MODE=record",
+		"IRIS_PROC_RECORD_TAG=old-image-v1",
+		"IRIS_PROC_RECORD_OUT="+recordOut,
+	)
+	if err := cmd.Start(); err != nil {
+		_ = img.Close()
+		t.Fatalf("Start(/proc/self/fd/3) failed: %v", err)
+	}
+	if err := img.Close(); err != nil {
+		t.Fatalf("Close after Start = %v", err)
+	}
+	if _, err := rawFD.Stat(); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("parent descriptor was not closed: %v", err)
+	}
+	if err := img.Close(); err != nil {
+		t.Fatalf("second Close = %v", err)
+	}
+	if err := cmd.Wait(); err != nil {
+		t.Fatalf("Wait(/proc/self/fd/3) failed: %v", err)
+	}
+
+	recorded, err := os.ReadFile(recordOut)
+	if err != nil {
+		t.Fatalf("old image did not write recorded args: %v", err)
+	}
+	if !strings.Contains(string(recorded), "old-image-v1\n-test.run=^TestProcDeletedExeChild$\n") {
+		t.Fatalf("recorded output = %q", string(recorded))
+	}
+	if _, err := os.Stat(decoyMarker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("decoy binary ran instead of old image: stat err = %v", err)
+	}
+
+	// Once the child exits, OpenExecutable returns ErrNotFound.
+	stopChild()
+	if _, err := OpenExecutable(snap.PID, snap.StartMS); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("OpenExecutable(exited) = %v, want ErrNotFound", err)
+	}
+}
+
+func TestOpenDeletedExecutableHandlesIdentityChangeExitOpenAndFstatErrors(t *testing.T) {
+	live := func(int) (Snapshot, bool) { return Snapshot{PID: 42, StartMS: 1000}, true }
+	exited := func(int) (Snapshot, bool) { return Snapshot{}, false }
+	reused := func(int) (Snapshot, bool) { return Snapshot{PID: 42, StartMS: 2000}, true }
+
+	// 1. Open failure while live -> ErrExecutableDeleted; when exited or reused -> ErrNotFound.
+	openDenied := func(string) (*os.File, error) { return nil, os.ErrPermission }
+	if _, err := openDeletedExeFrom(42, 1000, "/bin/agy (deleted)", live, openDenied); !errors.Is(err, ErrExecutableDeleted) {
+		t.Fatalf("open denied while live: %v", err)
+	}
+	if _, err := openDeletedExeFrom(42, 1000, "/bin/agy (deleted)", exited, openDenied); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("open denied after exit: %v", err)
+	}
+	if _, err := openDeletedExeFrom(42, 1000, "/bin/agy (deleted)", reused, openDenied); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("open denied after PID reuse: %v", err)
+	}
+
+	// 2. Non-regular file (directory) -> closes fd and returns ErrExecutableDeleted while live.
+	dir := t.TempDir()
+	dirFile, err := os.Open(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := openDeletedExeFrom(42, 1000, "/bin/agy (deleted)", live, func(string) (*os.File, error) {
+		return dirFile, nil
+	}); !errors.Is(err, ErrExecutableDeleted) {
+		t.Fatalf("non-regular deleted exe: %v", err)
+	}
+	if _, err := dirFile.Stat(); !errors.Is(err, os.ErrClosed) {
+		t.Fatalf("non-regular fd was not closed: %v", err)
+	}
+
+	// 3. fstat error (already-closed file) after process exit -> ErrNotFound.
+	regPath := filepath.Join(dir, "reg")
+	if err := os.WriteFile(regPath, []byte("bin"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	closedFile, err := os.Open(regPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = closedFile.Close()
+	if _, err := openDeletedExeFrom(42, 1000, "/bin/agy (deleted)", exited, func(string) (*os.File, error) {
+		return closedFile, nil
+	}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("fstat error after exit: %v", err)
+	}
+
+	// 4. Identity change or process exit after open+fstat closes the fd and returns ErrNotFound.
+	for name, getAfter := range map[string]func(int) (Snapshot, bool){
+		"reused": reused,
+		"exited": exited,
+	} {
+		f, err := os.Open(regPath)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := openDeletedExeFrom(42, 1000, "/bin/agy (deleted)", getAfter, func(string) (*os.File, error) {
+			return f, nil
+		}); !errors.Is(err, ErrNotFound) {
+			t.Fatalf("%s after fstat: %v", name, err)
+		}
+		if _, err := f.Stat(); !errors.Is(err, os.ErrClosed) {
+			t.Fatalf("%s fd was not closed: %v", name, err)
+		}
 	}
 }

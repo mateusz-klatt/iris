@@ -1,10 +1,11 @@
 # 028: Antigravity idle wake through a model-armed helper
 
 Status: accepted and verified live on 2026-11-13; amended on 2026-11-13 to turn wake on by default
-on the owner's direction (~20:20 UTC), and on 2026-11-14 by
+on the owner's direction (~20:20 UTC), on 2026-11-14 by
 [ADR 031](031-wake-only-in-interactive-sessions.md): `Stop` asks only an interactive session
-(measurement 16). Changes D7 for Antigravity only. Extends the single-wake policy of ADR 017 and
-ADR 023 without changing the other clients.
+(measurement 16), and on 2026-11-21 to keep Linux idle wake working across in-place `agy` updates
+through a verified `/proc/<pid>/exe` descriptor fallback. Changes D7 for Antigravity only. Extends
+the single-wake policy of ADR 017 and ADR 023 without changing the other clients.
 
 ## Problem
 
@@ -512,14 +513,15 @@ helper run **incremental, attempt-associated forward scanning** outside the `ses
   `ANTIGRAVITY_LS_ADDRESS` comes from `agy`'s environment and is checked only to be literal
   loopback; Iris cannot authenticate the loopback listener before `agentapi` sends the token.
 - **Live `agy` process, default config location, and platform scope.** After `agy` exits or
-  restarts, old Language Server addresses and tokens fail with exit `1` (measurement 5), and
-  upgrading `agy` in place on Linux causes `/proc/<pid>/exe` to carry `" (deleted)"`, stopping wakes
-  until `agy` restarts. Because the helper ignores `HOME`, `XDG_CONFIG_HOME`, `APPDATA`,
-  `IRIS_HUB_URL` and `IRIS_TOKEN_FILE` environment overrides, non-default Iris locations configured
-  only through environment variables (rather than `client.json` in the OS account's default config
-  directory) cannot use Antigravity wake. Measurements ran with `agy 1.5.8` on Linux/WSL2 and on
-  Windows 11 (measurements 9–15). On macOS, process-image lookup and wake delivery have not been
-  measured live.
+  restarts, old Language Server addresses and tokens fail with exit `1` (measurement 5). On Linux,
+  upgrading `agy` in place marks `/proc/<pid>/exe` as `" (deleted)"`; see the 2026-11-21 addendum
+  below for the Linux descriptor fallback, doctor diagnostic, and limits. Because the helper ignores
+  `HOME`, `XDG_CONFIG_HOME`, `APPDATA`, `IRIS_HUB_URL` and `IRIS_TOKEN_FILE` environment overrides,
+  non-default Iris locations configured only through environment variables (rather than
+  `client.json` in the OS account's default config directory) cannot use Antigravity wake.
+  Measurements ran with `agy 1.5.8` on Linux/WSL2 and on Windows 11 (measurements 9–15), plus
+  deleted-descriptor live verification with `agy 1.5.14` on Linux/WSL2. On macOS, process-image
+  lookup and wake delivery have not been measured live.
 - **Windows safety monitors can refuse arming without asking the user.** A `Stop`-requested
   arming with marker `default` was refused by agy's own pre-tool hook after its LLM monitors
   flagged `BypassSandbox` (severity 6) and the hook-initiated request (severity 5, "rogue
@@ -567,3 +569,57 @@ Unit and integration tests at 100% statement coverage verify:
 
 Run the full local WSL gates (`make test`, `make race`, `make cov`, `make cov-check`,
 `make check-all` and `make fixtures`) before implementation review.
+
+## Addendum (2026-11-21): Surviving in-place `agy` updates on Linux
+
+### Observed failure
+
+In live WSL2 sessions, `agy`'s background updater updated `agy` in place to `1.5.14` by renaming
+the running binary to `<path>.<nanoseconds>.old` and unlinking it, leaving `/proc/<pid>/exe`
+pointing to `/home/<user>/.local/bin/agy.<digits>.old (deleted)`. Because `proc.Executable`
+rejected any path ending in `" (deleted)"`, every armed Antigravity wake helper logged
+`wake_failed: binary check` (`Antigravity executable is unavailable`) until the `agy` session was
+restarted.
+
+### Decision (Option B + explicit diagnostics)
+
+1. **Linux-only verified-descriptor fallback (`proc.OpenExecutable`).**
+   - Normal (non-deleted) executable resolution and all non-Linux platforms remain unchanged.
+   - On Linux, when `/proc/<pid>/exe` ends in `" (deleted)"`, Iris verifies the pinned
+     `(pid, start_ms)`, opens `/proc/<pid>/exe` keeping the `*os.File` descriptor, verifies a
+     regular file via `fstat`, and rechecks `(pid, start_ms)` before returning a descriptor-backed
+     handle (never returning `/proc/<pid>/exe` as a path string, which would race PID reuse).
+   - `antigravityCommands.queue` runs `agentapi send-message` from that descriptor via
+     `exec.Cmd.ExtraFiles` and `/proc/self/fd/3`, closing the descriptor immediately after
+     `cmd.Start()` and on every error or preflight path, with `CGO_ENABLED=0`.
+   - Everything else is unchanged: session targeting, fixed content-free notification message,
+     timeouts, and retry/quota limits.
+2. **Rejected alternative (Option C).** Stripping `" (deleted)"` or `.<digits>.old` and running
+   whatever newer binary now exists at the old path is rejected: it breaks identity binding to the
+   running process and could invoke an unrelated or protocol-incompatible file.
+3. **Loud diagnostics.** If opening, `fstat`-verifying, or starting the deleted executable fails
+   (or a deleted path appears on a non-Linux platform), wake fails closed and records a fixed
+   diagnostic detail that `iris doctor` reports as:
+   `"the running agy executable was deleted, commonly by an in-place update; restart agy if wake stays unavailable"`
+   (without claiming deletion proves an update).
+
+### Live verification (2026-11-21, WSL2 Linux, `agy 1.5.14`)
+
+`/home/klattm/.local/bin/agy` (`1.5.14`) was copied to a temporary directory, started in an
+isolated session (stripped outer `ANTIGRAVITY_*`, isolated Iris env), renamed to
+`agy.1795283135508816615.old`, unlinked, and replaced at the original path with a decoy executable
+that writes a marker file and exits `42`. After confirming `/proc/<pid>/exe` ended in
+`" (deleted)"`, opening `/proc/<pid>/exe`, verifying `fstat` regular file and `(pid, start_ticks)`,
+and running `/proc/self/fd/3 agentapi send-message <conversationId> <message>` via `ExtraFiles`
+against that session's live Language Server succeeded with exit `0` in `127 ms`, empty `stderr`,
+valid JSON confirming `response.sendMessage.recipientId == conversationId`, and the decoy never
+ran.
+
+### Limits
+
+- The open descriptor preserves the running process's executable identity; it adds no security
+  boundary against same-OS-user processes, which are already inside Iris's same-user trust boundary
+  (D12).
+- Executing the unlinked descriptor still runs the old `agy` binary image until `agy` restarts.
+- A successful `agentapi send-message` only queues the notification in `agy`; it does not prove
+  that the model acts on it.

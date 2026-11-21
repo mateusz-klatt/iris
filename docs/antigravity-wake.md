@@ -119,10 +119,14 @@ The helper accepts only the exact arguments `watch --client antigravity --wake`.
 hub configuration and token strictly from the OS account's default Iris configuration directory
 (ignoring `HOME`, `XDG_CONFIG_HOME`, `APPDATA`, `IRIS_HUB_URL`, `IRIS_TOKEN_FILE` and
 `IRIS_EXECUTION`), resolves `<agy-exe>` from the verified `agy` ancestor process image rather than
-`PATH` or `ANTIGRAVITY_AGENTAPI_EXE`, pins `ANTIGRAVITY_LS_ADDRESS` (`127.0.0.1`, `::1`, or
-`localhost` dialed directly against literal loopback IPs without DNS) to a reachable literal
-loopback `host:port`, and passes `ANTIGRAVITY_CSRF_TOKEN` only in the scrubbed environment of the
-detached child and `<agy-exe> agentapi`.
+`PATH` or `ANTIGRAVITY_AGENTAPI_EXE` (on Linux, if `/proc/<pid>/exe` is marked `" (deleted)"` after
+an in-place update, it verifies `(pid, start_ms)`, opens `/proc/<pid>/exe`, checks `fstat` for a
+regular file, rechecks `(pid, start_ms)`, and executes `agentapi send-message` from that open
+descriptor via `/proc/self/fd/3` rather than running whatever newer file now sits at the old path),
+pins `ANTIGRAVITY_LS_ADDRESS` (`127.0.0.1`, `::1`, or `localhost` dialed directly against literal
+loopback IPs without DNS) to a reachable literal loopback `host:port`, and passes
+`ANTIGRAVITY_CSRF_TOKEN` only in the scrubbed environment of the detached child and
+`<agy-exe> agentapi`.
 
 Wake delivery enters Antigravity as a `SYSTEM` / `SYSTEM_MESSAGE` transcript step rather than firing
 `BeforeAgent`. Both `PostInvocation` hooks and the detached helper's poll loop scan forward through
@@ -154,12 +158,22 @@ removing a live guard can admit a duplicate notification.
 - **Busy-turn race.** Idle state recording and `agentapi send-message` are not atomic; if a turn
   starts between them, `agy` queues the message as `<SYSTEM_MESSAGE>` into the active turn, and
   Iris cannot promise zero billable empty turns.
-- **Same-user loopback boundary and default config path.** Same-OS-user processes retain normal OS
-  process visibility, Iris cannot authenticate the loopback listener before `agentapi` sends the
-  CSRF token, in-place upgrades of a running `agy` binary on Linux mark `/proc/<pid>/exe` deleted
-  until `agy` restarts, and non-default Iris locations set only via environment variables cannot use
-  Antigravity wake. Measurements ran with `agy 1.5.8` on Linux/WSL2 and on Windows 11; macOS has
-  not been measured live.
+- **Same-user loopback boundary, in-place updates, and default config path.** Same-OS-user
+  processes retain normal OS process visibility, Iris cannot authenticate the loopback listener
+  before `agentapi` sends the CSRF token, and non-default Iris locations set only via environment
+  variables cannot use Antigravity wake. On Linux, when an in-place update unlinks the running
+  `agy` binary and leaves `/proc/<pid>/exe` marked `" (deleted)"`, Iris falls back to executing
+  `agentapi send-message` from an open descriptor to that running image (`/proc/self/fd/3`), and
+  reports `"the running agy executable was deleted, commonly by an in-place update; restart agy if
+  wake stays unavailable"` in `iris doctor` if that fallback fails. This fallback is Linux-only and
+  has explicit limits:
+  - The open descriptor preserves the running process's executable identity; it adds no security
+    boundary against same-OS-user processes (already inside the same-user trust boundary).
+  - The unlinked image executed from that descriptor is still the old `agy` binary code until `agy`
+    restarts.
+  - Queuing a message via `agentapi send-message` does not prove the model acts on it.
+  Measurements ran with `agy 1.5.8` on Linux/WSL2 and on Windows 11 (and deleted-descriptor live
+  verification with `agy 1.5.14` on Linux/WSL2); macOS has not been measured live.
 - **Windows.**
   - agy runs each command in a job that ends with the command and forbids breakaway. Iris therefore
     starts the helper under the `agy` process it has verified, not under the command.

@@ -139,7 +139,7 @@ func (e *engine) step(ctx context.Context) stepResult {
 		switch answer.detail {
 		case antigravityActive:
 			return e.recheck(last, abortedSessionActive, 15*time.Second)
-		case antigravityExeUnavailable:
+		case antigravityExeUnavailable, antigravityExeDeleted:
 			return e.after(60 * time.Second)
 		}
 		return stepResult{}
