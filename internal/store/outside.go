@@ -12,8 +12,8 @@ const outsidePrefix = "outside:"
 func outsideAlias(host string) string { return outsidePrefix + host }
 
 // outsideShape is a registration that names no checkout at all. A new client sends it on the
-// outside route only; an older one sent it on the session route for a directory outside git,
-// as no client sends it for a checkout (ADR 034, decision 2).
+// outside route only; an older one sent it on the session route for a directory outside git, and
+// no shipped client sends it after a successful checkout discovery (ADR 034, decision 2).
 func outsideShape(r Request) bool {
 	return r.Worktree == "" && r.CommonDir == "" && r.WorktreeID == "" && r.RemoteURL == "" && r.RootCommit == ""
 }
@@ -109,7 +109,10 @@ func (t *transaction) folderProject(repo, host, root string) error {
 		return &Error{"conflict", "the source has aliases of a checkout or of another host; only a folder project of this host moves into its context", map[string]any{"aliases": foreign}}
 	}
 	var elsewhere, active, held int
-	if err = t.row("SELECT (SELECT COUNT(*) FROM Agent WHERE repository_id=?1 AND client<>'human' AND host<>?2)+(SELECT COUNT(*) FROM Execution WHERE repository_id=?1 AND client<>'human' AND host_id<>?2)", repo, host).Scan(&elsewhere); err != nil {
+	// Only the console's person, the operator's human mailbox with no worktree, is no host's: an
+	// ordinary session whose client calls itself human is checked like any other.
+	if err = t.row(`SELECT (SELECT COUNT(*) FROM Agent WHERE repository_id=?1 AND host<>?2 AND NOT (client='human' AND host='operator' AND worktree=''))
+ +(SELECT COUNT(*) FROM Execution WHERE repository_id=?1 AND host_id<>?2 AND NOT (client='human' AND host_id='operator' AND worktree=''))`, repo, host).Scan(&elsewhere); err != nil {
 		return err
 	}
 	if elsewhere > 0 {

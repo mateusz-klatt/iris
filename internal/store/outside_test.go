@@ -315,3 +315,60 @@ func TestRepairRefusesWhatIsNotAQuietFolderProjectOfThisHost(t *testing.T) {
 	}
 	expectError(t, s, "merge_outside", Request{FromRepository: held, IntoRepository: context, DryRun: true}, "conflict")
 }
+
+// After a hub start a session outside git reattaches with its generation, keeps its mailbox and
+// mail, and recovery writes no claim, wait or fence for it (ADR 034, decision 5).
+func TestASessionOutsideGitRecoversWithItsMailAndNoClaims(t *testing.T) {
+	s, clock, file := testStore(t)
+	o, out := outsideSession(t, s, "home", "o", "/home/u/tmp")
+	a, _ := session(t, s, 1)
+	mail := a
+	mail.Key, mail.To, mail.Body = "kept", []string{out["agent"].(map[string]any)["name"].(string)}, "kept"
+	call(t, s, "messages", mail)
+	var fence int64
+	if err := s.db.QueryRow("SELECT COALESCE(MAX(fence),0) FROM Claim").Scan(&fence); err != nil {
+		t.Fatal(err)
+	}
+	reopened := restart(t, s, file, clock)
+	back := call(t, reopened, "sessions_outside", Request{Client: "codex", Host: "home", SessionID: "o", Cwd: "/home/u/tmp", Generation: o.Generation, Source: "hook"})
+	if back["execution_id"] != o.ExecutionID || back["outside_git"] != true || back["unread"] != 1 {
+		t.Fatalf("recovery: %v", back)
+	}
+	var claims, waiters, after int64
+	if err := reopened.db.QueryRow("SELECT (SELECT COUNT(*) FROM Claim WHERE execution_id=?1),(SELECT COUNT(*) FROM Waiter WHERE execution_id=?1),(SELECT COALESCE(MAX(fence),0) FROM Claim)", o.ExecutionID).Scan(&claims, &waiters, &after); err != nil {
+		t.Fatal(err)
+	}
+	// a's one live claim, if any, is copied to a new fence when a recovers; o has none to copy.
+	if claims != 0 || waiters != 0 || after != fence {
+		t.Fatalf("recovery of an outside session wrote %d claims, %d waits, fence %d after %d", claims, waiters, after, fence)
+	}
+}
+
+// A scoped shell reconciliation and a repeated claim call are refused like any other, and the
+// refusal is not cached: a retry is refused again, not replayed (ADR 034, decision 5).
+func TestEveryClaimRouteRefusesAgainOnRetry(t *testing.T) {
+	s, _, _ := testStore(t)
+	o, _ := outsideSession(t, s, "home", "o", "/home/u/tmp")
+	scoped := reduced(o, "before", map[string]string{"x": " M"})
+	for i := 0; i < 2; i++ {
+		expectError(t, s, "reconcile_scoped", scoped, "outside_git")
+		expectError(t, s, "touch", touchRequest(o, "same", "x"), "outside_git")
+		expectError(t, s, "claim", claimRequest(o, "same", "x", "exact"), "outside_git")
+	}
+	if n := count(t, s, "SELECT COUNT(*) FROM Operation"); n != 0 {
+		t.Fatalf("%d refusals were cached", n)
+	}
+}
+
+// Only the console's person is no host's; an ordinary session whose client calls itself human,
+// from another host, refuses the repair like any other (ADR 034, decision 9).
+func TestRepairChecksAnOrdinaryHumanSessionsHost(t *testing.T) {
+	s, _, _ := testStore(t)
+	_, out := outsideSession(t, s, "home", "o", "/home/u/tmp")
+	folder, f := folderProject(t, s, "home", "f", "/home/u/scripts")
+	call(t, s, "end", Request{ExecutionID: f["execution_id"].(string), Generation: f["generation"].(int64)})
+	if _, err := s.db.Exec("UPDATE Agent SET client='human',host='laptop' WHERE id=?", f["agent"].(map[string]any)["id"]); err != nil {
+		t.Fatal(err)
+	}
+	expectError(t, s, "merge_outside", Request{FromRepository: folder, IntoRepository: out["repository_id"].(string), DryRun: true}, "conflict")
+}
