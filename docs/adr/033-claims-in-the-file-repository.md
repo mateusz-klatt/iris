@@ -168,6 +168,26 @@ project, "whether one works in the snapper-frontend checkout or in the submodule
   The walk runs inside the hook's 1.5 s deadline and fails open; its cost has not been measured
   on a slow filesystem.
 
+## Live check
+
+On 2026-11-21 at 09:12 UTC, on Linux (holzera), the released 0.1.7 binary ran as Claude Code's
+hooks (`iris hook --client claude`) against the production hub, also on 0.1.7. The test used a
+superproject `super` with a checked-out submodule `frontend`, and a separate clone of `frontend`
+with the same remote and root commit. The test records were forgotten afterwards.
+
+| Step | Session and edit | Answer | Claim stored |
+| --- | --- | --- | --- |
+| 1 | `super` edits `frontend/src/x.ts` | allow | `src/x.ts` in `frontend` |
+| 2 | the `frontend` clone edits `src/x.ts` | deny: "held by claude-holzera-super" | none |
+| 3 | `super` edits `README.md` | allow | `README.md` in `super` |
+| 4 | the clone edits `src/y.ts` | allow | `src/y.ts` in `frontend` |
+| 5 | `super` edits `frontend/src/y.ts` | deny: "held by claude-holzera-frontend in repository frontend" | none |
+| 6 | `super`, working directory moved into `frontend`, edits `src/w.ts` and `../README.md` | allow, allow | `src/w.ts` in `frontend`; `README.md` reused |
+| 7 | `super` runs a shell command in `frontend` that writes `src/z.ts` | allow | none; `README.md` stays held |
+
+Not measured: Windows and macOS hooks, the MCP `claim` tool with a live client, and the hook's
+walk on a slow filesystem.
+
 ## Limits
 
 - An older hook, or an older hub, keeps the old placement. Its claims can miss conflicts with
