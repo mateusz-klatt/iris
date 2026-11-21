@@ -3,7 +3,9 @@
 package wake
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"os"
@@ -15,6 +17,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mateusz-klatt/iris/internal/gitinfo"
 	"github.com/mateusz-klatt/iris/internal/hook"
 	"github.com/mateusz-klatt/iris/internal/proc"
 )
@@ -177,10 +180,28 @@ func TestAntigravityWakeSurvivesInPlaceUpdateViaDeletedDescriptor(t *testing.T) 
 		t.Fatalf("decoy at original path ran instead of old image: stat err = %v", err)
 	}
 
-	// Real descriptor-backed Start failure: strip execute bits from a running deleted image so
-	// proc.OpenExecutable succeeds with a real open descriptor, then execve(/proc/self/fd/3)
-	// fails with EACCES and queue() reports antigravityExeDeleted while closing the descriptor.
-	noExecAgy := filepath.Join(binDir, "agy-noexec")
+	// Once fake agy exits, check() reports unavailable (process gone, not deleted-image error).
+	stopChild()
+	if _, det, _ := cmds.check(context.Background(), ""); det != antigravityExeUnavailable {
+		t.Fatalf("check(exited) = %q, want %q", det, antigravityExeUnavailable)
+	}
+}
+
+// Real descriptor-backed Start failure in its own server-free fixture so process-wide exact
+// file descriptor counts cannot be perturbed by asynchronous HTTP test-server socket closes.
+func TestAntigravityWakeDeletedDescriptorStartFailureClosesFD(t *testing.T) {
+	const convID = "e28a6164-6409-4810-b8ee-df8202a16a0a"
+
+	dir := t.TempDir()
+	configDir := filepath.Join(dir, "iris-cfg")
+	if err := os.MkdirAll(configDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(hook.AntigravityWakePath(configDir), []byte("on\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	noExecAgy := filepath.Join(dir, "agy-noexec")
 	copyWakeTestBinary(t, noExecAgy)
 	noExecChild := exec.Command(noExecAgy, "fake-agy-sleep")
 	if err := noExecChild.Start(); err != nil {
@@ -194,6 +215,8 @@ func TestAntigravityWakeSurvivesInPlaceUpdateViaDeletedDescriptor(t *testing.T) 
 	if !ok || noExecSnap.StartMS <= 0 {
 		t.Fatalf("noexec child lookup failed: %+v %v", noExecSnap, ok)
 	}
+	// Strip execute bits from the running binary before unlinking it so proc.OpenExecutable
+	// succeeds with a real open descriptor while execve(/proc/self/fd/3) fails with EACCES.
 	if err := os.Chmod(noExecAgy, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -204,24 +227,65 @@ func TestAntigravityWakeSurvivesInPlaceUpdateViaDeletedDescriptor(t *testing.T) 
 	if err := os.Remove(noExecOld); err != nil {
 		t.Fatal(err)
 	}
-	noExecCmds := *cmds
-	noExecCmds.owner.AgyPID = noExecSnap.PID
-	noExecCmds.owner.AgyStartMS = noExecSnap.StartMS
-	beforeStartFailFDs := openFDCount(t)
-	failAns := noExecCmds.queue(context.Background(), convID, wakeMsg, func(start func() error) (bool, error) {
+
+	// Record convID as idle via an Antigravity Stop hook without starting any HTTP server.
+	stopPayload, _ := json.Marshal(map[string]any{
+		"conversationId":     convID,
+		"executionNum":       1,
+		"continuationActive": false,
+		"fullyIdle":          true,
+		"terminationReason":  "NO_TOOL_CALL",
+	})
+	tokenPath := filepath.Join(configDir, "hub.token")
+	(hook.Runner{
+		ClientName:      "antigravity",
+		EventName:       "Stop",
+		Stdin:           bytes.NewReader(stopPayload),
+		PinnedConfigDir: func() (string, error) { return configDir, nil },
+		Find: func(string) (gitinfo.Repo, error) {
+			return gitinfo.Repo{}, gitinfo.ErrNotRepo
+		},
+		Getenv: func(k string) string {
+			switch k {
+			case "IRIS_TOKEN_FILE":
+				return tokenPath
+			case "ANTIGRAVITY_CONVERSATION_ID":
+				return convID
+			default:
+				return ""
+			}
+		},
+		Ancestor: func() (proc.Ancestor, error) {
+			return proc.Ancestor{PID: noExecSnap.PID, StartMS: noExecSnap.StartMS, Name: "agy"}, nil
+		},
+	}).Run()
+	if conv, ok := hook.ReadAntigravityConvState(configDir, convID); !ok || !conv.Idle {
+		t.Fatalf("antigravity Stop hook did not mark conv idle: conv=%+v ok=%v", conv, ok)
+	}
+
+	cmds := &antigravityCommands{
+		configDir: configDir,
+		owner: hook.AntigravityHelperOwner{
+			AgyPID:     noExecSnap.PID,
+			AgyStartMS: noExecSnap.StartMS,
+			SessionID:  convID,
+		},
+		agentEnv:     []string{"ANTIGRAVITY_CONVERSATION_ID=" + convID, "GOCOVERDIR=" + t.TempDir()},
+		executable:   proc.OpenExecutable,
+		now:          func() time.Time { return time.UnixMilli(2000) },
+		queueTimeout: 5 * time.Second,
+		waitDelay:    time.Second,
+	}
+
+	beforeFDs := openFDCount(t)
+	failAns := cmds.queue(context.Background(), convID, "Iris wake after in-place update", func(start func() error) (bool, error) {
 		err := start()
 		return err == nil, err
 	})
 	if failAns.answer != "failed" || failAns.detail != antigravityExeDeleted || failAns.started {
 		t.Fatalf("real deleted-fd Start failure = %+v, want failed with %q", failAns, antigravityExeDeleted)
 	}
-	if afterStartFailFDs := openFDCount(t); afterStartFailFDs != beforeStartFailFDs {
-		t.Fatalf("failed Start on deleted descriptor leaked fds: before=%d after=%d", beforeStartFailFDs, afterStartFailFDs)
-	}
-
-	// Once fake agy exits, check() reports unavailable (process gone, not deleted-image error).
-	stopChild()
-	if _, det, _ := cmds.check(context.Background(), ""); det != antigravityExeUnavailable {
-		t.Fatalf("check(exited) = %q, want %q", det, antigravityExeUnavailable)
+	if afterFDs := openFDCount(t); afterFDs != beforeFDs {
+		t.Fatalf("failed Start on deleted descriptor leaked fds: before=%d after=%d", beforeFDs, afterFDs)
 	}
 }

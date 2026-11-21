@@ -271,10 +271,12 @@ func TestIntegrateDoesNotHangOnStalledClientConfig(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(home, "codex", "hooks.json")); err != nil {
 		t.Fatalf("codex hooks.json missing: %v", err)
 	}
-	if info, err := os.Stat(irisDir); err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
-		t.Fatalf("default fallback iris directory not present with 0700: info=%v err=%v", info, err)
+	// The FIFO fixture requires irisDir to exist beforehand (absent-directory creation with
+	// 0700 is covered by TestIntegrateCreatesResolvedTokenDirectoryWith0700 in cli_test.go).
+	// Verify integrate left irisDir intact and created no relocated directory under home.
+	if info, err := os.Stat(irisDir); err != nil || !info.IsDir() {
+		t.Fatalf("default fallback iris directory missing: info=%v err=%v", info, err)
 	}
-	// Only the client, state, and default fallback iris directories exist under home.
 	entries, err := os.ReadDir(home)
 	if err != nil {
 		t.Fatal(err)
