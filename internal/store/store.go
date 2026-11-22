@@ -478,9 +478,42 @@ func (s *Store) Restored() bool { return s.restored }
 // It includes transactions that later rolled back and resets when the Store is reopened.
 func (s *Store) TransactionCount() uint64 { return s.transactions.Load() }
 
+type lockObserver struct {
+	beforeLock  func()
+	afterUnlock func(wait, held time.Duration)
+}
+
+type lockObserverKey struct{}
+
+func withLockObserver(ctx context.Context, observer lockObserver) context.Context {
+	return context.WithValue(ctx, lockObserverKey{}, observer)
+}
+
 func (s *Store) transact(ctx context.Context, f func(*transaction) error) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	observer, hasObserver := ctx.Value(lockObserverKey{}).(lockObserver)
+	var wait time.Duration
+	var acquired time.Time
+	if hasObserver {
+		if observer.beforeLock != nil {
+			observer.beforeLock()
+		}
+		requested := time.Now()
+		s.mu.Lock()
+		acquired = time.Now()
+		wait = acquired.Sub(requested)
+	} else {
+		s.mu.Lock()
+	}
+	defer func() {
+		var held time.Duration
+		if hasObserver {
+			held = time.Since(acquired)
+		}
+		s.mu.Unlock()
+		if hasObserver {
+			observer.afterUnlock(wait, held)
+		}
+	}()
 	c, err := s.db.Conn(ctx)
 	if err != nil {
 		return err
