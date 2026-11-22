@@ -91,14 +91,17 @@ of an opted-in repository, not only to a coordinator's delegates.
    original automatic claim unchanged. An explicit claim is never downgraded, as today.
 
    Under `worktree`, an exact-path upgrade uses the request checkout's key to select the caller's
-   automatic row; the current own-row selection in `explicitIn` has no key
-   (`internal/store/claims.go:424-467`). On success, that row becomes explicit, clears its key and
-   keeps its display location. Every sibling automatic row of the same Execution, repository and
-   path key, such as rows for one path in `/wt1` and `/wt2`, is revoked in the same transaction.
-   Thus no keyed sibling remains for `releaseLeft` or `fileConflicts` to reuse or release later.
-   Normal release and waiter evaluation run for the revoked siblings, but the new repository-wide
-   explicit row still blocks overlapping waiters. Under `repository`, current own-row reuse is
-   unchanged and no sibling-folding behaviour is introduced.
+   automatic row; the current own-row selection in `explicitIn` has no key. On success, that row
+   becomes explicit, clears its key and keeps its display location. Every sibling automatic row of
+   the same Execution, repository and path key, such as rows for one path in `/wt1` and `/wt2`, is
+   revoked in the same transaction. The same revocation applies to a **new** exact explicit grant:
+   an Execution with an automatic claim only in `/wt2` that is granted an explicit claim in `/wt1`
+   has its `/wt2` automatic row revoked in the same transaction as the insert. This covers both
+   `explicitIn`'s reuse and insert branches (`internal/store/claims.go:424-477`). Thus no keyed
+   sibling remains for `releaseLeft` or `fileConflicts` to reuse or release later. Normal release
+   and waiter evaluation run for the revoked siblings, but the new repository-wide explicit row
+   still blocks overlapping waiters. Under `repository`, current own-row reuse is unchanged and no
+   sibling-folding behaviour is introduced.
 
    Prefix claims keep ADR 003's case folding and component boundaries. The empty prefix still
    requires the explicit repository-wide flag, is explicit, has a null worktree key and covers the
@@ -157,9 +160,11 @@ of an opted-in repository, not only to a coordinator's delegates.
    - outside the existing same-worktree exemption, an explicit claim, a held claim with a null key,
      or a committing checkout with no key is never exempt and still refuses;
    - the same-worktree exemption is applied first. It compares the claim checkout's canonical key
-     when it has one. A null-key explicit claim with a known display path can instead compare that
-     canonical path with the committing checkout; a legacy row with no per-claim location retains
-     the current holder-Execution host/path fallback. No fallback makes a null-key claim advisory.
+     when it has one. For a null-key explicit claim with a known display path, the holder
+     Execution's `host_id` and that canonical path must both match the committing checkout's host
+     and path; equal paths on two hosts do not qualify. A legacy row with no per-claim location
+     retains the current holder-Execution host/path fallback. No fallback makes a null-key claim
+     advisory.
 
    This settles ADR 033's own-session submodule guard case. Under `repository`, the existing
    refusal remains. Under `worktree`, a superproject session's claim placed in a submodule has that
@@ -403,9 +408,10 @@ the merge-time trade-off.
   results.
 - Explicit and grouped edits: upgrading auto to explicit checks another worktree's automatic claim,
   leaves the old claim unchanged on refusal, and under `worktree` selects by checkout key, clears
-  that key and atomically revokes same-path sibling auto rows on success. Prove that a sibling
-  cannot later be reused or released and that the explicit row keeps waiters blocked. A rename is
-  one grouped grant over both ends; any real conflict grants none. A superproject's policy does not
+  that key and atomically revokes same-path sibling auto rows on success. Test both that upgrade
+  and a new `/wt1` explicit grant while the Execution holds only a `/wt2` auto row. Prove that a
+  sibling cannot later be reused or released and that the explicit row keeps waiters blocked. A
+  rename is one grouped grant over both ends; any real conflict grants none. A superproject's policy does not
   affect a submodule, or vice versa. Only under `worktree` do reuse, de-duplication, replay and
   shell renewal distinguish one Execution's `/wt1`, `/wt2` and submodule claims.
 - Shell and waiters: under `repository`, a status has today's path-wide release and replay; under
@@ -418,8 +424,9 @@ the merge-time trade-off.
 - Guard: with only exempt automatic overlaps, `message` is empty and `advisories` is populated; a
   new guard warns and allows and an old guard allows silently. An explicit claim, a null held key,
   a missing committing key or any other real conflict makes `message` non-empty and refuses. Test
-  both policies' same-worktree behaviour, the legacy host/path fallback, staged renames, mixed
-  advisory plus real-conflict responses, and ADR 033's submodule refusal remaining under
+  both policies' same-worktree behaviour, the legacy host/path fallback, equal paths on two hosts
+  not skipping a null-key explicit claim, staged renames, mixed advisory plus real-conflict
+  responses, and ADR 033's submodule refusal remaining under
   `repository` but lifting for the same submodule checkout under `worktree`.
 - Identity: linked worktrees are distinct; branch and display-path changes do not change a key;
   remote or root alias replacement does not rekey WorktreeIdentity; symlink and bind root aliases
