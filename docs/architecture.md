@@ -1345,10 +1345,14 @@ was measured, the tool was unknown to Iris, so its writes went unreconciled and 
 
 On `modernc.org/sqlite`, with real concurrency:
 
-- Of concurrent overlapping grants, exactly one wins. A multi-path grant is all or nothing.
-- Prefix, case-folding and rename boundaries hold across worktrees.
-- A self-touch reuses a claim and never downgrades an `explicit` one. A replayed tool call does
-  not extend an expiry.
+- Of concurrent overlapping grants, exactly one wins, except that ADR 037's `worktree` opt-in lets
+  an automatic/automatic pair with different, non-null worktree keys both win. A multi-path grant
+  is all or nothing.
+- Prefix, case-folding and rename boundaries hold across worktrees. For ADR 037's sole exempted
+  automatic/automatic pair with different, non-null keys, ADR 003 path identity and those boundaries
+  are unchanged; only the conflict action changes.
+- A self-touch in the same worktree reuses an automatic claim. An own explicit claim is reused
+  repository-wide and is never downgraded. A replayed tool call does not extend an expiry.
 - Expired, released, wrong-owner and old-epoch fence tokens fail. A lost lease cannot renew.
 - Retries cannot double-send or resurrect a claim. A key reused with a different request gets 409.
 - A failed transaction exposes nothing.
@@ -1364,5 +1368,6 @@ On `modernc.org/sqlite`, with real concurrency:
   cannot bind to the first. In id mode, a tool call that names its session binds only that
   session's Execution, never through a handle.
 - An ambiguous URL cannot join a repository automatically.
-- A policy a client cannot express never becomes an allow.
+- A policy a client cannot express never becomes an allow. Under ADR 037, every real conflict still
+  turns Codex `ask` into `deny` (R5).
 - For every client, a crash, a timeout and a missing binary all leave the tool usable.
