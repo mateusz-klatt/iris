@@ -93,6 +93,7 @@ func TestIdleCoordinationPlansAvoidScanningHistoricalRows(t *testing.T) {
 				args      []any
 				indexes   []string
 			}{
+				{"stall credit", creditStallSQL, []any{clock.Tick(), stallStepMS, stallCapMS, s.epoch, clock.Tick() - 10000, clock.Tick(), stallCapMS, clock.Tick()}, []string{"execution_active_deadline"}},
 				{"execution expiry", expireExecutionsSQL, []any{clock.Now().UnixMilli(), s.epoch, clock.Tick()}, []string{"execution_active_deadline"}},
 				{"claim expiry", expiredClaimsSQL, []any{clock.Now().UnixMilli()}, []string{"claim_unrevoked_execution"}},
 				{"transition requeue", requeueExecutionSQL, []any{r.ExecutionID}, []string{"delivery_execution", "sqlite_autoindex_Ack_1"}},

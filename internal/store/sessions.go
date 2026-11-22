@@ -368,12 +368,13 @@ func (t *transaction) resume(e *execution, strong bool) (int64, error) {
 		lease = 60000
 		e.Heartbeat = true
 	}
-	if _, err := t.exec("UPDATE Execution SET recovery_deadline=NULL,boot_epoch=?,deadline_tick_ms=?,heartbeat_mode=? WHERE id=?", t.s.epoch, t.s.clock.Tick()+lease, e.Heartbeat, e.ID); err != nil {
+	tick := t.s.clock.Tick()
+	if _, err := t.exec("UPDATE Execution SET recovery_deadline=NULL,boot_epoch=?,deadline_tick_ms=?,lease_renewed_tick_ms=?,heartbeat_mode=? WHERE id=?", t.s.epoch, tick+lease, tick, e.Heartbeat, e.ID); err != nil {
 		return 0, err
 	}
 	e.Epoch = t.s.epoch
 	e.Recovery = sql.NullInt64{}
-	e.Deadline = t.s.clock.Tick() + lease
+	e.Deadline = tick + lease
 	// Rotate the numeric fence as well as the epoch: release accepts a fence
 	// without a complete token, so retaining the number would admit zombies.
 	if _, err := t.exec(`INSERT INTO Claim(execution_id,repository_id,kind,path,path_key,origin,boot_epoch,expires_ms)
@@ -538,7 +539,8 @@ func (t *transaction) register(r Request, outside bool) (map[string]any, error) 
 		lease = 60000
 	}
 	ex := id("ex_")
-	_, err = t.exec(`INSERT INTO Execution(id,agent_id,repository_id,host_id,client,session_id,generation,worktree,branch,boot_epoch,deadline_tick_ms,state,parent_id,client_pid,client_pid_start_ms,single_session,heartbeat_mode) VALUES(?,?,?,?,?,?,?,?,?,?,?,'active',?,?,?,?,?)`, ex, agent, repo, r.Host, r.Client, r.SessionID, generation, r.Worktree, r.Branch, t.s.epoch, t.s.clock.Tick()+lease, parent, r.ClientPID, r.ClientPIDStartMS, r.SingleSession, heartbeat)
+	tick := t.s.clock.Tick()
+	_, err = t.exec(`INSERT INTO Execution(id,agent_id,repository_id,host_id,client,session_id,generation,worktree,branch,boot_epoch,deadline_tick_ms,lease_renewed_tick_ms,state,parent_id,client_pid,client_pid_start_ms,single_session,heartbeat_mode) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'active',?,?,?,?,?)`, ex, agent, repo, r.Host, r.Client, r.SessionID, generation, r.Worktree, r.Branch, t.s.epoch, tick+lease, tick, parent, r.ClientPID, r.ClientPIDStartMS, r.SingleSession, heartbeat)
 	if err != nil {
 		return nil, err
 	}
@@ -679,7 +681,8 @@ func (t *transaction) heartbeat(r Request) (map[string]any, error) {
 	if e.Heartbeat || strong {
 		strong, lease = true, 60000
 	}
-	if _, err = t.exec("UPDATE Execution SET deadline_tick_ms=?,heartbeat_mode=? WHERE id=?", t.s.clock.Tick()+lease, strong, e.ID); err != nil {
+	tick := t.s.clock.Tick()
+	if _, err = t.exec("UPDATE Execution SET deadline_tick_ms=?,lease_renewed_tick_ms=?,heartbeat_mode=? WHERE id=?", tick+lease, tick, strong, e.ID); err != nil {
 		return nil, err
 	}
 	if r.Source == "watch" {

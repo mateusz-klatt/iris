@@ -546,3 +546,66 @@ func TestSlowAccountWriterKeepsOnlyTheLatestQueuedRevision(t *testing.T) {
 		}
 	})
 }
+
+// 5i: Blocking the hub's sweep across more than 5 s of bubble time credits an in-budget execution on its catch-up expire.
+func TestStallCreditKeepsActiveExecutionAcrossBlockedSweep(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		h, server := idleMemoryHub(t)
+		session := register(t, server, 1)
+		execID := session["execution_id"].(string)
+		request(t, server, http.MethodPost, "/v1/executions/"+execID+"/heartbeat", map[string]any{"generation": 1, "source": "shim"}, http.StatusOK)
+		claim := authority(session)
+		claim["key"], claim["kind"], claim["path"] = "stall-claim", "exact", "stall.go"
+		request(t, server, http.MethodPost, "/v1/claims", claim, http.StatusOK)
+
+		var block, hit atomic.Bool
+		blocked, release, caughtUp := make(chan struct{}), make(chan struct{}), make(chan struct{})
+		var releaseOnce sync.Once
+		releaseSweep := func() { releaseOnce.Do(func() { close(release) }) }
+		defer releaseSweep()
+
+		real := h.call
+		h.call = func(ctx context.Context, op string, req store.Request) (map[string]any, error) {
+			if op == "expire" && block.Load() && hit.CompareAndSwap(false, true) {
+				close(blocked)
+				select {
+				case <-release:
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				}
+				res, err := real(ctx, op, req)
+				close(caughtUp)
+				return res, err
+			}
+			return real(ctx, op, req)
+		}
+
+		socket := idleWatch(t, server, execID, 0)
+		synctest.Wait()
+
+		block.Store(true)
+		<-blocked
+		// Block the sweep across 65 s (> 5 s stall threshold and past the 60 s lease, within the 120 s cap).
+		time.Sleep(65 * time.Second)
+		releaseSweep()
+		<-caughtUp
+		synctest.Wait()
+
+		if _, closed, err := socket.snapshot(); closed {
+			t.Fatalf("in-budget execution stream closed after blocked sweep: %v", err)
+		}
+		// Before any new heartbeat arrives, the catch-up expire itself left the execution active.
+		bound := request(t, server, http.MethodPost, "/v1/bind", map[string]any{"client": "codex", "host": "host", "execution": execID}, http.StatusOK)
+		if bound["execution_id"] != execID || bound["generation"] != float64(1) {
+			t.Fatalf("execution did not remain bound after catch-up expire: %v", bound)
+		}
+		hb := request(t, server, http.MethodPost, "/v1/executions/"+execID+"/heartbeat", map[string]any{"generation": 1, "source": "shim"}, http.StatusOK)
+		if hb["execution_id"] != execID {
+			t.Fatalf("heartbeat failed after catch-up expire: %v", hb)
+		}
+		claims := request(t, server, http.MethodGet, "/v1/claims?repository_id="+session["repository_id"].(string), nil, http.StatusOK)["claims"].([]any)
+		if len(claims) != 1 {
+			t.Fatalf("claim was revoked during stalled sweep: %v", claims)
+		}
+	})
+}

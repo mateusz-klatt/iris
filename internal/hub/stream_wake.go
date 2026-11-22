@@ -41,6 +41,7 @@ func (h *Hub) subscribeStreams() (*streamWakes, func()) {
 		// Capture before launching the worker or reading a stream's first snapshot.
 		changes := h.store.Changes()
 		h.streams = w
+		h.store.SetStreamSweep(true)
 		go h.runStreamWakes(ctx, w, changes)
 	}
 	w := h.streams
@@ -55,6 +56,7 @@ func (h *Hub) subscribeStreams() (*streamWakes, func()) {
 			// The worker never takes streamMu: joining here prevents a new first
 			// subscriber from starting a second sweep before the old one exits.
 			<-w.done
+			h.store.SetStreamSweep(false)
 			h.streams = nil
 		}
 	}

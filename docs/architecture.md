@@ -610,6 +610,19 @@ has not passed.
 does not fire reliably, and it has a 1 to 1.5 s budget. Leases are measured on the hub's
 monotonic clock within one boot. Claim expiries must survive a restart, so they use the hub's
 wall clock. Client clocks are never trusted.
+
+While the stream expiry sweep is armed, a gap of more than 5 s on the hub's monotonic clock since
+the previous expiry run counts as a hub stall, whether the first expiry after it arrives from the
+sweep or from a domain call. Active, non-recovering Executions whose deadlines fell due during
+that gap move to `min(now + 20 s, lease_renewed_tick_ms + lease + 60 s)` instead of being
+marked `lost`, giving queued heartbeats one 20 s client interval to land; a committed renewal
+restores the full cap. With no stream armed, a quiet gap expires leases without credit. What this
+cannot do: a hub stall longer than about 120 s since the last committed heartbeat (the 60 s lease
+plus the 60 s cap) still loses sessions; a stall of a client, network or machine while the hub's
+sweep keeps running on time is not credited; and the credit never moves `recovery_deadline`,
+never uses wall-clock time, never credits an execution already due before the gap, and never
+revives a `lost` row.
+
 A `SessionEnd` carrying stale remembered proof is not retried without that proof: a delayed end
 must not acquire a healthy replacement generation and end it.
 
