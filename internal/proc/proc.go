@@ -258,11 +258,29 @@ func isShell(name string) bool {
 }
 
 func isClient(name string) bool {
+	_, ok := ClientName(name)
+	return ok
+}
+
+// ClientName maps a client process's executable name to Iris's client name.
+func ClientName(name string) (string, bool) {
 	switch baseName(name) {
-	case "claude", "codex", "copilot", "cursor", "cursor-agent", "agy", "antigravity", "grok", "kimi", "kimi-code":
-		return true
+	case "claude":
+		return "claude", true
+	case "codex":
+		return "codex", true
+	case "copilot":
+		return "copilot", true
+	case "cursor", "cursor-agent":
+		return "cursor", true
+	case "agy", "antigravity":
+		return "antigravity", true
+	case "grok":
+		return "grok", true
+	case "kimi", "kimi-code":
+		return "kimi", true
 	default:
-		return false
+		return "", false
 	}
 }
 

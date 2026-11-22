@@ -7,12 +7,15 @@ import (
 
 	"github.com/mateusz-klatt/iris/internal/config"
 	"github.com/mateusz-klatt/iris/internal/integrate"
+	"github.com/mateusz-klatt/iris/internal/proc"
 )
 
 // TestMain points every user directory at a temporary one. These tests inject hook
 // failures on purpose, and those must never reach the real hook-failures.log, where
 // iris doctor would report them as genuine.
 func TestMain(m *testing.M) {
+	// Command tests do not inherit whichever agent happens to be running the test suite.
+	mcpAncestor = func() (proc.Ancestor, error) { return proc.Ancestor{}, proc.ErrNotFound }
 	// An exported credential must not point hook failures at the real home.
 	for _, key := range []string{"IRIS_HUB_URL", "IRIS_TOKEN_FILE"} {
 		if err := os.Unsetenv(key); err != nil {
