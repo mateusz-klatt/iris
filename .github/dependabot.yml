@@ -7,10 +7,29 @@ updates:
     directory: /
     schedule:
       interval: weekly
+    ignore:
+      # modernc.org/libc must equal the exact version required in
+      # modernc.org/sqlite's go.mod ("Fragile modernc.org/libc dependency").
+      # Dependabot cannot express "follow sqlite", so ignore standalone
+      # updates; modernc.org/sqlite bumps carry the matching libc version.
+      - dependency-name: modernc.org/libc
   - package-ecosystem: npm
     directory: /web
     schedule:
       interval: weekly
+    ignore:
+      # Keep TypeScript on 6.x until typescript-eslint supports TS 7:
+      # typescript-eslint@8.73.0 declares peer typescript@">=4.8.4 <6.1.0"
+      # (failing `npm ci --ignore-scripts` with ERESOLVE) and rejects TS 7.0
+      # at lint runtime.
+      - dependency-name: typescript
+        versions: [">=7"]
+      # Keep Tailwind CSS on 3.x until web/postcss.config.cjs and
+      # web/tailwind.config.cjs are migrated to @tailwindcss/postcss or
+      # Tailwind is removed: tailwindcss@4.3.5 fails `vite build` because the
+      # PostCSS plugin moved out of the `tailwindcss` package.
+      - dependency-name: tailwindcss
+        versions: [">=4"]
   - package-ecosystem: github-actions
     directory: /
     schedule:
