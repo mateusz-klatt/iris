@@ -190,7 +190,7 @@ function AccessForm({ account, repositories, lastOperator, saving, heading, onSa
     <h2 id="iris-access-selected" ref={heading} tabIndex={-1}>{t("admin.selectedUser", { user: account.username })}</h2>
     <form className="settings-form" onSubmit={submit}>
       <label htmlFor="iris-access-role">{t("access.role")}</label>
-      <select id="iris-access-role" value={role} disabled={saving || lastOperator} onChange={(event) => {
+      <select id="iris-access-role" name="role" value={role} disabled={saving || lastOperator} onChange={(event) => {
         setRole(event.target.value);
         if (event.target.value === "none") setDisabled(true);
       }}>
@@ -198,14 +198,14 @@ function AccessForm({ account, repositories, lastOperator, saving, heading, onSa
         <option value="member">{t("accountUi.member")}</option>
         <option value="none">{t("accountUi.none")}</option>
       </select>
-      <label className="iris-access-disabled"><input type="checkbox" checked={disabled} disabled={saving || lastOperator || role === "none"}
+      <label className="iris-access-disabled"><input id="iris-access-disabled" name="disabled" type="checkbox" checked={disabled} disabled={saving || lastOperator || role === "none"}
         onChange={(event) => setDisabled(event.target.checked)} />{t("admin.disabled")}</label>
       {lastOperator ? <p>{t("access.lastOperator")}</p> : null}
       {role === "operator" ? <p>{t("access.operatorHint")}</p> : null}
       {role === "member" ? <fieldset disabled={saving} className="iris-access-grants"><legend>{t("operator.repositories")}</legend>
         {repositories.length === 0 ? <p>{t("operator.none")}</p> : repositories.map((repository) => <label key={repository.id}>
           <span>{repositoryLabel(repository, t)}</span>
-          <select aria-label={t("access.assignment", { repository: repositoryLabel(repository, t) })} value={grants.find((grant) => grant.repository_id === repository.id)?.mode ?? ""}
+          <select id={`iris-access-grant-${repository.id}`} name={`grant-${repository.id}`} aria-label={t("access.assignment", { repository: repositoryLabel(repository, t) })} value={grants.find((grant) => grant.repository_id === repository.id)?.mode ?? ""}
             onChange={(event) => {
               const remaining = grants.filter((grant) => grant.repository_id !== repository.id);
               const mode = event.target.value;

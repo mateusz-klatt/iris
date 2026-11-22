@@ -2,6 +2,7 @@ package store
 
 import (
 	"fmt"
+	"strings"
 	"testing"
 	"time"
 )
@@ -132,5 +133,119 @@ func TestDeliveryProblemsCapCountsFilteredMessagesAndKeepsRecipients(t *testing.
 				}
 			}
 		})
+	}
+}
+
+// Delivery problems must filter out settled deliveries through Ack's covering index before
+// looking up Message rows; joining through DeliveryState scanned every historical message first.
+func TestDeliveryProblemsFilterAckedBeforeMessageLookup(t *testing.T) {
+	s, _, _ := testStore(t)
+	rows, err := s.db.Query("EXPLAIN QUERY PLAN "+deliveriesSQL+"1=1 AND 1=1 AND 1=1 ORDER BY m.created_ms DESC,m.id,a.name", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	var steps []string
+	ackIdx, msgIdx := -1, -1
+	for rows.Next() {
+		var id, parent, unused int
+		var detail string
+		if err := rows.Scan(&id, &parent, &unused, &detail); err != nil {
+			t.Fatal(err)
+		}
+		steps = append(steps, detail)
+		if strings.Contains(detail, "sqlite_autoindex_Ack_1") && ackIdx < 0 {
+			ackIdx = len(steps) - 1
+		}
+		if strings.Contains(detail, "SEARCH m ") && msgIdx < 0 {
+			msgIdx = len(steps) - 1
+		}
+	}
+	if err := rows.Err(); err != nil {
+		t.Fatal(err)
+	}
+	if ackIdx < 0 || msgIdx < 0 || ackIdx > msgIdx {
+		t.Fatalf("expected Ack filter before Message lookup, plan=%v", steps)
+	}
+}
+
+// A NULL Ack.delivery_id (permitted by SQLite on rowid PRIMARY KEY columns without NOT NULL)
+// must never suppress unacked deliveries, and handled or redelivered deliveries must match
+// DeliveryState's semantics identically.
+func TestDeliveryProblemsSurvivesNullAckAndMatchesHandledAndRedelivered(t *testing.T) {
+	s, clock, _ := testStore(t)
+	unacked, out := session(t, s, 1)
+	repo := out["repository_id"].(string)
+	unackedName := out["agent"].(map[string]any)["name"].(string)
+	acked, out := session(t, s, 2)
+	ackedName := out["agent"].(map[string]any)["name"].(string)
+	handled, out := session(t, s, 3)
+	handledName := out["agent"].(map[string]any)["name"].(string)
+	redelivered, out := session(t, s, 4)
+	redeliveredName := out["agent"].(map[string]any)["name"].(string)
+
+	call(t, s, "ui_messages", Request{
+		Key: "eq-check", RepositoryID: repo,
+		To: []string{unackedName, ackedName, handledName, redeliveredName}, Subject: "eq-check", Body: "b",
+	})
+
+	// Plain ack (handled=false) settles ackedName.
+	for _, d := range call(t, s, "inbox", acked)["deliveries"].([]map[string]any) {
+		call(t, s, "ack", Request{ExecutionID: acked.ExecutionID, Generation: acked.Generation, Attempt: d["attempt"].(int64), Key: d["id"].(string)})
+	}
+	// Handled ack (handled=true) settles handledName.
+	for _, d := range call(t, s, "inbox", handled)["deliveries"].([]map[string]any) {
+		call(t, s, "ack", Request{ExecutionID: handled.ExecutionID, Generation: handled.Generation, Attempt: d["attempt"].(int64), Key: d["id"].(string), Handled: true})
+	}
+	// Redelivered flow: fetch attempt 1, end Execution (requeues to pending), re-register gen 2, fetch attempt 2 (inflight).
+	call(t, s, "inbox", redelivered)
+	call(t, s, "end", Request{ExecutionID: redelivered.ExecutionID, Generation: redelivered.Generation})
+	rejoined := call(t, s, "sessions", Request{
+		Client: "codex", Host: "host", SessionID: "4", Cwd: "/repo/w4", Worktree: "/repo/w4",
+		RemoteURL: "https://example.com/team/project.git", RootCommit: "root", Source: "hook",
+	})
+	redelivered2 := Request{ExecutionID: rejoined["execution_id"].(string), Generation: rejoined["generation"].(int64)}
+	redeliveries := call(t, s, "inbox", redelivered2)["deliveries"].([]map[string]any)
+	if len(redeliveries) != 1 || redeliveries[0]["attempt"].(int64) != 2 {
+		t.Fatalf("expected redelivered attempt 2, got %+v", redeliveries)
+	}
+
+	// Insert a NULL delivery_id row into Ack (valid on SQLite rowid PRIMARY KEY without NOT NULL).
+	if _, err := s.db.Exec("INSERT INTO Ack(delivery_id,execution_id,attempt,acked_ms) VALUES(NULL,?,1,?)", acked.ExecutionID, clock.Now().UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+
+	// Advance past deliveryWait while keeping all active sessions alive.
+	for waited := time.Duration(0); waited <= deliveryWait; waited += 30 * time.Second {
+		clock.advance(30 * time.Second)
+		for _, r := range []Request{unacked, acked, handled, redelivered2} {
+			call(t, s, "heartbeat", Request{ExecutionID: r.ExecutionID, Generation: r.Generation, Source: "shim"})
+		}
+	}
+
+	got := call(t, s, "ui_deliveries", Request{RepositoryID: repo})["messages"].([]map[string]any)
+	if len(got) != 1 {
+		t.Fatalf("expected 1 message with unacked/redelivered recipients despite NULL Ack row, got %+v", got)
+	}
+	byName := map[string]string{}
+	for _, r := range got[0]["recipients"].([]map[string]any) {
+		byName[r["name"].(string)] = r["reason"].(string) + "/" + r["state"].(string) + "/" + r["execution"].(string)
+	}
+	if len(byName) != 2 || byName[unackedName] != "waiting/pending/active" || byName[redeliveredName] != "waiting/inflight/active" {
+		t.Fatalf("unexpected recipients with NULL Ack row: %+v", byName)
+	}
+
+	// Settling the redelivered attempt 2 removes redeliveredName while keeping unackedName.
+	call(t, s, "ack", Request{
+		ExecutionID: redelivered2.ExecutionID, Generation: redelivered2.Generation,
+		Attempt: redeliveries[0]["attempt"].(int64), Key: redeliveries[0]["id"].(string), Handled: true,
+	})
+	afterAck := call(t, s, "ui_deliveries", Request{RepositoryID: repo})["messages"].([]map[string]any)
+	if len(afterAck) != 1 {
+		t.Fatalf("expected 1 message remaining for unackedName, got %+v", afterAck)
+	}
+	rem := afterAck[0]["recipients"].([]map[string]any)
+	if len(rem) != 1 || rem[0]["name"] != unackedName || rem[0]["state"] != "pending" {
+		t.Fatalf("expected only unackedName pending after settling redelivered attempt, got %+v", rem)
 	}
 }

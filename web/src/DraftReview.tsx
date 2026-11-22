@@ -13,6 +13,7 @@ import type { Review } from "./review";
 export function DraftBody({ value, onChange }: { value: string; onChange: (value: string) => void }) {
   const { t } = useTranslation();
   const [previewing, setPreviewing] = useState(false);
+  const field = useId();
   const hint = useId();
   const onKeyDown = (event: KeyboardEvent<HTMLTextAreaElement>) => {
     if (event.key === "Enter" && (event.ctrlKey || event.metaKey)) {
@@ -37,7 +38,7 @@ export function DraftBody({ value, onChange }: { value: string; onChange: (value
       ) : (
         <label>
           {t("operator.body")}
-          <textarea value={value} aria-describedby={hint} onChange={(event) => onChange(event.target.value)} onKeyDown={onKeyDown} />
+          <textarea id={field} name="body" value={value} aria-describedby={hint} onChange={(event) => onChange(event.target.value)} onKeyDown={onKeyDown} />
         </label>
       )}
       <small id={hint}>{t("markdown.shortcutHint")}</small>

@@ -134,7 +134,7 @@ export default function Account({ session, onSession, onSignedOut }: AccountProp
         <p>{t("account.languagesHint")}</p>
         <div className="settings-form">
           <label htmlFor="iris-account-language">{t("account.uiLanguage")}</label>
-          <select id="iris-account-language" value={account.ui_locale} onChange={(event) => void saveProfile(event.target.value, false)} disabled={profileSaving}>
+          <select id="iris-account-language" name="ui-locale" value={account.ui_locale} onChange={(event) => void saveProfile(event.target.value, false)} disabled={profileSaving}>
             <option value="">{t("accountUi.browserLanguage")}</option>
             {supportedLocales.map((locale) => <option key={locale} value={locale}>{localeMetadata[locale].nativeName}</option>)}
           </select>
