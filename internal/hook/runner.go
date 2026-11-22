@@ -401,12 +401,18 @@ func checkRestoreFloor(state *runState, ev Event, m Memory, generation int, err 
 }
 
 func refuseRestoreFloor(state *runState, ev Event, m Memory, generation int, note string) error {
-	state.observe(note)
 	if files, ok := m.(fileMemory); ok && generation > 0 {
-		if damaged := files.retainGeneration(string(ev.Client), ev.SessionID, generation); damaged != "" {
-			state.observe(damagedGenerationObservation(damaged))
+		marker := files.retainGeneration(string(ev.Client), ev.SessionID, generation)
+		if marker.Path != "" && (note == RestoreFloorRefused || note == RestoreFloorHubTooOld) {
+			note = note + " at " + marker.Path
 		}
+		state.observe(note)
+		if marker.Damaged {
+			state.observe(damagedGenerationObservation(marker.Path))
+		}
+		return errRestoreFloor
 	}
+	state.observe(note)
 	return errRestoreFloor
 }
 

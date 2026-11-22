@@ -62,8 +62,8 @@ type ClientReport struct {
 	// unusable says a call of this client named a session without a usable Execution in the
 	// last 24 hours (ADR 017), which unusableHint explains from the hub's evidence.
 	unusable bool
-	// localProofDamage names local generation files for recovery. The report sent to the hub
-	// has only the observation kind and count.
+	// localProofDamage names local generation files for recovery, including an .ended
+	// marker a refusal named. The report sent to the hub has only the observation kind and count.
 	localProofDamage string
 }
 
@@ -479,15 +479,15 @@ func applyFailuresFrom(res *Result, tokenFile, fallbackTokenFile string, now tim
 				observed[name] = map[string]int{}
 			}
 			note := entry.Error
-			if path, ok := strings.CutPrefix(note, hook.DamagedGenerationProof+" at "); ok {
-				note = hook.DamagedGenerationProof
+			if kind, path, ok := observedLocalPath(note); ok {
+				note = kind
 				if strings.IndexFunc(path, func(r rune) bool { return !unicode.IsPrint(r) }) >= 0 {
 					path = strconv.Quote(path)
 				}
 				if proofDamage[name] == nil {
 					proofDamage[name] = map[string]int{}
 				}
-				proofDamage[name][note+" at "+path]++
+				proofDamage[name][kind+" at "+path]++
 			}
 			observed[name][note]++
 			continue
@@ -955,6 +955,18 @@ const lineEndingsTimeout = 10 * time.Second
 // crlfFloor keeps a few CRLF files, which an editor can write in any repository, from being
 // reported as a misconfigured checkout.
 const crlfFloor = 20
+
+// observedLocalPath separates a generation-file path from an observation that names one.
+// The kind is what a stored report may count. The path stays on the machine that holds the file.
+// The longer refusal is listed first so it is not read as the shorter one.
+func observedLocalPath(note string) (kind, path string, ok bool) {
+	for _, kind := range []string{hook.RestoreFloorHubTooOld, hook.DamagedGenerationProof, hook.RestoreFloorRefused} {
+		if path, ok := strings.CutPrefix(note, kind+" at "); ok {
+			return kind, path, true
+		}
+	}
+	return "", "", false
+}
 
 // observedText lists observations with their counts, in a stable order.
 func observedText(seen map[string]int) string {
