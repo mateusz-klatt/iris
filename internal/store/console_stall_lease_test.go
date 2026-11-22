@@ -236,6 +236,8 @@ func classifyTraceSQL(q string) string {
 	switch q {
 	case "BEGIN IMMEDIATE":
 		return "begin_immediate"
+	case "BEGIN DEFERRED":
+		return "begin_deferred"
 	case "COMMIT":
 		return "commit"
 	case "ROLLBACK":
@@ -250,8 +252,12 @@ func classifyTraceSQL(q string) string {
 		return "expire_console_sessions"
 	}
 	switch {
+	case strings.HasPrefix(q, "SELECT m.thread_id,COUNT(*) FROM Message m JOIN Delivery d"):
+		return "threads_unread_query"
 	case strings.HasPrefix(q, "SELECT m.thread_id,"):
 		return "threads_main_query"
+	case strings.HasPrefix(q, "SELECT m.subject FROM Message m"):
+		return "thread_subject_query"
 	case strings.HasPrefix(q, "SELECT DISTINCT CASE WHEN a.client='human'"):
 		return "thread_participants_query"
 	case strings.HasPrefix(q, "SELECT DISTINCT m.sender_account_id"):
@@ -266,7 +272,7 @@ func classifyTraceSQL(q string) string {
 		return "overview_repo_claims"
 	case strings.HasPrefix(q, overviewAgentsSQL):
 		return "overview_agents"
-	case strings.Contains(q, "FROM Delivery d JOIN Agent a ON a.id=d.recipient_agent_id WHERE a.client='human'"):
+	case strings.HasPrefix(q, overviewHumanUnreadSQL):
 		return "overview_human_unread"
 	case strings.HasPrefix(q, deliveriesSQL):
 		return "deliveries_query"

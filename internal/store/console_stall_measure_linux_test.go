@@ -222,8 +222,12 @@ type opBreakdown struct {
 	CommitMS            float64 `json:"commit_ms"`
 	RollbackMS          float64 `json:"rollback_ms,omitempty"`
 	NonSQLGoMS          float64 `json:"non_sql_go_ms"`
-	ThreadsMainMS       float64 `json:"threads_main_query_ms,omitempty"`
-	ThreadPartsCount    int     `json:"thread_participants_count,omitempty"`
+	ThreadsMainMS        float64 `json:"threads_main_query_ms,omitempty"`
+	ThreadsUnreadMS      float64 `json:"threads_unread_query_ms,omitempty"`
+	ThreadSubjectCount   int     `json:"thread_subjects_count,omitempty"`
+	ThreadSubjectTotalMS float64 `json:"thread_subjects_total_ms,omitempty"`
+	ThreadSubjectMaxMS   float64 `json:"thread_subjects_max_ms,omitempty"`
+	ThreadPartsCount     int     `json:"thread_participants_count,omitempty"`
 	ThreadPartsTotalMS  float64 `json:"thread_participants_total_ms,omitempty"`
 	ThreadPartsMaxMS    float64 `json:"thread_participants_max_ms,omitempty"`
 	ThreadAuthorCount   int     `json:"thread_authors_count,omitempty"`
@@ -820,7 +824,7 @@ func summarizeStatements(stmts []sqlStatementRecord, muHeldMS float64) opBreakdo
 	for _, st := range stmts {
 		sqlTotal += st.WallMS
 		switch st.Label {
-		case "begin_immediate":
+		case "begin_immediate", "begin_deferred":
 			b.BeginMS += st.WallMS
 		case "commit":
 			b.CommitMS += st.WallMS
@@ -833,6 +837,12 @@ func summarizeStatements(stmts []sqlStatementRecord, muHeldMS float64) opBreakdo
 			switch st.Label {
 			case "threads_main_query":
 				b.ThreadsMainMS += st.WallMS
+			case "threads_unread_query":
+				b.ThreadsUnreadMS += st.WallMS
+			case "thread_subject_query":
+				b.ThreadSubjectCount++
+				b.ThreadSubjectTotalMS += st.WallMS
+				b.ThreadSubjectMaxMS = max(b.ThreadSubjectMaxMS, st.WallMS)
 			case "thread_participants_query":
 				b.ThreadPartsCount++
 				b.ThreadPartsTotalMS += st.WallMS
@@ -1003,8 +1013,11 @@ func captureExplainPlans(t *testing.T, db *sql.DB, captured map[string]sqlStatem
 		planKey, stmtLabel string
 	}{
 		{"threads_main", "threads_main_query"},
+		{"threads_unread", "threads_unread_query"},
+		{"thread_subject", "thread_subject_query"},
 		{"threads_participants", "thread_participants_query"},
 		{"overview_agents", "overview_agents"},
+		{"overview_human_unread", "overview_human_unread"},
 		{"deliveries", "deliveries_query"},
 	} {
 		if rec, ok := captured[spec.stmtLabel]; ok {
