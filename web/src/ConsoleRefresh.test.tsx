@@ -613,6 +613,33 @@ describe("console refresh scheduling", () => {
     }
   });
 
+  it("makes no reload if unmounted before a post-read acknowledgement settles", async () => {
+    vi.useFakeTimers();
+    const tracker = trackRequests();
+    const ackReady = deferred<Response>();
+    try {
+      server.use(http.post("*/v1/ui/threads/:id/read", () => ackReady.promise));
+      const { unmount } = render(<App connect={() => () => {}} />);
+      await flushFakeNetwork();
+
+      fireEvent.click(screen.getByRole("button", { name: /Open thread: Rollout check/ }));
+      await flushFakeNetwork();
+      unmount();
+      tracker.reset();
+
+      await act(async () => {
+        ackReady.resolve(HttpResponse.json({ read: 1 }));
+      });
+      await flushFakeNetwork();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15_000);
+      });
+      expect(tracker.snapshot()).toEqual({ overview: 0, doctor: 0, deliveries: 0, threads: 0, thread: 0 });
+    } finally {
+      tracker.stop();
+    }
+  });
+
   it("treats a fallback refresh as starting the cooldown window when a frame arrives at the deadline", async () => {
     vi.useFakeTimers();
     const tracker = trackRequests();

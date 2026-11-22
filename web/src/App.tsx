@@ -393,7 +393,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const replyAgents = member ? sessions : noAgents;
   const replyAgentsRef = useRef(replyAgents);
   replyAgentsRef.current = replyAgents;
-  const postReadRefresh = useRef<() => void>(() => undefined);
+  const postReadRefresh = useRef<(() => void) | null>(null);
   const repositoryIdRef = useRef(repositoryId);
   repositoryIdRef.current = repositoryId;
   const waiting = phase === "ready" && sessions.length === 0;
@@ -518,7 +518,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     return readThread(pending.id, pending.repositoryId)
       .then((read) => {
         if (!deferReload && read > 0) {
-          postReadRefresh.current();
+          postReadRefresh.current?.();
         }
       })
       .catch(() => undefined);
@@ -672,7 +672,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       requests.current++;
       closed = true;
       visibleEpoch++;
-      postReadRefresh.current = () => undefined;
+      postReadRefresh.current = null;
       clearFallback();
       clearTimeout(cooldownTimer);
       document.removeEventListener("visibilitychange", onVisibilityChange);
