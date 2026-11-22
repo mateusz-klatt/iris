@@ -112,19 +112,20 @@ func TestRung2ShimGenerationReattachWithoutProcessIdentity(t *testing.T) {
 			if err := s.Close(); err != nil {
 				t.Fatal(err)
 			}
-			s, err := Open(file, clock)
+			reopened, err := Open(file, clock)
 			if err != nil {
 				t.Fatal(err)
 			}
+			t.Cleanup(func() { _ = reopened.Close() })
 
-			got := call(t, s, "sessions", Request{
+			got := call(t, reopened, "sessions", Request{
 				Client: "claude", Host: "host", SessionID: "rung-2-session", Cwd: "/repo",
 				Generation: 1, Source: "shim",
 			})
 			if got["execution_id"] != registered["execution_id"] || got["generation"] != int64(1) {
 				t.Fatalf("session-only reattach selected the wrong identity: %+v", got)
 			}
-			if count := rowCount(t, s, "SELECT COUNT(*) FROM Execution"); count != 1 {
+			if count := rowCount(t, reopened, "SELECT COUNT(*) FROM Execution"); count != 1 {
 				t.Fatalf("session-only reattach registered an extra Execution: count=%d", count)
 			}
 		})
