@@ -83,7 +83,7 @@ func TestCachedBindingReattachesAfterHubRestart(t *testing.T) {
 	}
 	select {
 	case <-heartbeat:
-	default:
+	case <-time.After(5 * time.Second):
 		t.Fatal("recovery refresh did not send its heartbeat proof")
 	}
 	// A second restart without any tool call still reattaches through Maintain's heartbeat.

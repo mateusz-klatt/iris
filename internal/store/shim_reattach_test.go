@@ -54,6 +54,43 @@ func TestShimGenerationReattachRequiresHookRegisteredSession(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() { _ = s.Close() }()
 	clock.advance(121 * time.Second)
 	expectError(t, s, "sessions", Request{Client: "claude", Host: "host", SessionID: "hook-sess", Cwd: "/repo", Generation: 1, Source: "shim"}, "lost")
+}
+
+func TestShimGenerationReattachChecksClientProcessWhenSupplied(t *testing.T) {
+	s, clock, file := testStore(t)
+
+	reg := call(t, s, "sessions", Request{
+		Client: "cursor", Host: "host", SessionID: "pid-sess", Cwd: "/repo", Worktree: "/repo",
+		ClientPID: 5000, ClientPIDStartMS: 12345, SingleSession: true, Source: "hook",
+	})
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err := Open(file, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+
+	// Wrong PID, wrong start time, or partial process identity is refused.
+	for _, bad := range []Request{
+		{Client: "cursor", Host: "host", SessionID: "pid-sess", Cwd: "/repo", Generation: 1, Source: "shim", ClientPID: 6000, ClientPIDStartMS: 12345},
+		{Client: "cursor", Host: "host", SessionID: "pid-sess", Cwd: "/repo", Generation: 1, Source: "shim", ClientPID: 5000, ClientPIDStartMS: 99999},
+		{Client: "cursor", Host: "host", SessionID: "pid-sess", Cwd: "/repo", Generation: 1, Source: "shim", ClientPID: 5000},
+		{Client: "cursor", Host: "host", SessionID: "pid-sess", Cwd: "/repo", Generation: 1, Source: "shim", ClientPIDStartMS: 12345},
+	} {
+		expectError(t, s, "sessions", bad, "lost")
+	}
+
+	// Exact matching process identity reattaches cleanly.
+	got := call(t, s, "sessions", Request{
+		Client: "cursor", Host: "host", SessionID: "pid-sess", Cwd: "/repo", Generation: 1, Source: "shim",
+		ClientPID: 5000, ClientPIDStartMS: 12345,
+	})
+	if got["execution_id"] != reg["execution_id"] || got["generation"] != int64(1) {
+		t.Fatalf("matching process identity failed to reattach: %+v", got)
+	}
 }

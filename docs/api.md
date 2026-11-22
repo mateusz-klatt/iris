@@ -83,6 +83,10 @@ its record whichever route reattaches it. A hub from before this route answers `
 For recovery after a hub restart, reattach with the same `session_id` and the last returned
 `generation`. A recovering session without that generation returns `lost`; an expired
 generation cannot be reattached. `generation:0` starts or resumes a non-recovering session.
+A shim reattaching from hook generation memory sends `source:"shim"` with `generation > 0`; the
+hub requires `hook_seen_ms > 0` on the recovering Execution and, when `client_pid` or
+`client_pid_start_ms` is present (Rung-3 process-bound sessions), checks that both match the
+Execution's recorded client process.
 Recovery keeps claim ownership and expiry but rotates fence numbers; use the `claims`
 in the reattachment response. Old fence numbers and tokens are invalid.
 

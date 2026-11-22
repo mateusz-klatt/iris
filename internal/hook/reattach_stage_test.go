@@ -5,9 +5,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/mateusz-klatt/iris/internal/gitinfo"
 	"github.com/mateusz-klatt/iris/internal/proc"
 )
 
@@ -80,6 +82,8 @@ func TestAntigravityHookDeadlineRecordsAntigravityStage(t *testing.T) {
 
 	fire := make(chan time.Time, 1)
 	logged := make(chan struct{})
+	execDone := make(chan struct{})
+	var findOnce sync.Once
 	r := Runner{
 		ClientName: "antigravity",
 		EventName:  "PreInvocation",
@@ -92,9 +96,13 @@ func TestAntigravityHookDeadlineRecordsAntigravityStage(t *testing.T) {
 		},
 		PinnedConfigDir: func() (string, error) { return dir, nil },
 		Ancestor:        func() (proc.Ancestor, error) { return proc.Ancestor{PID: 4242, StartMS: 99, Name: "agy"}, nil },
-		after:           func(time.Duration) <-chan time.Time { return fire },
-		logAfter:        func(time.Duration) <-chan time.Time { return make(chan time.Time) },
-		logged:          func() { close(logged) },
+		Find: func(string) (gitinfo.Repo, error) {
+			findOnce.Do(func() { close(execDone) })
+			return gitinfo.Repo{}, errors.New("stop after antigravity")
+		},
+		after:    func(time.Duration) <-chan time.Time { return fire },
+		logAfter: func(time.Duration) <-chan time.Time { return make(chan time.Time) },
+		logged:   func() { close(logged) },
 	}
 	done := make(chan Output, 1)
 	go func() { done <- r.Run() }()
@@ -111,6 +119,11 @@ func TestAntigravityHookDeadlineRecordsAntigravityStage(t *testing.T) {
 	out := <-done
 	close(release)
 	<-logged
+	select {
+	case <-execDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for execute goroutine to leave antigravity stage")
+	}
 
 	if out.Exit != 0 {
 		t.Fatalf("deadline did not fail open: %+v", out)

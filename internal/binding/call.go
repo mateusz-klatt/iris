@@ -97,7 +97,7 @@ func (r *Resolver) Note(session string) {
 func (r *Resolver) ResolveCall(ctx context.Context, handle, session, thread string) (Bound, bool, error) {
 	m := r.decided.Load()
 	if m == nil {
-		if b, overridden, err := r.overrideOrDecide(ctx, handle, session, thread); overridden {
+		if b, overridden, err := r.overrideOrDecide(ctx, session, thread); overridden {
 			return b, true, err
 		}
 		m = r.decided.Load()
@@ -121,22 +121,38 @@ func (r *Resolver) ResolveCall(ctx context.Context, handle, session, thread stri
 
 // overrideOrDecide is the step of a call that found the process undecided. Under decideMu it reads
 // the decision again, so a call that another one decided for meanwhile goes on without touching
-// mu. If the process is still undecided, the call takes mu: a live override binds the call as
-// today, in the same hold that checks it, so a loss the heartbeat confirms meanwhile cannot slip
-// between; otherwise the call decides the mode.
-func (r *Resolver) overrideOrDecide(ctx context.Context, handle, session, thread string) (Bound, bool, error) {
+// mu. If the process is still undecided, the call takes mu: while IRIS_EXECUTION is live, it binds
+// or refreshes only that Execution; once a refresh heartbeat confirms it gone, the call decides
+// the mode and lets ResolveCall dispatch under it (never falling through to rungs 2-4 as primary).
+func (r *Resolver) overrideOrDecide(ctx context.Context, session, thread string) (Bound, bool, error) {
 	r.decideMu.Lock()
 	defer r.decideMu.Unlock()
 	if r.decided.Load() == nil {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		if ex := r.Getenv("IRIS_EXECUTION"); ex != "" && !r.gone[ex] {
-			b, err := r.resolveHeld(ctx, handle)
-			return b, true, err
+			b, err := r.bindOverrideHeld(ctx, ex)
+			if !r.gone[ex] {
+				return b, true, err
+			}
 		}
 		r.decided.Store(decide(session, thread))
 	}
 	return Bound{}, false, nil
+}
+
+// bindOverrideHeld binds or refreshes only the live IRIS_EXECUTION override (rung 1), with mu held.
+func (r *Resolver) bindOverrideHeld(ctx context.Context, ex string) (Bound, error) {
+	if r.bound.ExecutionID == ex {
+		return r.refresh(ctx)
+	}
+	var b Bound
+	if err := r.Hub.Do(ctx, "POST", "/v1/bind", map[string]any{"execution": ex, "client": r.Client, "host": r.Host, "cwd": r.CWD}, &b); err != nil {
+		return Bound{}, err
+	}
+	b.Rung = 1
+	r.keepHeld(b)
+	return b, nil
 }
 
 // sessionBinding is a root's process's binding of its session. Once bound, it is refreshed by its

@@ -2,10 +2,12 @@ package binding
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -18,6 +20,7 @@ import (
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 	"github.com/mateusz-klatt/iris/internal/proc"
 	"github.com/mateusz-klatt/iris/internal/store"
+	_ "modernc.org/sqlite"
 )
 
 type testRealClock struct {
@@ -108,6 +111,52 @@ func (h *restartableBindingHub) open() {
 func (h *restartableBindingHub) restart() {
 	h.t.Helper()
 	if err := h.store.Close(); err != nil {
+		h.t.Fatal(err)
+	}
+	h.open()
+}
+
+func (h *restartableBindingHub) backup() string {
+	h.t.Helper()
+	if err := h.store.Close(); err != nil {
+		h.t.Fatal(err)
+	}
+	raw, err := os.ReadFile(h.file)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	dst := filepath.Join(h.t.TempDir(), "backup.db")
+	if err := os.WriteFile(dst, raw, 0o600); err != nil {
+		h.t.Fatal(err)
+	}
+	h.open()
+	return dst
+}
+
+func (h *restartableBindingHub) restore(backupPath string) {
+	h.t.Helper()
+	if err := h.store.Close(); err != nil {
+		h.t.Fatal(err)
+	}
+	for _, suffix := range []string{"-wal", "-shm"} {
+		_ = os.Remove(h.file + suffix)
+	}
+	raw, err := os.ReadFile(backupPath)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	if err := os.WriteFile(h.file, raw, 0o600); err != nil {
+		h.t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", h.file)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	if err := store.MarkRestore(context.Background(), db, h.clock.Now()); err != nil {
+		_ = db.Close()
+		h.t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
 		h.t.Fatal(err)
 	}
 	h.open()
@@ -571,4 +620,491 @@ func TestRefreshTransientHeartbeatFailureAndWatchSourceAndEmptyHeartbeat(t *test
 	if _, err := r.Resolve(ctx, ""); !IsCode(err, "lost") || r.bound != before || r.Lost() {
 		t.Fatalf("retry bind failure after ok heartbeat broke state: err=%v bound=%+v lost=%v", err, r.bound, r.Lost())
 	}
+}
+
+func TestForeignRung1AndRung4NeverLeakIntoLast(t *testing.T) {
+	ctx := context.Background()
+
+	for _, tc := range []struct {
+		name   string
+		rung1  bool
+		tick   bool
+		cursor bool
+	}{
+		{"lost rung 1 on handle-less call uses env session not override session", true, false, false},
+		{"lost rung 1 on maintain tick uses env session not override session", true, true, false},
+		{"lost rung 4 on handle-less call uses env session not handle session", false, false, false},
+		{"lost rung 4 on maintain tick uses env session not handle session", false, true, false},
+		{"lost rung 1 on cursor without env never recalls foreign session", true, false, true},
+		{"lost rung 4 on cursor without env never recalls foreign session", false, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newRestartableBindingHub(t)
+			client := "claude"
+			if tc.cursor {
+				client = "cursor"
+			}
+			exB, err := h.store.Call(ctx, "sessions", store.Request{Client: client, Host: "host", SessionID: "S_B", Cwd: "/repo", Worktree: "/repo", Source: "hook"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			exBID := exB["execution_id"].(string)
+			env := map[string]string{}
+			if !tc.cursor {
+				env["CLAUDE_CODE_SESSION_ID"] = "S_A"
+			}
+			if tc.rung1 {
+				env["IRIS_EXECUTION"] = exBID
+			}
+			var recalled []string
+			var recallMu sync.Mutex
+			r := &Resolver{
+				Hub:    &hubclient.Client{Config: config{h.srv.URL}},
+				Client: client, Host: "host", CWD: "/repo",
+				Getenv:   func(k string) string { return env[k] },
+				Ancestor: func() (proc.Ancestor, error) { return proc.Ancestor{}, nil },
+				Recall: func(c, session string) (int, bool, error) {
+					recallMu.Lock()
+					recalled = append(recalled, session)
+					recallMu.Unlock()
+					switch session {
+					case "S_A":
+						return 1, true, nil
+					case "S_B":
+						return 2, true, nil
+					default:
+						return 0, false, nil
+					}
+				},
+			}
+			// Initial bind uses Rung 1 (override) or Rung 4 (explicit handle) for foreign session S_B,
+			// before S_A is registered so Rung 4 is reached without Rung 2 matching first.
+			handle := ""
+			wantRung := 1
+			if !tc.rung1 {
+				handle = exBID
+				wantRung = 4
+			}
+			initial, err := r.Resolve(ctx, handle)
+			if err != nil || initial.ExecutionID != exBID || initial.Rung != wantRung {
+				t.Fatalf("initial bind: %+v %v", initial, err)
+			}
+			if r.last.ExecutionID != "" {
+				t.Fatalf("foreign rung %d polluted r.last: %+v", wantRung, r.last)
+			}
+
+			// Register S_A, end ex_B, register S_B gen 2, and restart hub so both S_A (gen 1) and S_B (gen 2) are recovering.
+			exA, err := h.store.Call(ctx, "sessions", store.Request{Client: client, Host: "host", SessionID: "S_A", Cwd: "/repo", Worktree: "/repo", Source: "hook"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if _, err := h.store.Call(ctx, "end", store.Request{ExecutionID: exBID, Generation: 1}); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := h.store.Call(ctx, "sessions", store.Request{Client: client, Host: "host", SessionID: "S_B", Cwd: "/repo", Worktree: "/repo", Source: "hook"}); err != nil {
+				t.Fatal(err)
+			}
+			h.restart()
+
+			if tc.tick {
+				// Confirm ex_B lost via Heartbeat, then let Maintain's tick look up the process's own session.
+				if err := r.Heartbeat(ctx, "shim"); !IsCode(err, "lost") || !r.Lost() {
+					t.Fatalf("expected heartbeat lost for ex_B: err=%v lost=%v", err, r.Lost())
+				}
+				maintainUntil(t, r, func(int) bool {
+					r.mu.Lock()
+					defer r.mu.Unlock()
+					return r.bound.ExecutionID == exA["execution_id"].(string)
+				})
+				r.mu.Lock()
+				bound := r.bound
+				r.mu.Unlock()
+				if bound.ExecutionID != exA["execution_id"].(string) || bound.SessionID != "S_A" || bound.Rung != 2 {
+					t.Fatalf("maintain bound wrong session: %+v", bound)
+				}
+			} else if tc.cursor {
+				if _, err := r.Resolve(ctx, ""); !IsCode(err, "lost") || !r.Lost() {
+					t.Fatalf("expected lost without env session: err=%v lost=%v", err, r.Lost())
+				}
+				recallMu.Lock()
+				gotRecalled := append([]string(nil), recalled...)
+				recallMu.Unlock()
+				if len(gotRecalled) != 0 {
+					t.Fatalf("cursor without process-owned binding recalled foreign sessions: %v", gotRecalled)
+				}
+			} else {
+				got, err := r.Resolve(ctx, "")
+				if err != nil || got.ExecutionID != exA["execution_id"].(string) || got.SessionID != "S_A" || got.Rung != 2 {
+					t.Fatalf("expected S_A reattach, got %+v %v", got, err)
+				}
+			}
+			for _, req := range h.sessions() {
+				if req.SessionID == "S_B" {
+					t.Fatalf("leaked foreign session S_B into shim reattach: %+v", req)
+				}
+			}
+		})
+	}
+}
+
+func TestOverrideOrDecideDecidesModeAfterRefreshConfirmsLoss(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("sub-agent call after override loss dispatches as lookup-only subagent", func(t *testing.T) {
+		h := newRestartableBindingHub(t)
+		overrideReg, err := h.store.Call(ctx, "sessions", store.Request{Client: "codex", Host: "host", SessionID: "override-s", Cwd: "/repo", Worktree: "/repo", Source: "hook"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		rootReg, err := h.store.Call(ctx, "sessions", store.Request{Client: "codex", Host: "host", SessionID: "root-s", Cwd: "/repo", Worktree: "/repo", Source: "hook"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		overrideID := overrideReg["execution_id"].(string)
+		rootID := rootReg["execution_id"].(string)
+
+		r := &Resolver{
+			Hub:    &hubclient.Client{Config: config{h.srv.URL}},
+			Client: "codex", Host: "host", CWD: "/repo",
+			Getenv: func(k string) string {
+				if k == "IRIS_EXECUTION" {
+					return overrideID
+				}
+				return ""
+			},
+			Ancestor: func() (proc.Ancestor, error) { return proc.Ancestor{}, nil },
+		}
+		// Initial call binds the live IRIS_EXECUTION override without deciding mode.
+		if b, primary, err := r.ResolveCall(ctx, "", "root-s", "child-thread"); err != nil || !primary || b.ExecutionID != overrideID || decidedMode(r) != "undecided" {
+			t.Fatalf("initial override bind: %+v primary=%v err=%v mode=%s", b, primary, err, decidedMode(r))
+		}
+		// End override Execution (no Maintain runs); next call's refresh confirms loss.
+		if _, err := h.store.Call(ctx, "end", store.Request{ExecutionID: overrideID, Generation: 1}); err != nil {
+			t.Fatal(err)
+		}
+		// Sub-agent call must decide subagent mode and dispatch as lookup-only (primary=false).
+		b, primary, err := r.ResolveCall(ctx, "ex_foreign_handle", "root-s", "child-thread")
+		if err != nil || primary || b.ExecutionID != rootID || decidedMode(r) != "subagent" || r.bound.ExecutionID != "" {
+			t.Fatalf("sub-agent call after override loss broke isolation: %+v primary=%v err=%v mode=%s bound=%+v", b, primary, err, decidedMode(r), r.bound)
+		}
+		if _, primary, err := r.ResolveCall(ctx, "", "", ""); err != errNoSession || primary {
+			t.Fatalf("sub-agent process did not reject call without session: err=%v primary=%v", err, primary)
+		}
+		if len(h.sessions()) != 0 {
+			t.Fatalf("sub-agent call registered a session: %+v", h.sessions())
+		}
+	})
+
+	t.Run("root call after override loss decides root mode and binds session", func(t *testing.T) {
+		h := newRestartableBindingHub(t)
+		overrideReg, err := h.store.Call(ctx, "sessions", store.Request{Client: "codex", Host: "host", SessionID: "override-s", Cwd: "/repo", Worktree: "/repo", Source: "hook"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		rootReg, err := h.store.Call(ctx, "sessions", store.Request{Client: "codex", Host: "host", SessionID: "root-s", Cwd: "/repo", Worktree: "/repo", Source: "hook"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		overrideID := overrideReg["execution_id"].(string)
+		rootID := rootReg["execution_id"].(string)
+
+		r := &Resolver{
+			Hub:    &hubclient.Client{Config: config{h.srv.URL}},
+			Client: "codex", Host: "host", CWD: "/repo",
+			Getenv: func(k string) string {
+				if k == "IRIS_EXECUTION" {
+					return overrideID
+				}
+				return ""
+			},
+			Ancestor: func() (proc.Ancestor, error) { return proc.Ancestor{}, nil },
+		}
+		if _, _, err := r.ResolveCall(ctx, "", "root-s", "root-s"); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.store.Call(ctx, "end", store.Request{ExecutionID: overrideID, Generation: 1}); err != nil {
+			t.Fatal(err)
+		}
+		b, primary, err := r.ResolveCall(ctx, "", "root-s", "root-s")
+		if err != nil || !primary || b.ExecutionID != rootID || decidedMode(r) != "root" || r.Lost() {
+			t.Fatalf("root call after override loss failed: %+v primary=%v err=%v mode=%s lost=%v", b, primary, err, decidedMode(r), r.Lost())
+		}
+	})
+
+	t.Run("initial override bind error stays overridden without deciding mode", func(t *testing.T) {
+		h := &callHub{sessions: map[string]string{"root-s": "ex_root"}, lost: map[string]bool{"ex_bad": true}}
+		r, _ := callResolver(t, h, map[string]string{"IRIS_EXECUTION": "ex_bad"})
+		if _, primary, err := r.ResolveCall(ctx, "", "root-s", "child"); !IsCode(err, "lost") || !primary || decidedMode(r) != "undecided" {
+			t.Fatalf("initial override bind failure: primary=%v err=%v mode=%s", primary, err, decidedMode(r))
+		}
+		if got := h.seen(); len(got.lookups) != 0 {
+			t.Fatalf("initial override failure leaked into session lookup: %+v", got)
+		}
+	})
+}
+
+func TestRung3ProcessIdentityAndBeatOnePreservesHookSeen(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("beatOne preserves HookSeen when heartbeat omits hook_seen", func(t *testing.T) {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte(`{"lease_ms":60000}`))
+		}))
+		defer srv.Close()
+		r := &Resolver{
+			Hub:    &hubclient.Client{Config: config{srv.URL}},
+			Client: "cursor", Host: "host",
+			bound: Bound{ExecutionID: "ex_1", Generation: 1, SessionID: "s1", Rung: 3, HookSeen: true},
+		}
+		if err := r.beatOne(ctx, Bound{ExecutionID: "ex_1", Generation: 1, SessionID: "s1", Rung: 3, HookSeen: false}, "shim"); err != nil {
+			t.Fatal(err)
+		}
+		if !r.bound.HookSeen || !r.last.HookSeen {
+			t.Fatalf("beatOne cleared HookSeen: bound=%+v last=%+v", r.bound, r.last)
+		}
+	})
+
+	t.Run("rung 3 memory reattach sends client process identity and refuses foreign process", func(t *testing.T) {
+		h := newRestartableBindingHub(t)
+		ancA := proc.Ancestor{PID: 5000, StartMS: 12345}
+		ancB := proc.Ancestor{PID: 6000, StartMS: 99999}
+		// Hook registers S1 under process A.
+		ex1, err := h.store.Call(ctx, "sessions", store.Request{
+			Client: "cursor", Host: "host", SessionID: "S1", Cwd: "/repo", Worktree: "/repo",
+			ClientPID: int64(ancA.PID), ClientPIDStartMS: ancA.StartMS, SingleSession: true, Source: "hook",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		curAnc := ancA
+		memGen := 1
+		rA := &Resolver{
+			Hub:    &hubclient.Client{Config: config{h.srv.URL}},
+			Client: "cursor", Host: "host", CWD: "/repo",
+			Getenv:   func(string) string { return "" },
+			Ancestor: func() (proc.Ancestor, error) { return curAnc, nil },
+			Recall: func(client, session string) (int, bool, error) {
+				if client == "cursor" && session == "S1" {
+					return memGen, true, nil
+				}
+				return 0, false, nil
+			},
+		}
+		b1, err := rA.Resolve(ctx, "")
+		if err != nil || b1.ExecutionID != ex1["execution_id"] || b1.Rung != 3 || !b1.HookSeen {
+			t.Fatalf("initial rung-3 bind: %+v %v", b1, err)
+		}
+
+		// Expire gen 1, confirm loss in process A, then hook resumes S1 in process B and hub restarts.
+		h.clock.Advance(16 * time.Minute)
+		if _, err := rA.Resolve(ctx, ""); !IsCode(err, "lost") || !rA.Lost() {
+			t.Fatalf("expected loss for process A: err=%v lost=%v", err, rA.Lost())
+		}
+		ex2, err := h.store.Call(ctx, "sessions", store.Request{
+			Client: "cursor", Host: "host", SessionID: "S1", Cwd: "/repo", Worktree: "/repo",
+			ClientPID: int64(ancB.PID), ClientPIDStartMS: ancB.StartMS, SingleSession: true, Source: "hook",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		memGen = 2
+		h.restart()
+
+		// Without a client process identity, rung-3 memory reattach sends no /v1/sessions call.
+		beforeMissing := len(h.sessions())
+		curAnc = proc.Ancestor{}
+		if _, err := rA.Resolve(ctx, ""); !IsCode(err, "lost") || len(h.sessions()) != beforeMissing {
+			t.Fatalf("missing ancestor sent reattach: err=%v reqs=%+v", err, h.sessions())
+		}
+
+		// Process A sends its own PID/StartMS and is refused because S1 now belongs to process B.
+		curAnc = ancA
+		if _, err := rA.Resolve(ctx, ""); !IsCode(err, "lost") || !rA.Lost() {
+			t.Fatalf("process A reattached process B's session: err=%v lost=%v", err, rA.Lost())
+		}
+		reqs := h.sessions()[beforeMissing:]
+		if len(reqs) != 1 || reqs[0].ClientPID != ancA.PID || reqs[0].ClientPIDStartMS != ancA.StartMS {
+			t.Fatalf("rung-3 reattach did not send client process identity: %+v", reqs)
+		}
+
+		// Process B with matching PID/StartMS reattaches cleanly.
+		curAnc = ancB
+		b2, err := rA.Resolve(ctx, "")
+		if err != nil || b2.ExecutionID != ex2["execution_id"] || b2.Generation != 2 || rA.Lost() {
+			t.Fatalf("process B failed to reattach its own session: %+v %v lost=%v", b2, err, rA.Lost())
+		}
+	})
+}
+
+func TestPost120sEndedRestoreAndMaintainBadMemoryRefusals(t *testing.T) {
+	ctx := context.Background()
+
+	t.Run("post-120s refusal for bound MCP", func(t *testing.T) {
+		h := newRestartableBindingHub(t)
+		if _, err := h.store.Call(ctx, "sessions", store.Request{Client: "claude", Host: "host", SessionID: "s1", Cwd: "/repo", Worktree: "/repo", Source: "hook"}); err != nil {
+			t.Fatal(err)
+		}
+		r := &Resolver{
+			Hub:    &hubclient.Client{Config: config{h.srv.URL}},
+			Client: "claude", Host: "host", CWD: "/repo",
+			Getenv: func(k string) string { return map[string]string{"CLAUDE_CODE_SESSION_ID": "s1"}[k] },
+			Recall: func(string, string) (int, bool, error) { return 1, true, nil },
+		}
+		if _, err := r.Resolve(ctx, ""); err != nil {
+			t.Fatal(err)
+		}
+		h.restart()
+		h.clock.Advance(121 * time.Second)
+		if _, err := r.Resolve(ctx, ""); !IsCode(err, "lost") || !r.Lost() {
+			t.Fatalf("bound MCP revived past 120s: err=%v lost=%v", err, r.Lost())
+		}
+		status, err := h.store.Call(ctx, "status", store.Request{})
+		if err != nil || status["counts"].(map[string]int)["Execution"] != 1 {
+			t.Fatalf("post-120s bound MCP created new Execution: %+v %v", status, err)
+		}
+	})
+
+	t.Run("post-120s refusal for unbound legacy MCP with stale memory", func(t *testing.T) {
+		h := newRestartableBindingHub(t)
+		if _, err := h.store.Call(ctx, "sessions", store.Request{Client: "claude", Host: "host", SessionID: "s1", Cwd: "/repo", Worktree: "/repo", Source: "hook"}); err != nil {
+			t.Fatal(err)
+		}
+		h.restart()
+		h.clock.Advance(121 * time.Second)
+		r := &Resolver{
+			Hub:    &hubclient.Client{Config: config{h.srv.URL}},
+			Client: "claude", Host: "host", CWD: "/repo",
+			Getenv: func(k string) string { return map[string]string{"CLAUDE_CODE_SESSION_ID": "s1"}[k] },
+			Recall: func(string, string) (int, bool, error) { return 1, true, nil },
+		}
+		if _, err := r.Resolve(ctx, ""); !IsCode(err, "lost") {
+			t.Fatalf("unbound legacy MCP revived past 120s: %v", err)
+		}
+		reqs := h.sessions()
+		if len(reqs) != 1 || reqs[0].Generation != 1 || reqs[0].Source != "shim" {
+			t.Fatalf("expected single gen-1 shim reattach attempt, got %+v", reqs)
+		}
+	})
+
+	t.Run("post-120s refusal for unbound codex root with stale memory", func(t *testing.T) {
+		h := newRestartableBindingHub(t)
+		if _, err := h.store.Call(ctx, "sessions", store.Request{Client: "codex", Host: "host", SessionID: "c1", Cwd: "/repo", Worktree: "/repo", Source: "hook"}); err != nil {
+			t.Fatal(err)
+		}
+		h.restart()
+		h.clock.Advance(121 * time.Second)
+		r := &Resolver{
+			Hub:    &hubclient.Client{Config: config{h.srv.URL}},
+			Client: "codex", Host: "host", CWD: "/repo",
+			Getenv: func(string) string { return "" },
+			Recall: func(string, string) (int, bool, error) { return 1, true, nil },
+		}
+		if _, _, err := r.ResolveCall(ctx, "", "c1", "c1"); !IsCode(err, "lost") {
+			t.Fatalf("unbound codex root revived past 120s: %v", err)
+		}
+		reqs := h.sessions()
+		if len(reqs) != 1 || reqs[0].Generation != 1 || reqs[0].Source != "shim" {
+			t.Fatalf("expected single gen-1 shim reattach attempt, got %+v", reqs)
+		}
+	})
+
+	t.Run("unbound MCP against ended session with stale memory never revives", func(t *testing.T) {
+		h := newRestartableBindingHub(t)
+		reg, err := h.store.Call(ctx, "sessions", store.Request{Client: "claude", Host: "host", SessionID: "s-ended", Cwd: "/repo", Worktree: "/repo", Source: "hook"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.store.Call(ctx, "end", store.Request{ExecutionID: reg["execution_id"].(string), Generation: 1}); err != nil {
+			t.Fatal(err)
+		}
+		r := &Resolver{
+			Hub:    &hubclient.Client{Config: config{h.srv.URL}},
+			Client: "claude", Host: "host", CWD: "/repo",
+			Getenv: func(k string) string { return map[string]string{"CLAUDE_CODE_SESSION_ID": "s-ended"}[k] },
+			Recall: func(string, string) (int, bool, error) { return 1, true, nil },
+		}
+		if _, err := r.Resolve(ctx, ""); !IsCode(err, "lost") {
+			t.Fatalf("unbound MCP revived ended session: %v", err)
+		}
+		status, err := h.store.Call(ctx, "status", store.Request{})
+		if err != nil || status["counts"].(map[string]int)["Execution"] != 1 {
+			t.Fatalf("ended session spawned replacement: %+v %v", status, err)
+		}
+	})
+
+	t.Run("bound MCP against restored older generation is refused without downgrade", func(t *testing.T) {
+		h := newRestartableBindingHub(t)
+		ex1, err := h.store.Call(ctx, "sessions", store.Request{Client: "claude", Host: "host", SessionID: "s-restore", Cwd: "/repo", Worktree: "/repo", Source: "hook"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		backupPath := h.backup()
+		// Reattach ex1 after backup's reopen so end can transition it cleanly to gen 2.
+		if _, err := h.store.Call(ctx, "heartbeat", store.Request{ExecutionID: ex1["execution_id"].(string), Generation: 1, Source: "shim"}); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.store.Call(ctx, "end", store.Request{ExecutionID: ex1["execution_id"].(string), Generation: 1}); err != nil {
+			t.Fatal(err)
+		}
+		ex2, err := h.store.Call(ctx, "sessions", store.Request{Client: "claude", Host: "host", SessionID: "s-restore", Cwd: "/repo", Worktree: "/repo", Source: "hook"})
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := &Resolver{
+			Hub:    &hubclient.Client{Config: config{h.srv.URL}},
+			Client: "claude", Host: "host", CWD: "/repo",
+			Getenv: func(k string) string { return map[string]string{"CLAUDE_CODE_SESSION_ID": "s-restore"}[k] },
+			Recall: func(string, string) (int, bool, error) { return 2, true, nil },
+		}
+		b, err := r.Resolve(ctx, "")
+		if err != nil || b.ExecutionID != ex2["execution_id"] || b.Generation != 2 {
+			t.Fatalf("initial gen-2 bind: %+v %v", b, err)
+		}
+
+		// Restore gen-1 backup with restore marker: gen-2 MCP must be refused lost and never downgraded.
+		h.restore(backupPath)
+		if _, err := r.Resolve(ctx, ""); !IsCode(err, "lost") || !r.Lost() || r.bound.ExecutionID != "" {
+			t.Fatalf("bound MCP downgraded to restored older generation: err=%v lost=%v bound=%+v", err, r.Lost(), r.bound)
+		}
+	})
+
+	t.Run("maintain tick with malformed or mismatched memory stays unbound without generation 0", func(t *testing.T) {
+		for _, tc := range []struct {
+			name     string
+			gen      int
+			recallEr error
+			wantReqs int
+		}{
+			{"malformed", 0, errors.New("bad"), 0},
+			{"mismatched", 2, nil, 1},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				synctest.Test(t, func(t *testing.T) {
+					var sessions int
+					h := &tickHub{reply: func(req *http.Request, body map[string]any) (int, any) {
+						switch req.URL.Path {
+						case "/v1/bind":
+							return refused("unbound")
+						case "/v1/sessions":
+							sessions++
+							if body["generation"] == float64(0) {
+								t.Errorf("maintain fell back to generation 0: %+v", body)
+							}
+							return refused("lost")
+						default:
+							return leaseGranted()
+						}
+					}}
+					r := tickResolver(h.client(), "claude", sessionS, proc.Ancestor{})
+					r.Recall = func(string, string) (int, bool, error) { return tc.gen, true, tc.recallEr }
+					stop := maintain(t, r, "shim")
+					time.Sleep(21 * time.Second)
+					stop()
+					if sessions != tc.wantReqs || r.bound.ExecutionID != "" {
+						t.Fatalf("maintain with %s memory: sessions=%d (want %d) bound=%+v", tc.name, sessions, tc.wantReqs, r.bound)
+					}
+				})
+			})
+		}
+	})
 }

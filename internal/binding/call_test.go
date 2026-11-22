@@ -325,7 +325,7 @@ func TestACallThatFoundTheModeUndecidedDoesNotWaitBehindTheFirstBind(t *testing.
 	rechecked := make(chan error, 1)
 	go func() {
 		// This call read the decision before it was made, so it takes the undecided step.
-		_, overridden, err := r.overrideOrDecide(context.Background(), "", "other", "other")
+		_, overridden, err := r.overrideOrDecide(context.Background(), "other", "other")
 		if overridden {
 			err = errors.New("an absent override bound the call")
 		}

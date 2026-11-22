@@ -412,8 +412,13 @@ func (t *transaction) register(r Request, outside bool) (map[string]any, error) 
 		if e.Recovery.Valid && r.Generation != e.Generation {
 			return nil, fail("lost", "recovery requires the prior session generation")
 		}
-		if r.Source == "shim" && r.Generation != 0 && e.HookSeenMS == 0 {
-			return nil, fail("lost", "reattach requires a hook-registered session")
+		if r.Source == "shim" && r.Generation != 0 {
+			if e.HookSeenMS == 0 {
+				return nil, fail("lost", "reattach requires a hook-registered session")
+			}
+			if (r.ClientPID != 0 || r.ClientPIDStartMS != 0) && (e.PID != r.ClientPID || e.PIDStart != r.ClientPIDStartMS) {
+				return nil, fail("lost", "session belongs to another client process")
+			}
 		}
 		// A hook reports the checkout of the event it saw, which can be another repository: a
 		// submodule, or another project the agent ran a command in. Its root and aliases describe

@@ -75,9 +75,10 @@ type Resolver struct {
 	HeartbeatSource string
 	mu              sync.Mutex
 	bound           Bound
-	// last preserves the most recently bound Execution (including SessionID, Rung and HookSeen)
-	// after a confirmed loss clears bound, so memory-based reattachment retains positive session
-	// evidence even for clients without a session environment variable.
+	// last preserves the most recently bound process-owned Execution (rungs 2 and 3, including
+	// SessionID, Rung and HookSeen) after a confirmed loss clears bound, so memory-based
+	// reattachment retains positive session evidence even for clients without a session
+	// environment variable, without ever leaking a foreign Rung-1 or Rung-4 handle.
 	last Bound
 	// lost is set when a heartbeat found the bound generation gone, until a fresh bind
 	// succeeds. gone holds every Execution found lost: none is ever bound again, so a
@@ -217,9 +218,15 @@ func (r *Resolver) resolveHeld(ctx context.Context, handle string) (Bound, error
 	return b, err
 }
 
+func (r *Resolver) rememberLastHeld(b Bound) {
+	if b.Rung == 2 || b.Rung == 3 {
+		r.last = b
+	}
+}
+
 func (r *Resolver) keepHeld(b Bound) {
 	r.bound = b
-	r.last = b
+	r.rememberLastHeld(b)
 	r.lost = false
 }
 
@@ -229,7 +236,7 @@ func (r *Resolver) markLostHeld(b Bound) {
 	}
 	r.gone[b.ExecutionID] = true
 	if r.bound.ExecutionID == b.ExecutionID {
-		r.last = b
+		r.rememberLastHeld(b)
 		r.bound, r.lost = Bound{}, true
 	}
 }
@@ -275,8 +282,9 @@ func (r *Resolver) refresh(ctx context.Context) (Bound, error) {
 		}
 		return Bound{}, hbErr
 	}
+	fresh.HookSeen = fresh.HookSeen || r.bound.HookSeen
 	r.bound = fresh
-	r.last = fresh
+	r.rememberLastHeld(fresh)
 	b, err = r.bindExecutionHeld(ctx, r.bound)
 	if err != nil {
 		return Bound{}, err
@@ -324,14 +332,23 @@ func (r *Resolver) reattachByMemoryHeld(ctx context.Context, session string, run
 	if err != nil || gen <= 0 {
 		return Bound{}, true, &hubclient.Error{Code: "lost", Message: "remembered session generation is malformed"}
 	}
-	resp, err := r.Hub.RegisterSession(ctx, hubclient.SessionRequest{
+	req := hubclient.SessionRequest{
 		Client:     r.Client,
 		SessionID:  session,
 		Host:       r.Host,
 		CWD:        r.CWD,
 		Generation: gen,
 		Source:     "shim",
-	})
+	}
+	if rung == 3 {
+		anc := r.ancestor()
+		if anc.PID <= 0 || anc.StartMS <= 0 {
+			return Bound{}, false, nil
+		}
+		req.ClientPID = anc.PID
+		req.ClientPIDStartMS = anc.StartMS
+	}
+	resp, err := r.Hub.RegisterSession(ctx, req)
 	if err != nil {
 		return Bound{}, true, err
 	}
@@ -559,8 +576,10 @@ func (r *Resolver) beatOne(ctx context.Context, b Bound, source string) error {
 		r.mu.Lock()
 		// Resolve may have selected another explicit handle during this request.
 		if r.bound.ExecutionID == b.ExecutionID && r.bound.Generation == b.Generation {
+			// Heartbeat answers carry no hook_seen field, so preserve what bind established.
+			fresh.HookSeen = fresh.HookSeen || r.bound.HookSeen
 			r.bound = fresh
-			r.last = fresh
+			r.rememberLastHeld(fresh)
 		}
 		r.mu.Unlock()
 		return nil
