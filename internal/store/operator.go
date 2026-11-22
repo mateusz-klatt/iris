@@ -213,6 +213,7 @@ func (t *transaction) overview() (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer func(rows *queryRows) { _ = rows.Close() }(rows)
 	ids := []string{}
 	for rows.Next() {
 		var id string
@@ -237,6 +238,7 @@ func (t *transaction) overview() (map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
+		defer func(rows *queryRows) { _ = rows.Close() }(rows)
 		kind, host := "repository", ""
 		for rows.Next() {
 			var a string
@@ -280,6 +282,7 @@ func (t *transaction) overview() (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer func(rows *queryRows) { _ = rows.Close() }(rows)
 	for rows.Next() {
 		var id, name, client, host, repo, worktree, branch, state string
 		var seen, hookSeen, watchSeen int64
@@ -368,6 +371,7 @@ func (t *transaction) threads(r Request) (map[string]any, error) {
 	if err != nil {
 		return nil, matchError(err)
 	}
+	defer func(rows *queryRows) { _ = rows.Close() }(rows)
 	out := []map[string]any{}
 	for rows.Next() {
 		var id string
@@ -405,6 +409,7 @@ func (t *transaction) threads(r Request) (map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
+		defer func(rows *queryRows) { _ = rows.Close() }(rows)
 		for rows.Next() {
 			var id string
 			var unread int64
@@ -432,6 +437,7 @@ func (t *transaction) threads(r Request) (map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
+		defer func(rows *queryRows) { _ = rows.Close() }(rows)
 		for rows.Next() {
 			var name string
 			rows.Scan(&name)
@@ -456,6 +462,7 @@ func (t *transaction) thread(id, repo string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer func(rows *queryRows) { _ = rows.Close() }(rows)
 	messages := []map[string]any{}
 	for rows.Next() {
 		var mid, sender, subject, body, repo, accountID, username, displayName string
@@ -488,6 +495,7 @@ func (t *transaction) thread(id, repo string) (map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
+		defer func(rows *queryRows) { _ = rows.Close() }(rows)
 		for rows.Next() {
 			var name, state string
 			rows.Scan(&name, &state)

@@ -172,6 +172,7 @@ func (s *Store) ListConsoleAccounts(ctx context.Context, p Principal) ([]Console
 		if err != nil {
 			return err
 		}
+		defer func(rows *queryRows) { _ = rows.Close() }(rows)
 		ids := []string{}
 		for rows.Next() {
 			var id string

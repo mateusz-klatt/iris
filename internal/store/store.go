@@ -139,14 +139,23 @@ func absent(err error, code, message string) error {
 }
 
 type Store struct {
-	mu      sync.Mutex
-	db      *sql.DB
-	readDB  *sql.DB
-	lock    *os.File
-	clock   Clock
-	epoch   int64
-	stream  string
-	changed chan struct{}
+	mu     sync.Mutex
+	db     *sql.DB
+	readDB *sql.DB
+	// reads is cancelled when Close begins. readMu guards readsClosed and admission
+	// onto readWG. Close waits out the reads it cancelled before it closes either
+	// pool or releases the database lock: sql.DB.Close does not wait for a Conn
+	// that readTransact has checked out, and those reads do not hold Store.mu.
+	reads       context.Context
+	stopReads   context.CancelFunc
+	readMu      sync.Mutex
+	readWG      sync.WaitGroup
+	readsClosed bool
+	lock        *os.File
+	clock       Clock
+	epoch       int64
+	stream      string
+	changed     chan struct{}
 	// restored says this start consumed a restore marker and so runs on a new stream (ADR 006).
 	restored bool
 	// transactions is process-local diagnostic state, never part of a durable cursor.
@@ -255,7 +264,8 @@ func openDatabase(filename string, clock Clock, driverName string) (*Store, erro
 		unlockDatabase(lock)
 		return nil, err
 	}
-	s := &Store{db: db, lock: lock, clock: clock, changed: make(chan struct{})}
+	reads, stopReads := context.WithCancel(context.Background())
+	s := &Store{db: db, lock: lock, clock: clock, changed: make(chan struct{}), reads: reads, stopReads: stopReads}
 	err = s.transact(context.Background(), func(t *transaction) error {
 		if _, err := t.exec(schema); err != nil {
 			return err
@@ -482,17 +492,50 @@ func openSQLite(driverName, dsn string, maxConns int, pragmas ...string) (*sql.D
 	}
 	return db, nil
 }
+
+// errStoreClosed is what a console read receives once Close has begun. The
+// database lock is still held until every read that started earlier returns.
+var errStoreClosed = errors.New("store closed")
+
 func (s *Store) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Admit no further console read, then cancel the ones already in readTransact.
+	// The flag and the WaitGroup share readMu, so a read cannot pass the gate
+	// after Close has decided to wait and then be missed by that wait.
+	s.readMu.Lock()
+	s.readsClosed = true
+	s.readMu.Unlock()
+	// Historical fixtures build a Store with no read pool, so there is no cancel.
+	if s.stopReads != nil {
+		s.stopReads()
+	}
+	// sql.DB.Close does not wait for a Conn readTransact has checked out, and
+	// those reads do not hold Store.mu. Wait while still holding mu, so no writer
+	// begins, then close the pools and only then drop the database lock.
+	s.readWG.Wait()
 	var readErr error
 	if s.readDB != nil {
 		readErr = s.readDB.Close()
 	}
 	err := s.db.Close()
 	unlockDatabase(s.lock)
+	s.lock = nil
 	return errors.Join(readErr, err)
 }
+
+func (s *Store) beginConsoleRead() error {
+	s.readMu.Lock()
+	defer s.readMu.Unlock()
+	if s.readsClosed {
+		return errStoreClosed
+	}
+	s.readWG.Add(1)
+	return nil
+}
+
+func (s *Store) endConsoleRead() { s.readWG.Done() }
+
 func (s *Store) Changes() <-chan struct{} { s.mu.Lock(); defer s.mu.Unlock(); return s.changed }
 
 // Restored reports whether this start consumed a restore marker, and so runs on a new stream
@@ -566,6 +609,16 @@ func (s *Store) transact(ctx context.Context, f func(*transaction) error) error 
 }
 
 func (s *Store) readTransact(ctx context.Context, f func(*transaction) error) error {
+	if err := s.beginConsoleRead(); err != nil {
+		return err
+	}
+	defer s.endConsoleRead()
+	// The caller's deadline and Close both end the snapshot. Close waits until
+	// this returns, so a read cannot still hold SQLite after the lock is released.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stop := context.AfterFunc(s.reads, cancel)
+	defer stop()
 	c, err := s.readDB.Conn(ctx)
 	if err != nil {
 		return err
