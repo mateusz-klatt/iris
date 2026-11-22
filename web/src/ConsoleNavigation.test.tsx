@@ -126,6 +126,68 @@ it("keeps focus in an edited reply when a live refresh fails and recovers", asyn
   expect(body).toHaveValue("Keep typing through live updates");
 });
 
+it("leaves mail unread when a watch refresh recovers a failed open", async () => {
+  const user = userEvent.setup({ delay: null });
+  mockVisibility("visible");
+  const reads = observeThreadReads();
+  let fails = true;
+  let onFrame: ((frame: WatchFrame) => void) | undefined;
+  const arrived = { ...threadDetail.messages[0]!, id: "ms_reply", body: "Mail arrived after the failed open." };
+  server.use(http.get("*/v1/ui/threads/:id", () => fails
+    ? new HttpResponse(null, { status: 500 })
+    : HttpResponse.json({ ...threadDetail, messages: [...threadDetail.messages, arrived] })));
+  render(<App connect={(frame) => { onFrame = frame; return () => {}; }} />);
+  const row = await screen.findByRole("button", { name: /Open thread: Rollout check/ });
+  await user.click(row);
+  expect(await screen.findByRole("alert")).toHaveTextContent("could not load");
+  expect(reads()).toHaveLength(0);
+
+  fails = false;
+  act(() => onFrame?.({ cursor: 2, kind: "changed" }));
+  expect(await screen.findByText(arrived.body)).toBeVisible();
+  expect(reads()).toHaveLength(0);
+
+  await user.click(row);
+  await waitFor(() => expect(reads()).toHaveLength(1));
+});
+
+it("blocks sending a reviewed reply after a same-row reopen fails", async () => {
+  const user = userEvent.setup({ delay: null });
+  const fetch = vi.spyOn(globalThis, "fetch");
+  let fails = false;
+  server.use(http.get("*/v1/ui/threads/:id", () => fails
+    ? new HttpResponse(null, { status: 500 }) : HttpResponse.json(threadDetail)));
+  render(<App connect={() => () => {}} />);
+  const row = await screen.findByRole("button", { name: /Open thread: Rollout check/ });
+  await user.click(row);
+  const body = await screen.findByRole("textbox", { name: "Message" });
+  await user.type(body, "This draft should survive.");
+  await user.click(screen.getByRole("button", { name: "Review" }));
+  const reply = screen.getByRole("button", { name: "Reply" });
+  expect(reply).toBeEnabled();
+
+  fails = true;
+  await user.click(row);
+  expect(await screen.findByRole("alert")).toHaveTextContent("could not load");
+  fails = false;
+  await user.click(reply);
+  const sends = fetch.mock.calls.filter(([url, init]) => init?.method === "POST" && String(url).endsWith("/messages"));
+  expect(sends).toHaveLength(0);
+  expect(reply).toBeDisabled();
+
+  await user.click(screen.getByRole("button", { name: "Back to the draft" }));
+  const review = screen.getByRole("button", { name: "Review" });
+  expect(review).toBeDisabled();
+  await user.type(body, "{Control>}{Enter}{/Control}");
+  expect(screen.queryByRole("button", { name: "Reply" })).toBeNull();
+
+  await user.click(row);
+  await waitFor(() => expect(review).toBeEnabled());
+  expect(screen.queryByRole("alert")).toBeNull();
+  expect(body).toHaveValue("This draft should survive.");
+  await user.click(review);
+  expect(screen.getByRole("button", { name: "Reply" })).toBeEnabled();
+});
 
 const otherViews = [
   ["fleet", /^Fleet/],
@@ -141,21 +203,18 @@ const consoleViews = [["messages", /^My messages/], ...otherViews] as const;
 it.each(consoleViews)("keeps the %s view selected across a watch refresh", async (view, buttonName) => {
   const user = userEvent.setup();
   let onFrame: ((frame: WatchFrame) => void) | undefined;
-  let overviews = 0;
+  let unread = 1;
   server.use(
-    http.get("*/v1/ui/overview", () => {
-      overviews++;
-      return HttpResponse.json(sessionOverview);
-    }),
+    http.get("*/v1/ui/overview", () => HttpResponse.json({ ...sessionOverview, human_unread: unread })),
     http.get("*/v1/ui/accounts", () => HttpResponse.json({ accounts: [] })),
   );
   render(<App connect={(frame) => { onFrame = frame; return () => {}; }} />);
   await user.click(await screen.findByRole("button", { name: buttonName }));
   expect(screen.getByRole("main")).toHaveAttribute("data-view", view);
 
-  const before = overviews;
+  unread = 7;
   act(() => onFrame?.({ cursor: 2, kind: "changed" }));
-  await waitFor(() => expect(overviews).toBe(before + 1));
+  expect(await screen.findByRole("button", { name: /^My messages\s*7$/ })).toBeVisible();
   expect(screen.getByRole("main")).toHaveAttribute("data-view", view);
 });
 
@@ -286,18 +345,66 @@ it.each(otherViews)("cancels a deferred read when switching from the thread to %
   expect(reads()).toHaveLength(0);
 });
 
+it("cancels a deferred read when an overview error replaces the reader", async () => {
+  const user = userEvent.setup({ delay: null });
+  const changeVisibility = mockVisibility("visible");
+  const reads = observeThreadReads();
+  let overviewFails = false;
+  let onFrame: ((frame: WatchFrame) => void) | undefined;
+  let finishDetail!: () => void;
+  const detailReady = new Promise<void>((resolve) => { finishDetail = resolve; });
+  server.use(
+    http.get("*/v1/ui/overview", () => overviewFails
+      ? new HttpResponse(null, { status: 500 }) : HttpResponse.json(sessionOverview)),
+    http.get("*/v1/ui/threads/:id", async () => {
+      await detailReady;
+      return HttpResponse.json(threadDetail);
+    }),
+  );
+  render(<App connect={(frame) => { onFrame = frame; return () => {}; }} />);
+  await user.click(await screen.findByRole("button", { name: /Open thread: Rollout check/ }));
+  expect(screen.queryByText("All checks passed.")).toBeNull();
+  changeVisibility("hidden");
+  finishDetail();
+  expect(await screen.findByText("All checks passed.")).toBeVisible();
+  expect(reads()).toHaveLength(0);
+
+  overviewFails = true;
+  act(() => onFrame?.({ cursor: 2, kind: "changed" }));
+  const error = await screen.findByRole("alert");
+  expect(error).toHaveTextContent("could not load");
+  expect(screen.queryByRole("article", { name: "Rollout check" })).toBeNull();
+  changeVisibility("visible");
+  expect(reads()).toHaveLength(0);
+
+  overviewFails = false;
+  await user.click(within(error).getByRole("button", { name: "Try again" }));
+  expect(await screen.findByText("All checks passed.")).toBeVisible();
+  expect(reads()).toHaveLength(0);
+});
+
 it.each(["visible", "hidden"] as const)("reads newly arrived mail once when reopening the selected row while %s", async (visibility) => {
   const user = userEvent.setup({ delay: null });
   const changeVisibility = mockVisibility("visible");
   const reads = observeThreadReads();
+  let onFrame: ((frame: WatchFrame) => void) | undefined;
+  let unread = 2;
   const firstMessage = threadDetail.messages[0]!;
   let messages = threadDetail.messages;
-  server.use(http.get("*/v1/ui/threads/:id", () => HttpResponse.json({ ...threadDetail, messages })));
-  render(<App connect={() => () => {}} />);
+  server.use(
+    http.get("*/v1/ui/overview", () => HttpResponse.json({ ...sessionOverview, human_unread: unread })),
+    http.get("*/v1/ui/threads/:id", () => HttpResponse.json({ ...threadDetail, messages })),
+    http.post("*/v1/ui/threads/:id/read", () => {
+      unread--;
+      return HttpResponse.json({ read: 1 });
+    }),
+  );
+  render(<App connect={(frame) => { onFrame = frame; return () => {}; }} />);
   const row = await screen.findByRole("button", { name: /Open thread: Rollout check/ });
   await user.click(row);
   expect(await screen.findByText("All checks passed.")).toBeVisible();
   expect(reads()).toHaveLength(1);
+  expect(await screen.findByRole("button", { name: /^My messages\s*1$/ })).toBeVisible();
 
   messages = [
     { ...firstMessage, recipients: [{ name: "human", state: "acked" }] },
@@ -311,6 +418,12 @@ it.each(["visible", "hidden"] as const)("reads newly arrived mail once when reop
 
   changeVisibility("visible");
   expect(reads()).toHaveLength(2);
+  expect(await screen.findByRole("button", { name: /^My messages\s*0$/ })).toBeVisible();
   changeVisibility("visible");
+  expect(reads()).toHaveLength(2);
+
+  messages = [...messages, { ...firstMessage, id: "ms_latest", body: "Notes from the next rollout." }];
+  act(() => onFrame?.({ cursor: 2, kind: "changed" }));
+  expect(await screen.findByText("Notes from the next rollout.")).toBeVisible();
   expect(reads()).toHaveLength(2);
 });

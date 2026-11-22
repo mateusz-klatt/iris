@@ -48,6 +48,7 @@ import "./app.css";
 import "./console.css";
 
 type ConsoleView = "messages" | "fleet" | "claims" | "diagnostics" | "compose" | "account" | "access";
+type ThreadOpening = { id: string };
 
 // The hub limits a message by its UTF-8 bytes, not by characters: a draft of 16 KiB of
 // characters outside ASCII can be several times that (gap review A11).
@@ -378,11 +379,12 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const [openedPages, setOpenedPages] = useState({ filters: "", pages: 1 });
   const [olderCursor, setOlderCursor] = useState<string | undefined>(undefined);
   const [threadsError, setThreadsError] = useState(false);
-  const [openedThread, setOpenedThread] = useState<{ id: string } | null>(null);
+  const [openedThread, setOpenedThread] = useState<ThreadOpening | null>(null);
   const selectedId = openedThread?.id ?? null;
   const readRequestedFor = useRef<typeof openedThread>(null);
   const pendingRead = useRef<{ id: string; repositoryId: string } | null>(null);
-  const [thread, setThread] = useState<ThreadDetail | null>(null);
+  const [loadedThread, setLoadedThread] = useState<{ opening: ThreadOpening; detail: ThreadDetail } | null>(null);
+  const thread = loadedThread?.detail ?? null;
   const [compose, setCompose] = useState<Draft>(newDraft);
   // A conversation can be read through different repository views. Keep each view's
   // draft and retry identity together while the operator moves between conversations.
@@ -412,6 +414,8 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const recipientAgents = member ? sessions.filter((agent) => writableRepositories.some((repository) => repository.id === agent.repository_id)) : sessions;
   const validRecipients = (draft: Draft) => recipientsOf(draft.to).every((id) => (!member && id === "human") || recipientAgents.some((agent) => agent.id === id));
   const replyVisible = !member || thread?.messages.some((message) => message.id === reply.replyTo) === true;
+  // Keep the draft while a reopen loads, but require fresh detail to review or send it.
+  const replySendable = loadedThread?.opening === openedThread && sendable(reply) && (!member || validRecipients(reply));
   const permissions = overview?.repositories.map((repository) => `${repository.id}:${repository.console_access}`).join(",");
   const previousPermissions = useRef<string | undefined>(undefined);
   useEffect(() => {
@@ -448,6 +452,11 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     document.body.dataset.humanUnread = String(overview.human_unread);
   }, [overview]);
 
+  const cancelThreadRead = useCallback(() => {
+    readRequestedFor.current = null;
+    pendingRead.current = null;
+  }, []);
+
   // Reloads the overview on the watch's current connection. What the operator does reloads it
   // this way: reconnecting instead would make every action open a new socket and refresh again.
   const reload = useCallback(async () => {
@@ -465,9 +474,10 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       if (current !== overviewRequest.current || isAbort(error)) {
         return;
       }
+      cancelThreadRead();
       setPhase("error");
     }
-  }, [member]);
+  }, [cancelThreadRead, member]);
 
   const flushRead = useCallback(() => {
     const pending = pendingRead.current;
@@ -486,8 +496,11 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
 
   useEffect(() => {
     document.addEventListener("visibilitychange", flushRead);
-    return () => document.removeEventListener("visibilitychange", flushRead);
-  }, [flushRead]);
+    return () => {
+      document.removeEventListener("visibilitychange", flushRead);
+      cancelThreadRead();
+    };
+  }, [cancelThreadRead, flushRead]);
 
   // revision changes only to retry after an error, which reconnects too.
   useEffect(() => {
@@ -597,7 +610,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
         if (ignore) {
           return;
         }
-        setThread(detail);
+        setLoadedThread({ opening: openedThread, detail });
         setThreadError(false);
         // Only an explicit open arms a read. A watch refresh updates the conversation but
         // leaves both old and newly arrived mail unread; a hidden open waits for visibility.
@@ -621,10 +634,15 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
         }
       })
       .catch((error: unknown) => {
-        if (ignore || isAbort(error)) {
+        if (ignore) {
           return;
         }
-        setThreadError(true);
+        if (readRequestedFor.current === openedThread) {
+          readRequestedFor.current = null;
+        }
+        if (!isAbort(error)) {
+          setThreadError(true);
+        }
       });
     return () => {
       ignore = true;
@@ -750,16 +768,12 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const activeAgents = sessions.filter((item) => item.state === "active");
   const visibleAgents = sessions.filter((item) => (showInactive || item.state === "active") &&
     `${item.name} ${item.host} ${item.client} ${item.branch} ${repositoryName(overview!, item.repository_id, t)}`.toLowerCase().includes(agentSearch.toLowerCase().trim()));
-  const cancelThreadRead = () => {
-    readRequestedFor.current = null;
-    pendingRead.current = null;
-  };
   const clearThread = () => {
     replyReview.stop();
     composeReview.stop();
     cancelThreadRead();
     setOpenedThread(null);
-    setThread(null);
+    setLoadedThread(null);
     setThreadError(false);
   };
   const chooseView = (next: ConsoleView) => {
@@ -785,7 +799,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     // Review is an explicit step in this visit to the draft. Restoring its text must
     // not reopen the send control and pull focus away from the conversation heading.
     replyReview.stop();
-    setThread(null);
+    setLoadedThread(null);
     setThreadError(false);
   };
   const openMailbox = (scope: "mine" | "all") => {
@@ -945,7 +959,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
                     className="search-form"
                     onSubmit={(event) => {
                       event.preventDefault();
-                      if (sendable(reply) && (!member || validRecipients(reply))) {
+                      if (replySendable) {
                         replyReview.start();
                       }
                     }}
@@ -967,7 +981,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
                       recipients={recipientsOf(reply.to)}
                       subject={reply.subject}
                       body={reply.body}
-                      sendable={sendable(reply) && (!member || validRecipients(reply))}
+                      sendable={replySendable}
                       sending={sending}
                       sendLabel={t("operator.reply")}
                       onSend={() =>
