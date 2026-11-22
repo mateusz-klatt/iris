@@ -3,6 +3,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 import i18n, {
   canonicalLocale,
   englishTranslation,
+  formatWhen,
   loadLocale,
   localeMetadata,
   supportedLocales,
@@ -144,5 +145,20 @@ describe("Iris locale catalog contract", () => {
       expect(i18n.t("appName")).toBe("Iris");
       expect(i18n.t("nav.inbox").trim().length).toBeGreaterThan(0);
     }
+  });
+
+  it("formats timestamps in the requested locale using cached formatters and preserves empty or invalid values", () => {
+    const iso = "2026-11-22T12:23:00Z";
+    const expectedEn = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(new Date(iso));
+    const expectedPl = new Intl.DateTimeFormat("pl", { dateStyle: "medium", timeStyle: "short" }).format(new Date(iso));
+
+    expect(formatWhen(iso, "en")).toBe(expectedEn);
+    expect(formatWhen(iso, "pl")).toBe(expectedPl);
+    expect(formatWhen(iso, "pl")).toContain("lis");
+    expect(formatWhen(iso, "pl")).not.toBe(expectedEn);
+    // Repeated formatting in the same locale reuses the cached formatter.
+    expect(formatWhen("2026-11-06T10:05:00Z", "pl")).toContain("lis");
+    expect(formatWhen("", "pl")).toBe("");
+    expect(formatWhen("soon", "pl")).toBe("soon");
   });
 });

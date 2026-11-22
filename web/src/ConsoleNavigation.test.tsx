@@ -2,11 +2,12 @@ import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
 import { StrictMode } from "react";
-import { afterEach, beforeEach, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
-import type { WatchFrame } from "./api";
-import i18n from "./i18n";
-import { emptyOverview, server, sessionOverview, threadDetail, threadsPage } from "./test/server";
+import type { AccountSession } from "./accountApi";
+import type { DeliveryProblems, WatchFrame } from "./api";
+import i18n, { formatWhen } from "./i18n";
+import { doctorReport, emptyOverview, operatorSession, server, sessionOverview, threadDetail, threadsPage } from "./test/server";
 
 beforeEach(async () => { await i18n.changeLanguage("en"); });
 afterEach(() => { vi.restoreAllMocks(); });
@@ -493,4 +494,287 @@ it.each(["visible", "hidden"] as const)("reads newly arrived mail once when reop
   act(() => onFrame?.({ cursor: 2, kind: "changed" }));
   expect(await screen.findByText("Notes from the next rollout.")).toBeVisible();
   expect(reads()).toHaveLength(2);
+});
+
+describe("console timestamp locale", () => {
+  it("formats every console timestamp in Polish and updates them when switching locale", async () => {
+    const user = userEvent.setup();
+    const session = structuredClone(operatorSession);
+    session.account.ui_locale = "pl";
+    const createdAt = "2026-11-22T12:23:00Z";
+    const plThread = { ...threadsPage.threads[0]!, last_at: createdAt };
+    const plDetail = { ...threadDetail, messages: [{ ...threadDetail.messages[0]!, created_at: createdAt }] };
+    const plAgent = { ...sessionOverview.agents[0]!, last_seen: createdAt };
+    const plDoctor = { ...doctorReport, checked_at: createdAt };
+    const plProblems: DeliveryProblems = {
+      window_s: 7 * 86400,
+      wait_s: 15 * 60,
+      more: false,
+      messages: [{
+        id: "ms_del",
+        thread_id: "ms_root",
+        subject: "Deliver check",
+        created_at: createdAt,
+        recipients: [{ name: "claude-host", state: "pending", reason: "waiting", execution: "active" }],
+      }],
+    };
+    server.use(
+      http.get("*/v1/ui/session", () => HttpResponse.json(session)),
+      http.patch("*/v1/ui/profile", async ({ request }) => {
+        const input = (await request.json()) as { ui_locale: string; display_name: string; correspondence_locale: string };
+        session.account = { ...session.account, ...input, edit_revision: session.account.edit_revision + 1 };
+        return HttpResponse.json({ account: session.account });
+      }),
+      http.get("*/v1/ui/overview", () => HttpResponse.json({ ...sessionOverview, agents: [plAgent] })),
+      http.get("*/v1/ui/doctor", () => HttpResponse.json({ hosts: [plDoctor] })),
+      http.get("*/v1/ui/threads", () => HttpResponse.json({ threads: [plThread] })),
+      http.get("*/v1/ui/threads/:id", () => HttpResponse.json(plDetail)),
+      http.get("*/v1/ui/deliveries", () => HttpResponse.json(plProblems)),
+    );
+
+    const expectedPl = formatWhen(createdAt, "pl");
+    const expectedEn = formatWhen(createdAt, "en");
+    expect(expectedPl).toContain("lis");
+    expect(expectedEn).toContain("Nov");
+
+    render(<App connect={() => () => {}} />);
+    await waitFor(() => expect(document.documentElement.lang).toBe("pl"));
+    const row = await screen.findByRole("button", { name: /Rollout check/ });
+    expect(within(row).getByText(expectedPl)).toBeVisible();
+    expect(screen.queryByText(expectedEn)).toBeNull();
+
+    // Delivery problem timestamp is in Polish.
+    const deliverySection = screen.getByRole("region", { name: "Problemy z dostarczaniem" });
+    await user.click(deliverySection.querySelector("summary")!);
+    expect(within(deliverySection).getByText(expectedPl)).toBeVisible();
+
+    // Opened thread message timestamp is in Polish.
+    await user.click(row);
+    const reader = await screen.findByRole("article", { name: "Rollout check" });
+    expect(within(reader).getByText(expectedPl)).toBeVisible();
+
+    // Fleet session activity & host doctor timestamps are in Polish.
+    await user.click(screen.getByRole("button", { name: /^Flota/ }));
+    const agentsTable = screen.getByRole("table", { name: "Agenci" });
+    expect(within(agentsTable).getAllByText(new RegExp(expectedPl.replace(/[.*+?^${}()|[\]\\]/g, "\\$&"))).length).toBeGreaterThanOrEqual(2);
+
+    // Diagnostics host report timestamp is in Polish.
+    await user.click(screen.getByRole("button", { name: "Diagnostyka" }));
+    expect(within(screen.getByRole("region", { name: "local" })).getByText(new RegExp(expectedPl.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))).toBeVisible();
+
+    // Switch language to English via LocalePicker and verify timestamps switch too.
+    await user.click(screen.getByRole("button", { name: /Polski/ }));
+    await user.click(screen.getByRole("option", { name: /English/ }));
+    await waitFor(() => expect(document.documentElement.lang).toBe("en"));
+    expect(within(screen.getByRole("region", { name: "local" })).getByText(new RegExp(expectedEn.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")))).toBeVisible();
+    await user.click(screen.getByRole("button", { name: /^My messages/ }));
+    const rowEn = await screen.findByRole("button", { name: /Rollout check/ });
+    expect(within(rowEn).getByText(expectedEn)).toBeVisible();
+  }, 30000);
+});
+
+describe("console view URL routing", () => {
+  const allRoutes = [
+    { hash: "#/messages", button: /^My messages/, heading: "My messages", view: "messages", navName: /^My messages/ },
+    { hash: "#/activity", button: "All activity", heading: "All activity", view: "messages", navName: "All activity" },
+    { hash: "#/fleet", button: /^Fleet/, heading: "Fleet", view: "fleet", navName: /^Fleet/ },
+    { hash: "#/claims", button: /^Claims/, heading: "File reservations", view: "claims", navName: /^Claims/ },
+    { hash: "#/diagnostics", button: "Diagnostics", heading: "Diagnostics", view: "diagnostics", navName: "Diagnostics" },
+    { hash: "#/compose", button: "+ New message", heading: "New message", view: "compose", navName: null },
+    { hash: "#/account", button: "Account", heading: "Account", view: "account", navName: "Account" },
+    { hash: "#/access", button: "Access", heading: "Access", view: "access", navName: "Access" },
+  ] as const;
+
+  it.each(allRoutes)("updates the URL for $hash and restores it across reload", async ({ hash, button, heading, view, navName }) => {
+    const user = userEvent.setup();
+    const threadAgents: string[] = [];
+    server.use(
+      http.get("*/v1/ui/accounts", () => HttpResponse.json({ accounts: [{ ...operatorSession.account, grants: [] }] })),
+      http.get("*/v1/ui/threads", ({ request }) => {
+        threadAgents.push(new URL(request.url).searchParams.get("agent") ?? "");
+        return HttpResponse.json(threadsPage);
+      }),
+    );
+
+    const first = render(<App connect={() => () => {}} />);
+    await user.click(await screen.findByRole("button", { name: button }));
+    expect(window.location.hash).toBe(hash);
+    expect(screen.getByRole("main")).toHaveAttribute("data-view", view);
+    expect(await screen.findByRole("heading", { level: 1, name: heading })).toBeVisible();
+    first.unmount();
+
+    // Simulate a browser reload preserving window.location.hash.
+    threadAgents.length = 0;
+    render(<App connect={() => () => {}} />);
+    expect(await screen.findByRole("heading", { level: 1, name: heading })).toBeVisible();
+    expect(screen.getByRole("main")).toHaveAttribute("data-view", view);
+    expect(window.location.hash).toBe(hash);
+    if (navName !== null) {
+      expect(within(screen.getByRole("navigation")).getByRole("button", { name: navName })).toHaveAttribute("aria-current", "page");
+    }
+    if (hash === "#/activity") {
+      await waitFor(() => expect(threadAgents.at(-1)).toBe(""));
+    }
+  });
+
+  it("lets a URL view win over the initial diagnostics latch while keeping the latch when URL has none", async () => {
+    server.use(http.get("*/v1/ui/overview", () => HttpResponse.json(emptyOverview)));
+
+    window.location.hash = "#/messages";
+    const withUrl = render(<App connect={() => () => {}} />);
+    expect(await screen.findByRole("heading", { name: "My messages" })).toBeVisible();
+    expect(screen.getByRole("main")).toHaveAttribute("data-view", "messages");
+    expect(window.location.hash).toBe("#/messages");
+    withUrl.unmount();
+
+    window.history.replaceState(null, "", "/");
+    render(<App connect={() => () => {}} />);
+    expect(await screen.findByText("Waiting for the first session.")).toBeVisible();
+    expect(screen.getByRole("main")).toHaveAttribute("data-view", "diagnostics");
+    expect(window.location.hash).toBe("#/diagnostics");
+  });
+
+  it.each(["#/unknown", "#content", "#/threads/ms_root", "#/messages/ms_root"])("falls back safely from invalid hash %s without opening any thread", async (badHash) => {
+    const threadGets = vi.fn();
+    const threadReads = vi.fn();
+    server.use(
+      http.get("*/v1/ui/threads/:id", () => { threadGets(); return HttpResponse.json(threadDetail); }),
+      http.post("*/v1/ui/threads/:id/read", () => { threadReads(); return HttpResponse.json({ read: 1 }); }),
+    );
+    window.location.hash = badHash;
+    render(<App connect={() => () => {}} />);
+    expect(await screen.findByRole("heading", { name: "My messages" })).toBeVisible();
+    expect(screen.getByRole("main")).toHaveAttribute("data-view", "messages");
+    expect(window.location.hash).toBe("#/messages");
+    expect(screen.getByText("Choose a conversation")).toBeVisible();
+    expect(threadGets).not.toHaveBeenCalled();
+    expect(threadReads).not.toHaveBeenCalled();
+  });
+
+  it.each(["#/diagnostics", "#/access", "#/activity", "#/compose"])("falls back safely when a member loads unauthorized hash %s", async (restrictedHash) => {
+    const memberSession: AccountSession = {
+      ...operatorSession,
+      account: { ...operatorSession.account, id: "ca_member", username: "member", role: "member" },
+    };
+    const forbiddenDoctor = vi.fn();
+    const forbiddenAccounts = vi.fn();
+    server.use(
+      http.get("*/v1/ui/session", () => HttpResponse.json(memberSession)),
+      http.get("*/v1/ui/overview", () => HttpResponse.json({
+        ...sessionOverview,
+        repositories: sessionOverview.repositories.map((repo) => ({ ...repo, console_access: "rw" as const })),
+      })),
+      http.get("*/v1/ui/doctor", () => { forbiddenDoctor(); return HttpResponse.json({ hosts: [] }); }),
+      http.get("*/v1/ui/accounts", () => { forbiddenAccounts(); return HttpResponse.json({ accounts: [] }); }),
+    );
+    window.location.hash = restrictedHash;
+    render(<App connect={() => () => {}} />);
+    expect(await screen.findByRole("heading", { name: "Messages" })).toBeVisible();
+    expect(screen.getByRole("main")).toHaveAttribute("data-view", "messages");
+    expect(window.location.hash).toBe("#/messages");
+    expect(screen.queryByRole("combobox", { name: "Agent" })).toBeNull();
+    expect(forbiddenDoctor).not.toHaveBeenCalled();
+    expect(forbiddenAccounts).not.toHaveBeenCalled();
+  });
+
+  it("never puts an open thread in the URL and never opens or reads a thread on reload", async () => {
+    const user = userEvent.setup();
+    let detailCalls = 0;
+    let readCalls = 0;
+    server.use(
+      http.get("*/v1/ui/threads/:id", () => {
+        detailCalls++;
+        return HttpResponse.json(threadDetail);
+      }),
+      http.post("*/v1/ui/threads/:id/read", () => {
+        readCalls++;
+        return HttpResponse.json({ read: 1 });
+      }),
+    );
+
+    const first = render(<App connect={() => () => {}} />);
+    await user.click(await screen.findByRole("button", { name: "All activity" }));
+    expect(window.location.hash).toBe("#/activity");
+    await user.click(await screen.findByRole("button", { name: /Open thread: Rollout check/ }));
+    expect(await screen.findByRole("heading", { name: "Rollout check" })).toBeVisible();
+    expect(window.location.hash).toBe("#/activity");
+    expect(detailCalls).toBe(1);
+    expect(readCalls).toBe(1);
+    first.unmount();
+
+    detailCalls = 0;
+    readCalls = 0;
+    render(<App connect={() => () => {}} />);
+    expect(await screen.findByRole("heading", { name: "All activity" })).toBeVisible();
+    expect(screen.getByText("Choose a conversation")).toBeVisible();
+    expect(screen.queryByRole("article", { name: "Rollout check" })).toBeNull();
+    expect(detailCalls).toBe(0);
+    expect(readCalls).toBe(0);
+  });
+
+  it("supports browser back and forward, runtime hashchange fallbacks, and skip-to-content without losing the view", async () => {
+    const user = userEvent.setup();
+    render(<App connect={() => () => {}} />);
+    await screen.findByRole("heading", { name: "My messages" });
+    expect(window.location.hash).toBe("#/messages");
+
+    await user.click(screen.getByRole("button", { name: "All activity" }));
+    expect(window.location.hash).toBe("#/activity");
+    await user.click(screen.getByRole("button", { name: /^Fleet/ }));
+    expect(window.location.hash).toBe("#/fleet");
+    await user.click(screen.getByRole("link", { name: "Skip to content" }));
+    expect(screen.getByRole("main")).toHaveFocus();
+    expect(window.location.hash).toBe("#/fleet");
+    await user.click(screen.getByRole("button", { name: /^Claims/ }));
+    expect(window.location.hash).toBe("#/claims");
+
+    window.history.back();
+    await waitFor(() => expect(screen.getByRole("main")).toHaveAttribute("data-view", "fleet"));
+    window.history.back();
+    await waitFor(() => expect(within(screen.getByRole("navigation")).getByRole("button", { name: "All activity" })).toHaveAttribute("aria-current", "page"));
+    window.history.back();
+    await waitFor(() => expect(within(screen.getByRole("navigation")).getByRole("button", { name: /^My messages/ })).toHaveAttribute("aria-current", "page"));
+    window.history.forward();
+    await waitFor(() => expect(within(screen.getByRole("navigation")).getByRole("button", { name: "All activity" })).toHaveAttribute("aria-current", "page"));
+
+    // An invalid hashchange while mounted falls back cleanly, and clearing hash restores the latched view.
+    act(() => {
+      window.location.hash = "#/not-a-view";
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    });
+    expect(window.location.hash).toBe("#/messages");
+    expect(screen.getByRole("main")).toHaveAttribute("data-view", "messages");
+
+    await user.click(screen.getByRole("button", { name: /^Fleet/ }));
+    act(() => {
+      window.history.replaceState(null, "", "/");
+      window.dispatchEvent(new HashChangeEvent("hashchange"));
+    });
+    expect(window.location.hash).toBe("#/messages");
+    expect(screen.getByRole("main")).toHaveAttribute("data-view", "messages");
+
+    await user.click(screen.getByRole("button", { name: /^Fleet/ }));
+    expect(window.location.hash).toBe("#/fleet");
+    await user.click(screen.getByRole("link", { name: "Iris" }));
+    expect(window.location.hash).toBe("#/messages");
+    expect(screen.getByRole("main")).toHaveAttribute("data-view", "messages");
+  });
+
+  it("never triggers a thread read when navigating back to messages after leaving a deferred hidden open", async () => {
+    const user = userEvent.setup({ delay: null });
+    const changeVisibility = mockVisibility("hidden");
+    const reads = observeThreadReads();
+    render(<App connect={() => () => {}} />);
+    await user.click(await screen.findByRole("button", { name: /Open thread: Rollout check/ }));
+    expect(await screen.findByText("All checks passed.")).toBeVisible();
+    expect(window.location.hash).toBe("#/messages");
+
+    await user.click(screen.getByRole("button", { name: /^Fleet/ }));
+    expect(window.location.hash).toBe("#/fleet");
+    changeVisibility("visible");
+    window.history.back();
+    await waitFor(() => expect(screen.getByRole("main")).toHaveAttribute("data-view", "messages"));
+    expect(await screen.findByText("All checks passed.")).toBeVisible();
+    expect(reads()).toHaveLength(0);
+  });
 });

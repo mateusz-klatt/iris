@@ -694,6 +694,27 @@ export async function loadLocale(locale: SupportedLocale): Promise<void> {
   await i18n.changeLanguage(locale);
 }
 
+const whenFormatters = new Map<string, Intl.DateTimeFormat>();
+
+export function formatWhen(value: string, locale: string): string {
+  if (value.length === 0) {
+    return "";
+  }
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return value;
+  }
+  let formatter = whenFormatters.get(locale);
+  if (formatter === undefined) {
+    formatter = new Intl.DateTimeFormat(locale, {
+      dateStyle: "medium",
+      timeStyle: "short",
+    });
+    whenFormatters.set(locale, formatter);
+  }
+  return formatter.format(date);
+}
+
 void i18n.use(initReactI18next).init({
   resources,
   lng: "en",

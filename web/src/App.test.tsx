@@ -1305,6 +1305,7 @@ describe("Iris operator console", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("The result is unknown. Retrying within ten minutes uses the same delivery.");
     expect(failedView.getByRole("textbox", { name: "Message" })).toHaveValue("Are you there?");
     failed.unmount();
+    window.history.replaceState(null, "", "/");
 
     server.use(http.post("*/v1/ui/messages", () => new HttpResponse(null, { status: 401 })));
     render(<App connect={() => () => {}} />);
@@ -1323,6 +1324,7 @@ describe("Iris operator console", () => {
     expect(screen.getByText("docs/api.md")).toBeVisible();
     expect(screen.getByRole("button", { name: "Revoke" })).toBeEnabled();
     failed.unmount();
+    window.history.replaceState(null, "", "/");
 
     server.use(http.post("*/v1/ui/claims/:fence/revoke", () => new HttpResponse(null, { status: 401 })));
     render(<App connect={() => () => {}} />);

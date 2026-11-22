@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 
 import { getDeliveryProblems, type DeliveryProblems as Problems } from "./api";
+import { formatWhen } from "./i18n";
 
 interface Props {
   /** The repository being viewed, or "" for the whole hub. */
@@ -81,7 +82,6 @@ export function DeliveryProblems({ repositoryId, revision, onOpenThread }: Props
   }
   const days = Math.round(problems.window_s / 86400);
   const minutes = Math.round(problems.wait_s / 60);
-  const when = new Intl.DateTimeFormat(i18n.language, { dateStyle: "medium", timeStyle: "short" });
   return (
     <section id="delivery-problems" className="panel" aria-labelledby="delivery-problems-title">
       <details className="delivery-disclosure">
@@ -97,7 +97,7 @@ export function DeliveryProblems({ repositoryId, revision, onOpenThread }: Props
               <strong>{message.subject}</strong>
               {message.sender_account_id ? <span>{t("accountUi.sharedAuthor", { person: message.sender_display_name || message.sender_username, sender: "human" })}</span> : null}
               <small>
-                <time dateTime={message.created_at}>{when.format(new Date(message.created_at))}</time>
+                <time dateTime={message.created_at}>{formatWhen(message.created_at, i18n.language)}</time>
               </small>
               <span className="sr-only">{t("operator.openThread", { subject: message.subject })}</span>
             </button>

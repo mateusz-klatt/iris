@@ -1,11 +1,12 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
-import { describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it } from "vitest";
 
 import { App } from "./App";
 import { DeliveryProblems as DeliveryProblemsPanel } from "./DeliveryProblems";
 import type { DeliveryProblems } from "./api";
+import { formatWhen, loadLocale } from "./i18n";
 import { server } from "./test/server";
 
 const problems: DeliveryProblems = {
@@ -102,6 +103,27 @@ describe("delivery problems", () => {
     server.use(http.get("*/v1/ui/deliveries", () => new HttpResponse(null, { status: 401 })));
     render(<App connect={() => () => {}} />);
     expect(await screen.findByLabelText("Username")).toBeVisible();
+  });
+});
+
+describe("delivery problem timestamp locale", () => {
+  afterEach(async () => {
+    await loadLocale("en");
+  });
+
+  it("formats delivery timestamps in Polish and updates when the locale changes", async () => {
+    server.use(http.get("*/v1/ui/deliveries", () => HttpResponse.json(problems)));
+    await loadLocale("pl");
+    render(<DeliveryProblemsPanel repositoryId="" revision={0} onOpenThread={() => {}} />);
+
+    const time = await screen.findByText(formatWhen(problems.messages[0]!.created_at, "pl"));
+    expect(time).toHaveTextContent("lis");
+
+    await act(async () => {
+      await loadLocale("en");
+    });
+    expect(time).toHaveTextContent(formatWhen(problems.messages[0]!.created_at, "en"));
+    expect(time).toHaveTextContent("Nov");
   });
 });
 
