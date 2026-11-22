@@ -1182,9 +1182,15 @@ func TestConsoleReadStallMeasurement(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(cfg.OutPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
+	runDir, err := os.MkdirTemp(cfg.WorkDir, "run-*")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(runDir) })
+	cfg.WorkDir = runDir
 
-	env := measureEnvironment(t, cfg.WorkDir, cfg)
-	baseDB := filepath.Join(cfg.WorkDir, "synthetic-base.db")
+	env := measureEnvironment(t, runDir, cfg)
+	baseDB := filepath.Join(runDir, "synthetic-base.db")
 	seed := generateSyntheticConsoleDB(t, baseDB, cfg)
 
 	ops := []string{"ui_threads", "ui_overview", "ui_deliveries", "ui_doctor_get", "inbox", "heartbeat", "expire"}

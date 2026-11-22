@@ -6,6 +6,7 @@ import (
 	"database/sql/driver"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -301,6 +302,9 @@ type leaseConsequenceResult struct {
 
 func runLeaseConsequenceScenario(t *testing.T, dbPath string) leaseConsequenceResult {
 	t.Helper()
+	for _, suffix := range []string{"", "-wal", "-shm", ".lock"} {
+		_ = os.Remove(dbPath + suffix)
+	}
 	clock := newSyncFakeClock(time.Unix(1800000000, 0))
 	tracer := &sqlTracer{}
 	s, err := openDatabase(dbPath, clock, registerTraceDriver(tracer))
