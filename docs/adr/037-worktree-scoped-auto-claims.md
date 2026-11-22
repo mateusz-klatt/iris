@@ -1,7 +1,8 @@
 # ADR 037: Worktree-scoped automatic claims are a repository opt-in
 
-Status: proposed. Amends D10 and D12 only for a repository that opts in. ADR 003 path identity is
-unchanged, and ADR 033 still decides which repository owns a claim.
+Status: proposed. Amends D10, D12 and ADR 033's submodule guard consequence only for a repository
+that opts in. ADR 003 path identity is unchanged, and ADR 033 still decides which repository owns
+a claim.
 
 ## Context
 
@@ -35,6 +36,11 @@ of an opted-in repository, not only to a coordinator's delegates.
    does the other repository policies. A change applies to subsequent checks and does not rewrite
    existing claims.
 
+   Every behavioural change below is gated on `worktree`. Under `repository`, worktree keys are
+   stored for visibility but ignored for conflict, reuse, renewal, release, guard, waiter and replay
+   decisions. In particular, same-Execution automatic reuse and shell release stay path-wide across
+   checkouts exactly as today. Adding a key must never split a claim or a release under the default.
+
    Only the owner token can write the Repository row's policy. No committed file, hook payload,
    coordination envelope or message body is an input to that decision. Hook payloads describe
    checkouts and paths, but never select the policy. Host tokens, agents and console accounts
@@ -55,9 +61,10 @@ of an opted-in repository, not only to a coordinator's delegates.
      or incoming claim;
    - a held or incoming claim with a null worktree key is repository-wide;
    - two automatic claims in one worktree conflict as today;
-   - same-Execution reuse of an automatic claim is restricted to the same worktree key, while an
-     own explicit claim is still reused repository-wide; the existing parent/child exemption is
-     otherwise unchanged.
+   - only under `worktree`, same-Execution reuse of an automatic claim is restricted to the same
+     worktree key; under `repository`, current path-based reuse is unchanged. An own explicit claim
+     is still reused repository-wide, and the existing parent/child exemption is otherwise
+     unchanged.
 
    An advisory is not passed through the repository's `deny`, `ask` or `warn` action. The touch
    takes or renews the caller's own automatic claim in its own worktree and returns `allow`, with
@@ -69,7 +76,7 @@ of an opted-in repository, not only to a coordinator's delegates.
    The hook's advisory names the path, the other holder, that claim's worktree and its branch:
 
    ```
-   Iris: src/api.go is also auto-claimed by codex-host-delegate in worktree /src/app-api on branch delegate/api. This repository allows overlapping automatic claims across worktrees; this edit is allowed, and the overlap will otherwise surface at rebase or merge.
+   Iris: src/api.go is also auto-claimed by codex-host-delegate in worktree /src/app-api on branch delegate/api. This repository allows overlapping automatic claims across worktrees; this edit is allowed, and the overlap can meet immediately in a shared filesystem tree or surface at rebase or merge.
    ```
 
    The structured response carries the same holder, worktree and branch for each advisory. These
@@ -81,8 +88,17 @@ of an opted-in repository, not only to a coordinator's delegates.
    claim to explicit first performs the same repository-wide check as a new explicit claim. An
    otherwise conflicting automatic claim in another worktree therefore refuses the upgrade; the
    exemption is never applied because the incoming claim is explicit. A failed upgrade leaves the
-   original automatic claim unchanged, and a successful one clears its worktree key while retaining its display
-   location. An explicit claim is never downgraded, as today.
+   original automatic claim unchanged. An explicit claim is never downgraded, as today.
+
+   Under `worktree`, an exact-path upgrade uses the request checkout's key to select the caller's
+   automatic row; the current own-row selection in `explicitIn` has no key
+   (`internal/store/claims.go:424-467`). On success, that row becomes explicit, clears its key and
+   keeps its display location. Every sibling automatic row of the same Execution, repository and
+   path key, such as rows for one path in `/wt1` and `/wt2`, is revoked in the same transaction.
+   Thus no keyed sibling remains for `releaseLeft` or `fileConflicts` to reuse or release later.
+   Normal release and waiter evaluation run for the revoked siblings, but the new repository-wide
+   explicit row still blocks overlapping waiters. Under `repository`, current own-row reuse is
+   unchanged and no sibling-folding behaviour is introduced.
 
    Prefix claims keep ADR 003's case folding and component boundaries. The empty prefix still
    requires the explicit repository-wide flag, is explicit, has a null worktree key and covers the
@@ -101,18 +117,27 @@ of an opted-in repository, not only to a coordinator's delegates.
    the exempted pair does. The strictest policy among repositories with a real conflict still
    decides the response, including Codex's `ask`-to-`deny` rule.
 
-5. **Shell reconciliation uses the same pair, and releases only its own worktree's claims.** A
-   shell reconcile can report and take an automatic claim across another worktree's automatic
-   claim when the pair meets decision 2. Its advisory remains an after-the-fact observation and
-   cannot undo the shell edit. A real conflict keeps its current warning behaviour.
+5. **Shell reconciliation shares the classification, with key-scoped release only under
+   `worktree`.** `checkPaths` serves both the guard and shell reconciliation; reconcile calls it at
+   `internal/store/reconcile.go:108`. The shared result distinguishes real conflicts from
+   advisories. Under `worktree`, a shell reconcile can report and take an automatic claim across
+   another worktree's automatic claim when the pair meets decision 2. `reconcileChanges` renders
+   those advisories into the shell response's `message`, with the existing "Shell edit detected"
+   and "cannot undo" wording. The current hook warns when that message is non-empty
+   (`internal/hook/reconcile.go:155-156`). The guard instead keeps `message` empty for the same
+   advisory-only result, as decision 6 requires. A real shell conflict keeps its current warning,
+   and under `repository` the shared check has no advisories and behaves exactly as today.
 
-   When a path leaves git status, the reconcile releases only that session's own automatic exact
-   claim on that path in the status's repository **and with that status checkout's worktree key**.
-   It releases no explicit claim, no other session's claim, and no claim the same session holds on
-   the same repository-relative path in another worktree. The existing refusal to attribute a
-   status from another checkout to the Execution's baseline remains unchanged. Today `releaseLeft`
-   matches only Execution, origin, kind and path (`internal/store/reconcile.go:193-203`), so this
-   key comparison is required, not incidental.
+   Release is deliberately policy-dependent. Under `repository`, when a path leaves git status,
+   the reconcile releases every matching automatic exact claim of that session on that repository
+   and path, regardless of worktree key, exactly as today. One Execution claiming the same path
+   from two checkouts therefore keeps the current path-wide release; no key splits it. Under
+   `worktree`, the same event releases only the claim with the status checkout's worktree key. It
+   then releases no explicit claim, no other session's claim, and no claim the same session holds
+   on that path in another worktree. The existing refusal to attribute a status from another
+   checkout to the Execution's baseline remains unchanged. Today `releaseLeft` matches only
+   Execution, origin, kind and path (`internal/store/reconcile.go:193-203`), so the key filter is
+   added only on the `worktree` path.
 
 6. **The commit guard has a separate warning contract.** `iris guard` checks staged paths but makes
    no incoming claim. Its checkout supplies only the committing worktree key used for comparison.
@@ -122,23 +147,33 @@ of an opted-in repository, not only to a coordinator's delegates.
    `iris guard check` (`internal/guard/guard.go:202-206`, `cmd/iris/guard.go:38-46`). Those two
    interfaces must not be conflated with the edit-hook test.
 
-   Under `worktree`, the guard classifies each staged path against the owning repository's claims:
+   Under `repository`, the guard keeps its current holder-Execution host/worktree comparison and
+   refuses every staged path claimed from another host/worktree exactly as today. Keys and
+   advisories do not alter that path. Under `worktree`, it classifies each staged path against the
+   owning repository's claims:
    - if every overlapping held claim is `auto`, has a non-null key, and has a key different from
      the committing checkout's non-null key, the path has advisories but no conflict; there is no
      incoming origin to test because the guard makes no claim;
    - outside the existing same-worktree exemption, an explicit claim, a held claim with a null key,
      or a committing checkout with no key is never exempt and still refuses;
-   - the existing same-worktree exemption remains. It compares canonical keys when available and
-     retains the current host/path fallback for legacy rows, but a fallback comparison never makes
-     a null-key claim advisory.
+   - the same-worktree exemption is applied first. It compares the claim checkout's canonical key
+     when it has one. A null-key explicit claim with a known display path can instead compare that
+     canonical path with the committing checkout; a legacy row with no per-claim location retains
+     the current holder-Execution host/path fallback. No fallback makes a null-key claim advisory.
+
+   This settles ADR 033's own-session submodule guard case. Under `repository`, the existing
+   refusal remains. Under `worktree`, a superproject session's claim placed in a submodule has that
+   submodule's checkout identity, so committing in the same submodule checkout is same-worktree and
+   the old refusal is lifted. A claim from a different worktree is still classified by origin and
+   key. The guard still cannot identify who started Git.
 
    `CheckResponse` gains an additive `advisories` field. When a staged path's only overlaps are
    exempt, the hub leaves `message` empty and returns the advisories with holder, worktree and
    branch. The guard package returns that field separately to the CLI rather than folding it into
    the refusal message. A new guard prints the advisories to standard error and exits successfully.
-   An older guard ignores the unknown field, sees an empty message and also allows the commit. If any staged path has a
-   real conflict, `message` is non-empty and both old and new guards refuse as today; accompanying
-   advisories do not weaken that refusal. Guard failures still warn and allow.
+   An older guard ignores the unknown field, sees an empty message and also allows the commit. If
+   any staged path has a real conflict, `message` is non-empty and both old and new guards refuse
+   as today; accompanying advisories do not weaken that refusal. Guard failures still warn and allow.
 
 7. **A canonical worktree key is stable and separate from its display path.** The hook finds the
    git top level from the event's working directory by the existing `.git` walk. For an edit grouped
@@ -157,9 +192,9 @@ of an opted-in repository, not only to a coordinator's delegates.
 
    Repository aliasing cannot be allowed to split that key. Today `canonicalWorktree` replaces a
    WorktreeAlias when `remote_url` or `root_commit` changes
-   (`internal/store/sessions.go:846-864`). WorktreeIdentity does not participate in that replacement:
-   the same `(host_id, WorktreeID)` keeps its key when repository metadata or the preferred display
-   path changes. Repository resolution continues to use the existing alias rules. Reuse of a
+   (`internal/store/sessions.go:846-864`). WorktreeIdentity does not participate in that
+   replacement: the same `(host_id, WorktreeID)` keeps its key when repository metadata or the
+   preferred display path changes. Repository resolution continues to use the existing alias rules. Reuse of a
    filesystem ID by another directory can therefore retain the old key, which may cause a false
    same-worktree conflict but cannot create a cross-worktree exemption between keys that differ.
 
@@ -172,9 +207,10 @@ of an opted-in repository, not only to a coordinator's delegates.
 
    Display paths are absolute and lexically cleaned, with trailing separators removed without
    reducing the filesystem root. For comparison and legacy fallback, Windows drive-letter and UNC
-   paths (`C:\repo` and `\\server\share\repo`) both use forward slashes and case folding; drive
-   letters are upper-case, the UNC server and share remain part of the root, and Win32 trailing
-   dots and spaces are removed from each component. The stored display path retains its canonical
+   paths (`C:\repo` and `\\server\share\repo`) both use forward slashes and ADR 003's Unicode
+   canonical caseless rule, `NFD(cases.Fold(NFD(path)))`, not ASCII-only folding. Drive letters are
+   upper-case, the UNC server and share remain part of the root, and Win32 trailing dots and spaces
+   are removed from each component. The stored display path retains its canonical
    spelling rather than the folded comparison spelling. POSIX paths retain case. On macOS,
    WorktreeID, rather than unconditional case folding, makes path spellings on a case-insensitive
    volume share an identity; case-sensitive volumes exist there too.
@@ -182,7 +218,7 @@ of an opted-in repository, not only to a coordinator's delegates.
    ADR 034 is unchanged: a session outside git takes no claim and receives no worktree key. An
    outside-git context has no `claim.auto_scope` setting in effect.
 
-8. **Every claim operation includes the key where the checkout matters.** The migration adds
+8. **Only the `worktree` policy key-scopes claim operations.** The migration adds
    `Repository.auto_claim_scope TEXT NOT NULL DEFAULT 'repository'` with a check for the two values;
    nullable `Execution.worktree_key`; nullable `Claim.worktree_key`, `worktree_path` and
    `Claim.branch`; and the WorktreeIdentity mapping. Existing Claim rows are not backfilled with
@@ -194,33 +230,43 @@ of an opted-in repository, not only to a coordinator's delegates.
    Turning the policy back to `repository` makes every live claim repository-wide without a data
    rewrite.
 
-   Group de-duplication, conflict reuse, grant, renewal and replay use repository, path identity and
-   worktree key together. In particular, `fileConflicts` currently reuses a same-Execution claim by
-   path without a key (`internal/store/file_claims.go:206-216`), and grouped de-duplication also
-   folds equal paths across groups (`internal/store/file_claims.go:90-99`). Both must distinguish
-   keys so that an Execution touching `/wt1/a.go`, `/wt2/a.go` and a submodule path neither reuses
-   nor renews another checkout's claim. Replay's path-based fallback and shell `autoClaim` own-claim
-   renewal carry the same key. Release by fence and release-all keep their current ownership and
-   generation checks.
+   Under `repository`, group de-duplication, conflict reuse, grant, renewal and replay keep their
+   current repository and path identity without a worktree-key condition. In particular,
+   `fileConflicts` currently reuses a same-Execution claim by path without a key
+   (`internal/store/file_claims.go:206-216`), and grouped de-duplication folds equal paths across
+   groups (`internal/store/file_claims.go:90-99`); the default deliberately retains both behaviours.
 
-9. **Waiters and their replay carry the key too.** Waiter gains nullable `worktree_key`. An
-   automatic wait stores the incoming claim's key; an explicit wait stores null because the claim
-   it wants is repository-wide. Advisories create no waiter. `took` clears only the wait with the
-   same repository, path and key. The existing one-wait-per-Execution/path/kind constraint remains
-   for old-hub compatibility, so a later wait on another repository or key replaces the earlier
-   one, as the current cross-repository rule already does.
+   Under `worktree`, those operations use repository, path identity and worktree key together. An
+   Execution touching `/wt1/a.go`, `/wt2/a.go` and a submodule path neither reuses nor renews
+   another checkout's automatic claim. Replay's path-based fallback and shell `autoClaim` own-claim
+   renewal carry the key only on the `worktree` path. Release by fence and release-all keep their
+   current ownership and generation checks under both policies.
 
-   `blocked` (`internal/store/waiters.go:88-102`) applies decision 2 with the waiter's key and the
-   owning repository's policy, in addition to the existing relation checks. A null waiter or claim
-   key never qualifies for the exemption. A release wakes a waiter only when no real conflict
-   remains for that same key.
+9. **Waiters and their replay carry the key without changing the default.** Waiter gains nullable
+   `worktree_key`. Under `repository`, waits, `took`, blocking, wakes and replay keep their current
+   path-wide behaviour and ignore the key. Under `worktree`, an automatic wait stores the incoming
+   claim's key, an explicit wait stores null, and `took` clears only the wait with the same
+   repository, path and key. Advisories create no waiter. The existing
+   one-wait-per-Execution/path/kind constraint remains for old-hub compatibility, so a later wait
+   on another repository or key replaces the earlier one, as the current cross-repository rule
+   already does.
+
+   `blocked` (`internal/store/waiters.go:88-102`) is the single wake predicate. Under `repository`
+   it is the current unrelated-overlap test. Under `worktree`, it additionally applies decision 2
+   with the waiter's key and the owning repository's policy. A release wakes a waiter if and only
+   if `blocked` returns false over every live claim in that repository, not merely when no real
+   conflict remains for one key. Any overlapping explicit or null-key claim makes `blocked` true,
+   as does any other overlap outside the sole exemption, so none can be skipped by a keyed waiter's
+   wake.
 
    A `claim_available` Event also stores the waiter's key in a new nullable `Event.worktree_key`.
    This is necessary because waking deletes the Waiter while replay later reads the Event.
    `freedRewind` (`internal/store/api.go:294-333`) selects that key with the event's path and keeps
-   its current conservative prefix comparison and age bound. It treats only decision 2's exempted
-   pair as non-blocking; an old event with a null key retains repository-wide replay behaviour.
-   No claim event or wake is an authority input.
+   its current conservative prefix comparison, own-claim treatment and age bound. Under
+   `repository`, its current overlap test is unchanged. Under `worktree`, only decision 2's
+   exempted pair is non-blocking; every overlapping explicit or null-key claim still prevents the
+   rewind. An old event with a null key retains repository-wide replay behaviour. No claim event or
+   wake is an authority input.
 
 10. **Mixed versions fail toward repository-wide behaviour.** Registration and ADR 033 groups
     already carry worktree roots and WorktreeID, so no client-supplied scope key is added. Response
@@ -266,6 +312,9 @@ of an opted-in repository, not only to a coordinator's delegates.
   Explicit-claim checks and all other guard refusals remain cooperative, not a security boundary.
 - A null key conservatively retains repository-wide blocking. The policy cannot narrow claims for a
   client or filesystem that cannot supply canonical worktree identity.
+- An explicit upgrade can be refused across worktrees. The incoming explicit claim never uses the
+  automatic/automatic exemption, and sibling automatic rows are folded only after that check
+  succeeds.
 - Symlinked files inside worktrees are not resolved to their targets. The same underlying file can
   be edited through another path, and neither ADR 003 path identity nor this worktree key makes
   those claims meet. Worktree-root aliases are canonicalised; file symlinks are not.
@@ -328,9 +377,10 @@ the merge-time trade-off.
 - Same-worktree automatic conflicts and every explicit-claim conflict keep their current meaning.
   The default `repository` policy keeps all current behaviour. Real conflicts remain all-or-nothing
   across grouped edits and retain Codex's `ask`-to-`deny` conversion.
-- Several automatic claims can coexist on one path in one repository. Claim reuse, renewal,
-  release, waits, replay, doctor, the console and hook output all carry worktree identity rather
-  than implying that one holder or one Execution has only one checkout.
+- Under `worktree`, several automatic claims can coexist on one path in one repository. Claim
+  reuse, renewal, release, waits, replay, doctor, the console and hook output carry worktree
+  identity rather than implying that one Execution has only one checkout. Under `repository`, the
+  same stored keys have no behavioural effect.
 - Null-key claims can continue to block after opt-in until they expire or are released. This is
   intentional compatibility behaviour, not evidence that the policy failed.
 - The hub owns the policy and classification. No repository content or agent message can change it,
@@ -348,21 +398,29 @@ the merge-time trade-off.
   worktrees, null and non-null keys, same Execution and related Executions, concurrent grants and a
   policy change in either direction. Prove that exactly one grant wins except for decision 2's
   automatic/non-null/different-key pair, that ADR 003 identity is unchanged, and that every real
-  Codex `ask` conflict becomes `deny`.
+  Codex `ask` conflict becomes `deny`. With keys present and one Execution using two checkouts,
+  prove that `repository` retains today's reuse, path-wide release, guard, waiter and replay
+  results.
 - Explicit and grouped edits: upgrading auto to explicit checks another worktree's automatic claim,
-  leaves the old claim unchanged on refusal and clears the key on success. A rename is one grouped
-  grant over both ends; any real conflict grants none. A superproject's policy does not affect a
-  submodule, or vice versa. Reuse, de-duplication, replay and shell renewal distinguish one
-  Execution's `/wt1`, `/wt2` and submodule claims.
-- Shell and waiters: a status releases only the same session's automatic exact claim with the same
-  repository, path and key, leaving explicit, other-session and other-worktree claims intact.
-  Advisories create no wait; `took`, `blocked`, release wake and `freedRewind` use the key; old
+  leaves the old claim unchanged on refusal, and under `worktree` selects by checkout key, clears
+  that key and atomically revokes same-path sibling auto rows on success. Prove that a sibling
+  cannot later be reused or released and that the explicit row keeps waiters blocked. A rename is
+  one grouped grant over both ends; any real conflict grants none. A superproject's policy does not
+  affect a submodule, or vice versa. Only under `worktree` do reuse, de-duplication, replay and
+  shell renewal distinguish one Execution's `/wt1`, `/wt2` and submodule claims.
+- Shell and waiters: under `repository`, a status has today's path-wide release and replay; under
+  `worktree`, it releases only the same session's automatic exact claim with the same repository,
+  path and key, leaving explicit, other-session and other-worktree claims intact. Shared
+  `checkPaths` advisories become the shell hook's non-empty-Message warning. Advisories create no
+  wait; `took`, `blocked`, release wake and `freedRewind` use the key only under `worktree`; a wake
+  occurs exactly when `blocked` is false, and an explicit or null-key overlap keeps it true; old
   null-key Waiter and Event rows retain repository-wide behaviour.
 - Guard: with only exempt automatic overlaps, `message` is empty and `advisories` is populated; a
-  new guard warns and allows and an old guard allows. An explicit claim, a null held key, a missing
-  committing key or any other real conflict makes `message` non-empty and refuses. Test the current
-  same-worktree exemption and its legacy host/path fallback, staged renames and mixed advisory plus
-  real-conflict responses.
+  new guard warns and allows and an old guard allows silently. An explicit claim, a null held key,
+  a missing committing key or any other real conflict makes `message` non-empty and refuses. Test
+  both policies' same-worktree behaviour, the legacy host/path fallback, staged renames, mixed
+  advisory plus real-conflict responses, and ADR 033's submodule refusal remaining under
+  `repository` but lifting for the same submodule checkout under `worktree`.
 - Identity: linked worktrees are distinct; branch and display-path changes do not change a key;
   remote or root alias replacement does not rekey WorktreeIdentity; symlink and bind root aliases
   share one; Windows drive-letter and UNC separators, root handling, case and Win32 component

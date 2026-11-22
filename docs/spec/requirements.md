@@ -55,6 +55,8 @@ atomically by the server. When a session tries to edit something held by another
 it finds out before the edit wherever the client allows that, and at commit time at the
 latest. A claim held by a dead session must not block others for long. Under ADR 037's worktree
 opt-in, every real conflict outside the exempted automatic pair still turns Codex `ask` into `deny`.
+An older guard ignores the new advisory field and allows silently when `message` is empty, so an
+exempt automatic overlap can have no commit-time notice.
 
 ### R6. Immediate attention
 
