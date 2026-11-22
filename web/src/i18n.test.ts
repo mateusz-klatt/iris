@@ -147,18 +147,48 @@ describe("Iris locale catalog contract", () => {
     }
   });
 
-  it("formats timestamps in the requested locale using cached formatters and preserves empty or invalid values", () => {
+  it("formats timestamps in the requested locale, reuses cached formatters, and falls back safely for bad or unknown locales", () => {
     const iso = "2026-11-22T12:23:00Z";
-    const expectedEn = new Intl.DateTimeFormat("en", { dateStyle: "medium", timeStyle: "short" }).format(new Date(iso));
-    const expectedPl = new Intl.DateTimeFormat("pl", { dateStyle: "medium", timeStyle: "short" }).format(new Date(iso));
+    const secondIso = "2026-11-06T10:05:00Z";
+    const options: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "short" };
+    const OriginalDateTimeFormat = Intl.DateTimeFormat;
+    const expectedEn = new OriginalDateTimeFormat("en", options).format(new Date(iso));
+    const expectedPl = new OriginalDateTimeFormat("pl", options).format(new Date(iso));
+    const expectedFr1 = new OriginalDateTimeFormat("fr", options).format(new Date(iso));
+    const expectedFr2 = new OriginalDateTimeFormat("fr", options).format(new Date(secondIso));
 
     expect(formatWhen(iso, "en")).toBe(expectedEn);
     expect(formatWhen(iso, "pl")).toBe(expectedPl);
     expect(formatWhen(iso, "pl")).toContain("lis");
     expect(formatWhen(iso, "pl")).not.toBe(expectedEn);
-    // Repeated formatting in the same locale reuses the cached formatter.
-    expect(formatWhen("2026-11-06T10:05:00Z", "pl")).toContain("lis");
     expect(formatWhen("", "pl")).toBe("");
     expect(formatWhen("soon", "pl")).toBe("soon");
+
+    const spy = vi.spyOn(Intl, "DateTimeFormat").mockImplementation(
+      function (...args: ConstructorParameters<typeof Intl.DateTimeFormat>) {
+        return new OriginalDateTimeFormat(...args);
+      } as unknown as typeof Intl.DateTimeFormat,
+    );
+    try {
+      expect(formatWhen(iso, "fr")).toBe(expectedFr1);
+      expect(formatWhen(secondIso, "fr")).toBe(expectedFr2);
+      expect(formatWhen(iso, " FR ")).toBe(expectedFr1);
+      expect(spy).toHaveBeenCalledTimes(1);
+      expect(spy).toHaveBeenCalledWith("fr", options);
+
+      // Malformed and valid-but-unknown locale tags fall back safely to the app's default ("en").
+      expect(formatWhen(iso, "not_a_valid_locale")).toBe(expectedEn);
+      expect(formatWhen(iso, "bad!locale")).toBe(expectedEn);
+      expect(formatWhen(iso, "")).toBe(expectedEn);
+      expect(formatWhen(iso, "zz")).toBe(expectedEn);
+      expect(formatWhen(iso, "tlh")).toBe(expectedEn);
+      expect(spy).not.toHaveBeenCalledWith("not_a_valid_locale", expect.anything());
+      expect(spy).not.toHaveBeenCalledWith("bad!locale", expect.anything());
+      expect(spy).not.toHaveBeenCalledWith("", expect.anything());
+      expect(spy).not.toHaveBeenCalledWith("zz", expect.anything());
+      expect(spy).not.toHaveBeenCalledWith("tlh", expect.anything());
+    } finally {
+      spy.mockRestore();
+    }
   });
 });

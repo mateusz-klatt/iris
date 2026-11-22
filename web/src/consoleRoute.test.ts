@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import { fallbackRoute, resolveConsoleHash, routeToHash } from "./consoleRoute";
 
 const operator = { member: false, isOperator: true, canSend: true };
+const memberPending = { member: true, isOperator: false, canSend: null };
 const memberReadOnly = { member: true, isOperator: false, canSend: false };
 const memberWritable = { member: true, isOperator: false, canSend: true };
 const nonOperatorMember = { member: false, isOperator: false, canSend: true };
@@ -42,6 +43,9 @@ describe("consoleRoute", () => {
   });
 
   it("restricts diagnostics, access, all activity, and unavailable compose safely", () => {
+    expect(resolveConsoleHash("#/compose", memberPending)).toEqual({ kind: "pending", route: { view: "compose", mailScope: "mine" } });
+    expect(resolveConsoleHash("#/fleet", memberPending)).toEqual({ kind: "allowed", route: { view: "fleet", mailScope: "mine" } });
+    expect(resolveConsoleHash("#/diagnostics", memberPending)).toEqual({ kind: "fallback", route: fallbackRoute });
     expect(resolveConsoleHash("#/diagnostics", memberReadOnly)).toEqual({ kind: "fallback", route: fallbackRoute });
     expect(resolveConsoleHash("#/access", memberReadOnly)).toEqual({ kind: "fallback", route: fallbackRoute });
     expect(resolveConsoleHash("#/activity", memberReadOnly)).toEqual({ kind: "fallback", route: fallbackRoute });

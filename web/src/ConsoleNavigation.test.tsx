@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { AccountSession } from "./accountApi";
 import type { DeliveryProblems, WatchFrame } from "./api";
-import i18n, { formatWhen } from "./i18n";
+import i18n from "./i18n";
 import { doctorReport, emptyOverview, operatorSession, server, sessionOverview, threadDetail, threadsPage } from "./test/server";
 
 beforeEach(async () => { await i18n.changeLanguage("en"); });
@@ -532,8 +532,9 @@ describe("console timestamp locale", () => {
       http.get("*/v1/ui/deliveries", () => HttpResponse.json(plProblems)),
     );
 
-    const expectedPl = formatWhen(createdAt, "pl");
-    const expectedEn = formatWhen(createdAt, "en");
+    const options: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "short" };
+    const expectedPl = new Intl.DateTimeFormat("pl", options).format(new Date(createdAt));
+    const expectedEn = new Intl.DateTimeFormat("en", options).format(new Date(createdAt));
     expect(expectedPl).toContain("lis");
     expect(expectedEn).toContain("Nov");
 
@@ -651,7 +652,7 @@ describe("console view URL routing", () => {
     expect(threadReads).not.toHaveBeenCalled();
   });
 
-  it.each(["#/diagnostics", "#/access", "#/activity", "#/compose"])("falls back safely when a member loads unauthorized hash %s", async (restrictedHash) => {
+  it.each(["#/diagnostics", "#/access", "#/activity"])("falls back safely when a member loads unauthorized hash %s", async (restrictedHash) => {
     const memberSession: AccountSession = {
       ...operatorSession,
       account: { ...operatorSession.account, id: "ca_member", username: "member", role: "member" },
@@ -675,6 +676,96 @@ describe("console view URL routing", () => {
     expect(screen.queryByRole("combobox", { name: "Agent" })).toBeNull();
     expect(forbiddenDoctor).not.toHaveBeenCalled();
     expect(forbiddenAccounts).not.toHaveBeenCalled();
+  });
+
+  it("restores Compose on reload for a member with write access without rewriting the hash before permissions load", async () => {
+    const user = userEvent.setup();
+    const memberSession: AccountSession = {
+      ...operatorSession,
+      account: { ...operatorSession.account, id: "ca_member", username: "member", role: "member" },
+    };
+    const rwOverview = {
+      ...sessionOverview,
+      repositories: [
+        { id: "rp_ro", name: "readonly", aliases: [], console_access: "ro" as const },
+        { id: "rp_iris", name: "iris", aliases: [], console_access: "rw" as const },
+      ],
+    };
+    let overviewRequested = false;
+    let resolveOverview!: (response: Response) => void;
+    const overviewPromise = new Promise<Response>((resolve) => {
+      resolveOverview = resolve;
+    });
+    let deferOverview = false;
+    server.use(
+      http.get("*/v1/ui/session", () => HttpResponse.json(memberSession)),
+      http.get("*/v1/ui/overview", () => {
+        if (deferOverview) {
+          overviewRequested = true;
+          return overviewPromise;
+        }
+        return HttpResponse.json(rwOverview);
+      }),
+    );
+
+    const first = render(<App connect={() => () => {}} />);
+    expect(await screen.findByRole("heading", { name: "Messages" })).toBeVisible();
+    await user.selectOptions(screen.getByRole("combobox", { name: "Repository" }), "rp_iris");
+    await user.click(screen.getByRole("button", { name: "+ New message" }));
+    expect(window.location.hash).toBe("#/compose");
+    first.unmount();
+
+    deferOverview = true;
+    render(<App connect={() => () => {}} />);
+    expect(await screen.findByText("Loading messages…")).toBeVisible();
+    await waitFor(() => expect(overviewRequested).toBe(true));
+    expect(window.location.hash).toBe("#/compose");
+
+    await act(async () => {
+      resolveOverview(HttpResponse.json(rwOverview));
+    });
+    expect(await screen.findByRole("heading", { level: 1, name: "New message" })).toBeVisible();
+    expect(screen.getByRole("main")).toHaveAttribute("data-view", "compose");
+    expect(window.location.hash).toBe("#/compose");
+    const compose = within(document.getElementById("compose")!);
+    expect(compose.getByRole("combobox", { name: "Send from repository" })).toHaveValue("rp_iris");
+    expect(compose.getByRole("checkbox", { name: /claude-host/ })).toBeInTheDocument();
+  });
+
+  it.each([
+    ["ro" as const, sessionOverview.repositories.map((repo) => ({ ...repo, console_access: "ro" as const }))],
+    ["none" as const, []],
+  ])("falls back to Messages on reload when a member on #/compose has %s repository access", async (_label, repositories) => {
+    const memberSession: AccountSession = {
+      ...operatorSession,
+      account: { ...operatorSession.account, id: "ca_member", username: "member", role: "member" },
+    };
+    let overviewRequested = false;
+    let resolveOverview!: (response: Response) => void;
+    const overviewPromise = new Promise<Response>((resolve) => {
+      resolveOverview = resolve;
+    });
+    server.use(
+      http.get("*/v1/ui/session", () => HttpResponse.json(memberSession)),
+      http.get("*/v1/ui/overview", () => {
+        overviewRequested = true;
+        return overviewPromise;
+      }),
+    );
+
+    window.location.hash = "#/compose";
+    render(<App connect={() => () => {}} />);
+    expect(await screen.findByText("Loading messages…")).toBeVisible();
+    await waitFor(() => expect(overviewRequested).toBe(true));
+    expect(window.location.hash).toBe("#/compose");
+
+    await act(async () => {
+      resolveOverview(HttpResponse.json({ ...sessionOverview, repositories }));
+    });
+    expect(await screen.findByRole("heading", { name: "Messages" })).toBeVisible();
+    expect(screen.getByRole("main")).toHaveAttribute("data-view", "messages");
+    expect(window.location.hash).toBe("#/messages");
+    expect(document.getElementById("compose")).toBeNull();
   });
 
   it("never puts an open thread in the URL and never opens or reads a thread on reload", async () => {

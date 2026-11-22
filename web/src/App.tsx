@@ -368,7 +368,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const [repositoryId, setRepositoryId] = useState("");
   const [agent, setAgent] = useState("");
   const [initialRoute] = useState(() =>
-    resolveConsoleHash(window.location.hash, { member, isOperator, canSend: !member }),
+    resolveConsoleHash(window.location.hash, { member, isOperator, canSend: member ? null : true }),
   );
   const [view, setView] = useState<ConsoleView | null>(
     initialRoute.kind === "none" ? null : initialRoute.route.view,
@@ -429,10 +429,14 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const [revoking, setRevoking] = useState<number | null>(null);
   const [signingOut, setSigningOut] = useState(false);
   const [localeSaving, setLocaleSaving] = useState(false);
-  const writableRepositories = overview?.repositories.filter((repository) => repository.console_access === "rw") ?? [];
+  const writableRepositories = useMemo(
+    () => overview?.repositories.filter((repository) => repository.console_access === "rw") ?? [],
+    [overview],
+  );
   // A host's context of sessions outside git is no project; its agents and mail stay (ADR 034).
   const projects = overview?.repositories.filter((repository) => repository.kind !== "outside") ?? [];
   const canSend = !member || writableRepositories.some((repository) => repository.id === repositoryId);
+  const canCompose: boolean | null = !member ? true : overview === null ? null : writableRepositories.length > 0;
   const outsideScopes = Object.fromEntries((overview?.repositories ?? []).filter((repository) => repository.kind === "outside").map((repository) => [repository.id, recordName(repository, t)]));
   const recipientAgents = member ? sessions.filter((agent) => writableRepositories.some((repository) => repository.id === agent.repository_id)) : sessions;
   const validRecipients = (draft: Draft) => recipientsOf(draft.to).every((id) => (!member && id === "human") || recipientAgents.some((agent) => agent.id === id));
@@ -483,7 +487,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const transientState = {
     activeView,
     mailScope,
-    canSend,
+    canCompose,
     leave: () => {
       replyReview.stop();
       composeReview.stop();
@@ -497,26 +501,34 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     if (view === null) {
       return;
     }
-    if (activeView === "compose" && !canSend) {
-      transientStateRef.current.leave();
-      setView("messages");
-      setMailScope("mine");
-      window.history.replaceState(null, "", routeToHash("messages", "mine"));
-      return;
+    if (activeView === "compose") {
+      if (canCompose === null) {
+        return;
+      }
+      if (!canCompose) {
+        transientStateRef.current.leave();
+        setView("messages");
+        setMailScope("mine");
+        window.history.replaceState(null, "", routeToHash("messages", "mine"));
+        return;
+      }
+      if (member && !writableRepositories.some((repository) => repository.id === repositoryId)) {
+        setRepositoryId(writableRepositories[0]!.id);
+      }
     }
-    const current = resolveConsoleHash(window.location.hash, { member, isOperator, canSend });
+    const current = resolveConsoleHash(window.location.hash, { member, isOperator, canSend: canCompose });
     if (current.kind !== "allowed") {
       window.history.replaceState(null, "", routeToHash(view, mailScope));
     }
-  }, [activeView, canSend, isOperator, mailScope, member, view]);
+  }, [activeView, canCompose, isOperator, mailScope, member, repositoryId, view, writableRepositories]);
 
   useEffect(() => {
     const onLocationChange = () => {
-      const { activeView: currentView, mailScope: currentScope, canSend: currentCanSend, leave } = transientStateRef.current;
+      const { activeView: currentView, mailScope: currentScope, canCompose: currentCanCompose, leave } = transientStateRef.current;
       const resolved = resolveConsoleHash(window.location.hash, {
         member,
         isOperator,
-        canSend: currentCanSend,
+        canSend: currentCanCompose,
       });
       const target = resolved.kind === "none"
         ? { view: latchedViewRef.current, mailScope: "mine" as const }
@@ -526,7 +538,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       }
       setView(target.view);
       setMailScope(target.mailScope);
-      if (resolved.kind !== "allowed") {
+      if (resolved.kind === "none" || resolved.kind === "fallback") {
         window.history.replaceState(null, "", routeToHash(target.view, target.mailScope));
       }
     };

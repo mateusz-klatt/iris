@@ -694,7 +694,8 @@ export async function loadLocale(locale: SupportedLocale): Promise<void> {
   await i18n.changeLanguage(locale);
 }
 
-const whenFormatters = new Map<string, Intl.DateTimeFormat>();
+const defaultLocale: SupportedLocale = "en";
+const whenFormatters = new Map<SupportedLocale, Intl.DateTimeFormat>();
 
 export function formatWhen(value: string, locale: string): string {
   if (value.length === 0) {
@@ -704,13 +705,14 @@ export function formatWhen(value: string, locale: string): string {
   if (Number.isNaN(date.getTime())) {
     return value;
   }
-  let formatter = whenFormatters.get(locale);
+  const resolvedLocale = canonicalLocale(locale) ?? defaultLocale;
+  let formatter = whenFormatters.get(resolvedLocale);
   if (formatter === undefined) {
-    formatter = new Intl.DateTimeFormat(locale, {
+    formatter = new Intl.DateTimeFormat(resolvedLocale, {
       dateStyle: "medium",
       timeStyle: "short",
     });
-    whenFormatters.set(locale, formatter);
+    whenFormatters.set(resolvedLocale, formatter);
   }
   return formatter.format(date);
 }

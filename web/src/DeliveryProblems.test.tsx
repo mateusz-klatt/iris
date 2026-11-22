@@ -6,7 +6,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { App } from "./App";
 import { DeliveryProblems as DeliveryProblemsPanel } from "./DeliveryProblems";
 import type { DeliveryProblems } from "./api";
-import { formatWhen, loadLocale } from "./i18n";
+import { loadLocale } from "./i18n";
 import { server } from "./test/server";
 
 const problems: DeliveryProblems = {
@@ -113,16 +113,20 @@ describe("delivery problem timestamp locale", () => {
 
   it("formats delivery timestamps in Polish and updates when the locale changes", async () => {
     server.use(http.get("*/v1/ui/deliveries", () => HttpResponse.json(problems)));
+    const options: Intl.DateTimeFormatOptions = { dateStyle: "medium", timeStyle: "short" };
+    const createdAt = new Date(problems.messages[0]!.created_at);
+    const expectedPl = new Intl.DateTimeFormat("pl", options).format(createdAt);
+    const expectedEn = new Intl.DateTimeFormat("en", options).format(createdAt);
     await loadLocale("pl");
     render(<DeliveryProblemsPanel repositoryId="" revision={0} onOpenThread={() => {}} />);
 
-    const time = await screen.findByText(formatWhen(problems.messages[0]!.created_at, "pl"));
+    const time = await screen.findByText(expectedPl);
     expect(time).toHaveTextContent("lis");
 
     await act(async () => {
       await loadLocale("en");
     });
-    expect(time).toHaveTextContent(formatWhen(problems.messages[0]!.created_at, "en"));
+    expect(time).toHaveTextContent(expectedEn);
     expect(time).toHaveTextContent("Nov");
   });
 });

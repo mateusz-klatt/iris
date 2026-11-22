@@ -9,7 +9,7 @@ export interface ConsoleRoute {
 export interface RoutePermissions {
   member: boolean;
   isOperator: boolean;
-  canSend: boolean;
+  canSend: boolean | null;
 }
 
 const routes = new Map<string, ConsoleRoute>([
@@ -36,7 +36,7 @@ function isRouteAuthorized(route: ConsoleRoute, permissions: RoutePermissions): 
     case "access":
       return permissions.isOperator;
     case "compose":
-      return permissions.canSend;
+      return permissions.canSend === true;
     case "messages":
       return route.mailScope === "mine" || !permissions.member;
     default:
@@ -46,6 +46,7 @@ function isRouteAuthorized(route: ConsoleRoute, permissions: RoutePermissions): 
 
 export type HashResolution =
   | { kind: "none" }
+  | { kind: "pending"; route: ConsoleRoute }
   | { kind: "allowed"; route: ConsoleRoute }
   | { kind: "fallback"; route: ConsoleRoute };
 
@@ -55,7 +56,13 @@ export function resolveConsoleHash(hash: string, permissions: RoutePermissions):
     return { kind: "none" };
   }
   const route = routes.get(key);
-  if (route === undefined || !isRouteAuthorized(route, permissions)) {
+  if (route === undefined) {
+    return { kind: "fallback", route: fallbackRoute };
+  }
+  if (route.view === "compose" && permissions.canSend === null) {
+    return { kind: "pending", route };
+  }
+  if (!isRouteAuthorized(route, permissions)) {
     return { kind: "fallback", route: fallbackRoute };
   }
   return { kind: "allowed", route };
