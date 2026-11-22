@@ -48,6 +48,7 @@ import "./app.css";
 import "./console.css";
 
 type ConsoleView = "messages" | "fleet" | "claims" | "diagnostics" | "compose" | "account" | "access";
+type ThreadOpening = { id: string };
 
 // The hub limits a message by its UTF-8 bytes, not by characters: a draft of 16 KiB of
 // characters outside ASCII can be several times that (gap review A11).
@@ -368,7 +369,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const sessions = useMemo(() => overview?.agents ?? [], [overview]);
   const replyAgents = member ? sessions : noAgents;
   const waiting = phase === "ready" && sessions.length === 0;
-  const activeView = view ?? (waiting && !member ? "diagnostics" : "messages");
+  const activeView = view ?? "messages";
   const participant = mailScope === "mine" && !member ? "human" : agent;
   const [query, setQuery] = useState("");
   const [searchDraft, setSearchDraft] = useState("");
@@ -378,8 +379,12 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const [openedPages, setOpenedPages] = useState({ filters: "", pages: 1 });
   const [olderCursor, setOlderCursor] = useState<string | undefined>(undefined);
   const [threadsError, setThreadsError] = useState(false);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [thread, setThread] = useState<ThreadDetail | null>(null);
+  const [openedThread, setOpenedThread] = useState<ThreadOpening | null>(null);
+  const selectedId = openedThread?.id ?? null;
+  const readRequestedFor = useRef<ThreadOpening | Promise<ThreadDetail> | null>(null);
+  const pendingRead = useRef<{ id: string; repositoryId: string } | null>(null);
+  const [loadedThread, setLoadedThread] = useState<{ opening: ThreadOpening; detail: ThreadDetail } | null>(null);
+  const thread = loadedThread?.detail ?? null;
   const [compose, setCompose] = useState<Draft>(newDraft);
   // A conversation can be read through different repository views. Keep each view's
   // draft and retry identity together while the operator moves between conversations.
@@ -409,6 +414,8 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const recipientAgents = member ? sessions.filter((agent) => writableRepositories.some((repository) => repository.id === agent.repository_id)) : sessions;
   const validRecipients = (draft: Draft) => recipientsOf(draft.to).every((id) => (!member && id === "human") || recipientAgents.some((agent) => agent.id === id));
   const replyVisible = !member || thread?.messages.some((message) => message.id === reply.replyTo) === true;
+  // Keep the draft while a reopen loads, but require fresh detail to review or send it.
+  const replySendable = loadedThread?.opening === openedThread && sendable(reply) && (!member || validRecipients(reply));
   const permissions = overview?.repositories.map((repository) => `${repository.id}:${repository.console_access}`).join(",");
   const previousPermissions = useRef<string | undefined>(undefined);
   useEffect(() => {
@@ -445,9 +452,13 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     document.body.dataset.humanUnread = String(overview.human_unread);
   }, [overview]);
 
+  const cancelThreadRead = useCallback(() => {
+    readRequestedFor.current = null;
+    pendingRead.current = null;
+  }, []);
+
   // Reloads the overview on the watch's current connection. What the operator does reloads it
-  // this way: reconnecting instead would make every read a new socket, whose first frame
-  // reloads the open thread, which reads it again, without end.
+  // this way: reconnecting instead would make every action open a new socket and refresh again.
   const reload = useCallback(async () => {
     const current = ++overviewRequest.current;
     try {
@@ -455,6 +466,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       if (current !== overviewRequest.current) {
         return;
       }
+      setView((current) => current ?? (nextOverview.agents.length === 0 && !member ? "diagnostics" : "messages"));
       setOverview(nextOverview);
       setDoctor(nextDoctor);
       setPhase("ready");
@@ -462,9 +474,33 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       if (current !== overviewRequest.current || isAbort(error)) {
         return;
       }
+      cancelThreadRead();
       setPhase("error");
     }
-  }, [member]);
+  }, [cancelThreadRead, member]);
+
+  const flushRead = useCallback(() => {
+    const pending = pendingRead.current;
+    if (pending === null || document.visibilityState === "hidden") {
+      return;
+    }
+    pendingRead.current = null;
+    void readThread(pending.id, pending.repositoryId)
+      .then((read) => {
+        if (read > 0) {
+          void reload();
+        }
+      })
+      .catch(() => undefined);
+  }, [reload]);
+
+  useEffect(() => {
+    document.addEventListener("visibilitychange", flushRead);
+    return () => {
+      document.removeEventListener("visibilitychange", flushRead);
+      cancelThreadRead();
+    };
+  }, [cancelThreadRead, flushRead]);
 
   // revision changes only to retry after an error, which reconnects too.
   useEffect(() => {
@@ -564,29 +600,33 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   }, [participant, openedPages, phase, query, repositoryId, threadRevision]);
 
   useEffect(() => {
-    if (phase !== "ready" || activeView !== "messages" || selectedId === null) {
+    if (phase !== "ready" || activeView !== "messages" || openedThread === null) {
       return;
     }
+    const { id } = openedThread;
     let ignore = false;
-    void getThread(selectedId, repositoryId)
+    const request = getThread(id, repositoryId);
+    // The first detail request for an explicit open takes its read authorization.
+    if (readRequestedFor.current === openedThread) {
+      readRequestedFor.current = request;
+    }
+    const releaseReadAuthorization = () => {
+      if (readRequestedFor.current !== request) {
+        return false;
+      }
+      readRequestedFor.current = null;
+      return true;
+    };
+    void request
       .then((detail) => {
         if (ignore) {
           return;
         }
-        setThread(detail);
+        setLoadedThread({ opening: openedThread, detail });
         setThreadError(false);
-        // Opening a thread reads the operator's mail in it (A13); the overview's unread
-        // counts then follow. A failure here leaves the mail unread, which is safe. Every
-        // watch frame reloads the open thread, so a thread with nothing unread costs that
-        // GET only: no read, and no second overview.
-        if (!member && unreadForOperator(detail)) {
-          readThread(selectedId, repositoryId)
-            .then((read) => {
-              if (read > 0) {
-                void reload();
-              }
-            })
-            .catch(() => undefined);
+        if (releaseReadAuthorization() && !member && unreadForOperator(detail)) {
+          pendingRead.current = { id, repositoryId };
+          flushRead();
         }
         // Refresh an untouched suggestion, but retain an edited draft and its retry key
         // even when the operator left this conversation and has now returned to it.
@@ -596,20 +636,21 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
           return matches.length === 1 ? matches[0]!.id : name;
         }).join(", ") } : suggestion;
         if (fresh !== null) {
-          const scope = JSON.stringify([repositoryId, selectedId]);
+          const scope = JSON.stringify([repositoryId, id]);
           setReplies((current) => current[scope]?.offered === false ? current : { ...current, [scope]: fresh });
         }
       })
       .catch((error: unknown) => {
-        if (ignore || isAbort(error)) {
-          return;
+        releaseReadAuthorization();
+        if (!ignore && !isAbort(error)) {
+          setThreadError(true);
         }
-        setThreadError(true);
       });
     return () => {
       ignore = true;
+      releaseReadAuthorization();
     };
-  }, [activeView, phase, reload, repositoryId, selectedId, threadRevision, member, replyAgents]);
+  }, [activeView, phase, repositoryId, openedThread, threadRevision, member, replyAgents, flushRead]);
 
   useEffect(() => {
     if (activeView !== "messages") {
@@ -733,20 +774,27 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const clearThread = () => {
     replyReview.stop();
     composeReview.stop();
-    setSelectedId(null);
-    setThread(null);
+    cancelThreadRead();
+    setOpenedThread(null);
+    setLoadedThread(null);
     setThreadError(false);
   };
   const chooseView = (next: ConsoleView) => {
     if (next !== activeView) {
       replyReview.stop();
       composeReview.stop();
+      cancelThreadRead();
     }
     setView(next);
   };
   const openThread = (id: string, trigger: HTMLButtonElement) => {
     lastThreadButton.current = trigger;
     chooseView("messages");
+    // Each click requests fresh detail, even when the selected ID stays the same.
+    const opened = { id };
+    readRequestedFor.current = opened;
+    pendingRead.current = null;
+    setOpenedThread(opened);
     if (id === selectedId) {
       readerTitle.current?.focus();
       return;
@@ -754,9 +802,8 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     // Review is an explicit step in this visit to the draft. Restoring its text must
     // not reopen the send control and pull focus away from the conversation heading.
     replyReview.stop();
-    setThread(null);
+    setLoadedThread(null);
     setThreadError(false);
-    setSelectedId(id);
   };
   const openMailbox = (scope: "mine" | "all") => {
     chooseView("messages");
@@ -915,7 +962,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
                     className="search-form"
                     onSubmit={(event) => {
                       event.preventDefault();
-                      if (sendable(reply) && (!member || validRecipients(reply))) {
+                      if (replySendable) {
                         replyReview.start();
                       }
                     }}
@@ -937,7 +984,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
                       recipients={recipientsOf(reply.to)}
                       subject={reply.subject}
                       body={reply.body}
-                      sendable={sendable(reply) && (!member || validRecipients(reply))}
+                      sendable={replySendable}
                       sending={sending}
                       sendLabel={t("operator.reply")}
                       onSend={() =>
