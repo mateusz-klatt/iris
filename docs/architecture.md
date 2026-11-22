@@ -765,7 +765,9 @@ Changes from the reference schema:
    snapshot that is slightly stale relative to a concurrent writer commit; this is allowed because
    console reads never decide leases, fences, or authority—every state transition and permission
    mutation remains serialized on the writer connection under `Store.mu` and `BEGIN IMMEDIATE`,
-   and session revocation takes effect on subsequent WAL snapshots.
+   and session revocation takes effect on subsequent WAL snapshots. Close refuses a console read
+   that starts after it begins, cancels reads already in `readTransact`, and waits until they
+   finish before closing either pool or releasing the database lock.
 
 ### D10. Claim semantics
 
