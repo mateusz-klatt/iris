@@ -122,6 +122,22 @@ function replyDraft(messages: ThreadMessage[]): Draft | null {
   return newDraft({ to, subject: last.subject.startsWith("Re:") ? last.subject : `Re: ${last.subject}`, replyTo: last.id, offered: true });
 }
 
+function resolveReplySuggestion(messages: ThreadMessage[], member: boolean, agents: Agent[]): Draft | null {
+  const suggestion = replyDraft(messages);
+  if (suggestion === null || !member) {
+    return suggestion;
+  }
+  return {
+    ...suggestion,
+    to: recipientsOf(suggestion.to)
+      .map((name) => {
+        const matches = agents.filter((agent) => agent.name === name);
+        return matches.length === 1 ? matches[0]!.id : name;
+      })
+      .join(", "),
+  };
+}
+
 // unreadForOperator is whether a thread holds mail to the operator not yet acknowledged.
 function unreadForOperator(detail: ThreadDetail): boolean {
   return detail.messages.some((message) =>
@@ -377,6 +393,9 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const replyAgents = member ? sessions : noAgents;
   const replyAgentsRef = useRef(replyAgents);
   replyAgentsRef.current = replyAgents;
+  const postReadRefresh = useRef<() => void>(() => undefined);
+  const repositoryIdRef = useRef(repositoryId);
+  repositoryIdRef.current = repositoryId;
   const waiting = phase === "ready" && sessions.length === 0;
   const activeView = view ?? "messages";
   const participant = mailScope === "mine" && !member ? "human" : agent;
@@ -393,6 +412,8 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const readRequestedFor = useRef<ThreadOpening | Promise<ThreadDetail> | null>(null);
   const pendingRead = useRef<{ id: string; repositoryId: string } | null>(null);
   const [loadedThread, setLoadedThread] = useState<{ opening: ThreadOpening; detail: ThreadDetail } | null>(null);
+  const loadedThreadRef = useRef(loadedThread);
+  loadedThreadRef.current = loadedThread;
   const thread = loadedThread?.detail ?? null;
   const [compose, setCompose] = useState<Draft>(newDraft);
   // A conversation can be read through different repository views. Keep each view's
@@ -488,20 +509,20 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     }
   }, [cancelThreadRead, member]);
 
-  const flushRead = useCallback(() => {
+  const flushRead = useCallback((deferReload = false) => {
     const pending = pendingRead.current;
     if (pending === null || document.visibilityState === "hidden") {
-      return;
+      return null;
     }
     pendingRead.current = null;
-    void readThread(pending.id, pending.repositoryId)
+    return readThread(pending.id, pending.repositoryId)
       .then((read) => {
-        if (read > 0) {
-          void reload();
+        if (!deferReload && read > 0) {
+          postReadRefresh.current();
         }
       })
       .catch(() => undefined);
-  }, [reload]);
+  }, []);
 
   useEffect(() => () => cancelThreadRead(), [cancelThreadRead]);
 
@@ -511,7 +532,8 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     let closed = false;
     let running = false;
     let pending = false;
-    let lastFrameStarted = 0;
+    let visibleEpoch = 0;
+    let lastScheduledStarted = 0;
     let currentStarted = 0;
     let cooldownTimer: ReturnType<typeof setTimeout> | undefined;
     let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
@@ -526,7 +548,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       clearFallback();
       fallbackTimer = setTimeout(() => {
         fallbackTimer = undefined;
-        runRefresh(true, false);
+        runRefresh(true, true);
       }, fallbackRefreshInterval);
     };
 
@@ -534,7 +556,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       if (cooldownTimer !== undefined) {
         return;
       }
-      const base = lastFrameStarted !== 0 ? lastFrameStarted : currentStarted;
+      const base = lastScheduledStarted !== 0 ? lastScheduledStarted : currentStarted;
       cooldownTimer = setTimeout(() => {
         cooldownTimer = undefined;
         pending = false;
@@ -543,14 +565,16 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     };
 
     // One refresh at a time. The first load is one too, so a frame during it waits for it.
-    const runRefresh = (bumpThreads: boolean, fromFrame: boolean) => {
+    // Watch frames and fallback ticks share the cooldown window so a frame at or during a
+    // fallback load cannot queue against an expired timestamp and start a second round at once.
+    const runRefresh = (bumpThreads: boolean, startsCooldown: boolean) => {
       clearFallback();
       clearTimeout(cooldownTimer);
       cooldownTimer = undefined;
       running = true;
       currentStarted = Date.now();
-      if (fromFrame) {
-        lastFrameStarted = currentStarted;
+      if (startsCooldown) {
+        lastScheduledStarted = currentStarted;
       }
       if (bumpThreads) {
         setThreadRevision((value) => value + 1);
@@ -568,23 +592,21 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       });
     };
 
-    const onVisibilityChange = () => {
-      if (document.visibilityState === "hidden") {
-        hidden = true;
-        clearFallback();
-        clearTimeout(cooldownTimer);
-        cooldownTimer = undefined;
+    postReadRefresh.current = () => {
+      if (hidden) {
         return;
       }
-      // Flush any still-pending deferred read synchronously before starting the resume refresh.
-      // At this point the reader is visibly mounted and shown for an explicit open; if an
-      // earlier in-flight or explicit reload() failed while hidden, or a later reload fails,
-      // cancelThreadRead() has cleared any deferred read so nothing is sent from the error screen.
-      flushRead();
-      if (!hidden) {
+      if (running) {
+        pending = true;
         return;
       }
-      hidden = false;
+      runRefresh(false, false);
+    };
+
+    const resumeAfterVisibility = (epoch: number) => {
+      if (epoch !== visibleEpoch) {
+        return;
+      }
       pending = false;
       if (running) {
         pending = true;
@@ -593,7 +615,34 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       runRefresh(true, false);
     };
 
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        hidden = true;
+        visibleEpoch++;
+        clearFallback();
+        clearTimeout(cooldownTimer);
+        cooldownTimer = undefined;
+        return;
+      }
+      // Flush any still-pending deferred read synchronously before starting the resume refresh.
+      // When an acknowledgement starts here, defer the single resume refresh until it settles so
+      // resume + read > 0 runs once, and drop the resume if the tab hides again first.
+      const pendingFlush = flushRead(true);
+      if (!hidden) {
+        return;
+      }
+      hidden = false;
+      const epoch = ++visibleEpoch;
+      if (pendingFlush !== null) {
+        void pendingFlush.finally(() => resumeAfterVisibility(epoch));
+        return;
+      }
+      resumeAfterVisibility(epoch);
+    };
+
     document.addEventListener("visibilitychange", onVisibilityChange);
+    // Initial overview/doctor load stays active even if the tab opens in the background so first
+    // paint and initial view latch succeed; follow-up polling and fallback remain paused until visible.
     runRefresh(false, false);
     const stop = connect((frame: WatchFrame) => {
       if (frame.kind.length === 0) {
@@ -603,7 +652,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
         pending = true;
         return;
       }
-      const elapsed = lastFrameStarted === 0 ? refreshGap : Date.now() - lastFrameStarted;
+      const elapsed = lastScheduledStarted === 0 ? refreshGap : Date.now() - lastScheduledStarted;
       if (cooldownTimer !== undefined || elapsed < refreshGap) {
         pending = true;
         scheduleCooldown();
@@ -622,6 +671,8 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       // A load still in flight lands on a closed view, so it is dropped.
       requests.current++;
       closed = true;
+      visibleEpoch++;
+      postReadRefresh.current = () => undefined;
       clearFallback();
       clearTimeout(cooldownTimer);
       document.removeEventListener("visibilitychange", onVisibilityChange);
@@ -643,6 +694,10 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       const all: ThreadSummary[] = [];
       let before: string | undefined;
       for (let page = 0; page < threadPages; page++) {
+        // Background startup may finish page 0; defer further paginated requests until visible.
+        if (page > 0 && document.visibilityState === "hidden") {
+          return null;
+        }
         const next = await listThreads({ repository_id: repositoryId, agent: participant, q: query, before, limit: 50 });
         // A thread that got mail between two pages moves up and is listed again; keep it once.
         all.push(...next.threads.filter((item) => !all.some((seen) => seen.id === item.id)));
@@ -654,10 +709,10 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       return { all, before };
     };
     void walk()
-      .then(({ all, before }) => {
-        if (!ignore) {
-          setThreads(all);
-          setOlderCursor(before);
+      .then((result) => {
+        if (!ignore && result !== null) {
+          setThreads(result.all);
+          setOlderCursor(result.before);
           setThreadsError(false);
         }
       })
@@ -671,6 +726,13 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       ignore = true;
     };
   }, [participant, openedPages, phase, query, repositoryId, threadRevision]);
+
+  const applyReplySuggestion = useCallback((messages: ThreadMessage[], scope: string, agents: Agent[]) => {
+    const fresh = resolveReplySuggestion(messages, member, agents);
+    if (fresh !== null) {
+      setReplies((current) => current[scope]?.offered === false ? current : { ...current, [scope]: fresh });
+    }
+  }, [member]);
 
   useEffect(() => {
     if (phase !== "ready" || activeView !== "messages" || openedThread === null) {
@@ -699,19 +761,10 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
         setThreadError(false);
         if (releaseReadAuthorization() && !member && unreadForOperator(detail)) {
           pendingRead.current = { id, repositoryId };
-          flushRead();
+          void flushRead();
         }
-        // Refresh an untouched suggestion, but retain an edited draft and its retry key
-        // even when the operator left this conversation and has now returned to it.
-        const suggestion = replyDraft(detail.messages);
-        const fresh = suggestion !== null && member ? { ...suggestion, to: recipientsOf(suggestion.to).map((name) => {
-          const matches = replyAgentsRef.current.filter((agent) => agent.name === name);
-          return matches.length === 1 ? matches[0]!.id : name;
-        }).join(", ") } : suggestion;
-        if (fresh !== null) {
-          const scope = JSON.stringify([repositoryId, id]);
-          setReplies((current) => current[scope]?.offered === false ? current : { ...current, [scope]: fresh });
-        }
+        // Refresh an untouched suggestion together with loaded detail, retaining edited drafts (A14).
+        applyReplySuggestion(detail.messages, JSON.stringify([repositoryId, id]), replyAgentsRef.current);
       })
       .catch((error: unknown) => {
         releaseReadAuthorization();
@@ -723,7 +776,19 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       ignore = true;
       releaseReadAuthorization();
     };
-  }, [activeView, phase, repositoryId, openedThread, threadRevision, member, flushRead]);
+  }, [activeView, applyReplySuggestion, phase, repositoryId, openedThread, threadRevision, member, flushRead]);
+
+  useEffect(() => {
+    // Re-resolve an untouched member suggestion whenever the active-agent directory changes
+    // without re-fetching detail or overwriting an edited draft.
+    if (member && loadedThreadRef.current !== null) {
+      applyReplySuggestion(
+        loadedThreadRef.current.detail.messages,
+        JSON.stringify([repositoryIdRef.current, loadedThreadRef.current.opening.id]),
+        replyAgents,
+      );
+    }
+  }, [applyReplySuggestion, member, replyAgents]);
 
   useEffect(() => {
     if (activeView !== "messages") {

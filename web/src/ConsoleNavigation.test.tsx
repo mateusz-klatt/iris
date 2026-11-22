@@ -400,6 +400,11 @@ it("cancels a deferred read when an overview error replaces the reader", async (
   const overviewFailureReady = new Promise<void>((resolve) => { finishOverviewFailure = resolve; });
   let finishDetail!: () => void;
   const detailReady = new Promise<void>((resolve) => { finishDetail = resolve; });
+  const retryDetail = {
+    ...threadDetail,
+    messages: [{ ...threadDetail.messages[0]!, id: "ms_retry", body: "Fresh detail after retry." }],
+  };
+  let serveRetryDetail = false;
   server.use(
     http.get("*/v1/ui/overview", async () => {
       if (deferFailure) {
@@ -412,7 +417,7 @@ it("cancels a deferred read when an overview error replaces the reader", async (
     }),
     http.get("*/v1/ui/threads/:id", async () => {
       await detailReady;
-      return HttpResponse.json(threadDetail);
+      return HttpResponse.json(serveRetryDetail ? retryDetail : threadDetail);
     }),
   );
   render(<App connect={(frame) => { onFrame = frame; return () => {}; }} />);
@@ -439,8 +444,9 @@ it("cancels a deferred read when an overview error replaces the reader", async (
   expect(reads()).toHaveLength(0);
 
   overviewFails = false;
+  serveRetryDetail = true;
   await user.click(within(error).getByRole("button", { name: "Try again" }));
-  expect(await screen.findByText("All checks passed.")).toBeVisible();
+  expect(await screen.findByText("Fresh detail after retry.")).toBeVisible();
   expect(reads()).toHaveLength(0);
 });
 

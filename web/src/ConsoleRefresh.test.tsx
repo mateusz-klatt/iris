@@ -1,4 +1,4 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, fireEvent, render, screen, within } from "@testing-library/react";
 import { http, HttpResponse } from "msw";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -6,7 +6,25 @@ import { App } from "./App";
 import type { WatchFrame, WatchStatus } from "./api";
 import type { AccountSession } from "./accountApi";
 import i18n from "./i18n";
-import { server, sessionOverview, threadDetail } from "./test/server";
+import { server, sessionOverview, threadDetail, threadsPage } from "./test/server";
+
+class FakeSocket {
+  static latest: FakeSocket | null = null;
+  static opened = 0;
+
+  onopen: (() => void) | null = null;
+  onmessage: ((event: { data: unknown }) => void) | null = null;
+  onclose: (() => void) | null = null;
+
+  constructor(readonly url: string) {
+    FakeSocket.latest = this;
+    FakeSocket.opened++;
+  }
+
+  close() {
+    this.onclose?.();
+  }
+}
 
 interface EndpointCounts {
   overview: number;
@@ -92,7 +110,10 @@ beforeEach(async () => {
 });
 
 afterEach(() => {
+  FakeSocket.latest = null;
+  FakeSocket.opened = 0;
   vi.useRealTimers();
+  vi.unstubAllGlobals();
   vi.restoreAllMocks();
 });
 
@@ -471,6 +492,444 @@ describe("console refresh scheduling", () => {
       // Initial load (1) + 1 coalesced reload when the 10 s window closes = 2 total rounds.
       expect(tracker.snapshot()).toEqual({ overview: 2, doctor: 2, deliveries: 2, threads: 2, thread: 0 });
     } finally {
+      tracker.stop();
+    }
+  });
+
+  it("defers watch reconnect until visible on a hidden startup", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("WebSocket", FakeSocket);
+    const visibility = mockVisibility("hidden");
+    const tracker = trackRequests();
+    let sessionChecks = 0;
+    const onRequest = ({ request }: { request: Request }) => {
+      if (new URL(request.url).pathname === "/v1/ui/session") {
+        sessionChecks++;
+      }
+    };
+    server.events.on("request:start", onRequest);
+    try {
+      render(<App />);
+      await flushFakeNetwork();
+      expect(FakeSocket.opened).toBe(1);
+      expect(sessionChecks).toBe(1);
+
+      // Closing the watch socket while still hidden must defer /session checks and reconnects.
+      sessionChecks = 0;
+      tracker.reset();
+      act(() => {
+        FakeSocket.latest?.close();
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      await flushFakeNetwork();
+      expect(sessionChecks).toBe(0);
+      expect(FakeSocket.opened).toBe(1);
+      expect(tracker.snapshot()).toEqual({ overview: 0, doctor: 0, deliveries: 0, threads: 0, thread: 0 });
+
+      // Becoming visible revalidates the session, opens the reconnect socket, and runs one refresh.
+      visibility.set("visible");
+      await flushFakeNetwork();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      await flushFakeNetwork();
+      expect(sessionChecks).toBe(1);
+      expect(FakeSocket.opened).toBe(2);
+      expect(tracker.snapshot()).toEqual({ overview: 1, doctor: 1, deliveries: 1, threads: 1, thread: 0 });
+    } finally {
+      server.events.removeListener("request:start", onRequest);
+      visibility.restore();
+      tracker.stop();
+    }
+  });
+
+  it("coalesces a resume with a positive ACK into one round", async () => {
+    vi.useFakeTimers();
+    const visibility = mockVisibility("visible");
+    const tracker = trackRequests();
+    let unread = 1;
+    try {
+      server.use(
+        http.get("*/v1/ui/overview", () => HttpResponse.json({ ...sessionOverview, human_unread: unread })),
+        http.post("*/v1/ui/threads/:id/read", () => {
+          unread = 0;
+          return HttpResponse.json({ read: 1 });
+        }),
+      );
+      render(<App connect={() => () => {}} />);
+      await flushFakeNetwork();
+
+      // Open an unread thread while hidden so the acknowledgement is deferred.
+      visibility.set("hidden");
+      fireEvent.click(screen.getByRole("button", { name: /Open thread: Rollout check/ }));
+      await flushFakeNetwork();
+      expect(screen.getByText("All checks passed.")).toBeVisible();
+      expect(unread).toBe(1);
+
+      // Returning to visible flushes the ACK and runs only one combined refresh round.
+      tracker.reset();
+      visibility.set("visible");
+      await flushFakeNetwork();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(12_000);
+      });
+      await flushFakeNetwork();
+      expect(tracker.snapshot()).toEqual({ overview: 1, doctor: 1, deliveries: 1, threads: 1, thread: 1 });
+      expect(screen.getByRole("button", { name: /^My messages\s*0$/ })).toBeVisible();
+    } finally {
+      visibility.restore();
+      tracker.stop();
+    }
+  });
+
+  it("drops a post-read follow-up reload if the tab hides before acknowledgement settles", async () => {
+    vi.useFakeTimers();
+    const visibility = mockVisibility("visible");
+    const tracker = trackRequests();
+    const ackReady = deferred<Response>();
+    try {
+      server.use(http.post("*/v1/ui/threads/:id/read", () => ackReady.promise));
+      render(<App connect={() => () => {}} />);
+      await flushFakeNetwork();
+
+      fireEvent.click(screen.getByRole("button", { name: /Open thread: Rollout check/ }));
+      await flushFakeNetwork();
+      visibility.set("hidden");
+      tracker.reset();
+
+      await act(async () => {
+        ackReady.resolve(HttpResponse.json({ read: 1 }));
+      });
+      await flushFakeNetwork();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(15_000);
+      });
+      expect(tracker.snapshot()).toEqual({ overview: 0, doctor: 0, deliveries: 0, threads: 0, thread: 0 });
+    } finally {
+      visibility.restore();
+      tracker.stop();
+    }
+  });
+
+  it("treats a fallback refresh as starting the cooldown window when a frame arrives at the deadline", async () => {
+    vi.useFakeTimers();
+    const tracker = trackRequests();
+    let onFrame: ((frame: WatchFrame) => void) | undefined;
+    const fallbackGate = deferred<Response>();
+    let overviewCalls = 0;
+    try {
+      server.use(
+        http.get("*/v1/ui/overview", () => {
+          overviewCalls++;
+          return overviewCalls === 3 ? fallbackGate.promise : HttpResponse.json(sessionOverview);
+        }),
+      );
+      render(<App connect={(frame) => { onFrame = frame; return () => {}; }} />);
+      await flushFakeNetwork();
+
+      // Advance cleanly past an initial frame + 10 s window so lastFrameStarted is non-zero.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+      act(() => onFrame?.({ cursor: 1, kind: "changed" }));
+      await flushFakeNetwork();
+      tracker.reset();
+
+      // At the 30 s fallback deadline, deliver a watch frame while the fallback reload is running.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      await flushFakeNetwork(2);
+      expect(tracker.snapshot()).toEqual({ overview: 1, doctor: 1, deliveries: 1, threads: 1, thread: 0 });
+
+      act(() => onFrame?.({ cursor: 2, kind: "changed" }));
+      await act(async () => {
+        fallbackGate.resolve(HttpResponse.json(sessionOverview));
+      });
+      await flushFakeNetwork();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      expect(tracker.snapshot()).toEqual({ overview: 1, doctor: 1, deliveries: 1, threads: 1, thread: 0 });
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(5_000);
+      });
+      await flushFakeNetwork();
+      expect(tracker.snapshot()).toEqual({ overview: 2, doctor: 2, deliveries: 2, threads: 2, thread: 0 });
+    } finally {
+      tracker.stop();
+    }
+  });
+
+  it("makes no requests after teardown across both deadlines and closed sockets", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("WebSocket", FakeSocket);
+    const visibility = mockVisibility("visible");
+    const tracker = trackRequests();
+    let sessionChecks = 0;
+    const onRequest = ({ request }: { request: Request }) => {
+      if (new URL(request.url).pathname === "/v1/ui/session") {
+        sessionChecks++;
+      }
+    };
+    server.events.on("request:start", onRequest);
+    try {
+      const { unmount } = render(<App />);
+      await flushFakeNetwork();
+
+      // Cross both the 10 s cooldown deadline and the 30 s fallback deadline.
+      FakeSocket.latest?.onopen?.();
+      act(() => {
+        FakeSocket.latest?.onmessage?.({ data: JSON.stringify({ cursor: 1, kind: "changed" }) });
+        FakeSocket.latest?.onmessage?.({ data: JSON.stringify({ cursor: 2, kind: "changed" }) });
+      });
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      await flushFakeNetwork();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      await flushFakeNetwork();
+
+      // Schedule a pending cooldown and reconnect timer, then unmount before they fire.
+      act(() => {
+        FakeSocket.latest?.onmessage?.({ data: JSON.stringify({ cursor: 3, kind: "changed" }) });
+      });
+      await flushFakeNetwork();
+      act(() => {
+        FakeSocket.latest?.onmessage?.({ data: JSON.stringify({ cursor: 4, kind: "changed" }) });
+        FakeSocket.latest?.close();
+      });
+      await flushFakeNetwork();
+      const openedBeforeUnmount = FakeSocket.opened;
+      unmount();
+      tracker.reset();
+      sessionChecks = 0;
+
+      visibility.set("hidden");
+      visibility.set("visible");
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(60_000);
+      });
+      await flushFakeNetwork();
+      expect(tracker.snapshot()).toEqual({ overview: 0, doctor: 0, deliveries: 0, threads: 0, thread: 0 });
+      expect(sessionChecks).toBe(0);
+      expect(FakeSocket.opened).toBe(openedBeforeUnmount);
+    } finally {
+      server.events.removeListener("request:start", onRequest);
+      visibility.restore();
+      tracker.stop();
+    }
+  });
+
+  it("drops a resume reload if the tab hides while acknowledgement is in flight and coalesces visible ACKs during a run", async () => {
+    vi.useFakeTimers();
+    const visibility = mockVisibility("visible");
+    const tracker = trackRequests();
+    let ackGate = deferred<Response>();
+    const overviewGate = deferred<Response>();
+    let holdOverview = false;
+    let onFrame: ((frame: WatchFrame) => void) | undefined;
+    try {
+      server.use(
+        http.get("*/v1/ui/overview", () => holdOverview ? overviewGate.promise : HttpResponse.json(sessionOverview)),
+        http.post("*/v1/ui/threads/:id/read", () => ackGate.promise),
+      );
+      render(<App connect={(frame) => { onFrame = frame; return () => {}; }} />);
+      await flushFakeNetwork();
+
+      // Hide, defer read, become visible, then hide again before the resume ACK settles.
+      visibility.set("hidden");
+      fireEvent.click(screen.getByRole("button", { name: /Open thread: Rollout check/ }));
+      await flushFakeNetwork();
+      tracker.reset();
+
+      visibility.set("visible");
+      visibility.set("hidden");
+      await act(async () => {
+        ackGate.resolve(HttpResponse.json({ read: 1 }));
+      });
+      await flushFakeNetwork();
+      expect(tracker.snapshot()).toEqual({ overview: 0, doctor: 0, deliveries: 0, threads: 0, thread: 0 });
+
+      // Recover to visible, then click an unread thread while a frame refresh is in flight.
+      ackGate = deferred<Response>();
+      visibility.set("visible");
+      await flushFakeNetwork();
+      tracker.reset();
+
+      holdOverview = true;
+      act(() => onFrame?.({ cursor: 2, kind: "changed" }));
+      await flushFakeNetwork(2);
+      holdOverview = false;
+      fireEvent.click(screen.getByRole("button", { name: /Open thread: Rollout check/ }));
+      await flushFakeNetwork();
+      await act(async () => {
+        ackGate.resolve(HttpResponse.json({ read: 1 }));
+      });
+      await flushFakeNetwork();
+      expect(tracker.counts.overview).toBe(1);
+
+      await act(async () => {
+        overviewGate.resolve(HttpResponse.json(sessionOverview));
+      });
+      await flushFakeNetwork();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      await flushFakeNetwork();
+      expect(tracker.counts.overview).toBe(2);
+    } finally {
+      visibility.restore();
+      tracker.stop();
+    }
+  });
+
+  it("resolves a member's stale reply suggestion when overview updates unless edited", async () => {
+    vi.useFakeTimers();
+    const memberSession: AccountSession = {
+      csrf: "member-csrf",
+      created_ms: 1,
+      expires_ms: 9999999999999,
+      account: { id: "ca_member", username: "reader", display_name: "Reader", role: "member", disabled: false, ui_locale: "en", correspondence_locale: "en", edit_revision: 1 },
+    };
+    const baseOverview = {
+      ...sessionOverview,
+      repositories: sessionOverview.repositories.map((repo) => ({ ...repo, console_access: "rw" as const })),
+    };
+    const newAgent = { ...sessionOverview.agents[0]!, id: "ag_codex", name: "codex-new" };
+    const sent: unknown[] = [];
+    for (const editedBeforeUpdate of [false, true]) {
+      let onFrame: ((frame: WatchFrame) => void) | undefined;
+      let overviewCalls = 0;
+      let threadCalls = 0;
+      const delayedOverview = deferred<Response>();
+      server.use(
+        http.get("*/v1/ui/session", () => HttpResponse.json(memberSession)),
+        http.get("*/v1/ui/overview", () => {
+          overviewCalls++;
+          return overviewCalls === 2 ? delayedOverview.promise : HttpResponse.json(baseOverview);
+        }),
+        http.get("*/v1/ui/threads/:id", () => {
+          threadCalls++;
+          return HttpResponse.json({
+            ...threadDetail,
+            messages: [{ ...threadDetail.messages[0]!, sender: "codex-new" }],
+          });
+        }),
+        http.post("*/v1/ui/messages", async ({ request }) => {
+          sent.push(await request.json());
+          return new HttpResponse(null, { status: 204 });
+        }),
+      );
+      const { unmount } = render(<App connect={(frame) => { onFrame = frame; return () => {}; }} />);
+      await flushFakeNetwork();
+      fireEvent.change(screen.getByRole("combobox", { name: "Repository" }), { target: { value: "rp_iris" } });
+      await flushFakeNetwork();
+
+      // Start an overview refresh before opening so the thread detail resolves against the old directory first.
+      act(() => onFrame?.({ cursor: 2, kind: "changed" }));
+      fireEvent.click(screen.getByRole("button", { name: /Open thread: Rollout check/ }));
+      await flushFakeNetwork();
+      const replyForm = screen.getByRole("heading", { name: "Reply" }).closest("form")!;
+      expect(within(replyForm).getByRole("alert")).toHaveTextContent("codex-new");
+      expect(threadCalls).toBe(1);
+
+      if (editedBeforeUpdate) {
+        fireEvent.change(within(replyForm).getByRole("textbox", { name: "Message" }), { target: { value: "Keep my edit" } });
+        fireEvent.click(within(replyForm).getByRole("checkbox", { name: /claude-host/ }));
+      }
+
+      // Overview adds codex-new without re-fetching thread detail.
+      await act(async () => {
+        delayedOverview.resolve(HttpResponse.json({
+          ...baseOverview,
+          agents: [...baseOverview.agents, newAgent],
+        }));
+      });
+      await flushFakeNetwork();
+      expect(threadCalls).toBe(1);
+
+      if (!editedBeforeUpdate) {
+        expect(within(replyForm).queryByRole("alert")).toBeNull();
+        expect(within(replyForm).getByRole("checkbox", { name: /codex-new/ })).toBeChecked();
+        fireEvent.change(within(replyForm).getByRole("textbox", { name: "Message" }), { target: { value: "Send to resolved id" } });
+        fireEvent.click(within(replyForm).getByRole("button", { name: "Review" }));
+        fireEvent.click(within(replyForm).getByRole("button", { name: "Reply" }));
+        await flushFakeNetwork();
+        expect(sent.at(-1)).toMatchObject({ to: ["ag_codex"], body: "Send to resolved id" });
+      } else {
+        expect(within(replyForm).getByRole("textbox", { name: "Message" })).toHaveValue("Keep my edit");
+        expect(within(replyForm).getByRole("checkbox", { name: /claude-host/ })).toBeChecked();
+        expect(within(replyForm).getByRole("checkbox", { name: /codex-new/ })).not.toBeChecked();
+      }
+      unmount();
+      server.resetHandlers();
+    }
+  });
+
+  it("defers the next page of an in-flight paginated thread load until visible", async () => {
+    vi.useFakeTimers();
+    const visibility = mockVisibility("visible");
+    const tracker = trackRequests();
+    let onFrame: ((frame: WatchFrame) => void) | undefined;
+    let holdFirstPage = false;
+    const pageOneGate = deferred<Response>();
+    try {
+      server.use(
+        http.get("*/v1/ui/threads", ({ request }) => {
+          const before = new URL(request.url).searchParams.get("before");
+          if (before === "cursor_2") {
+            return HttpResponse.json({
+              threads: [{
+                id: "ms_older",
+                subject: "Older rollout",
+                participants: ["claude-host", "human"],
+                count: 1,
+                last_at: "2026-11-05T10:05:00Z",
+                unread: 0,
+              }],
+            });
+          }
+          if (holdFirstPage) {
+            holdFirstPage = false;
+            return pageOneGate.promise;
+          }
+          return HttpResponse.json({ ...threadsPage, next: "cursor_2" });
+        }),
+      );
+      render(<App connect={(frame) => { onFrame = frame; return () => {}; }} />);
+      await flushFakeNetwork();
+      fireEvent.click(screen.getByRole("button", { name: "Older threads" }));
+      await flushFakeNetwork();
+      expect(screen.getByRole("button", { name: /Open thread: Older rollout/ })).toBeVisible();
+
+      // Start page 1 of a refresh, hide the tab before page 1 returns, and assert page 2 waits until visible.
+      holdFirstPage = true;
+      act(() => onFrame?.({ cursor: 2, kind: "changed" }));
+      await flushFakeNetwork(2);
+      visibility.set("hidden");
+      tracker.reset();
+
+      await act(async () => {
+        pageOneGate.resolve(HttpResponse.json({ ...threadsPage, next: "cursor_2" }));
+      });
+      await flushFakeNetwork();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(10_000);
+      });
+      expect(tracker.snapshot().threads).toBe(0);
+
+      visibility.set("visible");
+      await flushFakeNetwork();
+      expect(tracker.snapshot().threads).toBe(2);
+      expect(screen.getByRole("button", { name: /Open thread: Older rollout/ })).toBeVisible();
+    } finally {
+      visibility.restore();
       tracker.stop();
     }
   });
