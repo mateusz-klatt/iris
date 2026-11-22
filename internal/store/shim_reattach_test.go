@@ -94,3 +94,40 @@ func TestShimGenerationReattachChecksClientProcessWhenSupplied(t *testing.T) {
 		t.Fatalf("matching process identity failed to reattach: %+v", got)
 	}
 }
+
+func TestRung2ShimGenerationReattachWithoutProcessIdentity(t *testing.T) {
+	for _, tc := range []struct {
+		name                      string
+		clientPID, clientPIDStart int64
+	}{
+		{name: "recorded process differs from shim ancestor", clientPID: 5000, clientPIDStart: 12345},
+		{name: "recorded process is absent and pid is zero"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, clock, file := testStore(t)
+			registered := call(t, s, "sessions", Request{
+				Client: "claude", Host: "host", SessionID: "rung-2-session", Cwd: "/repo", Worktree: "/repo",
+				ClientPID: tc.clientPID, ClientPIDStartMS: tc.clientPIDStart, Source: "hook",
+			})
+			if err := s.Close(); err != nil {
+				t.Fatal(err)
+			}
+			reopened, err := Open(file, clock)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(func() { _ = reopened.Close() })
+
+			got := call(t, reopened, "sessions", Request{
+				Client: "claude", Host: "host", SessionID: "rung-2-session", Cwd: "/repo",
+				Generation: 1, Source: "shim",
+			})
+			if got["execution_id"] != registered["execution_id"] || got["generation"] != int64(1) {
+				t.Fatalf("session-only reattach selected the wrong identity: %+v", got)
+			}
+			if count := rowCount(t, reopened, "SELECT COUNT(*) FROM Execution"); count != 1 {
+				t.Fatalf("session-only reattach registered an extra Execution: count=%d", count)
+			}
+		})
+	}
+}
