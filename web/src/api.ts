@@ -25,7 +25,9 @@ export interface Agent {
   worktree: string;
   branch: string;
   state: string;
-  last_seen: string;
+  last_seen: string | null;
+  hook_seen?: string | null;
+  watch_seen?: string | null;
   unread: number;
 }
 

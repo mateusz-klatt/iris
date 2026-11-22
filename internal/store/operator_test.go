@@ -27,8 +27,25 @@ func TestOperatorMailThreadsAndOverview(t *testing.T) {
 	sent := call(t, s, "messages", r)
 	threadID := sent["thread_id"].(string)
 	overview := call(t, s, "ui_overview", Request{})
-	if overview["human_unread"] != 1 || len(overview["repositories"].([]map[string]any)) != 1 || len(overview["agents"].([]map[string]any)) != 1 {
+	agents := overview["agents"].([]map[string]any)
+	if overview["human_unread"] != 1 || len(overview["repositories"].([]map[string]any)) != 1 || len(agents) != 1 {
 		t.Fatal(overview)
+	}
+	if last, ok := agents[0]["last_seen"].(string); !ok || last == "" {
+		t.Fatalf("expected last_seen timestamp: %+v", agents[0])
+	}
+	if hook, ok := agents[0]["hook_seen"].(string); !ok || hook == "" {
+		t.Fatalf("expected hook_seen timestamp: %+v", agents[0])
+	}
+	if agents[0]["watch_seen"] != nil {
+		t.Fatalf("expected watch_seen nil before watch heartbeat: %+v", agents[0])
+	}
+	watchReq := a
+	watchReq.Source = "watch"
+	call(t, s, "heartbeat", watchReq)
+	afterWatch := call(t, s, "ui_overview", Request{})["agents"].([]map[string]any)
+	if watch, ok := afterWatch[0]["watch_seen"].(string); !ok || watch == "" {
+		t.Fatalf("expected watch_seen timestamp after watch heartbeat: %+v", afterWatch[0])
 	}
 	clock.advance(time.Second)
 	reply := call(t, s, "ui_messages", Request{Key: "reply", ReplyTo: sent["message_id"].(string), To: []string{name}, Subject: "Re: Review required", Body: "Approved"})

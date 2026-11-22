@@ -2429,11 +2429,21 @@ html[data-flag-polyfill="true"] select {
 }
 
 /* An old doctor report says little about a client now (ADR 007). */
-.host-report[data-stale="yes"] {
+.host-report[data-stale="yes"],
+.host-doctor-cell[data-stale="yes"] {
   opacity: 0.6;
 }
-.host-report .stale-note {
+.host-report .stale-note,
+.host-doctor-cell .stale-note {
   font-style: italic;
+}
+.host-doctor-cell {
+  display: grid;
+  gap: 0.15rem;
+}
+.host-doctor-cell small {
+  color: var(--console-muted, #616579);
+  font-size: 0.8rem;
 }
 
 /* Draft body with an Edit and a Preview view, and the review shown before a send. */

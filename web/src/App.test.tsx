@@ -767,7 +767,8 @@ describe("Iris operator console", () => {
     expect(screen.getByRole("rowheader", { name: "orphan-agent" })).toBeVisible();
     expect(screen.getByRole("cell", { name: "rp_missing" })).toBeVisible();
     await user.click(screen.getByRole("button", { name: "Diagnostics" }));
-    expect(screen.getByText(/^Checked\s*$/)).toBeVisible();
+    const diagnosticsReport = () => within(screen.getByRole("region", { name: doctorReport.host }));
+    expect(diagnosticsReport().getByText(/^Checked\s*$/)).toBeVisible();
     await user.click(screen.getByRole("button", { name: /^Claims/ }));
     // A time the console cannot read is shown as given, never as a countdown or as expired.
     const raw = screen.getByText("raw-expiry").closest("li")!;
@@ -777,7 +778,7 @@ describe("Iris operator console", () => {
 
     await user.click(screen.getByRole("button", { name: "Diagnostics" }));
     await user.click(screen.getByRole("button", { name: "Reload the last doctor report" }));
-    expect(await screen.findByText("Checked soon")).toBeVisible();
+    expect(await diagnosticsReport().findByText("Checked soon")).toBeVisible();
   });
 
   it("offers a retry when the overview fails for a reason other than signing in", async () => {
