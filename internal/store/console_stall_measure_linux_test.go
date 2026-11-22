@@ -8,6 +8,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -302,6 +303,122 @@ type consoleStallReport struct {
 	Overview14kPoint *overview14kReport         `json:"overview_14k_point,omitempty"`
 	LeaseConsequence *leaseConsequenceResult    `json:"lease_consequence,omitempty"`
 	ReadNonBlocking  *readNonBlockingResult     `json:"read_non_blocking,omitempty"`
+	PeakDiskBytes    int64                      `json:"peak_disk_bytes"`
+	DiskCapBytes     int64                      `json:"disk_cap_bytes"`
+	WorkDirFreeBytes int64                      `json:"work_dir_free_bytes"`
+	MntCFreeBytes    *int64                     `json:"mnt_c_free_bytes"`
+}
+
+const (
+	measureFreeSpaceFactor = 10
+	measureDiskCapFactor   = 20
+	measureDiskCapMax      = int64(20 << 30)
+)
+
+// measureDiskBudget bounds one measurement run. Cold copies and the synthetic
+// database live under root; observe records the peak and stops the run when
+// the cap is crossed so a leaked copy cannot fill the disk.
+type measureDiskBudget struct {
+	root     string
+	capBytes int64
+	peak     int64
+	workFree int64
+	mntCFree *int64
+}
+
+func filesystemFreeBytes(dir string) (int64, error) {
+	var st syscall.Statfs_t
+	if err := syscall.Statfs(dir, &st); err != nil {
+		return 0, err
+	}
+	unit := st.Frsize
+	if unit <= 0 {
+		unit = st.Bsize
+	}
+	if unit <= 0 {
+		return 0, fmt.Errorf("statfs %s reported no block size", dir)
+	}
+	if st.Bavail > uint64(math.MaxInt64)/uint64(unit) {
+		return math.MaxInt64, nil
+	}
+	return int64(st.Bavail) * unit, nil
+}
+
+func allocatedFileBytes(info os.FileInfo) int64 {
+	if st, ok := info.Sys().(*syscall.Stat_t); ok {
+		if n := st.Blocks * 512; n > 0 {
+			return n
+		}
+	}
+	return info.Size()
+}
+
+func workDirUsage(root string) (int64, error) {
+	var total int64
+	err := filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil
+			}
+			return err
+		}
+		if d.IsDir() {
+			return nil
+		}
+		info, infoErr := d.Info()
+		if infoErr != nil {
+			if os.IsNotExist(infoErr) {
+				return nil
+			}
+			return infoErr
+		}
+		total += allocatedFileBytes(info)
+		return nil
+	})
+	return total, err
+}
+
+func newMeasureDiskBudget(t *testing.T, root string, targetBytes int64) *measureDiskBudget {
+	t.Helper()
+	workFree, err := filesystemFreeBytes(root)
+	if err != nil {
+		t.Fatalf("statfs %s: %v", root, err)
+	}
+	free := workFree
+	var mntCFree *int64
+	hostFreeText := "unavailable"
+	if hostFree, hostErr := filesystemFreeBytes("/mnt/c"); hostErr == nil {
+		mntCFree = &hostFree
+		hostFreeText = strconv.FormatInt(hostFree, 10)
+		free = min(free, hostFree)
+	}
+	need := targetBytes * measureFreeSpaceFactor
+	if free < need {
+		t.Fatalf("refusing to start console measurement: work directory has %d bytes free, /mnt/c has %s; effective free space is %d, need at least %d (10× the %d-byte target database)", workFree, hostFreeText, free, need, targetBytes)
+	}
+	b := &measureDiskBudget{
+		root:     root,
+		capBytes: min(targetBytes*measureDiskCapFactor, measureDiskCapMax),
+		workFree: workFree,
+		mntCFree: mntCFree,
+	}
+	b.observe(t)
+	t.Logf("disk bound: work_dir_free=%d mnt_c_free=%s effective_free=%d cap=%d (min(20 GiB, 20× the %d-byte target))", workFree, hostFreeText, free, b.capBytes, targetBytes)
+	return b
+}
+
+func (b *measureDiskBudget) observe(t *testing.T) {
+	t.Helper()
+	n, err := workDirUsage(b.root)
+	if err != nil {
+		t.Fatalf("disk usage under %s: %v", b.root, err)
+	}
+	if n > b.peak {
+		b.peak = n
+	}
+	if n > b.capBytes {
+		t.Fatalf("aborting console measurement: %s uses %d bytes, over the cap of %d (min(20 GiB, 20× the target database))", b.root, n, b.capBytes)
+	}
 }
 
 type syntheticSeedInfo struct {
@@ -364,7 +481,7 @@ func synthText(seed, targetBytes int) string {
 	return s
 }
 
-func generateSyntheticConsoleDB(t *testing.T, dbPath string, cfg consoleMeasureConfig) syntheticSeedInfo {
+func generateSyntheticConsoleDB(t *testing.T, dbPath string, cfg consoleMeasureConfig, budget *measureDiskBudget) syntheticSeedInfo {
 	t.Helper()
 	start := time.Now()
 	_ = os.Remove(dbPath)
@@ -665,12 +782,16 @@ func generateSyntheticConsoleDB(t *testing.T, dbPath string, cfg consoleMeasureC
 	}
 
 	// First populate the configured baseline threads, then top up in batches until targetBytes is reached.
+	// Each batch is checked against the work-dir cap so a size query that does not
+	// advance cannot keep writing until the disk is full.
 	batchSize := 50
 	for threadIdx < cfg.Threads {
 		n := min(batchSize, cfg.Threads-threadIdx)
 		insertThreadBatch(n)
+		budget.observe(t)
 	}
 	ensureInboxMail()
+	budget.observe(t)
 
 	dbBytesNow := func() int64 {
 		var pages, pageSize int64
@@ -681,7 +802,9 @@ func generateSyntheticConsoleDB(t *testing.T, dbPath string, cfg consoleMeasureC
 	}
 	for dbBytesNow() < targetBytes {
 		insertThreadBatch(batchSize)
+		budget.observe(t)
 	}
+	budget.observe(t)
 	var busy, logFrames, moved int
 	if err := s.db.QueryRow("PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &logFrames, &moved); err != nil {
 		t.Fatalf("checkpoint: %v", err)
@@ -1084,7 +1207,7 @@ func runColdWorker(t *testing.T, cfg consoleMeasureConfig) {
 	}
 }
 
-func measureOverview14kPoint(t *testing.T, workDir string) *overview14kReport {
+func measureOverview14kPoint(t *testing.T, workDir string, budget *measureDiskBudget) *overview14kReport {
 	t.Helper()
 	dbPath := filepath.Join(workDir, "overview-14k.db")
 	_ = os.Remove(dbPath)
@@ -1145,9 +1268,18 @@ func measureOverview14kPoint(t *testing.T, workDir string) *overview14kReport {
 	genMS := durationMS(time.Since(start))
 	dbSum := collectDatabaseSummary(t, dbPath, s.db, counts, genMS)
 	_ = s.Close()
+	budget.observe(t)
 
 	coldPath := filepath.Join(workDir, "overview-14k-cold.db")
 	copyDBCold(t, dbPath, coldPath)
+	budget.observe(t)
+	// The copy is the database under measurement. Drop the source immediately so
+	// the two files are not kept together for the rest of the scenario.
+	_ = os.Remove(dbPath)
+	_ = os.Remove(dbPath + "-wal")
+	_ = os.Remove(dbPath + "-shm")
+	_ = os.Remove(dbPath + ".lock")
+	budget.observe(t)
 	tr := &sqlTracer{}
 	coldStore, err := openDatabase(coldPath, nil, registerTraceDriver(tr))
 	if err != nil {
@@ -1185,6 +1317,14 @@ func measureOverview14kPoint(t *testing.T, workDir string) *overview14kReport {
 
 // TestConsoleReadStallMeasurement reproduces and measures the console-read Store.mu stall
 // on Linux/WSL. It is skipped unless IRIS_MEASURE_CONSOLE is set.
+//
+// Disk bound: the run refuses to start without at least 10× the target database
+// size free, using the lower statfs result for the work directory and /mnt/c when
+// the latter is available. It aborts when allocated usage under the work directory
+// exceeds min(20 GiB, 20× the target). All database copies live under a per-run
+// t.TempDir; each cold-mode copy is removed as soon as its operation returns, so
+// copies never accumulate. The harness uses no dd command or separate big-reader
+// file. The JSON report and log include peak usage and both free-space values.
 func TestConsoleReadStallMeasurement(t *testing.T) {
 	cfg, ok := parseConsoleMeasureConfig(t)
 	if !ok {
@@ -1200,23 +1340,29 @@ func TestConsoleReadStallMeasurement(t *testing.T) {
 	if err := os.MkdirAll(filepath.Dir(cfg.OutPath), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	runDir, err := os.MkdirTemp(cfg.WorkDir, "run-*")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(runDir) })
+	workRoot := cfg.WorkDir
+	budget := newMeasureDiskBudget(t, workRoot, int64(cfg.SizeMB)<<20)
+	t.Setenv("GOTMPDIR", workRoot)
+	runDir := t.TempDir()
 	cfg.WorkDir = runDir
 
 	env := measureEnvironment(t, runDir, cfg)
 	baseDB := filepath.Join(runDir, "synthetic-base.db")
-	seed := generateSyntheticConsoleDB(t, baseDB, cfg)
+	seed := generateSyntheticConsoleDB(t, baseDB, cfg, budget)
+	budget.observe(t)
+	if budget.peak == 0 {
+		t.Fatal("disk accounting reported no usage after generating the target database")
+	}
 
 	ops := []string{"ui_threads", "ui_overview", "ui_deliveries", "ui_doctor_get", "inbox", "heartbeat", "expire"}
 	report := consoleStallReport{
-		Environment:  env,
-		Config:       cfg,
-		Database:     seed.Summary,
-		ExplainPlans: map[string]queryPlanReport{},
+		Environment:      env,
+		Config:           cfg,
+		Database:         seed.Summary,
+		ExplainPlans:     map[string]queryPlanReport{},
+		DiskCapBytes:     budget.capBytes,
+		WorkDirFreeBytes: budget.workFree,
+		MntCFreeBytes:    budget.mntCFree,
 	}
 
 	capturedSQL := map[string]sqlStatementRecord{}
@@ -1224,6 +1370,7 @@ func TestConsoleReadStallMeasurement(t *testing.T) {
 	case "warm":
 		warmDB := filepath.Join(cfg.WorkDir, "measure-warm.db")
 		fadviseNote := copyDBCold(t, baseDB, warmDB)
+		budget.observe(t)
 		report.CacheNotes = []string{
 			"warm mode: pass 1 warms SQLite (~2 MiB default cache_size=-2000) and OS page cache in the same process and Store; pass 2 is reported in operations.",
 			"warm db setup: " + fadviseNote,
@@ -1269,43 +1416,54 @@ func TestConsoleReadStallMeasurement(t *testing.T) {
 		}
 		fadviseNotes := map[string]bool{}
 		for _, op := range ops {
-			coldDB := filepath.Join(cfg.WorkDir, "measure-cold-"+op+".db")
-			opOut := filepath.Join(cfg.WorkDir, "worker-"+op+".json")
-			note := copyDBCold(t, baseDB, coldDB)
-			fadviseNotes[note] = true
+			func() {
+				// One temporary directory per operation. It is removed before the
+				// next copy is created, including when the worker fails.
+				copyDir, err := os.MkdirTemp(cfg.WorkDir, "cold-"+op+"-")
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() {
+					if rmErr := os.RemoveAll(copyDir); rmErr != nil {
+						t.Errorf("removing cold copy %s: %v", copyDir, rmErr)
+					}
+				}()
+				coldDB := filepath.Join(copyDir, "copy.db")
+				opOut := filepath.Join(copyDir, "worker.json")
+				note := copyDBCold(t, baseDB, coldDB)
+				fadviseNotes[note] = true
+				budget.observe(t)
 
-			cmd := exec.Command(exe, "-test.run=^TestConsoleReadStallMeasurement$")
-			cmd.Env = append(os.Environ(),
-				"IRIS_MEASURE_CONSOLE=1",
-				"IRIS_MEASURE_CONSOLE_WORKER=1",
-				"IRIS_MEASURE_CONSOLE_OP="+op,
-				"IRIS_MEASURE_CONSOLE_DB="+coldDB,
-				"IRIS_MEASURE_CONSOLE_EXEC="+seed.ActiveExecID,
-				"IRIS_MEASURE_CONSOLE_OUT="+opOut,
-			)
-			if out, err := cmd.CombinedOutput(); err != nil {
-				t.Fatalf("cold worker %s failed: %v\n%s", op, err, out)
-			}
-			raw, err := os.ReadFile(opOut)
-			if err != nil {
-				t.Fatal(err)
-			}
-			var workerRes struct {
-				Operation opMeasurement              `json:"operation"`
-				Plans     map[string]queryPlanReport `json:"plans"`
-			}
-			if err := json.Unmarshal(raw, &workerRes); err != nil {
-				t.Fatal(err)
-			}
-			report.Operations = append(report.Operations, workerRes.Operation)
-			for k, p := range workerRes.Plans {
-				report.ExplainPlans[k] = p
-			}
-			_ = os.Remove(opOut)
-			_ = os.Remove(coldDB)
-			_ = os.Remove(coldDB + "-wal")
-			_ = os.Remove(coldDB + "-shm")
-			_ = os.Remove(coldDB + ".lock")
+				cmd := exec.Command(exe, "-test.run=^TestConsoleReadStallMeasurement$")
+				cmd.Env = append(os.Environ(),
+					"IRIS_MEASURE_CONSOLE=1",
+					"IRIS_MEASURE_CONSOLE_WORKER=1",
+					"IRIS_MEASURE_CONSOLE_OP="+op,
+					"IRIS_MEASURE_CONSOLE_DB="+coldDB,
+					"IRIS_MEASURE_CONSOLE_EXEC="+seed.ActiveExecID,
+					"IRIS_MEASURE_CONSOLE_OUT="+opOut,
+				)
+				if out, err := cmd.CombinedOutput(); err != nil {
+					t.Fatalf("cold worker %s failed: %v\n%s", op, err, out)
+				}
+				raw, err := os.ReadFile(opOut)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var workerRes struct {
+					Operation opMeasurement              `json:"operation"`
+					Plans     map[string]queryPlanReport `json:"plans"`
+				}
+				if err := json.Unmarshal(raw, &workerRes); err != nil {
+					t.Fatal(err)
+				}
+				report.Operations = append(report.Operations, workerRes.Operation)
+				for k, p := range workerRes.Plans {
+					report.ExplainPlans[k] = p
+				}
+				budget.observe(t)
+			}()
+			budget.observe(t)
 		}
 		for note := range fadviseNotes {
 			report.CacheNotes = append(report.CacheNotes, "cold mode file preparation: "+note)
@@ -1320,12 +1478,15 @@ func TestConsoleReadStallMeasurement(t *testing.T) {
 	_ = os.Remove(baseDB + "-wal")
 	_ = os.Remove(baseDB + "-shm")
 	_ = os.Remove(baseDB + ".lock")
+	budget.observe(t)
 
-	report.Overview14kPoint = measureOverview14kPoint(t, cfg.WorkDir)
+	report.Overview14kPoint = measureOverview14kPoint(t, cfg.WorkDir, budget)
 	leaseRes := runLeaseConsequenceScenario(t, filepath.Join(cfg.WorkDir, "lease-consequence-measure.db"))
 	report.LeaseConsequence = &leaseRes
 	readNonBlockingRes := runReadNonBlockingScenario(t, filepath.Join(cfg.WorkDir, "read-non-blocking-measure.db"))
 	report.ReadNonBlocking = &readNonBlockingRes
+	budget.observe(t)
+	report.PeakDiskBytes = budget.peak
 
 	encoded, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {
@@ -1335,7 +1496,11 @@ func TestConsoleReadStallMeasurement(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	t.Logf("report written: %s (db=%d bytes, fs=%s, mode=%s)", cfg.OutPath, report.Database.FileBytes, env["filesystem"], cfg.CacheMode)
+	hostFreeText := "unavailable"
+	if budget.mntCFree != nil {
+		hostFreeText = strconv.FormatInt(*budget.mntCFree, 10)
+	}
+	t.Logf("report written: %s (db=%d bytes, fs=%s, mode=%s, peak_disk=%d cap=%d work_dir_free=%d mnt_c_free=%s)", cfg.OutPath, report.Database.FileBytes, env["filesystem"], cfg.CacheMode, budget.peak, budget.capBytes, budget.workFree, hostFreeText)
 	for _, op := range report.Operations {
 		t.Logf("%-14s wall=%8.2f ms  cpu=%7.2f ms (u=%6.2f s=%6.2f)  mu_wait=%6.3f ms  mu_held=%8.2f ms  begin=%5.2f  expire=%5.2f  query=%8.2f  commit=%5.2f",
 			op.Operation, op.WallMS, op.CPUMS.TotalMS, op.CPUMS.UserMS, op.CPUMS.SysMS, op.MuWaitMS, op.MuHeldMS,
