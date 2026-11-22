@@ -378,8 +378,9 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const [openedPages, setOpenedPages] = useState({ filters: "", pages: 1 });
   const [olderCursor, setOlderCursor] = useState<string | undefined>(undefined);
   const [threadsError, setThreadsError] = useState(false);
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const readRequested = useRef(false);
+  const [openedThread, setOpenedThread] = useState<{ id: string } | null>(null);
+  const selectedId = openedThread?.id ?? null;
+  const readRequestedFor = useRef<typeof openedThread>(null);
   const pendingRead = useRef<{ id: string; repositoryId: string } | null>(null);
   const [thread, setThread] = useState<ThreadDetail | null>(null);
   const [compose, setCompose] = useState<Draft>(newDraft);
@@ -586,11 +587,12 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   }, [participant, openedPages, phase, query, repositoryId, threadRevision]);
 
   useEffect(() => {
-    if (phase !== "ready" || activeView !== "messages" || selectedId === null) {
+    if (phase !== "ready" || activeView !== "messages" || openedThread === null) {
       return;
     }
+    const { id } = openedThread;
     let ignore = false;
-    void getThread(selectedId, repositoryId)
+    void getThread(id, repositoryId)
       .then((detail) => {
         if (ignore) {
           return;
@@ -599,11 +601,12 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
         setThreadError(false);
         // Only an explicit open arms a read. A watch refresh updates the conversation but
         // leaves both old and newly arrived mail unread; a hidden open waits for visibility.
-        const explicit = readRequested.current;
-        readRequested.current = false;
-        if (explicit && !member && unreadForOperator(detail)) {
-          pendingRead.current = { id: selectedId, repositoryId };
-          flushRead();
+        if (readRequestedFor.current === openedThread) {
+          readRequestedFor.current = null;
+          if (!member && unreadForOperator(detail)) {
+            pendingRead.current = { id, repositoryId };
+            flushRead();
+          }
         }
         // Refresh an untouched suggestion, but retain an edited draft and its retry key
         // even when the operator left this conversation and has now returned to it.
@@ -613,7 +616,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
           return matches.length === 1 ? matches[0]!.id : name;
         }).join(", ") } : suggestion;
         if (fresh !== null) {
-          const scope = JSON.stringify([repositoryId, selectedId]);
+          const scope = JSON.stringify([repositoryId, id]);
           setReplies((current) => current[scope]?.offered === false ? current : { ...current, [scope]: fresh });
         }
       })
@@ -626,7 +629,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     return () => {
       ignore = true;
     };
-  }, [activeView, phase, reload, repositoryId, selectedId, threadRevision, member, replyAgents, flushRead]);
+  }, [activeView, phase, repositoryId, openedThread, threadRevision, member, replyAgents, flushRead]);
 
   useEffect(() => {
     if (activeView !== "messages") {
@@ -747,12 +750,15 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const activeAgents = sessions.filter((item) => item.state === "active");
   const visibleAgents = sessions.filter((item) => (showInactive || item.state === "active") &&
     `${item.name} ${item.host} ${item.client} ${item.branch} ${repositoryName(overview!, item.repository_id, t)}`.toLowerCase().includes(agentSearch.toLowerCase().trim()));
+  const cancelThreadRead = () => {
+    readRequestedFor.current = null;
+    pendingRead.current = null;
+  };
   const clearThread = () => {
     replyReview.stop();
     composeReview.stop();
-    readRequested.current = false;
-    pendingRead.current = null;
-    setSelectedId(null);
+    cancelThreadRead();
+    setOpenedThread(null);
     setThread(null);
     setThreadError(false);
   };
@@ -760,25 +766,27 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     if (next !== activeView) {
       replyReview.stop();
       composeReview.stop();
+      cancelThreadRead();
     }
     setView(next);
   };
   const openThread = (id: string, trigger: HTMLButtonElement) => {
     lastThreadButton.current = trigger;
     chooseView("messages");
+    // Each click requests fresh detail, even when the selected ID stays the same.
+    const opened = { id };
+    readRequestedFor.current = opened;
+    pendingRead.current = null;
+    setOpenedThread(opened);
     if (id === selectedId) {
       readerTitle.current?.focus();
-      flushRead();
       return;
     }
     // Review is an explicit step in this visit to the draft. Restoring its text must
     // not reopen the send control and pull focus away from the conversation heading.
     replyReview.stop();
-    readRequested.current = true;
-    pendingRead.current = null;
     setThread(null);
     setThreadError(false);
-    setSelectedId(id);
   };
   const openMailbox = (scope: "mine" | "all") => {
     chooseView("messages");

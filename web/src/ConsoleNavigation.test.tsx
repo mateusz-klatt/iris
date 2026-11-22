@@ -1,13 +1,29 @@
 import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { http, HttpResponse } from "msw";
-import { beforeEach, expect, it } from "vitest";
+import { StrictMode } from "react";
+import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { WatchFrame } from "./api";
 import i18n from "./i18n";
 import { emptyOverview, server, sessionOverview, threadDetail, threadsPage } from "./test/server";
 
 beforeEach(async () => { await i18n.changeLanguage("en"); });
+afterEach(() => { vi.restoreAllMocks(); });
+
+function mockVisibility(initial: DocumentVisibilityState) {
+  const visibility = vi.spyOn(document, "visibilityState", "get").mockReturnValue(initial);
+  return (next: DocumentVisibilityState) => {
+    visibility.mockReturnValue(next);
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+  };
+}
+
+function observeThreadReads() {
+  // Observe dispatch synchronously while MSW still handles the requests.
+  const fetch = vi.spyOn(globalThis, "fetch");
+  return () => fetch.mock.calls.filter(([url, init]) => init?.method === "POST" && String(url).endsWith("/read"));
+}
 
 it("starts with operator conversations, keeps fleet activity separate and exposes shortcuts", async () => {
   const user = userEvent.setup();
@@ -111,8 +127,7 @@ it("keeps focus in an edited reply when a live refresh fails and recovers", asyn
 });
 
 
-const consoleViews = [
-  ["messages", /^My messages/],
+const otherViews = [
   ["fleet", /^Fleet/],
   ["claims", /^Claims/],
   ["diagnostics", "Diagnostics"],
@@ -121,14 +136,19 @@ const consoleViews = [
   ["access", "Access"],
 ] as const;
 
+const consoleViews = [["messages", /^My messages/], ...otherViews] as const;
+
 it.each(consoleViews)("keeps the %s view selected across a watch refresh", async (view, buttonName) => {
   const user = userEvent.setup();
   let onFrame: ((frame: WatchFrame) => void) | undefined;
   let overviews = 0;
-  server.use(http.get("*/v1/ui/overview", () => {
-    overviews++;
-    return HttpResponse.json(sessionOverview);
-  }));
+  server.use(
+    http.get("*/v1/ui/overview", () => {
+      overviews++;
+      return HttpResponse.json(sessionOverview);
+    }),
+    http.get("*/v1/ui/accounts", () => HttpResponse.json({ accounts: [] })),
+  );
   render(<App connect={(frame) => { onFrame = frame; return () => {}; }} />);
   await user.click(await screen.findByRole("button", { name: buttonName }));
   expect(screen.getByRole("main")).toHaveAttribute("data-view", view);
@@ -195,58 +215,102 @@ it("neither selects nor reads a new thread when a refresh changes the list", asy
   expect(reads).toBe(0);
 });
 
-it("sends exactly one read for an explicit visible open and none for later frames", async () => {
+it("sends exactly one read for an explicit visible open under StrictMode and none for later frames", async () => {
   const user = userEvent.setup({ delay: null });
+  mockVisibility("visible");
+  const reads = observeThreadReads();
   let onFrame: ((frame: WatchFrame) => void) | undefined;
-  let reads = 0;
-  let details = 0;
-  server.use(
-    http.get("*/v1/ui/threads/:id", () => {
-      details++;
-      return HttpResponse.json(threadDetail);
-    }),
-    http.post("*/v1/ui/threads/:id/read", () => {
-      reads++;
-      return HttpResponse.json({ read: 1 });
-    }),
+  const firstMessage = threadDetail.messages[0]!;
+  let messages = threadDetail.messages;
+  server.use(http.get("*/v1/ui/threads/:id", () => HttpResponse.json({ ...threadDetail, messages })));
+  render(
+    <StrictMode>
+      <App connect={(frame) => { onFrame = frame; return () => {}; }} />
+    </StrictMode>,
   );
-  render(<App connect={(frame) => { onFrame = frame; return () => {}; }} />);
   await user.click(await screen.findByRole("button", { name: /Open thread: Rollout check/ }));
-  await screen.findByRole("article", { name: "Rollout check" });
-  await waitFor(() => expect(reads).toBe(1));
+  expect(await screen.findByText("All checks passed.")).toBeVisible();
+  expect(reads()).toHaveLength(1);
 
+  messages = [...messages, { ...firstMessage, id: "ms_reply", body: "New rollout details." }];
   act(() => onFrame?.({ cursor: 2, kind: "changed" }));
-  await waitFor(() => expect(details).toBe(2));
-  await act(async () => { await Promise.resolve(); });
-  expect(reads).toBe(1);
+  expect(await screen.findByText("New rollout details.")).toBeVisible();
+  expect(reads()).toHaveLength(1);
 });
 
-it("defers an explicit hidden open until the document becomes visible", async () => {
-  const original = Object.getOwnPropertyDescriptor(document, "visibilityState");
-  let visibility: DocumentVisibilityState = "hidden";
-  Object.defineProperty(document, "visibilityState", { configurable: true, get: () => visibility });
-  try {
-    const user = userEvent.setup({ delay: null });
-    let reads = 0;
-    server.use(http.post("*/v1/ui/threads/:id/read", () => {
-      reads++;
-      return HttpResponse.json({ read: 1 });
-    }));
-    render(<App connect={() => () => {}} />);
-    await user.click(await screen.findByRole("button", { name: /Open thread: Rollout check/ }));
-    await screen.findByRole("article", { name: "Rollout check" });
-    await act(async () => { await Promise.resolve(); });
-    expect(reads).toBe(0);
+it("defers a hidden open under StrictMode until visible and cancels it on Back", async () => {
+  const user = userEvent.setup({ delay: null });
+  const changeVisibility = mockVisibility("hidden");
+  const reads = observeThreadReads();
+  render(
+    <StrictMode>
+      <App connect={() => () => {}} />
+    </StrictMode>,
+  );
+  const row = await screen.findByRole("button", { name: /Open thread: Rollout check/ });
+  await user.click(row);
+  expect(await screen.findByText("All checks passed.")).toBeVisible();
+  expect(reads()).toHaveLength(0);
+  changeVisibility("hidden");
+  expect(reads()).toHaveLength(0);
 
-    act(() => document.dispatchEvent(new Event("visibilitychange")));
-    expect(reads).toBe(0);
-    visibility = "visible";
-    act(() => document.dispatchEvent(new Event("visibilitychange")));
-    await waitFor(() => expect(reads).toBe(1));
-    act(() => document.dispatchEvent(new Event("visibilitychange")));
-    expect(reads).toBe(1);
-  } finally {
-    if (original === undefined) Reflect.deleteProperty(document, "visibilityState");
-    else Object.defineProperty(document, "visibilityState", original);
-  }
+  await user.click(screen.getByRole("button", { name: "Back to threads" }));
+  expect(screen.getByText("Choose a conversation")).toBeVisible();
+  changeVisibility("visible");
+  expect(reads()).toHaveLength(0);
+
+  changeVisibility("hidden");
+  await user.click(row);
+  expect(await screen.findByText("All checks passed.")).toBeVisible();
+  expect(reads()).toHaveLength(0);
+  changeVisibility("visible");
+  expect(reads()).toHaveLength(1);
+  changeVisibility("visible");
+  expect(reads()).toHaveLength(1);
+});
+
+it.each(otherViews)("cancels a deferred read when switching from the thread to %s", async (view, buttonName) => {
+  const user = userEvent.setup({ delay: null });
+  const changeVisibility = mockVisibility("hidden");
+  const reads = observeThreadReads();
+  server.use(http.get("*/v1/ui/accounts", () => HttpResponse.json({ accounts: [] })));
+  render(<App connect={() => () => {}} />);
+  await user.click(await screen.findByRole("button", { name: /Open thread: Rollout check/ }));
+  expect(await screen.findByText("All checks passed.")).toBeVisible();
+  expect(reads()).toHaveLength(0);
+
+  await user.click(screen.getByRole("button", { name: buttonName }));
+  expect(screen.getByRole("main")).toHaveAttribute("data-view", view);
+  expect(screen.queryByRole("article", { name: "Rollout check" })).toBeNull();
+  changeVisibility("visible");
+  expect(reads()).toHaveLength(0);
+});
+
+it.each(["visible", "hidden"] as const)("reads newly arrived mail once when reopening the selected row while %s", async (visibility) => {
+  const user = userEvent.setup({ delay: null });
+  const changeVisibility = mockVisibility("visible");
+  const reads = observeThreadReads();
+  const firstMessage = threadDetail.messages[0]!;
+  let messages = threadDetail.messages;
+  server.use(http.get("*/v1/ui/threads/:id", () => HttpResponse.json({ ...threadDetail, messages })));
+  render(<App connect={() => () => {}} />);
+  const row = await screen.findByRole("button", { name: /Open thread: Rollout check/ });
+  await user.click(row);
+  expect(await screen.findByText("All checks passed.")).toBeVisible();
+  expect(reads()).toHaveLength(1);
+
+  messages = [
+    { ...firstMessage, recipients: [{ name: "human", state: "acked" }] },
+    { ...firstMessage, id: "ms_reply", body: "One more rollout check passed." },
+  ];
+  changeVisibility(visibility);
+  expect(row).toHaveAttribute("aria-current", "true");
+  await user.click(row);
+  expect(await screen.findByText("One more rollout check passed.")).toBeVisible();
+  expect(reads()).toHaveLength(visibility === "visible" ? 2 : 1);
+
+  changeVisibility("visible");
+  expect(reads()).toHaveLength(2);
+  changeVisibility("visible");
+  expect(reads()).toHaveLength(2);
 });
