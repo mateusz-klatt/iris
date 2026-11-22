@@ -110,7 +110,7 @@ it("keeps focus in an edited reply when a live refresh fails and recovers", asyn
   let onFrame: ((frame: WatchFrame) => void) | undefined;
   server.use(http.get("*/v1/ui/threads/:id", () => fails
     ? new HttpResponse(null, { status: 500 }) : HttpResponse.json(threadDetail)));
-  render(<App connect={(frame) => { onFrame = frame; return () => {}; }} />);
+  render(<App refreshGap={0} connect={(frame) => { onFrame = frame; return () => {}; }} />);
   await user.click(await screen.findByRole("button", { name: /Open thread: Rollout check/ }));
   const body = await screen.findByRole("textbox", { name: "Message" });
   await user.type(body, "Keep typing through live updates");
@@ -392,20 +392,43 @@ it("cancels a deferred read when an overview error replaces the reader", async (
   const user = userEvent.setup({ delay: null });
   const changeVisibility = mockVisibility("visible");
   const reads = observeThreadReads();
+  let deferFailure = false;
+  let failureInFlight = false;
   let overviewFails = false;
   let onFrame: ((frame: WatchFrame) => void) | undefined;
+  let finishOverviewFailure!: () => void;
+  const overviewFailureReady = new Promise<void>((resolve) => { finishOverviewFailure = resolve; });
   let finishDetail!: () => void;
   const detailReady = new Promise<void>((resolve) => { finishDetail = resolve; });
+  const retryDetail = {
+    ...threadDetail,
+    messages: [{ ...threadDetail.messages[0]!, id: "ms_retry", body: "Fresh detail after retry." }],
+  };
+  let serveRetryDetail = false;
   server.use(
-    http.get("*/v1/ui/overview", () => overviewFails
-      ? new HttpResponse(null, { status: 500 }) : HttpResponse.json(sessionOverview)),
+    http.get("*/v1/ui/overview", async () => {
+      if (deferFailure) {
+        deferFailure = false;
+        failureInFlight = true;
+        await overviewFailureReady;
+        return new HttpResponse(null, { status: 500 });
+      }
+      return overviewFails ? new HttpResponse(null, { status: 500 }) : HttpResponse.json(sessionOverview);
+    }),
     http.get("*/v1/ui/threads/:id", async () => {
       await detailReady;
-      return HttpResponse.json(threadDetail);
+      return HttpResponse.json(serveRetryDetail ? retryDetail : threadDetail);
     }),
   );
   render(<App connect={(frame) => { onFrame = frame; return () => {}; }} />);
-  await user.click(await screen.findByRole("button", { name: /Open thread: Rollout check/ }));
+  const row = await screen.findByRole("button", { name: /Open thread: Rollout check/ });
+
+  // Start a frame-triggered overview reload before hiding; an in-flight reload continues
+  // after hiding even though hidden tabs accept no new refreshes.
+  deferFailure = true;
+  act(() => onFrame?.({ cursor: 2, kind: "changed" }));
+  await waitFor(() => expect(failureInFlight).toBe(true));
+  await user.click(row);
   expect(screen.queryByText("All checks passed.")).toBeNull();
   changeVisibility("hidden");
   finishDetail();
@@ -413,7 +436,7 @@ it("cancels a deferred read when an overview error replaces the reader", async (
   expect(reads()).toHaveLength(0);
 
   overviewFails = true;
-  act(() => onFrame?.({ cursor: 2, kind: "changed" }));
+  finishOverviewFailure();
   const error = await screen.findByRole("alert");
   expect(error).toHaveTextContent("could not load");
   expect(screen.queryByRole("article", { name: "Rollout check" })).toBeNull();
@@ -421,8 +444,9 @@ it("cancels a deferred read when an overview error replaces the reader", async (
   expect(reads()).toHaveLength(0);
 
   overviewFails = false;
+  serveRetryDetail = true;
   await user.click(within(error).getByRole("button", { name: "Try again" }));
-  expect(await screen.findByText("All checks passed.")).toBeVisible();
+  expect(await screen.findByText("Fresh detail after retry.")).toBeVisible();
   expect(reads()).toHaveLength(0);
 });
 

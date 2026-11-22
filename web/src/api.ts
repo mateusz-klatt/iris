@@ -309,11 +309,54 @@ export function watchUi(
   let socket: WebSocket | null = null;
   let timer = 0;
   let failures = 0;
+  let waitVisible = false;
+
+  const revalidate = () => {
+    if (document.visibilityState === "hidden") {
+      waitVisible = true;
+      return;
+    }
+    // Every close revalidates authority before reconnecting. The browser cannot
+    // distinguish refusal from a network failure by the socket alone.
+    check().then(
+      () => {
+        if (!closed) {
+          retry();
+        }
+      },
+      (error: unknown) => {
+        if (closed) {
+          return;
+        }
+        if (error instanceof ApiError && error.status === 401) {
+          closed = true;
+          document.removeEventListener("visibilitychange", onVisibilityChange);
+          onStatus?.("unauthorized");
+          return;
+        }
+        retry();
+      },
+    );
+  };
 
   const retry = () => {
     const step = Math.min(lastWatchDelay, firstWatchDelay * 2 ** failures);
     failures++;
-    timer = window.setTimeout(() => open(true), step / 2 + random() * (step / 2));
+    timer = window.setTimeout(() => {
+      timer = 0;
+      if (document.visibilityState === "hidden") {
+        waitVisible = true;
+        return;
+      }
+      open(true);
+    }, step / 2 + random() * (step / 2));
+  };
+
+  const onVisibilityChange = () => {
+    if (waitVisible) {
+      waitVisible = false;
+      revalidate();
+    }
   };
 
   const open = (reconnect: boolean) => {
@@ -342,33 +385,18 @@ export function watchUi(
       if (closed) {
         return;
       }
-      // Every close revalidates authority before reconnecting. The browser cannot
-      // distinguish refusal from a network failure by the socket alone.
-      check().then(
-        () => {
-          if (!closed) {
-            retry();
-          }
-        },
-        (error: unknown) => {
-          if (closed) {
-            return;
-          }
-          if (error instanceof ApiError && error.status === 401) {
-            closed = true;
-            onStatus?.("unauthorized");
-            return;
-          }
-          retry();
-        },
-      );
+      revalidate();
     };
   };
 
+  document.addEventListener("visibilitychange", onVisibilityChange);
+  // Initial watch opens even in a background tab so live updates are ready on switch, while
+  // reconnect /session checks and backoff retries wait until the tab is visible.
   open(false);
   return () => {
     closed = true;
     window.clearTimeout(timer);
+    document.removeEventListener("visibilitychange", onVisibilityChange);
     socket?.close();
   };
 }

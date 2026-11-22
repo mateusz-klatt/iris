@@ -6,6 +6,7 @@ import { http, HttpResponse } from "msw";
 
 class FakeSocket {
   static latest: FakeSocket | null = null;
+  static opened = 0;
 
   onopen: (() => void) | null = null;
   onmessage: ((event: { data: unknown }) => void) | null = null;
@@ -13,6 +14,7 @@ class FakeSocket {
 
   constructor(readonly url: string) {
     FakeSocket.latest = this;
+    FakeSocket.opened++;
   }
 
   close() {
@@ -21,8 +23,11 @@ class FakeSocket {
 }
 
 afterEach(() => {
+  FakeSocket.latest = null;
+  FakeSocket.opened = 0;
   setConsoleCsrf("");
   vi.unstubAllGlobals();
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -298,5 +303,54 @@ describe("delivery problems", () => {
     await expect(getDeliveryProblems("rp a")).resolves.toEqual(body);
     await expect(getDeliveryProblems()).resolves.toEqual(body);
     expect(seen).toEqual(["?repository_id=rp%20a", ""]);
+  });
+});
+
+describe("watch visibility gating", () => {
+  it("defers reconnect checks and sockets on a hidden startup until visible", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("WebSocket", FakeSocket);
+    let state: DocumentVisibilityState = "hidden";
+    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => state);
+    const check = vi.fn().mockResolvedValue(undefined);
+    const stop = watchUi(() => undefined, undefined, { check, random: () => 0 });
+    expect(FakeSocket.opened).toBe(1);
+
+    FakeSocket.latest?.close();
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(check).not.toHaveBeenCalled();
+    expect(FakeSocket.opened).toBe(1);
+
+    state = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(500);
+    expect(check).toHaveBeenCalledOnce();
+    expect(FakeSocket.opened).toBe(2);
+    stop();
+  });
+
+  it("defers a pending retry timer that matures after hiding and makes no requests after stop", async () => {
+    vi.useFakeTimers();
+    vi.stubGlobal("WebSocket", FakeSocket);
+    let state: DocumentVisibilityState = "visible";
+    vi.spyOn(document, "visibilityState", "get").mockImplementation(() => state);
+    const check = vi.fn().mockResolvedValue(undefined);
+    const stop = watchUi(() => undefined, undefined, { check, random: () => 1 });
+
+    FakeSocket.latest?.close();
+    await Promise.resolve();
+    expect(check).toHaveBeenCalledOnce();
+
+    state = "hidden";
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(FakeSocket.opened).toBe(1);
+
+    stop();
+    state = "visible";
+    document.dispatchEvent(new Event("visibilitychange"));
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(check).toHaveBeenCalledOnce();
+    expect(FakeSocket.opened).toBe(1);
   });
 });

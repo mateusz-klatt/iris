@@ -619,6 +619,7 @@ describe("Iris operator console", () => {
     );
     render(
       <App
+        refreshGap={0}
         connect={(frame, status) => {
           onFrame = frame;
           status?.("live");

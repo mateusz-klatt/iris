@@ -63,8 +63,9 @@ function watched() {
 
 async function openThread(
   connect: NonNullable<Parameters<typeof App>[0]>["connect"],
+  refreshGap = 0,
 ) {
-  render(<App connect={connect} />);
+  render(<App refreshGap={refreshGap} connect={connect} />);
   await userEvent
     .setup({ delay: null })
     .click(await screen.findByRole("button", { name: /Rollout check/ }));
@@ -184,7 +185,7 @@ describe("console reply draft", () => {
     const { feed, connect } = watched();
     render(
       <StrictMode>
-        <App connect={connect} />
+        <App refreshGap={0} connect={connect} />
       </StrictMode>,
     );
     await user.click(await screen.findByRole("button", { name: /Rollout check/ }));

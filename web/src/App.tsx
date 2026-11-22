@@ -122,6 +122,22 @@ function replyDraft(messages: ThreadMessage[]): Draft | null {
   return newDraft({ to, subject: last.subject.startsWith("Re:") ? last.subject : `Re: ${last.subject}`, replyTo: last.id, offered: true });
 }
 
+function resolveReplySuggestion(messages: ThreadMessage[], member: boolean, agents: Agent[]): Draft | null {
+  const suggestion = replyDraft(messages);
+  if (suggestion === null || !member) {
+    return suggestion;
+  }
+  return {
+    ...suggestion,
+    to: recipientsOf(suggestion.to)
+      .map((name) => {
+        const matches = agents.filter((agent) => agent.name === name);
+        return matches.length === 1 ? matches[0]!.id : name;
+      })
+      .join(", "),
+  };
+}
+
 // unreadForOperator is whether a thread holds mail to the operator not yet acknowledged.
 function unreadForOperator(detail: ThreadDetail): boolean {
   return detail.messages.some((message) =>
@@ -287,10 +303,17 @@ function HostReport({ report }: { report: DoctorReport }) {
 }
 
 // The shortest time between the starts of two refreshes that watch frames cause. A frame that
-// finds no refresh running starts one at once; frames during one ask for a single more, which
-// starts when it ends and this long after it began. A hub whose cursor moved twice a second
-// otherwise had the console refetch without end, aborting the slowest reads every time.
-const frameRefreshGap = 2000;
+// finds no refresh running and an elapsed gap starts one at once; frames during a run or
+// inside the gap coalesce into a single follow-up when the window ends.
+// 10 s coalesces frames arriving every few seconds in an active fleet (such as claim touches
+// and expiries every ~4-5 s) to at most one full reload per 10 s while keeping an operator's
+// view reasonably fresh; explicit actions (send, read, revoke, retry) reload immediately.
+const frameRefreshGap = 10_000;
+
+// Bounded fallback interval when no watch frames arrive on a visible tab.
+// 30 s matches watchUi's maximum reconnect backoff (lastWatchDelay) and bounds staleness
+// across quiet hubs or stalled sockets without multiplying idle traffic across shared tabs.
+const fallbackRefreshInterval = 30_000;
 
 export function App({ connect = watchUi, refreshGap = frameRefreshGap }: { connect?: typeof watchUi; refreshGap?: number } = {}) {
   const { t } = useTranslation();
@@ -368,6 +391,11 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const lastThreadButton = useRef<HTMLButtonElement | null>(null);
   const sessions = useMemo(() => overview?.agents ?? [], [overview]);
   const replyAgents = member ? sessions : noAgents;
+  const replyAgentsRef = useRef(replyAgents);
+  replyAgentsRef.current = replyAgents;
+  const postReadRefresh = useRef<(() => void) | null>(null);
+  const repositoryIdRef = useRef(repositoryId);
+  repositoryIdRef.current = repositoryId;
   const waiting = phase === "ready" && sessions.length === 0;
   const activeView = view ?? "messages";
   const participant = mailScope === "mine" && !member ? "human" : agent;
@@ -384,6 +412,8 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const readRequestedFor = useRef<ThreadOpening | Promise<ThreadDetail> | null>(null);
   const pendingRead = useRef<{ id: string; repositoryId: string } | null>(null);
   const [loadedThread, setLoadedThread] = useState<{ opening: ThreadOpening; detail: ThreadDetail } | null>(null);
+  const loadedThreadRef = useRef(loadedThread);
+  loadedThreadRef.current = loadedThread;
   const thread = loadedThread?.detail ?? null;
   const [compose, setCompose] = useState<Draft>(newDraft);
   // A conversation can be read through different repository views. Keep each view's
@@ -479,66 +509,156 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     }
   }, [cancelThreadRead, member]);
 
-  const flushRead = useCallback(() => {
+  const flushRead = useCallback((deferReload = false) => {
     const pending = pendingRead.current;
     if (pending === null || document.visibilityState === "hidden") {
-      return;
+      return null;
     }
     pendingRead.current = null;
-    void readThread(pending.id, pending.repositoryId)
+    return readThread(pending.id, pending.repositoryId)
       .then((read) => {
-        if (read > 0) {
-          void reload();
+        if (!deferReload && read > 0) {
+          postReadRefresh.current?.();
         }
       })
       .catch(() => undefined);
-  }, [reload]);
+  }, []);
 
-  useEffect(() => {
-    document.addEventListener("visibilitychange", flushRead);
-    return () => {
-      document.removeEventListener("visibilitychange", flushRead);
-      cancelThreadRead();
-    };
-  }, [cancelThreadRead, flushRead]);
+  useEffect(() => () => cancelThreadRead(), [cancelThreadRead]);
 
   // revision changes only to retry after an error, which reconnects too.
   useEffect(() => {
     const requests = overviewRequest;
     let closed = false;
     let running = false;
-    let again = false;
-    let started = 0;
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let pending = false;
+    let visibleEpoch = 0;
+    let lastScheduledStarted = 0;
+    let currentStarted = 0;
+    let cooldownTimer: ReturnType<typeof setTimeout> | undefined;
+    let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
+    let hidden = document.visibilityState === "hidden";
+
+    const clearFallback = () => {
+      clearTimeout(fallbackTimer);
+      fallbackTimer = undefined;
+    };
+
+    const scheduleFallback = () => {
+      clearFallback();
+      fallbackTimer = setTimeout(() => {
+        fallbackTimer = undefined;
+        runRefresh(true, true);
+      }, fallbackRefreshInterval);
+    };
+
+    const scheduleCooldown = () => {
+      if (cooldownTimer !== undefined) {
+        return;
+      }
+      const base = lastScheduledStarted !== 0 ? lastScheduledStarted : currentStarted;
+      cooldownTimer = setTimeout(() => {
+        cooldownTimer = undefined;
+        pending = false;
+        runRefresh(true, true);
+      }, Math.max(0, base + refreshGap - Date.now()));
+    };
+
     // One refresh at a time. The first load is one too, so a frame during it waits for it.
-    const refresh = (frame: boolean) => {
+    // Watch frames and fallback ticks share the cooldown window so a frame at or during a
+    // fallback load cannot queue against an expired timestamp and start a second round at once.
+    const runRefresh = (bumpThreads: boolean, startsCooldown: boolean) => {
+      clearFallback();
+      clearTimeout(cooldownTimer);
+      cooldownTimer = undefined;
       running = true;
-      started = Date.now();
-      if (frame) {
+      currentStarted = Date.now();
+      if (startsCooldown) {
+        lastScheduledStarted = currentStarted;
+      }
+      if (bumpThreads) {
         setThreadRevision((value) => value + 1);
       }
       void reload().finally(() => {
         running = false;
-        if (closed || !again) {
+        if (closed || hidden) {
           return;
         }
-        again = false;
-        timer = setTimeout(() => {
-          timer = undefined;
-          refresh(true);
-        }, Math.max(0, started + refreshGap - Date.now()));
+        if (pending) {
+          scheduleCooldown();
+          return;
+        }
+        scheduleFallback();
       });
     };
-    refresh(false);
-    const stop = connect((frame: WatchFrame) => {
-      if (frame.kind.length === 0 || timer !== undefined) {
+
+    postReadRefresh.current = () => {
+      if (hidden) {
         return;
       }
       if (running) {
-        again = true;
+        pending = true;
         return;
       }
-      refresh(true);
+      runRefresh(false, false);
+    };
+
+    const resumeAfterVisibility = (epoch: number) => {
+      if (epoch !== visibleEpoch) {
+        return;
+      }
+      pending = false;
+      if (running) {
+        pending = true;
+        return;
+      }
+      runRefresh(true, false);
+    };
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        hidden = true;
+        visibleEpoch++;
+        clearFallback();
+        clearTimeout(cooldownTimer);
+        cooldownTimer = undefined;
+        return;
+      }
+      // Flush any still-pending deferred read synchronously before starting the resume refresh.
+      // When an acknowledgement starts here, defer the single resume refresh until it settles so
+      // resume + read > 0 runs once, and drop the resume if the tab hides again first.
+      const pendingFlush = flushRead(true);
+      if (!hidden) {
+        return;
+      }
+      hidden = false;
+      const epoch = ++visibleEpoch;
+      if (pendingFlush !== null) {
+        void pendingFlush.finally(() => resumeAfterVisibility(epoch));
+        return;
+      }
+      resumeAfterVisibility(epoch);
+    };
+
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    // Initial overview/doctor load stays active even if the tab opens in the background so first
+    // paint and initial view latch succeed; follow-up polling and fallback remain paused until visible.
+    runRefresh(false, false);
+    const stop = connect((frame: WatchFrame) => {
+      if (frame.kind.length === 0) {
+        return;
+      }
+      if (hidden || running) {
+        pending = true;
+        return;
+      }
+      const elapsed = lastScheduledStarted === 0 ? refreshGap : Date.now() - lastScheduledStarted;
+      if (cooldownTimer !== undefined || elapsed < refreshGap) {
+        pending = true;
+        scheduleCooldown();
+        return;
+      }
+      runRefresh(true, true);
     }, (status) => {
       // A refused session ends the watch; the operator is shown how to sign in again.
       if (status === "unauthorized") {
@@ -551,10 +671,14 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       // A load still in flight lands on a closed view, so it is dropped.
       requests.current++;
       closed = true;
-      clearTimeout(timer);
+      visibleEpoch++;
+      postReadRefresh.current = null;
+      clearFallback();
+      clearTimeout(cooldownTimer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
       stop();
     };
-  }, [connect, reload, refreshGap, revision, onUnauthorized, session]);
+  }, [connect, flushRead, reload, refreshGap, revision, onUnauthorized, session]);
 
   useEffect(() => {
     if (phase !== "ready") {
@@ -570,6 +694,10 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       const all: ThreadSummary[] = [];
       let before: string | undefined;
       for (let page = 0; page < threadPages; page++) {
+        // Background startup may finish page 0; defer further paginated requests until visible.
+        if (page > 0 && document.visibilityState === "hidden") {
+          return null;
+        }
         const next = await listThreads({ repository_id: repositoryId, agent: participant, q: query, before, limit: 50 });
         // A thread that got mail between two pages moves up and is listed again; keep it once.
         all.push(...next.threads.filter((item) => !all.some((seen) => seen.id === item.id)));
@@ -581,10 +709,10 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       return { all, before };
     };
     void walk()
-      .then(({ all, before }) => {
-        if (!ignore) {
-          setThreads(all);
-          setOlderCursor(before);
+      .then((result) => {
+        if (!ignore && result !== null) {
+          setThreads(result.all);
+          setOlderCursor(result.before);
           setThreadsError(false);
         }
       })
@@ -598,6 +726,13 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       ignore = true;
     };
   }, [participant, openedPages, phase, query, repositoryId, threadRevision]);
+
+  const applyReplySuggestion = useCallback((messages: ThreadMessage[], scope: string, agents: Agent[]) => {
+    const fresh = resolveReplySuggestion(messages, member, agents);
+    if (fresh !== null) {
+      setReplies((current) => current[scope]?.offered === false ? current : { ...current, [scope]: fresh });
+    }
+  }, [member]);
 
   useEffect(() => {
     if (phase !== "ready" || activeView !== "messages" || openedThread === null) {
@@ -626,19 +761,10 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
         setThreadError(false);
         if (releaseReadAuthorization() && !member && unreadForOperator(detail)) {
           pendingRead.current = { id, repositoryId };
-          flushRead();
+          void flushRead();
         }
-        // Refresh an untouched suggestion, but retain an edited draft and its retry key
-        // even when the operator left this conversation and has now returned to it.
-        const suggestion = replyDraft(detail.messages);
-        const fresh = suggestion !== null && member ? { ...suggestion, to: recipientsOf(suggestion.to).map((name) => {
-          const matches = replyAgents.filter((agent) => agent.name === name);
-          return matches.length === 1 ? matches[0]!.id : name;
-        }).join(", ") } : suggestion;
-        if (fresh !== null) {
-          const scope = JSON.stringify([repositoryId, id]);
-          setReplies((current) => current[scope]?.offered === false ? current : { ...current, [scope]: fresh });
-        }
+        // Refresh an untouched suggestion together with loaded detail, retaining edited drafts (A14).
+        applyReplySuggestion(detail.messages, JSON.stringify([repositoryId, id]), replyAgentsRef.current);
       })
       .catch((error: unknown) => {
         releaseReadAuthorization();
@@ -650,7 +776,19 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       ignore = true;
       releaseReadAuthorization();
     };
-  }, [activeView, phase, repositoryId, openedThread, threadRevision, member, replyAgents, flushRead]);
+  }, [activeView, applyReplySuggestion, phase, repositoryId, openedThread, threadRevision, member, flushRead]);
+
+  useEffect(() => {
+    // Re-resolve an untouched member suggestion whenever the active-agent directory changes
+    // without re-fetching detail or overwriting an edited draft.
+    if (member && loadedThreadRef.current !== null) {
+      applyReplySuggestion(
+        loadedThreadRef.current.detail.messages,
+        JSON.stringify([repositoryIdRef.current, loadedThreadRef.current.opening.id]),
+        replyAgents,
+      );
+    }
+  }, [applyReplySuggestion, member, replyAgents]);
 
   useEffect(() => {
     if (activeView !== "messages") {

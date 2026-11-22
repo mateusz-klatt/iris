@@ -63,7 +63,7 @@ describe("older threads", () => {
     const user = userEvent.setup({ delay: null });
     const hub = serveThreads(["t1", "t2", "t3", "t4", "t5"]);
     const { feed, connect } = watched();
-    render(<App connect={connect} />);
+    render(<App refreshGap={0} connect={connect} />);
     await waitFor(() => expect(shown()).toEqual(["t1", "t2"]));
     await user.click(screen.getByRole("button", { name: "Older threads" }));
     await waitFor(() => expect(shown()).toEqual(["t1", "t2", "t3", "t4"]));
