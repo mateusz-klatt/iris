@@ -16,8 +16,10 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/mateusz-klatt/iris/internal/binding"
 	"github.com/mateusz-klatt/iris/internal/gitinfo"
@@ -60,6 +62,9 @@ type ClientReport struct {
 	// unusable says a call of this client named a session without a usable Execution in the
 	// last 24 hours (ADR 017), which unusableHint explains from the hub's evidence.
 	unusable bool
+	// localProofDamage names local generation files for recovery. The report sent to the hub
+	// has only the observation kind and count.
+	localProofDamage string
 }
 
 // Result is the human-readable outcome plus the stored report.
@@ -283,6 +288,9 @@ func (r Result) Format() string {
 		if c.Detail != "" {
 			fmt.Fprintf(&b, "\t%s", c.Detail)
 		}
+		if c.localProofDamage != "" {
+			fmt.Fprintf(&b, "\t%s", c.localProofDamage)
+		}
 		if c.LastHookAt != "" {
 			fmt.Fprintf(&b, "\tlast hook %s", c.LastHookAt)
 		}
@@ -449,6 +457,7 @@ func applyFailuresFrom(res *Result, tokenFile, fallbackTokenFile string, now tim
 	degraded := map[string]int{}
 	skipped := map[string]int{}
 	observed := map[string]map[string]int{}
+	proofDamage := map[string]map[string]int{}
 	for _, entry := range entries {
 		name := integrate.Canonical(entry.Client)
 		if name == "" || now.Sub(entry.Time) > failureWindow {
@@ -467,7 +476,18 @@ func applyFailuresFrom(res *Result, tokenFile, fallbackTokenFile string, now tim
 			if observed[name] == nil {
 				observed[name] = map[string]int{}
 			}
-			observed[name][entry.Error]++
+			note := entry.Error
+			if path, ok := strings.CutPrefix(note, hook.DamagedGenerationProof+" at "); ok {
+				note = hook.DamagedGenerationProof
+				if strings.IndexFunc(path, func(r rune) bool { return !unicode.IsPrint(r) }) >= 0 {
+					path = strconv.Quote(path)
+				}
+				if proofDamage[name] == nil {
+					proofDamage[name] = map[string]int{}
+				}
+				proofDamage[name][note+" at "+path]++
+			}
+			observed[name][note]++
 			continue
 		}
 		broken[name] = append(broken[name], entry)
@@ -493,6 +513,12 @@ func applyFailuresFrom(res *Result, tokenFile, fallbackTokenFile string, now tim
 		}
 		if seen := observed[row.Client]; len(seen) > 0 {
 			row.Detail = joinDetail(row.Detail, "observed in 24 h: "+observedText(seen))
+			if seen[hook.RestoreFloorRefused]+seen[hook.RestoreFloorHubTooOld] > 0 {
+				row.Detail = joinDetail(row.Detail, "the hook kept its generation proof and left the session unregistered. Edits may have gone unclaimed")
+			}
+		}
+		if paths := proofDamage[row.Client]; len(paths) > 0 {
+			row.localProofDamage = observedText(paths)
 		}
 		row.unusable = observed[row.Client][binding.ObservedUnusable] > 0
 	}

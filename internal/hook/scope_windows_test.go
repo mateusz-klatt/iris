@@ -35,7 +35,7 @@ func TestWindowsKeepsNoBreakerAndSendsNoReducedSnapshot(t *testing.T) {
 		},
 	}
 	ev := Event{Client: ClientClaude, Kind: KindPreTool, SessionID: "s", CWD: root, ToolClass: ClassShell}
-	if _, err := r.register(context.Background(), ev, gitinfo.Repo{Worktree: root}); err != nil {
+	if _, err := r.register(context.Background(), &runState{}, ev, gitinfo.Repo{Worktree: root}); err != nil {
 		t.Fatal(err)
 	}
 	slow := r

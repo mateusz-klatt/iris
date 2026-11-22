@@ -30,6 +30,14 @@ type outsideHub interface {
 // registers nothing, as a hook did outside git before ADR 034.
 var errOlderHub = errors.New("the hub has no route for sessions outside git")
 
+// RestoreFloorRefused is recorded when local proof cannot safely be used or retried.
+const RestoreFloorRefused = "restore_floor_refused"
+
+// RestoreFloorHubTooOld records a refusal whose answer omitted the generation detail.
+const RestoreFloorHubTooOld = RestoreFloorRefused + ": hub predates restore floor"
+
+const errRestoreFloor hookFailure = RestoreFloorRefused
+
 type Hub interface {
 	RegisterSession(ctx context.Context, req hubclient.SessionRequest) (hubclient.SessionResponse, error)
 	Touch(ctx context.Context, req hubclient.TouchRequest) (hubclient.TouchResponse, error)
@@ -92,10 +100,17 @@ func (r Runner) Run() Output {
 	allow := FallbackAllow(Canonical(r.ClientName))
 	state := &runState{stage: "read"}
 	var failure error
-	var failureStage string
+	var failureStage, observation string
 	defer func() {
+		var entries []Failure
+		if observation != "" {
+			entries = append(entries, Failure{Stage: stageObserved, Error: observation})
+		}
 		if failure != nil {
-			r.recordFailure(failureStage, failure, state.payloadShape())
+			entries = append(entries, Failure{Stage: failureStage, Error: failureText(failure), Shape: state.payloadShape()})
+		}
+		if len(entries) != 0 {
+			r.recordEntries(entries...)
 		}
 	}()
 	deadline := r.Deadline
@@ -122,14 +137,13 @@ func (r Runner) Run() Output {
 	case out := <-ch:
 		failureStage, failure = state.snapshot()
 		out.Stderr = append(out.Stderr, state.receiptLine()...)
-		if seen := state.observation(); seen != "" {
-			r.record(stageObserved, seen, nil)
-		}
+		observation = state.observation()
 		return out
 	case <-after(deadline):
 		cancel()
 		failureStage, _ = state.snapshot()
 		failure = context.DeadlineExceeded
+		observation = state.observation()
 		return allow
 	}
 }
@@ -203,7 +217,7 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		state.at("session")
 		// What the session was told is read before the hub answers; see attentionNote.
 		rev := r.toldRevision(ev)
-		sess, err := r.register(ctx, ev, repo)
+		sess, err := r.register(ctx, state, ev, repo)
 		if errors.Is(err, errOlderHub) {
 			return r.finish(state, ev, Encode(ev, Decision{Action: ActionAllow}))
 		}
@@ -230,7 +244,7 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		// One registration per user turn: idempotent, hedged, and within the deadline.
 		state.at("session")
 		rev := r.toldRevision(ev)
-		sess, err := r.register(ctx, ev, repo)
+		sess, err := r.register(ctx, state, ev, repo)
 		if errors.Is(err, errOlderHub) {
 			return r.finish(state, ev, Encode(ev, Decision{Action: ActionAllow}))
 		}
@@ -251,7 +265,7 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		return r.cursorStop(ctx, state, ev, repo)
 	case KindSessionEnd:
 		state.at("session")
-		sess, err := r.register(ctx, ev, repo)
+		sess, err := r.register(ctx, state, ev, repo)
 		if errors.Is(err, errOlderHub) {
 			return r.finish(state, ev, Encode(ev, Decision{Action: ActionAllow}))
 		}
@@ -265,7 +279,7 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		}
 		r.forgetGrokSessionFile(ev)
 		if m := r.memory(); m != nil {
-			m.Forget(string(ev.Client), ev.SessionID)
+			m.Forget(string(ev.Client), ev.SessionID, sess.Generation)
 		}
 		// What the session was told goes with it; its wake file stays (ADR 017, decision 3).
 		if am, ok := r.memory().(attentionMemory); ok {
@@ -291,7 +305,7 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		// Touch needs an execution id. The hook only has the client session id,
 		// so it reattaches through POST /v1/sessions, which is defined as idempotent.
 		state.at("session")
-		sess, err := r.register(ctx, ev, repo)
+		sess, err := r.register(ctx, state, ev, repo)
 		if hubclient.IsCode(err, "lost") {
 			// Only a recovering Execution refuses a request that carries no generation. Its
 			// claims still block others, so allowing the edit would leave it unclaimed.
@@ -361,16 +375,58 @@ func (r Runner) failOpen(state *runState, ev Event, err error, allow Output) Out
 // recovering is the refusal while a session cannot yet prove itself after a hub restart.
 const recovering = "Iris: the hub restarted and this session cannot prove it is the same one yet, so the edit is refused rather than left unclaimed. Retry shortly: the session reattaches when Iris hears from it with proof, or starts afresh within two minutes of the restart."
 
-// register attaches a hook to its Execution. A remembered generation is the proof a
-// recovering Execution asks for. A stale one is dropped and the call made once without it,
-// which is what the hook sent before it had a memory. SessionEnd must keep its proof:
-// retrying without it could end a newer, healthy generation of the session.
-func (r Runner) register(ctx context.Context, ev Event, repo gitinfo.Repo) (hubclient.SessionResponse, error) {
+// checkRestoreFloor distinguishes a refused retry from recovery without proof. The latter
+// triggers D9's deliberate denial of an edit while the recovering Execution holds its claims.
+func checkRestoreFloor(state *runState, ev Event, m Memory, generation int, err error) error {
+	var hubErr *hubclient.Error
+	if generation == 0 || !errors.As(err, &hubErr) || hubErr.Code != "lost" {
+		return err
+	}
+	highest, valid, present := hubErr.HighestGeneration()
+	if valid && highest >= generation {
+		return err
+	}
+	note := RestoreFloorRefused
+	if !present {
+		note = RestoreFloorHubTooOld
+	}
+	return refuseRestoreFloor(state, ev, m, generation, note)
+}
+
+func refuseRestoreFloor(state *runState, ev Event, m Memory, generation int, note string) error {
+	state.observe(note)
+	if files, ok := m.(fileMemory); ok && generation > 0 {
+		files.retainGeneration(string(ev.Client), ev.SessionID, generation)
+	}
+	return errRestoreFloor
+}
+
+func registrationProof(state *runState, ev Event, m Memory, retained int) (int, error) {
+	if m == nil {
+		return retained, nil
+	}
+	generation, err := m.RecallGeneration(string(ev.Client), ev.SessionID)
+	if err != nil {
+		note := RestoreFloorRefused
+		if files, ok := m.(fileMemory); ok && errors.Is(err, ErrInvalidGeneration) {
+			note = damagedGenerationObservation(files.name(string(ev.Client), ev.SessionID))
+		}
+		return 0, refuseRestoreFloor(state, ev, m, retained, note)
+	}
+	return max(retained, generation), nil
+}
+
+// register attaches a hook to its Execution. It can retry stale proof once when the hub retains
+// at least that generation, which the retry carries as a floor. SessionEnd keeps exact proof to
+// avoid ending a newer Execution.
+func (r Runner) register(ctx context.Context, state *runState, ev Event, repo gitinfo.Repo) (hubclient.SessionResponse, error) {
 	m := r.memory()
 	req := r.sessionReq(ev, repo)
-	if m != nil {
-		req.Generation = m.Recall(string(ev.Client), ev.SessionID)
+	generation, err := registrationProof(state, ev, m, 0)
+	if err != nil {
+		return hubclient.SessionResponse{}, err
 	}
+	req.Generation = generation
 	send := r.Hub.RegisterSession
 	if repo.Worktree == "" {
 		// A session outside git registers on its own route (ADR 034). A hub without it refuses as
@@ -382,11 +438,25 @@ func (r Runner) register(ctx context.Context, ev Event, repo gitinfo.Repo) (hubc
 		send = outside.RegisterOutsideSession
 	}
 	sess, err := send(ctx, req)
-	if req.Generation != 0 && ev.Kind != KindSessionEnd && hubclient.IsCode(err, "lost") {
-		m.Forget(string(ev.Client), ev.SessionID)
-		req.RetryGeneration = req.Generation
-		req.Generation = 0
-		sess, err = send(ctx, req)
+	if req.Generation > 0 && ev.Kind != KindSessionEnd && hubclient.IsCode(err, "lost") {
+		floor, proofErr := registrationProof(state, ev, m, req.Generation)
+		if proofErr != nil {
+			return hubclient.SessionResponse{}, proofErr
+		}
+		err = checkRestoreFloor(state, ev, m, floor, err)
+		if hubclient.IsCode(err, "lost") && ctx.Err() == nil {
+			req.RetryGeneration = floor
+			req.Generation = 0
+			sess, err = send(ctx, req)
+			floor, proofErr = registrationProof(state, ev, m, floor)
+			if proofErr != nil {
+				return hubclient.SessionResponse{}, proofErr
+			}
+			err = checkRestoreFloor(state, ev, m, floor, err)
+			if err == nil && sess.Generation < floor {
+				err = refuseRestoreFloor(state, ev, m, floor, RestoreFloorRefused)
+			}
+		}
 	}
 	if hubclient.OlderHub(err) && repo.Worktree == "" {
 		return hubclient.SessionResponse{}, errOlderHub

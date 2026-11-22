@@ -296,7 +296,7 @@ func (r Runner) shellReduced(ctx context.Context, hub scopedShellHub, plain shel
 		// Whether this hub takes a reduced snapshot is not known yet. One registration says,
 		// before anything is read; a worktree whose full status always times out learns it so.
 		state.at("shell session")
-		s, err := r.register(ctx, ev, repo)
+		s, err := r.register(ctx, state, ev, repo)
 		if err != nil {
 			return out, false, err
 		}
@@ -341,7 +341,7 @@ func (r Runner) shellReduced(ctx context.Context, hub scopedShellHub, plain shel
 		out, err = hub.ReconcileScoped(ctx, hubclient.ScopedRequest{ReconcileRequest: reconcileRequest(sess.ExecutionID, sess.Generation, phase, taken, repo), Scope: scope})
 	} else {
 		state.at("shell session")
-		out, err = r.reconcileScopedSession(ctx, hub, ev, repo, phase, taken, scope)
+		out, err = r.reconcileScopedSession(ctx, state, hub, ev, repo, phase, taken, scope)
 	}
 	switch {
 	case err == nil:
@@ -354,7 +354,7 @@ func (r Runner) shellReduced(ctx context.Context, hub scopedShellHub, plain shel
 		// The session's proof is repaired as a registration repairs it, and this snapshot is
 		// dropped; the next one compares with whatever baseline the Execution has.
 		state.at("shell session")
-		if _, err = r.register(ctx, ev, repo); err != nil {
+		if _, err = r.register(ctx, state, ev, repo); err != nil {
 			return out, false, err
 		}
 		return hubclient.CheckResponse{}, false, nil
@@ -363,15 +363,17 @@ func (r Runner) shellReduced(ctx context.Context, hub scopedShellHub, plain shel
 }
 
 // reconcileScopedSession is the one-call form of a reduced snapshot.
-func (r Runner) reconcileScopedSession(ctx context.Context, hub scopedShellHub, ev Event, repo gitinfo.Repo, phase string, snapshot map[string]string, scope hubclient.Scope) (hubclient.CheckResponse, error) {
+func (r Runner) reconcileScopedSession(ctx context.Context, state *runState, hub scopedShellHub, ev Event, repo gitinfo.Repo, phase string, snapshot map[string]string, scope hubclient.Scope) (hubclient.CheckResponse, error) {
 	req := hubclient.ScopedSessionRequest{ShellSessionRequest: hubclient.ShellSessionRequest{SessionRequest: r.sessionReq(ev, repo), Kind: phase, Status: snapshot}, Scope: scope}
 	m := r.memory()
-	if m != nil {
-		req.Generation = m.Recall(string(ev.Client), ev.SessionID)
+	generation, err := registrationProof(state, ev, m, 0)
+	if err != nil {
+		return hubclient.CheckResponse{}, err
 	}
+	req.Generation = generation
 	res, err := hub.ReconcileScopedSession(ctx, req)
 	r.answered(m, ev, res, err)
-	return res.CheckResponse, err
+	return res.CheckResponse, checkRestoreFloor(state, ev, m, req.Generation, err)
 }
 
 // indexID and gitlinks read the index for a reduced snapshot, or the Runner's stand-ins.

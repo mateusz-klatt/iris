@@ -46,12 +46,14 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 			}
 			r.RepositoryID = e.Repo
 		}
+		registers := operation == "sessions" || operation == "sessions_outside"
+		registersShell := shellSession(operation, r)
 		var err error
 		switch operation {
 		case "touch", "touch_files", "claim", "claim_files", "release", "messages", "ack", "end", "heartbeat", "reconcile", "reconcile_scoped", "inbox_receipt":
 			// A shell reconcile that names its session registers it first, and a first
 			// registration has no generation to give.
-			if r.Generation <= 0 && !shellSession(operation, r) {
+			if r.Generation <= 0 && !registersShell {
 				return fail("bad_request", "generation is required")
 			}
 		}
@@ -81,7 +83,7 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 			if err = scopeFits(operation, r); err != nil {
 				return err
 			}
-			if shellSession(operation, r) {
+			if registersShell {
 				out, err = t.shellSession(&r)
 			} else {
 				out, err = t.reconcile(r)
@@ -181,7 +183,10 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 		default:
 			return fail("not_found", "unknown operation")
 		}
-		registers := operation == "sessions" || operation == "sessions_outside"
+		var lost *Error
+		if (registers || registersShell) && errors.As(err, &lost) && lost.Code == "lost" {
+			return t.registrationLost(r, lost.Message)
+		}
 		if err == nil && (registers || operation == "heartbeat") {
 			ex := r.ExecutionID
 			if registers {

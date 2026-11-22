@@ -61,8 +61,10 @@ func runWatch(args []string) error {
 	}
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
-	resolver := binding.New(&hubclient.Client{Config: hubclient.NewConfig()}, *client)
+	config := hubclient.NewConfig()
+	resolver := binding.New(&hubclient.Client{Config: config}, *client)
 	resolver.HeartbeatSource = "watch"
+	_, _ = bindingSessions(resolver, config)
 	// The monitor shell does not inherit GROK_SESSION_ID. The hook wrote it beside the grok
 	// process. A variable that is already set is left alone.
 	if hook.Canonical(*client) == hook.ClientGrok {

@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
+	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -15,6 +18,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/mateusz-klatt/iris/internal/hubclient"
 	"github.com/mateusz-klatt/iris/internal/store"
 )
 
@@ -67,7 +71,7 @@ func TestARestoredHubPassesEveryCheck(t *testing.T) {
 				t.Fatalf("%v\n%s", err, out.String())
 			}
 			text := out.String()
-			for _, want := range []string{"recovering, none live", "answers status", "gets a reset", "first retention sweep"} {
+			for _, want := range []string{"recovering, none live", "answers status", "refuses a generation-zero retry with floor 3 (409 lost, highest_generation=1) and leaves no generation 2", "gets a reset", "first retention sweep"} {
 				if !strings.Contains(text, want) {
 					t.Fatalf("no %q in\n%s", want, text)
 				}
@@ -78,7 +82,7 @@ func TestARestoredHubPassesEveryCheck(t *testing.T) {
 			if strings.Contains(text, "FAIL") {
 				t.Fatal(text)
 			}
-			if active != strings.Contains(text, "gets no restored authority") {
+			if active != strings.Contains(text, "gets no restored authority (409 lost, highest_generation=1)") {
 				t.Fatal(text)
 			}
 			if tc.marked != strings.Contains(text, "runs on a new stream") || tc.marked == strings.Contains(text, "warn the backup has no restore marker") || tc.marked == strings.Contains(text, "Run `iris admin mark-restored` on the copy you restore") {
@@ -86,6 +90,87 @@ func TestARestoredHubPassesEveryCheck(t *testing.T) {
 			}
 			if after, _ := os.ReadFile(src); !bytes.Equal(before, after) {
 				t.Fatal("the backup was changed")
+			}
+		})
+	}
+}
+
+func TestTheRestoreCheckRequiresATypedConflictWithTheExpectedFloor(t *testing.T) {
+	for _, tc := range []struct {
+		name, body string
+		status     int
+	}{
+		{"generic conflict", `{"error":{"code":"conflict","details":{"highest_generation":1}}}`, 409},
+		{"old hub", `{"error":{"code":"lost","details":{}}}`, 409},
+		{"wrong floor", `{"error":{"code":"lost","details":{"highest_generation":2}}}`, 409},
+		{"malformed floor", `{"error":{"code":"lost","details":{"highest_generation":"1"}}}`, 409},
+		{"wrong status", `{"error":{"code":"lost","details":{"highest_generation":1}}}`, 502},
+		{"different execution", `{"execution_id":"ex_fresh","generation":2}`, 200},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = io.WriteString(w, tc.body)
+			}))
+			defer srv.Close()
+			if lostWithHighest(context.Background(), srv.URL, "test-token", hubclient.SessionRequest{Generation: 3}, 1) {
+				t.Fatalf("accepted %d %s", tc.status, tc.body)
+			}
+		})
+	}
+}
+
+type testTransport func(*http.Request) (*http.Response, error)
+
+func (f testTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
+
+func TestTheRestoreCheckFailsIfEndingOrRetryingTheTerminalGenerationGoesWrong(t *testing.T) {
+	for _, mode := range []string{"end fails", "G2 was created despite the refusal"} {
+		t.Run(mode, func(t *testing.T) {
+			real := httpClient
+			httpClient = &http.Client{Transport: testTransport(func(r *http.Request) (*http.Response, error) {
+				if mode == "end fails" && strings.HasSuffix(r.URL.Path, "/end") {
+					return nil, errors.New("could not end execution")
+				}
+				if mode == "G2 was created despite the refusal" && r.URL.Path == "/v1/sessions" {
+					r = r.Clone(r.Context())
+					raw, err := io.ReadAll(r.Body)
+					if err != nil {
+						return nil, err
+					}
+					_ = r.Body.Close()
+					r.Body = io.NopCloser(bytes.NewReader(raw))
+					var reg hubclient.SessionRequest
+					if err := json.Unmarshal(raw, &reg); err != nil {
+						return nil, err
+					}
+					if reg.RetryGeneration == 3 {
+						reg.RetryGeneration = 0
+						replaced, _ := json.Marshal(reg)
+						r.Body = io.NopCloser(bytes.NewReader(replaced))
+						r.ContentLength = int64(len(replaced))
+						res, err := http.DefaultTransport.RoundTrip(r)
+						if err != nil {
+							return nil, err
+						}
+						var next hubclient.SessionResponse
+						decodeErr := json.NewDecoder(res.Body).Decode(&next)
+						_ = res.Body.Close()
+						if decodeErr != nil || next.Generation != 2 {
+							t.Errorf("failed to simulate the unintended generation: %+v, %v", next, decodeErr)
+						}
+						res.StatusCode = http.StatusConflict
+						res.Body = io.NopCloser(strings.NewReader(`{"error":{"code":"lost","details":{"highest_generation":1}}}`))
+						return res, nil
+					}
+				}
+				return http.DefaultTransport.RoundTrip(r)
+			})}
+			t.Cleanup(func() { httpClient = real })
+			var out bytes.Buffer
+			err := Run(context.Background(), backup(t, false), filepath.Join(t.TempDir(), "scratch"), &out)
+			if err == nil || !strings.Contains(out.String(), "FAIL a terminal generation 1") {
+				t.Fatalf("error = %v\n%s", err, &out)
 			}
 		})
 	}

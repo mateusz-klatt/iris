@@ -2,11 +2,15 @@ package hook
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
+	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -23,6 +27,12 @@ func newFileMemory(t *testing.T) fileMemory {
 	return fileMemory{dir: filepath.Join(t.TempDir(), "sessions"), now: time.Now, restrict: config.OwnerOnly}
 }
 
+// Recall inspects the on-disk generation without refreshing it.
+func (m fileMemory) Recall(client, session string) int {
+	generation, _ := readGeneration(m.name(client, session))
+	return generation
+}
+
 func TestFileMemoryRemembersEachSessionApart(t *testing.T) {
 	m := newFileMemory(t)
 	if m.Recall("claude", "s") != 0 {
@@ -37,7 +47,7 @@ func TestFileMemoryRemembersEachSessionApart(t *testing.T) {
 	if m.Recall("claude", "s") != 4 {
 		t.Fatal("a later generation replaces the earlier one")
 	}
-	m.Forget("claude", "s")
+	m.Forget("claude", "s", 4)
 	if m.Recall("claude", "s") != 0 || m.Recall("codex", "s") != 7 {
 		t.Fatal("forget removed the wrong session")
 	}
@@ -52,6 +62,48 @@ func TestFileMemoryRemembersEachSessionApart(t *testing.T) {
 	}
 	if dir, err := os.Stat(m.dir); err != nil || dir.Mode().Perm() != 0o700 {
 		t.Fatal(dir, err)
+	}
+}
+
+func TestFileMemoryChecksForNewerProofWhenTheWriteAcquiresItsLock(t *testing.T) {
+	m := newFileMemory(t)
+	m.Remember("claude", "s", 1)
+	protecting, proceed, done := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	late := m
+	late.restrict = func(path string) error {
+		if path == m.dir {
+			close(protecting)
+			<-proceed
+		}
+		return config.OwnerOnly(path)
+	}
+	go func() {
+		defer close(done)
+		late.Remember("claude", "s", 2)
+	}()
+	<-protecting
+	m.Remember("claude", "s", 3)
+	close(proceed)
+	<-done
+	if got := m.Recall("claude", "s"); got != 3 {
+		t.Fatalf("delayed G2 write replaced G3 with G%d", got)
+	}
+	m.Forget("claude", "s", 2)
+	if got := m.Recall("claude", "s"); got != 3 {
+		t.Fatalf("successful G2 end removed G3, now G%d", got)
+	}
+	unlock, err := m.lock(hookLockBudget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m.RecallGeneration("claude", "s"); !errors.Is(err, failSessionsLock) {
+		t.Errorf("proof was renewed without the lock: %v", err)
+	}
+	m.Remember("claude", "s", 4)
+	m.Forget("claude", "s", 3)
+	unlock()
+	if got := m.Recall("claude", "s"); got != 3 {
+		t.Fatalf("an operation whose lock timed out changed G3 to G%d", got)
 	}
 }
 
@@ -72,16 +124,143 @@ func mustList(t *testing.T, dir string) []os.FileInfo {
 	return out
 }
 
-func TestFileMemoryTreatsDamageAsNoProof(t *testing.T) {
+func TestDamagedProofCannotBeReadOrOverwritten(t *testing.T) {
 	m := newFileMemory(t)
 	m.Remember("claude", "s", 1)
-	for _, body := range []string{"", "x", "-2"} {
-		if err := os.WriteFile(m.name("claude", "s"), []byte(body), 0o600); err != nil {
+	path := m.name("claude", "s")
+	for _, body := range []string{"", "x", "0", "-2", "3\nx"} {
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if m.Recall("claude", "s") != 0 {
-			t.Fatalf("%q read as a generation", body)
+		if generation, err := m.RecallGeneration("claude", "s"); generation != 0 || !errors.Is(err, ErrInvalidGeneration) {
+			t.Fatalf("read %q as generation %d with %v", body, generation, err)
 		}
+		m.Remember("claude", "s", 1)
+		if got, err := os.ReadFile(path); string(got) != body || err != nil {
+			t.Fatalf("Remember replaced %q with %q, %v", body, got, err)
+		}
+	}
+}
+
+func TestEndMarkerGuardsPrunedProofAndAgesOut(t *testing.T) {
+	m := newFileMemory(t)
+	path := m.name("claude", "s")
+	prune := func(path string) {
+		t.Helper()
+		old := m.now().Add(-memoryAge - time.Hour)
+		if err := os.Chtimes(path, old, old); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.prune(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	m.Remember("claude", "s", 3)
+	prune(path)
+	m.Forget("claude", "s", 3) // The hub accepted the end after local proof was pruned.
+	m.Forget("claude", "s", 2) // A delayed older end must not lower the marker.
+	m.retainGeneration("claude", "s", 3)
+	if gen, err := readGeneration(path); gen != 0 || err != nil {
+		t.Fatalf("the refusal revived ended proof: G%d, %v", gen, err)
+	}
+
+	m.Remember("claude", "s", 4)
+	prune(path)
+	m.retainGeneration("claude", "s", 4)
+	if gen, err := readGeneration(path); gen != 4 || err != nil {
+		t.Fatalf("the refusal lost newer proof: G%d, %v", gen, err)
+	}
+	prune(path + ".ended")
+	if gen, err := readGeneration(path + ".ended"); gen != 0 || err != nil {
+		t.Fatalf("the old end marker survived pruning: G%d, %v", gen, err)
+	}
+	if gen, err := readGeneration(path); gen != 4 || err != nil {
+		t.Fatalf("pruning the marker changed live proof: G%d, %v", gen, err)
+	}
+}
+
+func TestForgetKeepsProofWhenEndMarkerCannotBeRecorded(t *testing.T) {
+	const (
+		client  = "claude"
+		session = "s"
+	)
+	for _, tc := range []struct {
+		name    string
+		prepare func(t *testing.T, m *fileMemory, marker string)
+		verify  func(t *testing.T, marker string)
+	}{
+		{
+			name: "malformed marker",
+			prepare: func(t *testing.T, _ *fileMemory, marker string) {
+				if err := os.WriteFile(marker, []byte("damaged\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			verify: func(t *testing.T, marker string) {
+				if raw, err := os.ReadFile(marker); err != nil || string(raw) != "damaged\n" {
+					t.Fatalf("marker was replaced with %q, %v", raw, err)
+				}
+			},
+		},
+		{
+			name: "unreadable marker",
+			prepare: func(t *testing.T, _ *fileMemory, marker string) {
+				if err := os.MkdirAll(filepath.Join(marker, "keep"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			},
+			verify: func(t *testing.T, marker string) {
+				if info, err := os.Stat(marker); err != nil || !info.IsDir() {
+					t.Fatalf("marker directory was replaced: %v, %v", info, err)
+				}
+			},
+		},
+		{
+			name: "marker write fails when absent",
+			prepare: func(_ *testing.T, m *fileMemory, _ string) {
+				m.restrict = func(string) error { return errors.New("acl") }
+			},
+			verify: func(t *testing.T, marker string) {
+				if _, err := os.Lstat(marker); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("unexpected marker after failed write: %v", err)
+				}
+			},
+		},
+		{
+			name: "marker write fails with prior marker",
+			prepare: func(t *testing.T, m *fileMemory, marker string) {
+				if err := os.WriteFile(marker, []byte("2\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				m.restrict = func(string) error { return errors.New("acl") }
+			},
+			verify: func(t *testing.T, marker string) {
+				if raw, err := os.ReadFile(marker); err != nil || string(raw) != "2\n" {
+					t.Fatalf("prior marker was replaced with %q, %v", raw, err)
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newFileMemory(t)
+			m.Remember(client, session, 3)
+			path := m.name(client, session)
+			marker := path + ".ended"
+			tc.prepare(t, &m, marker)
+
+			m.Forget(client, session, 3)
+
+			if gen, err := readGeneration(path); gen != 3 || err != nil {
+				t.Fatalf("proof after failed Forget = G%d, %v; want G3", gen, err)
+			}
+			tc.verify(t, marker)
+			for _, info := range mustList(t, m.dir) {
+				if strings.HasPrefix(info.Name(), ".tmp-") {
+					t.Fatalf("failed Forget left temporary file %s", info.Name())
+				}
+			}
+		})
 	}
 }
 
@@ -92,8 +271,11 @@ func TestFileMemoryFailsQuietly(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := fileMemory{dir: filepath.Join(file, "sessions"), now: time.Now, restrict: config.OwnerOnly}
+	if err := m.write(m.name("claude", "s"), "1"); err == nil {
+		t.Fatal("a write reported success without a usable directory")
+	}
 	m.Remember("claude", "s", 1)
-	m.Forget("claude", "s")
+	m.Forget("claude", "s", 1)
 	if err := m.prune(); err != nil {
 		t.Fatalf("a directory that cannot be listed has nothing to prune: %v", err)
 	}
@@ -101,12 +283,24 @@ func TestFileMemoryFailsQuietly(t *testing.T) {
 		t.Fatal("nothing could have been stored")
 	}
 
-	// The target is a directory, so the rename fails and the temporary file must go.
+	// The directory can also vanish after it was prepared, before the temporary file opens.
+	m = newFileMemory(t)
+	m.restrict = os.Remove
+	if err := m.write(m.name("claude", "s"), "1"); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a write whose directory vanished returned %v", err)
+	}
+	if m.Recall("claude", "s") != 0 {
+		t.Fatal("the vanished directory took a write")
+	}
+
+	// The shared file replacement rejects a directory target and cleans up its temporary file.
 	m = newFileMemory(t)
 	if err := os.MkdirAll(filepath.Join(m.name("claude", "s"), "keep"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	m.Remember("claude", "s", 1)
+	if err := m.write(m.name("claude", "s"), "1"); err == nil {
+		t.Fatal("replaced a directory with a generation file")
+	}
 	for _, info := range mustList(t, m.dir) {
 		if strings.HasPrefix(info.Name(), ".tmp-") {
 			t.Fatal("a failed write left", info.Name())
@@ -172,9 +366,13 @@ func TestMemoryLivesBesideTheToken(t *testing.T) {
 
 type fakeMemory struct{ h *recoveryHub }
 
-func (fakeMemory) Recall(string, string) int    { return 0 }
-func (fakeMemory) Remember(string, string, int) {}
-func (fakeMemory) Forget(string, string)        {}
+func (fakeMemory) RecallGeneration(string, string) (int, error) { return 0, nil }
+func (fakeMemory) Remember(string, string, int)                 {}
+func (fakeMemory) Forget(string, string, int)                   {}
+
+func lostWithHighest(highest int) *hubclient.Error {
+	return &hubclient.Error{Code: "lost", Details: json.RawMessage(fmt.Sprintf(`{"highest_generation":%d}`, highest))}
+}
 
 // recoveryHub plays the hub's side of D9: an Execution in recovery refuses a request
 // without its generation, and a stale generation is refused outright.
@@ -195,9 +393,9 @@ func (h *recoveryHub) RegisterSession(_ context.Context, r hubclient.SessionRequ
 	h.retries = append(h.retries, r.RetryGeneration)
 	switch {
 	case r.Generation != 0 && r.Generation != h.generation:
-		return hubclient.SessionResponse{}, &hubclient.Error{Code: "lost", Message: "session generation no longer exists"}
+		return hubclient.SessionResponse{}, lostWithHighest(h.generation)
 	case h.recovering && r.Generation == 0:
-		return hubclient.SessionResponse{}, &hubclient.Error{Code: "lost", Message: "recovery requires the prior session generation"}
+		return hubclient.SessionResponse{}, lostWithHighest(h.generation)
 	}
 	h.recovering = false
 	return hubclient.SessionResponse{ExecutionID: "ex", Generation: h.generation}, nil
@@ -254,7 +452,7 @@ func TestAnEditWithoutProofIsRefusedNotAllowed(t *testing.T) {
 	}
 }
 
-func TestAStaleGenerationIsDroppedAndTheCallRepeated(t *testing.T) {
+func TestAStaleGenerationBecomesTheRetryFloor(t *testing.T) {
 	root := gitRepo(t)
 	m := newFileMemory(t)
 	m.Remember("claude", "s", 1)
@@ -264,10 +462,10 @@ func TestAStaleGenerationIsDroppedAndTheCallRepeated(t *testing.T) {
 		t.Fatalf("%s", out.Stdout)
 	}
 	if len(h.sent) != 2 || h.sent[0] != 1 || h.sent[1] != 0 {
-		t.Fatal("the hook must retry once without the stale generation", h.sent)
+		t.Fatal("the hook must retry once using the stale generation as a floor", h.sent)
 	}
 	if len(h.retries) != 2 || h.retries[0] != 0 || h.retries[1] != 1 {
-		t.Fatalf("the retry did not identify its discarded proof for diagnostics: %v", h.retries)
+		t.Fatalf("the retry did not preserve its floor: %v", h.retries)
 	}
 	if m.Recall("claude", "s") != 5 {
 		t.Fatal("the current generation was not remembered")
@@ -280,8 +478,76 @@ func TestAStaleGenerationDuringRecoveryStillRefuses(t *testing.T) {
 	m.Remember("claude", "s", 1)
 	h := &recoveryHub{generation: 5, recovering: true}
 	out := runWith(h, m, "PreToolUse", writePayload(root, "s", "a.go"))
-	if !strings.Contains(string(out.Stdout), `"permissionDecision":"deny"`) || h.touched != 0 {
+	if !strings.Contains(string(out.Stdout), `"permissionDecision":"deny"`) || h.touched != 0 || m.Recall("claude", "s") != 1 {
 		t.Fatalf("%s", out.Stdout)
+	}
+}
+
+func TestMalformedOrMissingFloorDetailsAndLowerRetryRepliesFailOpen(t *testing.T) {
+	root := gitRepo(t)
+	for _, tc := range []struct {
+		name, detail, note string
+		retry              bool
+	}{
+		{"old hub", "", RestoreFloorHubTooOld, false},
+		{"missing field", `,"details":{}`, RestoreFloorHubTooOld, false},
+		{"malformed field", `,"details":{"highest_generation":"5"}`, RestoreFloorRefused, false},
+		{"unexpected lower success", `,"details":{"highest_generation":5}`, RestoreFloorRefused, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var mu sync.Mutex
+			var sent []floorRequest
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				var req hubclient.SessionRequest
+				if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+					t.Error(err)
+				}
+				mu.Lock()
+				sent = append(sent, floorRequest{r.URL.Path, req.Generation, req.RetryGeneration})
+				second := len(sent) == 2
+				mu.Unlock()
+				if second && tc.retry {
+					_, _ = w.Write([]byte(`{"execution_id":"restored","generation":2}`))
+					return
+				}
+				w.WriteHeader(http.StatusConflict)
+				_, _ = fmt.Fprint(w, `{"error":{"code":"lost","message":"refused"`+tc.detail+`}}`)
+			}))
+			defer server.Close()
+			getenv := failureEnv(t)
+			token := getenv("IRIS_TOKEN_FILE")
+			m := sessionsFor(getenv)
+			m.Remember("claude", "s", 3)
+			stale := time.Now().Add(-memoryAge - time.Hour)
+			if err := os.Chtimes(m.name("claude", "s"), stale, stale); err != nil {
+				t.Fatal(err)
+			}
+			client := &hubclient.Client{Config: hubURL(server.URL)}
+			assertAllow(t, ClientClaude, run(client, "PreToolUse", writePayload(root, "s", "unguarded.go"), getenv))
+			want := []floorRequest{{route: "/v1/sessions", generation: 3}}
+			if tc.retry {
+				want = append(want, floorRequest{route: "/v1/sessions", floor: 3})
+			}
+			mu.Lock()
+			got := slices.Clone(sent)
+			mu.Unlock()
+			if !slices.Equal(got, want) {
+				t.Fatalf("sent %+v, want %+v", got, want)
+			}
+			if err := m.prune(); err != nil {
+				t.Fatal(err)
+			}
+			if got := m.Recall("claude", "s"); got != 3 {
+				t.Fatalf("refused proof pruned or changed to G%d", got)
+			}
+			notes, err := ReadRecentObservations(token, 1)
+			if err != nil || len(notes) != 1 || notes[0].Error != tc.note {
+				t.Fatalf("observations %+v, %v", notes, err)
+			}
+			if failure := waitForFailure(t, token); failure.Stage != "session" || failure.Error != RestoreFloorRefused {
+				t.Fatalf("missing fail-open record: %+v", failure)
+			}
+		})
 	}
 }
 
@@ -380,7 +646,9 @@ func TestTheRecoveryWindowNeverAllowsAnUnclaimedEdit(t *testing.T) {
 	stop()
 	stop = start()
 	defer func() { stop() }()
-	(fileMemory{dir: filepath.Join(filepath.Dir(token), "sessions")}).Forget("claude", "forgot")
+	if err := os.Remove(sessionsFor(env).name("claude", "forgot")); err != nil {
+		t.Fatal(err)
+	}
 
 	if out := hook("PreToolUse", writePayload(root, "forgot", "new.go")); !strings.Contains(out, "hub restarted") {
 		t.Fatalf("an edit without proof was not refused: %s", out)
@@ -419,8 +687,12 @@ func TestFileMemoryKeepsNothingItCannotProtect(t *testing.T) {
 		if m.Recall("claude", "s") != 0 {
 			t.Fatalf("%s: an unprotected generation was kept", name)
 		}
-		if entries, err := os.ReadDir(m.dir); err == nil && len(entries) != 0 {
-			t.Fatalf("%s: left %d entries", name, len(entries))
+		if entries, err := os.ReadDir(m.dir); err == nil {
+			for _, entry := range entries {
+				if entry.Name() != sessionsLock {
+					t.Fatalf("%s: left %s", name, entry.Name())
+				}
+			}
 		}
 	}
 }

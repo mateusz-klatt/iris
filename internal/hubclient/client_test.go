@@ -129,6 +129,44 @@ func TestIsCodeLooksThroughWrapping(t *testing.T) {
 	}
 }
 
+func TestRegistrationRestoreFloorRequiresAnIntegerInAConflict(t *testing.T) {
+	for _, tc := range []struct {
+		name, details  string
+		status, want   int
+		valid, present bool
+	}{
+		{"known", `,"details":{"highest_generation":3}`, 409, 3, true, true},
+		{"no retained history", `,"details":{"highest_generation":0}`, 409, 0, true, true},
+		{"old hub", `,"details":{}`, 409, 0, false, false},
+		{"missing details", "", 409, 0, false, false},
+		{"non-object details", `,"details":[]`, 409, 0, false, true},
+		{"string", `,"details":{"highest_generation":"3"}`, 409, 0, false, true},
+		{"decimal", `,"details":{"highest_generation":3.0}`, 409, 0, false, true},
+		{"negative", `,"details":{"highest_generation":-1}`, 409, 0, false, true},
+		{"overflow", `,"details":{"highest_generation":9223372036854775808}`, 409, 0, false, true},
+		{"null", `,"details":{"highest_generation":null}`, 409, 0, false, true},
+		{"wrong status", `,"details":{"highest_generation":3}`, 502, 0, false, true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(tc.status)
+				_, _ = fmt.Fprintf(w, `{"error":{"code":"lost"%s}}`, tc.details)
+			}))
+			defer srv.Close()
+			c := &Client{Config: staticConfig{url: srv.URL}}
+			_, err := c.RegisterSession(context.Background(), SessionRequest{Generation: 3})
+			var lost *Error
+			if !errors.As(err, &lost) || lost.Code != "lost" {
+				t.Fatalf("registration error: %v", err)
+			}
+			got, valid, present := lost.HighestGeneration()
+			if got != tc.want || valid != tc.valid || present != tc.present {
+				t.Fatalf("highest generation = %d, valid = %t, present = %t", got, valid, present)
+			}
+		})
+	}
+}
+
 // A session outside git registers on its own route. A hub without that route answers not_found
 // with "unknown API route", which OlderHub tells from every other refusal (ADR 034).
 func TestAnOutsideSessionRegistersOnItsRoute(t *testing.T) {

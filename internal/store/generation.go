@@ -3,14 +3,27 @@ package store
 import "context"
 
 // GenerationChange contains only hub-assigned identities, counters and fixed
-// labels. A registration's retry marker is a client claim for diagnostics only;
-// it is never evidence that grants authority to a lost generation.
+// labels. A registration's retry floor can restrict the new binding, but
+// cannot grant authority to a lost generation.
 type GenerationChange struct {
 	ExecutionID, PreviousExecutionID, Reason, Source, Proof string
 	Generation, PreviousGeneration, RetryGeneration         int64
 }
 
 type generationObserverKey struct{}
+
+const highestGenerationSQL = "SELECT COALESCE(MAX(generation),0) FROM Execution WHERE host_id=? AND client=? AND session_id=? AND id<>?"
+
+// registrationLost reports the highest retained generation in this transaction,
+// including terminal generations. An Execution inserted by the refused transaction
+// will roll back, so it cannot count as retained history.
+func (t *transaction) registrationLost(r Request, message string) error {
+	var highest int64
+	if err := t.row(highestGenerationSQL, r.Host, r.Client, r.SessionID, t.insertedExecution).Scan(&highest); err != nil {
+		return err
+	}
+	return &Error{Code: "lost", Message: message, Details: map[string]any{"highest_generation": highest}}
+}
 
 // WithGenerationObserver observes replacement generations only after their
 // transaction commits and releases its lock. A live session's repeated

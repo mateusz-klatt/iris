@@ -90,10 +90,16 @@ Execution's recorded client process.
 Recovery keeps claim ownership and expiry but rotates fence numbers; use the `claims`
 in the reattachment response. Old fence numbers and tokens are invalid.
 
-An optional `retry_generation` reports the proof a hook discarded before retrying with
-`generation:0`. It affects only the hub's generation-replacement diagnostic, grants no authority,
-and is omitted by older clients. Resume and reattachment preserve the generation; a new
-Execution after loss or end advances it.
+Generation-related registration conflicts return HTTP 409 with code `lost` and integer
+`error.details.highest_generation`. It is the maximum generation across all retained states
+for the request's `host`, `client` and `session_id`. Zero means there is no retained history.
+This applies to ordinary, outside-git and combined shell registrations.
+
+A hook with remembered generation G retries once only if that detail is valid and at least G.
+It sends `generation:0` and `retry_generation:G`. A positive retry floor requires both the
+retained history and the resulting binding to be at least G in the registration transaction.
+Resume and reattachment preserve the generation. A new Execution after loss or end advances
+it. An older hub omits the detail, so an upgraded hook keeps its proof and skips the retry.
 
 A shim or `iris watch` that retains the binding reattaches by heartbeat: a heartbeat with the
 current generation does the same work during the recovery window and returns the same response.

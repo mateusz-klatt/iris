@@ -89,8 +89,8 @@ type Request struct {
 	// ask; a watch socket's own reads never do.
 	Attention bool `json:"attention"`
 
-	// RetryGeneration is an optional client diagnostic claim. Unlike Generation,
-	// it never participates in registration, recovery or authority decisions.
+	// RetryGeneration is a registration floor when Generation is zero. It does
+	// not prove ownership of a recovering Execution.
 	RetryGeneration int64 `json:"retry_generation,omitempty"`
 }
 
@@ -409,6 +409,10 @@ func (t *transaction) register(r Request, outside bool) (map[string]any, error) 
 		if r.Generation != 0 && e.Generation != r.Generation {
 			return nil, fail("lost", "session generation no longer exists")
 		}
+		// The active row itself provides retained history at or above the floor.
+		if r.Generation == 0 && e.Generation < r.RetryGeneration {
+			return nil, fail("lost", "active session is below the retry generation floor")
+		}
 		if e.Recovery.Valid && r.Generation != e.Generation {
 			return nil, fail("lost", "recovery requires the prior session generation")
 		}
@@ -459,6 +463,14 @@ func (t *transaction) register(r Request, outside bool) (map[string]any, error) 
 	if r.Generation != 0 {
 		return nil, fail("lost", "expired generations cannot be revived")
 	}
+	previous, err := scanExecution(t.row(executionSelect+"WHERE e.host_id=? AND e.client=? AND e.session_id=? ORDER BY e.generation DESC LIMIT 1", r.Host, r.Client, r.SessionID))
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return nil, err
+	}
+	generation := previous.Generation + 1
+	if r.RetryGeneration > 0 && (previous.Generation < r.RetryGeneration || generation < r.RetryGeneration) {
+		return nil, fail("lost", "session history is below the retry generation floor")
+	}
 	var repo string
 	if outside {
 		repo, err = t.outsideContext(r.Host)
@@ -468,11 +480,6 @@ func (t *transaction) register(r Request, outside bool) (map[string]any, error) 
 	if err != nil {
 		return nil, err
 	}
-	previous, err := scanExecution(t.row(executionSelect+"WHERE e.host_id=? AND e.client=? AND e.session_id=? ORDER BY e.generation DESC LIMIT 1", r.Host, r.Client, r.SessionID))
-	if err != nil && !errors.Is(err, sql.ErrNoRows) {
-		return nil, err
-	}
-	generation := previous.Generation + 1
 	var agent, agentName string
 	// A session that ran here before gets its own mailbox back, unless another active
 	// session holds it now. Without this, the first free slot was taken, so the
@@ -535,6 +542,7 @@ func (t *transaction) register(r Request, outside bool) (map[string]any, error) 
 	if err != nil {
 		return nil, err
 	}
+	t.insertedExecution = ex
 	e, err = scanExecution(t.row(executionSelect+"WHERE e.id=?", ex))
 	if err != nil {
 		return nil, err

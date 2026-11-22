@@ -71,7 +71,9 @@ func (r *Resolver) lookupAntigravityWakeHeld(ctx context.Context) (Bound, error)
 		return Bound{}, errUnusable
 	}
 	b.Rung = 3
-	r.bound = b
+	if err := r.checkGenerationHeld(b); err != nil {
+		return Bound{}, err
+	}
 	return b, nil
 }
 
@@ -106,7 +108,7 @@ func (r *Resolver) StartIfPrimary(expected WakeTarget, start func() error) (bool
 func (r *Resolver) primaryHeld() (WakeTarget, bool) {
 	m := r.decided.Load()
 	if r.Host == "" || r.bound.ExecutionID == "" || r.bound.Generation <= 0 ||
-		r.lost || r.gone[r.bound.ExecutionID] {
+		r.lost || r.gone[r.bound.ExecutionID] || r.checkGenerationHeld(r.bound) != nil {
 		return WakeTarget{}, false
 	}
 	if ex := r.Getenv("IRIS_EXECUTION"); ex != "" && !r.gone[ex] {

@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -19,13 +20,14 @@ import (
 // process for every tool call, so without this the first edits of a recovering session had
 // none to give.
 type Memory interface {
-	Recall(client, session string) int
+	// RecallGeneration returns zero with no error only when proof is absent.
+	RecallGeneration(client, session string) (int, error)
 	Remember(client, session string, generation int)
-	Forget(client, session string)
+	Forget(client, session string, generation int)
 }
 
-// memoryAge is how long an untouched entry survives. A session that ends normally removes its
-// own; this only clears the entries of sessions that never reached SessionEnd.
+// memoryAge is how long an untouched entry survives, including the marker left when a
+// session ends normally.
 const memoryAge = 30 * 24 * time.Hour
 
 // fileMemory stores one small file per session beside the token, protected as the token is:
@@ -52,31 +54,107 @@ func (m fileMemory) read(path string) string {
 	return strings.TrimSpace(first)
 }
 
-func (m fileMemory) Recall(client, session string) int {
-	first := m.read(m.name(client, session))
-	generation, err := strconv.Atoi(first)
-	if err != nil || generation < 0 {
-		return 0
+func readGeneration(path string) (int, error) {
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		// A dangling link occupies the generation path even if its target is missing.
+		if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+			return 0, nil
+		}
 	}
-	return generation
+	if err != nil {
+		return 0, ErrInvalidGeneration
+	}
+	generation, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil || generation <= 0 {
+		return 0, ErrInvalidGeneration
+	}
+	return generation, nil
 }
 
-// Remember is best effort. A failed write only means the next restart costs this session
-// its proof, which is what every session had before.
+// RecallGeneration keeps known proof fresh before a request can race idle pruning.
+func (m fileMemory) RecallGeneration(client, session string) (int, error) {
+	path := m.name(client, session)
+	generation, readErr := readGeneration(path)
+	if generation == 0 {
+		return 0, readErr
+	}
+	if err := m.underLock(func() {
+		var current int
+		current, readErr = readGeneration(path)
+		// Another hook can write newer proof before we take the lock. A prune can also
+		// win the lock, in which case the proof we already read still belongs in the request.
+		if current >= generation {
+			generation = current
+			m.touchGeneration(path)
+		}
+	}); err != nil {
+		return 0, err
+	}
+	return generation, readErr
+}
+
+// Remember keeps the higher proof when another hook already recorded a newer registration.
 func (m fileMemory) Remember(client, session string, generation int) {
-	_ = m.write(m.name(client, session), strconv.Itoa(generation))
+	if err := m.directory(); err != nil {
+		return
+	}
+	_ = m.underLock(func() {
+		path := m.name(client, session)
+		if current, err := readGeneration(path); err == nil && generation > 0 && generation >= current {
+			_ = m.replace(path, strconv.Itoa(generation))
+		}
+	})
 }
 
-// Forget removes the session's generation. The told state goes when the session ends
-// (forgetAttention) or when pruning finds it untouched for memoryAge; the wake file stays.
-func (m fileMemory) Forget(client, session string) {
-	_ = os.Remove(m.name(client, session))
+// Forget removes only the proof of the Execution that successfully ended.
+func (m fileMemory) Forget(client, session string, generation int) {
+	_ = m.underLock(func() {
+		if generation <= 0 {
+			return
+		}
+		path := m.name(client, session)
+		// Record the end first, even if pruning already removed the proof. The same lock
+		// prevents a delayed refusal from treating a cleared file as merely pruned.
+		marker := path + ".ended"
+		ended, err := readGeneration(marker)
+		if err != nil || m.replace(marker, strconv.Itoa(max(ended, generation))) != nil {
+			return
+		}
+		if current, err := readGeneration(path); err == nil && current == generation {
+			_ = os.Remove(path)
+		}
+	})
 }
 
-// sessionsLock is the sessions directory's lock. Every read and every change of an attention file
-// or a wake file, and every removal by pruning, holds it (ADR 017). Reads hold it too because on
-// Windows the rename used here fails when another process holds the destination file open. It is
-// created once and never pruned, renamed or replaced, so every process locks the same file.
+// retainGeneration restores proof that pruning removed after it was read. Only an absent
+// entry may be recreated, and a successful end rules out that generation and earlier ones.
+func (m fileMemory) retainGeneration(client, session string, generation int) {
+	_ = m.underLock(func() {
+		path := m.name(client, session)
+		current, err := readGeneration(path)
+		switch {
+		case err != nil:
+			return
+		case current == 0:
+			if ended, err := readGeneration(path + ".ended"); err == nil && generation > ended {
+				_ = m.replace(path, strconv.Itoa(generation))
+			}
+		case current == generation:
+			m.touchGeneration(path)
+		}
+	})
+}
+
+func (m fileMemory) touchGeneration(path string) {
+	now := m.now()
+	_ = os.Chtimes(path, now, now)
+}
+
+// sessionsLock protects generation changes, every attention and wake file operation, and
+// removals by pruning (ADR 017). Reads of attention and wake files hold it because on Windows
+// the rename used here fails when another process holds the destination file open. It is created
+// once and never pruned, renamed or replaced, so every process locks the same file.
 const sessionsLock = ".lock"
 
 // hookLockBudget is how long a hook tries for the lock. Nobody holds it across a network call or

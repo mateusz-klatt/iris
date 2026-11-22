@@ -17,7 +17,7 @@ import (
 type SessionRequest struct {
 	CommonDir  string `json:"common_dir"`
 	Generation int    `json:"generation"`
-	// RetryGeneration reports discarded proof for hub diagnostics, never authority.
+	// RetryGeneration is the remembered floor for a generation-zero retry.
 	RetryGeneration  int    `json:"retry_generation,omitempty"`
 	Client           string `json:"client"`
 	SessionID        string `json:"session_id"`
@@ -248,9 +248,36 @@ type Error struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 	Details any    `json:"details"`
+	status  int
 }
 
 func (e *Error) Error() string { return e.Code + ": " + e.Message }
+
+// HighestGeneration reads the restore floor from a registration conflict. Keep the JSON
+// number intact so fractional values and integers that overflow cannot become proof.
+// present distinguishes an old hub's missing field from a malformed answer.
+func (e *Error) HighestGeneration() (generation int, valid, present bool) {
+	if e.status != 0 && e.status != http.StatusConflict {
+		return 0, false, true
+	}
+	raw, _ := e.Details.(json.RawMessage)
+	if len(raw) == 0 {
+		return 0, false, false
+	}
+	var details map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &details); err != nil {
+		return 0, false, true
+	}
+	floor, present := details["highest_generation"]
+	if !present {
+		return 0, false, false
+	}
+	var value *int
+	if err := json.Unmarshal(floor, &value); err != nil || value == nil || *value < 0 {
+		return 0, false, true
+	}
+	return *value, true, true
+}
 
 // Do issues an authenticated JSON request. Callers keep retry keys stable across retries.
 func (c *Client) Do(ctx context.Context, method, path string, body, dest any) error {
@@ -293,10 +320,15 @@ func (c *Client) Do(ctx context.Context, method, path string, body, dest any) er
 	}
 	if res.StatusCode < 200 || res.StatusCode >= 300 {
 		var envelope struct {
-			Error *Error `json:"error"`
+			Error *struct {
+				Code    string          `json:"code"`
+				Message string          `json:"message"`
+				Details json.RawMessage `json:"details"`
+			} `json:"error"`
 		}
 		if json.Unmarshal(slurp, &envelope) == nil && envelope.Error != nil {
-			return envelope.Error
+			e := envelope.Error
+			return &Error{Code: e.Code, Message: e.Message, Details: e.Details, status: res.StatusCode}
 		}
 		return &StatusError{Path: path, Code: res.StatusCode, Status: res.Status}
 	}

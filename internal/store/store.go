@@ -163,6 +163,8 @@ type transaction struct {
 	refused *Error
 	// A diagnostic becomes observable only after its replacement generation commits.
 	generationChange *GenerationChange
+	// A combined shell registration can fail after it inserts an Execution.
+	insertedExecution string
 }
 
 // exec runs a write that streams can observe. A commit in which an exec changed a row

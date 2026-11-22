@@ -234,16 +234,17 @@ correct attribution, not a security property.
 
 The session's hook is its registrar: one session is one Execution and one mailbox. An MCP server
 usually starts before the `SessionStart` hook has run, so when no rung finds the session its
-first bind keeps looking, with backoff, for 15 s. Only then, if hooks never ran, for example in
-an untrusted folder, does the shim register an MCP-only Execution so that messaging still works,
-and only where it can name the session: by its session id, or as a single-session process. If
+first bind keeps looking, with backoff, for 15 s. Only then, if it has no hook generation proof,
+can the shim register an MCP-only Execution so that messaging still works, for example in an
+untrusted folder. It needs a session it can name by id or as a single-session process. If
 the hook registers later after all, the shim's heartbeat finds the hook's Execution for the same
 client process, moves to it and ends its own, handing over the mail its stray mailbox received
 meanwhile, so a slow hook cannot leave the session split either. A first tool call that ends
-while the grace period runs is told Iris is still binding the session and to retry. After a loss the shim never registers; it waits for the hook to reattach (D9).
-A Codex root thread's shim in id mode waits the same grace period on its first bind. No shim in
-id mode registers, adopts or hands over anything, so this fallback and the adoption below belong
-to the chain above alone.
+while the grace period runs is told Iris is still binding the session and to retry. After a loss
+the shim waits for an eligible binding or uses exact generation proof for reattachment (D9).
+A Codex root thread's shim in id mode waits the same grace period on its first bind. Id-mode
+shims never create Executions, adopt them or hand over mail, so this fallback and the adoption
+below belong to the chain above alone.
 
 A shim also looks on its heartbeat tick ([ADR 027](adr/027-shim-binds-on-its-tick.md)). Without
 that, one that had no tool call yet, or lost its generation and had no call since, renewed
@@ -627,10 +628,10 @@ epoch without recovery evidence is labelled `prior_lost`: its cause was not pers
 current epoch mismatch cannot identify it. No payload, token, path,
 client/session/host name or message content is logged by this diagnostic. Ordinary registration,
 resume, reattachment and heartbeats preserve the generation and stay quiet; rolled-back changes
-emit nothing. New hooks mark retries that discarded stale proof with `retry_generation`; this is
-a client claim for diagnosis, never authority. Older clients omit it and are logged as registering
-without proof. This records why the store replaced the generation, not why a heartbeat failed
-to arrive; it cannot establish a network or client failure by itself.
+emit nothing. A hook that retries with `generation:0` sends its retained proof as
+`retry_generation`. The hub logs the floor and enforces it in the registration transaction.
+Older clients that omit it are logged as registering without proof. The diagnostic records what
+led the store to replace the generation and cannot establish a network or client failure.
 
 Changes from the reference schema:
 
@@ -685,6 +686,25 @@ Changes from the reference schema:
    edits stayed claimed by the same Execution across the restart. With the file removed, the edit
    was refused and nothing went through unclaimed.
 
+   After a generation-related registration `409 lost`, a hook with remembered generation G
+   retries once only if the hub reports a valid `highest_generation` of at least G. This is the
+   maximum of all retained generations for the same host, client and session ID. The retry
+   sends `generation:0, retry_generation:G` and the hub checks both the retained history and
+   the resulting binding against G inside registration. The check covers outside-git and
+   combined shell registration. If the retry is unsafe, the hook keeps G, records
+   `restore_floor_refused` for doctor, and fails open without claiming or reconciling the edit.
+   The proofless-edit denial during recovery still applies. An unreadable or malformed
+   generation file also fails open before registration. Local doctor output names the damaged
+   file. The hook refreshes readable proof under the bounded session lock before sending it.
+   A refusal can restore proof to a missing file only above any ended generation recorded
+   under the same lock. Generation writes keep the highest proof and SessionEnd clears only
+   matching proof. The shim and plain watch check same-session bindings against retained process
+   and disk proof, and check disk proof before first-bind generation-zero fallback. A Codex
+   id-mode sub-agent checks disk proof for its native session during its one lookup. These
+   bindings fail when the session's proof file is unreadable or malformed. For
+   deployment order and empty-hub recovery, see the
+   [ADR 006 addendum](adr/006-retention-and-restore.md#addendum-of-2026-11-22-the-restore-generation-floor).
+
    MCP `lost` answers give fixed, conditional recovery guidance at the shim boundary, without
    changing the hub API or granting authority. They also cover a replayed claim whose cached
    fence is no longer live, so they do not assert that every such answer proves session loss.
@@ -694,8 +714,8 @@ Changes from the reference schema:
    before the recovery deadline. `SessionStart` registers;
    prompt registration depends on the client. A shell reconcile can register, but one whose
    budget ends before registration reaches the hub does not; the ADR 018 breaker only changes
-   later hooks' scope. Plain binding lookups do not reattach on their own, and missing, malformed
-   or mismatched generation memory never falls back to a generation-0 registration. After the
+   later hooks' scope. Plain binding lookups do not reattach on their own. A shim reattachment
+   from memory never falls back to a generation-0 registration. After the
    deadline or `SessionEnd`, a registering hook must obtain a new generation. The
    [API recovery guidance](api.md#mcp-tools-answering-lost) lists the events and the binding-mode
    limits.

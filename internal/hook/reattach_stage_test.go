@@ -58,6 +58,39 @@ func TestSessionsRecallGeneration(t *testing.T) {
 	}
 }
 
+func TestBindingProofDamageRecordsTheLocalPath(t *testing.T) {
+	token := filepath.Join(t.TempDir(), "hub.token")
+	s := NewSessions(token)
+	if gen, present, err := s.RecallBindingGeneration("claude", "s"); gen != 0 || present || err != nil {
+		t.Fatalf("missing proof: generation %d, present %t, %v", gen, present, err)
+	}
+	s.memory.Remember("claude", "s", 3)
+	if gen, present, err := s.RecallBindingGeneration("claude", "s"); gen != 3 || !present || err != nil {
+		t.Fatalf("readable proof: generation %d, present %t, %v", gen, present, err)
+	}
+	path := s.memory.name("claude", "s")
+	if err := os.WriteFile(path, []byte("damaged\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if gen, present, err := s.RecallBindingGeneration("claude", "s"); gen != 0 || !present || !errors.Is(err, ErrInvalidGeneration) {
+		t.Fatalf("damaged proof: generation %d, present %t, %v", gen, present, err)
+	}
+	deadline := time.Now().Add(time.Second)
+	for {
+		notes, err := ReadRecentObservations(token, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(notes) > 0 || time.Now().After(deadline) {
+			if len(notes) != 1 || notes[0].Client != "claude" || notes[0].Event != "bind" || notes[0].Error != "damaged generation proof at "+path {
+				t.Fatalf("observations: %+v", notes)
+			}
+			break
+		}
+		time.Sleep(time.Millisecond)
+	}
+}
+
 func TestAntigravityHookDeadlineRecordsAntigravityStage(t *testing.T) {
 	dir := t.TempDir()
 	token := filepath.Join(dir, "hub.token")

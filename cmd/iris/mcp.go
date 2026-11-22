@@ -65,12 +65,7 @@ func runMCP(args []string) error {
 	// Pin the resolved token path so long-lived observations never re-read client.json.
 	observeEnv := map[string]string{"IRIS_TOKEN_FILE": config.TokenFile}
 	resolver.Observe = mcpObserver(func(k string) string { return observeEnv[k] }, *client)
-	tokenPath, tokenErr := config.TokenPath()
-	var sessions *hook.Sessions
-	if tokenErr == nil {
-		sessions = hook.NewSessions(tokenPath)
-		resolver.Recall = sessions.RecallGeneration
-	}
+	sessions, tokenErr := bindingSessions(resolver, config)
 	workers.Add(1)
 	go func() { defer workers.Done(); resolver.Maintain(ctx, "shim", 20*time.Second, parent.Alive, cancel) }()
 	var options []mcpserver.Option
@@ -87,4 +82,14 @@ func runMCP(args []string) error {
 		}
 	}
 	return mcpserver.New(resolver, options...).Run(ctx, mcpStdioTransport())
+}
+
+func bindingSessions(resolver *binding.Resolver, config hubclient.Resolved) (*hook.Sessions, error) {
+	tokenPath, err := config.TokenPath()
+	if err != nil {
+		return nil, err
+	}
+	sessions := hook.NewSessions(tokenPath)
+	resolver.Recall = sessions.RecallBindingGeneration
+	return sessions, nil
 }

@@ -24,7 +24,7 @@ func TestGenerationObserverNamesCommittedReplacementCauses(t *testing.T) {
 		retry                 int64
 	}{
 		{"ended", "hook", "hook", 0},
-		{"lease_expired", "mcp", "mcp", 9},
+		{"lease_expired", "mcp", "mcp", 1},
 		{"recovery_expired", "shim", "shim", 0},
 		{"prior_lost", "watch", "watch", 0},
 		{"ended", "", "legacy", 0},
@@ -102,12 +102,12 @@ func TestGenerationObserverNamesCommittedReplacementCauses(t *testing.T) {
 			if len(changes) != 1 {
 				t.Fatalf("retry duplicated a bump: %+v", changes)
 			}
-			// A diagnostic retry marker cannot grant authority to an old generation.
+			// The floor cannot give authority to a stale exact generation.
 			registration.Generation = 1
 			_, err := s.Call(ctx, "sessions", registration)
 			var lost *Error
 			if !errors.As(err, &lost) || lost.Code != "lost" || len(changes) != 1 {
-				t.Fatalf("diagnostic marker affected stale authority: %v, changes %+v", err, changes)
+				t.Fatalf("retry floor affected stale authority: %v, changes %+v", err, changes)
 			}
 		})
 	}
