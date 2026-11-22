@@ -139,10 +139,10 @@ func absent(err error, code, message string) error {
 }
 
 type Store struct {
-	mu           sync.Mutex
-	db           *sql.DB
-	readDB       *sql.DB
-	lock         *os.File
+	mu      sync.Mutex
+	db      *sql.DB
+	readDB  *sql.DB
+	lock    *os.File
 	clock   Clock
 	epoch   int64
 	stream  string

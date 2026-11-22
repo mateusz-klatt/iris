@@ -216,27 +216,27 @@ func timevalSubMS(after, before syscall.Timeval) float64 {
 }
 
 type opBreakdown struct {
-	BeginMS             float64 `json:"begin_ms"`
-	ExpireMS            float64 `json:"expire_ms"`
-	QueryMS             float64 `json:"query_ms"`
-	CommitMS            float64 `json:"commit_ms"`
-	RollbackMS          float64 `json:"rollback_ms,omitempty"`
-	NonSQLGoMS          float64 `json:"non_sql_go_ms"`
+	BeginMS              float64 `json:"begin_ms"`
+	ExpireMS             float64 `json:"expire_ms"`
+	QueryMS              float64 `json:"query_ms"`
+	CommitMS             float64 `json:"commit_ms"`
+	RollbackMS           float64 `json:"rollback_ms,omitempty"`
+	NonSQLGoMS           float64 `json:"non_sql_go_ms"`
 	ThreadsMainMS        float64 `json:"threads_main_query_ms,omitempty"`
 	ThreadsUnreadMS      float64 `json:"threads_unread_query_ms,omitempty"`
 	ThreadSubjectCount   int     `json:"thread_subjects_count,omitempty"`
 	ThreadSubjectTotalMS float64 `json:"thread_subjects_total_ms,omitempty"`
 	ThreadSubjectMaxMS   float64 `json:"thread_subjects_max_ms,omitempty"`
 	ThreadPartsCount     int     `json:"thread_participants_count,omitempty"`
-	ThreadPartsTotalMS  float64 `json:"thread_participants_total_ms,omitempty"`
-	ThreadPartsMaxMS    float64 `json:"thread_participants_max_ms,omitempty"`
-	ThreadAuthorCount   int     `json:"thread_authors_count,omitempty"`
-	ThreadAuthorTotalMS float64 `json:"thread_authors_total_ms,omitempty"`
-	ThreadAuthorMaxMS   float64 `json:"thread_authors_max_ms,omitempty"`
-	OverviewReposMS     float64 `json:"overview_repositories_ms,omitempty"`
-	OverviewDetailsMS   float64 `json:"overview_repo_details_total_ms,omitempty"`
-	OverviewAgentsMS    float64 `json:"overview_agents_ms,omitempty"`
-	OverviewHumanMS     float64 `json:"overview_human_unread_ms,omitempty"`
+	ThreadPartsTotalMS   float64 `json:"thread_participants_total_ms,omitempty"`
+	ThreadPartsMaxMS     float64 `json:"thread_participants_max_ms,omitempty"`
+	ThreadAuthorCount    int     `json:"thread_authors_count,omitempty"`
+	ThreadAuthorTotalMS  float64 `json:"thread_authors_total_ms,omitempty"`
+	ThreadAuthorMaxMS    float64 `json:"thread_authors_max_ms,omitempty"`
+	OverviewReposMS      float64 `json:"overview_repositories_ms,omitempty"`
+	OverviewDetailsMS    float64 `json:"overview_repo_details_total_ms,omitempty"`
+	OverviewAgentsMS     float64 `json:"overview_agents_ms,omitempty"`
+	OverviewHumanMS      float64 `json:"overview_human_unread_ms,omitempty"`
 }
 
 type opMeasurement struct {

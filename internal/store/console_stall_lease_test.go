@@ -340,7 +340,7 @@ func runReadNonBlockingScenario(t *testing.T, dbPath string) readNonBlockingResu
 	execA := Request{ExecutionID: outA["execution_id"].(string), Generation: outA["generation"].(int64)}
 	call(t, s, "ui_messages", Request{
 		Key: "seed-nonblock", RepositoryID: outA["repository_id"].(string),
-		To: []string{outA["agent"].(map[string]any)["name"].(string)},
+		To:      []string{outA["agent"].(map[string]any)["name"].(string)},
 		Subject: "nonblock test", Body: "synthetic body",
 	})
 
@@ -634,7 +634,10 @@ func TestRevokedConsoleSessionRefusedOnNextRead(t *testing.T) {
 	for name, fn := range map[string]func() error{
 		"ConsoleSessionInfo": func() error { _, err := s.ConsoleSessionInfo(t.Context(), digest); return err },
 		"ui_overview":        func() error { _, err := s.CallConsole(t.Context(), principal, "ui_overview", Request{}); return err },
-		"ui_threads":         func() error { _, err := s.CallConsole(t.Context(), principal, "ui_threads", Request{Limit: 10}); return err },
+		"ui_threads": func() error {
+			_, err := s.CallConsole(t.Context(), principal, "ui_threads", Request{Limit: 10})
+			return err
+		},
 	} {
 		err := fn()
 		var domainErr *Error
