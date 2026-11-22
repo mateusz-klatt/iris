@@ -3,6 +3,11 @@
 Status: accepted, 2026-11-21. Amends D10, D11 and D12. Decision 5 replaces ADR 032's limit on
 shell attribution. Decision 6, for explicit claims, shipped in the change after the first.
 
+Later amendment: [ADR 037](037-worktree-scoped-auto-claims.md) lifts the own-session submodule
+guard refusal described in Consequences only when the owning repository has
+`claim.auto_scope = worktree` and the claim and commit are in the same submodule checkout. The
+default `repository` behaviour is unchanged.
+
 ## Context
 
 The hook places an edit's paths in one checkout: the one it finds from the event's working
