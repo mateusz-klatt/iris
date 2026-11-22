@@ -179,7 +179,7 @@ func TestMemoryKeepsTheToldStateBesideTheGeneration(t *testing.T) {
 	if other := parseTold(m.read(m.counts("codex", "other"))); other != (toldState{}) {
 		t.Fatal(other)
 	}
-	m.Forget("codex", "s")
+	m.Forget("codex", "s", 6)
 	if _, err := os.Stat(m.counts("codex", "s")); err != nil {
 		t.Fatalf("dropping the generation took the told state: %v", err)
 	}

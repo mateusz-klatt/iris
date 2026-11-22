@@ -35,7 +35,7 @@ func (r Runner) cursorStop(ctx context.Context, state *runState, ev Event, repo 
 	}
 	state.at("session")
 	rev := r.toldRevision(ev)
-	sess, err := r.register(ctx, ev, repo)
+	sess, err := r.register(ctx, state, ev, repo)
 	if errors.Is(err, errOlderHub) {
 		return r.finish(state, ev, quiet)
 	}

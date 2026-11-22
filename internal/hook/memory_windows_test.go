@@ -54,7 +54,7 @@ func TestFileMemoryIsOwnerOnlyOnWindows(t *testing.T) {
 		t.Fatalf("a file was readable by others before it was protected: %s", got)
 	}
 	// Pruning and SessionEnd removal still work under the protected DACL.
-	m.Forget("claude", "s")
+	m.Forget("claude", "s", 1)
 	if m.Recall("claude", "s") != 0 {
 		t.Fatal("forget failed")
 	}
@@ -97,7 +97,7 @@ func TestFileMemoryKeepsProofWhenItsDirectoryIsReplacedByAFile(t *testing.T) {
 		if got := preserved.Recall("claude", "s"); got != 3 {
 			t.Fatalf("a failed write replaced the previous proof with %d", got)
 		}
-		if entries := mustList(t, saved); len(entries) != 1 {
+		if entries := mustList(t, saved); len(entries) != 2 {
 			t.Fatalf("a failed write left temporary files: %v", entries)
 		}
 		if raw, err := os.ReadFile(m.dir); err != nil || string(raw) != "replacement" {

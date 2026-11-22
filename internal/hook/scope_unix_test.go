@@ -140,7 +140,7 @@ type plainMemory struct{}
 
 func (plainMemory) Recall(string, string) int    { return 0 }
 func (plainMemory) Remember(string, string, int) {}
-func (plainMemory) Forget(string, string)        {}
+func (plainMemory) Forget(string, string, int)   {}
 
 // A trip needs git to be the slow part: a full status that started with at least half the
 // budget left, had not passed the output cap, and was still running when the reconcile's own
@@ -556,7 +556,7 @@ func TestAFailedScopedRequestIsNeverResentAsFull(t *testing.T) {
 // that snapshot: nothing goes on a plain route, and the next hook's snapshot carries the new
 // proof. A repair that is lost too refuses the command, or warns after it (ADR 018).
 func TestALostScopedRequestRepairsTheProof(t *testing.T) {
-	lost := &hubclient.Error{Code: "lost"}
+	lost := lostWithHighest(4)
 	f := newScopeFixture(t)
 	f.reduced(time.Minute)
 	f.warm()
@@ -597,6 +597,18 @@ func TestALostScopedRequestRepairsTheProof(t *testing.T) {
 			t.Fatalf("calls %v", calls)
 		}
 	}
+}
+
+func TestReducedShellKeepsItsProofAcrossARestore(t *testing.T) {
+	checkRestoredHookStates(t, "/v1/shell/scoped", func(h *restoredHook) {
+		repo, err := gitinfo.Find(h.root)
+		if err != nil {
+			h.t.Fatal(err)
+		}
+		m := sessionsFor(h.getenv)
+		m.SetCapable(h.server.URL, true)
+		m.SetBreaker(worktreeKey(repo), breaker{V: 1, Scope: scopeReduced, NextFullMS: time.Now().Add(time.Minute).UnixMilli()})
+	})
 }
 
 // The scope is chosen once, before the status runs. A breaker another hook replaces meanwhile
@@ -799,11 +811,11 @@ func TestTheCapabilityIsKeptPerHub(t *testing.T) {
 	if f.m.Capable(scopeHubURL) || !f.m.Capable(other) {
 		t.Fatal("one hub's capability was read as another's")
 	}
-	if _, err := f.r.register(context.Background(), f.ev, f.repo); err != nil || !f.m.Capable(scopeHubURL) {
+	if _, err := f.r.register(context.Background(), &runState{}, f.ev, f.repo); err != nil || !f.m.Capable(scopeHubURL) {
 		t.Fatalf("a registration answer was not kept: %v", err)
 	}
 	f.hub.incapable = true
-	if _, err := f.r.register(context.Background(), f.ev, f.repo); err != nil || f.m.Capable(scopeHubURL) || !f.m.Capable(other) {
+	if _, err := f.r.register(context.Background(), &runState{}, f.ev, f.repo); err != nil || f.m.Capable(scopeHubURL) || !f.m.Capable(other) {
 		t.Fatalf("an answer without the capability: %v", err)
 	}
 	// A one-call answer is kept as a registration's is.
@@ -1045,10 +1057,29 @@ func TestAReducedReconcileAgainstTheRealHub(t *testing.T) {
 		t.Fatalf("after: %s", text)
 	}
 
-	// A stale proof: the hub answers lost, the hook reattaches and drops this snapshot.
-	m.Remember(string(ev.Client), ev.SessionID, 99)
+	// Another process registers a new generation and keeps a baseline. The hook still has its
+	// previous proof, so it learns the new generation and drops the rejected snapshot.
+	req := r.sessionReq(ev, repo)
+	old, err := client.RegisterSession(ctx, req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := client.EndExecution(ctx, old.ExecutionID, old.Generation); err != nil {
+		t.Fatal(err)
+	}
+	taken, err := r.status(ctx, super, gitinfo.ReducedScope, &gitinfo.Attempt{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	baseline, err := client.ReconcileScopedSession(ctx, hubclient.ScopedSessionRequest{
+		ShellSessionRequest: hubclient.ShellSessionRequest{SessionRequest: req, Kind: "before", Status: taken},
+		Scope:               hubclient.Scope{Mode: "dirty", Submodules: []string{"submod"}},
+	})
+	if err != nil || baseline.Session.Generation <= old.Generation {
+		t.Fatalf("new generation baseline: %+v, %v", baseline, err)
+	}
 	write("later.txt", "made before the lost answer\n")
-	if out = r.reconcile(ctx, ev, &runState{}); !isAllow(out) || m.Recall(string(ev.Client), ev.SessionID) == 99 {
+	if out = r.reconcile(ctx, ev, &runState{}); !isAllow(out) || m.Recall(string(ev.Client), ev.SessionID) != baseline.Session.Generation {
 		t.Fatalf("repair: proof %d: %s", m.Recall(string(ev.Client), ev.SessionID), out.Stdout)
 	}
 	// The Execution kept its reduced baseline, so the edit is still attributed.

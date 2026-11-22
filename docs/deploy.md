@@ -427,7 +427,10 @@ throwaway hub on a loopback port with a token of its own. It then checks:
 
 - that every session active at backup time is recovering, none live;
 - that the restored hub answers status;
-- that a session presenting a generation the backup never saw gets no restored authority;
+- that a session presenting a generation the backup never saw receives a typed `409 lost`
+  with the expected `highest_generation`;
+- that a synthetic, terminal generation 1 refuses a generation-zero retry with floor 3
+  and leaves no generation 2;
 - that a monitor whose cursor is ahead of the restored history gets a reset;
 - for a backup with a restore marker, that the restored hub runs on a new stream. A backup without
   one gets a warning instead of this check, which names `iris admin mark-restored` (below).
@@ -450,8 +453,13 @@ database, and a database that a hub has open under that path or a link to it; it
 that opened the file through a hard link or another mount. It writes the marker into the database
 file itself before it reports success. If another process keeps the copy open in a way that stops
 that, it fails and says so; close that process and run it again. Keep the old console key
-withheld. Agents then reattach with proof or register afresh; reopen browser access only after the
-named-console recovery checks pass.
+withheld. Agents reattach with eligible proof or use the
+[restore floor recovery procedure](adr/006-retention-and-restore.md#addendum-of-2026-11-22-the-restore-generation-floor).
+Reopen browser access only after the named-console recovery checks pass.
+
+Deploy the restore floor in one release, hub first. Upgraded hooks fail closed for the
+generation-zero retry when an older hub omits `highest_generation`. The edit still gets a
+normal allow, and `iris doctor` reports “hub predates restore floor” from the hook observation.
 
 The restore marker (ADR 006, amended on 2026-11-13). The first start of a hub with migration 025 on
 a copy that carries it runs on a new stream, removes the marker from that copy, and says so on

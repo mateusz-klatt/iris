@@ -107,3 +107,70 @@ func TestGenerationBumpLogsItsCauseWithoutSessionContent(t *testing.T) {
 		t.Fatalf("shell diagnostics duplicated or leaked input: %s", line)
 	}
 }
+
+func TestRegistrationRoutesReportAndEnforceTheGenerationFloor(t *testing.T) {
+	for _, route := range []struct {
+		path    string
+		outside bool
+		shell   bool
+		scope   *store.ShellScope
+	}{
+		{path: "/v1/sessions"},
+		{path: "/v1/sessions/outside", outside: true},
+		{path: "/v1/shell/reconcile", shell: true},
+		{path: "/v1/shell/scoped", shell: true, scope: &store.ShellScope{Mode: "dirty"}},
+	} {
+		t.Run(route.path, func(t *testing.T) {
+			_, server := setup(t)
+			registration := store.Request{Client: "claude", SessionID: "session", Host: "host", Cwd: "/project", Worktree: "/project", Source: "hook", Kind: "before", Scope: route.scope}
+			if route.outside {
+				registration.Worktree = ""
+			}
+			refuse := func(generation, floor int64, highest float64) {
+				t.Helper()
+				r := registration
+				r.Generation, r.RetryGeneration = generation, floor
+				out := request(t, server, http.MethodPost, route.path, r, http.StatusConflict)
+				got, _ := out["error"].(map[string]any)
+				details, _ := got["details"].(map[string]any)
+				if got["code"] != "lost" || details["highest_generation"] != highest {
+					t.Fatalf("refused generation %d with floor %d: %v, want lost with highest_generation %v", generation, floor, out, highest)
+				}
+			}
+			register := func(floor int64) map[string]any {
+				t.Helper()
+				r := registration
+				r.RetryGeneration = floor
+				out := request(t, server, http.MethodPost, route.path, r, http.StatusOK)
+				if route.shell {
+					return out["session"].(map[string]any)
+				}
+				return out
+			}
+			refuse(3, 0, 0)
+			refuse(0, 1, 0)
+			first := register(0)
+			refuse(3, 0, 1)
+			refuse(0, 3, 1)
+			if resumed := register(1); resumed["execution_id"] != first["execution_id"] || resumed["generation"] != float64(1) {
+				t.Fatalf("equal floor did not preserve the active generation: %v", resumed)
+			}
+			request(t, server, http.MethodPost, "/v1/executions/"+first["execution_id"].(string)+"/end", authority(first), http.StatusOK)
+			refuse(3, 0, 1)
+			// Even though the next generation would meet this floor, retained history must meet it too.
+			refuse(0, 2, 1)
+			status := request(t, server, http.MethodGet, "/v1/status", nil, http.StatusOK)
+			if count := status["counts"].(map[string]any)["Execution"]; count != float64(1) {
+				t.Fatalf("a refusal created an Execution: %v", status)
+			}
+			second := register(1)
+			if second["execution_id"] == first["execution_id"] || second["generation"] != float64(2) {
+				t.Fatalf("a retry with sufficient retained history did not advance: %v", second)
+			}
+			refuse(1, 0, 2)
+			if resumed := register(1); resumed["execution_id"] != second["execution_id"] || resumed["generation"] != float64(2) {
+				t.Fatalf("a stale retry below the current generation did not resume it: %v", resumed)
+			}
+		})
+	}
+}

@@ -493,6 +493,9 @@ func applyFailuresFrom(res *Result, tokenFile, fallbackTokenFile string, now tim
 		}
 		if seen := observed[row.Client]; len(seen) > 0 {
 			row.Detail = joinDetail(row.Detail, "observed in 24 h: "+observedText(seen))
+			if seen[hook.RestoreFloorRefused]+seen[hook.RestoreFloorHubTooOld] > 0 {
+				row.Detail = joinDetail(row.Detail, "the hook kept its generation proof and left the session unregistered. Edits may have gone unclaimed")
+			}
 		}
 		row.unusable = observed[row.Client][binding.ObservedUnusable] > 0
 	}

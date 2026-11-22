@@ -69,7 +69,8 @@ type Resolver struct {
 	Getenv            func(string) string
 	Ancestor          func() (proc.Ancestor, error)
 	// Recall reads the hook's local generation memory for client and session without creating
-	// files. An unbound shim uses it only for a reattach-only registration with generation > 0.
+	// files. Both clients check it before binding or registering a fallback. An unbound shim
+	// can also use it for a reattach-only registration with generation > 0.
 	Recall func(client, session string) (generation int, present bool, err error)
 	// HeartbeatSource names the heartbeat source sent during refresh reattachment (default "shim").
 	HeartbeatSource string
@@ -122,8 +123,7 @@ type Resolver struct {
 }
 
 type handover struct {
-	from Bound
-	to   string
+	from, to Bound
 }
 
 func New(h *hubclient.Client, client string) *Resolver {
@@ -158,6 +158,9 @@ var errBinding = &hubclient.Error{Code: "unbound", Message: "Iris is still bindi
 
 // errLost answers a call while the binding is lost and no fresh bind has succeeded.
 var errLost = &hubclient.Error{Code: "lost", Message: "This session's Execution is gone at the hub. Iris binds afresh once the session has reattached: send any prompt, then retry."}
+
+var errGenerationFloor = &hubclient.Error{Code: "lost", Message: "the hub has not bound the remembered session generation"}
+var errMalformedGeneration = &hubclient.Error{Code: "lost", Message: "remembered session generation is malformed"}
 
 // LostError keeps the failed retry available for diagnosis while calls still answer lost.
 // Cause is evidence about the retry, never permission to register or reuse a lost Execution.
@@ -207,7 +210,7 @@ func (r *Resolver) resolveHeld(ctx context.Context, handle string) (Bound, error
 	}
 	b, err = r.orRegister(ctx, handle, b, err)
 	if err == nil && r.gone[b.ExecutionID] {
-		r.bound, b, err = Bound{}, Bound{}, &hubclient.Error{Code: "lost", Message: "the binding retry returned an Execution already found lost"}
+		b, err = Bound{}, &hubclient.Error{Code: "lost", Message: "the binding retry returned an Execution already found lost"}
 	}
 	if err != nil && r.lost {
 		return Bound{}, &LostError{Cause: err}
@@ -219,9 +222,60 @@ func (r *Resolver) resolveHeld(ctx context.Context, handle string) (Bound, error
 }
 
 func (r *Resolver) rememberLastHeld(b Bound) {
-	if b.Rung == 2 || b.Rung == 3 {
+	if rung := r.processRungHeld(b); rung > 0 && b.Generation >= r.processGenerationHeld(b.SessionID) {
+		b.Rung = rung
 		r.last = b
 	}
+}
+
+// processRungHeld identifies the session as the process's own, even when an explicit handle
+// selected it. Retain the positively known session/process rung when the handle is gone.
+func (r *Resolver) processRungHeld(b Bound) int {
+	if b.Rung == 2 || b.Rung == 3 {
+		return b.Rung
+	}
+	if b.SessionID != "" {
+		if b.SessionID == r.last.SessionID {
+			return r.last.Rung
+		}
+		if b.SessionID == r.envSession() {
+			return 2
+		}
+	}
+	return 0
+}
+
+func (r *Resolver) processGenerationHeld(session string) int {
+	if session != "" && r.last.SessionID == session {
+		return r.last.Generation
+	}
+	return 0
+}
+
+func (r *Resolver) recallGeneration(session string) (int, error) {
+	if r.Recall == nil {
+		return 0, nil
+	}
+	gen, present, err := r.Recall(r.Client, session)
+	if !present {
+		return 0, nil
+	}
+	if err != nil || gen <= 0 {
+		return 0, errMalformedGeneration
+	}
+	return gen, nil
+}
+
+// checkGenerationHeld applies proof to a process-owned session of the same identity. An
+// explicit handle is checked only if it names the session the process already knows.
+func (r *Resolver) checkGenerationHeld(b Bound) error {
+	if b.SessionID != "" && r.processRungHeld(b) > 0 {
+		gen, _ := r.recallGeneration(b.SessionID)
+		if b.Generation < max(gen, r.processGenerationHeld(b.SessionID)) {
+			return errGenerationFloor
+		}
+	}
+	return nil
 }
 
 func (r *Resolver) keepHeld(b Bound) {
@@ -237,7 +291,7 @@ func (r *Resolver) markLostHeld(b Bound) {
 	r.gone[b.ExecutionID] = true
 	if r.bound.ExecutionID == b.ExecutionID {
 		r.rememberLastHeld(b)
-		r.bound, r.lost = Bound{}, true
+		r.bound, r.lost, r.own = Bound{}, true, false
 	}
 }
 
@@ -266,27 +320,35 @@ func (r *Resolver) bindExecutionHeld(ctx context.Context, orig Bound) (Bound, er
 // answering lost marks the Execution lost while keeping its last identity; any other failure
 // leaves the cached binding intact.
 func (r *Resolver) refresh(ctx context.Context) (Bound, error) {
-	b, err := r.bindExecutionHeld(ctx, r.bound)
-	if err == nil {
-		r.keepHeld(b)
-		return b, nil
+	original := r.bound
+	b, err := r.bindExecutionHeld(ctx, original)
+	if IsCode(err, "lost") {
+		if err := r.checkGenerationHeld(original); err != nil {
+			r.markLostHeld(original)
+			return Bound{}, err
+		}
+		fresh := original
+		fresh.Outside = false
+		if hbErr := r.Hub.Do(ctx, "POST", "/v1/executions/"+original.ExecutionID+"/heartbeat", map[string]any{"generation": original.Generation, "source": r.heartbeatSource()}, &fresh); hbErr != nil {
+			if IsCode(hbErr, "lost") {
+				r.markLostHeld(original)
+			}
+			return Bound{}, hbErr
+		}
+		if err := r.checkGenerationHeld(fresh); err != nil {
+			r.markLostHeld(original)
+			return Bound{}, err
+		}
+		fresh.HookSeen = fresh.HookSeen || original.HookSeen
+		r.bound = fresh
+		r.rememberLastHeld(fresh)
+		b, err = r.bindExecutionHeld(ctx, fresh)
 	}
-	if !IsCode(err, "lost") {
+	if err != nil {
 		return Bound{}, err
 	}
-	fresh := r.bound
-	fresh.Outside = false
-	if hbErr := r.Hub.Do(ctx, "POST", "/v1/executions/"+r.bound.ExecutionID+"/heartbeat", map[string]any{"generation": r.bound.Generation, "source": r.heartbeatSource()}, &fresh); hbErr != nil {
-		if IsCode(hbErr, "lost") {
-			r.markLostHeld(r.bound)
-		}
-		return Bound{}, hbErr
-	}
-	fresh.HookSeen = fresh.HookSeen || r.bound.HookSeen
-	r.bound = fresh
-	r.rememberLastHeld(fresh)
-	b, err = r.bindExecutionHeld(ctx, r.bound)
-	if err != nil {
+	if err := r.checkGenerationHeld(b); err != nil {
+		r.markLostHeld(original)
 		return Bound{}, err
 	}
 	r.keepHeld(b)
@@ -297,24 +359,24 @@ func (r *Resolver) refresh(ctx context.Context) (Bound, error) {
 // eligible for generation-memory reattachment, with mu held. A live IRIS_EXECUTION override or
 // an explicit non-gone handle takes precedence and disables memory reattachment.
 func (r *Resolver) recallSessionHeld(handle string) (string, int) {
-	if r.Recall == nil {
+	if r.Recall == nil || r.HeartbeatSource == "watch" {
 		return "", 0
 	}
-	if ex := r.Getenv("IRIS_EXECUTION"); ex != "" && !r.gone[ex] {
-		return "", 0
-	}
-	if handle != "" && !r.gone[handle] {
+	if r.explicitBindingHeld(handle) {
 		return "", 0
 	}
 	if r.last.HookSeen && r.last.SessionID != "" {
 		return r.last.SessionID, r.last.Rung
 	}
-	if variable := sessionVariable[r.Client]; variable != "" {
-		if session := r.Getenv(variable); session != "" {
-			return session, 2
-		}
+	if session := r.envSession(); session != "" {
+		return session, 2
 	}
 	return "", 0
+}
+
+func (r *Resolver) explicitBindingHeld(handle string) bool {
+	ex := r.Getenv("IRIS_EXECUTION")
+	return (ex != "" && !r.gone[ex]) || (handle != "" && !r.gone[handle])
 }
 
 // reattachByMemoryHeld attempts a reattach-only registration (generation > 0) from the hook's
@@ -322,15 +384,15 @@ func (r *Resolver) recallSessionHeld(handle string) (string, int) {
 // returns attempted=false so nothing is sent. Malformed or mismatched memory returns a lost
 // error with attempted=true and never falls back to a generation-0 registration.
 func (r *Resolver) reattachByMemoryHeld(ctx context.Context, session string, rung int) (Bound, bool, error) {
-	if r.Recall == nil {
+	gen, err := r.recallGeneration(session)
+	if err != nil {
+		return Bound{}, true, err
+	}
+	if gen == 0 {
 		return Bound{}, false, nil
 	}
-	gen, present, err := r.Recall(r.Client, session)
-	if !present {
-		return Bound{}, false, nil
-	}
-	if err != nil || gen <= 0 {
-		return Bound{}, true, &hubclient.Error{Code: "lost", Message: "remembered session generation is malformed"}
+	if gen < r.processGenerationHeld(session) {
+		return Bound{}, true, errGenerationFloor
 	}
 	req := hubclient.SessionRequest{
 		Client:     r.Client,
@@ -352,7 +414,7 @@ func (r *Resolver) reattachByMemoryHeld(ctx context.Context, session string, run
 	if err != nil {
 		return Bound{}, true, err
 	}
-	return Bound{
+	b := Bound{
 		ExecutionID:  resp.ExecutionID,
 		Generation:   resp.Generation,
 		RepositoryID: resp.RepositoryID,
@@ -363,7 +425,11 @@ func (r *Resolver) reattachByMemoryHeld(ctx context.Context, session string, run
 		Capabilities: Capabilities(strings.Join(resp.Capabilities, "\n")),
 		Outside:      resp.OutsideGit,
 		HookSeen:     true,
-	}, true, nil
+	}
+	if err := r.checkGenerationHeld(b); err != nil {
+		return Bound{}, true, err
+	}
+	return b, true, nil
 }
 
 // orRegister is the last resort when no rung finds the session: a session whose hooks never
@@ -372,7 +438,7 @@ func (r *Resolver) reattachByMemoryHeld(ctx context.Context, session string, run
 // when the hook is what reattaches. Only a process that could name its session registers: by
 // its session id, or as a single-session client process (D6).
 func (r *Resolver) orRegister(ctx context.Context, handle string, b Bound, err error) (Bound, error) {
-	if !IsCode(err, "unbound") || len(r.gone) > 0 || r.last.HookSeen {
+	if !IsCode(err, "unbound") || len(r.gone) > 0 || r.last.HookSeen || r.explicitBindingHeld(handle) {
 		return b, err
 	}
 	if r.since.IsZero() {
@@ -388,10 +454,7 @@ func (r *Resolver) orRegister(ctx context.Context, handle string, b Bound, err e
 			return b, err
 		}
 	}
-	session := ""
-	if variable := sessionVariable[r.Client]; variable != "" {
-		session = r.Getenv(variable)
-	}
+	session := r.envSession()
 	ancestor := r.ancestor()
 	switch {
 	case session != "":
@@ -405,6 +468,9 @@ func (r *Resolver) orRegister(ctx context.Context, handle string, b Bound, err e
 // register makes an Execution of this process's own, which it gives up as soon as the hook's
 // appears (see adopt).
 func (r *Resolver) register(ctx context.Context, session string, a proc.Ancestor, single bool, rung int) (Bound, error) {
+	if err := r.fallbackGenerationError(session); err != nil {
+		return Bound{}, err
+	}
 	req := hubclient.SessionRequest{Client: r.Client, SessionID: session, Host: r.Host, CWD: r.CWD, Source: "mcp", ClientPID: a.PID, ClientPIDStartMS: a.StartMS, SingleSession: single}
 	repo, err := gitinfo.Find(r.CWD)
 	var response hubclient.SessionResponse
@@ -423,6 +489,9 @@ func (r *Resolver) register(ctx context.Context, session string, a proc.Ancestor
 		// same request on the session route, as before, and makes a project of the folder.
 		response, err = r.Hub.RegisterOutsideSession(ctx, req)
 		if hubclient.OlderHub(err) {
+			if err := r.fallbackGenerationError(session); err != nil {
+				return Bound{}, err
+			}
 			response, err = r.Hub.RegisterSession(ctx, req)
 			// Said only once the legacy registration it reports has happened.
 			r.olderHub = r.olderHub || err == nil
@@ -432,8 +501,19 @@ func (r *Resolver) register(ctx context.Context, session string, a proc.Ancestor
 		return Bound{}, err
 	}
 	b := Bound{ExecutionID: response.ExecutionID, Generation: response.Generation, RepositoryID: response.RepositoryID, Agent: response.Agent, SessionID: session, Rung: rung, Worktree: response.Worktree, Capabilities: Capabilities(strings.Join(response.Capabilities, "\n")), Outside: response.OutsideGit}
+	if err := r.checkGenerationHeld(b); err != nil {
+		return Bound{}, err
+	}
 	r.bound, r.own = b, true
 	return b, nil
+}
+
+func (r *Resolver) fallbackGenerationError(session string) error {
+	gen, err := r.recallGeneration(session)
+	if max(gen, r.processGenerationHeld(session)) > 0 {
+		return errGenerationFloor
+	}
+	return err
 }
 
 // adopt gives up this process's own Execution for the session's hook's, once that exists:
@@ -457,11 +537,16 @@ func (r *Resolver) adopt(ctx context.Context) {
 		}
 		r.keepHeld(b)
 		r.own = false
-		r.pending = &handover{from: mine, to: b.ExecutionID}
+		r.pending = &handover{from: mine, to: b}
 	}
 	// Retry the same idempotent end until its response confirms that the mail moved.
 	p := r.pending
-	if err := r.Hub.HandOverExecution(ctx, p.from.ExecutionID, p.from.Generation, p.to); err == nil {
+	if err := r.checkGenerationHeld(p.to); err != nil {
+		r.markLostHeld(p.to)
+		r.pending = nil
+		return
+	}
+	if err := r.Hub.HandOverExecution(ctx, p.from.ExecutionID, p.from.Generation, p.to.ExecutionID); err == nil {
 		r.pending = nil
 	}
 }
@@ -477,20 +562,33 @@ func (r *Resolver) ancestor() proc.Ancestor {
 
 var sessionVariable = map[string]string{"claude": "CLAUDE_CODE_SESSION_ID", "copilot": "COPILOT_AGENT_SESSION_ID", "grok": "GROK_SESSION_ID"}
 
+func (r *Resolver) envSession() string {
+	if variable := sessionVariable[r.Client]; variable != "" && r.Getenv != nil {
+		return r.Getenv(variable)
+	}
+	return ""
+}
+
 // resolve tries the rungs in order and only binds. exclude names an Execution to skip.
 func (r *Resolver) resolve(ctx context.Context, handle, exclude string) (Bound, error) {
 	req := map[string]any{"client": r.Client, "host": r.Host, "cwd": r.CWD}
 	if exclude != "" {
 		req["exclude"] = exclude
 	}
+	session := ""
 	bind := func(rung int) (Bound, error) {
 		var b Bound
-		err := r.Hub.Do(ctx, "POST", "/v1/bind", req, &b)
-		if err == nil {
-			b.Rung = rung
-			r.bound = b
+		if err := r.Hub.Do(ctx, "POST", "/v1/bind", req, &b); err != nil {
+			return Bound{}, err
 		}
-		return b, err
+		b.Rung = rung
+		if rung == 2 && b.SessionID == "" {
+			b.SessionID = session
+		}
+		if err := r.checkGenerationHeld(b); err != nil {
+			return Bound{}, err
+		}
+		return b, nil
 	}
 	ex := r.Getenv("IRIS_EXECUTION")
 	var lastErr error = &hubclient.Error{Code: "unbound", Message: "Pass the execution handle from SessionStart in the execution argument, or restart with IRIS_EXECUTION set. Iris cannot identify this session safely."}
@@ -504,15 +602,10 @@ func (r *Resolver) resolve(ctx context.Context, handle, exclude string) (Bound, 
 		req["execution"] = ex
 		return bind(1)
 	}
-	variable := sessionVariable[r.Client]
-	session := ""
-	if variable != "" {
-		session = r.Getenv(variable)
-	}
 	// The session's hook is its registrar. On resume Claude Code gives an MCP server another
 	// CLAUDE_CODE_SESSION_ID than its hooks, so a session id with nothing bound to it falls
 	// through to the client process, which the hook's Execution records.
-	if session != "" {
+	if session = r.envSession(); session != "" {
 		req["session_id"] = session
 		b, err := bind(2)
 		if err == nil || !IsCode(err, "unbound") {
@@ -564,6 +657,14 @@ func (r *Resolver) Heartbeat(ctx context.Context, source string) error {
 }
 
 func (r *Resolver) beatOne(ctx context.Context, b Bound, source string) error {
+	r.mu.Lock()
+	if err := r.checkGenerationHeld(b); err != nil {
+		r.markLostHeld(b)
+		r.mu.Unlock()
+		return err
+	}
+	r.mu.Unlock()
+
 	call, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	// Decode over the previous binding: older hubs return only lease_ms on an
@@ -574,14 +675,18 @@ func (r *Resolver) beatOne(ctx context.Context, b Bound, source string) error {
 	err := r.Hub.Do(call, "POST", "/v1/executions/"+b.ExecutionID+"/heartbeat", map[string]any{"generation": b.Generation, "source": source}, &fresh)
 	if err == nil {
 		r.mu.Lock()
+		defer r.mu.Unlock()
 		// Resolve may have selected another explicit handle during this request.
 		if r.bound.ExecutionID == b.ExecutionID && r.bound.Generation == b.Generation {
+			if err := r.checkGenerationHeld(fresh); err != nil {
+				r.markLostHeld(b)
+				return err
+			}
 			// Heartbeat answers carry no hook_seen field, so preserve what bind established.
 			fresh.HookSeen = fresh.HookSeen || r.bound.HookSeen
 			r.bound = fresh
 			r.rememberLastHeld(fresh)
 		}
-		r.mu.Unlock()
 		return nil
 	}
 	if IsCode(err, "lost") {

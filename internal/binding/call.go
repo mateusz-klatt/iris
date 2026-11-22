@@ -115,7 +115,7 @@ func (r *Resolver) ResolveCall(ctx context.Context, handle, session, thread stri
 	case session == "":
 		return Bound{}, false, errNoSession
 	}
-	b, err := r.lookup(ctx, session)
+	b, err := r.lookup(ctx, session, m.session)
 	return b, false, err
 }
 
@@ -151,6 +151,9 @@ func (r *Resolver) bindOverrideHeld(ctx context.Context, ex string) (Bound, erro
 		return Bound{}, err
 	}
 	b.Rung = 1
+	if err := r.checkGenerationHeld(b); err != nil {
+		return Bound{}, err
+	}
 	r.keepHeld(b)
 	return b, nil
 }
@@ -203,6 +206,15 @@ func (r *Resolver) sessionBinding(ctx context.Context, session string) (b Bound,
 
 func (r *Resolver) bySessionOrReattachHeld(ctx context.Context, session string) (Bound, error) {
 	b, err := r.bySession(ctx, session)
+	if err == nil {
+		if b.SessionID == "" {
+			b.SessionID = session
+		}
+		if err := r.checkGenerationHeld(b); err != nil {
+			return Bound{}, err
+		}
+		return b, nil
+	}
 	if IsCode(err, "unbound") {
 		if rb, attempted, rerr := r.reattachByMemoryHeld(ctx, session, 2); attempted {
 			return rb, rerr
@@ -212,9 +224,9 @@ func (r *Resolver) bySessionOrReattachHeld(ctx context.Context, session string) 
 }
 
 // lookup attributes a call to the session it names by one lookup, without mu, so it never waits
-// behind a first bind's grace period. It keeps nothing and renews nothing, so the hub's answer
-// stands as given: the Executions this process found lost matter only to a binding it keeps.
-func (r *Resolver) lookup(ctx context.Context, session string) (Bound, error) {
+// behind a first bind's grace period. It keeps nothing and renews nothing. A sub-agent lookup
+// for its native session still respects the hook's disk proof for that session.
+func (r *Resolver) lookup(ctx context.Context, session, nativeSession string) (Bound, error) {
 	b, err := r.bySession(ctx, session)
 	if unusableAnswer(err) {
 		r.noteUnusable()
@@ -222,6 +234,12 @@ func (r *Resolver) lookup(ctx context.Context, session string) (Bound, error) {
 	}
 	if err != nil {
 		return Bound{}, err
+	}
+	if session == nativeSession {
+		gen, _ := r.recallGeneration(session)
+		if b.Generation < gen {
+			return Bound{}, errGenerationFloor
+		}
 	}
 	return b, nil
 }

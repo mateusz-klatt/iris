@@ -213,7 +213,7 @@ func (r Runner) shellFull(ctx context.Context, hub shellHub, ev Event, repo giti
 		}
 		r.fullSucceeded(state, repo)
 		state.at("shell session")
-		out, err = r.reconcileSession(ctx, combined, ev, repo, phase, taken)
+		out, err = r.reconcileSession(ctx, state, combined, ev, repo, phase, taken)
 		// A lost answer may also be an older hub's to a request with no Execution, so the
 		// separate calls decide; they handle a real loss as an edit does.
 		if err == nil || (!hubclient.IsCode(err, "lost") && !hubclient.IsCode(err, "bad_request") && !hubclient.IsCode(err, "not_found")) {
@@ -221,7 +221,7 @@ func (r Runner) shellFull(ctx context.Context, hub shellHub, ev Event, repo giti
 		}
 	}
 	state.at("shell session")
-	sess, err := r.register(ctx, ev, repo)
+	sess, err := r.register(ctx, state, ev, repo)
 	if err != nil {
 		return out, false, err
 	}
@@ -240,7 +240,7 @@ func (r Runner) shellFull(ctx context.Context, hub shellHub, ev Event, repo giti
 // reconcileSession is the one-call form. The generation the hub answers with is remembered as
 // the session's next proof, as a registration's is, and so is whether the hub takes reduced
 // snapshots.
-func (r Runner) reconcileSession(ctx context.Context, hub sessionShellHub, ev Event, repo gitinfo.Repo, phase string, snapshot map[string]string) (hubclient.CheckResponse, error) {
+func (r Runner) reconcileSession(ctx context.Context, state *runState, hub sessionShellHub, ev Event, repo gitinfo.Repo, phase string, snapshot map[string]string) (hubclient.CheckResponse, error) {
 	req := hubclient.ShellSessionRequest{SessionRequest: r.sessionReq(ev, repo), Kind: phase, Status: snapshot}
 	m := r.memory()
 	if m != nil {
@@ -248,7 +248,7 @@ func (r Runner) reconcileSession(ctx context.Context, hub sessionShellHub, ev Ev
 	}
 	res, err := hub.ReconcileSession(ctx, req)
 	r.answered(m, ev, res, err)
-	return res.CheckResponse, err
+	return res.CheckResponse, checkRestoreFloor(state, ev, m, req.Generation, err)
 }
 
 // answered keeps what a one-call answer says: the session's next proof, and whether the hub

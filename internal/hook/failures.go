@@ -117,7 +117,7 @@ var hubCodes = []string{"unauthorized", "bad_request", "not_found", "conflict", 
 // fixedFailures are the failure texts that carry no variable part.
 var fixedFailures = []string{
 	string(failPanic), string(failPanicShell), string(failUnknownClient), string(failNoHub),
-	string(failNoPaths), string(failBadTouch), string(failSessionsLock), shellOverBudget, shellScopeUnknown, errNoSession.Error(),
+	string(failNoPaths), string(failBadTouch), string(failSessionsLock), string(errRestoreFloor), shellOverBudget, shellScopeUnknown, errNoSession.Error(),
 	"hook deadline exceeded", "hook operation canceled", "incomplete hook input or hub response",
 	"hub request failed", failHubRedirect, failHubTooLarge, failHubNoExecution, failHubNoAction,
 }
@@ -314,8 +314,13 @@ func (r Runner) logTokenPath() (string, error) {
 	return (hubclient.EnvConfig{Getenv: r.Getenv, ReadFile: r.readConfig}).BoundedTokenPath(failureConfigBudget, r.configAfter)
 }
 
-// record appends one entry to the log doctor reads, within the log's small budget.
+// record appends an entry to the log doctor reads, within the log's small budget.
 func (r Runner) record(stage, text string, shape *PayloadShape) {
+	r.recordEntries(Failure{Stage: stage, Error: text, Shape: shape})
+}
+
+// recordEntries shares the log budget when a single run has both a failure and an observation.
+func (r Runner) recordEntries(entries ...Failure) {
 	// Logging is best effort. A slow disk, permissions failure or competing writer
 	// must not delay the allow response beyond this small, fixed budget.
 	done := make(chan struct{})
@@ -333,8 +338,11 @@ func (r Runner) record(stage, text string, shape *PayloadShape) {
 		if client == "" {
 			client = "unknown"
 		}
-		entry := Failure{Time: time.Now().UTC(), Client: client, Event: boundedLabel(r.EventName), Stage: stage, Error: text, Shape: shape}
-		_ = appendFailure(token, entry)
+		now, event := time.Now().UTC(), boundedLabel(r.EventName)
+		for _, entry := range entries {
+			entry.Time, entry.Client, entry.Event = now, client, event
+			_ = appendFailure(token, entry)
+		}
 	}()
 	after := r.logAfter
 	if after == nil {

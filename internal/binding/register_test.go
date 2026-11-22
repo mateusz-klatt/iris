@@ -144,7 +144,8 @@ func TestAnOwnExecutionOutsideGitRegistersOnItsRoute(t *testing.T) {
 	}
 	older := &scriptedHub{binds: []string{"unbound", "unbound", "unbound"}, older: true, register: "denied"}
 	var said []string
-	r = resolverFor(t, older, "grok", map[string]string{"GROK_SESSION_ID": "s"}, proc.Ancestor{})
+	env := map[string]string{"GROK_SESSION_ID": "s"}
+	r = resolverFor(t, older, "grok", env, proc.Ancestor{})
 	r.Observe = func(text string) { said = append(said, text) }
 	// A legacy registration the hub refuses is not reported as made.
 	if _, err := r.Resolve(context.Background(), ""); !IsCode(err, "denied") || len(said) != 0 {
@@ -155,11 +156,14 @@ func TestAnOwnExecutionOutsideGitRegistersOnItsRoute(t *testing.T) {
 	if _, err := r.Resolve(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
+	// A fresh native session may bootstrap, while the old generation remains process proof
+	// for its own session. The hub warning is still said only once per process.
 	r.bound = Bound{}
+	env["GROK_SESSION_ID"] = "another-session"
 	if _, err := r.Resolve(context.Background(), ""); err != nil {
 		t.Fatal(err)
 	}
-	if len(older.routes) != 2 || older.routes[0] != "/v1/sessions" || len(said) != 1 || said[0] != ObservedOlderHub {
+	if len(older.routes) != 2 || older.routes[0] != "/v1/sessions" || older.session.SessionID != "another-session" || len(said) != 1 || said[0] != ObservedOlderHub {
 		t.Fatalf("routes %v, said %v", older.routes, said)
 	}
 	unreadable := &scriptedHub{binds: []string{"unbound"}}

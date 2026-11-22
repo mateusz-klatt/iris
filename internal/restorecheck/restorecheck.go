@@ -22,6 +22,7 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/mateusz-klatt/iris/internal/hub"
+	"github.com/mateusz-klatt/iris/internal/hubclient"
 	"github.com/mateusz-klatt/iris/internal/store"
 )
 
@@ -69,7 +70,7 @@ func run(ctx context.Context, backup, scratch, listen string, out io.Writer) err
 		DatabaseBytes int64  `json:"database_bytes"`
 		Stream        string `json:"stream"`
 	}
-	c.check(call(ctx, base, token, "GET", "/v1/status", nil, &status) == nil, "the restored hub answers status (database %d bytes)", status.DatabaseBytes)
+	c.check(call(ctx, base, token, "GET", "/v1/status", http.StatusOK, nil, &status) == nil, "the restored hub answers status (database %d bytes)", status.DatabaseBytes)
 	// A backup made by `iris admin backup` carries a restore marker, and a hub restored from it
 	// runs on a new stream (ADR 006). A copy made any other way, or by an older binary, keeps
 	// the stream; that is not a failed check, but the operator should know.
@@ -82,22 +83,22 @@ func run(ctx context.Context, backup, scratch, listen string, out io.Writer) err
 	if sample != nil {
 		// A host that moved on since the backup presents a newer generation, which the copy has
 		// never seen. It must not get the old Execution back.
-		reg := map[string]any{"client": sample.client, "host": sample.host, "session_id": sample.session, "cwd": sample.worktree, "worktree": sample.worktree, "generation": sample.generation + 1, "source": "hook"}
-		var got map[string]any
-		err := call(ctx, base, token, "POST", "/v1/sessions", reg, &got)
-		c.check(err != nil || got["execution_id"] != sample.id, "a session presenting a generation the backup does not have gets no restored authority")
+		reg := hubclient.SessionRequest{Client: sample.client, Host: sample.host, SessionID: sample.session, CWD: sample.worktree, Worktree: sample.worktree, Generation: sample.highest + 1, Source: "hook"}
+		c.check(lostWithHighest(ctx, base, token, reg, sample.highest), "a session presenting a generation the backup does not have gets no restored authority (409 lost, highest_generation=%d)", sample.highest)
 	} else {
 		c.line("no session was active at backup time, so there is no restored authority to test")
 	}
 
-	var fresh struct {
-		ExecutionID string `json:"execution_id"`
-	}
+	floor := hubclient.SessionRequest{Client: "codex", Host: "restore-check", SessionID: "restore-floor-" + randomToken()[:16], CWD: "/restore-check", Worktree: "/restore-check", Source: "hook"}
+	c.check(terminalFloor(ctx, base, token, db, floor), "a terminal generation 1 refuses a generation-zero retry with floor 3 (409 lost, highest_generation=1) and leaves no generation 2")
+
+	var fresh hubclient.SessionResponse
 	// The monitor needs a session that is new to the copy. A fixed session id is not: the scratch
 	// copy an earlier restore-check left holds that check's session, recovering after this start,
 	// and a recovering session refuses a registration that brings no generation.
-	monitor := map[string]any{"client": "codex", "host": "restore-check", "session_id": "restore-check-" + randomToken()[:16], "cwd": "/restore-check", "worktree": "/restore-check", "source": "hook"}
-	if err := call(ctx, base, token, "POST", "/v1/sessions", monitor, &fresh); err != nil {
+	monitor := floor
+	monitor.SessionID = "restore-check-" + randomToken()[:16]
+	if err := call(ctx, base, token, "POST", "/v1/sessions", http.StatusOK, monitor, &fresh); err != nil {
 		c.check(false, "a new session registers on the restored hub (%v), so its monitor cannot be tested", err)
 	} else {
 		c.check(resets(ctx, base, token, fresh.ExecutionID), "a monitor whose cursor is ahead of the restored history gets a reset")
@@ -152,8 +153,8 @@ func prepare(backup, scratch string) (string, error) {
 }
 
 type session struct {
-	id, host, client, session, worktree string
-	generation                          int64
+	host, client, session, worktree string
+	highest                         int
 }
 
 // activeSessions counts the Executions active at backup time and returns one of them.
@@ -168,11 +169,12 @@ func activeSessions(path string) (int, *session, error) {
 	db, _ := sql.Open("sqlite", path) // the driver only records the name; the query reports errors
 	defer func() { _ = db.Close() }()
 	var s session
-	err = db.QueryRow("SELECT id,host_id,client,session_id,worktree,generation FROM Execution WHERE state='active' LIMIT 1").Scan(&s.id, &s.host, &s.client, &s.session, &s.worktree, &s.generation)
+	err = db.QueryRow(`SELECT e.host_id,e.client,e.session_id,e.worktree,
+		(SELECT MAX(h.generation) FROM Execution h WHERE h.host_id=e.host_id AND h.client=e.client AND h.session_id=e.session_id)
+		FROM Execution e WHERE e.state='active' LIMIT 1`).Scan(&s.host, &s.client, &s.session, &s.worktree, &s.highest)
 	return n, &s, err
 }
 
-// scalar reads one number from the copy, on a connection of its own.
 // restoreState reads, before the copy is opened, the stream it was backed up on and whether it
 // carries a restore marker. A copy from before migration 025, without the marker's table,
 // carries none.
@@ -185,11 +187,12 @@ func restoreState(path string) (stream string, marked bool) {
 	return stream, n > 0
 }
 
-func scalar(path, query string) (int, error) {
+// scalar reads one number from the copy, on a connection of its own.
+func scalar(path, query string, args ...any) (int, error) {
 	db, _ := sql.Open("sqlite", path) // the driver only records the name; the query reports errors
 	defer func() { _ = db.Close() }()
 	var n int
-	err := db.QueryRow(query).Scan(&n)
+	err := db.QueryRow(query, args...).Scan(&n)
 	return n, err
 }
 
@@ -206,7 +209,7 @@ func randomToken() string {
 	return hex.EncodeToString(b[:])
 }
 
-func call(ctx context.Context, base, token, method, path string, body, out any) error {
+func call(ctx context.Context, base, token, method, path string, status int, body, out any) error {
 	var reader io.Reader
 	if body != nil {
 		raw, _ := json.Marshal(body)
@@ -220,10 +223,38 @@ func call(ctx context.Context, base, token, method, path string, body, out any) 
 		return err
 	}
 	defer func() { _ = res.Body.Close() }()
-	if res.StatusCode != http.StatusOK {
+	if res.StatusCode != status {
 		return fmt.Errorf("%s %s: %s", method, path, res.Status)
 	}
 	return json.NewDecoder(res.Body).Decode(out)
+}
+
+func lostWithHighest(ctx context.Context, base, token string, reg hubclient.SessionRequest, highest int) bool {
+	var reply struct {
+		Error struct {
+			Code    string `json:"code"`
+			Details struct {
+				Highest *int `json:"highest_generation"`
+			} `json:"details"`
+		} `json:"error"`
+	}
+	err := call(ctx, base, token, "POST", "/v1/sessions", http.StatusConflict, reg, &reply)
+	return err == nil && reply.Error.Code == "lost" && reply.Error.Details.Highest != nil && *reply.Error.Details.Highest == highest
+}
+
+func terminalFloor(ctx context.Context, base, token, db string, reg hubclient.SessionRequest) bool {
+	var fresh hubclient.SessionResponse
+	if err := call(ctx, base, token, "POST", "/v1/sessions", http.StatusOK, reg, &fresh); err != nil || fresh.Generation != 1 || fresh.ExecutionID == "" {
+		return false
+	}
+	if err := call(ctx, base, token, "POST", "/v1/executions/"+fresh.ExecutionID+"/end", http.StatusOK, map[string]int{"generation": 1}, &struct{}{}); err != nil {
+		return false
+	}
+	reg.RetryGeneration = 3
+	ok := lostWithHighest(ctx, base, token, reg, 1)
+	terminalOnly, err := scalar(db, `SELECT COUNT(*)=1 AND MAX(generation)=1 AND MAX(state)='ended'
+		FROM Execution WHERE host_id=? AND client=? AND session_id=?`, reg.Host, reg.Client, reg.SessionID)
+	return ok && err == nil && terminalOnly == 1
 }
 
 // resets opens a monitor with a cursor far beyond the restored history, as a monitor that

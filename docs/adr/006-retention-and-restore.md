@@ -3,7 +3,7 @@
 Status: accepted. The decisions below were made by `claude-holzera-iris` under the owner's
 delegation, from a proposal by `claude-home-iris` (gap review D3). Implementation is planned, not
 done. Decision 7 is amended below, on 2026-11-13 (a restored copy runs on a new stream) and on
-2026-11-22 (in-window reattachment by `iris mcp` and `iris watch`).
+2026-11-22 (in-window reattachment by `iris mcp` and `iris watch`, and the restore generation floor).
 
 ## Problem
 
@@ -46,17 +46,18 @@ transaction rolls back, the hook fails open (D3) and records why, and doctor sho
 not delete anything early to make room.
 
 **7. Restore.** Restoring a backup is a hub start on an older database, and every start already
-increments the boot epoch. So every Execution in the restored database is recovering, not live:
-it must reattach with its remembered generation inside the recovery window, or it is lost. A
-session whose host has moved on since the backup, to a newer generation, cannot present the old
-one and registers afresh. Restored authority is never used as it was. A monitor whose saved cursor
+increments the boot epoch. Every active Execution in the restored database enters recovery.
+It must reattach with its remembered generation inside the recovery window or become lost. A
+session whose host has moved on since the backup, to a newer generation, keeps its local proof
+and follows the restore floor addendum below. A monitor whose saved cursor
 is past the restored high-water mark gets a reset, as the events code already does for a cursor
 ahead of the hub.
 
 The restore procedure in `docs/deploy.md` is tested for real against a copy of production's backup,
 which the archive in the volume holds, and never against production itself. The test opens the
-copy in a scratch hub, checks `GET /v1/status`, registers a session with an old generation and sees
-it refused or rebuilt, and confirms that a monitor resets.
+copy in a scratch hub, checks `GET /v1/status`, verifies that registration refuses a generation
+the backup never saw, and confirms that a monitor resets. It also checks the retry floor
+against a synthetic terminal Execution on that copy.
 
 ## Consequences
 
@@ -174,3 +175,43 @@ generation or restore checks.
   retried with `generation = 0`, so restored authority is never granted.
 - Automatic post-120 s succession without a registering hook is deliberately out of scope here and
   deferred to its own ADR.
+
+## Addendum of 2026-11-22: the restore generation floor
+
+A hook that remembers generation G keeps that proof after a registration conflict. Every
+generation-related registration `409 lost` includes an integer `error.details.highest_generation`.
+It is the maximum across all retained Execution states for the same host, client and native
+session ID, or zero if no history remains. A hook retries once within its existing deadline only
+when the field is valid and at least G. The retry sends `generation:0` with `retry_generation:G`.
+In the registration transaction, the hub refuses if either the retained history or the resulting
+binding is below G. Outside-git and combined shell registration use the same floor. A recovering
+Execution still accepts only exact-generation proof.
+
+A refused retry leaves the session unregistered by that hook. The hook records
+`restore_floor_refused` for `iris doctor` and returns the client's normal allow without claiming
+or reconciling the edit. A proofless edit against a recovering Execution is still deliberately
+denied under D9. Concurrent hooks keep the highest generation in the session file, and a
+successful SessionEnd clears that proof only when it matches the generation that ended.
+
+The MCP shim and plain watch use retained process and hook-file proof to reject a lower
+generation when binding the same session. Hook-file proof also blocks either client's first-bind
+generation-zero fallback. Eligible exact-generation heartbeats and shim reattachment still
+work during the 120 s recovery window.
+
+The maximum describes the rows SQLite still holds. Retention can lower it between the original
+conflict and a retry. An equal generation carries no restore provenance, so proof based on
+the counter alone cannot distinguish equal generations from different histories. Local proof
+that has been unused for 30 days can still be pruned.
+
+For an empty replacement hub, the owner verifies the hub is empty and starts a new native
+session. If the same native session ID is essential, stop its hook, shim and watch before
+archiving its local generation file, then relaunch the session. Archive only the file
+`<token-dir>/sessions/<hex of the first 16 SHA-256 bytes of client + NUL + session_id>`
+([path calculation](../../internal/hook/memory.go#L40)). Keep other session files and the
+token in place. `iris admin forget` deletes hub records and mail and is unsuitable for this
+local recovery.
+
+Upgrade the hub first and then the clients in the same release. An upgraded hook against
+an older hub treats a missing `highest_generation` as a refusal to retry, keeps its proof and
+fails open for the edit. Doctor reports “hub predates restore floor” from that observation.
+The full protection requires both the hub and clients to be upgraded.

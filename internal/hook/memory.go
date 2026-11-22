@@ -21,7 +21,7 @@ import (
 type Memory interface {
 	Recall(client, session string) int
 	Remember(client, session string, generation int)
-	Forget(client, session string)
+	Forget(client, session string, generation int)
 }
 
 // memoryAge is how long an untouched entry survives. A session that ends normally removes its
@@ -61,22 +61,41 @@ func (m fileMemory) Recall(client, session string) int {
 	return generation
 }
 
-// Remember is best effort. A failed write only means the next restart costs this session
-// its proof, which is what every session had before.
+// Remember keeps the higher proof when another hook already recorded a newer registration.
 func (m fileMemory) Remember(client, session string, generation int) {
-	_ = m.write(m.name(client, session), strconv.Itoa(generation))
+	if err := m.directory(); err != nil {
+		return
+	}
+	_ = m.underLock(func() {
+		if generation > 0 && generation >= m.Recall(client, session) {
+			_ = m.replace(m.name(client, session), strconv.Itoa(generation))
+		}
+	})
 }
 
-// Forget removes the session's generation. The told state goes when the session ends
-// (forgetAttention) or when pruning finds it untouched for memoryAge; the wake file stays.
-func (m fileMemory) Forget(client, session string) {
-	_ = os.Remove(m.name(client, session))
+// Forget removes only the proof of the Execution that successfully ended.
+func (m fileMemory) Forget(client, session string, generation int) {
+	_ = m.underLock(func() {
+		if generation > 0 && generation == m.Recall(client, session) {
+			_ = os.Remove(m.name(client, session))
+		}
+	})
 }
 
-// sessionsLock is the sessions directory's lock. Every read and every change of an attention file
-// or a wake file, and every removal by pruning, holds it (ADR 017). Reads hold it too because on
-// Windows the rename used here fails when another process holds the destination file open. It is
-// created once and never pruned, renamed or replaced, so every process locks the same file.
+// refresh keeps a proof that a running hook still needs past the idle-pruning cutoff.
+func (m fileMemory) refresh(client, session string, generation int) {
+	_ = m.underLock(func() {
+		if generation == m.Recall(client, session) {
+			now := m.now()
+			_ = os.Chtimes(m.name(client, session), now, now)
+		}
+	})
+}
+
+// sessionsLock protects generation changes, every attention and wake file operation, and
+// removals by pruning (ADR 017). Reads of attention and wake files hold it because on Windows
+// the rename used here fails when another process holds the destination file open. It is created
+// once and never pruned, renamed or replaced, so every process locks the same file.
 const sessionsLock = ".lock"
 
 // hookLockBudget is how long a hook tries for the lock. Nobody holds it across a network call or

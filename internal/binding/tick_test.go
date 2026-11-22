@@ -411,7 +411,7 @@ func TestAFallbackOrAHandoverIsLeftToAdopt(t *testing.T) {
 				return leaseGranted()
 			}}
 			r := tickResolver(h.client(), "claude", sessionS, proc.Ancestor{})
-			r.pending = &handover{from: Bound{ExecutionID: "ex_f", Generation: 1}, to: "ex_d"}
+			r.pending = &handover{from: Bound{ExecutionID: "ex_f", Generation: 1}, to: Bound{ExecutionID: "ex_d"}}
 			stop := maintain(t, r, "shim")
 			time.Sleep(21 * time.Second)
 			stop()
@@ -744,16 +744,19 @@ func (l *liveHub) client() *hubclient.Client {
 }
 
 // hook registers the session as iris hook does (internal/hook/runner.go, register): with its
-// remembered generation as proof, and once more without it, naming it as retry_generation, when
-// that generation is lost.
+// remembered generation as proof, and once more with retry_generation as the floor when the
+// hub still retains at least that generation.
 func (l *liveHub) hook(t *testing.T, remembered *int64, req store.Request) map[string]any {
 	t.Helper()
 	req.Generation = *remembered
 	out, err := l.s.Call(context.Background(), "sessions", req)
 	var lost *store.Error
 	if req.Generation != 0 && errors.As(err, &lost) && lost.Code == "lost" {
-		req.RetryGeneration, req.Generation = req.Generation, 0
-		out, err = l.s.Call(context.Background(), "sessions", req)
+		details, _ := lost.Details.(map[string]any)
+		if highest, ok := details["highest_generation"].(int64); ok && highest >= req.Generation {
+			req.RetryGeneration, req.Generation = req.Generation, 0
+			out, err = l.s.Call(context.Background(), "sessions", req)
+		}
 	}
 	if err != nil {
 		t.Fatal(err)

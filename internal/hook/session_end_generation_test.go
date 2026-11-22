@@ -18,7 +18,15 @@ import (
 type delayedSessionEndHub struct {
 	*hubclient.Client
 	before      func(hubclient.SessionRequest) error
+	afterEnd    func() error
 	generations []int
+}
+
+func (h *delayedSessionEndHub) EndExecution(ctx context.Context, id string, generation int) error {
+	if err := h.Client.EndExecution(ctx, id, generation); err != nil {
+		return err
+	}
+	return h.afterEnd()
 }
 
 func (h *delayedSessionEndHub) RegisterSession(ctx context.Context, req hubclient.SessionRequest) (hubclient.SessionResponse, error) {
@@ -90,5 +98,22 @@ func TestStaleSessionEndCannotEndAReplacementGeneration(t *testing.T) {
 	}
 	if len(after.Claims) != 1 || after.Claims[0].Path != "held.go" || after.Claims[0].Holder != replacement.Agent.Name {
 		t.Fatalf("the stale end released the replacement's claim: %+v", after.Claims)
+	}
+
+	// Even a successful end reply can arrive after another hook writes the next generation.
+	// The reply names G2 and must leave G3's proof intact.
+	var next hubclient.SessionResponse
+	h.afterEnd = func() error {
+		next, err = client.RegisterSession(ctx, req)
+		if err != nil {
+			return err
+		}
+		m.Remember("claude", "session", next.Generation)
+		return nil
+	}
+	out = (Runner{ClientName: "claude", EventName: "SessionEnd", Stdin: strings.NewReader(payload), Hub: h, Memory: m, Host: func() string { return "host" }, Ancestor: func() (proc.Ancestor, error) { return proc.Ancestor{}, nil }, Getenv: func(string) string { return "" }, after: never, logAfter: never}).Run()
+	assertAllow(t, ClientClaude, out)
+	if len(h.generations) != 2 || h.generations[1] != 2 || next.Generation != 3 || m.Recall("claude", "session") != 3 {
+		t.Fatalf("end sent %v, next %+v, remembered G%d", h.generations, next, m.Recall("claude", "session"))
 	}
 }
