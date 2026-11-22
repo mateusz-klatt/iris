@@ -126,3 +126,12 @@ later successful heartbeat. The count is a diagnostic, not a tally of every rebi
   - recovering Executions not found by any evidence, with the claim and the fetched mail kept and
     a retained binding reattaching;
   - a short-lived process leaving the session on the 60 s lease.
+
+## Amendment of 2026-11-22: in-window memory reattachment on the tick
+
+Following the 2026-11-22 amendment to [ADR 006](006-retention-and-restore.md), when the shim's
+unbound lookup tick gets `unbound` from `/v1/bind`, it may read the hook's local generation memory
+for a positively identified, hook-registered session (retained `hook_seen` session id or client
+session variable, never a live `IRIS_EXECUTION` override) and send a reattach-only registration
+(`source: "shim"`, `generation > 0`). Missing, malformed or mismatched memory never triggers a
+`generation = 0` registration, and Executions found lost remain refused.

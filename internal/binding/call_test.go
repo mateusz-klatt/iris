@@ -401,8 +401,9 @@ func TestACallThatEndsDuringTheGracePeriodIsStillBinding(t *testing.T) {
 	}
 }
 
-// Across a hub restart a bound root keeps its Execution and generation: the refusals pass
-// through, nothing is looked up by id, and the heartbeat is what reattaches the session.
+// Across a hub restart a bound root keeps its Execution and generation: when refresh sees lost,
+// the call immediately heartbeats to reattach the session without looking up by id or waiting
+// for Maintain.
 func TestARootKeepsItsBindingUntilTheHeartbeatReattachesIt(t *testing.T) {
 	h := &callHub{sessions: map[string]string{"s": "ex_s"}}
 	r, _ := callResolver(t, h, nil)
@@ -411,13 +412,15 @@ func TestARootKeepsItsBindingUntilTheHeartbeatReattachesIt(t *testing.T) {
 		t.Fatal(err)
 	}
 	h.with(func(h *callHub) { h.refused = map[string]bool{"ex_s": true} })
-	if _, _, err := r.ResolveCall(ctx, "", "s", "s"); !IsCode(err, "lost") {
-		t.Fatal(err)
+	if b, _, err := r.ResolveCall(ctx, "", "s", "s"); err != nil || b.ExecutionID != "ex_s" {
+		t.Fatalf("expected immediate reattach on tool call: %+v %v", b, err)
 	}
-	if got := h.seen(); r.bound.ExecutionID != "ex_s" || r.bound.Generation != 1 || len(got.lookups) != 1 {
-		t.Fatalf("binding %+v, lookups %v", r.bound, got.lookups)
+	if got := h.seen(); r.bound.ExecutionID != "ex_s" || r.bound.Generation != 1 || len(got.lookups) != 1 || len(got.beats) != 1 {
+		t.Fatalf("binding %+v, seen %+v", r.bound, got)
 	}
-	maintainUntil(t, r, renewed(h))
+	// An idle restart without a tool call still reattaches through Maintain's heartbeat.
+	h.with(func(h *callHub) { h.refused = map[string]bool{"ex_s": true} })
+	maintainUntil(t, r, func(int) bool { return len(h.seen().beats) >= 2 })
 	if b, _, err := r.ResolveCall(ctx, "", "s", "s"); err != nil || b.ExecutionID != "ex_s" || len(h.seen().lookups) != 1 {
 		t.Fatalf("%+v %v lookups %v", b, err, h.seen().lookups)
 	}

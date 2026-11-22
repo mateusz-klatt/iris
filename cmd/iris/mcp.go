@@ -65,17 +65,23 @@ func runMCP(args []string) error {
 	// Pin the resolved token path so long-lived observations never re-read client.json.
 	observeEnv := map[string]string{"IRIS_TOKEN_FILE": config.TokenFile}
 	resolver.Observe = mcpObserver(func(k string) string { return observeEnv[k] }, *client)
+	tokenPath, tokenErr := config.TokenPath()
+	var sessions *hook.Sessions
+	if tokenErr == nil {
+		sessions = hook.NewSessions(tokenPath)
+		resolver.Recall = sessions.RecallGeneration
+	}
 	workers.Add(1)
 	go func() { defer workers.Done(); resolver.Maintain(ctx, "shim", 20*time.Second, parent.Alive, cancel) }()
 	var options []mcpserver.Option
 	if wakeEnabled {
-		if tokenPath, err := config.TokenPath(); err != nil {
+		if tokenErr != nil {
 			resolver.Observe("wake_invalid_state")
 		} else {
 			var version atomic.Value
 			version.Store("")
 			options = append(options, mcpserver.WithClientVersion(func(v string) { version.Store(v) }))
-			worker := newMCPWakeWorker(resolver, hook.NewSessions(tokenPath), func() string { return version.Load().(string) }, resolver.Observe)
+			worker := newMCPWakeWorker(resolver, sessions, func() string { return version.Load().(string) }, resolver.Observe)
 			workers.Add(1)
 			go func() { defer workers.Done(); worker.Run(ctx) }()
 		}

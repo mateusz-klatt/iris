@@ -102,7 +102,7 @@ type Receipt struct {
 
 type execution struct {
 	ID, AgentID, Repo, Host, Client, Session, Worktree, Branch, State, Name string
-	Generation, Epoch, Deadline, PID, PIDStart                              int64
+	Generation, Epoch, Deadline, PID, PIDStart, HookSeenMS                  int64
 	Recovery                                                                sql.NullInt64
 	Parent                                                                  sql.NullString
 	Single, Heartbeat                                                       bool
@@ -110,10 +110,10 @@ type execution struct {
 	Outside bool
 }
 
-const executionSelect = `SELECT e.id,e.agent_id,e.repository_id,e.host_id,e.client,e.session_id,e.worktree,e.branch,e.state,a.name,e.generation,e.boot_epoch,e.deadline_tick_ms,e.client_pid,e.client_pid_start_ms,e.recovery_deadline,e.parent_id,e.single_session,e.heartbeat_mode,EXISTS(SELECT 1 FROM RepositoryAlias o WHERE o.alias='outside:'||e.host_id AND o.repository_id=e.repository_id) FROM Execution e JOIN Agent a ON a.id=e.agent_id `
+const executionSelect = `SELECT e.id,e.agent_id,e.repository_id,e.host_id,e.client,e.session_id,e.worktree,e.branch,e.state,a.name,e.generation,e.boot_epoch,e.deadline_tick_ms,e.client_pid,e.client_pid_start_ms,e.hook_seen_ms,e.recovery_deadline,e.parent_id,e.single_session,e.heartbeat_mode,EXISTS(SELECT 1 FROM RepositoryAlias o WHERE o.alias='outside:'||e.host_id AND o.repository_id=e.repository_id) FROM Execution e JOIN Agent a ON a.id=e.agent_id `
 
 func (e *execution) fields() []any {
-	return []any{&e.ID, &e.AgentID, &e.Repo, &e.Host, &e.Client, &e.Session, &e.Worktree, &e.Branch, &e.State, &e.Name, &e.Generation, &e.Epoch, &e.Deadline, &e.PID, &e.PIDStart, &e.Recovery, &e.Parent, &e.Single, &e.Heartbeat, &e.Outside}
+	return []any{&e.ID, &e.AgentID, &e.Repo, &e.Host, &e.Client, &e.Session, &e.Worktree, &e.Branch, &e.State, &e.Name, &e.Generation, &e.Epoch, &e.Deadline, &e.PID, &e.PIDStart, &e.HookSeenMS, &e.Recovery, &e.Parent, &e.Single, &e.Heartbeat, &e.Outside}
 }
 
 func scanExecution(row interface{ Scan(...any) error }) (e execution, err error) {
@@ -412,6 +412,9 @@ func (t *transaction) register(r Request, outside bool) (map[string]any, error) 
 		if e.Recovery.Valid && r.Generation != e.Generation {
 			return nil, fail("lost", "recovery requires the prior session generation")
 		}
+		if r.Source == "shim" && r.Generation != 0 && e.HookSeenMS == 0 {
+			return nil, fail("lost", "reattach requires a hook-registered session")
+		}
 		// A hook reports the checkout of the event it saw, which can be another repository: a
 		// submodule, or another project the agent ran a command in. Its root and aliases describe
 		// that checkout, not this Execution's, so they are checked and learned only from the
@@ -569,7 +572,7 @@ func (t *transaction) bind(r Request) (map[string]any, error) {
 		if e.Client != r.Client || e.Host != r.Host {
 			return nil, fail("unbound", "handle does not match this client and host")
 		}
-		return t.boundWithHooks(e)
+		return boundWithHooks(e), nil
 	}
 	query := executionSelect + "WHERE e.client=? AND e.host_id=? AND e.state='active' AND e.recovery_deadline IS NULL AND e.boot_epoch=? AND e.deadline_tick_ms>?"
 	args := []any{r.Client, r.Host, t.s.epoch, t.s.clock.Tick()}
@@ -621,26 +624,22 @@ func (t *transaction) bind(r Request) (map[string]any, error) {
 	if len(matches) > 1 {
 		return nil, fail("ambiguous", "multiple sessions match; provide an explicit execution handle")
 	}
-	out, err := t.boundWithHooks(matches[0])
-	if combined && err == nil {
+	out := boundWithHooks(matches[0])
+	if combined {
 		// Only this branch says so. A hub from before it takes such a request by session alone
 		// and answers without this field, which the asking client must refuse.
 		out["match"] = "process_session"
 	}
-	return out, err
+	return out, nil
 }
 
 // boundWithHooks is a bind answer: the binding, and whether any hook has reached the hub for that
 // Execution. ADR 017 requires Codex's wake to arm only on that evidence, because only the
 // session's prompt hook can release the wake's reservation.
-func (t *transaction) boundWithHooks(e execution) (map[string]any, error) {
-	var seen int64
-	if err := t.row("SELECT hook_seen_ms FROM Execution WHERE id=?", e.ID).Scan(&seen); err != nil {
-		return nil, err
-	}
+func boundWithHooks(e execution) map[string]any {
 	out := bound(e)
-	out["hook_seen"] = seen > 0
-	return out, nil
+	out["hook_seen"] = e.HookSeenMS > 0
+	return out
 }
 func (t *transaction) heartbeat(r Request) (map[string]any, error) {
 	if r.Source != "hook" && r.Source != "shim" && r.Source != "watch" {

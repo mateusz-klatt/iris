@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -19,6 +20,10 @@ const SecondNoteAfter = secondNoteAfter
 
 // ErrSessionsLocked means another session-file operation held the lock past its budget.
 var ErrSessionsLocked = failSessionsLock
+
+// ErrInvalidGeneration reports that a session's generation file exists but could not be read
+// or did not hold a positive integer generation.
+var ErrInvalidGeneration = errors.New("invalid remembered generation")
 
 // Sessions shares the hooks' session paths and lock with a wake runner. Only hooks write told
 // state and consume wakes; a runner may read told state to decide whether a wake is still due.
@@ -79,4 +84,26 @@ func (s *Sessions) Told(client, session string) (ToldSnapshot, error) {
 		Identity: hubclient.Identity{Known: true, Pending: told.Stream != "", Stream: told.Stream, Cursor: told.Cursor},
 		ToldMS:   told.At, Twice: told.Twice, Revision: told.Rev,
 	}, nil
+}
+
+// RecallGeneration reads the generation last remembered by a hook for client and session,
+// without creating any directory or file. A missing entry reports present=false and nil error;
+// a readable entry holding a positive integer reports (gen, true, nil); any other read error
+// or malformed content reports present=true and ErrInvalidGeneration.
+func (s *Sessions) RecallGeneration(client, session string) (int, bool, error) {
+	if client == "" || session == "" {
+		return 0, false, nil
+	}
+	raw, err := os.ReadFile(s.memory.name(client, session))
+	if errors.Is(err, os.ErrNotExist) {
+		return 0, false, nil
+	}
+	if err != nil {
+		return 0, true, ErrInvalidGeneration
+	}
+	gen, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil || gen <= 0 {
+		return 0, true, ErrInvalidGeneration
+	}
+	return gen, true, nil
 }

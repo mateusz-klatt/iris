@@ -2,7 +2,8 @@
 
 Status: accepted. The decisions below were made by `claude-holzera-iris` under the owner's
 delegation, from a proposal by `claude-home-iris` (gap review D3). Implementation is planned, not
-done. Decision 7 is amended below, on 2026-11-13: a restored copy runs on a new stream.
+done. Decision 7 is amended below, on 2026-11-13 (a restored copy runs on a new stream) and on
+2026-11-22 (in-window reattachment by `iris mcp` and `iris watch`).
 
 ## Problem
 
@@ -134,3 +135,42 @@ restore is refused, as after any restart, and a session that reattaches gets fre
   replay can cause up to two extra announcements of attention already told. Nothing is lost.
 - The first start by a binary with migration 025 consumes a marked file's marker. Moving the backup
   file into place consumes the only marked copy, so copy it instead and keep the original.
+
+## Amendment of 2026-11-22: in-window reattachment by `iris mcp` and `iris watch`
+
+Decided by `claude-holzera-iris` on 2026-11-22 (with `gpt-6.1-sol` advisory review), from a
+proposal by `antigravity-home-iris`. It refines how long-lived clients present their remembered
+generation during decision 7's 120 s recovery window without changing the hub's deadline,
+generation or restore checks.
+
+**What changes.**
+- **Bound `iris mcp` reattaches on a tool call.** When refreshing a cached binding gets `lost`
+  from `POST /v1/bind`, the shim immediately sends `POST /v1/executions/{id}/heartbeat` with its
+  exact remembered generation and retries `/v1/bind` once it reattaches, rather than failing the
+  call until the next 20 s tick.
+- **Unbound `iris mcp` reads hook generation memory.** For a positively identified,
+  hook-registered session (a Codex id-mode root, a client session environment variable, or a
+  retained hook-registered session id after a prior loss; never a live `IRIS_EXECUTION` override,
+  an explicit non-gone handle, or a Codex id-mode sub-agent), an unbound shim reads the hook's
+  local generation file beside the token and sends a reattach-only registration (`source: "shim"`,
+  `generation > 0`). Missing, malformed or mismatched memory never falls back to a `generation = 0`
+  registration, and the hub enforces `hook_seen_ms > 0` for `source: "shim"` registrations carrying
+  a non-zero generation.
+- **`iris watch` heartbeats immediately on reconnect and `reset`.** On reconnect after a drop and
+  before fetching a `reset` snapshot, `iris watch` sends `POST /v1/executions/{id}/heartbeat` with
+  `source: "watch"` immediately while keeping its periodic 20 s heartbeat and reconnect backoff.
+- **No permanent client-side latch on `lost`.** A heartbeat `lost` answer drops the dead Execution
+  and records it in `gone` so that stale Execution is never bound again, while retaining the last
+  positive session identity and `hook_seen` evidence so later permitted rebind or `generation > 0`
+  reattach attempts (for example after a hook registers a newer generation and a subsequent restart
+  leaves it recovering) can succeed. `ended` Executions stay terminal and are never revived.
+
+**What stays unchanged (restore safety).**
+- Every active Execution at hub start or restore still enters recovery with a persisted 120 s
+  `recovery_deadline`; repeated restarts never extend it, and expired or ended generations cannot
+  be revived.
+- On a restored backup whose generation is older than the host's local generation memory,
+  presenting the newer remembered generation is still refused with `lost` and never downgraded or
+  retried with `generation = 0`, so restored authority is never granted.
+- Automatic post-120 s succession without a registering hook is deliberately out of scope here and
+  deferred to its own ADR.

@@ -140,31 +140,35 @@ func (r *Resolver) overrideOrDecide(ctx context.Context, handle, session, thread
 }
 
 // sessionBinding is a root's process's binding of its session. Once bound, it is refreshed by its
-// Execution, as today, so a refusal leaves it cached and the heartbeat reattaches it after a hub
-// restart. While the process has no binding, it looks the Execution up by the session's id. On
-// the first bind it repeats the lookup for the grace period, while the session's hook may not have
-// registered the session yet; after a loss it looks once, since the hook is what reattaches a
-// session. An Execution found lost is never bound again. unusable says the first bind's grace
-// period ran out without a usable Execution; a call that ends before then is still binding.
+// Execution, which immediately heartbeats on lost so a recovering session reattaches on the tool
+// call itself. While the process has no binding, it looks the Execution up by the session's id,
+// and if unbound may reattach a recovering hook-registered session via local generation memory
+// (generation > 0), never registering generation 0. On the first bind it repeats the lookup for
+// the grace period, while the session's hook may not have registered the session yet; after a
+// loss it looks once. An Execution found lost is never bound again. unusable says the first
+// bind's grace period ran out without a usable Execution; a call that ends before then is still
+// binding.
 func (r *Resolver) sessionBinding(ctx context.Context, session string) (b Bound, unusable bool, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.bound.ExecutionID != "" {
 		b, err = r.refresh(ctx)
-		return b, false, err
+		if err == nil || r.bound.ExecutionID != "" {
+			return b, false, err
+		}
 	}
 	first := len(r.gone) == 0
 	if first && r.since.IsZero() {
 		r.since = time.Now()
 	}
-	b, err = r.bySession(ctx, session)
+	b, err = r.bySessionOrReattachHeld(ctx, session)
 	for delay := 100 * time.Millisecond; first && unusableAnswer(err) && time.Since(r.since) < r.Grace; delay = min(2*delay, 2*time.Second) {
 		select {
 		case <-ctx.Done():
 			return Bound{}, false, errBinding
 		case <-time.After(min(delay, r.Grace-time.Since(r.since))):
 		}
-		b, err = r.bySession(ctx, session)
+		b, err = r.bySessionOrReattachHeld(ctx, session)
 	}
 	switch {
 	case first && err != nil && ctx.Err() != nil:
@@ -177,8 +181,18 @@ func (r *Resolver) sessionBinding(ctx context.Context, session string) (b Bound,
 	case r.gone[b.ExecutionID]:
 		return Bound{}, false, errUnusable
 	}
-	r.bound, r.lost = b, false
+	r.keepHeld(b)
 	return b, false, nil
+}
+
+func (r *Resolver) bySessionOrReattachHeld(ctx context.Context, session string) (Bound, error) {
+	b, err := r.bySession(ctx, session)
+	if IsCode(err, "unbound") {
+		if rb, attempted, rerr := r.reattachByMemoryHeld(ctx, session, 2); attempted {
+			return rb, rerr
+		}
+	}
+	return b, err
 }
 
 // lookup attributes a call to the session it names by one lookup, without mu, so it never waits

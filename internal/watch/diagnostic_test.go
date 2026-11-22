@@ -124,14 +124,14 @@ func TestStoppedDiagnosticResetsOnlyAfterResumingAndFollowsTheNewCursor(t *testi
 func diagnosticRecovery(t *testing.T, prompt bool) {
 	t.Helper()
 	answers := []string{"lost", "lost", "lost", "ambiguous", "unauthorized", "", "lost", "lost", "unbound", ""}
-	ages := []time.Duration{0, 150 * time.Second, 209 * time.Second, 210 * time.Second, 500 * time.Second, 500 * time.Second, 500 * time.Second, 650 * time.Second, 710 * time.Second, 900 * time.Second}
+	ages := []time.Duration{0, 150 * time.Second, 209 * time.Second, 210 * time.Second, 500 * time.Second, 500 * time.Second, 500 * time.Second, 559 * time.Second, 560 * time.Second, 900 * time.Second}
 	if prompt {
-		ages = []time.Duration{0, 150 * time.Second, 160 * time.Second, 170 * time.Second, 175 * time.Second, 180 * time.Second, 180 * time.Second, 330 * time.Second, 340 * time.Second, 350 * time.Second}
+		ages = []time.Duration{0, 150 * time.Second, 160 * time.Second, 170 * time.Second, 175 * time.Second, 180 * time.Second, 180 * time.Second, 190 * time.Second, 200 * time.Second, 210 * time.Second}
 	}
 	var binds, watches, checkpoints atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/v1/bind":
+		switch {
+		case r.URL.Path == "/v1/bind":
 			i := int(binds.Add(1)) - 1
 			if i >= len(answers) {
 				t.Error("retried after the scenario ended")
@@ -148,7 +148,10 @@ func diagnosticRecovery(t *testing.T, prompt bool) {
 				ex = "second"
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{"execution_id": ex, "generation": 1})
-		case "/v1/watch":
+		case strings.HasSuffix(r.URL.Path, "/heartbeat"):
+			w.WriteHeader(http.StatusConflict)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]string{"code": "lost"}})
+		case r.URL.Path == "/v1/watch":
 			i := watches.Add(1)
 			want := "first"
 			if i == 2 {
@@ -166,7 +169,7 @@ func diagnosticRecovery(t *testing.T, prompt bool) {
 			defer func() { _ = conn.CloseNow() }()
 			_ = conn.Write(r.Context(), websocket.MessageText, []byte(`{"stream":"stream","cursor":8,"kind":"other"}`))
 			_ = conn.Close(websocket.StatusGoingAway, "restarting")
-		case "/v1/events":
+		case r.URL.Path == "/v1/events":
 			checkpoints.Add(1)
 			if r.URL.Query().Get("after") != "8" {
 				t.Errorf("did not save the resumed stream's cursor: %v", r.URL.Query())

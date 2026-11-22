@@ -35,10 +35,10 @@ const wantLostMessage = "This call's Execution or cached claim is not usable. " 
 	"Hooks need hub access and the remembered generation. " +
 	"A shell command is not a reliable remedy: a reconcile that times out before registration " +
 	"reaches the hub does not reattach. " +
-	"An MCP tool retry first looks for a usable binding; that lookup does not reattach. " +
-	"A shim retaining its binding can reattach through its heartbeat. " +
-	"Without that binding, including after confirmed loss, the shim cannot reattach through a heartbeat. " +
-	"Codex id-mode sub-agents never renew the Execution. " +
+	"An MCP tool retry with a retained binding heartbeats immediately to reattach inside the 120 s window. " +
+	"An unbound shim can reattach a positively identified, hook-registered session inside that window using the hook's remembered generation, never with generation 0. " +
+	"Without matching proof, or after the window or SessionEnd, the shim cannot reattach. " +
+	"Codex id-mode sub-agents never renew or reattach the Execution. " +
 	"Waiting past the recovery deadline cannot revive the old Execution; " +
 	"a registering hook must obtain a new generation. " +
 	"For IRIS_EXECUTION, hooks must belong to the session whose Execution the override names. " +
@@ -211,8 +211,8 @@ func TestCachedBindingsExplainLossAndKeepTheirHeartbeatProof(t *testing.T) {
 			}
 			mu.Lock()
 			defer mu.Unlock()
-			if len(binds) != 2 || binds[1]["execution"] != "ex" {
-				t.Fatalf("a cached binding was not refreshed by Execution: %+v", binds)
+			if len(binds) != 3 || binds[1]["execution"] != "ex" || binds[2]["execution"] != "ex" {
+				t.Fatalf("a cached binding was not refreshed and retried by Execution: %+v", binds)
 			}
 		})
 	}

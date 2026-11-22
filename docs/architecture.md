@@ -657,12 +657,27 @@ Changes from the reference schema:
    session's edits went through unclaimed for up to the full 120 s, and its claims were then
    lost. With a heartbeating `iris mcp` that was one edit. An `iris mcp` binds on its first tool
    call, or, outside Codex and id mode, on its heartbeat tick (D6, ADR 027), and only a bound one
-   heartbeats. A heartbeat that finds its generation lost, as after a
-   laptop sleeps past the lease, drops the binding and the process keeps running: a client does
+   heartbeats. When a bound `iris mcp` refreshes on a tool call and `/v1/bind` answers `lost`,
+   it immediately heartbeats with its exact remembered generation and retries `/v1/bind`, so a
+   recovering Execution reattaches on the tool call itself without waiting for the next 20 s tick.
+   An unbound `iris mcp` (on a tool call or its heartbeat tick, excluding Codex id-mode sub-agents)
+   may also read the hook's local generation memory for a positively identified, hook-registered
+   session and send a reattach-only registration (`source: "shim"`, `generation > 0`): missing,
+   malformed or mismatched memory never falls back to a generation-0 registration, and the hub
+   refuses shim reattach for any Execution without `hook_seen_ms > 0` or past its 120 s deadline.
+   `iris watch` heartbeats immediately on reconnect and on `reset` frames while keeping its
+   periodic heartbeat and reconnect backoff, and never revives a terminal Execution. A heartbeat
+   that finds its generation lost, as after a
+   laptop sleeps past the lease, drops the binding while preserving the last session identity and
+   hook evidence and keeps the process running: a client does
    not restart an MCP server or monitor that exits, so it showed the server as failed and the
-   session went deaf. Legacy tools answer `lost` until the shim's tick or a call binds afresh,
-   through the usual rungs, to the session's current Execution. A Codex id-mode root without a cached binding,
-   or a sub-agent lookup, answers `unbound` when its session has no single usable Execution.
+   session went deaf. A `lost` answer does not permanently latch out later permitted rebind or
+   memory-reattach attempts (for example, after a hook registers a new generation and a later hub
+   restart leaves it recovering); `ended` stays terminal and is never revived. Legacy tools answer
+   `lost` until the shim's tick or a call binds or reattaches to the session's current Execution.
+   A Codex id-mode root without a cached binding,
+   or a sub-agent lookup, answers `unbound` when its session has no single usable Execution (or
+   `lost` when local generation memory is malformed or refused).
    An Execution found lost is never bound again, by
    whatever route it comes back, so no process speaks for a stale identity. `iris watch` says
    once that notifications stopped, keeps trying a fresh bind with backoff, says when they
@@ -673,13 +688,17 @@ Changes from the reference schema:
    MCP `lost` answers give fixed, conditional recovery guidance at the shim boundary, without
    changing the hub API or granting authority. They also cover a replayed claim whose cached
    fence is no longer live, so they do not assert that every such answer proves session loss.
-   Reattachment needs a successful registering hook with remembered proof, or the heartbeat
-   of a shim retaining the binding, before the recovery deadline. `SessionStart` registers;
+   Reattachment needs a successful registering hook with remembered proof, a bound shim's or
+   watch's heartbeat (periodic, on a tool-call refresh, or on watch reconnect/reset), or an
+   unbound shim's reattach-only `generation > 0` registration from hook generation memory,
+   before the recovery deadline. `SessionStart` registers;
    prompt registration depends on the client. A shell reconcile can register, but one whose
    budget ends before registration reaches the hub does not; the ADR 018 breaker only changes
-   later hooks' scope. Binding lookups do not reattach. After the deadline, a registering hook
-   must obtain a new generation. The [API recovery guidance](api.md#mcp-tools-answering-lost)
-   lists the events and the binding-mode limits.
+   later hooks' scope. Plain binding lookups do not reattach on their own, and missing, malformed
+   or mismatched generation memory never falls back to a generation-0 registration. After the
+   deadline or `SessionEnd`, a registering hook must obtain a new generation. The
+   [API recovery guidance](api.md#mcp-tools-answering-lost) lists the events and the binding-mode
+   limits.
 3. A claim has `origin` (`explicit` or `auto`) and an optional expiry instead of a mandatory
    renewed deadline.
 4. A Delivery keeps four separate facts. `attempt` guards acknowledgements: each fetch raises it,

@@ -160,6 +160,9 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		return FallbackAllow(runner)
 	}
 	state.received(r.canaryReceipt(ev))
+	if ev.Client == ClientAntigravity {
+		state.at("antigravity")
+	}
 	if out, ok := r.antigravityHook(ev, state.observe); ok {
 		return r.finish(state, ev, out)
 	}

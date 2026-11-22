@@ -200,9 +200,18 @@ func (r *Runner) Run(ctx context.Context) error {
 	// resumption is too.
 	current := ""
 	for ctx.Err() == nil {
-		call, cancel := context.WithTimeout(ctx, 5*time.Second)
-		b, err := r.Resolver.Resolve(call, "")
-		cancel()
+		var b binding.Bound
+		var err error
+		if current != "" {
+			// On reconnect, heartbeat immediately so a recovering Execution reattaches as
+			// soon as connectivity returns, without reviving any terminal Execution.
+			err = r.Resolver.Heartbeat(ctx, "watch")
+		}
+		if err == nil || binding.IsCode(err, "lost") {
+			call, cancel := context.WithTimeout(ctx, 5*time.Second)
+			b, err = r.Resolver.Resolve(call, "")
+			cancel()
+		}
 		bindErr := err
 		r.opened = time.Time{}
 		if err == nil && b.ExecutionID != current {
@@ -444,6 +453,9 @@ func (r *Runner) connect(ctx context.Context, b binding.Bound, cursor *int64, st
 			}
 		case f := <-frames:
 			if f.Kind == "reset" {
+				if err = r.Resolver.Heartbeat(ctx, "watch"); err != nil {
+					return err
+				}
 				var snapshot struct {
 					Stream   string `json:"stream"`
 					High     int64  `json:"high_water"`
