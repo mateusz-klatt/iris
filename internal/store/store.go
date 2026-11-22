@@ -675,9 +675,35 @@ const (
 	stallCapMS       = 60000
 )
 
-const creditStallSQL = `UPDATE Execution SET deadline_tick_ms=MIN(?+?, lease_renewed_tick_ms+CASE WHEN heartbeat_mode<>0 THEN 60000 ELSE 900000 END+?)
- WHERE state='active' AND recovery_deadline IS NULL AND boot_epoch=? AND deadline_tick_ms>? AND deadline_tick_ms<=?
- AND lease_renewed_tick_ms+CASE WHEN heartbeat_mode<>0 THEN 60000 ELSE 900000 END+?>?`
+// stallCapSQL returns the SQL expression for an Execution's stall-credit deadline ceiling.
+func stallCapSQL(prefix string) string {
+	return prefix + `lease_renewed_tick_ms+CASE WHEN ` + prefix + `heartbeat_mode<>0 THEN 60000 ELSE 900000 END+?`
+}
+
+// stallCreditWhereSQL returns the shared SQL predicate identifying non-recovering active
+// Executions in the current epoch whose deadline fell due in (prev, tick] and remains below cap.
+func stallCreditWhereSQL(prefix string) string {
+	return prefix + `recovery_deadline IS NULL AND ` + prefix + `boot_epoch=? AND ` +
+		prefix + `deadline_tick_ms>? AND ` + prefix + `deadline_tick_ms<=? AND ` +
+		stallCapSQL(prefix) + `>?`
+}
+
+var creditStallSQL = `UPDATE Execution SET deadline_tick_ms=MIN(?+?,` + stallCapSQL("") + `) WHERE state='active' AND ` + stallCreditWhereSQL("")
+
+// stallCreditGap reports the previous committed expire tick in this transaction or store
+// and whether a monotonic gap past 5 s with the stream sweep armed qualifies as a hub stall.
+func (t *transaction) stallCreditGap(tick int64) (prev int64, stalled bool) {
+	prev = t.s.lastExpireTick
+	if t.hasExpireTick {
+		prev = t.expireTick
+	}
+	return prev, t.s.sweepArmed && tick-prev > stallThresholdMS
+}
+
+// stallCreditArgs returns the bound parameters matching stallCreditWhereSQL.
+func (t *transaction) stallCreditArgs(prev, tick int64) []any {
+	return []any{t.s.epoch, prev, tick, stallCapMS, tick}
+}
 
 const expireExecutionsSQL = `UPDATE Execution SET state='lost' WHERE state='active' AND
  ((recovery_deadline IS NOT NULL AND recovery_deadline<=?) OR
@@ -694,12 +720,9 @@ const expireConsoleSessionsSQL = `DELETE FROM ConsoleSession WHERE expires_ms<=?
 
 func (t *transaction) expire() error {
 	now, tick := t.s.clock.Now().UnixMilli(), t.s.clock.Tick()
-	prev := t.s.lastExpireTick
-	if t.hasExpireTick {
-		prev = t.expireTick
-	}
-	if t.s.sweepArmed && tick-prev > stallThresholdMS {
-		if _, err := t.execQuiet(creditStallSQL, tick, stallStepMS, stallCapMS, t.s.epoch, prev, tick, stallCapMS, tick); err != nil {
+	if prev, stalled := t.stallCreditGap(tick); stalled {
+		args := append([]any{tick, stallStepMS, stallCapMS}, t.stallCreditArgs(prev, tick)...)
+		if _, err := t.execQuiet(creditStallSQL, args...); err != nil {
 			return err
 		}
 	}

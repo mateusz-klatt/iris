@@ -284,3 +284,113 @@ func TestMergeClaimLivenessWithoutExpiryWrites(t *testing.T) {
 		})
 	}
 }
+
+func TestMergeRespectsPendingStallCreditWithoutExpiring(t *testing.T) {
+	setupSplitHeartbeatClaims := func(t *testing.T, pathA, pathB string) (*Store, *fakeClock, Request, Request, string, string) {
+		t.Helper()
+		s, clock, _ := testStore(t)
+		a, ar, b, br := mergeSplit(t, s)
+		for _, holder := range []Request{a, b} {
+			hb := holder
+			hb.Source = "shim"
+			call(t, s, "heartbeat", hb)
+		}
+		call(t, s, "claim", claimRequest(a, "held-a", pathA, "exact"))
+		call(t, s, "claim", claimRequest(b, "held-b", pathB, "exact"))
+		return s, clock, a, b, br["repository_id"].(string), ar["repository_id"].(string)
+	}
+
+	t.Run("in_budget_refuses_overlapping_merge_without_writing_or_advancing_baseline", func(t *testing.T) {
+		s, clock, a, b, from, into := setupSplitHeartbeatClaims(t, "src/file.go", "SRC/file.go")
+		s.SetStreamSweep(true)
+		clock.advance(70 * time.Second) // tick = 70000; deadline=60000 is in (0, 70000] and cap=120000 > 70000
+
+		before := databaseState(t, s)
+		for _, dry := range []bool{true, false} {
+			expectError(t, s, "merge", mergeRequest(from, into, dry), "conflict")
+			if databaseState(t, s) != before {
+				t.Fatalf("merge(dry_run=%v) wrote state on stall-credit collision", dry)
+			}
+			if s.lastExpireTick != 0 {
+				t.Fatalf("merge(dry_run=%v) moved lastExpireTick to %d", dry, s.lastExpireTick)
+			}
+		}
+
+		// Subsequent expire still sees the original baseline and credits both executions to 90000.
+		call(t, s, "expire", Request{})
+		for _, id := range []string{a.ExecutionID, b.ExecutionID} {
+			if row := readExecutionRow(t, s, id); row.state != "active" || row.deadline != 90000 {
+				t.Fatalf("execution %s after post-merge expire: %+v, want active deadline 90000", id, row)
+			}
+		}
+	})
+
+	t.Run("non_overlapping_merge_preserves_baseline_for_next_expire", func(t *testing.T) {
+		s, clock, a, b, from, into := setupSplitHeartbeatClaims(t, "left.go", "right.go")
+		s.SetStreamSweep(true)
+		clock.advance(70 * time.Second)
+
+		before := databaseState(t, s)
+		call(t, s, "merge", mergeRequest(from, into, true))
+		if databaseState(t, s) != before || s.lastExpireTick != 0 {
+			t.Fatal("dry-run merge mutated state or baseline")
+		}
+
+		call(t, s, "merge", mergeRequest(from, into, false))
+		if s.lastExpireTick != 0 {
+			t.Fatalf("applied merge advanced lastExpireTick to %d", s.lastExpireTick)
+		}
+
+		// Subsequent expire keeps the old baseline and credits both moved holders.
+		call(t, s, "expire", Request{})
+		for _, holder := range []Request{a, b} {
+			if row := readExecutionRow(t, s, holder.ExecutionID); row.state != "active" || row.deadline != 90000 {
+				t.Fatalf("execution %s after merge+expire: %+v, want active deadline 90000", holder.ExecutionID, row)
+			}
+			hb := holder
+			hb.Source = "shim"
+			out := call(t, s, "heartbeat", hb)
+			if number(out["generation"]) != holder.Generation {
+				t.Fatalf("holder %s lost generation after merge: %v", holder.ExecutionID, out)
+			}
+		}
+	})
+
+	t.Run("past_cap_or_disarmed_or_already_due_not_live", func(t *testing.T) {
+		for _, tc := range []struct {
+			name   string
+			armed  bool
+			before time.Duration
+			jump   time.Duration
+		}{
+			{name: "at_cap", armed: true, jump: 120 * time.Second},
+			{name: "past_cap", armed: true, jump: 121 * time.Second},
+			{name: "disarmed", armed: false, jump: 70 * time.Second},
+			{name: "due_before_gap", armed: true, before: 65 * time.Second, jump: 10 * time.Second},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				s, clock, a, b, from, into := setupSplitHeartbeatClaims(t, "file.go", "file.go")
+				if tc.before > 0 {
+					clock.advance(tc.before)
+				}
+				if tc.armed {
+					s.SetStreamSweep(true)
+				}
+				clock.advance(tc.jump)
+
+				before := databaseState(t, s)
+				call(t, s, "merge", mergeRequest(from, into, true))
+				if databaseState(t, s) != before {
+					t.Fatal("dry-run merge changed records")
+				}
+				call(t, s, "merge", mergeRequest(from, into, false))
+				call(t, s, "expire", Request{})
+				for _, id := range []string{a.ExecutionID, b.ExecutionID} {
+					if row := readExecutionRow(t, s, id); row.state != "lost" {
+						t.Fatalf("%s: execution %s survived expire after merge: %+v", tc.name, id, row)
+					}
+				}
+			})
+		}
+	})
+}
