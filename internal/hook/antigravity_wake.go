@@ -126,8 +126,17 @@ func antigravityConvFile(dir, sessionID string) string {
 	return filepath.Join(dir, "conv-"+hex.EncodeToString(sum[:16])+".json")
 }
 
+func readAntigravityStateFile(path string) ([]byte, error) {
+	f, err := openAntigravityStateFile(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	return io.ReadAll(f)
+}
+
 func readAntigravityProcFile(path string) (antigravityProcState, bool) {
-	raw, err := os.ReadFile(path)
+	raw, err := readAntigravityStateFile(path)
 	if err != nil {
 		return antigravityProcState{}, false
 	}
@@ -144,7 +153,7 @@ func readAntigravityProcState(dir string, pid int, startMS int64) antigravityPro
 }
 
 func readAntigravityConvFile(dir, sessionID string) (AntigravityConvState, bool) {
-	raw, err := os.ReadFile(antigravityConvFile(dir, sessionID))
+	raw, err := readAntigravityStateFile(antigravityConvFile(dir, sessionID))
 	if err != nil {
 		return AntigravityConvState{}, false
 	}
@@ -182,7 +191,7 @@ func writeAntigravityJSON(dir, target string, v any) error {
 		err = protectPath(tmp)
 	}
 	if err == nil {
-		err = os.Rename(tmp, target)
+		err = renameAntigravityStateFile(tmp, target)
 	}
 	if err != nil {
 		_ = os.Remove(tmp)

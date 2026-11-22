@@ -10,6 +10,14 @@ import (
 	"syscall"
 )
 
+func renameAntigravityStateFile(oldpath, newpath string) error {
+	return os.Rename(oldpath, newpath)
+}
+
+func openAntigravityStateFile(path string) (*os.File, error) {
+	return os.Open(path)
+}
+
 func openRegularTranscript(path string) (*os.File, string, int64, error) {
 	return openRegularFileUnix(path, os.OpenFile, func(f *os.File) (os.FileInfo, error) { return f.Stat() })
 }

@@ -88,6 +88,29 @@ func TestAntigravityWakeMarkerAndDecode(t *testing.T) {
 	}
 }
 
+func TestAntigravityStateCanBeReplacedWhileReadOpen(t *testing.T) {
+	dir := t.TempDir()
+	target := filepath.Join(dir, "state.json")
+	if err := writeAntigravityJSON(dir, target, antigravityProcState{CurrentSessionID: "old"}); err != nil {
+		t.Fatal(err)
+	}
+	reader, err := openAntigravityStateFile(target)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reader.Close() }()
+	if err := writeAntigravityJSON(dir, target, antigravityProcState{CurrentSessionID: "new"}); err != nil {
+		t.Fatalf("replace with a reader open: %v", err)
+	}
+	state, ok := readAntigravityProcFile(target)
+	if !ok || state.CurrentSessionID != "new" {
+		t.Fatalf("replacement was not visible to a new reader: %+v, %v", state, ok)
+	}
+	if _, err := readAntigravityStateFile(filepath.Join(dir, "missing.json")); err == nil {
+		t.Fatal("missing state file did not report an error")
+	}
+}
+
 func TestAntigravityQuotingAndCommandMatching(t *testing.T) {
 	for _, bad := range []string{"", "/bin/iris\nbad", "/bin/iris\rbad", "/bin/iris\x00bad", "/bin/iris\x7fbad", `/bin/"iris"`} {
 		if got, ok := quoteAntigravityIrisPath(bad, "linux"); ok || got != "" {
