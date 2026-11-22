@@ -8,12 +8,19 @@ import (
 
 	"github.com/mateusz-klatt/iris/internal/config"
 	"github.com/mateusz-klatt/iris/internal/integrate"
+	"github.com/mateusz-klatt/iris/internal/proc"
 )
+
+func fixedAncestor() (proc.Ancestor, error) {
+	return proc.Ancestor{PID: 42, StartMS: 99, Name: "test-runner"}, nil
+}
 
 // TestMain points every user directory at a temporary one. These tests inject hook
 // failures on purpose, and those must never reach the real hook-failures.log, where
 // iris doctor would report them as genuine.
 func TestMain(m *testing.M) {
+	// A Runner without explicit ancestry gets the same non-client process on every host.
+	nearestAncestor = fixedAncestor
 	// A live process with Codex's argv lets the Linux identity regression use the
 	// same /proc evidence as a real exec or app-server, without starting a model.
 	if os.Getenv("IRIS_TEST_CODEX_PROCESS") == "1" {

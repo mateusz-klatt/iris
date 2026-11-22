@@ -431,7 +431,7 @@ func checkClient(ctx context.Context, opt Options, c integrate.Client) (row Clie
 // says nothing about whether the client is protected now.
 const failureWindow = 24 * time.Hour
 
-const cursorClaudeCrossLoadWarning = "warning: Cursor cross-loads the Claude Code plugin. For one project, `cursor-agent mcp disable plugin-iris-iris` (~/.cursor/projects/<project>/mcp-disabled.json) is the only control. Iris cannot stop Cursor from spawning the plugin's processes."
+const cursorClaudeCrossLoadWarning = "warning: Cursor cross-loads the Claude Code plugin. For one project, `agent mcp disable plugin-iris-iris` (~/.cursor/projects/<project>/mcp-disabled.json) is the only control. Iris cannot stop Cursor from spawning the plugin's processes."
 
 // slowLimit is how many over-budget shell reconciliations in failureWindow a client can have
 // before doctor says so. One is a cold cache; many mean changes routinely go unclaimed.

@@ -53,7 +53,7 @@ func TestDoctorWarnsWhenCursorCrossLoadsClaude(t *testing.T) {
 				t.Fatalf("warning present %v, want %v: %q", warned, tc.warn, row.Detail)
 			}
 			if tc.warn {
-				for _, text := range []string{"cursor-agent mcp disable plugin-iris-iris", "~/.cursor/projects/<project>/mcp-disabled.json", "only control", "Iris cannot stop Cursor from spawning the plugin's processes"} {
+				for _, text := range []string{"agent mcp disable plugin-iris-iris", "~/.cursor/projects/<project>/mcp-disabled.json", "only control", "Iris cannot stop Cursor from spawning the plugin's processes"} {
 					if !strings.Contains(res.Format(), text) {
 						t.Errorf("doctor output omits %q:\n%s", text, res.Format())
 					}

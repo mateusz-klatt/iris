@@ -69,6 +69,54 @@ func TestFailOpenEveryClient(t *testing.T) {
 	}
 }
 
+func TestAncestorBlockOrErrorStillAllowsWithinDeadline(t *testing.T) {
+	for _, blocked := range []bool{false, true} {
+		name := "error"
+		if blocked {
+			name = "block"
+		}
+		t.Run(name, func(t *testing.T) {
+			root := gitRepo(t)
+			release := make(chan struct{})
+			done := make(chan struct{})
+			calls := 0
+			payload := fmt.Sprintf(`{"session_id":"s1","cwd":%q,"tool_name":"Read","tool_input":{"file_path":%q}}`, root, filepath.Join(root, "a.go"))
+			start := time.Now()
+			out := Runner{
+				ClientName: "claude",
+				EventName:  "PreToolUse",
+				Stdin:      strings.NewReader(payload),
+				Getenv:     failureEnv(t),
+				Hub:        &countingHub{fn: func() { calls++ }},
+				Ancestor: func() (proc.Ancestor, error) {
+					if blocked {
+						<-release
+					}
+					return proc.Ancestor{}, proc.ErrNotFound
+				},
+				Find: func(dir string) (gitinfo.Repo, error) {
+					defer close(done)
+					return gitinfo.Find(dir)
+				},
+				Deadline: 25 * time.Millisecond,
+				logAfter: never,
+			}.Run()
+			if blocked {
+				close(release)
+			}
+			select {
+			case <-done:
+			case <-time.After(time.Second):
+				t.Fatal("the hook execution did not finish after its ancestor returned")
+			}
+			assertAllow(t, ClientClaude, out)
+			if calls != 0 || time.Since(start) > time.Second {
+				t.Fatalf("hub calls %d, elapsed %s", calls, time.Since(start))
+			}
+		})
+	}
+}
+
 func TestEndToEndFakeHub(t *testing.T) {
 	var mu sync.Mutex
 	var sessions []map[string]any

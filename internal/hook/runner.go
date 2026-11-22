@@ -631,10 +631,12 @@ func (r Runner) sessionReq(ev Event, repo gitinfo.Repo) hubclient.SessionRequest
 	}
 }
 
+var nearestAncestor = proc.Nearest
+
 func (r Runner) ancestor() proc.Ancestor {
 	fn := r.Ancestor
 	if fn == nil {
-		fn = proc.Nearest
+		fn = nearestAncestor
 	}
 	a, err := fn()
 	if err != nil {

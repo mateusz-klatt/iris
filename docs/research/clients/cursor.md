@@ -99,7 +99,7 @@ Iris therefore treats a recognized `cursor-agent` ancestor, or `CURSOR_PROJECT_D
 `iris doctor` shows the observations and appends this warning to Claude's row without changing an observation into a failing hook grade:
 
 ```text
-warning: Cursor cross-loads the Claude Code plugin. For one project, `cursor-agent mcp disable plugin-iris-iris` (~/.cursor/projects/<project>/mcp-disabled.json) is the only control. Iris cannot stop Cursor from spawning the plugin's processes.
+warning: Cursor cross-loads the Claude Code plugin. For one project, `agent mcp disable plugin-iris-iris` (~/.cursor/projects/<project>/mcp-disabled.json) is the only control. Iris cannot stop Cursor from spawning the plugin's processes.
 ```
 
 The command is per-project and writes `~/.cursor/projects/<project>/mcp-disabled.json`. It is the only known control for the plugin's MCP server. Iris cannot stop Cursor from spawning the plugin's processes; the hook and shim guards only prevent those processes from acting as a Claude session in Iris. [MEASURED]
