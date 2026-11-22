@@ -100,11 +100,12 @@ func (r Runner) Run() Output {
 	allow := FallbackAllow(Canonical(r.ClientName))
 	state := &runState{stage: "read"}
 	var failure error
-	var failureStage, observation string
+	var failureStage string
+	var observations []string
 	defer func() {
 		var entries []Failure
-		if observation != "" {
-			entries = append(entries, Failure{Stage: stageObserved, Error: observation})
+		for _, obs := range observations {
+			entries = append(entries, Failure{Stage: stageObserved, Error: obs})
 		}
 		if failure != nil {
 			entries = append(entries, Failure{Stage: failureStage, Error: failureText(failure), Shape: state.payloadShape()})
@@ -137,13 +138,13 @@ func (r Runner) Run() Output {
 	case out := <-ch:
 		failureStage, failure = state.snapshot()
 		out.Stderr = append(out.Stderr, state.receiptLine()...)
-		observation = state.observation()
+		observations = state.observations()
 		return out
 	case <-after(deadline):
 		cancel()
 		failureStage, _ = state.snapshot()
 		failure = context.DeadlineExceeded
-		observation = state.observation()
+		observations = state.observations()
 		return allow
 	}
 }
@@ -279,7 +280,13 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		}
 		r.forgetGrokSessionFile(ev)
 		if m := r.memory(); m != nil {
-			m.Forget(string(ev.Client), ev.SessionID, sess.Generation)
+			if files, ok := m.(fileMemory); ok {
+				if damaged := files.forget(string(ev.Client), ev.SessionID, sess.Generation); damaged != "" {
+					state.observe(damagedGenerationObservation(damaged))
+				}
+			} else {
+				m.Forget(string(ev.Client), ev.SessionID, sess.Generation)
+			}
 		}
 		// What the session was told goes with it; its wake file stays (ADR 017, decision 3).
 		if am, ok := r.memory().(attentionMemory); ok {
@@ -396,7 +403,9 @@ func checkRestoreFloor(state *runState, ev Event, m Memory, generation int, err 
 func refuseRestoreFloor(state *runState, ev Event, m Memory, generation int, note string) error {
 	state.observe(note)
 	if files, ok := m.(fileMemory); ok && generation > 0 {
-		files.retainGeneration(string(ev.Client), ev.SessionID, generation)
+		if damaged := files.retainGeneration(string(ev.Client), ev.SessionID, generation); damaged != "" {
+			state.observe(damagedGenerationObservation(damaged))
+		}
 	}
 	return errRestoreFloor
 }

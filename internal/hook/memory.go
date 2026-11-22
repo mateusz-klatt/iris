@@ -109,6 +109,11 @@ func (m fileMemory) Remember(client, session string, generation int) {
 
 // Forget removes only the proof of the Execution that successfully ended.
 func (m fileMemory) Forget(client, session string, generation int) {
+	_ = m.forget(client, session, generation)
+}
+
+func (m fileMemory) forget(client, session string, generation int) string {
+	var damaged string
 	_ = m.underLock(func() {
 		if generation <= 0 {
 			return
@@ -118,18 +123,24 @@ func (m fileMemory) Forget(client, session string, generation int) {
 		// prevents a delayed refusal from treating a cleared file as merely pruned.
 		marker := path + ".ended"
 		ended, err := readGeneration(marker)
-		if err != nil || m.replace(marker, strconv.Itoa(max(ended, generation))) != nil {
+		if err != nil {
+			damaged = marker
+			return
+		}
+		if m.replace(marker, strconv.Itoa(max(ended, generation))) != nil {
 			return
 		}
 		if current, err := readGeneration(path); err == nil && current == generation {
 			_ = os.Remove(path)
 		}
 	})
+	return damaged
 }
 
 // retainGeneration restores proof that pruning removed after it was read. Only an absent
 // entry may be recreated, and a successful end rules out that generation and earlier ones.
-func (m fileMemory) retainGeneration(client, session string, generation int) {
+func (m fileMemory) retainGeneration(client, session string, generation int) string {
+	var damaged string
 	_ = m.underLock(func() {
 		path := m.name(client, session)
 		current, err := readGeneration(path)
@@ -137,13 +148,20 @@ func (m fileMemory) retainGeneration(client, session string, generation int) {
 		case err != nil:
 			return
 		case current == 0:
-			if ended, err := readGeneration(path + ".ended"); err == nil && generation > ended {
+			marker := path + ".ended"
+			ended, err := readGeneration(marker)
+			if err != nil {
+				damaged = marker
+				return
+			}
+			if generation > ended {
 				_ = m.replace(path, strconv.Itoa(generation))
 			}
 		case current == generation:
 			m.touchGeneration(path)
 		}
 	})
+	return damaged
 }
 
 func (m fileMemory) touchGeneration(path string) {

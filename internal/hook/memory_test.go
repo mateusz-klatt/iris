@@ -186,12 +186,14 @@ func TestForgetKeepsProofWhenEndMarkerCannotBeRecorded(t *testing.T) {
 		session = "s"
 	)
 	for _, tc := range []struct {
-		name    string
-		prepare func(t *testing.T, m *fileMemory, marker string)
-		verify  func(t *testing.T, marker string)
+		name        string
+		wantDamaged bool
+		prepare     func(t *testing.T, m *fileMemory, marker string)
+		verify      func(t *testing.T, marker string)
 	}{
 		{
-			name: "malformed marker",
+			name:        "malformed marker",
+			wantDamaged: true,
 			prepare: func(t *testing.T, _ *fileMemory, marker string) {
 				if err := os.WriteFile(marker, []byte("damaged\n"), 0o600); err != nil {
 					t.Fatal(err)
@@ -204,7 +206,8 @@ func TestForgetKeepsProofWhenEndMarkerCannotBeRecorded(t *testing.T) {
 			},
 		},
 		{
-			name: "unreadable marker",
+			name:        "unreadable marker",
+			wantDamaged: true,
 			prepare: func(t *testing.T, _ *fileMemory, marker string) {
 				if err := os.MkdirAll(filepath.Join(marker, "keep"), 0o700); err != nil {
 					t.Fatal(err)
@@ -249,7 +252,14 @@ func TestForgetKeepsProofWhenEndMarkerCannotBeRecorded(t *testing.T) {
 			marker := path + ".ended"
 			tc.prepare(t, &m, marker)
 
-			m.Forget(client, session, 3)
+			damaged := m.forget(client, session, 3)
+			want := ""
+			if tc.wantDamaged {
+				want = marker
+			}
+			if damaged != want {
+				t.Fatalf("forget reported damaged=%q, want %q", damaged, want)
+			}
 
 			if gen, err := readGeneration(path); gen != 3 || err != nil {
 				t.Fatalf("proof after failed Forget = G%d, %v; want G3", gen, err)
@@ -259,6 +269,41 @@ func TestForgetKeepsProofWhenEndMarkerCannotBeRecorded(t *testing.T) {
 				if strings.HasPrefix(info.Name(), ".tmp-") {
 					t.Fatalf("failed Forget left temporary file %s", info.Name())
 				}
+			}
+		})
+	}
+}
+
+func TestRetainGenerationRefusesAndReportsDamagedEndMarker(t *testing.T) {
+	const (
+		client  = "claude"
+		session = "s"
+	)
+	for _, unreadable := range []bool{false, true} {
+		name := "malformed marker"
+		if unreadable {
+			name = "directory marker"
+		}
+		t.Run(name, func(t *testing.T) {
+			m := newFileMemory(t)
+			if err := m.directory(); err != nil {
+				t.Fatal(err)
+			}
+			path := m.name(client, session)
+			marker := path + ".ended"
+			if unreadable {
+				if err := os.Mkdir(marker, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.WriteFile(marker, []byte("damaged\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+
+			if damaged := m.retainGeneration(client, session, 4); damaged != marker {
+				t.Fatalf("retainGeneration reported damaged=%q, want %q", damaged, marker)
+			}
+			if gen, err := readGeneration(path); gen != 0 || err != nil {
+				t.Fatalf("retainGeneration restored proof over damaged marker: G%d, %v", gen, err)
 			}
 		})
 	}
@@ -369,6 +414,27 @@ type fakeMemory struct{ h *recoveryHub }
 func (fakeMemory) RecallGeneration(string, string) (int, error) { return 0, nil }
 func (fakeMemory) Remember(string, string, int)                 {}
 func (fakeMemory) Forget(string, string, int)                   {}
+
+type recordedMemory struct {
+	forgotten []int
+}
+
+func (m *recordedMemory) RecallGeneration(string, string) (int, error) { return 0, nil }
+func (m *recordedMemory) Remember(string, string, int)                 {}
+func (m *recordedMemory) Forget(_ string, _ string, generation int) {
+	m.forgotten = append(m.forgotten, generation)
+}
+
+func TestSessionEndCallsInjectedMemoryForget(t *testing.T) {
+	root := gitRepo(t)
+	h := &recoveryHub{generation: 4}
+	m := &recordedMemory{}
+	out := runWith(h, m, "SessionEnd", `{"session_id":"s","cwd":`+quote(root)+`}`)
+	assertAllow(t, ClientClaude, out)
+	if h.ended != 1 || !slices.Equal(m.forgotten, []int{4}) {
+		t.Fatalf("ended=%d forgotten=%v, want ended=1 forgotten=[4]", h.ended, m.forgotten)
+	}
+}
 
 func lostWithHighest(highest int) *hubclient.Error {
 	return &hubclient.Error{Code: "lost", Details: json.RawMessage(fmt.Sprintf(`{"highest_generation":%d}`, highest))}

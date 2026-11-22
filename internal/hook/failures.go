@@ -199,8 +199,8 @@ type runState struct {
 	err   error
 	// receipt is the doctor canary's proof that Iris ran, for stderr; see canaryReceipt.
 	receipt []byte
-	// observed is what this run saw for doctor without failing; see Failure.Observed.
-	observed string
+	// observed holds what this run saw for doctor without failing; see Failure.Observed.
+	observed []string
 	// shape is the payload's shape when it could not be decoded; see Failure.Shape.
 	shape *PayloadShape
 }
@@ -212,8 +212,16 @@ func (s *runState) payloadShape() *PayloadShape {
 	return s.shape
 }
 
-func (s *runState) observe(text string) { s.mu.Lock(); s.observed = text; s.mu.Unlock() }
-func (s *runState) observation() string { s.mu.Lock(); defer s.mu.Unlock(); return s.observed }
+func (s *runState) observe(text string) {
+	s.mu.Lock()
+	s.observed = append(s.observed, text)
+	s.mu.Unlock()
+}
+func (s *runState) observations() []string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.observed)
+}
 
 func (s *runState) received(b []byte) { s.mu.Lock(); s.receipt = b; s.mu.Unlock() }
 
