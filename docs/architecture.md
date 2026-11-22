@@ -764,6 +764,7 @@ of its file: the innermost checkout that contains it, which for a submodule's fi
 submodule's, wherever the session was started (ADR 033). Branch and worktree are
 context, not an exemption: two worktrees editing one file will meet at merge time, which is
 exactly the collision Iris exists to prevent. A narrower policy can be added per repository.
+See [ADR 037](adr/037-worktree-scoped-auto-claims.md) for an opt-in per-repository narrowing of auto claims.
 A session outside any git checkout takes no claim at all: it belongs to its host's context of
 sessions outside git, which is for mail only (ADR 034).
 
