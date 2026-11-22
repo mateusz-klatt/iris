@@ -269,6 +269,26 @@ func TestCrossLoad(t *testing.T) {
 	}
 }
 
+func TestSessionEnvironmentCrossLoadSkipsAncestorWalk(t *testing.T) {
+	called := false
+	r := Runner{
+		Getenv: func(key string) string {
+			if key == "ANTIGRAVITY_CONVERSATION_ID" {
+				return "s1"
+			}
+			return ""
+		},
+		Ancestor: func() (proc.Ancestor, error) {
+			called = true
+			return proc.Ancestor{Name: "claude"}, nil
+		},
+	}
+	runner, cross := r.crossLoad("s1", ClientClaude)
+	if !cross || runner != ClientAntigravity || called {
+		t.Fatalf("runner %q, cross %v, ancestor walk called %v", runner, cross, called)
+	}
+}
+
 func TestUnknownToolReported(t *testing.T) {
 	payload, err := os.ReadFile("testdata/copilot/preToolUse-iris_probe_probe.json")
 	if err != nil {

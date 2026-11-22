@@ -543,24 +543,34 @@ var sessionEnv = map[Client]string{
 
 func (r Runner) crossLoad(sessionID string, requested Client) (Client, bool) {
 	getenv := r.Getenv
-	if getenv == nil || sessionID == "" {
-		return "", false
-	}
 	var found []Client
-	for _, c := range []Client{ClientGrok, ClientCopilot, ClientCursor, ClientAntigravity} {
-		if getenv(sessionEnv[c]) == sessionID {
-			found = append(found, c)
+	if getenv != nil && sessionID != "" {
+		for _, c := range []Client{ClientGrok, ClientCopilot, ClientCursor, ClientAntigravity} {
+			if getenv(sessionEnv[c]) == sessionID {
+				found = append(found, c)
+			}
 		}
-	}
-	if len(found) == 0 {
-		return "", false
 	}
 	for _, c := range found {
 		if c == requested {
 			return "", false
 		}
 	}
-	return found[0], true
+	if len(found) > 0 {
+		return found[0], true
+	}
+	ancestor, hasAncestor := proc.ClientName(r.ancestor().Name)
+	if hasAncestor && Client(ancestor) == requested {
+		return "", false
+	}
+	if requested != ClientCursor && hasAncestor && Client(ancestor) == ClientCursor {
+		return ClientCursor, true
+	}
+	// Cursor 2026.11.22 omits CURSOR_CONVERSATION_ID from cross-loaded Claude hooks.
+	if requested != ClientCursor && getenv != nil && getenv("CURSOR_PROJECT_DIR") != "" && getenv("CURSOR_VERSION") != "" {
+		return ClientCursor, true
+	}
+	return "", false
 }
 
 func (r Runner) repoFor(ev Event) (gitinfo.Repo, error) {

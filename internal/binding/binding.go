@@ -120,6 +120,9 @@ type Resolver struct {
 	// unusable is set once a call has been observed naming a session without a usable Execution.
 	unusable    atomic.Bool
 	wakeSession string
+	// mismatch is the running client found at MCP startup when it is not the requested client.
+	// It is set before the resolver's workers start and never changes afterwards.
+	mismatch string
 }
 
 type handover struct {
@@ -131,6 +134,33 @@ func New(h *hubclient.Client, client string) *Resolver {
 	cwd, _ := os.Getwd()
 	return &Resolver{Hub: h, Client: client, Host: host, CWD: cwd, Getenv: os.Getenv, Ancestor: proc.Nearest, Grace: 15 * time.Second}
 }
+
+// ObservedClientMismatch groups observations of a shim another client cross-loaded.
+const ObservedClientMismatch = "client mismatch"
+
+// ClientMismatchObservation is the fixed, payload-free observation doctor groups and explains.
+func ClientMismatchObservation(client, runner string) string {
+	return ObservedClientMismatch + ": " + client + " MCP shim ran under " + runner
+}
+
+// CheckClient refuses every binding route when another client cross-loaded this shim.
+func (r *Resolver) CheckClient() bool {
+	runner, known := proc.ClientName(r.ancestor().Name)
+	if !known || runner == r.Client {
+		return false
+	}
+	r.mismatch = runner
+	r.observe(ClientMismatchObservation(r.Client, runner))
+	return true
+}
+
+func (r *Resolver) clientMismatchError() error {
+	if r.mismatch == "" {
+		return nil
+	}
+	return &hubclient.Error{Code: "client_mismatch", Message: "This Iris MCP server is for " + r.Client + ", but " + r.mismatch + " is running it. Use the running client's native Iris MCP server (`iris mcp --client " + r.mismatch + "`) instead; this cross-loaded server cannot bind, register, or heartbeat a session."}
+}
+
 func Key() string {
 	var b [16]byte
 	_, _ = rand.Read(b[:]) // crypto/rand.Read always fills b or crashes the program.
@@ -176,6 +206,9 @@ func (e *LostError) Unwrap() []error { return []error{errLost, e.Cause} }
 // through the usual rungs, but never to an Execution found lost, however that comes back:
 // IRIS_EXECUTION, a handle argument, or the hub's answer.
 func (r *Resolver) Resolve(ctx context.Context, handle string) (Bound, error) {
+	if err := r.clientMismatchError(); err != nil {
+		return Bound{}, err
+	}
 	r.mu.Lock()
 	b, err := r.resolveHeld(ctx, handle)
 	say := r.olderHub && !r.olderHubSaid
@@ -665,6 +698,9 @@ const ObservedRebound = "rebound on heartbeat after a loss"
 // It updates the cached binding on success, marks it lost on a lost answer, returns nil when
 // nothing is bound, and never revives a terminal Execution.
 func (r *Resolver) Heartbeat(ctx context.Context, source string) error {
+	if err := r.clientMismatchError(); err != nil {
+		return err
+	}
 	r.mu.Lock()
 	b := r.bound
 	r.mu.Unlock()
@@ -721,6 +757,9 @@ func (r *Resolver) beatOne(ctx context.Context, b Bound, source string) error {
 // session's current Execution, as a call would (ADR 027); the watch's own loop and a call's
 // Resolve bind afresh too.
 func (r *Resolver) Maintain(ctx context.Context, source string, interval time.Duration, parentAlive func() bool, onStop func()) {
+	if r.mismatch != "" {
+		return
+	}
 	tick := time.NewTicker(interval)
 	defer tick.Stop()
 	for {

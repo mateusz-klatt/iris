@@ -50,7 +50,7 @@ User: `~/.cursor/hooks.json` (scripts cwd `~/.cursor/`). Project: `<repo>/.curso
 
 **Hooks:** spawned as processes; on this Linux CLI the hook’s immediate parent is `/bin/bash` (wrapper), not `cursor-agent`. [MEASURED: `fixtures/log.jsonl` `parent_is_bash`] Desktop Windows: hooks via PowerShell, JSON on stdin/`$input`. [DOCS https://cursor.com/docs/hooks] cwd: project root for project hooks. [DOCS] [MEASURED]
 
-**Hook env (names):** includes `CURSOR_PROJECT_DIR`, `CURSOR_VERSION`, `CURSOR_USER_EMAIL`, `CURSOR_CONVERSATION_ID`, `CURSOR_AGENT`, plus sessionStart-injected keys. [MEASURED] Docs also list `CURSOR_TRANSCRIPT_PATH`, `CLAUDE_PROJECT_DIR`, `CURSOR_PLUGIN_ROOT`. [DOCS]
+**Hook env (names):** native Cursor hooks include `CURSOR_PROJECT_DIR`, `CURSOR_VERSION`, `CURSOR_USER_EMAIL`, `CURSOR_CONVERSATION_ID`, `CURSOR_AGENT`, plus sessionStart-injected keys. [MEASURED] Docs also list `CURSOR_TRANSCRIPT_PATH`, `CLAUDE_PROJECT_DIR`, `CURSOR_PLUGIN_ROOT`. [DOCS] A cross-loaded Claude hook on 2026.11.22 has no `CURSOR_CONVERSATION_ID`; see A7. [MEASURED]
 
 **MCP stdio:** direct child of `cursor-agent`; env sparse (`HOME`,`PATH`,`SHELL`,`TERM`,`USER`,`LOGNAME`,`LC_CTYPE` only in probe). No `CURSOR_*`. [MEASURED: `fixtures/mcp_spawn.json`]
 
@@ -85,6 +85,24 @@ Cursor Plugins (`.cursor-plugin/plugin.json`) can bundle hooks, MCP, rules, skil
 ### A6 Session identity
 
 `conversation_id` ≡ `session_id` (UUID) on hooks; stable for the run; also in `-p` JSON `session_id`. [MEASURED] `generation_id` present (same as conversation at sessionStart in our captures). Resume uses chat id via `--resume`. Subagent ids: `subagent_id` / separate transcript path in docs. [DOCS] Compaction: `preCompact` (not seen here). [DOCS]
+
+### A7 Claude Code plugin cross-load (2026.11.22-e9042b2)
+
+Cursor always imports enabled Claude Code plugins. Its bundle hard-codes `enableMarketplacePlugins: true`, which enables `importThirdPartyPlugins` and `loadClaude`; no configuration key turns this off. [MEASURED]
+
+With Iris's enabled Claude plugin at `~/.claude/plugins/cache/iris/iris/0.1.0/`, Cursor starts both its native `iris mcp --client cursor` and the plugin's stdio server `plugin-iris-iris`, running `iris mcp --client claude`. Stdio servers are not deduplicated. Both children receive only `HOME`, `LOGNAME`, `NODE_DISABLE_COMPILE_CACHE`, `PATH`, `SHELL`, `TERM` and `USER`: neither `CLAUDE_CODE_SESSION_ID` nor `IRIS_EXECUTION` survives. [MEASURED]
+
+Cursor also merges the plugin's `hooks/hooks.json` and runs `iris hook --client claude --event ...`. Its `buildHookEnvironment` exports `CURSOR_PROJECT_DIR`, `CURSOR_VERSION`, `CURSOR_USER_EMAIL`, `CURSOR_TRANSCRIPT_PATH` and `CLAUDE_PROJECT_DIR`, but not `CURSOR_CONVERSATION_ID`; the session id still arrives on stdin. [MEASURED]
+
+Iris therefore treats a recognized `cursor-agent` ancestor, or `CURSOR_PROJECT_DIR` together with `CURSOR_VERSION`, as proof of this cross-load even without `CURSOR_CONVERSATION_ID`. The cross-loaded hook answers with Cursor-valid output and does not contact the hub. A mismatched MCP shim keeps its stdio server available but every tool call answers with typed `client_mismatch`, directing the model to the running client's native Iris server; it does not bind, register or heartbeat. A real Claude Code session started inside Cursor still works because its nearest client ancestor is `claude`.
+
+`iris doctor` shows the observations and appends this warning to Claude's row without changing an observation into a failing hook grade:
+
+```text
+warning: Cursor cross-loads the Claude Code plugin. For one project, `cursor-agent mcp disable plugin-iris-iris` (~/.cursor/projects/<project>/mcp-disabled.json) is the only control. Iris cannot stop Cursor from spawning the plugin's processes.
+```
+
+The command is per-project and writes `~/.cursor/projects/<project>/mcp-disabled.json`. It is the only known control for the plugin's MCP server. Iris cannot stop Cursor from spawning the plugin's processes; the hook and shim guards only prevent those processes from acting as a Claude session in Iris. [MEASURED]
 
 ## B. Minimal Iris integration
 

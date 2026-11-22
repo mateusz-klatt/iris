@@ -95,6 +95,9 @@ func (r *Resolver) Note(session string) {
 // the id a call names, never through a handle or the client process, and it registers, adopts and
 // hands over nothing.
 func (r *Resolver) ResolveCall(ctx context.Context, handle, session, thread string) (Bound, bool, error) {
+	if err := r.clientMismatchError(); err != nil {
+		return Bound{}, false, err
+	}
 	m := r.decided.Load()
 	if m == nil {
 		if b, overridden, err := r.overrideOrDecide(ctx, session, thread); overridden {

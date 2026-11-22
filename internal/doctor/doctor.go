@@ -431,6 +431,8 @@ func checkClient(ctx context.Context, opt Options, c integrate.Client) (row Clie
 // says nothing about whether the client is protected now.
 const failureWindow = 24 * time.Hour
 
+const cursorClaudeCrossLoadWarning = "warning: Cursor cross-loads the Claude Code plugin. For one project, `cursor-agent mcp disable plugin-iris-iris` (~/.cursor/projects/<project>/mcp-disabled.json) is the only control. Iris cannot stop Cursor from spawning the plugin's processes."
+
 // slowLimit is how many over-budget shell reconciliations in failureWindow a client can have
 // before doctor says so. One is a cold cache; many mean changes routinely go unclaimed.
 const slowLimit = 10
@@ -515,6 +517,9 @@ func applyFailuresFrom(res *Result, tokenFile, fallbackTokenFile string, now tim
 			row.Detail = joinDetail(row.Detail, "observed in 24 h: "+observedText(seen))
 			if seen[hook.RestoreFloorRefused]+seen[hook.RestoreFloorHubTooOld] > 0 {
 				row.Detail = joinDetail(row.Detail, "the hook kept its generation proof and left the session unregistered. Edits may have gone unclaimed")
+			}
+			if row.Client == integrate.Claude && (seen[binding.ClientMismatchObservation(integrate.Claude, integrate.Cursor)] > 0 || seen["cross-load: ran in a session of cursor"] > 0) {
+				row.Detail = joinDetail(row.Detail, cursorClaudeCrossLoadWarning)
 			}
 		}
 		if paths := proofDamage[row.Client]; len(paths) > 0 {

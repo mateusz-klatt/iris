@@ -173,7 +173,10 @@ started from a Claude session still carries `CLAUDE_CODE_SESSION_ID` (measured).
 So `--client` selects a parser, and the hook then confirms who is really running it. Environment
 markers alone are not proof: a profile can export them, and `GROK_HOOK_EVENT` is also set on
 Claude hooks that Grok runs. A client counts as the runner only when its session variable equals
-the session id on stdin, for example `GROK_SESSION_ID` equal to `sessionId`.
+the session id on stdin, for example `GROK_SESSION_ID` equal to `sessionId`. Cursor 2026.11.22
+omits `CURSOR_CONVERSATION_ID` from a cross-loaded Claude hook, so Cursor is also confirmed by a
+nearest `cursor-agent` ancestor or by `CURSOR_PROJECT_DIR` together with `CURSOR_VERSION`. A nearest
+client ancestor matching the requested client keeps a real session nested inside another client native.
 
 When a hook meant for one client runs under another, it prints the runner's allow output, exits
 0 and does not call the hub, whether or not the runner has its own integration. `iris doctor`
@@ -197,6 +200,13 @@ Hooks always receive a session id. The problem is the stdio MCP process, which o
 The Grok cell is the stdio MCP child. Grok's `monitor` shell does not inherit
 `GROK_SESSION_ID` (measured on 1.0.77). `iris watch --client grok` reads the session id the
 hook stored for that grok process ([ADR 025](adr/025-grok-stop-monitor.md)).
+
+At MCP startup, a recognized nearest client that does not match `--client` identifies a cross-loaded
+shim. Before any binding or generation-proof check, that shim refuses every rung, including an
+inherited execution or session id, and never registers or heartbeats. Its stdio server stays up;
+tool calls answer typed `client_mismatch` and direct the model to the running client's native Iris
+server. One observation goes to the log doctor reads. A real client nested inside another client
+still binds when its nearest client matches.
 
 `iris mcp` resolves its Execution at the first tool call, by this chain, and outside Codex and id
 mode also on its heartbeat tick (see below):

@@ -43,6 +43,30 @@ func TestNearestFromStopsAtBrokenChains(t *testing.T) {
 	}
 }
 
+func TestClientNameCanonicalizesEveryKnownProcess(t *testing.T) {
+	for _, tc := range []struct {
+		name, client string
+		known        bool
+	}{
+		{"/opt/Claude.EXE", "claude", true},
+		{"codex", "codex", true},
+		{"copilot", "copilot", true},
+		{`C:\Tools\Cursor.exe`, "cursor", true},
+		{"cursor-agent", "cursor", true},
+		{"agy", "antigravity", true},
+		{"ANTIGRAVITY", "antigravity", true},
+		{"grok", "grok", true},
+		{"kimi", "kimi", true},
+		{"kimi-code", "kimi", true},
+		{"node", "", false},
+	} {
+		client, known := ClientName(tc.name)
+		if client != tc.client || known != tc.known {
+			t.Errorf("%q: got %q, %v; want %q, %v", tc.name, client, known, tc.client, tc.known)
+		}
+	}
+}
+
 func TestSingleSessionKnowsOnlyMeasuredLaunchers(t *testing.T) {
 	for _, c := range []struct {
 		name, client string
