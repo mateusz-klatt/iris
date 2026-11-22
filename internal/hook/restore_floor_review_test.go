@@ -409,3 +409,112 @@ func TestGenerationProofDamagedDuringRegistrationPreventsAuthority(t *testing.T)
 		})
 	}
 }
+
+func TestSessionEndWithDamagedEndMarkerKeepsProofAndRecordsObservation(t *testing.T) {
+	for _, unreadable := range []bool{false, true} {
+		name := "malformed marker"
+		if unreadable {
+			name = "unreadable marker"
+		}
+		t.Run(name, func(t *testing.T) {
+			h, _ := newRestoredHook(t, &hookClock{wall: time.Unix(1800000000, 0)})
+			h.prompt()
+			if h.registered.Generation != 1 {
+				t.Fatalf("initial registration = %+v", h.registered)
+			}
+			proof := sessionsFor(h.getenv).name("claude", "s1")
+			marker := proof + ".ended"
+			if unreadable {
+				if err := os.Mkdir(marker, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.WriteFile(marker, []byte("damaged\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			out := h.run("SessionEnd", `{"session_id":"s1","cwd":`+quote(h.root)+`}`)
+			if out != string(FallbackAllow(ClientClaude).Stdout) {
+				t.Fatalf("SessionEnd output %q", out)
+			}
+			if gen, err := readGeneration(proof); gen != 1 || err != nil {
+				t.Fatalf("SessionEnd removed or altered proof when marker was damaged: G%d, %v", gen, err)
+			}
+			if unreadable {
+				if info, err := os.Stat(marker); err != nil || !info.IsDir() {
+					t.Fatalf("SessionEnd replaced unreadable marker: %v, %v", info, err)
+				}
+			} else if raw, err := os.ReadFile(marker); err != nil || string(raw) != "damaged\n" {
+				t.Fatalf("SessionEnd replaced malformed marker with %q, %v", raw, err)
+			}
+			failures, err := ReadRecentFailures(h.getenv("IRIS_TOKEN_FILE"), 10)
+			if err != nil || len(failures) != 0 {
+				t.Fatalf("SessionEnd failures = %+v, %v", failures, err)
+			}
+			assertReviewObservation(t, h, "damaged generation proof at "+marker)
+		})
+	}
+}
+
+func TestRefusalWithPrunedProofAndDamagedEndMarkerKeepsAbsentProofAndRecordsBoth(t *testing.T) {
+	for _, unreadable := range []bool{false, true} {
+		name := "malformed marker"
+		if unreadable {
+			name = "unreadable marker"
+		}
+		t.Run(name, func(t *testing.T) {
+			const route = "/v1/sessions"
+			h := reviewRestoredHook(t, route, false)
+			m := sessionsFor(h.getenv)
+			proof := m.name("claude", "s1")
+			marker := proof + ".ended"
+			if unreadable {
+				if err := os.Mkdir(marker, 0o700); err != nil {
+					t.Fatal(err)
+				}
+			} else if err := os.WriteFile(marker, []byte("damaged\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			// Keep marker newer than the prune cutoff while aging proof past it via pruner.now,
+			// so prune removes only proof after RecallGeneration refreshes proof's mtime.
+			newer := time.Now().Add(2 * time.Hour)
+			if err := os.Chtimes(marker, newer, newer); err != nil {
+				t.Fatal(err)
+			}
+			observeReviewRequests(h, func(req floorRequest) error {
+				if req.route == route && req.generation == 3 {
+					pruner := m
+					pruner.now = func() time.Time { return time.Now().Add(memoryAge + time.Hour) }
+					if err := pruner.prune(); err != nil {
+						return err
+					}
+				}
+				return nil
+			})
+			out := runReviewHook(h, route)
+			if gen, present, err := NewSessions(h.getenv("IRIS_TOKEN_FILE")).RecallGeneration("claude", "s1"); gen != 0 || present || err != nil {
+				t.Fatalf("proof after refusal with damaged marker = G%d, present %t, %v", gen, present, err)
+			}
+			if unreadable {
+				if info, err := os.Stat(marker); err != nil || !info.IsDir() {
+					t.Fatalf("refusal replaced unreadable marker: %v, %v", info, err)
+				}
+			} else if raw, err := os.ReadFile(marker); err != nil || string(raw) != "damaged\n" {
+				t.Fatalf("refusal replaced malformed marker with %q, %v", raw, err)
+			}
+			notes, err := ReadRecentObservations(h.getenv("IRIS_TOKEN_FILE"), 10)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			for _, note := range notes {
+				got = append(got, note.Error)
+			}
+			want := []string{RestoreFloorRefused, "damaged generation proof at " + marker}
+			if !slices.Equal(got, want) {
+				t.Fatalf("observations = %v, want %v", got, want)
+			}
+			if out != string(FallbackAllow(ClientClaude).Stdout) {
+				t.Fatalf("refused hook output %q", out)
+			}
+		})
+	}
+}

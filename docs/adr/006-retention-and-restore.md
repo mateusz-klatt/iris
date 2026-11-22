@@ -195,8 +195,9 @@ SessionEnd records the ended generation in a marker under the same lock and clea
 proof. The hook refreshes proof under that lock before sending it. A refusal can restore a
 missing file only above the ended generation. Idle pruning removes the marker after 30 days.
 
-An unreadable or malformed generation file stops registration and binding. Only an absent
-file allows a hook to start registration without proof. Local `iris doctor` output reports
+An unreadable or malformed generation file stops registration and binding, and an unreadable or
+malformed `.ended` marker stops `Forget` and proof restoration; only an absent file allows a hook
+to start registration without proof. Local `iris doctor` output reports
 `damaged generation proof at <path>`. Before archiving the named file, verify you are connected
 to the intended hub and check the session's generation history there. Archive the file only
 once you have confirmed the session can safely register without that proof.
@@ -219,6 +220,15 @@ archiving its local generation file, then relaunch the session. Archive only the
 ([path calculation](../../internal/hook/memory.go#L42)). Keep other session files and the
 token in place. `iris admin forget` deletes hub records and mail and is unsuitable for this
 local recovery.
+
+When `Forget` cannot record its `.ended` marker on `SessionEnd` (for example, when the marker is
+damaged or cannot be written), it keeps the local generation proof rather than deleting it without
+a record. While that kept proof `G` remains on disk, an unbound `iris mcp` answers `lost` until a
+hook registers `G+1`. Against an older hub, an empty replacement hub, or after retention has swept
+the ended row, the kept proof yields `restore_floor_refused`. The recovery is the same as for
+damaged proof: verify the hub and check the session's generation history there, stop its hook, shim
+and watch, then archive that file (the kept proof file, or the damaged `.ended` marker named by
+`iris doctor`).
 
 Upgrade the hub first and then the clients in the same release. An upgraded hook against
 an older hub treats a missing `highest_generation` as a refusal to retry, keeps its proof and
