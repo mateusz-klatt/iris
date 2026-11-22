@@ -141,6 +141,11 @@ function isAbort(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
 }
 
+const whenFormatter = new Intl.DateTimeFormat(undefined, {
+  dateStyle: "medium",
+  timeStyle: "short",
+});
+
 function formatWhen(value: string): string {
   if (value.length === 0) {
     return "";
@@ -149,10 +154,7 @@ function formatWhen(value: string): string {
   if (Number.isNaN(date.getTime())) {
     return value;
   }
-  return new Intl.DateTimeFormat(undefined, {
-    dateStyle: "medium",
-    timeStyle: "short",
-  }).format(date);
+  return whenFormatter.format(date);
 }
 
 function repositoryName(overview: Overview, id: string, t: TFunction): string {
@@ -847,20 +849,20 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
               <DeliveryProblems repositoryId={repositoryId} revision={threadRevision} onOpenThread={openThread} />
               <section id="threads" aria-label={t("operator.threads")}>
                 <form className="search-form mail-filters" onSubmit={(event) => { event.preventDefault(); setQuery(searchDraft); clearThread(); }}>
-                  <label>{t("operator.search")}<input type="search" value={searchDraft} onChange={(event) => setSearchDraft(event.target.value)} /></label>
+                  <label>{t("operator.search")}<input id="iris-mail-search" name="q" type="search" value={searchDraft} onChange={(event) => setSearchDraft(event.target.value)} /></label>
                   <label>{t("operator.repository")}
-                    <select value={repositoryId} onChange={(event) => { setRepositoryId(event.target.value); clearThread(); }}>
+                    <select id="iris-mail-repository" name="repository_id" value={repositoryId} onChange={(event) => { setRepositoryId(event.target.value); clearThread(); }}>
                       <option value="">{t("operator.all")}</option>
                       {overview.repositories.map((repository) => <option key={repository.id} value={repository.id}>{recordName(repository, t)} · {repository.id}</option>)}
                     </select>
                   </label>
                   {mailScope === "all" ? <label>{t("operator.agent")}
-                    <select value={agent} onChange={(event) => { setAgent(event.target.value); clearThread(); }}>
+                    <select id="iris-mail-agent" name="agent" value={agent} onChange={(event) => { setAgent(event.target.value); clearThread(); }}>
                       <option value="">{t("operator.all")}</option>
                       {sessions.filter((item) => showInactive || item.state === "active" || item.name === agent).map((item) => <option key={item.id} value={item.name}>{item.name}</option>)}
                     </select>
                   </label> : null}
-                  {mailScope === "all" ? <label><input type="checkbox" checked={showInactive} onChange={(event) => setShowInactive(event.target.checked)} />{t("console.showInactive")}</label> : null}
+                  {mailScope === "all" ? <label><input id="iris-mail-show-inactive" name="mail_show_inactive" type="checkbox" checked={showInactive} onChange={(event) => setShowInactive(event.target.checked)} />{t("console.showInactive")}</label> : null}
                   <button type="submit" className="primary-button">{t("search.submit")}</button>
                 </form>
                 <div className="mailbox-layout" data-reading={selectedId !== null ? "yes" : "no"}>
@@ -921,11 +923,11 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
                     <h3>{t("operator.reply")}</h3>
                     {member ? <RecipientPicker agents={recipientAgents} scopes={outsideScopes} selected={recipientsOf(reply.to)} allowHuman={false} onChange={(ids) => setReply(edited(reply, { to: ids.join(", ") }))} /> : <label>
                       {t("operator.recipients")}
-                      <input value={reply.to} onChange={(event) => setReply(edited(reply, { to: event.target.value }))} />
+                      <input id="iris-reply-to" name="reply_to" value={reply.to} onChange={(event) => setReply(edited(reply, { to: event.target.value }))} />
                     </label>}
                     <label>
                       {t("operator.subject")}
-                      <input value={reply.subject} onChange={(event) => setReply(edited(reply, { subject: event.target.value }))} />
+                      <input id="iris-reply-subject" name="reply_subject" value={reply.subject} onChange={(event) => setReply(edited(reply, { subject: event.target.value }))} />
                     </label>
                     <SubjectSize subject={reply.subject} />
                     <DraftBody value={reply.body} onChange={(body) => setReply(edited(reply, { body }))} />
@@ -1009,8 +1011,8 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
                   <h2>{t("operator.agents")}</h2>
                 </div>
                 <div className="fleet-toolbar">
-                  <label>{t("console.findAgent")}<input type="search" value={agentSearch} onChange={(event) => setAgentSearch(event.target.value)} /></label>
-                  <label><input type="checkbox" checked={showInactive} onChange={(event) => setShowInactive(event.target.checked)} />{t("console.showInactive")}</label>
+                  <label>{t("console.findAgent")}<input id="iris-fleet-search" name="fleet_search" type="search" value={agentSearch} onChange={(event) => setAgentSearch(event.target.value)} /></label>
+                  <label><input id="iris-fleet-show-inactive" name="fleet_show_inactive" type="checkbox" checked={showInactive} onChange={(event) => setShowInactive(event.target.checked)} />{t("console.showInactive")}</label>
                 </div>
                 {visibleAgents.length === 0 ? <p>{t("console.noAgentMatch")}</p> : (
                   <table className="stack-table">
@@ -1070,7 +1072,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
                 }}
               >
                 <label>{t("console.composeRepository")}
-                  <select value={repositoryId} onChange={(event) => { setRepositoryId(event.target.value); clearThread(); }}>
+                  <select id="iris-compose-repository" name="compose_repository_id" value={repositoryId} onChange={(event) => { setRepositoryId(event.target.value); clearThread(); }}>
                     {!member ? <option value="">{t("console.automaticRepository")}</option> : null}
                     {(member ? writableRepositories : overview.repositories).map((repository) => <option key={repository.id} value={repository.id}>{recordName(repository, t)} · {repository.id}</option>)}
                   </select>
@@ -1078,7 +1080,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
                 <RecipientPicker agents={recipientAgents} scopes={outsideScopes} allowHuman={!member} selected={composeRecipients} onChange={(ids) => setCompose(edited(compose, { to: ids.join(", ") }))} />
                 <label>
                   {t("operator.subject")}
-                  <input value={compose.subject} onChange={(event) => setCompose(edited(compose, { subject: event.target.value }))} />
+                  <input id="iris-compose-subject" name="compose_subject" value={compose.subject} onChange={(event) => setCompose(edited(compose, { subject: event.target.value }))} />
                 </label>
                 <SubjectSize subject={compose.subject} />
                 <DraftBody value={compose.body} onChange={(body) => setCompose(edited(compose, { body }))} />

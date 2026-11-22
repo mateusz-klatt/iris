@@ -80,7 +80,7 @@ export function ClaimsPanel({
           <div className="claim-filters" role="group" aria-label={t("operator.claimFilters")}>
             <label>
               {t("operator.repository")}
-              <select value={repository} onChange={(event) => setRepository(event.target.value)}>
+              <select id="iris-claims-repository" name="claims_repository" value={repository} onChange={(event) => setRepository(event.target.value)}>
                 <option value="">{t("operator.all")}</option>
                 {options(
                   claims.map((claim) => claim.repository_id),
@@ -95,7 +95,7 @@ export function ClaimsPanel({
             </label>
             <label>
               {t("reservations.holder")}
-              <select value={holder} onChange={(event) => setHolder(event.target.value)}>
+              <select id="iris-claims-holder" name="claims_holder" value={holder} onChange={(event) => setHolder(event.target.value)}>
                 <option value="">{t("operator.all")}</option>
                 {options(
                   claims.map((claim) => claim.holder),
@@ -109,7 +109,7 @@ export function ClaimsPanel({
             </label>
             <label>
               {t("reservations.path")}
-              <input type="search" value={path} onChange={(event) => setPath(event.target.value)} />
+              <input id="iris-claims-path" name="claims_path" type="search" value={path} onChange={(event) => setPath(event.target.value)} />
             </label>
           </div>
           {shown.length === 0 ? (

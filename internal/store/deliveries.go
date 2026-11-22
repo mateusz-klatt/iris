@@ -15,6 +15,21 @@ const deliveryWait = 15 * time.Minute
 // deliveryMessageLimit bounds the newest messages with at least one recipient in trouble.
 const deliveryMessageLimit = 200
 
+// deliveriesSQL lists unacked human-sent deliveries in the last deliveryWindow. Checking Ack
+// directly on Delivery via NOT EXISTS filters out settled deliveries via Ack's covering primary
+// key before looking up Message and Execution rows (and avoids NOT IN's NULL hazard on SQLite
+// rowid primary keys), instead of scanning every historical message through DeliveryState first.
+const deliveriesSQL = `SELECT m.id,m.thread_id,m.subject,m.created_ms,a.name,
+ CASE WHEN d.execution_id IS NULL THEN 'pending' ELSE 'inflight' END,
+ COALESCE((SELECT x.state FROM Execution x WHERE x.agent_id=a.id ORDER BY x.rowid DESC LIMIT 1),'none'),
+ EXISTS(SELECT 1 FROM Execution x WHERE x.agent_id=a.id AND x.state='active'),
+ COALESCE(m.sender_account_id,''),COALESCE(m.sender_username,''),COALESCE(m.sender_display_name,'')
+ FROM Delivery d JOIN Message m ON m.id=d.message_id
+ JOIN Execution e ON e.id=m.sender_execution_id JOIN Agent a ON a.id=d.recipient_agent_id
+ WHERE NOT EXISTS (SELECT 1 FROM Ack WHERE Ack.delivery_id=d.id)
+ AND e.client='human' AND a.client<>'human' AND m.created_ms>=?
+ AND `
+
 // deliveries lists the human's messages of the last deliveryWindow with a delivery in trouble:
 // unacked, to a recipient with no active Execution ("unreachable"), or from a message created
 // longer than deliveryWait ago ("waiting"). An acked or handled delivery is never listed, so
@@ -30,14 +45,7 @@ func (t *transaction) deliveries(r Request) (map[string]any, error) {
 	if t.console != nil {
 		originFilter, originArgs = "1=1", nil
 	}
-	rows, err := t.rows(`SELECT m.id,m.thread_id,m.subject,m.created_ms,a.name,d.state,
- COALESCE((SELECT x.state FROM Execution x WHERE x.agent_id=a.id ORDER BY x.rowid DESC LIMIT 1),'none'),
- EXISTS(SELECT 1 FROM Execution x WHERE x.agent_id=a.id AND x.state='active'),
- COALESCE(m.sender_account_id,''),COALESCE(m.sender_username,''),COALESCE(m.sender_display_name,'')
- FROM Message m JOIN Execution e ON e.id=m.sender_execution_id
- JOIN DeliveryState d ON d.message_id=m.id JOIN Agent a ON a.id=d.recipient_agent_id
- WHERE e.client='human' AND a.client<>'human' AND d.state IN ('pending','inflight') AND m.created_ms>=?
- AND `+originFilter+` AND `+visible+` AND `+recipientScope+`
+	rows, err := t.rows(deliveriesSQL+originFilter+` AND `+visible+` AND `+recipientScope+`
  ORDER BY m.created_ms DESC,m.id,a.name`, append(append(append([]any{now.Add(-deliveryWindow).UnixMilli()}, originArgs...), visibleArgs...), recipientArgs...)...)
 	if err != nil {
 		return nil, err
