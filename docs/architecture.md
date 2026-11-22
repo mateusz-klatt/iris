@@ -807,14 +807,18 @@ exist yet still conflict. An empty prefix, meaning the whole repository, needs a
 **A pre-edit hook checks and claims in one step**, so protection exists without the model doing
 anything, and `explicit` claims are for planned work. The step is one idempotent transaction
 over every path in the tool call, including both ends of a rename. It grants all missing claims
-or none. Paths the caller already holds are reused, and an `explicit` claim is never downgraded.
-An `auto` claim lasts 10 minutes from the last touch. A retried call, identified by its tool call
+or none. Under `repository`, paths the caller already holds are reused exactly as today. Under ADR
+037's `worktree` opt-in, automatic self-reuse also requires the same worktree key. An `explicit`
+claim is never downgraded. An `auto` claim lasts 10 minutes from the last touch. A retried call, identified by its tool call
 id, does not extend it.
 
 An `auto` claim means "this session has uncommitted changes here". When a shell command takes a
 path out of the session's git status, by commit, stash or restore, the reconcile releases the
 session's own `auto` claim on that path in the same transaction, and wakes whoever waited for it.
-An `explicit` claim, and every other session's claim, stays. Committed but unmerged work is
+Under the default `repository` policy this release stays path-wide across that session's matching
+claims, exactly as before. Under ADR 037's `worktree` opt-in it releases only the claim with the
+status checkout's worktree key; the session's automatic claim on the same path in another worktree
+stays. An `explicit` claim, and every other session's claim, stays. Committed but unmerged work is
 git's business, not a claim's. This happens only at the session's next shell reconcile: a commit
 made outside the session, or an edit-tool claim on a path no shell command ever saw dirty,
 keeps its claim until it expires.
@@ -942,11 +946,17 @@ inode, size, modification and change times, and checksum at its end. It never re
 scoped call on the plain route. `iris doctor` shows what each breaker suggests. Windows takes no
 reduced snapshot and keeps no breaker.
 
-`iris guard` is a pre-commit check, installed per repository on request. It refuses a commit
-of paths claimed from another host/worktree, even by the same session: the checkout does not
-prove who started Git. Same-host/worktree claims are skipped. A refusal explains the possible
-own-session case and gives the fence to release from the holding session before retrying.
-It is the strongest check Iris has, and it is cooperative.
+`iris guard` is a pre-commit check, installed per repository on request. Under the default
+`repository` policy it refuses a commit of paths claimed from another host/worktree, even by the
+same session, exactly as before: the checkout does not prove who started Git. Same-host/worktree
+claims are skipped. Under ADR 037's `worktree` opt-in, a staged path whose only overlaps are
+automatic claims with different, non-null worktree keys receives an advisory instead of a refusal;
+explicit claims, null-key claims and a committing checkout without a key still refuse outside the
+same-worktree exemption. That exemption then uses the claim's checkout identity, so ADR 033's
+own-session submodule refusal is lifted when the claim and commit are in the same submodule
+checkout. A new guard prints an advisory and allows; an older guard ignores it and allows silently.
+A refusal explains the possible own-session case and gives the fence to release from the holding
+session before retrying. It is the strongest check Iris has, and it is cooperative.
 
 ### D13. Security
 
@@ -1396,8 +1406,10 @@ On `modernc.org/sqlite`, with real concurrency:
 - Prefix, case-folding and rename boundaries hold across worktrees. For ADR 037's sole exempted
   automatic/automatic pair with different, non-null keys, ADR 003 path identity and those boundaries
   are unchanged; only the conflict action changes.
-- A self-touch in the same worktree reuses an automatic claim. An own explicit claim is reused
-  repository-wide and is never downgraded. A replayed tool call does not extend an expiry.
+- Under `repository`, a self-touch reuses a claim and shell release stays path-wide exactly as
+  today, even when rows carry worktree keys. Under ADR 037's `worktree` opt-in, automatic
+  self-reuse and release are key-scoped. An own explicit claim is reused repository-wide and is
+  never downgraded. A replayed tool call does not extend an expiry.
 - Expired, released, wrong-owner and old-epoch fence tokens fail. A lost lease cannot renew.
 - Retries cannot double-send or resurrect a claim. A key reused with a different request gets 409.
 - A failed transaction exposes nothing.
