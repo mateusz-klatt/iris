@@ -368,7 +368,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const sessions = useMemo(() => overview?.agents ?? [], [overview]);
   const replyAgents = member ? sessions : noAgents;
   const waiting = phase === "ready" && sessions.length === 0;
-  const activeView = view ?? (waiting && !member ? "diagnostics" : "messages");
+  const activeView = view ?? "messages";
   const participant = mailScope === "mine" && !member ? "human" : agent;
   const [query, setQuery] = useState("");
   const [searchDraft, setSearchDraft] = useState("");
@@ -379,6 +379,8 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const [olderCursor, setOlderCursor] = useState<string | undefined>(undefined);
   const [threadsError, setThreadsError] = useState(false);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const readRequested = useRef(false);
+  const pendingRead = useRef<{ id: string; repositoryId: string } | null>(null);
   const [thread, setThread] = useState<ThreadDetail | null>(null);
   const [compose, setCompose] = useState<Draft>(newDraft);
   // A conversation can be read through different repository views. Keep each view's
@@ -446,8 +448,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   }, [overview]);
 
   // Reloads the overview on the watch's current connection. What the operator does reloads it
-  // this way: reconnecting instead would make every read a new socket, whose first frame
-  // reloads the open thread, which reads it again, without end.
+  // this way: reconnecting instead would make every action open a new socket and refresh again.
   const reload = useCallback(async () => {
     const current = ++overviewRequest.current;
     try {
@@ -455,6 +456,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       if (current !== overviewRequest.current) {
         return;
       }
+      setView((current) => current ?? (nextOverview.agents.length === 0 && !member ? "diagnostics" : "messages"));
       setOverview(nextOverview);
       setDoctor(nextDoctor);
       setPhase("ready");
@@ -465,6 +467,26 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       setPhase("error");
     }
   }, [member]);
+
+  const flushRead = useCallback(() => {
+    const pending = pendingRead.current;
+    if (pending === null || document.visibilityState === "hidden") {
+      return;
+    }
+    pendingRead.current = null;
+    void readThread(pending.id, pending.repositoryId)
+      .then((read) => {
+        if (read > 0) {
+          void reload();
+        }
+      })
+      .catch(() => undefined);
+  }, [reload]);
+
+  useEffect(() => {
+    document.addEventListener("visibilitychange", flushRead);
+    return () => document.removeEventListener("visibilitychange", flushRead);
+  }, [flushRead]);
 
   // revision changes only to retry after an error, which reconnects too.
   useEffect(() => {
@@ -575,18 +597,13 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
         }
         setThread(detail);
         setThreadError(false);
-        // Opening a thread reads the operator's mail in it (A13); the overview's unread
-        // counts then follow. A failure here leaves the mail unread, which is safe. Every
-        // watch frame reloads the open thread, so a thread with nothing unread costs that
-        // GET only: no read, and no second overview.
-        if (!member && unreadForOperator(detail)) {
-          readThread(selectedId, repositoryId)
-            .then((read) => {
-              if (read > 0) {
-                void reload();
-              }
-            })
-            .catch(() => undefined);
+        // Only an explicit open arms a read. A watch refresh updates the conversation but
+        // leaves both old and newly arrived mail unread; a hidden open waits for visibility.
+        const explicit = readRequested.current;
+        readRequested.current = false;
+        if (explicit && !member && unreadForOperator(detail)) {
+          pendingRead.current = { id: selectedId, repositoryId };
+          flushRead();
         }
         // Refresh an untouched suggestion, but retain an edited draft and its retry key
         // even when the operator left this conversation and has now returned to it.
@@ -609,7 +626,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     return () => {
       ignore = true;
     };
-  }, [activeView, phase, reload, repositoryId, selectedId, threadRevision, member, replyAgents]);
+  }, [activeView, phase, reload, repositoryId, selectedId, threadRevision, member, replyAgents, flushRead]);
 
   useEffect(() => {
     if (activeView !== "messages") {
@@ -733,6 +750,8 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const clearThread = () => {
     replyReview.stop();
     composeReview.stop();
+    readRequested.current = false;
+    pendingRead.current = null;
     setSelectedId(null);
     setThread(null);
     setThreadError(false);
@@ -749,11 +768,14 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     chooseView("messages");
     if (id === selectedId) {
       readerTitle.current?.focus();
+      flushRead();
       return;
     }
     // Review is an explicit step in this visit to the draft. Restoring its text must
     // not reopen the send control and pull focus away from the conversation heading.
     replyReview.stop();
+    readRequested.current = true;
+    pendingRead.current = null;
     setThread(null);
     setThreadError(false);
     setSelectedId(id);

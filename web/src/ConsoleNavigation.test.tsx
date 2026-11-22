@@ -5,7 +5,7 @@ import { beforeEach, expect, it } from "vitest";
 import { App } from "./App";
 import type { WatchFrame } from "./api";
 import i18n from "./i18n";
-import { server, sessionOverview, threadDetail, threadsPage } from "./test/server";
+import { emptyOverview, server, sessionOverview, threadDetail, threadsPage } from "./test/server";
 
 beforeEach(async () => { await i18n.changeLanguage("en"); });
 
@@ -108,4 +108,145 @@ it("keeps focus in an edited reply when a live refresh fails and recovers", asyn
   await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
   expect(body).toHaveFocus();
   expect(body).toHaveValue("Keep typing through live updates");
+});
+
+
+const consoleViews = [
+  ["messages", /^My messages/],
+  ["fleet", /^Fleet/],
+  ["claims", /^Claims/],
+  ["diagnostics", "Diagnostics"],
+  ["compose", "+ New message"],
+  ["account", "Account"],
+  ["access", "Access"],
+] as const;
+
+it.each(consoleViews)("keeps the %s view selected across a watch refresh", async (view, buttonName) => {
+  const user = userEvent.setup();
+  let onFrame: ((frame: WatchFrame) => void) | undefined;
+  let overviews = 0;
+  server.use(http.get("*/v1/ui/overview", () => {
+    overviews++;
+    return HttpResponse.json(sessionOverview);
+  }));
+  render(<App connect={(frame) => { onFrame = frame; return () => {}; }} />);
+  await user.click(await screen.findByRole("button", { name: buttonName }));
+  expect(screen.getByRole("main")).toHaveAttribute("data-view", view);
+
+  const before = overviews;
+  act(() => onFrame?.({ cursor: 2, kind: "changed" }));
+  await waitFor(() => expect(overviews).toBe(before + 1));
+  expect(screen.getByRole("main")).toHaveAttribute("data-view", view);
+});
+
+it("keeps the initial diagnostics view when the first session arrives", async () => {
+  let empty = true;
+  let onFrame: ((frame: WatchFrame) => void) | undefined;
+  server.use(http.get("*/v1/ui/overview", () => {
+    const value = empty ? emptyOverview : sessionOverview;
+    empty = false;
+    return HttpResponse.json(value);
+  }));
+  render(<App connect={(frame) => { onFrame = frame; return () => {}; }} />);
+  expect(await screen.findByText("Waiting for the first session.")).toBeVisible();
+  expect(screen.getByRole("main")).toHaveAttribute("data-view", "diagnostics");
+
+  act(() => onFrame?.({ cursor: 2, kind: "changed" }));
+  await waitFor(() => expect(screen.getByRole("button", { name: /^My messages/ })).toHaveTextContent(/1$/));
+  expect(screen.getByRole("main")).toHaveAttribute("data-view", "diagnostics");
+  expect(screen.queryByText("Waiting for the first session.")).toBeNull();
+});
+
+it("neither selects nor reads a new thread when a refresh changes the list", async () => {
+  let onFrame: ((frame: WatchFrame) => void) | undefined;
+  let refreshed = false;
+  let overviews = 0;
+  let reads = 0;
+  let details = 0;
+  server.use(
+    http.get("*/v1/ui/overview", () => {
+      overviews++;
+      return HttpResponse.json(sessionOverview);
+    }),
+    http.get("*/v1/ui/threads", () => HttpResponse.json(refreshed ? {
+      threads: [{ ...threadsPage.threads[0], id: "ms_new", subject: "Newest thread" }],
+    } : threadsPage)),
+    http.get("*/v1/ui/threads/:id", () => {
+      details++;
+      return HttpResponse.json({ ...threadDetail, id: "ms_new" });
+    }),
+    http.post("*/v1/ui/threads/:id/read", () => {
+      reads++;
+      return HttpResponse.json({ read: 1 });
+    }),
+  );
+  render(<App connect={(frame) => { onFrame = frame; return () => {}; }} />);
+  expect(await screen.findByRole("button", { name: /Open thread: Rollout check/ })).toBeVisible();
+  expect(screen.getByText("Choose a conversation")).toBeVisible();
+
+  const before = overviews;
+  refreshed = true;
+  act(() => onFrame?.({ cursor: 2, kind: "changed" }));
+  await waitFor(() => expect(overviews).toBe(before + 1));
+  expect(await screen.findByRole("button", { name: /Open thread: Newest thread/ })).toBeVisible();
+  expect(screen.getByText("Choose a conversation")).toBeVisible();
+  expect(screen.queryByRole("article", { name: "Newest thread" })).toBeNull();
+  expect(details).toBe(0);
+  expect(reads).toBe(0);
+});
+
+it("sends exactly one read for an explicit visible open and none for later frames", async () => {
+  const user = userEvent.setup({ delay: null });
+  let onFrame: ((frame: WatchFrame) => void) | undefined;
+  let reads = 0;
+  let details = 0;
+  server.use(
+    http.get("*/v1/ui/threads/:id", () => {
+      details++;
+      return HttpResponse.json(threadDetail);
+    }),
+    http.post("*/v1/ui/threads/:id/read", () => {
+      reads++;
+      return HttpResponse.json({ read: 1 });
+    }),
+  );
+  render(<App connect={(frame) => { onFrame = frame; return () => {}; }} />);
+  await user.click(await screen.findByRole("button", { name: /Open thread: Rollout check/ }));
+  await screen.findByRole("article", { name: "Rollout check" });
+  await waitFor(() => expect(reads).toBe(1));
+
+  act(() => onFrame?.({ cursor: 2, kind: "changed" }));
+  await waitFor(() => expect(details).toBe(2));
+  await act(async () => { await Promise.resolve(); });
+  expect(reads).toBe(1);
+});
+
+it("defers an explicit hidden open until the document becomes visible", async () => {
+  const original = Object.getOwnPropertyDescriptor(document, "visibilityState");
+  let visibility: DocumentVisibilityState = "hidden";
+  Object.defineProperty(document, "visibilityState", { configurable: true, get: () => visibility });
+  try {
+    const user = userEvent.setup({ delay: null });
+    let reads = 0;
+    server.use(http.post("*/v1/ui/threads/:id/read", () => {
+      reads++;
+      return HttpResponse.json({ read: 1 });
+    }));
+    render(<App connect={() => () => {}} />);
+    await user.click(await screen.findByRole("button", { name: /Open thread: Rollout check/ }));
+    await screen.findByRole("article", { name: "Rollout check" });
+    await act(async () => { await Promise.resolve(); });
+    expect(reads).toBe(0);
+
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+    expect(reads).toBe(0);
+    visibility = "visible";
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+    await waitFor(() => expect(reads).toBe(1));
+    act(() => document.dispatchEvent(new Event("visibilitychange")));
+    expect(reads).toBe(1);
+  } finally {
+    if (original === undefined) Reflect.deleteProperty(document, "visibilityState");
+    else Object.defineProperty(document, "visibilityState", original);
+  }
 });

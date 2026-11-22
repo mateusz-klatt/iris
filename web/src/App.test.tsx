@@ -595,9 +595,8 @@ describe("Iris operator console", () => {
     expect(reads).toBeLessThanOrEqual(2);
   }, 40000);
 
-  // Every watch frame reloads the open thread. With nothing unread for the operator, that GET
-  // is all it costs: no read, and no second overview.
-  it("reads only a thread with unread operator mail, and reloads only after a read that read", async () => {
+  // Every watch frame reloads the open thread, but only another explicit open may read it.
+  it("reads only an explicitly opened thread with unread operator mail, and reloads only after a read that read", async () => {
     const user = userEvent.setup({ delay: null });
     let onFrame: ((frame: WatchFrame) => void) | undefined;
     let reads = 0;
@@ -635,18 +634,26 @@ describe("Iris operator console", () => {
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(reads).toBe(0);
 
-    // Unread, but the hub reads nothing (another repository's human, say): no reload.
+    // New unread mail arrived, but the frame alone must not acknowledge it.
     state = "pending";
     onFrame?.({ cursor: 2, kind: "changed" });
+    await waitFor(() => expect(overviews).toBe(settled + 2));
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(reads).toBe(0);
+
+    // An explicit open whose hub read changes nothing does not reload the overview.
+    await user.click(screen.getByRole("button", { name: "Back to threads" }));
+    await user.click(await screen.findByRole("button", { name: /Rollout check/ }));
     await waitFor(() => expect(reads).toBe(1));
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(overviews).toBe(settled + 2);
 
     // A read that read reloads the overview once.
     read = 1;
-    onFrame?.({ cursor: 3, kind: "changed" });
+    await user.click(screen.getByRole("button", { name: "Back to threads" }));
+    await user.click(await screen.findByRole("button", { name: /Rollout check/ }));
     await waitFor(() => expect(reads).toBe(2));
-    await waitFor(() => expect(overviews).toBe(settled + 4));
+    await waitFor(() => expect(overviews).toBe(settled + 3));
     server.events.removeAllListeners();
   }, 40000);
 
