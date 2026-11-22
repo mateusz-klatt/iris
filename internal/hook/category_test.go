@@ -64,7 +64,7 @@ func TestFailureCategoryAndStageHideUnknownText(t *testing.T) {
 			t.Errorf("FailureStage(%q) = %q, want other", stage, got)
 		}
 	}
-	for _, stage := range []string{"session", "shell reconcile", stageObserved} {
+	for _, stage := range []string{"antigravity", "session", "shell reconcile", stageObserved} {
 		if got := FailureStage(stage); got != stage {
 			t.Errorf("FailureStage(%q) = %q", stage, got)
 		}

@@ -34,6 +34,8 @@ type Bound struct {
 	// Outside says the Execution belongs to its host's context of sessions outside git, which
 	// takes no claim (ADR 034). An older hub never says so.
 	Outside bool `json:"outside_git,omitempty"`
+	// HookSeen says whether a hook has reached the hub for this Execution.
+	HookSeen bool `json:"hook_seen,omitempty"`
 }
 
 // Capabilities is what a hub takes beyond version one, as its answers list it. It is kept as one
@@ -66,8 +68,18 @@ type Resolver struct {
 	Client, Host, CWD string
 	Getenv            func(string) string
 	Ancestor          func() (proc.Ancestor, error)
-	mu                sync.Mutex
-	bound             Bound
+	// Recall reads the hook's local generation memory for client and session without creating
+	// files. An unbound shim uses it only for a reattach-only registration with generation > 0.
+	Recall func(client, session string) (generation int, present bool, err error)
+	// HeartbeatSource names the heartbeat source sent during refresh reattachment (default "shim").
+	HeartbeatSource string
+	mu              sync.Mutex
+	bound           Bound
+	// last preserves the most recently bound process-owned Execution (rungs 2 and 3, including
+	// SessionID, Rung and HookSeen) after a confirmed loss clears bound, so memory-based
+	// reattachment retains positive session evidence even for clients without a session
+	// environment variable, without ever leaking a foreign Rung-1 or Rung-4 handle.
+	last Bound
 	// lost is set when a heartbeat found the bound generation gone, until a fresh bind
 	// succeeds. gone holds every Execution found lost: none is ever bound again, so a
 	// rebind never speaks for a stale identity.
@@ -179,10 +191,20 @@ const ObservedOlderHub = "registered outside git on the legacy route: the hub is
 
 // resolveHeld is Resolve with mu held.
 func (r *Resolver) resolveHeld(ctx context.Context, handle string) (Bound, error) {
-	if r.bound.ExecutionID != "" && (handle == "" || handle == r.bound.ExecutionID) {
-		return r.refresh(ctx)
+	if r.bound.ExecutionID != "" && (handle == "" || handle == r.bound.ExecutionID || r.gone[handle]) {
+		b, err := r.refresh(ctx)
+		if err == nil || r.bound.ExecutionID != "" {
+			return b, err
+		}
 	}
 	b, err := r.resolve(ctx, handle, "")
+	if IsCode(err, "unbound") {
+		if session, rung := r.recallSessionHeld(handle); session != "" {
+			if rb, attempted, rerr := r.reattachByMemoryHeld(ctx, session, rung); attempted {
+				b, err = rb, rerr
+			}
+		}
+	}
 	b, err = r.orRegister(ctx, handle, b, err)
 	if err == nil && r.gone[b.ExecutionID] {
 		r.bound, b, err = Bound{}, Bound{}, &hubclient.Error{Code: "lost", Message: "the binding retry returned an Execution already found lost"}
@@ -191,24 +213,157 @@ func (r *Resolver) resolveHeld(ctx context.Context, handle string) (Bound, error
 		return Bound{}, &LostError{Cause: err}
 	}
 	if err == nil {
-		r.lost = false
+		r.keepHeld(b)
 	}
 	return b, err
 }
 
-// refresh checks the bound Execution at the hub, with mu held, and keeps what the hub says of it:
-// a repository merge can change its repository without changing the Execution. A refusal leaves
-// the binding as it was; only a heartbeat confirms a loss.
-func (r *Resolver) refresh(ctx context.Context) (Bound, error) {
-	b := r.bound
-	// A bind answer names the worktree and capabilities when its hub has them. One rolled back
-	// since names neither, and the binding must not keep offering it a route it refuses (ADR 033).
-	b.Worktree, b.Capabilities, b.Outside = "", "", false
+func (r *Resolver) rememberLastHeld(b Bound) {
+	if b.Rung == 2 || b.Rung == 3 {
+		r.last = b
+	}
+}
+
+func (r *Resolver) keepHeld(b Bound) {
+	r.bound = b
+	r.rememberLastHeld(b)
+	r.lost = false
+}
+
+func (r *Resolver) markLostHeld(b Bound) {
+	if r.gone == nil {
+		r.gone = map[string]bool{}
+	}
+	r.gone[b.ExecutionID] = true
+	if r.bound.ExecutionID == b.ExecutionID {
+		r.rememberLastHeld(b)
+		r.bound, r.lost = Bound{}, true
+	}
+}
+
+func (r *Resolver) heartbeatSource() string {
+	if r.HeartbeatSource != "" {
+		return r.HeartbeatSource
+	}
+	return "shim"
+}
+
+func (r *Resolver) bindExecutionHeld(ctx context.Context, orig Bound) (Bound, error) {
+	b := orig
+	// A bind answer names the worktree, capabilities, outside and hook_seen when its hub
+	// has them. One rolled back since names none, and the binding must not keep stale flags.
+	b.Worktree, b.Capabilities, b.Outside, b.HookSeen = "", "", false, false
 	if err := r.Hub.Do(ctx, "POST", "/v1/bind", map[string]any{"execution": b.ExecutionID, "client": r.Client, "host": r.Host}, &b); err != nil {
 		return Bound{}, err
 	}
-	r.bound = b
 	return b, nil
+}
+
+// refresh checks the bound Execution at the hub, with mu held, and keeps what the hub says of it:
+// a repository merge can change its repository without changing the Execution. When /v1/bind
+// answers lost, refresh immediately heartbeats with the exact remembered generation so a
+// recovering Execution reattaches on the tool call itself, then retries /v1/bind. A heartbeat
+// answering lost marks the Execution lost while keeping its last identity; any other failure
+// leaves the cached binding intact.
+func (r *Resolver) refresh(ctx context.Context) (Bound, error) {
+	b, err := r.bindExecutionHeld(ctx, r.bound)
+	if err == nil {
+		r.keepHeld(b)
+		return b, nil
+	}
+	if !IsCode(err, "lost") {
+		return Bound{}, err
+	}
+	fresh := r.bound
+	fresh.Outside = false
+	if hbErr := r.Hub.Do(ctx, "POST", "/v1/executions/"+r.bound.ExecutionID+"/heartbeat", map[string]any{"generation": r.bound.Generation, "source": r.heartbeatSource()}, &fresh); hbErr != nil {
+		if IsCode(hbErr, "lost") {
+			r.markLostHeld(r.bound)
+		}
+		return Bound{}, hbErr
+	}
+	fresh.HookSeen = fresh.HookSeen || r.bound.HookSeen
+	r.bound = fresh
+	r.rememberLastHeld(fresh)
+	b, err = r.bindExecutionHeld(ctx, r.bound)
+	if err != nil {
+		return Bound{}, err
+	}
+	r.keepHeld(b)
+	return b, nil
+}
+
+// recallSessionHeld returns the positively identified hook-registered session and binding rung
+// eligible for generation-memory reattachment, with mu held. A live IRIS_EXECUTION override or
+// an explicit non-gone handle takes precedence and disables memory reattachment.
+func (r *Resolver) recallSessionHeld(handle string) (string, int) {
+	if r.Recall == nil {
+		return "", 0
+	}
+	if ex := r.Getenv("IRIS_EXECUTION"); ex != "" && !r.gone[ex] {
+		return "", 0
+	}
+	if handle != "" && !r.gone[handle] {
+		return "", 0
+	}
+	if r.last.HookSeen && r.last.SessionID != "" {
+		return r.last.SessionID, r.last.Rung
+	}
+	if variable := sessionVariable[r.Client]; variable != "" {
+		if session := r.Getenv(variable); session != "" {
+			return session, 2
+		}
+	}
+	return "", 0
+}
+
+// reattachByMemoryHeld attempts a reattach-only registration (generation > 0) from the hook's
+// local generation memory for a positively identified session, with mu held. Missing memory
+// returns attempted=false so nothing is sent. Malformed or mismatched memory returns a lost
+// error with attempted=true and never falls back to a generation-0 registration.
+func (r *Resolver) reattachByMemoryHeld(ctx context.Context, session string, rung int) (Bound, bool, error) {
+	if r.Recall == nil {
+		return Bound{}, false, nil
+	}
+	gen, present, err := r.Recall(r.Client, session)
+	if !present {
+		return Bound{}, false, nil
+	}
+	if err != nil || gen <= 0 {
+		return Bound{}, true, &hubclient.Error{Code: "lost", Message: "remembered session generation is malformed"}
+	}
+	req := hubclient.SessionRequest{
+		Client:     r.Client,
+		SessionID:  session,
+		Host:       r.Host,
+		CWD:        r.CWD,
+		Generation: gen,
+		Source:     "shim",
+	}
+	if rung == 3 {
+		anc := r.ancestor()
+		if anc.PID <= 0 || anc.StartMS <= 0 {
+			return Bound{}, false, nil
+		}
+		req.ClientPID = anc.PID
+		req.ClientPIDStartMS = anc.StartMS
+	}
+	resp, err := r.Hub.RegisterSession(ctx, req)
+	if err != nil {
+		return Bound{}, true, err
+	}
+	return Bound{
+		ExecutionID:  resp.ExecutionID,
+		Generation:   resp.Generation,
+		RepositoryID: resp.RepositoryID,
+		Agent:        resp.Agent,
+		SessionID:    session,
+		Rung:         rung,
+		Worktree:     resp.Worktree,
+		Capabilities: Capabilities(strings.Join(resp.Capabilities, "\n")),
+		Outside:      resp.OutsideGit,
+		HookSeen:     true,
+	}, true, nil
 }
 
 // orRegister is the last resort when no rung finds the session: a session whose hooks never
@@ -217,7 +372,7 @@ func (r *Resolver) refresh(ctx context.Context) (Bound, error) {
 // when the hook is what reattaches. Only a process that could name its session registers: by
 // its session id, or as a single-session client process (D6).
 func (r *Resolver) orRegister(ctx context.Context, handle string, b Bound, err error) (Bound, error) {
-	if !IsCode(err, "unbound") || len(r.gone) > 0 {
+	if !IsCode(err, "unbound") || len(r.gone) > 0 || r.last.HookSeen {
 		return b, err
 	}
 	if r.since.IsZero() {
@@ -300,7 +455,8 @@ func (r *Resolver) adopt(ctx context.Context) {
 			r.bound = mine
 			return
 		}
-		r.bound, r.own = b, false
+		r.keepHeld(b)
+		r.own = false
 		r.pending = &handover{from: mine, to: b.ExecutionID}
 	}
 	// Retry the same idempotent end until its response confirms that the mail moved.
@@ -394,6 +550,48 @@ func (r *Resolver) resolve(ctx context.Context, handle, exclude string) (Bound, 
 // text and says nothing of which session.
 const ObservedRebound = "rebound on heartbeat after a loss"
 
+// Heartbeat sends one heartbeat immediately for the currently bound Execution, if any.
+// It updates the cached binding on success, marks it lost on a lost answer, returns nil when
+// nothing is bound, and never revives a terminal Execution.
+func (r *Resolver) Heartbeat(ctx context.Context, source string) error {
+	r.mu.Lock()
+	b := r.bound
+	r.mu.Unlock()
+	if b.ExecutionID == "" {
+		return nil
+	}
+	return r.beatOne(ctx, b, source)
+}
+
+func (r *Resolver) beatOne(ctx context.Context, b Bound, source string) error {
+	call, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	// Decode over the previous binding: older hubs return only lease_ms on an
+	// ordinary heartbeat, and omit all binding fields, including its local rung.
+	fresh := b
+	// A heartbeat answer says outside git when its hub knows contexts (ADR 034).
+	fresh.Outside = false
+	err := r.Hub.Do(call, "POST", "/v1/executions/"+b.ExecutionID+"/heartbeat", map[string]any{"generation": b.Generation, "source": source}, &fresh)
+	if err == nil {
+		r.mu.Lock()
+		// Resolve may have selected another explicit handle during this request.
+		if r.bound.ExecutionID == b.ExecutionID && r.bound.Generation == b.Generation {
+			// Heartbeat answers carry no hook_seen field, so preserve what bind established.
+			fresh.HookSeen = fresh.HookSeen || r.bound.HookSeen
+			r.bound = fresh
+			r.rememberLastHeld(fresh)
+		}
+		r.mu.Unlock()
+		return nil
+	}
+	if IsCode(err, "lost") {
+		r.mu.Lock()
+		r.markLostHeld(b)
+		r.mu.Unlock()
+	}
+	return err
+}
+
 // Maintain stops before any renewal after parent loss. The process owner also cancels
 // this context when the transport reaches EOF. A generation the heartbeat finds lost is
 // dropped, never renewed, and the process keeps running. A shim's next tick looks for the
@@ -430,37 +628,10 @@ func (r *Resolver) Maintain(ctx context.Context, source string, interval time.Du
 				onStop()
 				return
 			}
-			call, cancel := context.WithTimeout(ctx, 5*time.Second)
-			// Decode over the previous binding: older hubs return only lease_ms on an
-			// ordinary heartbeat, and omit all binding fields, including its local rung.
-			fresh := b
-			// A heartbeat answer says outside git when its hub knows contexts (ADR 034).
-			fresh.Outside = false
-			err := r.Hub.Do(call, "POST", "/v1/executions/"+b.ExecutionID+"/heartbeat", map[string]any{"generation": b.Generation, "source": source}, &fresh)
-			cancel()
-			if err == nil {
-				r.mu.Lock()
-				// Resolve may have selected another explicit handle during this request.
-				if r.bound.ExecutionID == b.ExecutionID && r.bound.Generation == b.Generation {
-					r.bound = fresh
-				}
-				r.mu.Unlock()
+			if r.beatOne(ctx, b, source) == nil && rebound {
 				// A rebind is only ever this tick's sole renewal: the lookup runs
 				// without a pending handover.
-				if rebound {
-					r.observe(ObservedRebound)
-				}
-			}
-			if IsCode(err, "lost") {
-				r.mu.Lock()
-				if r.gone == nil {
-					r.gone = map[string]bool{}
-				}
-				r.gone[b.ExecutionID] = true
-				if r.bound.ExecutionID == b.ExecutionID {
-					r.bound, r.lost = Bound{}, true
-				}
-				r.mu.Unlock()
+				r.observe(ObservedRebound)
 			}
 		}
 	}
@@ -471,8 +642,9 @@ func (r *Resolver) Maintain(ctx context.Context, source string, interval time.Du
 // had no call yet, or lost its generation and got no call after, renewed nothing while the
 // session's hooks registered generation after generation on the hook-only lease.
 //
-// It binds what a call without a handle would, through rungs 1 to 3, and only an Execution
-// live at the hub: it never registers, never binds by a handle, never binds one found lost,
+// It binds what a call without a handle would, through rungs 1 to 3, and may reattach a
+// recovering hook-registered session via local generation memory (generation > 0): it never
+// registers a generation-0 Execution, never binds by a handle, never binds one found lost,
 // and never decides how calls bind. Codex calls can name their session, so its first call
 // decides the process's mode; Codex and a process in id mode are left to their calls. A
 // failed lookup changes nothing, so a confirmed loss stays confirmed until a bind succeeds.
@@ -492,6 +664,13 @@ func (r *Resolver) lookupHeld(ctx context.Context) bool {
 		b, err = r.lookupAntigravityWakeHeld(ctx)
 	} else {
 		b, err = r.resolve(ctx, "", "")
+		if IsCode(err, "unbound") {
+			if session, rung := r.recallSessionHeld(""); session != "" {
+				if rb, attempted, rerr := r.reattachByMemoryHeld(ctx, session, rung); attempted {
+					b, err = rb, rerr
+				}
+			}
+		}
 	}
 	if err != nil {
 		return false
@@ -501,7 +680,7 @@ func (r *Resolver) lookupHeld(ctx context.Context) bool {
 		return false
 	}
 	lost := r.lost
-	r.lost = false
+	r.keepHeld(b)
 	return lost
 }
 

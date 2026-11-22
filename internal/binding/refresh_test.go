@@ -75,11 +75,26 @@ func TestCachedBindingReattachesAfterHubRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 	serving.Store(hub.New(s, "secret", []string{srv.Listener.Addr().String()}))
-	// A plain bind cannot grant authority to a recovering session. Its cached
-	// generation must survive the refusal so the next heartbeat can reattach it.
-	if _, err := r.Resolve(ctx, ""); !IsCode(err, "lost") || r.bound != before || r.Lost() {
-		t.Fatalf("recovery refresh: bound %+v, lost %v, err %v", r.bound, r.Lost(), err)
+	// A bound shim immediately heartbeats with its remembered generation when refresh sees
+	// lost, so a recovering session reattaches on the tool call itself without waiting for
+	// the next periodic tick.
+	if after, err := r.Resolve(ctx, ""); err != nil || after != before || r.Lost() {
+		t.Fatalf("recovery refresh did not reattach immediately: %+v %v lost %v", after, err, r.Lost())
 	}
+	select {
+	case <-heartbeat:
+	case <-time.After(5 * time.Second):
+		t.Fatal("recovery refresh did not send its heartbeat proof")
+	}
+	// A second restart without any tool call still reattaches through Maintain's heartbeat.
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s, err = store.Open(file, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serving.Store(hub.New(s, "secret", []string{srv.Listener.Addr().String()}))
 	run, stop := context.WithCancel(ctx)
 	done := make(chan struct{})
 	go func() {

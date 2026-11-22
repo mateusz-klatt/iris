@@ -135,7 +135,7 @@ const (
 
 // stages are the stages a run records a failure or an observation at.
 var stages = []string{
-	"client", "decode", "repository", "hub", "session", "end", "paths", "touch",
+	"client", "decode", "antigravity", "repository", "hub", "session", "end", "paths", "touch",
 	"shell repository", "shell scope", "shell status", "shell session", "shell reconcile", stageSessionFiles, stageObserved,
 }
 

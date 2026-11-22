@@ -97,7 +97,7 @@ func (r *Resolver) Note(session string) {
 func (r *Resolver) ResolveCall(ctx context.Context, handle, session, thread string) (Bound, bool, error) {
 	m := r.decided.Load()
 	if m == nil {
-		if b, overridden, err := r.overrideOrDecide(ctx, handle, session, thread); overridden {
+		if b, overridden, err := r.overrideOrDecide(ctx, session, thread); overridden {
 			return b, true, err
 		}
 		m = r.decided.Load()
@@ -121,50 +121,70 @@ func (r *Resolver) ResolveCall(ctx context.Context, handle, session, thread stri
 
 // overrideOrDecide is the step of a call that found the process undecided. Under decideMu it reads
 // the decision again, so a call that another one decided for meanwhile goes on without touching
-// mu. If the process is still undecided, the call takes mu: a live override binds the call as
-// today, in the same hold that checks it, so a loss the heartbeat confirms meanwhile cannot slip
-// between; otherwise the call decides the mode.
-func (r *Resolver) overrideOrDecide(ctx context.Context, handle, session, thread string) (Bound, bool, error) {
+// mu. If the process is still undecided, the call takes mu: while IRIS_EXECUTION is live, it binds
+// or refreshes only that Execution; once a refresh heartbeat confirms it gone, the call decides
+// the mode and lets ResolveCall dispatch under it (never falling through to rungs 2-4 as primary).
+func (r *Resolver) overrideOrDecide(ctx context.Context, session, thread string) (Bound, bool, error) {
 	r.decideMu.Lock()
 	defer r.decideMu.Unlock()
 	if r.decided.Load() == nil {
 		r.mu.Lock()
 		defer r.mu.Unlock()
 		if ex := r.Getenv("IRIS_EXECUTION"); ex != "" && !r.gone[ex] {
-			b, err := r.resolveHeld(ctx, handle)
-			return b, true, err
+			b, err := r.bindOverrideHeld(ctx, ex)
+			if !r.gone[ex] {
+				return b, true, err
+			}
 		}
 		r.decided.Store(decide(session, thread))
 	}
 	return Bound{}, false, nil
 }
 
+// bindOverrideHeld binds or refreshes only the live IRIS_EXECUTION override (rung 1), with mu held.
+func (r *Resolver) bindOverrideHeld(ctx context.Context, ex string) (Bound, error) {
+	if r.bound.ExecutionID == ex {
+		return r.refresh(ctx)
+	}
+	var b Bound
+	if err := r.Hub.Do(ctx, "POST", "/v1/bind", map[string]any{"execution": ex, "client": r.Client, "host": r.Host, "cwd": r.CWD}, &b); err != nil {
+		return Bound{}, err
+	}
+	b.Rung = 1
+	r.keepHeld(b)
+	return b, nil
+}
+
 // sessionBinding is a root's process's binding of its session. Once bound, it is refreshed by its
-// Execution, as today, so a refusal leaves it cached and the heartbeat reattaches it after a hub
-// restart. While the process has no binding, it looks the Execution up by the session's id. On
-// the first bind it repeats the lookup for the grace period, while the session's hook may not have
-// registered the session yet; after a loss it looks once, since the hook is what reattaches a
-// session. An Execution found lost is never bound again. unusable says the first bind's grace
-// period ran out without a usable Execution; a call that ends before then is still binding.
+// Execution, which immediately heartbeats on lost so a recovering session reattaches on the tool
+// call itself. While the process has no binding, it looks the Execution up by the session's id,
+// and if unbound may reattach a recovering hook-registered session via local generation memory
+// (generation > 0), never registering generation 0. On the first bind it repeats the lookup for
+// the grace period, while the session's hook may not have registered the session yet; after a
+// loss it looks once. An Execution found lost is never bound again. unusable says the first
+// bind's grace period ran out without a usable Execution; a call that ends before then is still
+// binding.
 func (r *Resolver) sessionBinding(ctx context.Context, session string) (b Bound, unusable bool, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.bound.ExecutionID != "" {
 		b, err = r.refresh(ctx)
-		return b, false, err
+		if err == nil || r.bound.ExecutionID != "" {
+			return b, false, err
+		}
 	}
 	first := len(r.gone) == 0
 	if first && r.since.IsZero() {
 		r.since = time.Now()
 	}
-	b, err = r.bySession(ctx, session)
+	b, err = r.bySessionOrReattachHeld(ctx, session)
 	for delay := 100 * time.Millisecond; first && unusableAnswer(err) && time.Since(r.since) < r.Grace; delay = min(2*delay, 2*time.Second) {
 		select {
 		case <-ctx.Done():
 			return Bound{}, false, errBinding
 		case <-time.After(min(delay, r.Grace-time.Since(r.since))):
 		}
-		b, err = r.bySession(ctx, session)
+		b, err = r.bySessionOrReattachHeld(ctx, session)
 	}
 	switch {
 	case first && err != nil && ctx.Err() != nil:
@@ -177,8 +197,18 @@ func (r *Resolver) sessionBinding(ctx context.Context, session string) (b Bound,
 	case r.gone[b.ExecutionID]:
 		return Bound{}, false, errUnusable
 	}
-	r.bound, r.lost = b, false
+	r.keepHeld(b)
 	return b, false, nil
+}
+
+func (r *Resolver) bySessionOrReattachHeld(ctx context.Context, session string) (Bound, error) {
+	b, err := r.bySession(ctx, session)
+	if IsCode(err, "unbound") {
+		if rb, attempted, rerr := r.reattachByMemoryHeld(ctx, session, 2); attempted {
+			return rb, rerr
+		}
+	}
+	return b, err
 }
 
 // lookup attributes a call to the session it names by one lookup, without mu, so it never waits

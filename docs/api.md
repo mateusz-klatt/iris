@@ -83,6 +83,10 @@ its record whichever route reattaches it. A hub from before this route answers `
 For recovery after a hub restart, reattach with the same `session_id` and the last returned
 `generation`. A recovering session without that generation returns `lost`; an expired
 generation cannot be reattached. `generation:0` starts or resumes a non-recovering session.
+A shim reattaching from hook generation memory sends `source:"shim"` with `generation > 0`; the
+hub requires `hook_seen_ms > 0` on the recovering Execution and, when `client_pid` or
+`client_pid_start_ms` is present (Rung-3 process-bound sessions), checks that both match the
+Execution's recorded client process.
 Recovery keeps claim ownership and expiry but rotates fence numbers; use the `claims`
 in the reattachment response. Old fence numbers and tokens are invalid.
 
@@ -156,10 +160,10 @@ accept the remembered generation before the persisted 120 s recovery deadline:
 | A prompt on Claude Code, Codex, Copilot or Kimi; Antigravity's `PreInvocation` | Registers with remembered proof. Cursor and Grok prompts do not register. |
 | A recognized pre-edit hook with paths inside the worktree | Registers before touching the paths. The edit is refused if recovery proof is missing. |
 | A shell reconcile | Can register with proof. A command is not a reliable recovery action: a budget spent before registration reaches the hub leaves the session recovering. Registration may already have succeeded before a later timeout. ADR 018's breaker changes later hooks' scope; it does not register in the background. |
-| A heartbeat from a shim retaining the binding | Reattaches with its generation. An unbound shim cannot send that proof; Codex id-mode sub-agent lookups never renew. |
-| An unbound shim's heartbeat tick (ADR 027) | Looks the session up as a call without a handle would. It binds only an Execution live at the hub, so it cannot discover a recovering one, and it never registers or binds one found lost. It finds the generation a registering hook obtained, then renews it. Not for Codex, a process in id mode or `iris watch`. |
-| Another MCP call | Binding lookups do not reattach. A call can discover a session a hook already registered; primary `whoami` also heartbeats after a successful bind. Initial legacy fallback registration carries no prior generation and cannot recover a recovering session. |
-| Waiting past the deadline | Loses the old Execution and its reservations. A later registering hook can obtain a new generation, never revive the old one. |
+| A heartbeat from a shim or `iris watch` retaining the binding | Reattaches with its generation on periodic ticks, immediately on an MCP tool-call refresh after `lost`, and immediately on `iris watch` reconnect or `reset`. Codex id-mode sub-agent lookups never renew. |
+| An unbound shim's heartbeat tick (ADR 027) | Looks the session up as a call without a handle would, and if `unbound` may send a reattach-only registration (`source: "shim"`, `generation > 0`) from hook generation memory for a positively identified, hook-registered session. It never registers with `generation = 0`, never binds by a handle and never binds one found lost. Not for Codex, a process in id mode or `iris watch`. |
+| Another MCP call | A bound shim immediately heartbeats on a `lost` refresh and retries `/v1/bind`. An unbound shim (including a Codex id-mode root, excluding sub-agents) may reattach a recovering, hook-registered session using hook generation memory (`generation > 0`), never falling back to `generation = 0` on missing, malformed or mismatched memory. Primary `whoami` also heartbeats after a successful bind. |
+| Waiting past the deadline or `SessionEnd` | Loses or ends the old Execution and its reservations. `ended` stays terminal; neither `iris mcp` nor `iris watch` can revive an expired or ended generation. A later registering hook must obtain a new generation. |
 
 Resume the session owning the Execution to fire its enabled `SessionStart` hook, or submit a
 prompt on a client whose Iris hook registers it, then retry the tool. Hooks must be working
