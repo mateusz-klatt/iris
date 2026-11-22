@@ -27,6 +27,12 @@ func newFileMemory(t *testing.T) fileMemory {
 	return fileMemory{dir: filepath.Join(t.TempDir(), "sessions"), now: time.Now, restrict: config.OwnerOnly}
 }
 
+// Recall inspects the on-disk generation without refreshing it.
+func (m fileMemory) Recall(client, session string) int {
+	generation, _ := readGeneration(m.name(client, session))
+	return generation
+}
+
 func TestFileMemoryRemembersEachSessionApart(t *testing.T) {
 	m := newFileMemory(t)
 	if m.Recall("claude", "s") != 0 {
@@ -90,6 +96,9 @@ func TestFileMemoryChecksForNewerProofWhenTheWriteAcquiresItsLock(t *testing.T) 
 	if err != nil {
 		t.Fatal(err)
 	}
+	if _, err := m.RecallGeneration("claude", "s"); !errors.Is(err, failSessionsLock) {
+		t.Errorf("proof was renewed without the lock: %v", err)
+	}
 	m.Remember("claude", "s", 4)
 	m.Forget("claude", "s", 3)
 	unlock()
@@ -115,15 +124,20 @@ func mustList(t *testing.T, dir string) []os.FileInfo {
 	return out
 }
 
-func TestFileMemoryTreatsDamageAsNoProof(t *testing.T) {
+func TestDamagedProofCannotBeReadOrOverwritten(t *testing.T) {
 	m := newFileMemory(t)
 	m.Remember("claude", "s", 1)
-	for _, body := range []string{"", "x", "-2"} {
-		if err := os.WriteFile(m.name("claude", "s"), []byte(body), 0o600); err != nil {
+	path := m.name("claude", "s")
+	for _, body := range []string{"", "x", "0", "-2", "3\nx"} {
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if m.Recall("claude", "s") != 0 {
-			t.Fatalf("%q read as a generation", body)
+		if generation, err := m.RecallGeneration("claude", "s"); generation != 0 || !errors.Is(err, ErrInvalidGeneration) {
+			t.Fatalf("read %q as generation %d with %v", body, generation, err)
+		}
+		m.Remember("claude", "s", 1)
+		if got, err := os.ReadFile(path); string(got) != body || err != nil {
+			t.Fatalf("Remember replaced %q with %q, %v", body, got, err)
 		}
 	}
 }
@@ -157,12 +171,14 @@ func TestFileMemoryFailsQuietly(t *testing.T) {
 		t.Fatal("the vanished directory took a write")
 	}
 
-	// The target is a directory, so the rename fails and the temporary file must go.
+	// The shared file replacement rejects a directory target and cleans up its temporary file.
 	m = newFileMemory(t)
 	if err := os.MkdirAll(filepath.Join(m.name("claude", "s"), "keep"), 0o700); err != nil {
 		t.Fatal(err)
 	}
-	m.Remember("claude", "s", 1)
+	if err := m.write(m.name("claude", "s"), "1"); err == nil {
+		t.Fatal("replaced a directory with a generation file")
+	}
 	for _, info := range mustList(t, m.dir) {
 		if strings.HasPrefix(info.Name(), ".tmp-") {
 			t.Fatal("a failed write left", info.Name())
@@ -228,9 +244,9 @@ func TestMemoryLivesBesideTheToken(t *testing.T) {
 
 type fakeMemory struct{ h *recoveryHub }
 
-func (fakeMemory) Recall(string, string) int    { return 0 }
-func (fakeMemory) Remember(string, string, int) {}
-func (fakeMemory) Forget(string, string, int)   {}
+func (fakeMemory) RecallGeneration(string, string) (int, error) { return 0, nil }
+func (fakeMemory) Remember(string, string, int)                 {}
+func (fakeMemory) Forget(string, string, int)                   {}
 
 func lostWithHighest(highest int) *hubclient.Error {
 	return &hubclient.Error{Code: "lost", Details: json.RawMessage(fmt.Sprintf(`{"highest_generation":%d}`, highest))}

@@ -162,6 +162,97 @@ func TestNewDiskProofStopsCachedGenerationRenewal(t *testing.T) {
 	}
 }
 
+func TestLiveBindingRejectsUnreadableGenerationProof(t *testing.T) {
+	for _, tc := range []struct {
+		name, client, source, thread string
+		present, primary             bool
+	}{
+		{"shim", "claude", "shim", "", true, true},
+		{"shim with unknown proof presence", "claude", "shim", "", false, true},
+		{"watch", "claude", "watch", "", true, true},
+		{"Codex root", "codex", "shim", "S", true, true},
+		{"Codex native sub-agent", "codex", "shim", "child", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := &tickHub{reply: func(*http.Request, map[string]any) (int, any) {
+				return found("ex_restored", 1, "S")
+			}}
+			r := tickResolver(h.client(), tc.client, sessionS, proc.Ancestor{})
+			r.HeartbeatSource = tc.source
+			proofErr := errors.New("cannot read generation proof")
+			r.Recall = func(client, session string) (int, bool, error) {
+				if client != tc.client || session != "S" {
+					t.Errorf("read unrelated proof for %s/%s", client, session)
+				}
+				return 0, tc.present, proofErr
+			}
+			primary := true
+			var b Bound
+			var err error
+			if tc.client == "codex" {
+				b, primary, err = r.ResolveCall(t.Context(), "", "S", tc.thread)
+			} else {
+				b, err = r.Resolve(t.Context(), "")
+			}
+			if b != (Bound{}) || primary != tc.primary || !errors.Is(err, errMalformedGeneration) {
+				t.Fatalf("unreadable proof allowed a binding: %+v, primary=%v, err=%v", b, primary, err)
+			}
+			if r.bound != (Bound{}) || r.last != (Bound{}) {
+				t.Fatalf("unreadable proof left a cached binding: bound=%+v last=%+v", r.bound, r.last)
+			}
+			h.expect(t, "bind session_id=S")
+		})
+	}
+}
+
+func TestCachedBindingCanReattachAfterATransientProofReadError(t *testing.T) {
+	for _, source := range []string{"shim", "watch"} {
+		t.Run(source, func(t *testing.T) {
+			recovering := false
+			h := &tickHub{reply: func(req *http.Request, _ map[string]any) (int, any) {
+				if req.URL.Path == "/v1/bind" {
+					if recovering {
+						return refused("lost")
+					}
+					return found("ex_live", 3, "S")
+				}
+				recovering = false
+				return leaseGranted()
+			}}
+			r := tickResolver(h.client(), "claude", sessionS, proc.Ancestor{})
+			r.HeartbeatSource = source
+			var readErr error
+			r.Recall = func(string, string) (int, bool, error) { return 3, true, readErr }
+			b, err := r.Resolve(t.Context(), "")
+			if err != nil || b.ExecutionID != "ex_live" || b.Generation != 3 {
+				t.Fatalf("initial binding = %+v, %v", b, err)
+			}
+
+			recovering = true
+			readErr = errors.New("temporary read error")
+			renew := func() error {
+				if source == "watch" {
+					return r.Heartbeat(t.Context(), source)
+				}
+				_, err := r.Resolve(t.Context(), "")
+				return err
+			}
+			if err := renew(); !errors.Is(err, errMalformedGeneration) || !recovering || r.Lost() || r.gone[b.ExecutionID] {
+				t.Fatalf("unverifiable proof renewed or lost the Execution: recovering=%v, lost=%v, gone=%v, err=%v", recovering, r.Lost(), r.gone, err)
+			}
+			readErr = nil
+			if err := renew(); err != nil || recovering || r.bound != b {
+				t.Fatalf("valid proof could not reattach the exact Execution: recovering=%v, bound=%+v, err=%v", recovering, r.bound, err)
+			}
+			if source == "watch" {
+				h.expect(t, "bind session_id=S", "beat ex_live 3 watch")
+			} else {
+				h.expect(t, "bind session_id=S", "bind execution=ex_live", "bind execution=ex_live", "beat ex_live 3 shim", "bind execution=ex_live")
+			}
+		})
+	}
+}
+
 func TestFirstFallbackChecksGenerationProofAfterGrace(t *testing.T) {
 	for _, mode := range []string{"shim", "watch"} {
 		for _, proof := range []string{"absent", "remembered", "malformed"} {
@@ -447,6 +538,34 @@ func TestAYoungerProofStopsPendingHandoverToOldTarget(t *testing.T) {
 		t.Fatalf("handover retained stale destination: %+v", r.bound)
 	}
 	h.expect(t, "bind session_id=S exclude=ex_fallback", "/v1/executions/ex_fallback/end")
+}
+
+func TestPendingHandoverWaitsForReadableProof(t *testing.T) {
+	h := &tickHub{reply: func(req *http.Request, body map[string]any) (int, any) {
+		if body["hand_over"] != "ex_hook" || body["generation"] != float64(1) {
+			t.Errorf("handover lost its original source or destination: %s %+v", req.URL.Path, body)
+		}
+		return leaseGranted()
+	}}
+	r := tickResolver(h.client(), "claude", sessionS, proc.Ancestor{})
+	readErr := errors.New("temporary read error")
+	r.Recall = func(string, string) (int, bool, error) { return 3, true, readErr }
+	r.bound = Bound{ExecutionID: "ex_hook", Generation: 3, Rung: 2, SessionID: "S"}
+	pending := &handover{from: Bound{ExecutionID: "ex_fallback", Generation: 1}, to: r.bound}
+	r.pending = pending
+
+	r.adopt(t.Context())
+	if r.pending != pending || r.bound != pending.to || r.Lost() {
+		t.Fatalf("unreadable proof lost the pending handover: pending=%+v, bound=%+v, lost=%v", r.pending, r.bound, r.Lost())
+	}
+	h.expect(t)
+
+	readErr = nil
+	r.adopt(t.Context())
+	if r.pending != nil || r.bound != pending.to || r.Lost() {
+		t.Fatalf("readable proof did not settle the pending handover: pending=%+v, bound=%+v, lost=%v", r.pending, r.bound, r.Lost())
+	}
+	h.expect(t, "/v1/executions/ex_fallback/end")
 }
 
 func TestLookupOnlyWakeRejectsLowerProcessGeneration(t *testing.T) {

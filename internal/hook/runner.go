@@ -30,7 +30,7 @@ type outsideHub interface {
 // registers nothing, as a hook did outside git before ADR 034.
 var errOlderHub = errors.New("the hub has no route for sessions outside git")
 
-// RestoreFloorRefused is recorded when local proof cannot safely be retried.
+// RestoreFloorRefused is recorded when local proof cannot safely be used or retried.
 const RestoreFloorRefused = "restore_floor_refused"
 
 // RestoreFloorHubTooOld records a refusal whose answer omitted the generation detail.
@@ -395,10 +395,21 @@ func checkRestoreFloor(state *runState, ev Event, m Memory, generation int, err 
 
 func refuseRestoreFloor(state *runState, ev Event, m Memory, generation int, note string) error {
 	state.observe(note)
-	if files, ok := m.(fileMemory); ok {
-		files.refresh(string(ev.Client), ev.SessionID, generation)
+	if files, ok := m.(fileMemory); ok && generation > 0 {
+		files.retainGeneration(string(ev.Client), ev.SessionID, generation)
 	}
 	return errRestoreFloor
+}
+
+func registrationProof(state *runState, ev Event, m Memory, retained int) (int, error) {
+	if m == nil {
+		return retained, nil
+	}
+	generation, err := m.RecallGeneration(string(ev.Client), ev.SessionID)
+	if err != nil {
+		return 0, refuseRestoreFloor(state, ev, m, retained, RestoreFloorRefused)
+	}
+	return max(retained, generation), nil
 }
 
 // register attaches a hook to its Execution. It can retry stale proof once when the hub retains
@@ -407,9 +418,11 @@ func refuseRestoreFloor(state *runState, ev Event, m Memory, generation int, not
 func (r Runner) register(ctx context.Context, state *runState, ev Event, repo gitinfo.Repo) (hubclient.SessionResponse, error) {
 	m := r.memory()
 	req := r.sessionReq(ev, repo)
-	if m != nil {
-		req.Generation = m.Recall(string(ev.Client), ev.SessionID)
+	generation, err := registrationProof(state, ev, m, 0)
+	if err != nil {
+		return hubclient.SessionResponse{}, err
 	}
+	req.Generation = generation
 	send := r.Hub.RegisterSession
 	if repo.Worktree == "" {
 		// A session outside git registers on its own route (ADR 034). A hub without it refuses as
@@ -422,13 +435,19 @@ func (r Runner) register(ctx context.Context, state *runState, ev Event, repo gi
 	}
 	sess, err := send(ctx, req)
 	if req.Generation > 0 && ev.Kind != KindSessionEnd && hubclient.IsCode(err, "lost") {
-		floor := max(req.Generation, m.Recall(string(ev.Client), ev.SessionID))
+		floor, proofErr := registrationProof(state, ev, m, req.Generation)
+		if proofErr != nil {
+			return hubclient.SessionResponse{}, proofErr
+		}
 		err = checkRestoreFloor(state, ev, m, floor, err)
 		if hubclient.IsCode(err, "lost") && ctx.Err() == nil {
 			req.RetryGeneration = floor
 			req.Generation = 0
 			sess, err = send(ctx, req)
-			floor = max(floor, m.Recall(string(ev.Client), ev.SessionID))
+			floor, proofErr = registrationProof(state, ev, m, floor)
+			if proofErr != nil {
+				return hubclient.SessionResponse{}, proofErr
+			}
 			err = checkRestoreFloor(state, ev, m, floor, err)
 			if err == nil && sess.Generation < floor {
 				err = refuseRestoreFloor(state, ev, m, floor, RestoreFloorRefused)

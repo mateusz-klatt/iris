@@ -236,9 +236,8 @@ func (r *Resolver) lookup(ctx context.Context, session, nativeSession string) (B
 		return Bound{}, err
 	}
 	if session == nativeSession {
-		gen, _ := r.recallGeneration(session)
-		if b.Generation < gen {
-			return Bound{}, errGenerationFloor
+		if err := r.checkGeneration(session, b.Generation, 0); err != nil {
+			return Bound{}, err
 		}
 	}
 	return b, nil

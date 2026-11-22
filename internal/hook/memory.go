@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -19,7 +20,8 @@ import (
 // process for every tool call, so without this the first edits of a recovering session had
 // none to give.
 type Memory interface {
-	Recall(client, session string) int
+	// RecallGeneration returns zero with no error only when proof is absent.
+	RecallGeneration(client, session string) (int, error)
 	Remember(client, session string, generation int)
 	Forget(client, session string, generation int)
 }
@@ -52,13 +54,44 @@ func (m fileMemory) read(path string) string {
 	return strings.TrimSpace(first)
 }
 
-func (m fileMemory) Recall(client, session string) int {
-	first := m.read(m.name(client, session))
-	generation, err := strconv.Atoi(first)
-	if err != nil || generation < 0 {
-		return 0
+func readGeneration(path string) (int, error) {
+	raw, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		// A dangling link occupies the generation path even if its target is missing.
+		if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+			return 0, nil
+		}
 	}
-	return generation
+	if err != nil {
+		return 0, ErrInvalidGeneration
+	}
+	generation, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil || generation <= 0 {
+		return 0, ErrInvalidGeneration
+	}
+	return generation, nil
+}
+
+// RecallGeneration keeps known proof fresh before a request can race idle pruning.
+func (m fileMemory) RecallGeneration(client, session string) (int, error) {
+	path := m.name(client, session)
+	generation, readErr := readGeneration(path)
+	if generation == 0 {
+		return 0, readErr
+	}
+	if err := m.underLock(func() {
+		var current int
+		current, readErr = readGeneration(path)
+		// Another hook can write newer proof before we take the lock. A prune can also
+		// win the lock, in which case the proof we already read still belongs in the request.
+		if current >= generation {
+			generation = current
+			m.touchGeneration(path)
+		}
+	}); err != nil {
+		return 0, err
+	}
+	return generation, readErr
 }
 
 // Remember keeps the higher proof when another hook already recorded a newer registration.
@@ -67,8 +100,9 @@ func (m fileMemory) Remember(client, session string, generation int) {
 		return
 	}
 	_ = m.underLock(func() {
-		if generation > 0 && generation >= m.Recall(client, session) {
-			_ = m.replace(m.name(client, session), strconv.Itoa(generation))
+		path := m.name(client, session)
+		if current, err := readGeneration(path); err == nil && generation > 0 && generation >= current {
+			_ = m.replace(path, strconv.Itoa(generation))
 		}
 	})
 }
@@ -76,20 +110,33 @@ func (m fileMemory) Remember(client, session string, generation int) {
 // Forget removes only the proof of the Execution that successfully ended.
 func (m fileMemory) Forget(client, session string, generation int) {
 	_ = m.underLock(func() {
-		if generation > 0 && generation == m.Recall(client, session) {
-			_ = os.Remove(m.name(client, session))
+		path := m.name(client, session)
+		if current, err := readGeneration(path); err == nil && generation > 0 && generation == current {
+			_ = os.Remove(path)
 		}
 	})
 }
 
-// refresh keeps a proof that a running hook still needs past the idle-pruning cutoff.
-func (m fileMemory) refresh(client, session string, generation int) {
+// retainGeneration restores proof that pruning removed after it was read. Only an absent
+// entry may be recreated.
+func (m fileMemory) retainGeneration(client, session string, generation int) {
 	_ = m.underLock(func() {
-		if generation == m.Recall(client, session) {
-			now := m.now()
-			_ = os.Chtimes(m.name(client, session), now, now)
+		path := m.name(client, session)
+		current, err := readGeneration(path)
+		switch {
+		case err != nil:
+			return
+		case current == 0:
+			_ = m.replace(path, strconv.Itoa(generation))
+		case current == generation:
+			m.touchGeneration(path)
 		}
 	})
+}
+
+func (m fileMemory) touchGeneration(path string) {
+	now := m.now()
+	_ = os.Chtimes(path, now, now)
 }
 
 // sessionsLock protects generation changes, every attention and wake file operation, and

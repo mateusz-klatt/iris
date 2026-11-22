@@ -165,17 +165,18 @@ func TestGrokSessionFileIsSkippedUnlessTheSessionJoined(t *testing.T) {
 }
 
 func TestGrokSessionWriteFailureStillStartsTheSession(t *testing.T) {
-	parent := filepath.Join(t.TempDir(), "not-a-directory")
-	if err := os.WriteFile(parent, []byte("x"), 0o600); err != nil {
+	env := grokGetenv(t, nil)
+	// Fail only the PID map write. The generation directory beside it is usable.
+	pidDir := filepath.Join(filepath.Dir(env("IRIS_TOKEN_FILE")), grokPIDDirName)
+	if err := os.WriteFile(pidDir, []byte("x"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	env := grokGetenv(t, map[string]string{"IRIS_TOKEN_FILE": filepath.Join(parent, "hub.token")})
 	out := grokRun(t, env, grokAncestor(7, 8, "GROK.EXE"), "SessionStart", `{"session_id":"`+grokSession+`","cwd":"ROOT","hook_event_name":"SessionStart"}`, scriptHub{})
 	if out.Exit != 0 || !strings.Contains(string(out.Stdout), "systemMessage") {
 		t.Fatalf("%#v", out)
 	}
-	if _, err := os.Stat(filepath.Join(filepath.Dir(env("IRIS_TOKEN_FILE")), grokPIDDirName)); err == nil {
-		t.Fatal("pid directory was created beside a file")
+	if raw, err := os.ReadFile(pidDir); err != nil || string(raw) != "x" {
+		t.Fatalf("failed PID map write replaced file: %q, %v", raw, err)
 	}
 }
 

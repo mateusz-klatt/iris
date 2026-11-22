@@ -138,9 +138,9 @@ func (f *scopeFixture) slowGit(left time.Duration) gitStandIn {
 // plainMemory keeps session proofs only, as a Memory without a scope memory does.
 type plainMemory struct{}
 
-func (plainMemory) Recall(string, string) int    { return 0 }
-func (plainMemory) Remember(string, string, int) {}
-func (plainMemory) Forget(string, string, int)   {}
+func (plainMemory) RecallGeneration(string, string) (int, error) { return 0, nil }
+func (plainMemory) Remember(string, string, int)                 {}
+func (plainMemory) Forget(string, string, int)                   {}
 
 // A trip needs git to be the slow part: a full status that started with at least half the
 // budget left, had not passed the output cap, and was still running when the reconcile's own

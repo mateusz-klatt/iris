@@ -4,7 +4,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"time"
 
@@ -94,16 +93,6 @@ func (s *Sessions) RecallGeneration(client, session string) (int, bool, error) {
 	if client == "" || session == "" {
 		return 0, false, nil
 	}
-	raw, err := os.ReadFile(s.memory.name(client, session))
-	if errors.Is(err, os.ErrNotExist) {
-		return 0, false, nil
-	}
-	if err != nil {
-		return 0, true, ErrInvalidGeneration
-	}
-	gen, err := strconv.Atoi(strings.TrimSpace(string(raw)))
-	if err != nil || gen <= 0 {
-		return 0, true, ErrInvalidGeneration
-	}
-	return gen, true, nil
+	generation, err := readGeneration(s.memory.name(client, session))
+	return generation, generation > 0 || err != nil, err
 }

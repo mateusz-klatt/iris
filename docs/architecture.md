@@ -693,11 +693,15 @@ Changes from the reference schema:
    the resulting binding against G inside registration. The check covers outside-git and
    combined shell registration. If the retry is unsafe, the hook keeps G, records
    `restore_floor_refused` for doctor, and fails open without claiming or reconciling the edit.
-   The proofless-edit denial during recovery still applies. Generation file updates under the
-   bounded session lock keep the highest proof and a successful SessionEnd clears only its own
+   The proofless-edit denial during recovery still applies. An unreadable or malformed
+   generation file also fails open with `restore_floor_refused` before registration. The hook
+   refreshes readable proof under the bounded session lock before sending it. A refusal can
+   restore a missing file from the proof the hook read, without replacing an existing file.
+   Generation writes keep the highest proof and a successful SessionEnd clears only its own
    generation. The shim and plain watch check same-session bindings against retained process
    and disk proof, and check disk proof before first-bind generation-zero fallback. A Codex
-   id-mode sub-agent checks disk proof for its native session during its one lookup. For
+   id-mode sub-agent checks disk proof for its native session during its one lookup. These
+   bindings fail when the session's proof file is unreadable or malformed. For
    deployment order and empty-hub recovery, see the
    [ADR 006 addendum](adr/006-retention-and-restore.md#addendum-of-2026-11-22-the-restore-generation-floor).
 
@@ -710,8 +714,8 @@ Changes from the reference schema:
    before the recovery deadline. `SessionStart` registers;
    prompt registration depends on the client. A shell reconcile can register, but one whose
    budget ends before registration reaches the hub does not; the ADR 018 breaker only changes
-   later hooks' scope. Plain binding lookups do not reattach on their own, and missing, malformed
-   or mismatched generation memory never falls back to a generation-0 registration. After the
+   later hooks' scope. Plain binding lookups do not reattach on their own. A shim reattachment
+   from memory never falls back to a generation-0 registration. After the
    deadline or `SessionEnd`, a registering hook must obtain a new generation. The
    [API recovery guidance](api.md#mcp-tools-answering-lost) lists the events and the binding-mode
    limits.

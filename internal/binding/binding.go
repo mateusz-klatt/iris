@@ -257,23 +257,31 @@ func (r *Resolver) recallGeneration(session string) (int, error) {
 		return 0, nil
 	}
 	gen, present, err := r.Recall(r.Client, session)
+	if err != nil || present && gen <= 0 {
+		return 0, errMalformedGeneration
+	}
 	if !present {
 		return 0, nil
 	}
-	if err != nil || gen <= 0 {
-		return 0, errMalformedGeneration
-	}
 	return gen, nil
+}
+
+func (r *Resolver) checkGeneration(session string, generation, retained int) error {
+	gen, err := r.recallGeneration(session)
+	if err != nil {
+		return err
+	}
+	if generation < max(gen, retained) {
+		return errGenerationFloor
+	}
+	return nil
 }
 
 // checkGenerationHeld applies proof to a process-owned session of the same identity. An
 // explicit handle is checked only if it names the session the process already knows.
 func (r *Resolver) checkGenerationHeld(b Bound) error {
 	if b.SessionID != "" && r.processRungHeld(b) > 0 {
-		gen, _ := r.recallGeneration(b.SessionID)
-		if b.Generation < max(gen, r.processGenerationHeld(b.SessionID)) {
-			return errGenerationFloor
-		}
+		return r.checkGeneration(b.SessionID, b.Generation, r.processGenerationHeld(b.SessionID))
 	}
 	return nil
 }
@@ -292,6 +300,14 @@ func (r *Resolver) markLostHeld(b Bound) {
 	if r.bound.ExecutionID == b.ExecutionID {
 		r.rememberLastHeld(b)
 		r.bound, r.lost, r.own = Bound{}, true, false
+	}
+}
+
+// A floor mismatch proves this binding is stale. A local read error blocks use until the
+// proof becomes readable, so preserve the exact generation for another verification.
+func (r *Resolver) markGenerationLossHeld(b Bound, err error) {
+	if err == errGenerationFloor {
+		r.markLostHeld(b)
 	}
 }
 
@@ -324,7 +340,7 @@ func (r *Resolver) refresh(ctx context.Context) (Bound, error) {
 	b, err := r.bindExecutionHeld(ctx, original)
 	if IsCode(err, "lost") {
 		if err := r.checkGenerationHeld(original); err != nil {
-			r.markLostHeld(original)
+			r.markGenerationLossHeld(original, err)
 			return Bound{}, err
 		}
 		fresh := original
@@ -336,7 +352,7 @@ func (r *Resolver) refresh(ctx context.Context) (Bound, error) {
 			return Bound{}, hbErr
 		}
 		if err := r.checkGenerationHeld(fresh); err != nil {
-			r.markLostHeld(original)
+			r.markGenerationLossHeld(original, err)
 			return Bound{}, err
 		}
 		fresh.HookSeen = fresh.HookSeen || original.HookSeen
@@ -348,7 +364,7 @@ func (r *Resolver) refresh(ctx context.Context) (Bound, error) {
 		return Bound{}, err
 	}
 	if err := r.checkGenerationHeld(b); err != nil {
-		r.markLostHeld(original)
+		r.markGenerationLossHeld(original, err)
 		return Bound{}, err
 	}
 	r.keepHeld(b)
@@ -542,8 +558,10 @@ func (r *Resolver) adopt(ctx context.Context) {
 	// Retry the same idempotent end until its response confirms that the mail moved.
 	p := r.pending
 	if err := r.checkGenerationHeld(p.to); err != nil {
-		r.markLostHeld(p.to)
-		r.pending = nil
+		if err == errGenerationFloor {
+			r.markLostHeld(p.to)
+			r.pending = nil
+		}
 		return
 	}
 	if err := r.Hub.HandOverExecution(ctx, p.from.ExecutionID, p.from.Generation, p.to.ExecutionID); err == nil {
@@ -659,7 +677,7 @@ func (r *Resolver) Heartbeat(ctx context.Context, source string) error {
 func (r *Resolver) beatOne(ctx context.Context, b Bound, source string) error {
 	r.mu.Lock()
 	if err := r.checkGenerationHeld(b); err != nil {
-		r.markLostHeld(b)
+		r.markGenerationLossHeld(b, err)
 		r.mu.Unlock()
 		return err
 	}
@@ -679,7 +697,7 @@ func (r *Resolver) beatOne(ctx context.Context, b Bound, source string) error {
 		// Resolve may have selected another explicit handle during this request.
 		if r.bound.ExecutionID == b.ExecutionID && r.bound.Generation == b.Generation {
 			if err := r.checkGenerationHeld(fresh); err != nil {
-				r.markLostHeld(b)
+				r.markGenerationLossHeld(b, err)
 				return err
 			}
 			// Heartbeat answers carry no hook_seen field, so preserve what bind established.

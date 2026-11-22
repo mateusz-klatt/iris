@@ -192,11 +192,16 @@ A refused retry leaves the session unregistered by that hook. The hook records
 or reconciling the edit. A proofless edit against a recovering Execution is still deliberately
 denied under D9. Concurrent hooks keep the highest generation in the session file, and a
 successful SessionEnd clears that proof only when it matches the generation that ended.
+An unreadable or malformed generation file also produces `restore_floor_refused` and stops
+registration before a request is sent. Only an absent file allows registration without proof.
+The hook refreshes proof under the session lock before sending it. A refusal restores the
+retained proof if the entry disappeared during the request. An existing entry is left in place.
 
 The MCP shim and plain watch use retained process and hook-file proof to reject a lower
-generation when binding the same session. Hook-file proof also blocks either client's first-bind
-generation-zero fallback. Eligible exact-generation heartbeats and shim reattachment still
-work during the 120 s recovery window.
+generation when binding the same session. An unreadable or malformed file also prevents that
+binding, including a Codex sub-agent's lookup of its own session. Hook-file proof blocks
+either client's first-bind generation-zero fallback. Eligible exact-generation heartbeats
+and shim reattachment still work during the 120 s recovery window.
 
 The maximum describes the rows SQLite still holds. Retention can lower it between the original
 conflict and a retry. An equal generation carries no restore provenance, so proof based on
