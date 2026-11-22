@@ -180,6 +180,90 @@ func TestEndMarkerGuardsPrunedProofAndAgesOut(t *testing.T) {
 	}
 }
 
+func TestForgetKeepsProofWhenEndMarkerCannotBeRecorded(t *testing.T) {
+	const (
+		client  = "claude"
+		session = "s"
+	)
+	for _, tc := range []struct {
+		name    string
+		prepare func(t *testing.T, m *fileMemory, marker string)
+		verify  func(t *testing.T, marker string)
+	}{
+		{
+			name: "malformed marker",
+			prepare: func(t *testing.T, _ *fileMemory, marker string) {
+				if err := os.WriteFile(marker, []byte("damaged\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			},
+			verify: func(t *testing.T, marker string) {
+				if raw, err := os.ReadFile(marker); err != nil || string(raw) != "damaged\n" {
+					t.Fatalf("marker was replaced with %q, %v", raw, err)
+				}
+			},
+		},
+		{
+			name: "unreadable marker",
+			prepare: func(t *testing.T, _ *fileMemory, marker string) {
+				if err := os.MkdirAll(filepath.Join(marker, "keep"), 0o700); err != nil {
+					t.Fatal(err)
+				}
+			},
+			verify: func(t *testing.T, marker string) {
+				if info, err := os.Stat(marker); err != nil || !info.IsDir() {
+					t.Fatalf("marker directory was replaced: %v, %v", info, err)
+				}
+			},
+		},
+		{
+			name: "marker write fails when absent",
+			prepare: func(_ *testing.T, m *fileMemory, _ string) {
+				m.restrict = func(string) error { return errors.New("acl") }
+			},
+			verify: func(t *testing.T, marker string) {
+				if _, err := os.Lstat(marker); !errors.Is(err, os.ErrNotExist) {
+					t.Fatalf("unexpected marker after failed write: %v", err)
+				}
+			},
+		},
+		{
+			name: "marker write fails with prior marker",
+			prepare: func(t *testing.T, m *fileMemory, marker string) {
+				if err := os.WriteFile(marker, []byte("2\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				m.restrict = func(string) error { return errors.New("acl") }
+			},
+			verify: func(t *testing.T, marker string) {
+				if raw, err := os.ReadFile(marker); err != nil || string(raw) != "2\n" {
+					t.Fatalf("prior marker was replaced with %q, %v", raw, err)
+				}
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			m := newFileMemory(t)
+			m.Remember(client, session, 3)
+			path := m.name(client, session)
+			marker := path + ".ended"
+			tc.prepare(t, &m, marker)
+
+			m.Forget(client, session, 3)
+
+			if gen, err := readGeneration(path); gen != 3 || err != nil {
+				t.Fatalf("proof after failed Forget = G%d, %v; want G3", gen, err)
+			}
+			tc.verify(t, marker)
+			for _, info := range mustList(t, m.dir) {
+				if strings.HasPrefix(info.Name(), ".tmp-") {
+					t.Fatalf("failed Forget left temporary file %s", info.Name())
+				}
+			}
+		})
+	}
+}
+
 func TestFileMemoryFailsQuietly(t *testing.T) {
 	blocked := t.TempDir()
 	file := filepath.Join(blocked, "file")
