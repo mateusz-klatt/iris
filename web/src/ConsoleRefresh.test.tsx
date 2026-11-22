@@ -584,6 +584,80 @@ describe("console refresh scheduling", () => {
     }
   });
 
+  it("runs one resume when visibility bounces twice during the read and the refresh", async () => {
+    vi.useFakeTimers();
+    const visibility = mockVisibility("visible");
+    const tracker = trackRequests();
+    const readGate = deferred<Response>();
+    const overviewGate = deferred<Response>();
+    let reads = 0;
+    let overviews = 0;
+    try {
+      server.use(
+        http.get("*/v1/ui/overview", () => {
+          overviews++;
+          return overviews === 1 ? HttpResponse.json(sessionOverview) : overviewGate.promise;
+        }),
+        http.post("*/v1/ui/threads/:id/read", () => {
+          reads++;
+          return readGate.promise;
+        }),
+      );
+      render(<App connect={() => () => {}} />);
+      await flushFakeNetwork();
+      expect(overviews).toBe(1);
+      expect(screen.getByRole("heading", { name: "My messages" })).toBeVisible();
+
+      // Open while hidden so the acknowledgement waits for the resume.
+      visibility.set("hidden");
+      fireEvent.click(screen.getByRole("button", { name: /Open thread: Rollout check/ }));
+      await flushFakeNetwork();
+      expect(screen.getByText("All checks passed.")).toBeVisible();
+      expect(reads).toBe(0);
+
+      // Show, hide, and show again before that read settles: still one POST and no refresh yet.
+      tracker.reset();
+      visibility.set("visible");
+      visibility.set("hidden");
+      visibility.set("visible");
+      await flushFakeNetwork();
+      expect(reads).toBe(1);
+      expect(overviews).toBe(1);
+      expect(tracker.snapshot()).toEqual({ overview: 0, doctor: 0, deliveries: 0, threads: 0, thread: 0 });
+
+      await act(async () => {
+        readGate.resolve(HttpResponse.json({ read: 1 }));
+      });
+      await flushFakeNetwork(2);
+      expect(overviews).toBe(2);
+      expect(reads).toBe(1);
+
+      // The resume refresh is still in flight. Another bounce must not start a second round or a second read.
+      visibility.set("hidden");
+      visibility.set("visible");
+      await flushFakeNetwork();
+      expect(overviews).toBe(2);
+      expect(reads).toBe(1);
+
+      await act(async () => {
+        overviewGate.resolve(HttpResponse.json({ ...sessionOverview, human_unread: 0 }));
+      });
+      await flushFakeNetwork();
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(12_000);
+      });
+      await flushFakeNetwork();
+      expect(reads).toBe(1);
+      expect(overviews).toBe(2);
+      expect(tracker.snapshot()).toEqual({ overview: 1, doctor: 1, deliveries: 1, threads: 1, thread: 1 });
+      expect(screen.getByRole("button", { name: /^My messages\s*0$/ })).toBeVisible();
+      expect(screen.getByText("All checks passed.")).toBeVisible();
+    } finally {
+      visibility.restore();
+      tracker.stop();
+    }
+  });
+
   it("drops a post-read follow-up reload if the tab hides before acknowledgement settles", async () => {
     vi.useFakeTimers();
     const visibility = mockVisibility("visible");
@@ -708,7 +782,9 @@ describe("console refresh scheduling", () => {
       await flushFakeNetwork();
 
       // Cross both the 10 s cooldown deadline and the 30 s fallback deadline.
-      FakeSocket.latest?.onopen?.();
+      act(() => {
+        FakeSocket.latest?.onopen?.();
+      });
       act(() => {
         FakeSocket.latest?.onmessage?.({ data: JSON.stringify({ cursor: 1, kind: "changed" }) });
         FakeSocket.latest?.onmessage?.({ data: JSON.stringify({ cursor: 2, kind: "changed" }) });

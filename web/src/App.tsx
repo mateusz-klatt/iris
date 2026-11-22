@@ -597,7 +597,10 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     let closed = false;
     let running = false;
     let pending = false;
-    let visibleEpoch = 0;
+    // A resume owns its read and the refresh that follows it. Another show while
+    // either is in flight must not start a second read or a second refresh.
+    let resuming = false;
+    let resumeRefresh = false;
     let lastScheduledStarted = 0;
     let currentStarted = 0;
     let cooldownTimer: ReturnType<typeof setTimeout> | undefined;
@@ -644,8 +647,13 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       if (bumpThreads) {
         setThreadRevision((value) => value + 1);
       }
+      const ownedResume = resumeRefresh;
       void reload().finally(() => {
         running = false;
+        if (ownedResume) {
+          resumeRefresh = false;
+          resuming = false;
+        }
         if (closed || hidden) {
           return;
         }
@@ -668,41 +676,51 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       runRefresh(false, false);
     };
 
-    const resumeAfterVisibility = (epoch: number) => {
-      if (epoch !== visibleEpoch) {
-        return;
-      }
+    const resumeAfterVisibility = () => {
       pending = false;
       if (running) {
         pending = true;
+        resuming = false;
         return;
       }
+      resumeRefresh = true;
       runRefresh(true, false);
     };
 
     const onVisibilityChange = () => {
       if (document.visibilityState === "hidden") {
         hidden = true;
-        visibleEpoch++;
         clearFallback();
         clearTimeout(cooldownTimer);
         cooldownTimer = undefined;
         return;
       }
-      // Flush any still-pending deferred read synchronously before starting the resume refresh.
-      // When an acknowledgement starts here, defer the single resume refresh until it settles so
-      // resume + read > 0 runs once, and drop the resume if the tab hides again first.
-      const pendingFlush = flushRead(true);
+      // Already visible, so this event is not a resume and must not flush a read.
       if (!hidden) {
         return;
       }
+      // Record the show before the in-flight check. The resume already underway must see
+      // the tab as visible when its read settles, and must not start a second read or refresh.
       hidden = false;
-      const epoch = ++visibleEpoch;
-      if (pendingFlush !== null) {
-        void pendingFlush.finally(() => resumeAfterVisibility(epoch));
+      if (resuming) {
         return;
       }
-      resumeAfterVisibility(epoch);
+      resuming = true;
+      // Flush a deferred read before the one resume refresh. A positive acknowledgement
+      // shares that refresh. If the tab is hidden again when the read settles, skip it.
+      const pendingFlush = flushRead(true);
+      const continueResume = () => {
+        if (closed || hidden) {
+          resuming = false;
+          return;
+        }
+        resumeAfterVisibility();
+      };
+      if (pendingFlush !== null) {
+        void pendingFlush.finally(continueResume);
+        return;
+      }
+      continueResume();
     };
 
     document.addEventListener("visibilitychange", onVisibilityChange);
@@ -736,7 +754,6 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       // A load still in flight lands on a closed view, so it is dropped.
       requests.current++;
       closed = true;
-      visibleEpoch++;
       postReadRefresh.current = null;
       clearFallback();
       clearTimeout(cooldownTimer);
