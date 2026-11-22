@@ -190,12 +190,16 @@ Execution still accepts only exact-generation proof.
 A refused retry leaves the session unregistered by that hook. The hook records
 `restore_floor_refused` for `iris doctor` and returns the client's normal allow without claiming
 or reconciling the edit. A proofless edit against a recovering Execution is still deliberately
-denied under D9. Concurrent hooks keep the highest generation in the session file, and a
-successful SessionEnd clears that proof only when it matches the generation that ended.
-An unreadable or malformed generation file also produces `restore_floor_refused` and stops
-registration before a request is sent. Only an absent file allows registration without proof.
-The hook refreshes proof under the session lock before sending it. A refusal restores the
-retained proof if the entry disappeared during the request. An existing entry is left in place.
+denied under D9. Concurrent hooks keep the highest generation in the session file. A successful
+SessionEnd records the ended generation in a marker under the same lock and clears matching
+proof. The hook refreshes proof under that lock before sending it. A refusal can restore a
+missing file only above the ended generation. Idle pruning removes the marker after 30 days.
+
+An unreadable or malformed generation file stops registration and binding. Only an absent
+file allows a hook to start registration without proof. Local `iris doctor` output reports
+`damaged generation proof at <path>`. Before archiving the named file, verify you are connected
+to the intended hub and check the session's generation history there. Archive the file only
+once you have confirmed the session can safely register without that proof.
 
 The MCP shim and plain watch use retained process and hook-file proof to reject a lower
 generation when binding the same session. An unreadable or malformed file also prevents that
@@ -212,7 +216,7 @@ For an empty replacement hub, the owner verifies the hub is empty and starts a n
 session. If the same native session ID is essential, stop its hook, shim and watch before
 archiving its local generation file, then relaunch the session. Archive only the file
 `<token-dir>/sessions/<hex of the first 16 SHA-256 bytes of client + NUL + session_id>`
-([path calculation](../../internal/hook/memory.go#L40)). Keep other session files and the
+([path calculation](../../internal/hook/memory.go#L42)). Keep other session files and the
 token in place. `iris admin forget` deletes hub records and mail and is unsuitable for this
 local recovery.
 

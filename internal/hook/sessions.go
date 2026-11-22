@@ -24,16 +24,22 @@ var ErrSessionsLocked = failSessionsLock
 // or did not hold a positive integer generation.
 var ErrInvalidGeneration = errors.New("invalid remembered generation")
 
+// DamagedGenerationProof is the fixed kind for observations about unreadable generation files.
+const DamagedGenerationProof = "damaged generation proof"
+
+func damagedGenerationObservation(path string) string { return DamagedGenerationProof + " at " + path }
+
 // Sessions shares the hooks' session paths and lock with a wake runner. Only hooks write told
 // state and consume wakes; a runner may read told state to decide whether a wake is still due.
 type Sessions struct {
-	memory fileMemory
+	memory    fileMemory
+	tokenPath string
 }
 
 // NewSessions locates the session files beside tokenPath without reading the token or creating
 // any files. It uses the same session names as the hooks.
 func NewSessions(tokenPath string) *Sessions {
-	return &Sessions{memory: fileMemory{
+	return &Sessions{tokenPath: tokenPath, memory: fileMemory{
 		dir: filepath.Join(filepath.Dir(tokenPath), "sessions"), now: time.Now, restrict: config.OwnerOnly,
 	}}
 }
@@ -95,4 +101,16 @@ func (s *Sessions) RecallGeneration(client, session string) (int, bool, error) {
 	}
 	generation, err := readGeneration(s.memory.name(client, session))
 	return generation, generation > 0 || err != nil, err
+}
+
+// RecallBindingGeneration is the binding reader. It records a damaged file in the local
+// doctor log even when the client has yet to run a hook.
+func (s *Sessions) RecallBindingGeneration(client, session string) (int, bool, error) {
+	generation, present, err := s.RecallGeneration(client, session)
+	if err != nil {
+		env := map[string]string{"IRIS_TOKEN_FILE": s.tokenPath}
+		recorder := Runner{ClientName: client, EventName: "bind", Getenv: func(key string) string { return env[key] }}
+		recorder.record(stageObserved, damagedGenerationObservation(s.memory.name(client, session)), nil)
+	}
+	return generation, present, err
 }

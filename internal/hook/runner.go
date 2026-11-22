@@ -407,7 +407,11 @@ func registrationProof(state *runState, ev Event, m Memory, retained int) (int, 
 	}
 	generation, err := m.RecallGeneration(string(ev.Client), ev.SessionID)
 	if err != nil {
-		return 0, refuseRestoreFloor(state, ev, m, retained, RestoreFloorRefused)
+		note := RestoreFloorRefused
+		if files, ok := m.(fileMemory); ok && errors.Is(err, ErrInvalidGeneration) {
+			note = damagedGenerationObservation(files.name(string(ev.Client), ev.SessionID))
+		}
+		return 0, refuseRestoreFloor(state, ev, m, retained, note)
 	}
 	return max(retained, generation), nil
 }

@@ -26,8 +26,8 @@ type Memory interface {
 	Forget(client, session string, generation int)
 }
 
-// memoryAge is how long an untouched entry survives. A session that ends normally removes its
-// own; this only clears the entries of sessions that never reached SessionEnd.
+// memoryAge is how long an untouched entry survives, including the marker left when a
+// session ends normally.
 const memoryAge = 30 * 24 * time.Hour
 
 // fileMemory stores one small file per session beside the token, protected as the token is:
@@ -110,15 +110,25 @@ func (m fileMemory) Remember(client, session string, generation int) {
 // Forget removes only the proof of the Execution that successfully ended.
 func (m fileMemory) Forget(client, session string, generation int) {
 	_ = m.underLock(func() {
+		if generation <= 0 {
+			return
+		}
 		path := m.name(client, session)
-		if current, err := readGeneration(path); err == nil && generation > 0 && generation == current {
+		// Record the end first, even if pruning already removed the proof. The same lock
+		// prevents a delayed refusal from treating a cleared file as merely pruned.
+		marker := path + ".ended"
+		ended, err := readGeneration(marker)
+		if err != nil || m.replace(marker, strconv.Itoa(max(ended, generation))) != nil {
+			return
+		}
+		if current, err := readGeneration(path); err == nil && current == generation {
 			_ = os.Remove(path)
 		}
 	})
 }
 
 // retainGeneration restores proof that pruning removed after it was read. Only an absent
-// entry may be recreated.
+// entry may be recreated, and a successful end rules out that generation and earlier ones.
 func (m fileMemory) retainGeneration(client, session string, generation int) {
 	_ = m.underLock(func() {
 		path := m.name(client, session)
@@ -127,7 +137,9 @@ func (m fileMemory) retainGeneration(client, session string, generation int) {
 		case err != nil:
 			return
 		case current == 0:
-			_ = m.replace(path, strconv.Itoa(generation))
+			if ended, err := readGeneration(path + ".ended"); err == nil && generation > ended {
+				_ = m.replace(path, strconv.Itoa(generation))
+			}
 		case current == generation:
 			m.touchGeneration(path)
 		}

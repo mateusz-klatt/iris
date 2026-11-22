@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -25,12 +26,15 @@ func TestDoctorExplainsWhyAHookDidNotRetryRegistration(t *testing.T) {
 	for _, tc := range []struct {
 		name, details string
 		oldHub        bool
+		damaged       bool
 	}{
-		{"old hub", `{}`, true},
-		{"restored hub with lower history", `{"highest_generation":1}`, false},
+		{"old hub", `{}`, true, false},
+		{"restored hub with lower history", `{"highest_generation":1}`, false, false},
+		{"damaged local proof", "", false, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var registrations atomic.Int32
+			uploaded := make(chan string, 1)
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
 				case "/v1/sessions":
@@ -41,8 +45,15 @@ func TestDoctorExplainsWhyAHookDidNotRetryRegistration(t *testing.T) {
 					}
 					w.WriteHeader(http.StatusConflict)
 					_, _ = fmt.Fprintf(w, `{"error":{"code":"lost","details":%s}}`, tc.details)
-				case "/v1/status", "/v1/agents", "/v1/hooks/seen", "/v1/ui/doctor":
+				case "/v1/status", "/v1/agents", "/v1/hooks/seen":
 					_, _ = fmt.Fprint(w, `{}`)
+				case "/v1/ui/doctor":
+					body, err := io.ReadAll(r.Body)
+					if err != nil {
+						t.Errorf("read doctor upload: %v", err)
+					}
+					uploaded <- string(body)
+					w.WriteHeader(http.StatusNoContent)
 				default:
 					t.Errorf("the hook tried to use an Execution via %s", r.URL.Path)
 					http.NotFound(w, r)
@@ -60,7 +71,11 @@ func TestDoctorExplainsWhyAHookDidNotRetryRegistration(t *testing.T) {
 			}
 			sum := sha256.Sum256([]byte("claude\x00restore-test"))
 			proof := filepath.Join(sessions, hex.EncodeToString(sum[:16]))
-			if err := os.WriteFile(proof, []byte("3"), 0o600); err != nil {
+			proofBytes, wantRegistrations := "3", int32(1)
+			if tc.damaged {
+				proofBytes, wantRegistrations = "not a generation", 0
+			}
+			if err := os.WriteFile(proof, []byte(proofBytes), 0o600); err != nil {
 				t.Fatal(err)
 			}
 			getenv := func(key string) string {
@@ -74,10 +89,10 @@ func TestDoctorExplainsWhyAHookDidNotRetryRegistration(t *testing.T) {
 				Hub: &hubclient.Client{Config: hubclient.EnvConfig{Getenv: getenv}, HTTP: srv.Client()},
 			}
 			out := runner.Run()
-			if out.Exit != 0 || !json.Valid(out.Stdout) || strings.Contains(string(out.Stdout), "deny") || registrations.Load() != 1 {
+			if out.Exit != 0 || !json.Valid(out.Stdout) || strings.Contains(string(out.Stdout), "deny") || registrations.Load() != wantRegistrations {
 				t.Fatalf("output = %+v, registrations = %d", out, registrations.Load())
 			}
-			if raw, err := os.ReadFile(proof); err != nil || strings.TrimSpace(string(raw)) != "3" {
+			if raw, err := os.ReadFile(proof); err != nil || strings.TrimSpace(string(raw)) != proofBytes {
 				t.Fatalf("proof = %q, %v", raw, err)
 			}
 			result, err := Run(context.Background(), Options{Layout: layout, HubURL: srv.URL, TokenFile: token, HTTP: srv.Client(), Host: "local", Dir: layout.Home})
@@ -85,14 +100,50 @@ func TestDoctorExplainsWhyAHookDidNotRetryRegistration(t *testing.T) {
 				t.Fatal(err)
 			}
 			report := result.Format()
-			if !strings.Contains(report, "restore_floor_refused") || !strings.Contains(report, "left the session unregistered") || strings.Contains(report, "hub predates restore floor") != tc.oldHub {
+			if !strings.Contains(report, "restore_floor_refused") || strings.Contains(report, "hub predates restore floor") != tc.oldHub {
 				t.Fatalf("doctor report:\n%s", report)
 			}
-			bundle := NewBundle(result, "test", time.Now())
+			if !result.Stored {
+				t.Fatalf("doctor report was not stored: %s", result.StoreError)
+			}
+			body := <-uploaded
 			want := BundleCount{Client: "claude", Stage: "observed", Category: "restore_floor_refused", Count: 1}
+			if tc.damaged {
+				want.Category = "damaged generation proof"
+				if !strings.Contains(report, "damaged generation proof at "+proof) {
+					t.Fatalf("local diagnostic omitted the damaged file:\n%s", report)
+				}
+				if !strings.Contains(body, "damaged generation proof (1)") || strings.Contains(body, filepath.Base(proof)) {
+					t.Fatalf("upload did not count or redact the observation: %s", body)
+				}
+			} else if !strings.Contains(report, "left the session unregistered") {
+				t.Fatalf("doctor omitted the refusal explanation:\n%s", report)
+			}
+			bundle := NewBundle(result, "test", time.Now())
 			if len(bundle.Observations) != 1 || bundle.Observations[0] != want {
 				t.Fatalf("bundle observations = %+v", bundle.Observations)
 			}
 		})
+	}
+}
+
+func TestDamagedProofDiagnosticEscapesControlCharacters(t *testing.T) {
+	now := time.Now()
+	dir := t.TempDir()
+	token := filepath.Join(dir, "hub.token")
+	path := filepath.Join(dir, "sessions", "proof") + "\n\x1b[1A"
+	log, err := json.Marshal(hook.Failure{Time: now, Client: "claude", Stage: "observed", Error: "damaged generation proof at " + path})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "hook-observed.log"), append(log, '\n'), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res := Result{Report: Report{Clients: []ClientReport{{Client: "claude", Status: StatusOK}}}}
+	if err := applyFailures(&res, token, now); err != nil {
+		t.Fatal(err)
+	}
+	if report := res.Format(); strings.Contains(report, path) || !strings.Contains(report, fmt.Sprintf("damaged generation proof at %q", path)) {
+		t.Fatalf("unsafe path diagnostic %q", report)
 	}
 }

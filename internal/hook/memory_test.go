@@ -142,6 +142,44 @@ func TestDamagedProofCannotBeReadOrOverwritten(t *testing.T) {
 	}
 }
 
+func TestEndMarkerGuardsPrunedProofAndAgesOut(t *testing.T) {
+	m := newFileMemory(t)
+	path := m.name("claude", "s")
+	prune := func(path string) {
+		t.Helper()
+		old := m.now().Add(-memoryAge - time.Hour)
+		if err := os.Chtimes(path, old, old); err != nil {
+			t.Fatal(err)
+		}
+		if err := m.prune(); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	m.Remember("claude", "s", 3)
+	prune(path)
+	m.Forget("claude", "s", 3) // The hub accepted the end after local proof was pruned.
+	m.Forget("claude", "s", 2) // A delayed older end must not lower the marker.
+	m.retainGeneration("claude", "s", 3)
+	if gen, err := readGeneration(path); gen != 0 || err != nil {
+		t.Fatalf("the refusal revived ended proof: G%d, %v", gen, err)
+	}
+
+	m.Remember("claude", "s", 4)
+	prune(path)
+	m.retainGeneration("claude", "s", 4)
+	if gen, err := readGeneration(path); gen != 4 || err != nil {
+		t.Fatalf("the refusal lost newer proof: G%d, %v", gen, err)
+	}
+	prune(path + ".ended")
+	if gen, err := readGeneration(path + ".ended"); gen != 0 || err != nil {
+		t.Fatalf("the old end marker survived pruning: G%d, %v", gen, err)
+	}
+	if gen, err := readGeneration(path); gen != 4 || err != nil {
+		t.Fatalf("pruning the marker changed live proof: G%d, %v", gen, err)
+	}
+}
+
 func TestFileMemoryFailsQuietly(t *testing.T) {
 	blocked := t.TempDir()
 	file := filepath.Join(blocked, "file")
@@ -524,7 +562,9 @@ func TestTheRecoveryWindowNeverAllowsAnUnclaimedEdit(t *testing.T) {
 	stop()
 	stop = start()
 	defer func() { stop() }()
-	(fileMemory{dir: filepath.Join(filepath.Dir(token), "sessions")}).Forget("claude", "forgot", 1)
+	if err := os.Remove(sessionsFor(env).name("claude", "forgot")); err != nil {
+		t.Fatal(err)
+	}
 
 	if out := hook("PreToolUse", writePayload(root, "forgot", "new.go")); !strings.Contains(out, "hub restarted") {
 		t.Fatalf("an edit without proof was not refused: %s", out)

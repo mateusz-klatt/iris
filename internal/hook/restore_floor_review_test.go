@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/mateusz-klatt/iris/internal/backup"
@@ -101,12 +102,12 @@ func runReviewHook(h *restoredHook, route string) string {
 	}
 }
 
-func assertReviewRefusal(t *testing.T, h *restoredHook, out string) {
+func assertReviewRefusal(t *testing.T, h *restoredHook, out, observation string) {
 	t.Helper()
 	if out != string(FallbackAllow(ClientClaude).Stdout) {
 		t.Errorf("refused hook output %q", out)
 	}
-	assertReviewObservation(t, h)
+	assertReviewObservation(t, h, observation)
 	db, err := sql.Open("sqlite", h.restoredPath)
 	if err != nil {
 		t.Fatal(err)
@@ -123,11 +124,11 @@ func assertReviewRefusal(t *testing.T, h *restoredHook, out string) {
 	}
 }
 
-func assertReviewObservation(t *testing.T, h *restoredHook) {
+func assertReviewObservation(t *testing.T, h *restoredHook, want string) {
 	t.Helper()
 	notes, err := ReadRecentObservations(h.getenv("IRIS_TOKEN_FILE"), 1)
-	if err != nil || len(notes) != 1 || notes[0].Error != RestoreFloorRefused {
-		t.Errorf("restore refusal observation: %+v, %v", notes, err)
+	if err != nil || len(notes) != 1 || notes[0].Error != want {
+		t.Errorf("restore refusal observation: %+v, %v, want %q", notes, err, want)
 	}
 }
 
@@ -181,7 +182,7 @@ func checkDamagedReviewProof(t *testing.T, route string, terminal, unreadable bo
 	} else if raw, err := os.ReadFile(path); err != nil || string(raw) != "damaged\n" {
 		t.Errorf("the hook replaced malformed proof with %q, %v", raw, err)
 	}
-	assertReviewRefusal(t, h, out)
+	assertReviewRefusal(t, h, out, "damaged generation proof at "+path)
 }
 
 func TestPruneDuringARefusedRegistrationKeepsItsGenerationProof(t *testing.T) {
@@ -236,9 +237,108 @@ func TestPruneDuringARefusedRegistrationKeepsItsGenerationProof(t *testing.T) {
 			if want := []floorRequest{{route: route, generation: 3}, {route: route, generation: 3}}; !slices.Equal(seen, want) {
 				t.Errorf("requests across both hooks = %+v, want %+v", seen, want)
 			}
-			assertReviewRefusal(t, h, out)
+			assertReviewRefusal(t, h, out, RestoreFloorRefused)
 		})
 	}
+}
+
+func TestRefusalKeepsSessionEndProofCleared(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		generation int
+	}{
+		{"ended generation stays cleared", 0},
+		{"newer proof survives", 2},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _ := newRestoredHook(t, &hookClock{wall: time.Unix(1800000000, 0)})
+			client := &hubclient.Client{Config: hubclient.EnvConfig{Getenv: h.getenv}}
+			h.prompt()
+			if h.registered.Generation != 1 {
+				t.Fatalf("initial binding = %+v", h.registered)
+			}
+			m := NewSessions(h.getenv("IRIS_TOKEN_FILE"))
+			wrapped := interceptedRegistration{Client: client, register: func(_ context.Context, req hubclient.SessionRequest) (hubclient.SessionResponse, error) {
+				if req.Generation != 1 || req.RetryGeneration != 0 {
+					t.Errorf("in-flight edit sent G%d with floor G%d", req.Generation, req.RetryGeneration)
+				}
+				// The edit already holds G1 while another hook ends that Execution.
+				payload := `{"session_id":"s1","cwd":` + quote(h.root) + `}`
+				assertAllow(t, ClientClaude, h.runner("SessionEnd", payload, client).Run())
+				if got, present, err := m.RecallGeneration("claude", "s1"); got != 0 || present || err != nil {
+					t.Errorf("SessionEnd left proof = G%d, present %t, %v", got, present, err)
+				}
+				if tc.generation > 0 {
+					h.prompt()
+					if h.registered.Generation != tc.generation {
+						t.Errorf("replacement binding = %+v, want G%d", h.registered, tc.generation)
+					}
+				}
+				return hubclient.SessionResponse{}, &hubclient.Error{Code: "lost"}
+			}}
+			out := h.runner("PreToolUse", writePayload(h.root, "s1", "review.go"), wrapped).Run()
+			assertAllow(t, ClientClaude, out)
+			if got, present, err := m.RecallGeneration("claude", "s1"); got != tc.generation || present != (tc.generation > 0) || err != nil {
+				t.Errorf("refused edit left proof = G%d, present %t, %v, want G%d", got, present, err, tc.generation)
+			}
+			notes, err := ReadRecentObservations(h.getenv("IRIS_TOKEN_FILE"), 1)
+			if err != nil || len(notes) != 1 || notes[0].Error != RestoreFloorHubTooOld {
+				t.Errorf("legacy refusal observation = %+v, %v", notes, err)
+			}
+		})
+	}
+}
+
+func TestFloorRetryBeyondDeadlineFailsOpen(t *testing.T) {
+	const client = ClientAntigravity
+	r := editRunner(t, client, "")
+	sessionsFor(r.Getenv).Remember(string(client), "s1", 3)
+	synctest.Test(t, func(t *testing.T) {
+		type retry struct {
+			request hubclient.SessionRequest
+			ctx     context.Context
+		}
+		entered := make(chan retry, 1)
+		release := make(chan struct{})
+		defer close(release)
+		r.Hub = interceptedRegistration{Client: r.Hub.(*hubclient.Client), register: func(ctx context.Context, req hubclient.SessionRequest) (hubclient.SessionResponse, error) {
+			if req.Generation == 3 && req.RetryGeneration == 0 {
+				return hubclient.SessionResponse{}, lostWithHighest(3)
+			}
+			entered <- retry{req, ctx}
+			// Simulate a transport that stays blocked even after the hook cancels it.
+			<-release
+			return hubclient.SessionResponse{}, ctx.Err()
+		}}
+		deadline := make(chan time.Time)
+		r.after = func(time.Duration) <-chan time.Time { return deadline }
+		done := make(chan Output, 1)
+		go func() { done <- r.Run() }()
+		var pending retry
+		select {
+		case pending = <-entered:
+		case out := <-done:
+			t.Fatalf("hook returned before retrying: %+v", out)
+		case <-time.After(5 * time.Second):
+			t.Fatal("hook did not enter its retry")
+		}
+		if pending.request.Generation != 0 || pending.request.RetryGeneration != 3 {
+			t.Fatalf("retry = %+v, want G0 with floor G3", pending.request)
+		}
+		close(deadline)
+		select {
+		case out := <-done:
+			assertAllow(t, client, out)
+		case <-time.After(5 * time.Second):
+			t.Fatal("blocked retry kept the hook from answering at its deadline")
+		}
+		if pending.ctx.Err() != context.Canceled {
+			t.Errorf("retry context after deadline = %v", pending.ctx.Err())
+		}
+		if f := waitForFailure(t, r.Getenv("IRIS_TOKEN_FILE")); f.Stage != "session" || f.Error != "hook deadline exceeded" {
+			t.Errorf("deadline failure = %+v", f)
+		}
+	})
 }
 
 func TestGenerationProofDamagedDuringRegistrationPreventsAuthority(t *testing.T) {
@@ -259,8 +359,13 @@ func TestGenerationProofDamagedDuringRegistrationPreventsAuthority(t *testing.T)
 			proof := sessionsFor(h.getenv).name("claude", "s1")
 			const corrupt = "damaged during registration\n"
 			var seen []floorRequest
+			var touches int
 			observeReviewRequests(h, func(req floorRequest) error {
-				seen = append(seen, req)
+				if strings.HasPrefix(req.route, "/v1/claims/touch") {
+					touches++
+				} else {
+					seen = append(seen, req)
+				}
 				return nil
 			})
 			client.HTTP = h.http
@@ -285,10 +390,22 @@ func TestGenerationProofDamagedDuringRegistrationPreventsAuthority(t *testing.T)
 			if !slices.Equal(seen, want) {
 				t.Errorf("requests = %+v, want %+v", seen, want)
 			}
+			if touches != 0 {
+				t.Errorf("damaged proof led to %d touches, want zero", touches)
+			}
+			db, err := sql.Open("sqlite", h.livePath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = db.Close() }()
+			var claims int
+			if err := db.QueryRow(`SELECT COUNT(*) FROM Claim`).Scan(&claims); err != nil || claims != 0 {
+				t.Errorf("Claim rows after proof damage = %d, %v, want zero", claims, err)
+			}
 			if raw, err := os.ReadFile(proof); err != nil || string(raw) != corrupt {
 				t.Errorf("proof after refusal = %q, %v", raw, err)
 			}
-			assertReviewObservation(t, h)
+			assertReviewObservation(t, h, "damaged generation proof at "+proof)
 		})
 	}
 }
