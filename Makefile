@@ -70,7 +70,7 @@ cov-check:
 # through `go run`, so nothing needs installing and go.mod does not change. Dependabot
 # does not see these pins; bump them here.
 GOLANGCI_LINT_VERSION ?= v2.15.0
-GOVULNCHECK_VERSION ?= v1.9.0
+GOVULNCHECK_VERSION ?= v1.10.0
 GITLEAKS_VERSION ?= v8.30.1
 
 check-all: lint vuln secrets pins
