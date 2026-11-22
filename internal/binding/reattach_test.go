@@ -444,6 +444,60 @@ func TestUnboundMCPReattachesFromHookMemoryAndRefusesBadProof(t *testing.T) {
 	})
 }
 
+func TestRung2MemoryReattachUsesSessionIdentity(t *testing.T) {
+	ctx := context.Background()
+	for _, tc := range []struct {
+		name                      string
+		clientPID, clientPIDStart int64
+	}{
+		{name: "recorded process differs from nearest ancestor", clientPID: 5000, clientPIDStart: 12345},
+		{name: "recorded process is absent and pid is zero"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newRestartableBindingHub(t)
+			registered, err := h.store.Call(ctx, "sessions", store.Request{
+				Client: "claude", Host: "host", SessionID: "rung-2-session", Cwd: "/repo", Worktree: "/repo",
+				ClientPID: tc.clientPID, ClientPIDStartMS: tc.clientPIDStart, Source: "hook",
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			h.restart()
+
+			nearest := proc.Ancestor{PID: 6000, StartMS: 67890}
+			r := &Resolver{
+				Hub:    &hubclient.Client{Config: config{h.srv.URL}},
+				Client: "claude", Host: "host", CWD: "/repo",
+				Getenv: func(key string) string {
+					if key == "CLAUDE_CODE_SESSION_ID" {
+						return "rung-2-session"
+					}
+					return ""
+				},
+				Ancestor: func() (proc.Ancestor, error) { return nearest, nil },
+				Recall: func(client, session string) (int, bool, error) {
+					if client == "claude" && session == "rung-2-session" {
+						return 1, true, nil
+					}
+					return 0, false, nil
+				},
+			}
+			b, err := r.Resolve(ctx, "")
+			if err != nil || b.ExecutionID != registered["execution_id"] || b.Generation != 1 || b.SessionID != "rung-2-session" || b.Rung != 2 || r.Lost() {
+				t.Fatalf("Rung-2 reattach did not use session identity: bound=%+v err=%v lost=%v", b, err, r.Lost())
+			}
+			reqs := h.sessions()
+			if len(reqs) != 1 || reqs[0].Source != "shim" || reqs[0].Generation != 1 || reqs[0].SessionID != "rung-2-session" || reqs[0].ClientPID != 0 || reqs[0].ClientPIDStartMS != 0 {
+				t.Fatalf("expected one session-only shim reattach, got %+v", reqs)
+			}
+			status, err := h.store.Call(ctx, "status", store.Request{})
+			if err != nil || status["counts"].(map[string]int)["Execution"] != 1 {
+				t.Fatalf("Rung-2 reattach registered an extra Execution: status=%+v err=%v", status, err)
+			}
+		})
+	}
+}
+
 func TestPermanentLatchRemovedAndEndedStaysTerminal(t *testing.T) {
 	ctx := context.Background()
 
