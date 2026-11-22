@@ -748,11 +748,20 @@ queries remain scoped by current grants in the store transaction.
 ```json
 {"repositories":[{"id":"rp_...","name":"iris","aliases":["..."],"kind":"repository"}],
  "agents":[{"id":"ag_...","name":"...","client":"claude","host":"...","repository_id":"rp_...",
-            "worktree":"...","branch":"main","state":"active","last_seen":"...","unread":0}],
+            "worktree":"...","branch":"main","state":"active","last_seen":"...","hook_seen":"...","watch_seen":"...","unread":0}],
  "claims":[{"fence":1,"repository_id":"rp_...","path":"...","kind":"exact","holder":"...",
             "origin":"auto","expires_at":"..."}],
  "human_unread":0}
 ```
+
+Each agent's `last_seen`, `hook_seen` and `watch_seen` come from its latest Execution on the hub
+(`null` when never observed). The console's Fleet → Agents table shows these per-session liveness
+timestamps under **Session activity**, separately from **Host doctor**, which shows the host's
+last `iris doctor` row for `(host, client)` with its `checked_at` timestamp, >24 h staleness
+fading, detail tooltip, and a distinct label when `status` is `silent` only because a hook failed
+open in the last 24 h. Host doctor findings (including `needs_human` or 24 h fail-open warnings)
+describe the host's last doctor run, never the live state of an individual running session or
+print-mode delegate.
 
 `GET /v1/ui/deliveries?repository_id=...` lists at most 200 of the human's own messages whose
 delivery is in trouble, newest first. The cap counts messages after recipient filtering, not

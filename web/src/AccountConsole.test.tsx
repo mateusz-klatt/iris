@@ -135,7 +135,8 @@ describe("named console", () => {
     expect(screen.getByText("docs/api.md")).toBeVisible();
     expect(screen.queryByRole("button", { name: "Revoke" })).toBeNull();
     await user.click(within(screen.getByRole("navigation")).getByRole("button", { name: /Fleet/ }));
-    expect(screen.queryByRole("columnheader", { name: "Client health" })).toBeNull();
+    expect(screen.getByRole("columnheader", { name: "Session activity" })).toBeVisible();
+    expect(screen.queryByRole("columnheader", { name: "Host doctor" })).toBeNull();
     expect(forbidden).not.toHaveBeenCalled();
   });
 

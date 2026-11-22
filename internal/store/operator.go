@@ -200,7 +200,7 @@ func (t *transaction) operator(op string, r Request) (map[string]any, error) {
 // the caller appends the repository scope. Unread mail is counted once for every recipient:
 // counted per agent, it read the whole Delivery table once for each one, which with 14,000
 // deliveries and 226 agents took 0.9 s of every overview.
-const overviewAgentsSQL = `SELECT a.id,a.name,a.client,a.host,a.repository_id,a.worktree,COALESCE(e.branch,''),COALESCE(e.state,'offline'),COALESCE(e.last_seen_ms,0),COALESCE(u.n,0) FROM Agent a LEFT JOIN Execution e ON e.id=(SELECT id FROM Execution WHERE agent_id=a.id ORDER BY rowid DESC LIMIT 1) LEFT JOIN (SELECT d.recipient_agent_id agent_id,COUNT(*) n FROM Delivery d WHERE d.id NOT IN (SELECT delivery_id FROM Ack) GROUP BY d.recipient_agent_id) u ON u.agent_id=a.id WHERE a.client<>'human' AND `
+const overviewAgentsSQL = `SELECT a.id,a.name,a.client,a.host,a.repository_id,a.worktree,COALESCE(e.branch,''),COALESCE(e.state,'offline'),COALESCE(e.last_seen_ms,0),COALESCE(e.hook_seen_ms,0),COALESCE(e.watch_seen_ms,0),COALESCE(u.n,0) FROM Agent a LEFT JOIN Execution e ON e.id=(SELECT id FROM Execution WHERE agent_id=a.id ORDER BY rowid DESC LIMIT 1) LEFT JOIN (SELECT d.recipient_agent_id agent_id,COUNT(*) n FROM Delivery d WHERE d.id NOT IN (SELECT delivery_id FROM Ack) GROUP BY d.recipient_agent_id) u ON u.agent_id=a.id WHERE a.client<>'human' AND `
 
 func (t *transaction) overview() (map[string]any, error) {
 	repos := []map[string]any{}
@@ -280,10 +280,23 @@ func (t *transaction) overview() (map[string]any, error) {
 	}
 	for rows.Next() {
 		var id, name, client, host, repo, worktree, branch, state string
-		var seen int64
+		var seen, hookSeen, watchSeen int64
 		var unread int
-		rows.Scan(&id, &name, &client, &host, &repo, &worktree, &branch, &state, &seen, &unread)
-		agents = append(agents, map[string]any{"id": id, "name": name, "client": client, "host": host, "repository_id": repo, "worktree": worktree, "branch": branch, "state": state, "last_seen": timestamp(sql.NullInt64{Int64: seen, Valid: seen > 0}), "unread": unread})
+		rows.Scan(&id, &name, &client, &host, &repo, &worktree, &branch, &state, &seen, &hookSeen, &watchSeen, &unread)
+		agents = append(agents, map[string]any{
+			"id":            id,
+			"name":          name,
+			"client":        client,
+			"host":          host,
+			"repository_id": repo,
+			"worktree":      worktree,
+			"branch":        branch,
+			"state":         state,
+			"last_seen":     timestamp(sql.NullInt64{Int64: seen, Valid: seen > 0}),
+			"hook_seen":     timestamp(sql.NullInt64{Int64: hookSeen, Valid: hookSeen > 0}),
+			"watch_seen":    timestamp(sql.NullInt64{Int64: watchSeen, Valid: watchSeen > 0}),
+			"unread":        unread,
+		})
 	}
 	err = rows.Err()
 	_ = rows.Close()

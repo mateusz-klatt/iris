@@ -175,6 +175,15 @@ function statusKey(status: DoctorStatus): `operator.${"statusOk" | "statusNotCon
   }
 }
 
+// doctorStatusKey separates a recent fail-open warning from a genuinely silent client so an
+// active host with a past 24 h timeout does not read as "no response" (docs/api.md).
+function doctorStatusKey(client: DoctorClient): ReturnType<typeof statusKey> | "operator.statusHookFailedOpen" {
+  if (client.status === "silent" && client.detail?.startsWith("hook failed open")) {
+    return "operator.statusHookFailedOpen";
+  }
+  return statusKey(client.status);
+}
+
 function recipientsOf(value: string): string[] {
   return value
     .split(",")
@@ -186,19 +195,66 @@ function humanKey(): string {
   return `human:${crypto.randomUUID()}`;
 }
 
-// healthOf is what the session's own host last reported for its client (ADR 007): the evidence
-// for this session, not for another machine's installation of the same client.
-function healthOf(doctor: DoctorReports | null, agent: Agent): DoctorClient | undefined {
-  return doctor?.hosts.find((report) => report.host === agent.host)?.clients.find((client) => client.client === agent.client);
+// hostDoctorOf is what the session's own host last reported for its client (ADR 007), together
+// with the report's checked_at timestamp so the fleet table can show age and staleness rather
+// than presenting a host doctor snapshot as current session liveness.
+function hostDoctorOf(doctor: DoctorReports | null, agent: Agent): { report: DoctorReport; client: DoctorClient } | undefined {
+  const report = doctor?.hosts.find((item) => item.host === agent.host);
+  const client = report?.clients.find((item) => item.client === agent.client);
+  return report !== undefined && client !== undefined ? { report, client } : undefined;
 }
 
 // staleAfter is how old a report may be before it says little about the client now (ADR 007).
 const staleAfter = 24 * 60 * 60 * 1000;
 
+function isReportStale(report: DoctorReport): boolean {
+  // An age that cannot be read is no fresher than an old one.
+  return report.checked_at === null || !(Date.now() - Date.parse(report.checked_at) <= staleAfter);
+}
+
+function SessionActivity({ agent }: { agent: Agent }) {
+  const { t } = useTranslation();
+  const parts: string[] = [];
+  if (agent.last_seen) {
+    parts.push(t("operator.seenAt", { date: formatWhen(agent.last_seen) }));
+  }
+  if (agent.hook_seen) {
+    parts.push(t("operator.hookSeenAt", { date: formatWhen(agent.hook_seen) }));
+  }
+  if (agent.watch_seen) {
+    parts.push(t("operator.watchSeenAt", { date: formatWhen(agent.watch_seen) }));
+  }
+  if (parts.length === 0) {
+    return <>{t("operator.noActivity")}</>;
+  }
+  return <>{parts.join(" · ")}</>;
+}
+
+function HostDoctorCell({ entry }: { entry: { report: DoctorReport; client: DoctorClient } | undefined }) {
+  const { t } = useTranslation();
+  if (entry === undefined) {
+    return <td data-health="none">{t("operator.noHostReport")}</td>;
+  }
+  const { report, client } = entry;
+  const stale = isReportStale(report);
+  const checked = report.checked_at ? formatWhen(report.checked_at) : "";
+  return (
+    <td
+      className="host-doctor-cell"
+      data-health={client.status}
+      data-stale={stale ? "yes" : "no"}
+      title={client.detail || undefined}
+    >
+      <span>{t(doctorStatusKey(client))}</span>
+      {checked ? <small>{t("operator.checkedAt", { date: checked })}</small> : null}
+      {stale ? <small className="stale-note">{t("operator.doctorStaleShort")}</small> : null}
+    </td>
+  );
+}
+
 function HostReport({ report }: { report: DoctorReport }) {
   const { t } = useTranslation();
-  // An age that cannot be read is no fresher than an old one.
-  const stale = report.checked_at === null || !(Date.now() - Date.parse(report.checked_at) <= staleAfter);
+  const stale = isReportStale(report);
   return (
     <section className="host-report" data-host={report.host} data-stale={stale ? "yes" : "no"} aria-label={report.host}>
       <h2>{report.host === "unknown" ? t("operator.doctorUnknownHost") : report.host}</h2>
@@ -214,7 +270,7 @@ function HostReport({ report }: { report: DoctorReport }) {
                   {t("operator.version")}: {client.version ? client.version : t("operator.none")}
                 </small>
               </div>
-              <span className="status">{t(statusKey(client.status))}</span>
+              <span className="status">{t(doctorStatusKey(client))}</span>
               <p>
                 {client.status === "silent" || client.status === "slow" ? <span>{t("operator.cause")}: </span> : null}
                 {client.detail}
@@ -964,12 +1020,13 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
                         <th scope="col">{t("operator.agent")}</th>
                         <th scope="col">{t("operator.detail")}</th>
                         <th scope="col">{t("operator.repository")}</th>
-                        {!member ? <th scope="col">{t("operator.clientHealth")}</th> : null}
+                        <th scope="col">{t("operator.sessionActivity")}</th>
+                        {!member ? <th scope="col">{t("operator.hostDoctor")}</th> : null}
                       </tr>
                     </thead>
                     <tbody>
                       {visibleAgents.map((item: Agent) => {
-                        const health = healthOf(doctor, item);
+                        const hostDoctor = hostDoctorOf(doctor, item);
                         return (
                           <tr key={item.id}>
                             <th scope="row">{item.name}</th>
@@ -977,7 +1034,8 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
                               {item.host} · {item.client} · {item.state}<br />{item.branch}
                             </td>
                             <td>{repositoryName(overview, item.repository_id, t)}</td>
-                            {!member ? <td data-health={health?.status ?? "none"}>{health === undefined ? t("operator.noHostReport") : t(statusKey(health.status))}</td> : null}
+                            <td><SessionActivity agent={item} /></td>
+                            {!member ? <HostDoctorCell entry={hostDoctor} /> : null}
                           </tr>
                         );
                       })}

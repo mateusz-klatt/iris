@@ -42,3 +42,20 @@ this host" when there is none.
   route takes and returns host, and doctor sends it.
 - The console groups by host and shows each report's age.
 - A machine that stops running doctor fades to grey instead of looking healthy forever.
+
+## Amendment of 2026-11-22: separate session liveness from host doctor in Fleet → Agents
+
+Decision 5 showed the host's `iris doctor` status beside each session under "Client health" without
+showing the report's age or the Execution's own liveness. On a host where a transient hook timeout
+in the last 24 h graded a client `silent` ("No response" in translations) or a host-level drift
+graded `kimi` `needs_human`, live sessions and running Kimi print-mode delegates appeared broken
+even while actively sending mail and firing hooks.
+
+Fleet → Agents now separates the two signals:
+- **Session activity** displays per-Execution telemetry from `GET /v1/ui/overview` (`last_seen`,
+  `hook_seen`, `watch_seen`), so live sessions and delegates show their actual hub-observed
+  activity.
+- **Host doctor** (operators only) labels the doctor column for what it is, displays `checked_at`,
+  dims and marks reports older than 24 h (or without `checked_at`) as stale, exposes the doctor
+  `detail` on hover, and labels `silent` rows whose detail begins with `hook failed open` as a
+  24 h fail-open warning rather than "Silent".
