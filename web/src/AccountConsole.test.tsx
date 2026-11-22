@@ -212,7 +212,7 @@ describe("named console", () => {
     let refresh: (frame: WatchFrame) => void = () => {};
     const connect = (frame: (frame: WatchFrame) => void) => { refresh = frame; return () => {}; };
     const user = userEvent.setup();
-    render(<App connect={connect} />);
+    render(<App refreshGap={0} connect={connect} />);
     await screen.findByRole("heading", { name: "Messages" });
     await user.selectOptions(screen.getByRole("combobox", { name: "Repository" }), "rp_iris");
     await user.click(await screen.findByRole("button", { name: /Open thread: Rollout check/ }));

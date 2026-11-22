@@ -287,10 +287,17 @@ function HostReport({ report }: { report: DoctorReport }) {
 }
 
 // The shortest time between the starts of two refreshes that watch frames cause. A frame that
-// finds no refresh running starts one at once; frames during one ask for a single more, which
-// starts when it ends and this long after it began. A hub whose cursor moved twice a second
-// otherwise had the console refetch without end, aborting the slowest reads every time.
-const frameRefreshGap = 2000;
+// finds no refresh running and an elapsed gap starts one at once; frames during a run or
+// inside the gap coalesce into a single follow-up when the window ends.
+// 10 s coalesces frames arriving every few seconds in an active fleet (such as claim touches
+// and expiries every ~4-5 s) to at most one full reload per 10 s while keeping an operator's
+// view reasonably fresh; explicit actions (send, read, revoke, retry) reload immediately.
+const frameRefreshGap = 10_000;
+
+// Bounded fallback interval when no watch frames arrive on a visible tab.
+// 30 s matches watchUi's maximum reconnect backoff (lastWatchDelay) and bounds staleness
+// across quiet hubs or stalled sockets without multiplying idle traffic across shared tabs.
+const fallbackRefreshInterval = 30_000;
 
 export function App({ connect = watchUi, refreshGap = frameRefreshGap }: { connect?: typeof watchUi; refreshGap?: number } = {}) {
   const { t } = useTranslation();
@@ -368,6 +375,8 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const lastThreadButton = useRef<HTMLButtonElement | null>(null);
   const sessions = useMemo(() => overview?.agents ?? [], [overview]);
   const replyAgents = member ? sessions : noAgents;
+  const replyAgentsRef = useRef(replyAgents);
+  replyAgentsRef.current = replyAgents;
   const waiting = phase === "ready" && sessions.length === 0;
   const activeView = view ?? "messages";
   const participant = mailScope === "mine" && !member ? "human" : agent;
@@ -494,51 +503,113 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       .catch(() => undefined);
   }, [reload]);
 
-  useEffect(() => {
-    document.addEventListener("visibilitychange", flushRead);
-    return () => {
-      document.removeEventListener("visibilitychange", flushRead);
-      cancelThreadRead();
-    };
-  }, [cancelThreadRead, flushRead]);
+  useEffect(() => () => cancelThreadRead(), [cancelThreadRead]);
 
   // revision changes only to retry after an error, which reconnects too.
   useEffect(() => {
     const requests = overviewRequest;
     let closed = false;
     let running = false;
-    let again = false;
-    let started = 0;
-    let timer: ReturnType<typeof setTimeout> | undefined;
+    let pending = false;
+    let lastFrameStarted = 0;
+    let currentStarted = 0;
+    let cooldownTimer: ReturnType<typeof setTimeout> | undefined;
+    let fallbackTimer: ReturnType<typeof setTimeout> | undefined;
+    let hidden = document.visibilityState === "hidden";
+
+    const clearFallback = () => {
+      clearTimeout(fallbackTimer);
+      fallbackTimer = undefined;
+    };
+
+    const scheduleFallback = () => {
+      clearFallback();
+      fallbackTimer = setTimeout(() => {
+        fallbackTimer = undefined;
+        runRefresh(true, false);
+      }, fallbackRefreshInterval);
+    };
+
+    const scheduleCooldown = () => {
+      if (cooldownTimer !== undefined) {
+        return;
+      }
+      const base = lastFrameStarted !== 0 ? lastFrameStarted : currentStarted;
+      cooldownTimer = setTimeout(() => {
+        cooldownTimer = undefined;
+        pending = false;
+        runRefresh(true, true);
+      }, Math.max(0, base + refreshGap - Date.now()));
+    };
+
     // One refresh at a time. The first load is one too, so a frame during it waits for it.
-    const refresh = (frame: boolean) => {
+    const runRefresh = (bumpThreads: boolean, fromFrame: boolean) => {
+      clearFallback();
+      clearTimeout(cooldownTimer);
+      cooldownTimer = undefined;
       running = true;
-      started = Date.now();
-      if (frame) {
+      currentStarted = Date.now();
+      if (fromFrame) {
+        lastFrameStarted = currentStarted;
+      }
+      if (bumpThreads) {
         setThreadRevision((value) => value + 1);
       }
       void reload().finally(() => {
         running = false;
-        if (closed || !again) {
+        if (closed || hidden) {
           return;
         }
-        again = false;
-        timer = setTimeout(() => {
-          timer = undefined;
-          refresh(true);
-        }, Math.max(0, started + refreshGap - Date.now()));
+        if (pending) {
+          scheduleCooldown();
+          return;
+        }
+        scheduleFallback();
       });
     };
-    refresh(false);
-    const stop = connect((frame: WatchFrame) => {
-      if (frame.kind.length === 0 || timer !== undefined) {
+
+    const onVisibilityChange = () => {
+      if (document.visibilityState === "hidden") {
+        hidden = true;
+        clearFallback();
+        clearTimeout(cooldownTimer);
+        cooldownTimer = undefined;
         return;
       }
+      // Flush any still-pending deferred read synchronously before starting the resume refresh.
+      // At this point the reader is visibly mounted and shown for an explicit open; if an
+      // earlier in-flight or explicit reload() failed while hidden, or a later reload fails,
+      // cancelThreadRead() has cleared any deferred read so nothing is sent from the error screen.
+      flushRead();
+      if (!hidden) {
+        return;
+      }
+      hidden = false;
+      pending = false;
       if (running) {
-        again = true;
+        pending = true;
         return;
       }
-      refresh(true);
+      runRefresh(true, false);
+    };
+
+    document.addEventListener("visibilitychange", onVisibilityChange);
+    runRefresh(false, false);
+    const stop = connect((frame: WatchFrame) => {
+      if (frame.kind.length === 0) {
+        return;
+      }
+      if (hidden || running) {
+        pending = true;
+        return;
+      }
+      const elapsed = lastFrameStarted === 0 ? refreshGap : Date.now() - lastFrameStarted;
+      if (cooldownTimer !== undefined || elapsed < refreshGap) {
+        pending = true;
+        scheduleCooldown();
+        return;
+      }
+      runRefresh(true, true);
     }, (status) => {
       // A refused session ends the watch; the operator is shown how to sign in again.
       if (status === "unauthorized") {
@@ -551,10 +622,12 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       // A load still in flight lands on a closed view, so it is dropped.
       requests.current++;
       closed = true;
-      clearTimeout(timer);
+      clearFallback();
+      clearTimeout(cooldownTimer);
+      document.removeEventListener("visibilitychange", onVisibilityChange);
       stop();
     };
-  }, [connect, reload, refreshGap, revision, onUnauthorized, session]);
+  }, [connect, flushRead, reload, refreshGap, revision, onUnauthorized, session]);
 
   useEffect(() => {
     if (phase !== "ready") {
@@ -632,7 +705,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
         // even when the operator left this conversation and has now returned to it.
         const suggestion = replyDraft(detail.messages);
         const fresh = suggestion !== null && member ? { ...suggestion, to: recipientsOf(suggestion.to).map((name) => {
-          const matches = replyAgents.filter((agent) => agent.name === name);
+          const matches = replyAgentsRef.current.filter((agent) => agent.name === name);
           return matches.length === 1 ? matches[0]!.id : name;
         }).join(", ") } : suggestion;
         if (fresh !== null) {
@@ -650,7 +723,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       ignore = true;
       releaseReadAuthorization();
     };
-  }, [activeView, phase, repositoryId, openedThread, threadRevision, member, replyAgents, flushRead]);
+  }, [activeView, phase, repositoryId, openedThread, threadRevision, member, flushRead]);
 
   useEffect(() => {
     if (activeView !== "messages") {
