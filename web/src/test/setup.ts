@@ -15,6 +15,9 @@ afterEach(() => {
   clearAccountSession();
   resetFixtures();
   server.resetHandlers();
+  if (window.location.hash !== "") {
+    window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+  }
 });
 
 afterAll(() => server.close());

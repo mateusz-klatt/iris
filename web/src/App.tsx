@@ -30,7 +30,8 @@ import { ClaimsPanel } from "./ClaimsPanel";
 import { DraftBody, DraftReview } from "./DraftReview";
 import { RecipientPicker } from "./RecipientPicker";
 import { useReview } from "./review";
-import { loadLocale, type SupportedLocale } from "./i18n";
+import { formatWhen, loadLocale, type SupportedLocale } from "./i18n";
+import { resolveConsoleHash, routeToHash, type ConsoleView, type MailScope } from "./consoleRoute";
 import LocalePicker from "./LocalePicker";
 import { MessageBody } from "./MessageBody";
 import {
@@ -47,7 +48,6 @@ import { recordName } from "./recordName";
 import "./app.css";
 import "./console.css";
 
-type ConsoleView = "messages" | "fleet" | "claims" | "diagnostics" | "compose" | "account" | "access";
 type ThreadOpening = { id: string };
 
 // The hub limits a message by its UTF-8 bytes, not by characters: a draft of 16 KiB of
@@ -158,22 +158,6 @@ function isAbort(error: unknown): boolean {
   return error instanceof Error && error.name === "AbortError";
 }
 
-const whenFormatter = new Intl.DateTimeFormat(undefined, {
-  dateStyle: "medium",
-  timeStyle: "short",
-});
-
-function formatWhen(value: string): string {
-  if (value.length === 0) {
-    return "";
-  }
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) {
-    return value;
-  }
-  return whenFormatter.format(date);
-}
-
 function repositoryName(overview: Overview, id: string, t: TFunction): string {
   const repository = overview.repositories.find((item) => item.id === id);
   return repository === undefined ? id : recordName(repository, t);
@@ -232,16 +216,16 @@ function isReportStale(report: DoctorReport): boolean {
 }
 
 function SessionActivity({ agent }: { agent: Agent }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const parts: string[] = [];
   if (agent.last_seen) {
-    parts.push(t("operator.seenAt", { date: formatWhen(agent.last_seen) }));
+    parts.push(t("operator.seenAt", { date: formatWhen(agent.last_seen, i18n.language) }));
   }
   if (agent.hook_seen) {
-    parts.push(t("operator.hookSeenAt", { date: formatWhen(agent.hook_seen) }));
+    parts.push(t("operator.hookSeenAt", { date: formatWhen(agent.hook_seen, i18n.language) }));
   }
   if (agent.watch_seen) {
-    parts.push(t("operator.watchSeenAt", { date: formatWhen(agent.watch_seen) }));
+    parts.push(t("operator.watchSeenAt", { date: formatWhen(agent.watch_seen, i18n.language) }));
   }
   if (parts.length === 0) {
     return <>{t("operator.noActivity")}</>;
@@ -250,13 +234,13 @@ function SessionActivity({ agent }: { agent: Agent }) {
 }
 
 function HostDoctorCell({ entry }: { entry: { report: DoctorReport; client: DoctorClient } | undefined }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   if (entry === undefined) {
     return <td data-health="none">{t("operator.noHostReport")}</td>;
   }
   const { report, client } = entry;
   const stale = isReportStale(report);
-  const checked = report.checked_at ? formatWhen(report.checked_at) : "";
+  const checked = report.checked_at ? formatWhen(report.checked_at, i18n.language) : "";
   return (
     <td
       className="host-doctor-cell"
@@ -272,12 +256,12 @@ function HostDoctorCell({ entry }: { entry: { report: DoctorReport; client: Doct
 }
 
 function HostReport({ report }: { report: DoctorReport }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const stale = isReportStale(report);
   return (
     <section className="host-report" data-host={report.host} data-stale={stale ? "yes" : "no"} aria-label={report.host}>
       <h2>{report.host === "unknown" ? t("operator.doctorUnknownHost") : report.host}</h2>
-      {report.checked_at !== null ? <p>{t("operator.checkedAt", { date: formatWhen(report.checked_at) })}</p> : null}
+      {report.checked_at !== null ? <p>{t("operator.checkedAt", { date: formatWhen(report.checked_at, i18n.language) })}</p> : null}
       {stale ? <p className="stale-note">{t("operator.doctorStale")}</p> : null}
       <ul className="message-list">
         {report.clients.map((client) => (
@@ -369,8 +353,9 @@ export function App({ connect = watchUi, refreshGap = frameRefreshGap }: { conne
 }
 
 function Console({ connect, refreshGap, session, onSession, onSignedOut }: { connect: typeof watchUi; refreshGap: number; session: AccountSession; onSession: (session: AccountSession) => void; onSignedOut: (passwordChanged?: boolean) => void }) {
-  const { t } = useTranslation();
+  const { t, i18n } = useTranslation();
   const member = session.account.role === "member";
+  const isOperator = session.account.role === "operator";
   const [locale, setLocale] = useState<SupportedLocale>("en");
   const [soundOn, setSoundOn] = useState(false);
   const [phase, setPhase] = useState<"loading" | "ready" | "error">("loading");
@@ -382,8 +367,16 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const [stream, setStream] = useState<WatchStatus>("connecting");
   const [repositoryId, setRepositoryId] = useState("");
   const [agent, setAgent] = useState("");
-  const [view, setView] = useState<ConsoleView | null>(null);
-  const [mailScope, setMailScope] = useState<"mine" | "all">("mine");
+  const [initialRoute] = useState(() =>
+    resolveConsoleHash(window.location.hash, { member, isOperator, canSend: member ? null : true }),
+  );
+  const [view, setView] = useState<ConsoleView | null>(
+    initialRoute.kind === "none" ? null : initialRoute.route.view,
+  );
+  const [mailScope, setMailScope] = useState<MailScope>(
+    initialRoute.kind === "none" ? "mine" : initialRoute.route.mailScope,
+  );
+  const latchedViewRef = useRef<ConsoleView>("messages");
   const [showInactive, setShowInactive] = useState(false);
   const [agentSearch, setAgentSearch] = useState("");
   const [threadError, setThreadError] = useState(false);
@@ -436,10 +429,14 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const [revoking, setRevoking] = useState<number | null>(null);
   const [signingOut, setSigningOut] = useState(false);
   const [localeSaving, setLocaleSaving] = useState(false);
-  const writableRepositories = overview?.repositories.filter((repository) => repository.console_access === "rw") ?? [];
+  const writableRepositories = useMemo(
+    () => overview?.repositories.filter((repository) => repository.console_access === "rw") ?? [],
+    [overview],
+  );
   // A host's context of sessions outside git is no project; its agents and mail stay (ADR 034).
   const projects = overview?.repositories.filter((repository) => repository.kind !== "outside") ?? [];
   const canSend = !member || writableRepositories.some((repository) => repository.id === repositoryId);
+  const canCompose: boolean | null = !member ? true : overview === null ? null : writableRepositories.length > 0;
   const outsideScopes = Object.fromEntries((overview?.repositories ?? []).filter((repository) => repository.kind === "outside").map((repository) => [repository.id, recordName(repository, t)]));
   const recipientAgents = member ? sessions.filter((agent) => writableRepositories.some((repository) => repository.id === agent.repository_id)) : sessions;
   const validRecipients = (draft: Draft) => recipientsOf(draft.to).every((id) => (!member && id === "human") || recipientAgents.some((agent) => agent.id === id));
@@ -487,6 +484,72 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     pendingRead.current = null;
   }, []);
 
+  const transientState = {
+    activeView,
+    mailScope,
+    canCompose,
+    leave: () => {
+      replyReview.stop();
+      composeReview.stop();
+      cancelThreadRead();
+    },
+  };
+  const transientStateRef = useRef(transientState);
+  transientStateRef.current = transientState;
+
+  useEffect(() => {
+    if (view === null) {
+      return;
+    }
+    if (activeView === "compose") {
+      if (canCompose === null) {
+        return;
+      }
+      if (!canCompose) {
+        transientStateRef.current.leave();
+        setView("messages");
+        setMailScope("mine");
+        window.history.replaceState(null, "", routeToHash("messages", "mine"));
+        return;
+      }
+      if (member && !writableRepositories.some((repository) => repository.id === repositoryId)) {
+        setRepositoryId(writableRepositories[0]!.id);
+      }
+    }
+    const current = resolveConsoleHash(window.location.hash, { member, isOperator, canSend: canCompose });
+    if (current.kind !== "allowed") {
+      window.history.replaceState(null, "", routeToHash(view, mailScope));
+    }
+  }, [activeView, canCompose, isOperator, mailScope, member, repositoryId, view, writableRepositories]);
+
+  useEffect(() => {
+    const onLocationChange = () => {
+      const { activeView: currentView, mailScope: currentScope, canCompose: currentCanCompose, leave } = transientStateRef.current;
+      const resolved = resolveConsoleHash(window.location.hash, {
+        member,
+        isOperator,
+        canSend: currentCanCompose,
+      });
+      const target = resolved.kind === "none"
+        ? { view: latchedViewRef.current, mailScope: "mine" as const }
+        : resolved.route;
+      if (target.view !== currentView || target.mailScope !== currentScope) {
+        leave();
+      }
+      setView(target.view);
+      setMailScope(target.mailScope);
+      if (resolved.kind === "none" || resolved.kind === "fallback") {
+        window.history.replaceState(null, "", routeToHash(target.view, target.mailScope));
+      }
+    };
+    window.addEventListener("popstate", onLocationChange);
+    window.addEventListener("hashchange", onLocationChange);
+    return () => {
+      window.removeEventListener("popstate", onLocationChange);
+      window.removeEventListener("hashchange", onLocationChange);
+    };
+  }, [isOperator, member]);
+
   // Reloads the overview on the watch's current connection. What the operator does reloads it
   // this way: reconnecting instead would make every action open a new socket and refresh again.
   const reload = useCallback(async () => {
@@ -496,7 +559,9 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       if (current !== overviewRequest.current) {
         return;
       }
-      setView((current) => current ?? (nextOverview.agents.length === 0 && !member ? "diagnostics" : "messages"));
+      const latched: ConsoleView = nextOverview.agents.length === 0 && !member ? "diagnostics" : "messages";
+      latchedViewRef.current = latched;
+      setView((current) => current ?? latched);
       setOverview(nextOverview);
       setDoctor(nextDoctor);
       setPhase("ready");
@@ -924,6 +989,10 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       cancelThreadRead();
     }
     setView(next);
+    const targetHash = routeToHash(next, mailScope);
+    if (window.location.hash !== targetHash) {
+      window.history.pushState(null, "", targetHash);
+    }
   };
   const openThread = (id: string, trigger: HTMLButtonElement) => {
     lastThreadButton.current = trigger;
@@ -944,9 +1013,13 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     setThreadError(false);
   };
   const openMailbox = (scope: "mine" | "all") => {
-    chooseView("messages");
+    setView("messages");
     setMailScope(scope);
     clearThread();
+    const targetHash = routeToHash("messages", scope);
+    if (window.location.hash !== targetHash) {
+      window.history.pushState(null, "", targetHash);
+    }
   };
   const title = activeView === "messages" ? t(mailScope === "mine" ? "console.myMessages" : "console.allActivity")
     : activeView === "fleet" ? t("console.fleet")
@@ -955,11 +1028,11 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
 
   return (
     <div className="app-shell operator-console">
-      <a className="skip-link" href="#content">
+      <a className="skip-link" href="#content" onClick={(event) => { event.preventDefault(); document.getElementById("content")!.focus(); }}>
         {t("skipToContent")}
       </a>
       <header className="topbar">
-        <a className="brand" href="#content" onClick={() => openMailbox("mine")}>
+        <a className="brand" href="#/messages" onClick={(event) => { event.preventDefault(); openMailbox("mine"); }}>
           <span className="brand-mark" aria-hidden="true">
             <img src="/iris-rainbow.svg" alt="" className="brand-logo" width="34" height="34" />
           </span>
@@ -1003,7 +1076,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
             </nav>
           </aside>
         ) : null}
-      <main id="content" className="content console-content" data-view={activeView}>
+      <main id="content" tabIndex={-1} className="content console-content" data-view={activeView}>
         {phase === "loading" ? <p className="state-panel">{t("inbox.loading")}</p> : null}
         {phase === "error" ? (
           <div className="state-panel state-error" role="alert">
@@ -1059,7 +1132,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
                         <ul className="message-list">
                           {threads.map((item) => <li key={item.id}>
                             <button type="button" className="thread-row" aria-current={item.id === selectedId ? "true" : undefined} data-unread={item.unread > 0 ? "yes" : "no"} onClick={(event) => openThread(item.id, event.currentTarget)}>
-                              <span className="thread-row-top"><strong>{item.subject}</strong><time dateTime={item.last_at}>{formatWhen(item.last_at)}</time></span>
+                              <span className="thread-row-top"><strong>{item.subject}</strong><time dateTime={item.last_at}>{formatWhen(item.last_at, i18n.language)}</time></span>
                               <span className="thread-participants">{item.participants.join(", ")}{item.authors?.map((author) => <span key={author.sender_account_id}> · {author.sender_display_name || author.sender_username}</span>)}</span>
                               <span className="thread-row-bottom"><span>{t("inbox.count", { count: item.count })}</span><span>{t("operator.unread", { count: item.unread })}</span></span>
                               <span className="sr-only">{t("operator.openThread", { subject: item.subject })}</span>
@@ -1091,7 +1164,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
                         <small>
                           {t("message.to")}: {message.recipients.map((recipient) => `${recipient.name} (${recipient.state})`).join(", ")}
                         </small>
-                        <time dateTime={message.created_at}>{formatWhen(message.created_at)}</time>
+                        <time dateTime={message.created_at}>{formatWhen(message.created_at, i18n.language)}</time>
                       </header>
                       <MessageBody body={message.body} />
                     </article>
