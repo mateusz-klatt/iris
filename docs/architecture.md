@@ -628,8 +628,8 @@ in Python. The Go implementation must repeat them on `modernc.org/sqlite`. The m
   retries, keyed by principal and client-chosen key, with a request hash so a reused key with a
   different request returns 409.
 
-Every state change happens in one `BEGIN IMMEDIATE` transaction. An OS file lock stops a second
-hub on the same database.
+Every state change happens in one `BEGIN IMMEDIATE` transaction under `Store.mu`. An OS file lock
+stops a second hub on the same database. Read-only console snapshots run outside `Store.mu` (item 5 below).
 
 The hub logs one diagnostic after each committed generation replacement, naming the prior
 Execution and generation, the replacement, the registration operation and source, and whether
@@ -756,6 +756,16 @@ Changes from the reference schema:
    their mail without a live Execution. This is computed when asked and changes no delivery state or
    timestamp. It describes now, cannot predict a reply, and leaves mail queued for a returning
    agent. A recovering Execution remains active until its recovery deadline, as above.
+5. **Read-only console connection outside the writer lock.** Console read operations
+   (`ui_overview`, `ui_deliveries`, `ui_threads`, `ui_thread`, `ui_doctor_get`, `ui_events`,
+   `ui_receipts`, console session lookups, and account listing) run in `BEGIN DEFERRED`
+   transactions on a separate `*sql.DB` pool with `PRAGMA query_only=ON`, without acquiring
+   `Store.mu` and without running `expire`. Each read transaction ends and materializes its
+   result before the HTTP handler writes the response body. Console reads may observe a WAL
+   snapshot that is slightly stale relative to a concurrent writer commit; this is allowed because
+   console reads never decide leases, fences, or authority—every state transition and permission
+   mutation remains serialized on the writer connection under `Store.mu` and `BEGIN IMMEDIATE`,
+   and session revocation takes effect on subsequent WAL snapshots.
 
 ### D10. Claim semantics
 

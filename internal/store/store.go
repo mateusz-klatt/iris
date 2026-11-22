@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -138,9 +139,10 @@ func absent(err error, code, message string) error {
 }
 
 type Store struct {
-	mu      sync.Mutex
-	db      *sql.DB
-	lock    *os.File
+	mu           sync.Mutex
+	db           *sql.DB
+	readDB       *sql.DB
+	lock         *os.File
 	clock   Clock
 	epoch   int64
 	stream  string
@@ -248,22 +250,12 @@ func openDatabase(filename string, clock Clock, driverName string) (*Store, erro
 		unlockDatabase(lock)
 		return nil, err
 	}
-	db, err := sql.Open(driverName, abs)
+	db, err := openSQLite(driverName, abs, 1, "PRAGMA foreign_keys=ON", "PRAGMA journal_mode=WAL", "PRAGMA synchronous=FULL", "PRAGMA busy_timeout=5000", "PRAGMA temp_store=MEMORY")
 	if err != nil {
 		unlockDatabase(lock)
 		return nil, err
 	}
-	db.SetMaxOpenConns(1)
 	s := &Store{db: db, lock: lock, clock: clock, changed: make(chan struct{})}
-	// temp_store=MEMORY: the hub's image is FROM scratch, with no temporary directory, and a large
-	// delete's statement journal or a sort would otherwise need one. A sweep of 17,153 events made
-	// the hub crash-loop with IOERR_GETTEMPPATH before this (ADR 006's first deploy).
-	for _, q := range []string{"PRAGMA foreign_keys=ON", "PRAGMA journal_mode=WAL", "PRAGMA synchronous=FULL", "PRAGMA busy_timeout=5000", "PRAGMA temp_store=MEMORY"} {
-		if _, err = db.Exec(q); err != nil {
-			_ = s.Close()
-			return nil, err
-		}
-	}
 	err = s.transact(context.Background(), func(t *transaction) error {
 		if _, err := t.exec(schema); err != nil {
 			return err
@@ -459,14 +451,47 @@ func openDatabase(filename string, clock Clock, driverName string) (*Store, erro
 		_ = s.Close()
 		return nil, err
 	}
+	// Console reads share a dedicated query_only pool outside Store.mu so slow snapshots never
+	// delay heartbeats, claims, or lease expiry on the single serialized writer connection.
+	readDB, err := openSQLite(driverName, readOnlyDSN(abs), 4, "PRAGMA foreign_keys=ON", "PRAGMA query_only=ON", "PRAGMA busy_timeout=5000", "PRAGMA temp_store=MEMORY")
+	if err != nil {
+		_ = s.Close()
+		return nil, err
+	}
+	s.readDB = readDB
 	return s, nil
+}
+func readOnlyDSN(abs string) string {
+	return "file:" + (&url.URL{Path: filepath.ToSlash(abs)}).EscapedPath() + "?_pragma=foreign_keys(ON)&_pragma=query_only(ON)&_pragma=busy_timeout(5000)&_pragma=temp_store(2)"
+}
+
+// temp_store=MEMORY: the hub's image is FROM scratch, with no temporary directory, and a large
+// delete's statement journal or a sort would otherwise need one. A sweep of 17,153 events made
+// the hub crash-loop with IOERR_GETTEMPPATH before this (ADR 006's first deploy).
+func openSQLite(driverName, dsn string, maxConns int, pragmas ...string) (*sql.DB, error) {
+	db, err := sql.Open(driverName, dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(maxConns)
+	for _, q := range pragmas {
+		if _, err = db.Exec(q); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+	}
+	return db, nil
 }
 func (s *Store) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	var readErr error
+	if s.readDB != nil {
+		readErr = s.readDB.Close()
+	}
 	err := s.db.Close()
 	unlockDatabase(s.lock)
-	return err
+	return errors.Join(readErr, err)
 }
 func (s *Store) Changes() <-chan struct{} { s.mu.Lock(); defer s.mu.Unlock(); return s.changed }
 
@@ -538,6 +563,27 @@ func (s *Store) transact(ctx context.Context, f func(*transaction) error) error 
 		s.changed = make(chan struct{})
 	}
 	return nil
+}
+
+func (s *Store) readTransact(ctx context.Context, f func(*transaction) error) error {
+	c, err := s.readDB.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = c.Close() }()
+	// Cancellation can be reported after SQLite has executed BEGIN DEFERRED. Install cleanup
+	// before starting it, so an aborted call never leaves a read snapshot pinned on the connection.
+	defer func() { _, _ = c.ExecContext(context.Background(), "ROLLBACK") }()
+	if _, err = c.ExecContext(ctx, "BEGIN DEFERRED"); err != nil {
+		return err
+	}
+	s.transactions.Add(1)
+	tx := &transaction{conn: c, ctx: ctx, s: s}
+	if err = f(tx); err != nil {
+		return err
+	}
+	_, err = c.ExecContext(ctx, "COMMIT")
+	return err
 }
 
 const expireExecutionsSQL = `UPDATE Execution SET state='lost' WHERE state='active' AND

@@ -301,6 +301,7 @@ type consoleStallReport struct {
 	ExplainPlans     map[string]queryPlanReport `json:"explain_query_plan"`
 	Overview14kPoint *overview14kReport         `json:"overview_14k_point,omitempty"`
 	LeaseConsequence *leaseConsequenceResult    `json:"lease_consequence,omitempty"`
+	ReadNonBlocking  *readNonBlockingResult     `json:"read_non_blocking,omitempty"`
 }
 
 type syntheticSeedInfo struct {
@@ -935,6 +936,10 @@ func measureStoreOperation(t *testing.T, s *Store, tr *sqlTracer, cacheMode, op,
 	stmts := tr.snapshot()
 	tr.reset(false)
 
+	heldOrWallMS := durationMS(timing.Held)
+	if heldOrWallMS == 0 {
+		heldOrWallMS = durationMS(wall)
+	}
 	m := opMeasurement{
 		Operation:     op,
 		CacheMode:     cacheMode,
@@ -943,7 +948,7 @@ func measureStoreOperation(t *testing.T, s *Store, tr *sqlTracer, cacheMode, op,
 		MuWaitMS:      durationMS(timing.Wait),
 		MuHeldMS:      durationMS(timing.Held),
 		ResultSummary: summarizeResult(op, out),
-		Breakdown:     summarizeStatements(stmts, durationMS(timing.Held)),
+		Breakdown:     summarizeStatements(stmts, heldOrWallMS),
 		Statements:    stmts,
 	}
 	if err != nil {
@@ -1319,6 +1324,8 @@ func TestConsoleReadStallMeasurement(t *testing.T) {
 	report.Overview14kPoint = measureOverview14kPoint(t, cfg.WorkDir)
 	leaseRes := runLeaseConsequenceScenario(t, filepath.Join(cfg.WorkDir, "lease-consequence-measure.db"))
 	report.LeaseConsequence = &leaseRes
+	readNonBlockingRes := runReadNonBlockingScenario(t, filepath.Join(cfg.WorkDir, "read-non-blocking-measure.db"))
+	report.ReadNonBlocking = &readNonBlockingRes
 
 	encoded, err := json.MarshalIndent(report, "", "  ")
 	if err != nil {

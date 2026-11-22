@@ -2,6 +2,7 @@ package store
 
 import (
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"database/sql/driver"
 	"errors"
@@ -300,10 +301,143 @@ type leaseConsequenceResult struct {
 	HeartbeatErrorCode   string  `json:"heartbeat_error_code"`
 	HeartbeatMuWaitMS    float64 `json:"heartbeat_mu_wait_ms"`
 	HeartbeatMuHeldMS    float64 `json:"heartbeat_mu_held_ms"`
-	ThreadsMuHeldMS      float64 `json:"threads_mu_held_ms"`
+	WriterMuHeldMS       float64 `json:"writer_mu_held_ms"`
 	HeartbeatExecState   string  `json:"heartbeat_exec_state_after"`
 	HookOnlyExecState    string  `json:"hook_only_exec_state_after"`
 	HookOnlyValidateOK   bool    `json:"hook_only_validate_ok"`
+}
+
+type readNonBlockingResult struct {
+	ConsoleReadCalledLock bool    `json:"console_read_called_lock"`
+	HeartbeatWhileHeldOK  bool    `json:"heartbeat_while_held_ok"`
+	HeartbeatWallMS       float64 `json:"heartbeat_wall_ms"`
+	HeartbeatMuWaitMS     float64 `json:"heartbeat_mu_wait_ms"`
+	HeartbeatMuHeldMS     float64 `json:"heartbeat_mu_held_ms"`
+	HeartbeatExecState    string  `json:"heartbeat_exec_state_after"`
+	ThreadsWallMS         float64 `json:"threads_wall_ms"`
+	ThreadsUsedDeferred   bool    `json:"threads_used_deferred"`
+}
+
+func runReadNonBlockingScenario(t *testing.T, dbPath string) readNonBlockingResult {
+	t.Helper()
+	for _, suffix := range []string{"", "-wal", "-shm", ".lock"} {
+		_ = os.Remove(dbPath + suffix)
+	}
+	clock := newSyncFakeClock(time.Unix(1800000000, 0))
+	tracer := &sqlTracer{}
+	s, err := openDatabase(dbPath, clock, registerTraceDriver(tracer))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+
+	outA := call(t, s, "sessions", Request{
+		Client: "codex", Host: "host", SessionID: "nonblock-60s",
+		Cwd: "/repo/nb1", Worktree: "/repo/nb1",
+		RemoteURL: "https://example.invalid/team/repo.git", RootCommit: "root",
+		Source: "shim",
+	})
+	execA := Request{ExecutionID: outA["execution_id"].(string), Generation: outA["generation"].(int64)}
+	call(t, s, "ui_messages", Request{
+		Key: "seed-nonblock", RepositoryID: outA["repository_id"].(string),
+		To: []string{outA["agent"].(map[string]any)["name"].(string)},
+		Subject: "nonblock test", Body: "synthetic body",
+	})
+
+	clock.advance(5 * time.Second)
+
+	readInQuery := make(chan struct{})
+	releaseRead := make(chan struct{})
+	var hookOnce sync.Once
+	tracer.setQueryHook(func(q string) {
+		if strings.HasPrefix(q, "SELECT m.thread_id,") {
+			hookOnce.Do(func() {
+				close(readInQuery)
+				<-releaseRead
+			})
+		}
+	})
+	tracer.reset(true)
+
+	var readCalledLock atomic.Bool
+	var threadsWall atomic.Int64
+	threadsDone := make(chan error, 1)
+	go func() {
+		start := time.Now()
+		ctx := withLockObserver(context.Background(), lockObserver{
+			afterUnlock: func(_, _ time.Duration) { readCalledLock.Store(true) },
+		})
+		_, callErr := s.Call(ctx, "ui_threads", Request{RepositoryID: "", Agent: "human", Limit: 50})
+		threadsWall.Store(time.Since(start).Nanoseconds())
+		threadsDone <- callErr
+	}()
+
+	<-readInQuery
+
+	// While ui_threads is held blocked inside its BEGIN DEFERRED read transaction, advance 20 s
+	// (still inside the 60 s lease) and issue a heartbeat on the writer. It must succeed immediately.
+	clock.advance(20 * time.Second)
+	var hbTiming lockTiming
+	hbStart := time.Now()
+	hbCtx := withLockObserver(context.Background(), lockObserver{
+		beforeLock:  func() {},
+		afterUnlock: func(wait, held time.Duration) { hbTiming = lockTiming{Wait: wait, Held: held} },
+	})
+	if _, err := s.Call(hbCtx, "heartbeat", Request{
+		ExecutionID: execA.ExecutionID, Generation: execA.Generation, Source: "shim",
+	}); err != nil {
+		close(releaseRead)
+		t.Fatalf("heartbeat delayed or failed while console read was held: %v", err)
+	}
+	hbWall := time.Since(hbStart)
+
+	select {
+	case err := <-threadsDone:
+		t.Fatalf("expected ui_threads to still be blocked in read hook, returned early: %v", err)
+	default:
+	}
+
+	var stateA string
+	if err := s.db.QueryRow("SELECT state FROM Execution WHERE id=?", execA.ExecutionID).Scan(&stateA); err != nil {
+		close(releaseRead)
+		t.Fatal(err)
+	}
+	if stateA != "active" {
+		close(releaseRead)
+		t.Fatalf("expected heartbeat execution state 'active', got %q", stateA)
+	}
+
+	close(releaseRead)
+	tracer.setQueryHook(nil)
+	if err := <-threadsDone; err != nil {
+		t.Fatalf("held ui_threads failed: %v", err)
+	}
+	stmts := tracer.snapshot()
+	tracer.reset(false)
+
+	if readCalledLock.Load() {
+		t.Fatal("ui_threads unexpectedly acquired Store.mu")
+	}
+	usedDeferred := false
+	for _, st := range stmts {
+		if st.Label == "begin_deferred" {
+			usedDeferred = true
+		}
+	}
+	if !usedDeferred {
+		t.Fatalf("expected ui_threads to use BEGIN DEFERRED, got statements=%+v", stmts)
+	}
+
+	return readNonBlockingResult{
+		ConsoleReadCalledLock: readCalledLock.Load(),
+		HeartbeatWhileHeldOK:  true,
+		HeartbeatWallMS:       durationMS(hbWall),
+		HeartbeatMuWaitMS:     durationMS(hbTiming.Wait),
+		HeartbeatMuHeldMS:     durationMS(hbTiming.Held),
+		HeartbeatExecState:    stateA,
+		ThreadsWallMS:         durationMS(time.Duration(threadsWall.Load())),
+		ThreadsUsedDeferred:   usedDeferred,
+	}
 }
 
 func runLeaseConsequenceScenario(t *testing.T, dbPath string) leaseConsequenceResult {
@@ -338,42 +472,35 @@ func runLeaseConsequenceScenario(t *testing.T, dbPath string) leaseConsequenceRe
 	}
 	outB := call(t, s, "sessions", regB)
 	execB := Request{ExecutionID: outB["execution_id"].(string), Generation: outB["generation"].(int64)}
-	agentA := outA["agent"].(map[string]any)["name"].(string)
-
-	// One message involving human so ui_threads executes its full query path.
-	call(t, s, "ui_messages", Request{
-		Key: "seed-thread", RepositoryID: outA["repository_id"].(string),
-		To: []string{agentA}, Subject: "stall test", Body: "synthetic body",
-	})
 
 	// 5 s after registration, session A still has 55 s of its 60 s lease remaining.
 	clock.advance(5 * time.Second)
 
-	threadsInQuery := make(chan struct{})
-	releaseThreads := make(chan struct{})
+	writerInQuery := make(chan struct{})
+	releaseWriter := make(chan struct{})
 	var hookOnce sync.Once
 	tracer.setQueryHook(func(q string) {
-		if strings.HasPrefix(q, "SELECT m.thread_id,") {
+		if q == "SELECT COUNT(*) FROM Agent" {
 			hookOnce.Do(func() {
-				close(threadsInQuery)
-				<-releaseThreads
+				close(writerInQuery)
+				<-releaseWriter
 			})
 		}
 	})
 
-	var threadsTiming lockTiming
-	threadsDone := make(chan error, 1)
+	var writerTiming lockTiming
+	writerDone := make(chan error, 1)
 	go func() {
 		ctx := withLockObserver(context.Background(), lockObserver{
 			afterUnlock: func(wait, held time.Duration) {
-				threadsTiming = lockTiming{Wait: wait, Held: held}
+				writerTiming = lockTiming{Wait: wait, Held: held}
 			},
 		})
-		_, callErr := s.Call(ctx, "ui_threads", Request{RepositoryID: "", Agent: "human", Limit: 50})
-		threadsDone <- callErr
+		_, callErr := s.Call(ctx, "status", Request{})
+		writerDone <- callErr
 	}()
 
-	<-threadsInQuery
+	<-writerInQuery
 
 	hbQueuing := make(chan struct{})
 	var hbTiming lockTiming
@@ -395,15 +522,15 @@ func runLeaseConsequenceScenario(t *testing.T, dbPath string) leaseConsequenceRe
 
 	<-hbQueuing
 	// Give the goroutine a brief moment to block inside s.mu.Lock() so mu_wait is measurable,
-	// then jump the fake clock 57 s while ui_threads holds Store.mu.
+	// then jump the fake clock 57 s while the writer Call holds Store.mu.
 	time.Sleep(5 * time.Millisecond)
 	tracer.reset(true)
 	clock.advance(57 * time.Second)
-	close(releaseThreads)
+	close(releaseWriter)
 	tracer.setQueryHook(nil)
 
-	if err := <-threadsDone; err != nil {
-		t.Fatalf("ui_threads failed: %v", err)
+	if err := <-writerDone; err != nil {
+		t.Fatalf("status writer call failed: %v", err)
 	}
 	hbErr := <-hbDone
 	stmts := tracer.snapshot()
@@ -445,8 +572,8 @@ func runLeaseConsequenceScenario(t *testing.T, dbPath string) leaseConsequenceRe
 	if stateB != "active" {
 		t.Fatalf("expected 15m hook-only session state 'active', got %q", stateB)
 	}
-	if hbTiming.Wait <= 0 || threadsTiming.Held <= 0 {
-		t.Fatalf("expected positive lock wait/held timings, got hb.Wait=%v threads.Held=%v", hbTiming.Wait, threadsTiming.Held)
+	if hbTiming.Wait <= 0 || writerTiming.Held <= 0 {
+		t.Fatalf("expected positive lock wait/held timings, got hb.Wait=%v writer.Held=%v", hbTiming.Wait, writerTiming.Held)
 	}
 
 	return leaseConsequenceResult{
@@ -454,19 +581,127 @@ func runLeaseConsequenceScenario(t *testing.T, dbPath string) leaseConsequenceRe
 		HeartbeatErrorCode:   domainErr.Code,
 		HeartbeatMuWaitMS:    durationMS(hbTiming.Wait),
 		HeartbeatMuHeldMS:    durationMS(hbTiming.Held),
-		ThreadsMuHeldMS:      durationMS(threadsTiming.Held),
+		WriterMuHeldMS:       durationMS(writerTiming.Held),
 		HeartbeatExecState:   stateA,
 		HookOnlyExecState:    stateB,
 		HookOnlyValidateOK:   true,
 	}
 }
 
-// TestConsoleStallLeaseConsequence proves with a fake clock that holding Store.mu in
-// ui_threads across a 57 s tick jump causes a queued 60 s heartbeat to expire inside
-// t.expire() before renewing, while a 15-minute hook-only lease survives.
-func TestConsoleStallLeaseConsequence(t *testing.T) {
+// TestBlockedConsoleReadDoesNotDelayHeartbeat proves that holding a console read inside its
+// read-only BEGIN DEFERRED transaction does not acquire Store.mu or delay a heartbeat Call.
+func TestBlockedConsoleReadDoesNotDelayHeartbeat(t *testing.T) {
+	res := runReadNonBlockingScenario(t, t.TempDir()+"/read-non-blocking.db")
+	if res.ConsoleReadCalledLock || !res.HeartbeatWhileHeldOK || res.HeartbeatExecState != "active" || !res.ThreadsUsedDeferred {
+		t.Fatalf("unexpected non-blocking console read result: %+v", res)
+	}
+}
+
+// TestWriterCallStallExpiresQueued60sHeartbeat proves with a fake clock that holding Store.mu
+// across a 57 s tick jump causes a queued 60 s heartbeat to expire inside t.expire() before
+// renewing, while a 15-minute hook-only lease survives.
+func TestWriterCallStallExpiresQueued60sHeartbeat(t *testing.T) {
 	res := runLeaseConsequenceScenario(t, t.TempDir()+"/lease-consequence.db")
 	if res.HeartbeatErrorCode != "lost" || res.HeartbeatExecState != "lost" || res.HookOnlyExecState != "active" || !res.HookOnlyValidateOK {
 		t.Fatalf("unexpected lease consequence result: %+v", res)
 	}
+}
+
+func TestRevokedConsoleSessionRefusedOnNextRead(t *testing.T) {
+	s, _, _ := testStore(t)
+	admin := createTestConsoleAccount(t, s, "Revoked Reader", "operator")
+	sum := sha256.Sum256([]byte("revocation-session-token"))
+	digest := sum[:]
+	if _, err := s.IssueConsoleSession(t.Context(), admin, digest); err != nil {
+		t.Fatal(err)
+	}
+	principal := Principal{Kind: ConsolePrincipal, SessionDigest: digest}
+
+	if _, err := s.ConsoleSessionInfo(t.Context(), digest); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CallConsole(t.Context(), principal, "ui_overview", Request{}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.CallConsole(t.Context(), principal, "ui_threads", Request{Limit: 10}); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := s.DeleteConsoleSession(t.Context(), digest); err != nil {
+		t.Fatal(err)
+	}
+
+	for name, fn := range map[string]func() error{
+		"ConsoleSessionInfo": func() error { _, err := s.ConsoleSessionInfo(t.Context(), digest); return err },
+		"ui_overview":        func() error { _, err := s.CallConsole(t.Context(), principal, "ui_overview", Request{}); return err },
+		"ui_threads":         func() error { _, err := s.CallConsole(t.Context(), principal, "ui_threads", Request{Limit: 10}); return err },
+	} {
+		err := fn()
+		var domainErr *Error
+		if !errors.As(err, &domainErr) || domainErr.Code != "unauthorized" {
+			t.Fatalf("%s after revocation: got %v, want unauthorized", name, err)
+		}
+	}
+}
+
+func TestConsoleReadConnectionRejectsWritesAndCanceledContext(t *testing.T) {
+	s, _, _ := testStore(t)
+	err := s.readTransact(t.Context(), func(tx *transaction) error {
+		_, writeErr := tx.exec("INSERT INTO Repository(id,root_commit) VALUES('r1','root')")
+		if writeErr == nil {
+			t.Fatal("expected PRAGMA query_only=ON to reject INSERT inside readTransact")
+		}
+		if _, updateErr := tx.exec("UPDATE Meta SET boot_epoch=99 WHERE id=1"); updateErr == nil {
+			t.Fatal("expected PRAGMA query_only=ON to reject UPDATE inside readTransact")
+		}
+		return writeErr
+	})
+	if err == nil || !strings.Contains(err.Error(), "readonly") {
+		t.Fatalf("expected readonly database error, got %v", err)
+	}
+
+	canceled, cancel := context.WithCancel(t.Context())
+	cancel()
+	if _, err := s.Call(canceled, "ui_overview", Request{}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled on canceled console read, got %v", err)
+	}
+}
+
+type failQueryOnlyDriver struct{ err error }
+
+func (d failQueryOnlyDriver) Open(name string) (driver.Conn, error) {
+	c, err := (&sqlite.Driver{}).Open(name)
+	if err != nil {
+		return nil, err
+	}
+	return failQueryOnlyConn{Conn: c, err: d.err}, nil
+}
+
+type failQueryOnlyConn struct {
+	driver.Conn
+	err error
+}
+
+func (c failQueryOnlyConn) ExecContext(ctx context.Context, q string, args []driver.NamedValue) (driver.Result, error) {
+	if q == "PRAGMA query_only=ON" {
+		return nil, c.err
+	}
+	return c.Conn.(driver.ExecerContext).ExecContext(ctx, q, args)
+}
+
+func TestOpenFailsClosedWhenReadConnectionCannotEnableQueryOnly(t *testing.T) {
+	dbPath := t.TempDir() + "/fail-query-only.db"
+	want := errors.New("query_only refused")
+	name := fmt.Sprintf("iris-fail-query-only-%d", traceDriverSeq.Add(1))
+	sql.Register(name, failQueryOnlyDriver{err: want})
+
+	if _, err := openDatabase(dbPath, nil, name); !errors.Is(err, want) {
+		t.Fatalf("expected %v when PRAGMA query_only=ON fails, got %v", want, err)
+	}
+	// Opening cleanly afterward proves the failed open closed s.db and released the file lock.
+	reopened, err := Open(dbPath, nil)
+	if err != nil {
+		t.Fatalf("expected clean reopen after failed query_only setup: %v", err)
+	}
+	_ = reopened.Close()
 }

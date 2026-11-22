@@ -11,9 +11,13 @@ import (
 	"github.com/mateusz-klatt/iris/internal/buildinfo"
 )
 
-// Call dispatches a domain operation. All observations and changes share a single
-// BEGIN IMMEDIATE snapshot; only a successful commit becomes visible to readers.
+// Call dispatches a domain operation. Writer operations share a single BEGIN IMMEDIATE
+// snapshot under Store.mu; pure console reads run on a query_only BEGIN DEFERRED snapshot
+// without acquiring Store.mu.
 func (s *Store) Call(ctx context.Context, operation string, r Request) (map[string]any, error) {
+	if isConsoleReadOperation(operation) {
+		return s.callRead(ctx, operation, r)
+	}
 	var out map[string]any
 	var refused *Error
 	var change *GenerationChange
@@ -63,16 +67,9 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 			// calls. Authorization independently rejects sessions at their deadline.
 			_, err = t.exec(expireConsoleSessionsSQL, t.s.clock.Now().UnixMilli())
 			out = map[string]any{}
-		case "ui_receipts":
-			if t.console == nil {
-				return fail("forbidden", "a console account session is required")
-			}
-			out, err = t.consoleReceipts(r)
-		case "ui_overview", "ui_deliveries", "ui_threads", "ui_thread", "ui_read", "ui_messages", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_events":
+		case "ui_read", "ui_messages", "ui_revoke", "ui_doctor_put":
 			if t.console != nil && operation == "ui_messages" {
 				out, err = t.consoleSend(r)
-			} else if t.console != nil && operation == "ui_events" {
-				out, err = t.consoleEvents()
 			} else {
 				out, err = t.operator(operation, r)
 			}
@@ -410,4 +407,43 @@ func (t *transaction) events(r Request) (map[string]any, error) {
 // reset and consistent snapshot when their cursor precedes this prefix.
 func (s *Store) PruneEvents(ctx context.Context, through int64) error {
 	return s.transact(ctx, func(t *transaction) error { _, err := t.exec("DELETE FROM Event WHERE seq<=?", through); return err })
+}
+
+func isConsoleReadOperation(operation string) bool {
+	switch operation {
+	case "ui_overview", "ui_deliveries", "ui_threads", "ui_thread", "ui_doctor_get", "ui_events", "ui_receipts":
+		return true
+	default:
+		return false
+	}
+}
+
+func (s *Store) callRead(ctx context.Context, operation string, r Request) (map[string]any, error) {
+	var out map[string]any
+	err := s.readTransact(ctx, func(t *transaction) error {
+		if principal, ok := ctx.Value(authorizationKey{}).(Principal); ok {
+			if err := t.authorize(principal, operation, r); err != nil {
+				return err
+			}
+		}
+		switch operation {
+		case "ui_receipts":
+			if t.console == nil {
+				return fail("forbidden", "a console account session is required")
+			}
+			var err error
+			out, err = t.consoleReceipts(r)
+			return err
+		case "ui_events":
+			if t.console != nil {
+				var err error
+				out, err = t.consoleEvents()
+				return err
+			}
+		}
+		var err error
+		out, err = t.operator(operation, r)
+		return err
+	})
+	return out, err
 }

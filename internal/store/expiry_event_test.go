@@ -8,6 +8,8 @@ import (
 // A session that dies holding no claims still changes what the console shows, so its expiry
 // moves the event cursor the console refreshes on. Before, only expired claims did, and a
 // claimless dead session stayed "active" until unrelated traffic arrived (gap review A16).
+// Console reads run outside the writer lock without running expiry; maintenance calls "expire"
+// (or any writer Call) persist expiry and advance the cursor observed by "ui_events".
 func TestAClaimlessSessionsExpiryRefreshesTheConsole(t *testing.T) {
 	s, clock, _ := testStore(t)
 	session(t, s, 1)
@@ -16,6 +18,7 @@ func TestAClaimlessSessionsExpiryRefreshesTheConsole(t *testing.T) {
 		t.Fatalf("an idle poll moved the cursor: %d then %d", before, again)
 	}
 	clock.advance(time.Hour) // past the lease, with no claims and no other activity
+	call(t, s, "expire", Request{})
 	after := call(t, s, "ui_events", Request{})["cursor"].(int64)
 	if after <= before {
 		t.Fatalf("expiry left the cursor at %d", after)
@@ -24,7 +27,8 @@ func TestAClaimlessSessionsExpiryRefreshesTheConsole(t *testing.T) {
 	if len(agents) != 1 || agents[0]["state"] != "lost" {
 		t.Fatalf("%v", agents)
 	}
-	// Announced once: the next idle poll finds nothing new.
+	// Announced once: the next expire and idle poll find nothing new.
+	call(t, s, "expire", Request{})
 	if again := call(t, s, "ui_events", Request{})["cursor"].(int64); again != after {
 		t.Fatalf("the expiry was announced again: %d then %d", after, again)
 	}
@@ -45,10 +49,12 @@ func TestARecoveryWindowThatClosesRefreshesTheConsole(t *testing.T) {
 	t.Cleanup(func() { _ = reopened.Close() })
 	before := call(t, reopened, "ui_events", Request{})["cursor"].(int64)
 	clock.advance(time.Minute) // inside the 120 s recovery window
+	call(t, reopened, "expire", Request{})
 	if mid := call(t, reopened, "ui_events", Request{})["cursor"].(int64); mid != before {
 		t.Fatalf("a recovering session was announced as gone: %d then %d", before, mid)
 	}
 	clock.advance(2 * time.Minute)
+	call(t, reopened, "expire", Request{})
 	if after := call(t, reopened, "ui_events", Request{})["cursor"].(int64); after <= before {
 		t.Fatalf("a closed recovery window left the cursor at %d", after)
 	}

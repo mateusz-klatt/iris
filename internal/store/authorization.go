@@ -164,7 +164,7 @@ func (s *Store) ChangeConsoleAccess(ctx context.Context, p Principal, target str
 
 func (s *Store) ListConsoleAccounts(ctx context.Context, p Principal) ([]ConsoleAccessAccount, error) {
 	accounts := []ConsoleAccessAccount{}
-	err := s.transact(ctx, func(t *transaction) error {
+	err := s.readTransact(ctx, func(t *transaction) error {
 		if err := t.authorize(p, "ui_accounts", Request{}); err != nil {
 			return err
 		}

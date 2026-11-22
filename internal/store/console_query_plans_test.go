@@ -75,9 +75,13 @@ func TestConsoleReadQueryPlansAvoidAckSubqueryScan(t *testing.T) {
 
 	assertNoNotIn := func(op string, stmts []sqlStatementRecord) map[string]sqlStatementRecord {
 		byLabel := map[string]sqlStatementRecord{}
+		seenDeferred := false
 		for _, st := range stmts {
-			if strings.HasPrefix(st.Label, "expire_") {
-				continue
+			if st.Label == "begin_immediate" || strings.HasPrefix(st.Label, "expire_") {
+				t.Fatalf("%s ran unexpected writer/expiry statement %s: %s", op, st.Label, st.SQL)
+			}
+			if st.Label == "begin_deferred" {
+				seenDeferred = true
 			}
 			if strings.Contains(strings.ToUpper(st.SQL), "NOT IN") {
 				t.Fatalf("%s executed unexpected NOT IN query: %s", op, st.SQL)
@@ -85,6 +89,9 @@ func TestConsoleReadQueryPlansAvoidAckSubqueryScan(t *testing.T) {
 			if _, exists := byLabel[st.Label]; !exists {
 				byLabel[st.Label] = st
 			}
+		}
+		if !seenDeferred {
+			t.Fatalf("%s did not execute BEGIN DEFERRED on read connection", op)
 		}
 		return byLabel
 	}

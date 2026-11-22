@@ -97,12 +97,26 @@ func installFaultDriver(t *testing.T, s *Store, file string) *storageFault {
 	if err := s.db.Close(); err != nil {
 		t.Fatal(err)
 	}
+	if s.readDB != nil {
+		if err := s.readDB.Close(); err != nil {
+			t.Fatal(err)
+		}
+	}
 	db, err := sql.Open(name, file)
 	if err != nil {
 		t.Fatal(err)
 	}
 	db.SetMaxOpenConns(1)
+	readDB, err := openSQLite(name, readOnlyDSN(file), 4, "PRAGMA query_only=ON")
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.mu.Lock()
+	f.count = 0
+	f.trace = nil
+	f.mu.Unlock()
 	s.db = db
+	s.readDB = readDB
 	return f
 }
 
