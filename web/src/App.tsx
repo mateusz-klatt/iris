@@ -381,7 +381,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const [threadsError, setThreadsError] = useState(false);
   const [openedThread, setOpenedThread] = useState<ThreadOpening | null>(null);
   const selectedId = openedThread?.id ?? null;
-  const readRequestedFor = useRef<typeof openedThread>(null);
+  const readRequestedFor = useRef<ThreadOpening | Promise<ThreadDetail> | null>(null);
   const pendingRead = useRef<{ id: string; repositoryId: string } | null>(null);
   const [loadedThread, setLoadedThread] = useState<{ opening: ThreadOpening; detail: ThreadDetail } | null>(null);
   const thread = loadedThread?.detail ?? null;
@@ -605,21 +605,28 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     }
     const { id } = openedThread;
     let ignore = false;
-    void getThread(id, repositoryId)
+    const request = getThread(id, repositoryId);
+    // The first detail request for an explicit open takes its read authorization.
+    if (readRequestedFor.current === openedThread) {
+      readRequestedFor.current = request;
+    }
+    const releaseReadAuthorization = () => {
+      if (readRequestedFor.current !== request) {
+        return false;
+      }
+      readRequestedFor.current = null;
+      return true;
+    };
+    void request
       .then((detail) => {
         if (ignore) {
           return;
         }
         setLoadedThread({ opening: openedThread, detail });
         setThreadError(false);
-        // Only an explicit open arms a read. A watch refresh updates the conversation but
-        // leaves both old and newly arrived mail unread; a hidden open waits for visibility.
-        if (readRequestedFor.current === openedThread) {
-          readRequestedFor.current = null;
-          if (!member && unreadForOperator(detail)) {
-            pendingRead.current = { id, repositoryId };
-            flushRead();
-          }
+        if (releaseReadAuthorization() && !member && unreadForOperator(detail)) {
+          pendingRead.current = { id, repositoryId };
+          flushRead();
         }
         // Refresh an untouched suggestion, but retain an edited draft and its retry key
         // even when the operator left this conversation and has now returned to it.
@@ -634,18 +641,14 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
         }
       })
       .catch((error: unknown) => {
-        if (ignore) {
-          return;
-        }
-        if (readRequestedFor.current === openedThread) {
-          readRequestedFor.current = null;
-        }
-        if (!isAbort(error)) {
+        releaseReadAuthorization();
+        if (!ignore && !isAbort(error)) {
           setThreadError(true);
         }
       });
     return () => {
       ignore = true;
+      releaseReadAuthorization();
     };
   }, [activeView, phase, repositoryId, openedThread, threadRevision, member, replyAgents, flushRead]);
 

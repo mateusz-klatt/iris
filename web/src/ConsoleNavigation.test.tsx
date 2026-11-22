@@ -19,9 +19,8 @@ function mockVisibility(initial: DocumentVisibilityState) {
   };
 }
 
-function observeThreadReads() {
+function observeThreadReads(fetch = vi.spyOn(globalThis, "fetch")) {
   // Observe dispatch synchronously while MSW still handles the requests.
-  const fetch = vi.spyOn(globalThis, "fetch");
   return () => fetch.mock.calls.filter(([url, init]) => init?.method === "POST" && String(url).endsWith("/read"));
 }
 
@@ -144,6 +143,50 @@ it("leaves mail unread when a watch refresh recovers a failed open", async () =>
 
   fails = false;
   act(() => onFrame?.({ cursor: 2, kind: "changed" }));
+  expect(await screen.findByText(arrived.body)).toBeVisible();
+  expect(reads()).toHaveLength(0);
+
+  await user.click(row);
+  await waitFor(() => expect(reads()).toHaveLength(1));
+});
+
+it("leaves mail unread when a watch refresh supersedes a failing open", async () => {
+  const user = userEvent.setup({ delay: null });
+  mockVisibility("visible");
+  const fetch = vi.spyOn(globalThis, "fetch");
+  const reads = observeThreadReads(fetch);
+  let onFrame: ((frame: WatchFrame) => void) | undefined;
+  let finishOpen!: () => void;
+  let finishRefresh!: () => void;
+  const openReady = new Promise<void>((resolve) => { finishOpen = resolve; });
+  const refreshReady = new Promise<void>((resolve) => { finishRefresh = resolve; });
+  const arrived = { ...threadDetail.messages[0]!, id: "ms_reply", body: "Unread mail from the watch refresh." };
+  let detailRequests = 0;
+  server.use(http.get("*/v1/ui/threads/:id", async () => {
+    detailRequests++;
+    if (detailRequests === 1) {
+      await openReady;
+      return new HttpResponse(null, { status: 500 });
+    }
+    await refreshReady;
+    return HttpResponse.json({ ...threadDetail, messages: [...threadDetail.messages, arrived] });
+  }));
+  render(<App connect={(frame) => { onFrame = frame; return () => {}; }} />);
+  const row = await screen.findByRole("button", { name: /Open thread: Rollout check/ });
+  await user.click(row);
+  await waitFor(() => expect(detailRequests).toBe(1));
+  const openIndex = fetch.mock.calls.findIndex(([url]) => String(url).endsWith(`/threads/${threadDetail.id}`));
+  const openResponse = fetch.mock.results[openIndex]!.value as Promise<Response>;
+
+  act(() => onFrame?.({ cursor: 2, kind: "changed" }));
+  await waitFor(() => expect(detailRequests).toBe(2));
+  await act(async () => {
+    finishOpen();
+    expect((await openResponse).status).toBe(500);
+  });
+  expect(screen.queryByRole("alert")).toBeNull();
+
+  finishRefresh();
   expect(await screen.findByText(arrived.body)).toBeVisible();
   expect(reads()).toHaveLength(0);
 
