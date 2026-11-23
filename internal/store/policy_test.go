@@ -82,7 +82,9 @@ func TestAutoClaimScopeIsOwnerOnlyAndLeavesClaims(t *testing.T) {
 	mail.ClaimAutoScope = "worktree"
 	call(t, s, "messages", mail)
 	checked := call(t, s, "check", Request{Host: "elsewhere", Cwd: "/other", Worktree: "/other", RemoteURL: "https://example.com/team/project.git", RootCommit: "root", Paths: []string{"src/api.go"}, ClaimAutoScope: "worktree"})
-	if _, reported := checked["claim_auto_scope"]; reported || checked["message"] == "" || len(checked["conflicts"].([]map[string]any)) != 1 {
+	// The check reports the stored scope so doctor can show it. The payload's
+	// worktree value is not that scope, and the overlap is still a refusal.
+	if checked["claim_auto_scope"] != "repository" || checked["message"] == "" || len(checked["conflicts"].([]map[string]any)) != 1 {
 		t.Fatal("a check payload changed the repository-wide refusal", checked)
 	}
 	if scopeOf() != "repository" || waiterKey() != "wt_wait" {

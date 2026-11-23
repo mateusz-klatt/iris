@@ -19,11 +19,29 @@ type claim struct {
 	Expiry                           sql.NullInt64
 	// WorktreeKey is empty when the claim is repository-wide. WorktreePath and Branch
 	// are the checkout that was observed; they are display, not identity (ADR 037).
-	WorktreeKey, WorktreePath, Branch string
+	// Host is the holding Execution's host, so two equal display paths can be told apart.
+	WorktreeKey, WorktreePath, Branch, Host string
 }
 
 func (c claim) public() map[string]any {
 	return map[string]any{"fence": c.Fence, "path": c.Path, "kind": c.Kind, "holder": c.Holder, "origin": c.Origin, "expires_at": timestamp(c.Expiry)}
+}
+
+// listed is one claim as the console and GET /v1/claims show it (ADR 037).
+// An empty worktree path is a legacy row: the location is unknown, not the holder's
+// current checkout. effective_scope is worktree only for an automatic claim with a
+// key while the repository has opted in. A null key or an explicit claim stays
+// repository-wide even when a display path is recorded.
+func (c claim) listed(scope string) map[string]any {
+	out := c.public()
+	out["worktree_path"] = c.WorktreePath
+	out["branch"] = c.Branch
+	out["host"] = c.Host
+	out["effective_scope"] = "repository"
+	if scope == "worktree" && c.Origin == "auto" && c.WorktreeKey != "" {
+		out["effective_scope"] = "worktree"
+	}
+	return out
 }
 func (t *transaction) conflict(c claim) (map[string]any, error) {
 	var deadline int64
@@ -45,7 +63,7 @@ func (t *transaction) conflict(c claim) (map[string]any, error) {
 }
 
 func (t *transaction) claimRows(repo string) ([]claim, error) {
-	rows, err := t.rows(`SELECT c.fence,c.execution_id,c.repository_id,c.kind,c.path,c.path_key,c.origin,a.name,c.boot_epoch,c.expires_ms,COALESCE(c.worktree_key,''),COALESCE(c.worktree_path,''),COALESCE(c.branch,'') FROM Claim c JOIN Execution e ON e.id=c.execution_id JOIN Agent a ON a.id=e.agent_id WHERE c.repository_id=? AND c.revoked_ms IS NULL AND e.state='active' ORDER BY c.fence`, repo)
+	rows, err := t.rows(`SELECT c.fence,c.execution_id,c.repository_id,c.kind,c.path,c.path_key,c.origin,a.name,c.boot_epoch,c.expires_ms,COALESCE(c.worktree_key,''),COALESCE(c.worktree_path,''),COALESCE(c.branch,''),COALESCE(e.host_id,'') FROM Claim c JOIN Execution e ON e.id=c.execution_id JOIN Agent a ON a.id=e.agent_id WHERE c.repository_id=? AND c.revoked_ms IS NULL AND e.state='active' ORDER BY c.fence`, repo)
 	if err != nil {
 		return nil, err
 	}
@@ -53,7 +71,7 @@ func (t *transaction) claimRows(repo string) ([]claim, error) {
 	out := []claim{}
 	for rows.Next() {
 		var c claim
-		rows.Scan(&c.Fence, &c.Execution, &c.Repo, &c.Kind, &c.Path, &c.Key, &c.Origin, &c.Holder, &c.Epoch, &c.Expiry, &c.WorktreeKey, &c.WorktreePath, &c.Branch)
+		rows.Scan(&c.Fence, &c.Execution, &c.Repo, &c.Kind, &c.Path, &c.Key, &c.Origin, &c.Holder, &c.Epoch, &c.Expiry, &c.WorktreeKey, &c.WorktreePath, &c.Branch, &c.Host)
 		out = append(out, c)
 	}
 	return out, rows.Err()
@@ -64,8 +82,15 @@ func (t *transaction) claims(repo string) ([]map[string]any, error) {
 		return nil, err
 	}
 	out := []map[string]any{}
+	if len(cs) == 0 {
+		return out, nil
+	}
+	scope, err := t.claimScope(repo)
+	if err != nil {
+		return nil, err
+	}
 	for _, c := range cs {
-		out = append(out, c.public())
+		out = append(out, c.listed(scope))
 	}
 	return out, nil
 }

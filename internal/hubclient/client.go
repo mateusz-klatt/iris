@@ -441,6 +441,9 @@ type CheckResponse struct {
 	Advisories []Advisory `json:"advisories,omitempty"`
 	// CasePolicy is the repository's case policy, folded or sensitive (ADR 003).
 	CasePolicy string `json:"case_policy,omitempty"`
+	// ClaimAutoScope is repository or worktree (ADR 037). Empty when a hub from
+	// before that decision omits the field; doctor then says the scope is unknown.
+	ClaimAutoScope string `json:"claim_auto_scope,omitempty"`
 	// Attention is in every successful shell reconcile answer from a hub that names attention,
 	// and nil from one before it (ADR 017, decision 6).
 	Attention *Attention `json:"attention,omitempty"`

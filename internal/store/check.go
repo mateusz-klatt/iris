@@ -109,7 +109,9 @@ func (t *transaction) checkPaths(repo, host, worktree, incomingKey string, paths
 	// that folds case works in it (ADR 003). advisories is omitted when empty so a check
 	// with no exemption keeps today's keys. The shell renders them into message later;
 	// the guard keeps message empty for an advisory-only result.
-	out := map[string]any{"message": message, "conflicts": conflicts, "case_policy": policy}
+	// claim_auto_scope is what iris doctor reports. It is always present, so a missing
+	// field means a hub from before ADR 037, which doctor calls unknown.
+	out := map[string]any{"message": message, "conflicts": conflicts, "case_policy": policy, "claim_auto_scope": scope}
 	if len(advisories) > 0 {
 		out["advisories"] = advisories
 	}
