@@ -632,7 +632,9 @@ describe("console view URL routing", () => {
     render(<App connect={() => () => {}} />);
     expect(await screen.findByText("Waiting for the first session.")).toBeVisible();
     expect(screen.getByRole("main")).toHaveAttribute("data-view", "diagnostics");
-    expect(window.location.hash).toBe("#/diagnostics");
+    // The latch commits the diagnostics view in render. The hash is written
+    // afterwards, in the route effect, so findBy can return while it is still empty.
+    await waitFor(() => expect(window.location.hash).toBe("#/diagnostics"));
   });
 
   it.each(["#/unknown", "#content", "#/threads/ms_root", "#/messages/ms_root"])("falls back safely from invalid hash %s without opening any thread", async (badHash) => {
