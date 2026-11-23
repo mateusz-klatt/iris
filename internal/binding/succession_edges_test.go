@@ -55,7 +55,7 @@ func scriptedSuccessionResolver(h *tickHub, memory *fakeSuccessionMemory) *Resol
 	r := tickResolver(h.client(), "claude", sessionS, proc.Ancestor{})
 	r.Succession = memory
 	r.ParentAlive = func() bool { return true }
-	r.Recall = func(string, string) (int, bool, error) { return memory.generation, memory.generation > 0, nil }
+	r.Recall = func(string, string) (int, int, error) { return memory.generation, 0, nil }
 	return r
 }
 
@@ -69,7 +69,7 @@ func TestSuccessionCurrentSessionDiscoveryAndUntrustedFallback(t *testing.T) {
 		}}
 		memory := &fakeSuccessionMemory{currentErr: errors.New("bad witness")}
 		r := tickResolver(h.client(), "cursor", nil, proc.Ancestor{PID: 42, StartMS: 100, Name: "cursor-agent"})
-		r.Recall = func(string, string) (int, bool, error) { return 0, false, nil }
+		r.Recall = func(string, string) (int, int, error) { return 0, 0, nil }
 		r.Succession = memory
 		if _, err := r.Resolve(t.Context(), ""); !IsCode(err, "lost") {
 			t.Fatalf("witness error did not fail closed: %v", err)
@@ -92,7 +92,7 @@ func TestSuccessionCurrentSessionDiscoveryAndUntrustedFallback(t *testing.T) {
 		}}
 		memory := &fakeSuccessionMemory{currentOK: false}
 		r := tickResolver(h.client(), "cursor", nil, proc.Ancestor{PID: 42, StartMS: 100, Name: "cursor-agent"})
-		r.Recall = func(string, string) (int, bool, error) { return 0, false, nil }
+		r.Recall = func(string, string) (int, int, error) { return 0, 0, nil }
 		r.Succession = memory
 		b, err := r.Resolve(t.Context(), "")
 		if err != nil || b.ExecutionID != "ex_fallback" || b.SessionID != "mcp-42-100" || !r.own {
@@ -210,7 +210,7 @@ func TestSuccessionValidatesResponsesAndCASFailures(t *testing.T) {
 		name     string
 		response map[string]any
 		advance  func(string, int, string) (int, bool, error)
-		recall   func(string, string) (int, bool, error)
+		recall   func(string, string) (int, int, error)
 		bind     bool
 	}{
 		{name: "missing execution", response: map[string]any{}},
@@ -219,7 +219,7 @@ func TestSuccessionValidatesResponsesAndCASFailures(t *testing.T) {
 		{name: "advance failure", response: map[string]any{"execution_id": "ex_two", "generation": 2, "session_id": "S"}, advance: func(string, int, string) (int, bool, error) { return 0, false, errors.New("CAS") }},
 		{name: "same generation different execution after CAS", response: map[string]any{"execution_id": "ex_two", "generation": 2, "session_id": "S"}, advance: func(string, int, string) (int, bool, error) { return 2, false, nil }},
 		{name: "advance mismatch without winner", response: map[string]any{"execution_id": "ex_two", "generation": 2, "session_id": "S"}, advance: func(string, int, string) (int, bool, error) { return 0, false, nil }, bind: true},
-		{name: "generation recall failure", response: map[string]any{"execution_id": "ex_two", "generation": 2, "session_id": "S"}, recall: func(string, string) (int, bool, error) { return 0, true, nil }},
+		{name: "generation recall failure", response: map[string]any{"execution_id": "ex_two", "generation": 2, "session_id": "S"}, recall: func(string, string) (int, int, error) { return -1, 0, nil }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := &tickHub{reply: func(req *http.Request, _ map[string]any) (int, any) {
@@ -257,7 +257,7 @@ func TestSuccessionAdoptsValidWinnersAndRejectsOthers(t *testing.T) {
 		gone         bool
 		proofs       []fakeSuccessionProof
 		advance      func(string, int, string) (int, bool, error)
-		recall       func(string, string) (int, bool, error)
+		recall       func(string, string) (int, int, error)
 		wantWinner   string
 		wantBindOnly bool
 	}{
@@ -273,7 +273,7 @@ func TestSuccessionAdoptsValidWinnersAndRejectsOthers(t *testing.T) {
 		{name: "advance failure", bind: validWinner, advance: func(string, int, string) (int, bool, error) { return 0, false, errors.New("CAS") }},
 		{name: "winner proof failure", bind: validWinner, proofs: []fakeSuccessionProof{{generation: 1, execution: "ex_one"}, {err: errors.New("bad winner proof")}}},
 		{name: "winner proof mismatch", bind: validWinner, proofs: []fakeSuccessionProof{{generation: 1, execution: "ex_one"}, {generation: 3, execution: "ex_two"}}},
-		{name: "winner generation recall failure", bind: validWinner, recall: func(string, string) (int, bool, error) { return 0, true, nil }},
+		{name: "winner generation recall failure", bind: validWinner, recall: func(string, string) (int, int, error) { return -1, 0, nil }},
 		{name: "later hook winner", bind: map[string]any{"execution_id": "ex_three", "generation": 3, "session_id": "S", "match": "succession"}, proofs: []fakeSuccessionProof{{generation: 1, execution: "ex_one"}, {generation: 3, execution: "ex_three"}}, wantWinner: "ex_three"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -453,7 +453,7 @@ func TestSuccessionNetworkFailureIsLost(t *testing.T) {
 	})}}
 	memory := &fakeSuccessionMemory{generation: 1, execution: "ex_one"}
 	r := &Resolver{Hub: client, Client: "claude", Host: "host", Getenv: func(string) string { return "" }, Succession: memory, ParentAlive: func() bool { return true }}
-	r.Recall = func(string, string) (int, bool, error) { return memory.generation, true, nil }
+	r.Recall = func(string, string) (int, int, error) { return memory.generation, 0, nil }
 	if _, attempted, err := r.succeedAfterLostHeld(t.Context(), "S", 2, 1); !attempted || !IsCode(err, "lost") {
 		t.Fatalf("network failure did not become lost: attempted=%t err=%v", attempted, err)
 	}

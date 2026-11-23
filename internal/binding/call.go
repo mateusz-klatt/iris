@@ -227,8 +227,8 @@ func (r *Resolver) bySessionOrReattachHeld(ctx context.Context, session string, 
 }
 
 // lookup attributes a call to the session it names by one lookup, without mu, so it never waits
-// behind a first bind's grace period. It keeps nothing and renews nothing. A sub-agent lookup
-// for its native session still respects the hook's disk proof for that session.
+// behind a first bind's grace period. It keeps nothing and renews nothing. A lookup respects the
+// session's end marker and, for the native session, the hook's live proof.
 func (r *Resolver) lookup(ctx context.Context, session, nativeSession string) (Bound, error) {
 	b, err := r.bySession(ctx, session)
 	if unusableAnswer(err) {
@@ -238,10 +238,8 @@ func (r *Resolver) lookup(ctx context.Context, session, nativeSession string) (B
 	if err != nil {
 		return Bound{}, err
 	}
-	if session == nativeSession {
-		if err := r.checkGeneration(session, b.Generation, 0); err != nil {
-			return Bound{}, err
-		}
+	if err := r.checkGeneration(session, b.Generation, 0, session == nativeSession); err != nil {
+		return Bound{}, err
 	}
 	return b, nil
 }

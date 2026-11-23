@@ -103,28 +103,29 @@ func (s *Sessions) RecallGeneration(client, session string) (int, bool, error) {
 	return generation, generation > 0 || err != nil, err
 }
 
-// RecallBindingGeneration is the binding reader. Once SessionEnd has cleared the ordinary
-// proof, its .ended marker still blocks a proofless fallback. It records a damaged file in the
-// local doctor log even when the client has yet to run a hook.
-func (s *Sessions) RecallBindingGeneration(client, session string) (int, bool, error) {
-	generation, present, err := s.RecallGeneration(client, session)
+// RecallBindingGeneration returns live proof and the last recorded end separately. A zero
+// value means that file was absent. Damage to either file or the execution proof is recorded for doctor.
+func (s *Sessions) RecallBindingGeneration(client, session string) (generation, endedThrough int, err error) {
+	if client == "" || session == "" {
+		return 0, 0, nil
+	}
 	path := s.memory.name(client, session)
-	if err == nil && client != "" && session != "" {
+	generation, err = readGeneration(path)
+	if err == nil {
 		executionPath := path + ".execution"
-		_, err = readExecutionProof(executionPath)
+		_, err = readExecutionProof(executionPath, generation)
 		if err != nil {
-			path, present = executionPath, true
+			path = executionPath
 		}
 	}
-	if !present && client != "" && session != "" {
+	if err == nil {
 		path += ".ended"
-		generation, err = readGeneration(path)
-		present = generation > 0 || err != nil
+		endedThrough, err = readGeneration(path)
 	}
 	if err != nil {
 		s.recordDamagedGeneration(client, path)
 	}
-	return generation, present, err
+	return generation, endedThrough, err
 }
 
 func (s *Sessions) recordDamagedGeneration(client, path string) {

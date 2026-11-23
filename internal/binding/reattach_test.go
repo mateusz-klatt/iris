@@ -258,9 +258,17 @@ func TestBoundMCPReattachesOnToolCallInsideWindowWithoutMaintain(t *testing.T) {
 func TestUnboundMCPReattachesFromHookMemoryAndRefusesBadProof(t *testing.T) {
 	ctx := context.Background()
 
-	t.Run("legacy env reattach inside window", func(t *testing.T) {
+	t.Run("legacy env reattach with live proof above the end", func(t *testing.T) {
 		h := newRestartableBindingHub(t)
-		reg, err := h.store.Call(ctx, "sessions", store.Request{Client: "claude", Host: "host", SessionID: "s1", Cwd: "/repo", Worktree: "/repo", Source: "hook"})
+		req := store.Request{Client: "claude", Host: "host", SessionID: "s1", Cwd: "/repo", Worktree: "/repo", Source: "hook"}
+		first, err := h.store.Call(ctx, "sessions", req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := h.store.Call(ctx, "end", store.Request{ExecutionID: first["execution_id"].(string), Generation: 1}); err != nil {
+			t.Fatal(err)
+		}
+		reg, err := h.store.Call(ctx, "sessions", req)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -275,19 +283,19 @@ func TestUnboundMCPReattachesFromHookMemoryAndRefusesBadProof(t *testing.T) {
 				}
 				return ""
 			},
-			Recall: func(client, session string) (int, bool, error) {
+			Recall: func(client, session string) (int, int, error) {
 				if client == "claude" && session == "s1" {
-					return 1, true, nil
+					return 2, 1, nil
 				}
-				return 0, false, nil
+				return 0, 0, nil
 			},
 		}
 		b, err := r.Resolve(ctx, "")
-		if err != nil || b.ExecutionID != reg["execution_id"] || b.Generation != 1 || b.Rung != 2 || !b.HookSeen || b.Worktree != "/repo" {
+		if err != nil || b.ExecutionID != reg["execution_id"] || b.Generation != 2 || b.Rung != 2 || !b.HookSeen || b.Worktree != "/repo" {
 			t.Fatalf("unbound legacy reattach failed: %+v %v", b, err)
 		}
-		if reqs := h.sessions(); len(reqs) != 1 || reqs[0].Source != "shim" || reqs[0].Generation != 1 {
-			t.Fatalf("expected one shim gen-1 reattach request, got %+v", reqs)
+		if reqs := h.sessions(); len(reqs) != 1 || reqs[0].Source != "shim" || reqs[0].Generation != 2 {
+			t.Fatalf("expected one shim gen-2 reattach request, got %+v", reqs)
 		}
 	})
 
@@ -303,11 +311,11 @@ func TestUnboundMCPReattachesFromHookMemoryAndRefusesBadProof(t *testing.T) {
 			Hub:    &hubclient.Client{Config: config{h.srv.URL}},
 			Client: "codex", Host: "host", CWD: "/repo",
 			Getenv: func(string) string { return "" },
-			Recall: func(client, session string) (int, bool, error) {
+			Recall: func(client, session string) (int, int, error) {
 				if client == "codex" && session == "c1" {
-					return 1, true, nil
+					return 1, 0, nil
 				}
-				return 0, false, nil
+				return 0, 0, nil
 			},
 		}
 		// Sub-agent call never reattaches or calls /v1/sessions.
@@ -341,7 +349,7 @@ func TestUnboundMCPReattachesFromHookMemoryAndRefusesBadProof(t *testing.T) {
 			wantReqs int
 		}{
 			{"legacy malformed error", false, 0, true, errors.New("bad"), 0},
-			{"legacy zero gen", false, 0, true, nil, 0},
+			{"legacy invalid gen", false, -1, true, nil, 0},
 			{"legacy mismatched gen", false, 2, true, nil, 1},
 			{"codex malformed error", true, 0, true, errors.New("bad"), 0},
 			{"codex mismatched gen", true, 2, true, nil, 1},
@@ -367,7 +375,7 @@ func TestUnboundMCPReattachesFromHookMemoryAndRefusesBadProof(t *testing.T) {
 						}
 						return ""
 					},
-					Recall: func(string, string) (int, bool, error) { return tc.gen, tc.present, tc.recallEr },
+					Recall: func(string, string) (int, int, error) { return tc.gen, 0, tc.recallEr },
 				}
 				var err error
 				if tc.codex {
@@ -401,7 +409,7 @@ func TestUnboundMCPReattachesFromHookMemoryAndRefusesBadProof(t *testing.T) {
 		h := &scriptedHub{binds: []string{"unbound", "unbound"}}
 		called := 0
 		r := resolverFor(t, h, "claude", map[string]string{"IRIS_EXECUTION": "ex_live", "CLAUDE_CODE_SESSION_ID": "s1"}, proc.Ancestor{})
-		r.Recall = func(string, string) (int, bool, error) { called++; return 1, true, nil }
+		r.Recall = func(string, string) (int, int, error) { called++; return 1, 0, nil }
 		if _, err := r.Resolve(ctx, ""); err != nil && !IsCode(err, "unbound") {
 			t.Fatal(err)
 		}
@@ -410,7 +418,7 @@ func TestUnboundMCPReattachesFromHookMemoryAndRefusesBadProof(t *testing.T) {
 		}
 
 		r2 := resolverFor(t, &scriptedHub{binds: []string{"unbound", "unbound"}}, "claude", map[string]string{"CLAUDE_CODE_SESSION_ID": "s1"}, proc.Ancestor{})
-		r2.Recall = func(string, string) (int, bool, error) { called++; return 1, true, nil }
+		r2.Recall = func(string, string) (int, int, error) { called++; return 1, 0, nil }
 		if _, err := r2.Resolve(ctx, "ex_explicit"); err != nil && !IsCode(err, "unbound") {
 			t.Fatal(err)
 		}
@@ -420,7 +428,7 @@ func TestUnboundMCPReattachesFromHookMemoryAndRefusesBadProof(t *testing.T) {
 
 		// With Recall configured but no session env var and no prior binding, Recall is not called.
 		r3 := resolverFor(t, &scriptedHub{binds: []string{"unbound"}}, "cursor", nil, proc.Ancestor{})
-		r3.Recall = func(string, string) (int, bool, error) { called++; return 1, true, nil }
+		r3.Recall = func(string, string) (int, int, error) { called++; return 1, 0, nil }
 		if _, err := r3.Resolve(ctx, ""); !IsCode(err, "unbound") || called != 0 {
 			t.Fatalf("client without session identity invoked Recall: err=%v called=%d", err, called)
 		}
@@ -444,11 +452,11 @@ func TestUnboundMCPReattachesFromHookMemoryAndRefusesBadProof(t *testing.T) {
 				}
 			}}
 			r := tickResolver(h.client(), "claude", sessionS, proc.Ancestor{})
-			r.Recall = func(client, session string) (int, bool, error) {
+			r.Recall = func(client, session string) (int, int, error) {
 				if client == "claude" && session == "S" {
-					return 3, true, nil
+					return 3, 0, nil
 				}
-				return 0, false, nil
+				return 0, 0, nil
 			}
 			stop := maintain(t, r, "shim")
 			time.Sleep(21 * time.Second)
@@ -491,11 +499,11 @@ func TestRung2MemoryReattachUsesSessionIdentity(t *testing.T) {
 					return ""
 				},
 				Ancestor: func() (proc.Ancestor, error) { return nearest, nil },
-				Recall: func(client, session string) (int, bool, error) {
+				Recall: func(client, session string) (int, int, error) {
 					if client == "claude" && session == "rung-2-session" {
-						return 1, true, nil
+						return 1, 0, nil
 					}
-					return 0, false, nil
+					return 0, 0, nil
 				},
 			}
 			b, err := r.Resolve(ctx, "")
@@ -534,11 +542,11 @@ func TestPermanentLatchRemovedAndEndedStaysTerminal(t *testing.T) {
 			Client: "cursor", Host: "host", CWD: "/repo",
 			Getenv:   func(string) string { return "" },
 			Ancestor: func() (proc.Ancestor, error) { return anc, nil },
-			Recall: func(client, session string) (int, bool, error) {
+			Recall: func(client, session string) (int, int, error) {
 				if client == "cursor" && session == "cur-1" && memGen > 0 {
-					return memGen, true, nil
+					return memGen, 0, nil
 				}
-				return 0, false, nil
+				return 0, 0, nil
 			},
 		}
 		b1, err := r.Resolve(ctx, "")
@@ -621,7 +629,7 @@ func TestPermanentLatchRemovedAndEndedStaysTerminal(t *testing.T) {
 				}
 				return ""
 			},
-			Recall: func(string, string) (int, bool, error) { return 1, true, nil },
+			Recall: func(string, string) (int, int, error) { return 1, 0, nil },
 		}
 		if _, err := r.Resolve(ctx, ""); err != nil {
 			t.Fatal(err)
@@ -733,17 +741,17 @@ func TestForeignRung1AndRung4NeverLeakIntoLast(t *testing.T) {
 				Client: client, Host: "host", CWD: "/repo",
 				Getenv:   func(k string) string { return env[k] },
 				Ancestor: func() (proc.Ancestor, error) { return proc.Ancestor{}, nil },
-				Recall: func(c, session string) (int, bool, error) {
+				Recall: func(c, session string) (int, int, error) {
 					recallMu.Lock()
 					recalled = append(recalled, session)
 					recallMu.Unlock()
 					switch session {
 					case "S_A":
-						return 1, true, nil
+						return 1, 0, nil
 					case "S_B":
-						return 2, true, nil
+						return 2, 0, nil
 					default:
-						return 0, false, nil
+						return 0, 0, nil
 					}
 				},
 			}
@@ -799,8 +807,10 @@ func TestForeignRung1AndRung4NeverLeakIntoLast(t *testing.T) {
 				recallMu.Lock()
 				gotRecalled := append([]string(nil), recalled...)
 				recallMu.Unlock()
-				if len(gotRecalled) != 0 {
-					t.Fatalf("cursor without process-owned binding recalled foreign sessions: %v", gotRecalled)
+				for _, session := range gotRecalled {
+					if session != "S_B" {
+						t.Fatalf("override checked an unrelated session's end marker: %v", gotRecalled)
+					}
 				}
 			} else {
 				got, err := r.Resolve(ctx, "")
@@ -953,11 +963,11 @@ func TestRung3ProcessIdentityAndBeatOnePreservesHookSeen(t *testing.T) {
 			Client: "cursor", Host: "host", CWD: "/repo",
 			Getenv:   func(string) string { return "" },
 			Ancestor: func() (proc.Ancestor, error) { return curAnc, nil },
-			Recall: func(client, session string) (int, bool, error) {
+			Recall: func(client, session string) (int, int, error) {
 				if client == "cursor" && session == "S1" {
-					return memGen, true, nil
+					return memGen, 0, nil
 				}
-				return 0, false, nil
+				return 0, 0, nil
 			},
 		}
 		b1, err := rA.Resolve(ctx, "")
@@ -1018,7 +1028,7 @@ func TestPost120sEndedRestoreAndMaintainBadMemoryRefusals(t *testing.T) {
 			Hub:    &hubclient.Client{Config: config{h.srv.URL}},
 			Client: "claude", Host: "host", CWD: "/repo",
 			Getenv: func(k string) string { return map[string]string{"CLAUDE_CODE_SESSION_ID": "s1"}[k] },
-			Recall: func(string, string) (int, bool, error) { return 1, true, nil },
+			Recall: func(string, string) (int, int, error) { return 1, 0, nil },
 		}
 		if _, err := r.Resolve(ctx, ""); err != nil {
 			t.Fatal(err)
@@ -1045,7 +1055,7 @@ func TestPost120sEndedRestoreAndMaintainBadMemoryRefusals(t *testing.T) {
 			Hub:    &hubclient.Client{Config: config{h.srv.URL}},
 			Client: "claude", Host: "host", CWD: "/repo",
 			Getenv: func(k string) string { return map[string]string{"CLAUDE_CODE_SESSION_ID": "s1"}[k] },
-			Recall: func(string, string) (int, bool, error) { return 1, true, nil },
+			Recall: func(string, string) (int, int, error) { return 1, 0, nil },
 		}
 		if _, err := r.Resolve(ctx, ""); !IsCode(err, "lost") {
 			t.Fatalf("unbound legacy MCP revived past 120s: %v", err)
@@ -1067,7 +1077,7 @@ func TestPost120sEndedRestoreAndMaintainBadMemoryRefusals(t *testing.T) {
 			Hub:    &hubclient.Client{Config: config{h.srv.URL}},
 			Client: "codex", Host: "host", CWD: "/repo",
 			Getenv: func(string) string { return "" },
-			Recall: func(string, string) (int, bool, error) { return 1, true, nil },
+			Recall: func(string, string) (int, int, error) { return 1, 0, nil },
 		}
 		if _, _, err := r.ResolveCall(ctx, "", "c1", "c1"); !IsCode(err, "lost") {
 			t.Fatalf("unbound codex root revived past 120s: %v", err)
@@ -1091,7 +1101,7 @@ func TestPost120sEndedRestoreAndMaintainBadMemoryRefusals(t *testing.T) {
 			Hub:    &hubclient.Client{Config: config{h.srv.URL}},
 			Client: "claude", Host: "host", CWD: "/repo",
 			Getenv: func(k string) string { return map[string]string{"CLAUDE_CODE_SESSION_ID": "s-ended"}[k] },
-			Recall: func(string, string) (int, bool, error) { return 1, true, nil },
+			Recall: func(string, string) (int, int, error) { return 1, 0, nil },
 		}
 		if _, err := r.Resolve(ctx, ""); !IsCode(err, "lost") {
 			t.Fatalf("unbound MCP revived ended session: %v", err)
@@ -1124,7 +1134,7 @@ func TestPost120sEndedRestoreAndMaintainBadMemoryRefusals(t *testing.T) {
 			Hub:    &hubclient.Client{Config: config{h.srv.URL}},
 			Client: "claude", Host: "host", CWD: "/repo",
 			Getenv: func(k string) string { return map[string]string{"CLAUDE_CODE_SESSION_ID": "s-restore"}[k] },
-			Recall: func(string, string) (int, bool, error) { return 2, true, nil },
+			Recall: func(string, string) (int, int, error) { return 2, 0, nil },
 		}
 		b, err := r.Resolve(ctx, "")
 		if err != nil || b.ExecutionID != ex2["execution_id"] || b.Generation != 2 {
@@ -1166,7 +1176,7 @@ func TestPost120sEndedRestoreAndMaintainBadMemoryRefusals(t *testing.T) {
 						}
 					}}
 					r := tickResolver(h.client(), "claude", sessionS, proc.Ancestor{})
-					r.Recall = func(string, string) (int, bool, error) { return tc.gen, true, tc.recallEr }
+					r.Recall = func(string, string) (int, int, error) { return tc.gen, 0, tc.recallEr }
 					stop := maintain(t, r, "shim")
 					time.Sleep(21 * time.Second)
 					stop()

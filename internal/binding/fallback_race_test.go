@@ -53,7 +53,7 @@ func TestFallbackFollowsSessionStartThatWinsRegistrationRace(t *testing.T) {
 			if tc.watch {
 				r.HeartbeatSource = "watch"
 			}
-			r.Recall = func(_, _ string) (int, bool, error) { return proof, proof > 0, nil }
+			r.Recall = func(_, _ string) (int, int, error) { return proof, 0, nil }
 
 			b, err := r.Resolve(t.Context(), "")
 			if tc.localProof == 0 {
