@@ -28,12 +28,24 @@ type ClaimGroup struct {
 	Prefix string `json:"prefix,omitempty"`
 }
 
-// filePlace is one repository's share of a grouped touch.
+// pathPlan is one exact path a place will grant, with the checkout it was read
+// from. A duplicate whose checkouts do not agree has an empty location, so the
+// one repository-scoped claim does not wear the first checkout.
+type pathPlan struct {
+	path string
+	loc  claimLocation
+}
+
+// filePlace is one repository's share of a grouped touch. Under repository the
+// share is the whole repository, and each path keeps its own checkout. Under
+// worktree the share is one checkout.
 type filePlace struct {
 	repo, policy, action string
 	scope                string
 	loc                  claimLocation
-	paths, ignored       []string
+	grants               []pathPlan
+	byPath               map[string]int
+	ignored              []string
 	reuse                map[string]claim
 	advisories           []map[string]any
 }
@@ -110,7 +122,7 @@ func (t *transaction) touchFiles(r Request) (map[string]any, error) {
 			if err != nil {
 				return nil, err
 			}
-			p = &filePlace{repo: repo, policy: policy, action: action, scope: scope, loc: loc, reuse: map[string]claim{}}
+			p = &filePlace{repo: repo, policy: policy, action: action, scope: scope, loc: loc, byPath: map[string]int{}, reuse: map[string]claim{}}
 			byPlace[id] = p
 			places = append(places, p)
 		}
@@ -124,13 +136,21 @@ func (t *transaction) touchFiles(r Request) (map[string]any, error) {
 			}
 			k := pathKey(clean, p.policy)
 			if seen[seenKey+k] {
+				// The same path in two checkouts is one claim under repository.
+				// The checkouts disagree, so the claim stays repository-wide
+				// instead of keeping the first group's key. After opt-in that
+				// key would make the second checkout look exempt.
+				if i, ok := p.byPath[k]; ok && p.scope != "worktree" && !sameProvenance(p.grants[i].loc, loc) {
+					p.grants[i].loc = claimLocation{}
+				}
 				continue
 			}
 			seen[seenKey+k] = true
 			if defaultIgnored(k) {
 				p.ignored = append(p.ignored, clean)
 			} else {
-				p.paths = append(p.paths, clean)
+				p.byPath[k] = len(p.grants)
+				p.grants = append(p.grants, pathPlan{path: clean, loc: loc})
 			}
 		}
 	}
@@ -147,6 +167,12 @@ func (t *transaction) touchFiles(r Request) (map[string]any, error) {
 		if found {
 			action = stricter(action, p.action)
 		}
+	}
+	// Planned grants are not rows yet, so fileConflicts cannot see a keyed
+	// claim and an unkeyed claim of the same path in this request. Classify
+	// them against each other before either is inserted.
+	if act := t.plannedOverlap(e, places, &conflicts); act != "" {
+		action = stricter(action, act)
 	}
 	ignored := []map[string]any{}
 	for _, p := range places {
@@ -255,23 +281,34 @@ func (t *transaction) fileConflicts(e execution, p *filePlace, conflicts *[]map[
 		return false, err
 	}
 	found := false
+	type checked struct {
+		path, key string
+		claim     bool
+	}
+	var paths []checked
+	for _, g := range p.grants {
+		paths = append(paths, checked{g.path, g.loc.key, true})
+	}
 	// Ignored paths take no automatic claim, but another session's explicit claim on one
 	// still applies (D10), so every requested path is checked for conflicts.
-	for i, path := range append(append([]string{}, p.paths...), p.ignored...) {
-		k := pathKey(path, p.policy)
+	for _, path := range p.ignored {
+		paths = append(paths, checked{path, p.loc.key, false})
+	}
+	for _, item := range paths {
+		k := pathKey(item.path, p.policy)
 		for _, c := range cs {
 			if !overlaps(k, "exact", c.Key, c.Kind) {
 				continue
 			}
 			if c.Execution == e.ID {
-				if reusesOwn(p.scope, c.Origin, c.WorktreeKey, p.loc.key) {
-					if i < len(p.paths) {
-						p.reuse[path] = c
+				if reusesOwn(p.scope, c.Origin, c.WorktreeKey, item.key) {
+					if item.claim {
+						p.reuse[item.path] = c
 					}
 					continue
 				}
-				if exemptAutoOverlap(p.scope, c.Origin, c.WorktreeKey, "auto", p.loc.key) {
-					p.advisories = append(p.advisories, advisoryOf(c, path, p.repo))
+				if exemptAutoOverlap(p.scope, c.Origin, c.WorktreeKey, "auto", item.key) {
+					p.advisories = append(p.advisories, advisoryOf(c, item.path, p.repo))
 					continue
 				}
 			} else {
@@ -282,8 +319,8 @@ func (t *transaction) fileConflicts(e execution, p *filePlace, conflicts *[]map[
 				if family {
 					continue
 				}
-				if exemptAutoOverlap(p.scope, c.Origin, c.WorktreeKey, "auto", p.loc.key) {
-					p.advisories = append(p.advisories, advisoryOf(c, path, p.repo))
+				if exemptAutoOverlap(p.scope, c.Origin, c.WorktreeKey, "auto", item.key) {
+					p.advisories = append(p.advisories, advisoryOf(c, item.path, p.repo))
 					continue
 				}
 			}
@@ -291,14 +328,14 @@ func (t *transaction) fileConflicts(e execution, p *filePlace, conflicts *[]map[
 			if err != nil {
 				return false, err
 			}
-			v["path"] = path
+			v["path"] = item.path
 			v["repository_id"] = p.repo
 			*conflicts = append(*conflicts, v)
 			found = true
 			// The holder's release of this path is what this session waits for.
 			// An overlap with this Execution's own other checkout does not wait on itself.
 			if c.Execution != e.ID {
-				if err = t.wait(e, p.repo, k, "exact", p.loc.key); err != nil {
+				if err = t.wait(e, p.repo, k, "exact", item.key); err != nil {
 					return false, err
 				}
 			}
@@ -307,12 +344,66 @@ func (t *transaction) fileConflicts(e execution, p *filePlace, conflicts *[]map[
 	return found, nil
 }
 
+// sameProvenance is whether two observations of one path are the same checkout.
+// A known key matches only that key. Two observations with no key match only
+// when the display paths do; otherwise the duplicate is ambiguous.
+func sameProvenance(a, b claimLocation) bool {
+	if a.key != b.key {
+		return false
+	}
+	if a.key != "" {
+		return true
+	}
+	return worktreePathsEqual(a.path, b.path)
+}
+
+// plannedOverlap classifies grants this request is about to insert against
+// each other. fileConflicts only reads rows already stored, so a keyed claim
+// and a null-key claim of one path in the same call would both be inserted.
+// A null key is repository-wide and is a real conflict. An exempt automatic
+// pair may both be granted. The caller grants nothing when this returns an action.
+func (t *transaction) plannedOverlap(e execution, places []*filePlace, conflicts *[]map[string]any) string {
+	type plan struct {
+		path, key, repo, scope, policy, action string
+	}
+	var plans []plan
+	for _, p := range places {
+		for _, g := range p.grants {
+			plans = append(plans, plan{g.path, g.loc.key, p.repo, p.scope, p.policy, p.action})
+		}
+	}
+	action := ""
+	for i := range plans {
+		for j := i + 1; j < len(plans); j++ {
+			a, b := plans[i], plans[j]
+			if a.repo != b.repo || !overlaps(pathKey(a.path, a.policy), "exact", pathKey(b.path, b.policy), "exact") {
+				continue
+			}
+			if exemptAutoOverlap(a.scope, "auto", a.key, "auto", b.key) {
+				continue
+			}
+			action = stricter(action, a.action)
+			expiry := t.s.clock.Now().Add(10 * time.Minute).UnixMilli()
+			*conflicts = append(*conflicts, map[string]any{
+				"path":          a.path,
+				"claimed_path":  b.path,
+				"holder":        e.Name,
+				"origin":        "auto",
+				"kind":          "exact",
+				"repository_id": a.repo,
+				"expires_at":    timestamp(sql.NullInt64{Int64: expiry, Valid: true}),
+			})
+		}
+	}
+	return action
+}
+
 // grantFiles takes or renews every path of places for e, within the claim limit, and returns
 // them with their repositories.
 func (t *transaction) grantFiles(e execution, places []*filePlace) ([]map[string]any, error) {
 	fresh := 0
 	for _, p := range places {
-		fresh += len(p.paths) - len(p.reuse)
+		fresh += len(p.grants) - len(p.reuse)
 	}
 	if err := t.claimLimit(e, fresh); err != nil {
 		return nil, err
@@ -320,24 +411,24 @@ func (t *transaction) grantFiles(e execution, places []*filePlace) ([]map[string
 	granted := []map[string]any{}
 	expiry := t.s.clock.Now().Add(10 * time.Minute).UnixMilli()
 	for _, p := range places {
-		for _, path := range p.paths {
-			k := pathKey(path, p.policy)
-			c, ok := p.reuse[path]
+		for _, g := range p.grants {
+			k := pathKey(g.path, p.policy)
+			c, ok := p.reuse[g.path]
 			if !ok {
-				fence, err := t.insertClaim(e, p.repo, "exact", path, k, "auto", sql.NullInt64{Int64: expiry, Valid: true}, p.loc)
+				fence, err := t.insertClaim(e, p.repo, "exact", g.path, k, "auto", sql.NullInt64{Int64: expiry, Valid: true}, g.loc)
 				if err != nil {
 					return nil, err
 				}
 				c.Fence = fence
 			} else if c.Origin == "auto" {
-				if err := t.renewAuto(c.Fence, expiry, p.loc.path, p.loc.branch); err != nil {
+				if err := t.renewAuto(c.Fence, expiry, g.loc.path, g.loc.branch); err != nil {
 					return nil, err
 				}
 			}
-			if err := t.took(e, p.repo, k, p.loc.key); err != nil {
+			if err := t.took(e, p.repo, k, g.loc.key); err != nil {
 				return nil, err
 			}
-			granted = append(granted, map[string]any{"repository_id": p.repo, "path": path, "fence": c.Fence})
+			granted = append(granted, map[string]any{"repository_id": p.repo, "path": g.path, "fence": c.Fence})
 		}
 	}
 	return granted, nil
