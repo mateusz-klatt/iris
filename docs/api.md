@@ -821,14 +821,17 @@ is older.
 ```
 
 `POST /v1/ui/threads/{id}/read` takes `{"repository_id":"...","last_message_id":"ms_..."}` and
-acknowledges the human deliveries through that message in the thread's `(created_ms, id)` order:
-the selected repository's deliveries, or every repository's when `repository_id` is empty. The
-message must belong to the thread and be visible in that view; an unknown, foreign or hidden id
-returns `not_found`. It returns `{"read": n}`. The console sends the newest message from the
-detail response loaded by an explicit, visible open. A passive refresh does not advance that
-high-water mark or authorize another read. For one release, omitting `last_message_id` keeps the
-legacy behavior of acknowledging the whole thread; a later release will require it. There is no
-way to mark mail unread again.
+acknowledges the human deliveries whose Message `rowid` is no greater than that message's
+`rowid`: the selected repository's deliveries, or every repository's when `repository_id` is
+empty. This insertion-order bound keeps later commits unread even when their wall-clock
+timestamps or random ids sort before the watermark. Thread detail orders messages by
+`(created_ms, rowid)`, and list titles select the first message in that same order. The message
+must belong to the thread and be visible in that view; an unknown, foreign or hidden id returns
+`not_found`. It returns `{"read": n}`. The console sends the newest message from the detail
+response loaded by an explicit, visible open. A passive refresh does not advance that high-water
+mark or authorize another read. For one release, omitting `last_message_id` keeps the legacy
+behavior of acknowledging the whole thread; a later release will require it. There is no way to
+mark mail unread again.
 
 `POST /v1/ui/messages` takes `{"key":"...","to":["..."],"subject":"...","body":"...","reply_to":""}`
 and sends as `human`.

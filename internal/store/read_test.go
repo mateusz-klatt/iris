@@ -51,17 +51,16 @@ func TestReadHighWaterAcknowledgesOnlyLoadedMessages(t *testing.T) {
 	for i, message := range messages {
 		ids[i] = message["id"].(string)
 	}
-	ordered := slices.Clone(ids)
-	slices.Sort(ordered)
-	if !slices.Equal(ids, ordered) {
-		t.Fatalf("thread detail order is %v, want canonical id order %v for equal timestamps", ids, ordered)
+	wantOrder := []string{first["message_id"].(string), second["message_id"].(string), third["message_id"].(string)}
+	if !slices.Equal(ids, wantOrder) {
+		t.Fatalf("thread detail order is %v, want insertion order %v for equal timestamps", ids, wantOrder)
 	}
 
 	refusedWith(t, s, "ui_read", Request{Key: thread, LastMessageID: "ms_unknown"}, "not_found")
 	refusedWith(t, s, "ui_read", Request{Key: thread, LastMessageID: other["message_id"].(string)}, "not_found")
-	read := call(t, s, "ui_read", Request{Key: thread, LastMessageID: ordered[1]})
+	read := call(t, s, "ui_read", Request{Key: thread, LastMessageID: second["message_id"].(string)})
 	if read["read"] != 2 {
-		t.Fatalf("high-water read acknowledged %v deliveries, want the two at or before %s", read, ordered[1])
+		t.Fatalf("high-water read acknowledged %v deliveries, want the two inserted at or before %s", read, second["message_id"])
 	}
 
 	messages = call(t, s, "ui_thread", Request{Key: thread})["messages"].([]map[string]any)
@@ -82,6 +81,77 @@ func TestReadHighWaterAcknowledgesOnlyLoadedMessages(t *testing.T) {
 	}
 	if unread := call(t, s, "ui_overview", Request{})["human_unread"]; unread != 1 {
 		t.Fatalf("legacy read left %v unread deliveries, want only the unrelated thread", unread)
+	}
+}
+
+func TestReadHighWaterExcludesMessagesCommittedAfterDetail(t *testing.T) {
+	for _, test := range []struct {
+		name   string
+		sameMS bool
+	}{
+		{"same millisecond with a smaller id", true},
+		{"earlier timestamp after a clock step back", false},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			s, clock, _ := testStore(t)
+			sender, registered := session(t, s, 1)
+			at := clock.Now().UnixMilli()
+			r := sendTo(sender, "watermark", "loaded body", "human")
+			r.Subject = "watermark subject"
+			sent := call(t, s, "messages", r)
+			watermark := sent["message_id"].(string)
+			thread := sent["thread_id"].(string)
+			loaded := call(t, s, "ui_thread", Request{Key: thread})["messages"].([]map[string]any)
+			if len(loaded) != 1 || loaded[0]["id"] != watermark {
+				t.Fatalf("detail snapshot contains %v, want only the watermark", loaded)
+			}
+
+			lateID, lateCreatedMS := "ms_after_clock_step_back", at-1
+			if test.sameMS {
+				lateID, lateCreatedMS = watermark[:len(watermark)-1], at
+			}
+			repo := registered["repository_id"].(string)
+			if _, err := s.db.Exec(`INSERT INTO Message(id,sender_execution_id,subject,body,created_ms,repository_id,thread_id) VALUES(?,?,?,?,?,?,?)`, lateID, registered["execution_id"], "late subject", "unseen body", lateCreatedMS, repo, thread); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := s.db.Exec(`INSERT INTO Delivery(id,message_id,recipient_agent_id,attention) VALUES(?,?,?,1)`, "dl_late", lateID, "human_"+repo); err != nil {
+				t.Fatal(err)
+			}
+			var watermarkRowID, lateRowID int64
+			if err := s.db.QueryRow("SELECT rowid FROM Message WHERE id=?", watermark).Scan(&watermarkRowID); err != nil {
+				t.Fatal(err)
+			}
+			if err := s.db.QueryRow("SELECT rowid FROM Message WHERE id=?", lateID).Scan(&lateRowID); err != nil {
+				t.Fatal(err)
+			}
+			if lateRowID <= watermarkRowID {
+				t.Fatalf("late message rowid %d did not follow watermark rowid %d", lateRowID, watermarkRowID)
+			}
+
+			read := call(t, s, "ui_read", Request{Key: thread, LastMessageID: watermark})
+			if read["read"] != 1 {
+				t.Fatalf("read acknowledged %v deliveries, want only the loaded watermark", read)
+			}
+			messages := call(t, s, "ui_thread", Request{Key: thread})["messages"].([]map[string]any)
+			states := map[string]any{}
+			for _, message := range messages {
+				states[message["id"].(string)] = message["recipients"].([]map[string]any)[0]["state"]
+			}
+			if states[watermark] != "acked" || states[lateID] != "pending" {
+				t.Fatalf("states after read are %v, want watermark acked and late message pending", states)
+			}
+			var lateAcks int
+			if err := s.db.QueryRow("SELECT COUNT(*) FROM Ack a JOIN Delivery d ON d.id=a.delivery_id WHERE d.message_id=?", lateID).Scan(&lateAcks); err != nil {
+				t.Fatal(err)
+			}
+			if lateAcks != 0 {
+				t.Fatalf("late message has %d acknowledgements, want none", lateAcks)
+			}
+			summaries := call(t, s, "ui_threads", Request{})["threads"].([]map[string]any)
+			if len(messages) != 2 || len(summaries) != 1 || summaries[0]["subject"] != messages[0]["subject"] {
+				t.Fatalf("list title %v does not match first displayed message %v", summaries, messages)
+			}
+		})
 	}
 }
 

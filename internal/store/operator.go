@@ -458,7 +458,7 @@ func (t *transaction) threads(r Request) (map[string]any, error) {
 func (t *transaction) thread(id, repo string) (map[string]any, error) {
 	visible, args := t.visibleIn("m", repo)
 	originScope, originArgs := t.repositoryVisibleSQL("m.repository_id")
-	rows, err := t.rows(`SELECT m.id,CASE WHEN a.client='human' THEN 'human' ELSE a.name END,m.subject,m.body,m.created_ms,m.reply_to,CASE WHEN `+originScope+` THEN m.repository_id ELSE '' END,COALESCE(m.sender_account_id,''),COALESCE(m.sender_username,''),COALESCE(m.sender_display_name,'') FROM Message m JOIN Execution e ON e.id=m.sender_execution_id JOIN Agent a ON a.id=e.agent_id WHERE m.thread_id=? AND `+visible+` ORDER BY m.created_ms,m.id`, append(append(originArgs, id), args...)...)
+	rows, err := t.rows(`SELECT m.id,CASE WHEN a.client='human' THEN 'human' ELSE a.name END,m.subject,m.body,m.created_ms,m.reply_to,CASE WHEN `+originScope+` THEN m.repository_id ELSE '' END,COALESCE(m.sender_account_id,''),COALESCE(m.sender_username,''),COALESCE(m.sender_display_name,'') FROM Message m JOIN Execution e ON e.id=m.sender_execution_id JOIN Agent a ON a.id=e.agent_id WHERE m.thread_id=? AND `+visible+` ORDER BY m.created_ms,m.rowid`, append(append(originArgs, id), args...)...)
 	if err != nil {
 		return nil, err
 	}
@@ -528,13 +528,13 @@ func (t *transaction) readThread(r Request) (map[string]any, error) {
 	args := []any{r.Key}
 	if r.LastMessageID != "" {
 		visible, visibleArgs := t.visibleIn("m", r.RepositoryID)
-		var createdMS int64
+		var highWaterRowID int64
 		highWaterArgs := append([]any{r.LastMessageID, r.Key}, visibleArgs...)
-		if err := t.row("SELECT m.created_ms FROM Message m WHERE m.id=? AND m.thread_id=? AND "+visible, highWaterArgs...).Scan(&createdMS); err != nil {
+		if err := t.row("SELECT m.rowid FROM Message m WHERE m.id=? AND m.thread_id=? AND "+visible, highWaterArgs...).Scan(&highWaterRowID); err != nil {
 			return nil, missing(err, "unknown message in thread")
 		}
-		boundary = " AND (m.created_ms<? OR (m.created_ms=? AND m.id<=?))"
-		args = append(args, createdMS, createdMS, r.LastMessageID)
+		boundary = " AND m.rowid<=?"
+		args = append(args, highWaterRowID)
 	}
 	args = append(args, r.RepositoryID, r.RepositoryID)
 	rows, err := t.rows(`SELECT d.id,d.attempt,a.repository_id FROM Delivery d JOIN Message m ON m.id=d.message_id JOIN Agent a ON a.id=d.recipient_agent_id
