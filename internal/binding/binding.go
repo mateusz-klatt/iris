@@ -465,7 +465,7 @@ func (r *Resolver) reattachRecalledHeld(ctx context.Context, handle string) (Bou
 	if session == "" {
 		return Bound{}, false, nil
 	}
-	return r.reattachByMemoryHeld(ctx, session, rung)
+	return r.reattachByMemoryHeld(ctx, session, rung, true)
 }
 
 func (r *Resolver) explicitBindingHeld(handle string) bool {
@@ -477,7 +477,7 @@ func (r *Resolver) explicitBindingHeld(handle string) bool {
 // local generation memory for a positively identified session, with mu held. Missing memory
 // returns attempted=false so nothing is sent. Malformed or mismatched memory returns a lost
 // error with attempted=true and never falls back to a generation-0 registration.
-func (r *Resolver) reattachByMemoryHeld(ctx context.Context, session string, rung int) (Bound, bool, error) {
+func (r *Resolver) reattachByMemoryHeld(ctx context.Context, session string, rung int, allowSuccession bool) (Bound, bool, error) {
 	gen, err := r.recallGeneration(session)
 	if err != nil {
 		return Bound{}, true, err
@@ -506,7 +506,7 @@ func (r *Resolver) reattachByMemoryHeld(ctx context.Context, session string, run
 	}
 	resp, err := r.Hub.RegisterSession(ctx, req)
 	if err != nil {
-		if IsCode(err, "lost") {
+		if allowSuccession && IsCode(err, "lost") {
 			if b, attempted, succeedErr := r.succeedAfterLostHeld(ctx, session, rung, gen); attempted {
 				return b, true, succeedErr
 			}

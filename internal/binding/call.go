@@ -110,7 +110,7 @@ func (r *Resolver) ResolveCall(ctx context.Context, handle, session, thread stri
 		b, err := r.Resolve(ctx, handle)
 		return b, true, err
 	case m.mode == root && (session == "" || session == m.session):
-		b, unusable, err := r.sessionBinding(ctx, m.session)
+		b, unusable, err := r.sessionBinding(ctx, m.session, handle == "")
 		if unusable {
 			r.noteUnusable()
 		}
@@ -170,7 +170,7 @@ func (r *Resolver) bindOverrideHeld(ctx context.Context, ex string) (Bound, erro
 // loss it looks once. An Execution found lost is never bound again. unusable says the first
 // bind's grace period ran out without a usable Execution; a call that ends before then is still
 // binding.
-func (r *Resolver) sessionBinding(ctx context.Context, session string) (b Bound, unusable bool, err error) {
+func (r *Resolver) sessionBinding(ctx context.Context, session string, allowSuccession bool) (b Bound, unusable bool, err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.bound.ExecutionID != "" {
@@ -183,14 +183,14 @@ func (r *Resolver) sessionBinding(ctx context.Context, session string) (b Bound,
 	if first && r.since.IsZero() {
 		r.since = time.Now()
 	}
-	b, err = r.bySessionOrReattachHeld(ctx, session)
+	b, err = r.bySessionOrReattachHeld(ctx, session, allowSuccession)
 	for delay := 100 * time.Millisecond; first && unusableAnswer(err) && time.Since(r.since) < r.Grace; delay = min(2*delay, 2*time.Second) {
 		select {
 		case <-ctx.Done():
 			return Bound{}, false, errBinding
 		case <-time.After(min(delay, r.Grace-time.Since(r.since))):
 		}
-		b, err = r.bySessionOrReattachHeld(ctx, session)
+		b, err = r.bySessionOrReattachHeld(ctx, session, allowSuccession)
 	}
 	switch {
 	case first && err != nil && ctx.Err() != nil:
@@ -207,7 +207,7 @@ func (r *Resolver) sessionBinding(ctx context.Context, session string) (b Bound,
 	return b, false, nil
 }
 
-func (r *Resolver) bySessionOrReattachHeld(ctx context.Context, session string) (Bound, error) {
+func (r *Resolver) bySessionOrReattachHeld(ctx context.Context, session string, allowSuccession bool) (Bound, error) {
 	b, err := r.bySession(ctx, session)
 	if err == nil {
 		if b.SessionID == "" {
@@ -219,7 +219,7 @@ func (r *Resolver) bySessionOrReattachHeld(ctx context.Context, session string) 
 		return b, nil
 	}
 	if IsCode(err, "unbound") {
-		if rb, attempted, rerr := r.reattachByMemoryHeld(ctx, session, 2); attempted {
+		if rb, attempted, rerr := r.reattachByMemoryHeld(ctx, session, 2, allowSuccession); attempted {
 			return rb, rerr
 		}
 	}
