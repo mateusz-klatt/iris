@@ -553,3 +553,62 @@ func TestStallCreditStorageFaultRollbackPreservesLastExpireTick(t *testing.T) {
 		t.Fatalf("retry did not grant stall credit: %+v lastExpireTick=%d", row, s.lastExpireTick)
 	}
 }
+
+func TestPre028ExecutionGetsNoCreditBeforeResumeAndResetsRenewedTickOnResume(t *testing.T) {
+	s, clock, file := testStore(t)
+	a, _ := startHeartbeatSession(t, s, 1, "pre028.go")
+	if _, err := s.db.Exec("ALTER TABLE Execution DROP COLUMN lease_renewed_tick_ms; PRAGMA user_version=27"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s.lock = nil
+
+	// Restart resets the hub's monotonic clock to a fresh origin while wall time keeps moving.
+	clock.tick = 0
+	reopened, err := Open(file, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reopened.Close() }()
+
+	before := readExecutionRow(t, reopened, a.ExecutionID)
+	if before.state != "active" || before.renewed != 0 || before.deadline != 60000 || !before.recovery.Valid {
+		t.Fatalf("unexpected pre-resume row after Open: %+v", before)
+	}
+
+	// Arm the sweep and stall across the old boot's deadline (60000): stall credit must not apply
+	// to the recovering pre-028 row before resume.
+	reopened.SetStreamSweep(true)
+	clock.advance(70 * time.Second) // tick = 70000, still inside 120 s wall recovery window
+	call(t, reopened, "expire", Request{})
+
+	mid := readExecutionRow(t, reopened, a.ExecutionID)
+	if mid.state != "active" || mid.renewed != 0 || mid.deadline != 60000 || !mid.recovery.Valid || mid.recovery.Int64 != before.recovery.Int64 {
+		t.Fatalf("stall credit touched pre-028 row before resume: %+v", mid)
+	}
+
+	// Resuming inside the recovery window clears recovery_deadline and writes lease_renewed_tick_ms
+	// from the new boot's monotonic tick.
+	clock.advance(5 * time.Second) // tick = 75000
+	hb := a
+	hb.Source = "shim"
+	out := call(t, reopened, "heartbeat", hb)
+	if number(out["generation"]) != a.Generation {
+		t.Fatalf("resume changed generation: %v", out)
+	}
+
+	resumed := readExecutionRow(t, reopened, a.ExecutionID)
+	if resumed.state != "active" || resumed.recovery.Valid || resumed.renewed != 75000 || resumed.deadline != 135000 {
+		t.Fatalf("resume did not establish new-boot renewed tick: %+v, want renewed=75000 deadline=135000", resumed)
+	}
+
+	// Subsequent stalls in the new boot credit against the resumed lease_renewed_tick_ms=75000.
+	clock.advance(70 * time.Second) // tick = 145000 (past 135000, below cap 75000+60000+60000=195000)
+	call(t, reopened, "expire", Request{})
+	credited := readExecutionRow(t, reopened, a.ExecutionID)
+	if credited.state != "active" || credited.deadline != 165000 || credited.renewed != 75000 {
+		t.Fatalf("post-resume stall credit used wrong baseline: %+v", credited)
+	}
+}
