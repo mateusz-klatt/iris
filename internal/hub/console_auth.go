@@ -415,7 +415,9 @@ func (h *Hub) consoleOperation(w http.ResponseWriter, r *http.Request, p store.P
 	if len(parts) == 2 && parts[0] == "threads" && r.Method == http.MethodGet {
 		op, key = "ui_thread", parts[1]
 	}
-	if len(parts) == 4 && parts[0] == "threads" && parts[2] == "read" && r.Method == http.MethodPost {
+	// An empty message id is not this route: the new route always takes its watermark from the
+	// path, never from a body field that an older client might also send.
+	if len(parts) == 4 && parts[0] == "threads" && parts[2] == "read" && parts[3] != "" && r.Method == http.MethodPost {
 		op, key, pathWatermark = "ui_read", parts[1], parts[3]
 	}
 	if len(parts) == 3 {

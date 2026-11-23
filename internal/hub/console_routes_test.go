@@ -122,6 +122,11 @@ func TestConsoleObjectRoutingUsesPathIDsAndReturnsOperationResults(t *testing.T)
 	if missing["error"].(map[string]any)["code"] != "not_found" {
 		t.Fatal("unknown path watermark", missing)
 	}
+	// An empty path segment is not the watermark route, so a body watermark never stands in for it.
+	empty := consoleRoute(t, h, server, cookie, csrf, "POST", "/v1/ui/threads/"+thread+"/read/", `{"last_message_id":"`+message+`"}`, 404)
+	if empty["error"].(map[string]any)["code"] != "not_found" {
+		t.Fatal("empty path watermark was accepted", empty)
+	}
 	claimBody := authority(session)
 	claimBody["key"], claimBody["path"], claimBody["kind"] = "route-claim", "file.go", "exact"
 	claim := request(t, server, "POST", "/v1/claims", claimBody, 200)
