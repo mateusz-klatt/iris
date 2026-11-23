@@ -1051,3 +1051,219 @@ func TestShellRendersAnAdvisoryAndKeepsARealConflict(t *testing.T) {
 		})
 	}
 }
+
+// The waiter shares the sibling's key, so it is waiting on that automatic row.
+// Folding the sibling into a repository-wide explicit claim revokes the row and
+// still blocks the waiter: an explicit claim is never the exempt pair.
+func TestExplicitFoldKeepsAKeyedWaiterBlocked(t *testing.T) {
+	s, _, _ := testStore(t)
+	a, ao := scopeSession(t, s, "", "a", "/repo/wt1", "dev:1", "main")
+	repo := ao["repository_id"].(string)
+	setScope(t, s, repo, "worktree")
+	call(t, s, "touch_files", filesTouch(a, "both", wtGroup("/repo/wt1", "dev:1", "main", "a.go"), wtGroup("/repo/wt2", "dev:2", "other", "a.go")))
+	waiter, _ := scopeSession(t, s, "", "waiter", "/repo/wt2", "dev:2", "other")
+	if got := call(t, s, "touch", touchRequest(waiter, "blocked", "a.go")); got["action"] != "deny" || waiterCount(t, s) != 1 {
+		t.Fatalf("same key was not a wait: %v waiters=%d", got, waiterCount(t, s))
+	}
+	var key string
+	if err := s.db.QueryRow("SELECT COALESCE(worktree_key,'') FROM Waiter WHERE execution_id=?", waiter.ExecutionID).Scan(&key); err != nil || key == "" {
+		t.Fatal("waiter has no key", key, err)
+	}
+	grant := call(t, s, "claim", claimRequest(a, "wide", "a.go", "exact"))
+	rows := liveClaims(t, s, repo)
+	if len(rows) != 1 || rows[0].origin != "explicit" || rows[0].key.Valid || rows[0].fence != number(grant["fence"]) {
+		t.Fatalf("fold: %+v", rows)
+	}
+	var still string
+	if err := s.db.QueryRow("SELECT COALESCE(worktree_key,'') FROM Waiter WHERE execution_id=?", waiter.ExecutionID).Scan(&still); err != nil || still != key || waiterCount(t, s) != 1 || woken(t, s, waiter) != 0 {
+		t.Fatalf("keyed waiter changed: key %q was %q waiters=%d wakes=%d err=%v", still, key, waiterCount(t, s), woken(t, s, waiter), err)
+	}
+}
+
+// An explicit claim in a submodule folds that repository's automatic siblings and
+// leaves the superproject's same-named path alone. The submodule waiter keeps its
+// key and stays blocked by the new explicit row.
+func TestExplicitFoldStaysInsideTheSubmodule(t *testing.T) {
+	s, _, _ := testStore(t)
+	parent, po := checkoutSession(t, s, "codex", "", "parent", "/src/snapper", "dev:super", superRemote, "snapper-root", "main")
+	parentRepo := po["repository_id"].(string)
+	setScope(t, s, parentRepo, "worktree")
+	_, co := checkoutSession(t, s, "codex", "", "child", "/src/frontend", "dev:fe1", frontendRemote, "frontend-root", "main")
+	childRepo := co["repository_id"].(string)
+	if parentRepo == childRepo {
+		t.Fatal("superproject and submodule share a repository")
+	}
+	setScope(t, s, childRepo, "worktree")
+	call(t, s, "touch", touchRequest(parent, "super", "src/a.ts"))
+	fe1 := ClaimGroup{Worktree: "/src/snapper/frontend", WorktreeID: "dev:fe1", RemoteURL: frontendRemote, RootCommit: "frontend-root", Branch: "main", Paths: []string{"src/a.ts"}}
+	fe2 := ClaimGroup{Worktree: "/src/snapper/frontend-wt", WorktreeID: "dev:fe2", RemoteURL: frontendRemote, RootCommit: "frontend-root", Branch: "side", Paths: []string{"src/a.ts"}}
+	granted := call(t, s, "touch_files", filesTouch(parent, "both", fe1, fe2))
+	if granted["action"] != "allow" || len(granted["granted"].([]map[string]any)) != 2 {
+		t.Fatal(granted)
+	}
+	for _, g := range granted["granted"].([]map[string]any) {
+		if g["repository_id"] != childRepo {
+			t.Fatal("submodule path claimed in", g)
+		}
+	}
+	waiter, _ := checkoutSession(t, s, "codex", "", "waiter", "/src/frontend-wt", "dev:fe2", frontendRemote, "frontend-root", "side")
+	if got := call(t, s, "touch", touchRequest(waiter, "blocked", "src/a.ts")); got["action"] != "deny" || waiterCount(t, s) != 1 {
+		t.Fatalf("submodule overlap did not wait: %v", got)
+	}
+	sub := fe1
+	sub.Prefix = "frontend"
+	sub.Paths = nil
+	upgrade := claimRequest(parent, "upgrade", "frontend/src/a.ts", "exact")
+	upgrade.Checkout = &sub
+	grant := call(t, s, "claim_files", upgrade)
+	rows := liveClaims(t, s, childRepo)
+	if len(rows) != 1 || rows[0].origin != "explicit" || rows[0].key.Valid || rows[0].path != "src/a.ts" || rows[0].fence != number(grant["fence"]) {
+		t.Fatalf("submodule fold: %+v", rows)
+	}
+	var revoked int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM Claim WHERE repository_id=? AND origin='auto' AND path='src/a.ts' AND revoked_ms IS NOT NULL", childRepo).Scan(&revoked); err != nil || revoked != 1 {
+		t.Fatal("sibling was not revoked", revoked, err)
+	}
+	superRows := claimsOn(liveClaims(t, s, parentRepo), "src/a.ts")
+	if len(superRows) != 1 || superRows[0].origin != "auto" || !superRows[0].key.Valid {
+		t.Fatalf("superproject claim was folded: %+v", superRows)
+	}
+	if waiterCount(t, s) != 1 || woken(t, s, waiter) != 0 {
+		t.Fatal("submodule fold woke the keyed waiter")
+	}
+}
+
+// Folded case makes A.go and a.go one path. The explicit grant keeps the caller's
+// row and revokes the other spelling in the other worktree.
+func TestExplicitFoldRevokesCaseFoldedSiblings(t *testing.T) {
+	s, _, _ := testStore(t)
+	a, ao := scopeSession(t, s, "", "a", "/repo/wt1", "dev:1", "main")
+	repo := ao["repository_id"].(string)
+	var policy string
+	if err := s.db.QueryRow("SELECT case_policy FROM Repository WHERE id=?", repo).Scan(&policy); err != nil || policy != "folded" {
+		t.Fatal("repository does not fold case", policy, err)
+	}
+	setScope(t, s, repo, "worktree")
+	call(t, s, "touch_files", filesTouch(a, "both", wtGroup("/repo/wt1", "dev:1", "main", "A.go"), wtGroup("/repo/wt2", "dev:2", "other", "a.go")))
+	if len(liveClaims(t, s, repo)) != 2 {
+		t.Fatalf("case siblings collapsed: %+v", liveClaims(t, s, repo))
+	}
+	grant := call(t, s, "claim", claimRequest(a, "wide", "a.go", "exact"))
+	rows := liveClaims(t, s, repo)
+	if len(rows) != 1 || rows[0].origin != "explicit" || rows[0].path != "A.go" || rows[0].key.Valid || rows[0].fence != number(grant["fence"]) {
+		t.Fatalf("fold kept both spellings: %+v", rows)
+	}
+	var sibling string
+	if err := s.db.QueryRow("SELECT path FROM Claim WHERE repository_id=? AND origin='auto' AND revoked_ms IS NOT NULL", repo).Scan(&sibling); err != nil || sibling != "a.go" {
+		t.Fatal("revoked sibling", sibling, err)
+	}
+}
+
+// Under repository a key never makes an overlap advisory. Each held shape
+// (explicit, automatic, a null key, a legacy row with no display path) blocks
+// both an explicit waiter and a keyed automatic one.
+func TestRepositoryScopeBlocksEveryWaiterShape(t *testing.T) {
+	holds := []struct {
+		name string
+		hold func(t *testing.T, s *Store, holder Request)
+	}{
+		{"explicit", func(t *testing.T, s *Store, holder Request) {
+			call(t, s, "claim", claimRequest(holder, "held", "a.go", "exact"))
+		}},
+		{"auto", func(t *testing.T, s *Store, holder Request) {
+			call(t, s, "touch", touchRequest(holder, "held", "a.go"))
+		}},
+		{"null-key", func(t *testing.T, s *Store, holder Request) {
+			call(t, s, "touch", touchRequest(holder, "held", "a.go"))
+			if _, err := s.db.Exec("UPDATE Claim SET worktree_key=NULL WHERE execution_id=? AND path='a.go'", holder.ExecutionID); err != nil {
+				t.Fatal(err)
+			}
+		}},
+		{"legacy", func(t *testing.T, s *Store, holder Request) {
+			call(t, s, "touch", touchRequest(holder, "held", "a.go"))
+			if _, err := s.db.Exec("UPDATE Claim SET worktree_key=NULL,worktree_path=NULL,branch=NULL WHERE execution_id=? AND path='a.go'", holder.ExecutionID); err != nil {
+				t.Fatal(err)
+			}
+		}},
+	}
+	for _, hold := range holds {
+		for _, incoming := range []string{"explicit", "auto"} {
+			t.Run(hold.name+"/"+incoming, func(t *testing.T) {
+				s, _, _ := testStore(t)
+				holder, ho := scopeSession(t, s, "", "holder", "/repo/wt1", "dev:1", "main")
+				var scope string
+				if err := s.db.QueryRow("SELECT auto_claim_scope FROM Repository WHERE id=?", ho["repository_id"]).Scan(&scope); err != nil || scope != "repository" {
+					t.Fatal(scope, err)
+				}
+				hold.hold(t, s, holder)
+				waiter, _ := scopeSession(t, s, "", "waiter", "/repo/wt2", "dev:2", "other")
+				if incoming == "explicit" {
+					expectError(t, s, "claim", claimRequest(waiter, "blocked", "a.go", "exact"), "conflict")
+				} else if got := call(t, s, "touch", touchRequest(waiter, "blocked", "a.go")); got["action"] != "deny" || got["advisories"] != nil {
+					t.Fatal(got)
+				}
+				var key sql.NullString
+				if err := s.db.QueryRow("SELECT worktree_key FROM Waiter WHERE execution_id=?", waiter.ExecutionID).Scan(&key); err != nil || waiterCount(t, s) != 1 || woken(t, s, waiter) != 0 {
+					t.Fatalf("waiters=%d wakes=%d key=%v err=%v", waiterCount(t, s), woken(t, s, waiter), key, err)
+				}
+				if incoming == "auto" && !key.Valid {
+					t.Fatal("automatic waiter lost its key")
+				}
+				if incoming == "explicit" && key.Valid {
+					t.Fatal("explicit waiter stored a key", key)
+				}
+			})
+		}
+	}
+}
+
+// A keyed claim in another worktree still covers a freed path when the scope is
+// repository. The wait may be explicit, automatic, or a null key, and a legacy
+// row with no key and no display path blocks a keyed wait the same way.
+func TestRepositoryReplayBlocksAKeyedClaimForEveryWaiter(t *testing.T) {
+	for _, kind := range []string{"explicit", "auto", "null", "legacy"} {
+		t.Run(kind, func(t *testing.T) {
+			s, _, _ := testStore(t)
+			holder, _ := scopeSession(t, s, "", "holder", "/repo/wt1", "dev:1", "main")
+			var waiter Request
+			var freed int64
+			switch kind {
+			case "explicit":
+				waiter, _ = scopeSession(t, s, "", "waiter", "/repo/wt2", "dev:2", "other")
+				call(t, s, "claim", claimRequest(holder, "held", "a.go", "exact"))
+				expectError(t, s, "claim", claimRequest(waiter, "blocked", "a.go", "exact"), "conflict")
+				call(t, s, "release", releaseAll(holder))
+				freed = newestEvent(t, s, "claim_available")
+			case "auto":
+				waiter, _ = scopeSession(t, s, "", "waiter", "/repo/wt2", "dev:2", "other")
+				freed = freeFor(t, s, holder, waiter, "a", "a.go")
+			default:
+				waiter = scopeSessionOnly(t, s, "legacy")
+				freed = freeFor(t, s, holder, waiter, "a", "a.go")
+			}
+			var eventKey sql.NullString
+			if err := s.db.QueryRow("SELECT worktree_key FROM Event WHERE seq=?", freed).Scan(&eventKey); err != nil {
+				t.Fatal(err)
+			}
+			if kind == "auto" && !eventKey.Valid {
+				t.Fatal("automatic wait lost its key")
+			}
+			if kind != "auto" && eventKey.Valid {
+				t.Fatal("null wait recorded a key", eventKey)
+			}
+			if got := call(t, s, "monitor_cursor", waiter)["cursor"]; got != freed-1 {
+				t.Fatalf("free path did not rewind: %v freed %d", got, freed)
+			}
+			other, _ := scopeSession(t, s, "", "other", "/repo/wt3", "dev:3", "third")
+			call(t, s, "touch", touchRequest(other, "covers", "a.go"))
+			if kind == "legacy" {
+				if _, err := s.db.Exec("UPDATE Claim SET worktree_key=NULL,worktree_path=NULL,branch=NULL WHERE execution_id=? AND path='a.go'", other.ExecutionID); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if got := call(t, s, "monitor_cursor", waiter)["cursor"]; got == freed-1 {
+				t.Fatal("repository replay treated the overlap as exempt")
+			}
+		})
+	}
+}

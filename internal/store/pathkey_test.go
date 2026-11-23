@@ -228,6 +228,63 @@ func TestOptingOutComparesExactlyAndRekeysLiveClaims(t *testing.T) {
 	}
 }
 
+// Rekey recomputes path keys and drops waiters, which were keyed by the old
+// policy. A live claim keeps the worktree key, display path and branch it had.
+func TestRekeyKeepsLiveWorktreeIdentityAndDropsWaiters(t *testing.T) {
+	ctx := context.Background()
+	s, _, _ := testStore(t)
+	holder, ho := scopeSession(t, s, "", "holder", "/repo/wt1", "dev:1", "feature")
+	repo := ho["repository_id"].(string)
+	setScope(t, s, repo, "worktree")
+	call(t, s, "touch", touchRequest(holder, "held", "SRC/A.go"))
+	same, _ := scopeSession(t, s, "", "same", "/repo/wt1", "dev:1", "feature")
+	if got := call(t, s, "touch", touchRequest(same, "wait", "SRC/A.go")); got["action"] != "deny" || waiterCount(t, s) != 1 {
+		t.Fatal(got, waiterCount(t, s))
+	}
+	var pathBefore, wtKey, wtPath, branch, waiterKey string
+	if err := s.db.QueryRow("SELECT path_key,COALESCE(worktree_key,''),COALESCE(worktree_path,''),COALESCE(branch,'') FROM Claim WHERE execution_id=? AND revoked_ms IS NULL", holder.ExecutionID).Scan(&pathBefore, &wtKey, &wtPath, &branch); err != nil {
+		t.Fatal(err)
+	}
+	if pathBefore != pathKey("SRC/A.go", "folded") || wtKey == "" || wtPath != "/repo/wt1" || branch != "feature" {
+		t.Fatalf("before rekey: %q %q %q %q", pathBefore, wtKey, wtPath, branch)
+	}
+	if err := s.db.QueryRow("SELECT COALESCE(worktree_key,'') FROM Waiter WHERE execution_id=?", same.ExecutionID).Scan(&waiterKey); err != nil || waiterKey == "" || waiterKey != wtKey {
+		t.Fatal("waiter key", waiterKey, wtKey, err)
+	}
+	if err := s.SetRepositoryPolicy(ctx, repo, "sensitive", "deny"); err != nil {
+		t.Fatal(err)
+	}
+	var pathNow, key2, path2, branch2 string
+	var waits int
+	if err := s.db.QueryRow("SELECT path_key,COALESCE(worktree_key,''),COALESCE(worktree_path,''),COALESCE(branch,'') FROM Claim WHERE execution_id=? AND revoked_ms IS NULL", holder.ExecutionID).Scan(&pathNow, &key2, &path2, &branch2); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM Waiter").Scan(&waits); err != nil {
+		t.Fatal(err)
+	}
+	if pathNow != "SRC/A.go" || key2 != wtKey || path2 != wtPath || branch2 != branch || waits != 0 {
+		t.Fatalf("rekey rewrote the checkout or kept the waiter: %q %s %s %s waits %d", pathNow, key2, path2, branch2, waits)
+	}
+	if got := call(t, s, "touch", touchRequest(same, "wait-again", "SRC/A.go")); got["action"] != "deny" || waiterCount(t, s) != 1 {
+		t.Fatal("sensitive claim no longer blocks", got)
+	}
+	if err := s.SetRepositoryPolicy(ctx, repo, "folded", "deny"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.QueryRow("SELECT path_key,COALESCE(worktree_key,''),COALESCE(worktree_path,''),COALESCE(branch,'') FROM Claim WHERE execution_id=? AND revoked_ms IS NULL", holder.ExecutionID).Scan(&pathNow, &key2, &path2, &branch2); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM Waiter").Scan(&waits); err != nil {
+		t.Fatal(err)
+	}
+	if pathNow != pathKey("SRC/A.go", "folded") || key2 != wtKey || path2 != wtPath || branch2 != branch || waits != 0 {
+		t.Fatalf("folding back: %q %s %s %s waits %d", pathNow, key2, path2, branch2, waits)
+	}
+	if got := call(t, s, "touch", touchRequest(same, "still", "src/a.go")); got["action"] != "deny" {
+		t.Fatal("folded key no longer matches", got)
+	}
+}
+
 func TestRecoveryCarriesTheKey(t *testing.T) {
 	s, _, file := testStore(t)
 	a, _ := fixtureSession(t, s, 1)

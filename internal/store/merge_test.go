@@ -414,3 +414,53 @@ func TestMergeRespectsPendingStallCreditWithoutExpiring(t *testing.T) {
 		}
 	})
 }
+
+// Merge moves a claim and a waiter onto the destination repository and leaves
+// the worktree key, the display path and the branch on the rows.
+func TestMergePreservesWorktreeKeyAndLocation(t *testing.T) {
+	s, _, _ := testStore(t)
+	src, so := checkoutSession(t, s, "codex", "host", "src", "/repo/src", "dev:src", "https://example.com/src.git", "src-root", "feature")
+	_, do := checkoutSession(t, s, "codex", "host", "dst", "/repo/dst", "dev:dst", "https://example.com/dst.git", "dst-root", "main")
+	from, into := so["repository_id"].(string), do["repository_id"].(string)
+	if from == into {
+		t.Fatal("the two checkouts share a repository")
+	}
+	setScope(t, s, from, "worktree")
+	setScope(t, s, into, "worktree")
+	call(t, s, "touch", touchRequest(src, "held", "kept.go"))
+	other, oo := checkoutSession(t, s, "codex", "host", "src-wait", "/repo/src", "dev:src", "https://example.com/src.git", "src-root", "feature")
+	if oo["repository_id"] != from {
+		t.Fatal("waiter joined", oo["repository_id"])
+	}
+	if got := call(t, s, "touch", touchRequest(other, "wait", "kept.go")); got["action"] != "deny" || waiterCount(t, s) != 1 {
+		t.Fatal(got, waiterCount(t, s))
+	}
+	var pathKey, wtKey, wtPath, branch, waiterKey string
+	if err := s.db.QueryRow("SELECT path_key,COALESCE(worktree_key,''),COALESCE(worktree_path,''),COALESCE(branch,'') FROM Claim WHERE repository_id=? AND path='kept.go' AND revoked_ms IS NULL", from).Scan(&pathKey, &wtKey, &wtPath, &branch); err != nil {
+		t.Fatal(err)
+	}
+	if wtKey == "" || wtPath != "/repo/src" || branch != "feature" {
+		t.Fatalf("claim location %q %q %q", wtKey, wtPath, branch)
+	}
+	if err := s.db.QueryRow("SELECT COALESCE(worktree_key,'') FROM Waiter WHERE execution_id=?", other.ExecutionID).Scan(&waiterKey); err != nil || waiterKey != wtKey {
+		t.Fatal("waiter key", waiterKey, wtKey, err)
+	}
+	call(t, s, "merge", mergeRequest(from, into, false))
+	var gotPathKey, gotKey, gotPath, gotBranch, gotRepo string
+	if err := s.db.QueryRow("SELECT path_key,COALESCE(worktree_key,''),COALESCE(worktree_path,''),COALESCE(branch,''),repository_id FROM Claim WHERE path='kept.go' AND revoked_ms IS NULL").Scan(&gotPathKey, &gotKey, &gotPath, &gotBranch, &gotRepo); err != nil {
+		t.Fatal(err)
+	}
+	if gotRepo != into || gotPathKey != pathKey || gotKey != wtKey || gotPath != wtPath || gotBranch != branch {
+		t.Fatalf("merged claim: repo %s path_key %s key %s path %s branch %s", gotRepo, gotPathKey, gotKey, gotPath, gotBranch)
+	}
+	var waitRepo, waitKey, waitPath string
+	if err := s.db.QueryRow("SELECT repository_id,COALESCE(worktree_key,''),path_key FROM Waiter WHERE execution_id=?", other.ExecutionID).Scan(&waitRepo, &waitKey, &waitPath); err != nil {
+		t.Fatal(err)
+	}
+	if waitRepo != into || waitKey != waiterKey || waitPath != "kept.go" {
+		t.Fatalf("merged waiter: repo %s key %s path %s", waitRepo, waitKey, waitPath)
+	}
+	if n := count(t, s, "SELECT COUNT(*) FROM Claim WHERE repository_id=?", from); n != 0 {
+		t.Fatal("claim left on the source", n)
+	}
+}
