@@ -469,6 +469,7 @@ const translation = {
     subject: "Oggetto",
     body: "Messaggio",
     loadError: "Iris non è riuscito a caricare questa vista.",
+    readReload: "Ricarica la console per segnare questo thread come letto.",
     emptyThreads: "Nessuna discussione in questa vista.",
     olderThreads: "Discussioni precedenti",
     participants: "Partecipanti",

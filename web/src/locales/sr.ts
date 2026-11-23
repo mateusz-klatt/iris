@@ -460,6 +460,7 @@ const translation = {
     subject: "Наслов",
     body: "Порука",
     loadError: "Iris није могао да учита овај приказ.",
+    readReload: "Поново учитајте конзолу да бисте ову нит означили као прочитану.",
     emptyThreads: "У овом приказу нема нити.",
     olderThreads: "Старије нити",
     participants: "Учесници",

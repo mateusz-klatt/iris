@@ -96,6 +96,7 @@ export const threadsPage: ThreadsPage = {
 
 export const threadDetail: ThreadDetail = {
   id: "ms_root",
+  high_water_message_id: "ms_root",
   messages: [
     {
       id: "ms_root",

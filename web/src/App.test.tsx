@@ -498,6 +498,52 @@ describe("Iris operator console", () => {
     expect(await screen.findByRole("article", { name: "Rollout check" })).toBeVisible();
   }, 40000);
 
+  it("sends the snapshot high-water id, not the last displayed message", async () => {
+    const user = userEvent.setup({ delay: null });
+    const reads: unknown[] = [];
+    const insertedLast = {
+      ...threadDetail.messages[0]!,
+      id: "ms_inserted",
+      created_at: "2026-11-06T09:00:00Z",
+      body: "Inserted later and shown first.",
+    };
+    const displayedLast = {
+      ...threadDetail.messages[0]!,
+      id: "ms_displayed",
+      created_at: "2026-11-06T11:00:00Z",
+      body: "Shown last after the clock moved forward.",
+    };
+    server.use(
+      http.get("*/v1/ui/threads/:id", () => HttpResponse.json({
+        ...threadDetail,
+        high_water_message_id: "ms_inserted",
+        messages: [insertedLast, displayedLast],
+      })),
+      http.post("*/v1/ui/threads/:id/read", async ({ request }) => {
+        reads.push(await request.json());
+        return HttpResponse.json({ read: 2 });
+      }),
+    );
+    await showSession();
+    await user.click(await screen.findByRole("button", { name: /Rollout check/ }));
+    expect(await screen.findByText("Shown last after the clock moved forward.")).toBeVisible();
+    await waitFor(() => expect(reads).toEqual([{ repository_id: "", last_message_id: "ms_inserted" }]));
+  }, 40000);
+
+  it("shows a reload hint when acknowledgement is refused", async () => {
+    const user = userEvent.setup({ delay: null });
+    server.use(
+      http.post("*/v1/ui/threads/:id/read", () => HttpResponse.json(
+        { error: { code: "bad_request", message: "reload the console to acknowledge this thread" } },
+        { status: 400 },
+      )),
+    );
+    await showSession();
+    await user.click(await screen.findByRole("button", { name: /Rollout check/ }));
+    expect(await screen.findByText("All checks passed.")).toBeVisible();
+    expect(await screen.findByRole("alert")).toHaveTextContent("Reload the console to mark this thread read.");
+  }, 40000);
+
   it("replies and sends as human", async () => {
     const user = userEvent.setup({ delay: null });
     const bodies: unknown[] = [];

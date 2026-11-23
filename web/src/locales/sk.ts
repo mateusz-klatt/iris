@@ -460,6 +460,7 @@ const translation = {
     subject: "Predmet",
     body: "Správa",
     loadError: "Iris nemohol načítať toto zobrazenie.",
+    readReload: "Znova načítajte konzolu, aby ste toto vlákno označili ako prečítané.",
     emptyThreads: "V tomto zobrazení nie sú žiadne vlákna.",
     olderThreads: "Staršie vlákna",
     participants: "Účastníci",

@@ -99,7 +99,12 @@ func TestConsoleObjectRoutingUsesPathIDsAndReturnsOperationResults(t *testing.T)
 	if replay := consoleRoute(t, h, server, cookie, csrf, "POST", "/v1/ui/messages", body, 200); replay["message_id"] != message {
 		t.Fatal("HTTP retry lost its accepted message")
 	}
-	read := consoleRoute(t, h, server, cookie, csrf, "POST", "/v1/ui/threads/"+thread+"/read", `{"key":"forged-body-id"}`, 200)
+	refused := consoleRoute(t, h, server, cookie, csrf, "POST", "/v1/ui/threads/"+thread+"/read", `{"key":"forged-body-id"}`, 400)
+	refusal := refused["error"].(map[string]any)
+	if refusal["code"] != "bad_request" || !strings.Contains(refusal["message"].(string), "reload the console") {
+		t.Fatal("missing watermark", refused)
+	}
+	read := consoleRoute(t, h, server, cookie, csrf, "POST", "/v1/ui/threads/"+thread+"/read", `{"key":"forged-body-id","last_message_id":"`+message+`"}`, 200)
 	if read["read"] != float64(0) {
 		t.Fatal("opening sent mail acknowledged unrelated deliveries")
 	}

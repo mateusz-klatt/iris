@@ -47,7 +47,7 @@ func TestReceiptsDoNotFlagHumanRecipientsAsUnreachable(t *testing.T) {
 			if _, flagged := got["unreachable"]; flagged || got["recipient"] != "human" || got["repository_id"] != tc.repository || got["state"] != "pending" || got["at"] != nil {
 				t.Fatal("human mail was reported unreachable before the console read it", got)
 			}
-			read := call(t, s, "ui_read", Request{Key: sent["thread_id"].(string), RepositoryID: tc.repository})
+			read := call(t, s, "ui_read", Request{Key: sent["thread_id"].(string), RepositoryID: tc.repository, LastMessageID: sent["message_id"].(string)})
 			if read["read"] != 1 {
 				t.Fatal("the console could not read the human delivery immediately", read)
 			}

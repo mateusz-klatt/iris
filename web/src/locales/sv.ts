@@ -460,6 +460,7 @@ const translation = {
     subject: "Ämne",
     body: "Meddelande",
     loadError: "Iris kunde inte läsa in den här vyn.",
+    readReload: "Ladda om konsolen för att markera den här tråden som läst.",
     emptyThreads: "Inga trådar i den här vyn.",
     olderThreads: "Äldre trådar",
     participants: "Deltagare",

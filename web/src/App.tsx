@@ -380,6 +380,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const [showInactive, setShowInactive] = useState(false);
   const [agentSearch, setAgentSearch] = useState("");
   const [threadError, setThreadError] = useState(false);
+  const [readWatermarkStale, setReadWatermarkStale] = useState(false);
   const readerTitle = useRef<HTMLHeadingElement>(null);
   const lastThreadButton = useRef<HTMLButtonElement | null>(null);
   const sessions = useMemo(() => overview?.agents ?? [], [overview]);
@@ -582,11 +583,16 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     pendingRead.current = null;
     return readThread(pending.id, pending.repositoryId, pending.lastMessageId)
       .then((read) => {
+        setReadWatermarkStale(false);
         if (!deferReload && read > 0) {
           postReadRefresh.current?.();
         }
       })
-      .catch(() => undefined);
+      .catch((error: unknown) => {
+        if (error instanceof ApiError && error.status === 400) {
+          setReadWatermarkStale(true);
+        }
+      });
   }, []);
 
   useEffect(() => () => cancelThreadRead(), [cancelThreadRead]);
@@ -841,8 +847,9 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
         }
         setLoadedThread({ opening: openedThread, detail });
         setThreadError(false);
+        setReadWatermarkStale(false);
         if (releaseReadAuthorization() && !member && unreadForOperator(detail)) {
-          pendingRead.current = { id, repositoryId, lastMessageId: detail.messages.at(-1)!.id };
+          pendingRead.current = { id, repositoryId, lastMessageId: detail.high_water_message_id };
           void flushRead();
         }
         // Refresh an untouched suggestion together with loaded detail, retaining edited drafts (A14).
@@ -1170,6 +1177,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
                         <h2 id="thread-title" tabIndex={-1} ref={readerTitle}>{thread === null ? t(threadError ? "operator.loadError" : "message.loading") : thread.messages[0]?.subject ?? thread.id}</h2>
                       </header>
                       {threadError ? <div className="state-panel"><p role="alert">{t("operator.loadError")}</p><button type="button" onClick={() => { readerTitle.current?.focus(); setThreadError(false); setThreadRevision((value) => value + 1); }}>{t("operator.retry")}</button></div> : null}
+                      {readWatermarkStale ? <p role="alert">{t("operator.readReload")}</p> : null}
                       {thread !== null ? <>
                   {thread.messages.map((message) => (
                     <article key={message.id} className="thread-message">

@@ -1325,18 +1325,19 @@ controls. These controls describe current capabilities; every request remains
 subject to store authorization. Messages show immutable person attribution
 alongside the shared human transport and explain that replies use a shared mailbox.
 
-An operator's explicit, visible thread open acknowledges only through `last_message_id`, the
-newest message in the detail response that open loaded. The hub requires that message to belong
-to the thread and be visible in the requested view, then acknowledges human deliveries whose
-Message `rowid` is no greater than its `rowid`. This insertion-order bound excludes later commits
-even if their wall-clock timestamps or random ids sort earlier. Thread detail orders messages by
-`(created_ms, rowid)`, and list titles select the first message in that same order. Because the
-display order uses the hub's wall clock while the bound uses insertion order, a message shown
-before the watermark but inserted after it, which needs a wall-clock step back, stays unread
-until the next open: the bound can under-acknowledge, never over-acknowledge. A passive
-refresh does not advance the mark or authorize a read. For one release, omitting
-`last_message_id` retains the legacy thread-wide acknowledgement; a later release will require
-the field.
+An operator's explicit, visible thread open acknowledges only through `last_message_id`. The
+console sends `high_water_message_id` from the detail response that open loaded: the visible
+message with the greatest Message `rowid`, not the last message in display order. The hub
+requires that message to belong to the thread and be visible in the requested view, then
+acknowledges human deliveries whose Message `rowid` is no greater than its `rowid`. This
+insertion-order bound excludes later commits even if their wall-clock timestamps or random ids
+sort earlier. Thread detail orders messages by `(created_ms, rowid)`, and list titles select the
+first message in that same order. The snapshot's high water is that response's maximum `rowid`,
+so a wall-clock step back does not leave a message from the snapshot unread. A request that
+omits `last_message_id` is `bad_request` and acknowledges nothing; the error tells the operator
+to reload the console. A passive refresh does not advance the mark or authorize a read. Mail
+committed after the snapshot stays unread until the next explicit open. There is no way to mark
+mail unread again.
 
 The new-message recipient picker stores Agent IDs, not display names, and sends those IDs
 through the existing address resolver. If a selected ID disappears from the directory, review

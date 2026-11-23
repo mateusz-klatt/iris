@@ -469,6 +469,7 @@ const translation = {
     subject: "제목",
     body: "메시지",
     loadError: "Iris가 이 보기를 불러오지 못했습니다.",
+    readReload: "이 스레드를 읽음으로 표시하려면 콘솔을 다시 로드하세요.",
     emptyThreads: "이 보기에 스레드가 없습니다.",
     olderThreads: "이전 스레드",
     participants: "참여자",

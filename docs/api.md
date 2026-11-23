@@ -833,25 +833,31 @@ the top. Mail can repeat a thread across pages in this way, but it never leaves 
 that names no thread is read as a millisecond timestamp and returns the threads whose last message
 is older.
 
-`GET /v1/ui/threads/{id}` returns the thread's messages:
+`GET /v1/ui/threads/{id}` returns the thread's messages and `high_water_message_id`, the
+visible message with the greatest Message `rowid`:
 
 ```json
-{"id":"ms_...","messages":[{"id":"ms_...","sender":"...","recipients":[{"name":"...",
-  "state":"acked"}],"subject":"...","body":"...","created_at":"..."}]}
+{"id":"ms_...","high_water_message_id":"ms_...","messages":[{"id":"ms_...","sender":"...",
+  "recipients":[{"name":"...","state":"acked"}],"subject":"...","body":"...","created_at":"..."}]}
 ```
 
-`POST /v1/ui/threads/{id}/read` takes `{"repository_id":"...","last_message_id":"ms_..."}` and
-acknowledges the human deliveries whose Message `rowid` is no greater than that message's
-`rowid`: the selected repository's deliveries, or every repository's when `repository_id` is
-empty. This insertion-order bound keeps later commits unread even when their wall-clock
-timestamps or random ids sort before the watermark. Thread detail orders messages by
-`(created_ms, rowid)`, and list titles select the first message in that same order. The message
-must belong to the thread and be visible in that view; an unknown, foreign or hidden id returns
-`not_found`. It returns `{"read": n}`. The console sends the newest message from the detail
-response loaded by an explicit, visible open. A passive refresh does not advance that high-water
-mark or authorize another read. For one release, omitting `last_message_id` keeps the legacy
-behavior of acknowledging the whole thread; a later release will require it. There is no way to
-mark mail unread again.
+Messages are ordered by `(created_ms, rowid)`. List titles select the first message in that
+same order. `high_water_message_id` does not: it is the maximum `rowid` among the messages in
+this response. After a wall-clock step back, the last displayed message can have a smaller
+`rowid` than one shown above it.
+
+`POST /v1/ui/threads/{id}/read` requires `{"repository_id":"...","last_message_id":"ms_..."}`.
+Omitting `last_message_id` returns `bad_request` and acknowledges nothing. The error tells the
+operator to reload the console, because a tab opened before this requirement has no watermark.
+The message must belong to the thread and be visible in that view; an unknown, foreign or hidden
+id returns `not_found`. The hub then acknowledges human deliveries whose Message `rowid` is no
+greater than that message's `rowid`: the selected repository's deliveries, or every repository's
+when `repository_id` is empty. This insertion-order bound keeps later commits unread even when
+their wall-clock timestamps or random ids sort before the watermark. It returns `{"read": n}`.
+The console sends `high_water_message_id` from the detail response loaded by an explicit, visible
+open. A passive refresh does not advance that high-water mark or authorize another read. Mail
+committed after that snapshot stays unread until the next explicit open. There is no way to mark
+mail unread again.
 
 `POST /v1/ui/messages` takes `{"key":"...","to":["..."],"subject":"...","body":"...","reply_to":""}`
 and sends as `human`.

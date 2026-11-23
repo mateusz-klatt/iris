@@ -469,6 +469,7 @@ const translation = {
     subject: "Tárgy",
     body: "Üzenet",
     loadError: "Az Iris nem tudta betölteni ezt a nézetet.",
+    readReload: "Töltse újra a konzolt, hogy olvasottnak jelölje ezt a szálat.",
     emptyThreads: "Ebben a nézetben nincsenek szálak.",
     olderThreads: "Régebbi szálak",
     participants: "Résztvevők",

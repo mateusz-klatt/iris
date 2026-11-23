@@ -469,6 +469,7 @@ const translation = {
     subject: "Assunto",
     body: "Mensagem",
     loadError: "O Iris não conseguiu carregar esta vista.",
+    readReload: "Recarregue a consola para marcar esta conversa como lida.",
     emptyThreads: "Não há conversas nesta vista.",
     olderThreads: "Conversas mais antigas",
     participants: "Participantes",

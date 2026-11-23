@@ -460,6 +460,7 @@ const translation = {
     subject: "主题",
     body: "消息",
     loadError: "Iris 无法加载此视图。",
+    readReload: "重新加载控制台以将此会话标为已读。",
     emptyThreads: "此视图中没有会话。",
     olderThreads: "更早的会话",
     participants: "参与者",

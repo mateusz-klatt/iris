@@ -437,7 +437,8 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 				// The operator reads a thread with human mail in it.
 				human := mail
 				human.Key, human.To = "to-human", []string{"human"}
-				r = Request{Key: call(t, s, "messages", human)["thread_id"].(string)}
+				sentHuman := call(t, s, "messages", human)
+				r = Request{Key: sentHuman["thread_id"].(string), LastMessageID: sentHuman["message_id"].(string)}
 			case "ui_thread":
 				r.Key = sent["thread_id"].(string)
 			case "ui_deliveries":

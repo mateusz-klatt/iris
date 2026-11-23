@@ -469,6 +469,7 @@ const translation = {
     subject: "Efni",
     body: "Skilaboð",
     loadError: "Iris gat ekki hlaðið þessu yfirliti.",
+    readReload: "Endurhladdu stjórnborðið til að merkja þennan þráð sem lesinn.",
     emptyThreads: "Engir þræðir í þessu yfirliti.",
     olderThreads: "Eldri þræðir",
     participants: "Þátttakendur",

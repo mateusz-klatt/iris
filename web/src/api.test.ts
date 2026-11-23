@@ -60,7 +60,7 @@ describe("operator watch", () => {
       ? new Promise<Response>((resolve) => { finish = () => resolve(response); })
       : Promise.resolve(response));
     vi.stubGlobal("fetch", fetch);
-    const pending = (stage === "read acknowledgement JSON" ? readThread("ms_first") : listThreads({})).catch((error: unknown) => error);
+    const pending = (stage === "read acknowledgement JSON" ? readThread("ms_first", "", "ms_first") : listThreads({})).catch((error: unknown) => error);
     await vi.waitFor(() => expect(stage === "fetch" ? fetch : json).toHaveBeenCalledOnce());
     setConsoleCsrf("iris-second-csrf");
     finish();

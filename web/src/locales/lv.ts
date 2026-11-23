@@ -469,6 +469,7 @@ const translation = {
     subject: "Temats",
     body: "Ziņojums",
     loadError: "Iris nevarēja ielādēt šo skatu.",
+    readReload: "Pārlādējiet konsoli, lai atzīmētu šo pavedienu kā izlasītu.",
     emptyThreads: "Šajā skatā nav pavedienu.",
     olderThreads: "Vecāki pavedieni",
     participants: "Dalībnieki",

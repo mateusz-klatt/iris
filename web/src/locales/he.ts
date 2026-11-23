@@ -469,6 +469,7 @@ const translation = {
     subject: "נושא",
     body: "הודעה",
     loadError: "Iris לא הצליח לטעון את התצוגה הזו.",
+    readReload: "טען מחדש את הקונסולה כדי לסמן את השרשור הזה כנקרא.",
     emptyThreads: "אין שרשורים בתצוגה הזו.",
     olderThreads: "שרשורים ישנים יותר",
     participants: "משתתפים",

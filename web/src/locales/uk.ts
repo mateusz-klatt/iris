@@ -460,6 +460,7 @@ const translation = {
     subject: "Тема",
     body: "Повідомлення",
     loadError: "Iris не вдалося завантажити це подання.",
+    readReload: "Перезавантажте консоль, щоб позначити цю гілку прочитаною.",
     emptyThreads: "У цьому поданні немає ланцюжків.",
     olderThreads: "Старіші ланцюжки",
     participants: "Учасники",

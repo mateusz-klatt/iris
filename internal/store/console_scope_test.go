@@ -280,7 +280,7 @@ func TestConsoleMemberUnreadClaimsAndReadActionRemainSharedButScoped(t *testing.
 	if len(threads) != 1 || threads[0]["unread"] != int64(1) {
 		t.Fatal("human participant filter counted outside shared mailbox", threads)
 	}
-	read := accountRead(t, s, operatorPrincipal, "ui_read", Request{Key: sent["thread_id"].(string), RepositoryID: origin})
+	read := accountRead(t, s, operatorPrincipal, "ui_read", Request{Key: sent["thread_id"].(string), RepositoryID: origin, LastMessageID: sent["message_id"].(string)})
 	if read["read"] != 1 {
 		t.Fatal("operator did not acknowledge selected shared mailbox", read)
 	}

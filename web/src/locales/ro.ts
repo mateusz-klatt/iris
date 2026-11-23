@@ -469,6 +469,7 @@ const translation = {
     subject: "Subiect",
     body: "Mesaj",
     loadError: "Iris nu a putut încărca această vizualizare.",
+    readReload: "Reîncarcă consola pentru a marca acest fir ca citit.",
     emptyThreads: "Nu există fire în această vizualizare.",
     olderThreads: "Fire mai vechi",
     participants: "Participanți",

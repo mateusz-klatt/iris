@@ -469,6 +469,7 @@ const translation = {
     subject: "Tema",
     body: "Pranešimas",
     loadError: "Iris nepavyko įkelti šio rodinio.",
+    readReload: "Iš naujo įkelkite konsolę, kad pažymėtumėte šią giją kaip perskaitytą.",
     emptyThreads: "Šiame rodinyje gijų nėra.",
     olderThreads: "Senesnės gijos",
     participants: "Dalyviai",

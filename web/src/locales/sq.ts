@@ -460,6 +460,7 @@ const translation = {
     subject: "Subjekti",
     body: "Mesazhi",
     loadError: "Iris nuk mundi ta ngarkonte këtë pamje.",
+    readReload: "Ringarko konsolën për ta shënuar këtë bisedë si të lexuar.",
     emptyThreads: "Nuk ka biseda në këtë pamje.",
     olderThreads: "Biseda më të vjetra",
     participants: "Pjesëmarrësit",

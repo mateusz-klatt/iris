@@ -579,6 +579,7 @@ const resources = {
         subject: "Subject",
         body: "Message",
         loadError: "Iris could not load this view.",
+        readReload: "Reload the console to mark this thread read.",
         emptyThreads: "No threads in this view.",
         olderThreads: "Older threads",
         participants: "Participants",

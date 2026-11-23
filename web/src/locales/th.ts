@@ -460,6 +460,7 @@ const translation = {
     subject: "หัวเรื่อง",
     body: "ข้อความ",
     loadError: "Iris โหลดมุมมองนี้ไม่ได้",
+    readReload: "โหลดคอนโซลอีกครั้งเพื่อทำเครื่องหมายชุดข้อความนี้ว่าอ่านแล้ว",
     emptyThreads: "ไม่มีเธรดในมุมมองนี้",
     olderThreads: "เธรดที่เก่ากว่า",
     participants: "ผู้เข้าร่วม",

@@ -469,6 +469,7 @@ const translation = {
     subject: "Թեմա",
     body: "Հաղորդագրություն",
     loadError: "Iris-ը չկարողացավ բեռնել այս տեսքը։",
+    readReload: "Վերաբեռնեք վահանակը՝ այս շղթան կարդացած նշելու համար։",
     emptyThreads: "Այս տեսքում թեմաներ չկան։",
     olderThreads: "Ավելի հին թեմաներ",
     participants: "Մասնակիցներ",
