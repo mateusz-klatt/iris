@@ -653,6 +653,62 @@ describe("Iris operator console", () => {
     server.events.removeAllListeners();
   }, 40000);
 
+  it("ignores a late acknowledgement for a different opening", async () => {
+    const user = userEvent.setup({ delay: null });
+    const other = { ...threadsPage.threads[0]!, id: "ms_other", subject: "Other thread", unread: 1 };
+    let release: (value?: void) => void = () => undefined;
+    let gate = new Promise<void>((resolve) => { release = resolve; });
+    let reads = 0;
+    const arm = () => {
+      gate = new Promise<void>((resolve) => { release = resolve; });
+    };
+    server.use(
+      http.get("*/v1/ui/threads", ({ request }) => {
+        const url = new URL(request.url);
+        if (url.pathname !== "/v1/ui/threads") {
+          return undefined;
+        }
+        return HttpResponse.json({ threads: [...threadsPage.threads, other] });
+      }),
+      http.get("*/v1/ui/threads/:id", ({ params }) => {
+        const id = String(params.id);
+        return HttpResponse.json({
+          ...threadDetail,
+          id,
+          high_water_message_id: id === "ms_root" ? undefined : id,
+          messages: [{
+            ...threadDetail.messages[0]!,
+            id,
+            subject: id === "ms_other" ? "Other thread" : "Rollout check",
+          }],
+        });
+      }),
+      http.post("*/v1/ui/threads/:id/read/:message", async () => {
+        const pending = gate;
+        reads++;
+        await pending;
+        return HttpResponse.json({ read: 1 });
+      }),
+    );
+    await showSession();
+    await user.click(await screen.findByRole("button", { name: /Other thread/ }));
+    await waitFor(() => expect(reads).toBe(1));
+    await user.click(screen.getByRole("button", { name: "Back to threads" }));
+    await waitFor(() => expect(screen.queryByRole("article")).toBeNull());
+    release();
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+    arm();
+    await user.click(await screen.findByRole("button", { name: /Other thread/ }));
+    await waitFor(() => expect(reads).toBe(2));
+    await user.click(screen.getByRole("button", { name: "Back to threads" }));
+    await user.click(await screen.findByRole("button", { name: /Rollout check/ }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Reload the console to mark this thread read.");
+    expect(reads).toBe(2);
+    release();
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+    expect(screen.getByRole("alert")).toHaveTextContent("Reload the console to mark this thread read.");
+  }, 40000);
+
   it("replies and sends as human", async () => {
     const user = userEvent.setup({ delay: null });
     const bodies: unknown[] = [];

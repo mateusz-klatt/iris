@@ -22,7 +22,7 @@ this configuration neither creates one nor authorizes anyone to create it.
 
 Publish this in the release notes:
 
-Reload any console tab opened before the upgrade; an old tab can no longer mark threads read (it now gets an error asking you to reload).
+Reload every console tab after the upgrade. An old tab silently stops marking threads read.
 
 Reload console tabs after a rollback to an older hub as well. A tab left open from this console does not mark a thread read against that hub.
 
