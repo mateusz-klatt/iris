@@ -72,8 +72,8 @@ func (t *transaction) succeed(r Request) (map[string]any, error) {
 	}
 	ex := id("ex_")
 	tick := t.s.clock.Tick()
-	_, err = t.exec(`INSERT INTO Execution(id,agent_id,repository_id,host_id,client,session_id,generation,worktree,branch,boot_epoch,deadline_tick_ms,lease_renewed_tick_ms,state,parent_id,client_pid,client_pid_start_ms,single_session,heartbeat_mode)
-		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'active',?,?,?,?,1)`, ex, prev.AgentID, prev.Repo, prev.Host, prev.Client, prev.Session, prev.Generation+1, prev.Worktree, prev.Branch, t.s.epoch, tick+60000, tick, prev.Parent, prev.PID, prev.PIDStart, prev.Single)
+	_, err = t.exec(`INSERT INTO Execution(id,agent_id,repository_id,host_id,client,session_id,generation,worktree,branch,boot_epoch,deadline_tick_ms,lease_renewed_tick_ms,state,parent_id,client_pid,client_pid_start_ms,single_session,heartbeat_mode,worktree_key)
+		VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'active',?,?,?,?,1,NULLIF(?,''))`, ex, prev.AgentID, prev.Repo, prev.Host, prev.Client, prev.Session, prev.Generation+1, prev.Worktree, prev.Branch, t.s.epoch, tick+60000, tick, prev.Parent, prev.PID, prev.PIDStart, prev.Single, prev.WorktreeKey)
 	if err != nil {
 		return nil, err
 	}
