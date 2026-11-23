@@ -37,7 +37,7 @@ func (t *transaction) check(r Request) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	out, err := t.checkPaths(repo, r.Host, r.Worktree, incoming, r.Paths)
+	out, err := t.checkPaths(repo, r.Host, r.Worktree, incoming, "", r.Paths)
 	if err != nil {
 		return nil, err
 	}
@@ -50,7 +50,13 @@ func (t *transaction) check(r Request) (map[string]any, error) {
 	return out, nil
 }
 
-func (t *transaction) checkPaths(repo, host, worktree, incomingKey string, paths []string) (map[string]any, error) {
+// checkPaths classifies staged or shell paths. shell is the Execution a shell
+// reconcile is granting for; it is empty for the commit guard. The guard skips
+// the committing checkout because it cannot tell who started git. The shell
+// knows its Execution, so it uses that grant's classification: a same-checkout
+// claim held by someone else is a real conflict, and the shell's own reusable
+// claim is not.
+func (t *transaction) checkPaths(repo, host, worktree, incomingKey, shell string, paths []string) (map[string]any, error) {
 	policy, _, err := t.policy(repo)
 	if err != nil {
 		return nil, err
@@ -79,17 +85,30 @@ func (t *transaction) checkPaths(repo, host, worktree, incomingKey string, paths
 			if err = t.row("SELECT host_id,worktree,branch FROM Execution WHERE id=?", c.Execution).Scan(&ch, &cw, &cb); err != nil {
 				return nil, err
 			}
-			// Same checkout is not a conflict and not an advisory. Under repository
-			// that is the holder Execution's host and worktree. Under worktree it
-			// is the claim key, then the explicit display path, then a legacy
-			// row's Execution path (ADR 037). An empty incoming key never takes
-			// the cross-worktree exemption.
-			if sameGuardWorktree(scope, c, incomingKey, host, worktree, ch, cw) {
-				continue
-			}
-			if exemptAutoOverlap(scope, c.Origin, c.WorktreeKey, "auto", incomingKey) {
-				advisories = append(advisories, advisoryOf(c, p, repo))
-				continue
+			if shell == "" {
+				// Same checkout is not a conflict and not an advisory. Under repository
+				// that is the holder Execution's host and worktree. Under worktree it
+				// is the claim key, then the explicit display path, then a legacy
+				// row's Execution path (ADR 037). An empty incoming key never takes
+				// the cross-worktree exemption. The shell does not use this skip.
+				if sameGuardWorktree(scope, c, incomingKey, host, worktree, ch, cw) {
+					continue
+				}
+				if exemptAutoOverlap(scope, c.Origin, c.WorktreeKey, "auto", incomingKey) {
+					advisories = append(advisories, advisoryOf(c, p, repo))
+					continue
+				}
+			} else {
+				skip, advise, err := t.shellClaim(shell, scope, incomingKey, c)
+				if err != nil {
+					return nil, err
+				}
+				if advise {
+					advisories = append(advisories, advisoryOf(c, p, repo))
+				}
+				if skip {
+					continue
+				}
 			}
 			conflict, err := t.conflict(c)
 			if err != nil {
@@ -116,6 +135,30 @@ func (t *transaction) checkPaths(repo, host, worktree, incomingKey string, paths
 		out["advisories"] = advisories
 	}
 	return out, nil
+}
+
+// shellClaim is autoClaim's decision for one overlapping claim. skip means the
+// grant does not treat it as a conflict. advise means the overlap is exempt and
+// the shell still reports it. A relative Execution is skipped and not advised,
+// matching the grant, which does not refuse a parent or child.
+func (t *transaction) shellClaim(shell, scope, incomingKey string, c claim) (skip, advise bool, err error) {
+	if c.Execution == shell {
+		if reusesOwn(scope, c.Origin, c.WorktreeKey, incomingKey) {
+			return true, false, nil
+		}
+		if exemptAutoOverlap(scope, c.Origin, c.WorktreeKey, "auto", incomingKey) {
+			return true, true, nil
+		}
+		return false, false, nil
+	}
+	family, err := t.related(shell, c.Execution)
+	if err != nil || family {
+		return true, false, err
+	}
+	if exemptAutoOverlap(scope, c.Origin, c.WorktreeKey, "auto", incomingKey) {
+		return true, true, nil
+	}
+	return false, false, nil
 }
 
 // where says which checkout holds a claim, so the person refused knows where to ask: the

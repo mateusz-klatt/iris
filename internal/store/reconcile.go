@@ -105,7 +105,10 @@ func (t *transaction) reconcileChanges(e execution, r Request) (map[string]any, 
 	// stashed or restored by git in this worktree, which changes nothing in a holder's worktree,
 	// so it is neither warned about nor claimed.
 	changed, left := shellChanges(previous, r.Status, r.Scope)
-	out, err := t.checkPaths(e.Repo, e.Host, e.Worktree, e.WorktreeKey, changed)
+	// The warning uses the same classification as the grant below. The guard's
+	// same-checkout skip would hide a claim another Execution holds in this
+	// checkout, while autoClaim still refuses it.
+	out, err := t.checkPaths(e.Repo, e.Host, e.Worktree, e.WorktreeKey, e.ID, changed)
 	if err != nil {
 		return nil, err
 	}
