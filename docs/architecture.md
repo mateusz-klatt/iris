@@ -1284,7 +1284,10 @@ newest message in the detail response that open loaded. The hub requires that me
 to the thread and be visible in the requested view, then acknowledges human deliveries whose
 Message `rowid` is no greater than its `rowid`. This insertion-order bound excludes later commits
 even if their wall-clock timestamps or random ids sort earlier. Thread detail orders messages by
-`(created_ms, rowid)`, and list titles select the first message in that same order. A passive
+`(created_ms, rowid)`, and list titles select the first message in that same order. Because the
+display order uses the hub's wall clock while the bound uses insertion order, a message shown
+before the watermark but inserted after it, which needs a wall-clock step back, stays unread
+until the next open: the bound can under-acknowledge, never over-acknowledge. A passive
 refresh does not advance the mark or authorize a read. For one release, omitting
 `last_message_id` retains the legacy thread-wide acknowledgement; a later release will require
 the field.
