@@ -16,6 +16,42 @@ import (
 	"golang.org/x/sys/windows"
 )
 
+// slowRenameClock advances by less than hookLockBudget on every pause, so the
+// attempt cap is what stops a retry. The budget test moves the clock by the
+// whole budget instead. Neither clock reads the wall time.
+func slowRenameClock() (advance func(), now func() time.Time) {
+	current := time.Unix(1_000, 0)
+	step := hookLockBudget / time.Duration(antigravityRenameAttempts)
+	return func() { current = current.Add(step) }, func() time.Time { return current }
+}
+
+func countRenamePause(t *testing.T, pauses *int, advance func()) func(time.Duration) {
+	t.Helper()
+	return func(delay time.Duration) {
+		if delay != antigravityRenamePause {
+			t.Errorf("retry delay = %v, want %v", delay, antigravityRenamePause)
+		}
+		*pauses++
+		advance()
+	}
+}
+
+// retryFallbackUntil is the unsupported-then-classic latch in replaceAntigravityState,
+// run on a clock the test controls.
+func retryFallbackUntil(posix, classic func(string, string) error, pause func(time.Duration), now func() time.Time) error {
+	unsupported := false
+	return retryAntigravityStateRenameUntil(func() error {
+		if !unsupported {
+			err := posix("old", "new")
+			if err == nil || !posixRenameUnsupported(err) {
+				return err
+			}
+			unsupported = true
+		}
+		return classic("old", "new")
+	}, pause, now)
+}
+
 func TestRetryAntigravityStateRename(t *testing.T) {
 	calls, pauses := 0, 0
 	err := retryAntigravityStateRename(func() error {
@@ -36,10 +72,11 @@ func TestRetryAntigravityStateRename(t *testing.T) {
 
 	permanent := &os.LinkError{Op: "rename", Err: os.ErrPermission}
 	calls, pauses = 0, 0
-	err = retryAntigravityStateRename(func() error {
+	advance, now := slowRenameClock()
+	err = retryAntigravityStateRenameUntil(func() error {
 		calls++
 		return permanent
-	}, func(time.Duration) { pauses++ })
+	}, countRenamePause(t, &pauses, advance), now)
 	if !errors.Is(err, os.ErrPermission) || calls != antigravityRenameAttempts || pauses != antigravityRenameAttempts-1 {
 		t.Fatalf("exhausted replacement = %v after %d calls and %d pauses", err, calls, pauses)
 	}
@@ -242,25 +279,27 @@ func TestReplaceAntigravityState(t *testing.T) {
 	}
 
 	posixCalls, classicCalls, pauses = 0, 0, 0
-	err = replaceAntigravityState("old", "new", func(string, string) error {
+	advance, now := slowRenameClock()
+	err = retryFallbackUntil(func(string, string) error {
 		posixCalls++
 		return windows.ERROR_INVALID_PARAMETER
 	}, func(string, string) error {
 		classicCalls++
 		return &os.LinkError{Op: "rename", Err: os.ErrPermission}
-	}, func(time.Duration) { pauses++ })
+	}, countRenamePause(t, &pauses, advance), now)
 	if !errors.Is(err, os.ErrPermission) || posixCalls != 1 || classicCalls != antigravityRenameAttempts || pauses != antigravityRenameAttempts-1 {
 		t.Fatalf("exhausted fallback = %v after posix %d classic %d pauses %d", err, posixCalls, classicCalls, pauses)
 	}
 
 	posixCalls, classicCalls, pauses = 0, 0, 0
-	err = replaceAntigravityState("old", "new", func(string, string) error {
+	advance, now = slowRenameClock()
+	err = retryFallbackUntil(func(string, string) error {
 		posixCalls++
 		return &os.LinkError{Op: "rename", Err: os.ErrPermission}
 	}, func(string, string) error {
 		classicCalls++
 		return nil
-	}, func(time.Duration) { pauses++ })
+	}, countRenamePause(t, &pauses, advance), now)
 	if !errors.Is(err, os.ErrPermission) || posixCalls != antigravityRenameAttempts || classicCalls != 0 || pauses != antigravityRenameAttempts-1 {
 		t.Fatalf("exhausted POSIX rename = %v after posix %d classic %d pauses %d", err, posixCalls, classicCalls, pauses)
 	}
