@@ -181,9 +181,11 @@ together with `CURSOR_VERSION`. Cursor's measured `agent` alias counts as Cursor
 pair. A bare `agent` without the pair is not a client, and the walk continues past it, because Grok
 installs an `agent` alias of its own (`~/.grok/bin/agent`, the same binary as `grok`). The hook gets
 the pair, so a cross-loaded Cursor hook under `agent` is still recognized. The nearest recognized
-client wins. One matching the requested client keeps a real nested session native, and markers
-never relabel a known third client. An inherited `CLAUDE_CODE_SESSION_ID` never outranks Cursor's
-process or marker evidence.
+client wins. One matching the requested client keeps a real nested session native.
+- **A Claude hook** (`claude` or `claude-code`): the marker walk applies, and markers never relabel a known third client.
+- **Every other client:** the walk ignores the markers. The marker pair alone still identifies Cursor, as in v0.1.13, unless the requested client was recognized.
+
+An inherited `CLAUDE_CODE_SESSION_ID` never outranks Cursor's process or marker evidence.
 
 When a hook meant for one client runs under another, it prints the runner's allow output, exits
 0 and does not call the hub, whether or not the runner has its own integration. `iris doctor`
