@@ -18,7 +18,7 @@ func TestWorktreeDisplayPathsKeepSpellingAndFoldOnlyWindows(t *testing.T) {
 		{raw: `c:\`, want: "C:/", sameAs: "C:/", differ: "C:/repo"},
 		{raw: "C:", want: "C:/"},
 		{raw: `C:\foo\.\bar\..`, want: "C:/foo"},
-		{raw: `C:\foo\..\..\other`, want: "C:/other"},
+		{raw: `C:\foo\..\..\outside`, want: "C:/outside"},
 		{raw: `C:\repo.\file.txt.`, want: "C:/repo/file.txt", sameAs: `c:/repo/file.txt`},
 		{raw: `C:\repo \a `, want: "C:/repo/a"},
 		{raw: `C:\...`, want: "C:/..."},
