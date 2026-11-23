@@ -48,7 +48,7 @@ func (r Runner) fileGroups(repo gitinfo.Repo, ev Event) []hubclient.ClaimGroup {
 		if !found {
 			i = len(groups)
 			index[place.GitDir] = i
-			groups = append(groups, hubclient.ClaimGroup{Worktree: place.Worktree, WorktreeID: place.WorktreeID, CommonDir: place.CommonDir, RemoteURL: place.RemoteURL, RootCommit: place.RootCommit})
+			groups = append(groups, hubclient.ClaimGroup{Worktree: place.Worktree, WorktreeID: place.WorktreeID, CommonDir: place.CommonDir, RemoteURL: place.RemoteURL, RootCommit: place.RootCommit, Branch: place.Branch})
 		}
 		if seen[place.GitDir+"\x00"+rel] {
 			continue

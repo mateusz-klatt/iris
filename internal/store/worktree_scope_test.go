@@ -800,6 +800,61 @@ func TestResumeCopiesTheWorktreeIdentity(t *testing.T) {
 	}
 }
 
+// A grouped touch records the checkout's branch, not the session's. The claim list
+// and a cross-worktree advisory both show that branch. An explicit claim placed in
+// another checkout does the same.
+func TestAGroupedClaimRecordsAndShowsItsCheckoutBranch(t *testing.T) {
+	s, _, _ := testStore(t)
+	a, ao := scopeSession(t, s, "", "a", "/repo/wt1", "dev:1", "main")
+	repo := ao["repository_id"].(string)
+	setScope(t, s, repo, "worktree")
+	if got := call(t, s, "touch_files", filesTouch(a, "edit", wtGroup("/repo/wt1", "dev:1", "feature", "a.go"))); got["action"] != "allow" {
+		t.Fatal(got)
+	}
+	rows := claimsOn(liveClaims(t, s, repo), "a.go")
+	if len(rows) != 1 || rows[0].branch.String != "feature" {
+		t.Fatalf("stored branch: %+v", rows)
+	}
+	incoming, _ := scopeSession(t, s, "", "b", "/repo/wt2", "dev:2", "side")
+	got := call(t, s, "touch", touchRequest(incoming, "overlap", "a.go"))
+	notes, _ := got["advisories"].([]map[string]any)
+	message, _ := got["message"].(string)
+	if got["action"] != "allow" || len(notes) != 1 || notes[0]["branch"] != "feature" || !strings.Contains(message, "on branch feature.") || strings.Contains(message, "on branch main.") {
+		t.Fatal(got)
+	}
+	var shown string
+	for _, c := range call(t, s, "claims", Request{RepositoryID: repo})["claims"].([]map[string]any) {
+		if c["path"] == "a.go" && c["worktree_path"] == "/repo/wt1" {
+			shown, _ = c["branch"].(string)
+		}
+	}
+	if shown != "feature" {
+		t.Fatalf("listed branch %q", shown)
+	}
+
+	parent, _ := register(t, s, "parent", "/src/snapper", superRemote, "snapper-root")
+	_, childRepo := register(t, s, "child", "/src/frontend", frontendRemote, "frontend-root")
+	sub := submodule()
+	sub.Prefix = "frontend"
+	sub.Branch = "release"
+	explicit := claimRequest(parent, "in-sub", "frontend/src/x.ts", "exact")
+	explicit.Checkout = &sub
+	fence := call(t, s, "claim_files", explicit)["fence"]
+	var stored sql.NullString
+	if err := s.db.QueryRow("SELECT branch FROM Claim WHERE fence=?", fence).Scan(&stored); err != nil || stored.String != "release" {
+		t.Fatalf("explicit branch %v, %v", stored, err)
+	}
+	listed := ""
+	for _, c := range call(t, s, "claims", Request{RepositoryID: childRepo})["claims"].([]map[string]any) {
+		if c["path"] == "src/x.ts" {
+			listed, _ = c["branch"].(string)
+		}
+	}
+	if listed != "release" {
+		t.Fatalf("listed explicit branch %q", listed)
+	}
+}
+
 func TestAdvisoryNamesAnUnknownBranchAndKeepsTheIgnoredNote(t *testing.T) {
 	s, _, _ := testStore(t)
 	held, ho := scopeSession(t, s, "", "held", "/repo/wt1", "dev:1", "")
