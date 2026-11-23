@@ -91,10 +91,10 @@ func TestFloorBypassAfterSessionEndBlocksRung2AndWatch(t *testing.T) {
 			r := &Resolver{
 				Hub: client, Client: "claude", Host: "floor-host", CWD: cwd, Grace: 0,
 				Getenv: getenv, Ancestor: func() (proc.Ancestor, error) { return proc.Ancestor{}, nil },
-				Recall: func(clientName, session string) (int, bool, error) {
-					generation, present, err := sessions.RecallBindingGeneration(clientName, session)
-					recalls = append(recalls, fmt.Sprintf("%s/%s -> %d present=%t err=%v", clientName, session, generation, present, err))
-					return generation, present, err
+				Recall: func(clientName, session string) (int, int, error) {
+					generation, ended, err := sessions.RecallBindingGeneration(clientName, session)
+					recalls = append(recalls, fmt.Sprintf("%s/%s -> %d ended=%d err=%v", clientName, session, generation, ended, err))
+					return generation, ended, err
 				},
 			}
 			if tc.mode == "watch" {
@@ -113,21 +113,9 @@ func TestFloorBypassAfterSessionEndBlocksRung2AndWatch(t *testing.T) {
 					t.Fatalf("damaged marker did not block locally: err=%v requests=%+v", err, requests)
 				}
 				assertBindingObservation(t, token, hook.DamagedGenerationProof+" at "+markerPath)
-			case tc.mode == "watch":
-				if !errors.Is(err, errGenerationFloor) || len(requests) != 0 {
-					t.Fatalf("watch did not stop at the local floor: err=%v requests=%+v", err, requests)
-				}
 			default:
-				if len(requests) != 1 || requests[0].Source != "shim" || requests[0].Generation != 1 || requests[0].RetryGeneration != 0 || requests[0].SessionID != "S" {
-					t.Fatalf("shim did not stop at exact-generation reattach: %+v", requests)
-				}
-				var hubErr *hubclient.Error
-				if !errors.As(err, &hubErr) {
-					t.Fatalf("shim did not surface the hub refusal: %v", err)
-				}
-				highest, valid, present := hubErr.HighestGeneration()
-				if !present || !valid || highest < 1 {
-					t.Fatalf("shim lost answer omitted the generation floor: %v", err)
+				if !errors.Is(err, errGenerationFloor) || len(requests) != 0 {
+					t.Fatalf("%s did not stop at the local veto: err=%v requests=%+v", tc.mode, err, requests)
 				}
 			}
 			if len(rows) != 1 || rows[0].id != endedID || rows[0].state != "ended" || rows[0].generation != 1 {
@@ -149,10 +137,10 @@ func TestFloorBypassUnhookedRung3RegistersSyntheticSession(t *testing.T) {
 	anc := proc.Ancestor{PID: pid, StartMS: start, Name: "cursor-agent"}
 	sessions := hook.NewSessions(token)
 	var recalls []string
-	r := rung3Resolver(t, h, cwd, anc, func(clientName, session string) (int, bool, error) {
-		generation, present, err := sessions.RecallBindingGeneration(clientName, session)
-		recalls = append(recalls, fmt.Sprintf("%s/%s -> %d present=%t err=%v", clientName, session, generation, present, err))
-		return generation, present, err
+	r := rung3Resolver(t, h, cwd, anc, func(clientName, session string) (int, int, error) {
+		generation, ended, err := sessions.RecallBindingGeneration(clientName, session)
+		recalls = append(recalls, fmt.Sprintf("%s/%s -> %d ended=%d err=%v", clientName, session, generation, ended, err))
+		return generation, ended, err
 	})
 	b, err := r.Resolve(ctx, "")
 	requests := h.sessions()
@@ -167,7 +155,7 @@ func TestFloorBypassUnhookedRung3RegistersSyntheticSession(t *testing.T) {
 	if len(rows) != 1 || rows[0].session != wantID || rows[0].generation != 1 || rows[0].state != "active" || rows[0].hookSeen != 0 {
 		t.Fatalf("synthetic execution: %+v", rows)
 	}
-	wantRecall := "cursor/" + wantID + " -> 0 present=false err=<nil>"
+	wantRecall := "cursor/" + wantID + " -> 0 ended=0 err=<nil>"
 	if len(recalls) != 2 || recalls[0] != wantRecall || recalls[1] != wantRecall {
 		t.Fatalf("floor was not checked against the synthetic session before and after registration: %v", recalls)
 	}
@@ -207,10 +195,10 @@ func TestFloorBypassRung3AfterEndDoesNotAdvanceTheHookSession(t *testing.T) {
 	endedID := rows[0].id
 	sessions := hook.NewSessions(token)
 	var recalls []string
-	r := rung3Resolver(t, h, cwd, anc, func(clientName, session string) (int, bool, error) {
-		generation, present, err := sessions.RecallBindingGeneration(clientName, session)
-		recalls = append(recalls, fmt.Sprintf("%s/%s -> %d present=%t err=%v", clientName, session, generation, present, err))
-		return generation, present, err
+	r := rung3Resolver(t, h, cwd, anc, func(clientName, session string) (int, int, error) {
+		generation, ended, err := sessions.RecallBindingGeneration(clientName, session)
+		recalls = append(recalls, fmt.Sprintf("%s/%s -> %d ended=%d err=%v", clientName, session, generation, ended, err))
+		return generation, ended, err
 	})
 	before := len(h.sessions())
 	b, err := r.Resolve(ctx, "")
@@ -354,7 +342,7 @@ func endedOrLiveCursor(t *testing.T, end bool) (*restartableBindingHub, string, 
 	return h, cwd, token, anc
 }
 
-func rung3Resolver(t *testing.T, h *restartableBindingHub, cwd string, anc proc.Ancestor, recall func(string, string) (int, bool, error)) *Resolver {
+func rung3Resolver(t *testing.T, h *restartableBindingHub, cwd string, anc proc.Ancestor, recall func(string, string) (int, int, error)) *Resolver {
 	t.Helper()
 	return &Resolver{
 		Hub: &hubclient.Client{Config: config{h.srv.URL}}, Client: "cursor", Host: "floor-host", CWD: cwd, Grace: 0,

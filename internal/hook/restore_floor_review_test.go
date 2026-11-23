@@ -556,12 +556,14 @@ func TestSessionEndThatCannotRecordTheMarkerKeepsProofAndNamesIt(t *testing.T) {
 
 func TestRefusalNamesAContributingEndMarker(t *testing.T) {
 	for _, tc := range []struct {
-		name      string
-		ended     string
-		prune     bool
-		wantProof string
+		name         string
+		ended        string
+		prune        bool
+		endsInFlight bool
+		wantProof    string
 	}{
-		{name: "pruned proof stays below the marker", ended: "5\n", prune: true, wantProof: ""},
+		{name: "pruned proof stays below the marker", ended: "5\n", prune: true, endsInFlight: true, wantProof: ""},
+		{name: "present proof names the marker written during registration", ended: "3\n", endsInFlight: true, wantProof: "3"},
 		{name: "pruned proof is restored above the marker", ended: "1\n", prune: true, wantProof: "3"},
 		{name: "proof already present still names the marker", ended: "2\n", wantProof: "3"},
 	} {
@@ -571,17 +573,28 @@ func TestRefusalNamesAContributingEndMarker(t *testing.T) {
 			m := sessionsFor(h.getenv)
 			proof := m.name("claude", "s1")
 			marker := proof + ".ended"
-			if err := os.WriteFile(marker, []byte(tc.ended), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			if tc.prune {
+			writeMarker := func() error {
+				if err := os.WriteFile(marker, []byte(tc.ended), 0o600); err != nil || !tc.prune {
+					return err
+				}
 				newer := time.Now().Add(2 * time.Hour)
-				if err := os.Chtimes(marker, newer, newer); err != nil {
+				return os.Chtimes(marker, newer, newer)
+			}
+			if !tc.endsInFlight {
+				if err := writeMarker(); err != nil {
 					t.Fatal(err)
 				}
 			}
 			observeReviewRequests(h, func(req floorRequest) error {
-				if tc.prune && req.route == route && req.generation == 3 {
+				if req.route != route || req.generation != 3 {
+					return nil
+				}
+				if tc.endsInFlight {
+					if err := writeMarker(); err != nil {
+						return err
+					}
+				}
+				if tc.prune {
 					pruner := m
 					pruner.now = func() time.Time { return time.Now().Add(memoryAge + time.Hour) }
 					return pruner.prune()

@@ -227,6 +227,9 @@ func (s *runState) received(b []byte) { s.mu.Lock(); s.receipt = b; s.mu.Unlock(
 
 func (s *runState) at(stage string) { s.mu.Lock(); s.stage = stage; s.mu.Unlock() }
 func (s *runState) fail(err error, out Output) Output {
+	if err == errEndedGeneration {
+		return out // the local refusal already recorded a path in the observation log
+	}
 	s.mu.Lock()
 	s.err = err
 	s.mu.Unlock()

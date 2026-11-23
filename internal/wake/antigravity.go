@@ -368,8 +368,11 @@ func runAntigravityChild(parentCtx context.Context, opts antigravityOptions, raw
 	}
 
 	hubClient := &hubclient.Client{Config: resolved}
+	sessions := hook.NewSessions(resolved.TokenFile)
 	resolver := binding.NewAntigravityWake(hubClient, convID, proc.Ancestor{PID: agyPID, StartMS: agyStartMS, Name: "agy"})
 	resolver.Host, resolver.CWD = opts.host, opts.cwd
+	resolver.Recall = sessions.RecallBindingGeneration
+	resolver.ObserveBindingRefusal = sessions.ObserveBindingRefusal
 	observeEnv := map[string]string{"IRIS_TOKEN_FILE": resolved.TokenFile}
 	resolver.Observe = hook.Observer(func(k string) string { return observeEnv[k] }, "antigravity")
 
@@ -400,7 +403,7 @@ func runAntigravityChild(parentCtx context.Context, opts antigravityOptions, raw
 	runner := &Runner{
 		resolver:      guarded,
 		source:        hubSource{client: hubClient},
-		sessions:      hook.NewSessions(resolved.TokenFile),
+		sessions:      sessions,
 		commands:      cmds,
 		clientVersion: func() string { return "" },
 		observe:       resolver.Observe,

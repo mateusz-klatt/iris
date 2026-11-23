@@ -536,7 +536,10 @@ func applyFailuresFrom(res *Result, tokenFile, fallbackTokenFile string, now tim
 		if seen := observed[row.Client]; len(seen) > 0 {
 			row.Detail = joinDetail(row.Detail, "observed in 24 h: "+observedText(seen))
 			if seen[hook.RestoreFloorRefused]+seen[hook.RestoreFloorHubTooOld] > 0 {
-				row.Detail = joinDetail(row.Detail, "the hook kept its generation proof and left the session unregistered. Edits may have gone unclaimed")
+				row.Detail = joinDetail(row.Detail, "the hook kept its generation proof and left the session unregistered. Edits may have gone unclaimed. Verify the configured hub and its restore history, or start a new client session")
+			}
+			if seen[hook.EndedGenerationRefused]+seen[hook.BindingGenerationRefused]+seen[hook.DamagedGenerationProof] > 0 {
+				row.Detail = joinDetail(row.Detail, "start a new client session to obtain fresh proof. To resume this session, verify the configured hub and its session history before archiving any named file. Keep the end marker while it protects against a backup of the ended session")
 			}
 			if row.Client == integrate.Claude && (seen[binding.ClientMismatchObservation(integrate.Claude, integrate.Cursor)] > 0 || seen["cross-load: ran in a session of cursor"] > 0) {
 				row.Detail = joinDetail(row.Detail, cursorClaudeCrossLoadWarning)
@@ -1051,7 +1054,7 @@ const crlfFloor = 20
 // The kind is what a stored report may count. The path stays on the machine that holds the file.
 // The longer refusal is listed first so it is not read as the shorter one.
 func observedLocalPath(note string) (kind, path string, ok bool) {
-	for _, kind := range []string{hook.RestoreFloorHubTooOld, hook.DamagedGenerationProof, hook.RestoreFloorRefused} {
+	for _, kind := range []string{hook.RestoreFloorHubTooOld, hook.DamagedGenerationProof, hook.RestoreFloorRefused, hook.EndedGenerationRefused, hook.BindingGenerationRefused} {
 		if path, ok := strings.CutPrefix(note, kind+" at "); ok {
 			return kind, path, true
 		}

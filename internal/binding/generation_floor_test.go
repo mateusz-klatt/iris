@@ -90,7 +90,7 @@ func TestRetainedGenerationRejectsALiveBindFromOlderBackup(t *testing.T) {
 				r.HeartbeatSource = "watch"
 			}
 			// A stale disk entry must not override the higher generation the process retained.
-			r.Recall = func(string, string) (int, bool, error) { return 1, true, nil }
+			r.Recall = func(string, string) (int, int, error) { return 1, 0, nil }
 			resolve := func(r *Resolver) (Bound, error) {
 				if mode == "codex" {
 					b, primary, err := r.ResolveCall(ctx, "", "S", "S")
@@ -115,7 +115,7 @@ func TestRetainedGenerationRejectsALiveBindFromOlderBackup(t *testing.T) {
 
 			fresh := tickResolver(r.Hub, client, sessionS, proc.Ancestor{})
 			fresh.HeartbeatSource = r.HeartbeatSource
-			fresh.Recall = func(string, string) (int, bool, error) { return 3, true, nil }
+			fresh.Recall = func(string, string) (int, int, error) { return 3, 0, nil }
 			if b, err := resolve(fresh); b != (Bound{}) || !errors.Is(err, errGenerationFloor) {
 				t.Fatalf("live generation 1 bypassed fresh client's disk proof: %+v, %v", b, err)
 			}
@@ -138,7 +138,7 @@ func TestNewDiskProofStopsCachedGenerationRenewal(t *testing.T) {
 			}}
 			r := tickResolver(h.client(), "claude", sessionS, proc.Ancestor{})
 			gen := 1
-			r.Recall = func(string, string) (int, bool, error) { return gen, true, nil }
+			r.Recall = func(string, string) (int, int, error) { return gen, 0, nil }
 			if b, err := r.Resolve(ctx, ""); err != nil || b.ExecutionID != "ex_restored" || b.Generation != 1 {
 				t.Fatalf("initial binding = %+v, %v", b, err)
 			}
@@ -162,16 +162,79 @@ func TestNewDiskProofStopsCachedGenerationRenewal(t *testing.T) {
 	}
 }
 
+func TestEndedThroughVetoesCachedHeartbeat(t *testing.T) {
+	for _, source := range []string{"shim", "watch"} {
+		t.Run(source, func(t *testing.T) {
+			ended := 0
+			h := &tickHub{reply: func(_ *http.Request, body map[string]any) (int, any) {
+				if body["execution"] != nil {
+					return refused("lost")
+				}
+				return found("ex_restored", 3, "S")
+			}}
+			r := tickResolver(h.client(), "claude", sessionS, proc.Ancestor{})
+			r.HeartbeatSource = source
+			r.Recall = func(string, string) (int, int, error) { return 0, ended, nil }
+			if b, err := r.Resolve(t.Context(), ""); err != nil || b.Generation != 3 {
+				t.Fatalf("initial bind: %+v, %v", b, err)
+			}
+			ended = 3
+			if source == "shim" {
+				if b, err := r.Resolve(t.Context(), ""); b != (Bound{}) || !errors.Is(err, errGenerationFloor) {
+					t.Fatalf("refresh used an ended generation: %+v, %v", b, err)
+				}
+				h.expect(t, "bind session_id=S", "bind execution=ex_restored", "bind session_id=S")
+			} else {
+				if err := r.Heartbeat(t.Context(), source); !errors.Is(err, errGenerationFloor) {
+					t.Fatalf("heartbeat used an ended generation: %v", err)
+				}
+				h.expect(t, "bind session_id=S")
+			}
+			if !r.Lost() || r.bound != (Bound{}) {
+				t.Fatalf("ended binding was retained: lost=%t, bound=%+v", r.Lost(), r.bound)
+			}
+		})
+	}
+}
+
+func TestEndedThroughVetoesExplicitAndForeignSessionBindings(t *testing.T) {
+	h := &tickHub{reply: func(_ *http.Request, body map[string]any) (int, any) {
+		if body["session_id"] == "native" {
+			return refused("unbound")
+		}
+		return found("ex_restored", 2, "ended")
+	}}
+	recall := func(client, session string) (int, int, error) {
+		if client != "codex" || session != "ended" {
+			t.Errorf("checked wrong end marker: %s/%s", client, session)
+		}
+		return 0, 3, nil
+	}
+	override := tickResolver(h.client(), "codex", map[string]string{"IRIS_EXECUTION": "ex_restored"}, proc.Ancestor{})
+	override.Recall = recall
+	if b, _, err := override.ResolveCall(t.Context(), "", "", ""); b != (Bound{}) || !errors.Is(err, errGenerationFloor) {
+		t.Fatalf("explicit override used a generation below the end: %+v, %v", b, err)
+	}
+	lookup := tickResolver(h.client(), "codex", nil, proc.Ancestor{})
+	lookup.Recall = recall
+	if _, _, err := lookup.ResolveCall(t.Context(), "", "native", "child"); !errors.Is(err, errUnusable) {
+		t.Fatalf("unbound native lookup did not enter lookup-only mode: %v", err)
+	}
+	if b, _, err := lookup.ResolveCall(t.Context(), "", "ended", "child"); b != (Bound{}) || !errors.Is(err, errGenerationFloor) {
+		t.Fatalf("foreign lookup used a generation below the end: %+v, %v", b, err)
+	}
+	h.expect(t, "bind execution=ex_restored", "bind session_id=native", "bind session_id=ended")
+}
+
 func TestLiveBindingRejectsUnreadableGenerationProof(t *testing.T) {
 	for _, tc := range []struct {
 		name, client, source, thread string
-		present, primary             bool
+		primary                      bool
 	}{
-		{"shim", "claude", "shim", "", true, true},
-		{"shim with unknown proof presence", "claude", "shim", "", false, true},
-		{"watch", "claude", "watch", "", true, true},
-		{"Codex root", "codex", "shim", "S", true, true},
-		{"Codex native sub-agent", "codex", "shim", "child", true, false},
+		{"shim", "claude", "shim", "", true},
+		{"watch", "claude", "watch", "", true},
+		{"Codex root", "codex", "shim", "S", true},
+		{"Codex native sub-agent", "codex", "shim", "child", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := &tickHub{reply: func(*http.Request, map[string]any) (int, any) {
@@ -180,11 +243,11 @@ func TestLiveBindingRejectsUnreadableGenerationProof(t *testing.T) {
 			r := tickResolver(h.client(), tc.client, sessionS, proc.Ancestor{})
 			r.HeartbeatSource = tc.source
 			proofErr := errors.New("cannot read generation proof")
-			r.Recall = func(client, session string) (int, bool, error) {
+			r.Recall = func(client, session string) (int, int, error) {
 				if client != tc.client || session != "S" {
 					t.Errorf("read unrelated proof for %s/%s", client, session)
 				}
-				return 0, tc.present, proofErr
+				return 0, 0, proofErr
 			}
 			primary := true
 			var b Bound
@@ -222,7 +285,7 @@ func TestCachedBindingCanReattachAfterATransientProofReadError(t *testing.T) {
 			r := tickResolver(h.client(), "claude", sessionS, proc.Ancestor{})
 			r.HeartbeatSource = source
 			var readErr error
-			r.Recall = func(string, string) (int, bool, error) { return 3, true, readErr }
+			r.Recall = func(string, string) (int, int, error) { return 3, 0, readErr }
 			b, err := r.Resolve(t.Context(), "")
 			if err != nil || b.ExecutionID != "ex_live" || b.Generation != 3 {
 				t.Fatalf("initial binding = %+v, %v", b, err)
@@ -255,7 +318,7 @@ func TestCachedBindingCanReattachAfterATransientProofReadError(t *testing.T) {
 
 func TestFirstFallbackChecksGenerationProofAfterGrace(t *testing.T) {
 	for _, mode := range []string{"shim", "watch"} {
-		for _, proof := range []string{"absent", "remembered", "malformed"} {
+		for _, proof := range []string{"absent", "remembered", "ended", "malformed"} {
 			t.Run(mode+"/"+proof, func(t *testing.T) {
 				cwd := t.TempDir()
 				synctest.Test(t, func(t *testing.T) {
@@ -275,19 +338,28 @@ func TestFirstFallbackChecksGenerationProofAfterGrace(t *testing.T) {
 					if mode == "watch" {
 						r.HeartbeatSource = "watch"
 					}
-					r.Recall = func(client, session string) (int, bool, error) {
+					var refusals []bool
+					r.ObserveBindingRefusal = func(client, session string, ended bool) {
+						if client != "claude" || session != "S" {
+							t.Errorf("reported a refusal for %s/%s", client, session)
+						}
+						refusals = append(refusals, ended)
+					}
+					r.Recall = func(client, session string) (int, int, error) {
 						if client != "claude" || session != "S" {
 							t.Errorf("recall for %s/%s", client, session)
 						}
 						if lookups == 2 {
 							switch proof {
 							case "remembered":
-								return 3, true, nil
+								return 3, 0, nil
+							case "ended":
+								return 0, 3, nil
 							case "malformed":
-								return 0, true, errors.New("corrupt file")
+								return 0, 0, errors.New("corrupt file")
 							}
 						}
-						return 0, false, nil
+						return 0, 0, nil
 					}
 					b, err := r.Resolve(context.Background(), "")
 					switch proof {
@@ -296,11 +368,18 @@ func TestFirstFallbackChecksGenerationProofAfterGrace(t *testing.T) {
 							t.Fatalf("fresh session could not bootstrap: %+v, %v", b, err)
 						}
 						h.expect(t, "bind session_id=S", "bind session_id=S", "/v1/sessions/outside")
-					case "remembered", "malformed":
+					case "remembered", "ended", "malformed":
 						if b != (Bound{}) || !IsCode(err, "lost") {
 							t.Fatalf("session with %s proof bootstrapped: %+v, %v", proof, b, err)
 						}
 						h.expect(t, "bind session_id=S", "bind session_id=S")
+					}
+					if proof == "remembered" || proof == "ended" {
+						if len(refusals) != 1 || refusals[0] != (proof == "ended") {
+							t.Fatalf("fallback did not report %s proof: ended refusals %v", proof, refusals)
+						}
+					} else if len(refusals) != 0 {
+						t.Fatalf("fallback reported a readable proof refusal for %s proof: %v", proof, refusals)
 					}
 				})
 			})
@@ -318,7 +397,7 @@ func TestWatchDoesNotRegisterToReattachFromDisk(t *testing.T) {
 	h.restart()
 	r := tickResolver(&hubclient.Client{Config: config{h.srv.URL}}, "claude", sessionS, proc.Ancestor{})
 	r.HeartbeatSource = "watch"
-	r.Recall = func(string, string) (int, bool, error) { return 1, true, nil }
+	r.Recall = func(string, string) (int, int, error) { return 1, 0, nil }
 	if b, err := r.Resolve(ctx, ""); b != (Bound{}) || !errors.Is(err, errGenerationFloor) {
 		t.Fatalf("watch reattached from disk: %+v, %v", b, err)
 	}
@@ -339,11 +418,11 @@ func TestBindByKnownSessionChecksProofWhenOlderHubOmitsSessionID(t *testing.T) {
 	}}
 	for _, client := range []string{"claude", "codex"} {
 		r := tickResolver(h.client(), client, sessionS, proc.Ancestor{})
-		r.Recall = func(client, session string) (int, bool, error) {
+		r.Recall = func(client, session string) (int, int, error) {
 			if session != "S" {
 				t.Fatalf("hub omitted session id and lookup forgot it: %s/%s", client, session)
 			}
-			return 3, true, nil
+			return 3, 0, nil
 		}
 		var b Bound
 		var err error
@@ -370,11 +449,11 @@ func TestCodexSubagentChecksNativeSessionProofWithOneLookup(t *testing.T) {
 			return http.StatusOK, map[string]any{"execution_id": "ex_native", "generation": generation}
 		}}
 		r := tickResolver(h.client(), "codex", nil, proc.Ancestor{})
-		r.Recall = func(client, session string) (int, bool, error) {
-			if client != "codex" || session != "native" {
+		r.Recall = func(client, session string) (int, int, error) {
+			if client != "codex" || (session != "native" && session != "foreign") {
 				t.Errorf("read unrelated proof for %s/%s", client, session)
 			}
-			return 3, true, nil
+			return 3, 0, nil
 		}
 		if b, primary, err := r.ResolveCall(ctx, "ignored", "native", "child"); b != (Bound{}) || primary || !errors.Is(err, errGenerationFloor) {
 			t.Fatalf("native lookup used generation below disk proof: %+v, primary=%v, err=%v", b, primary, err)
@@ -411,7 +490,7 @@ func TestAnExplicitOverrideCannotBindItsOwnLowerGeneration(t *testing.T) {
 		return found("ex_restored", 1, "S")
 	}}
 	r := tickResolver(h.client(), "claude", map[string]string{"IRIS_EXECUTION": "ex_restored", "CLAUDE_CODE_SESSION_ID": "S"}, proc.Ancestor{})
-	r.Recall = func(string, string) (int, bool, error) { return 3, true, nil }
+	r.Recall = func(string, string) (int, int, error) { return 3, 0, nil }
 	if b, primary, err := r.ResolveCall(context.Background(), "", "", ""); b != (Bound{}) || !primary || !errors.Is(err, errGenerationFloor) {
 		t.Fatalf("override bound its own lower generation: %+v, %v", b, err)
 	}
@@ -460,7 +539,7 @@ func TestCachedHeartbeatsCheckProofAgainAfterAReply(t *testing.T) {
 			}}
 			r := tickResolver(h.client(), "claude", sessionS, proc.Ancestor{})
 			r.bound = Bound{ExecutionID: "ex_restored", Generation: 1, SessionID: "S", Rung: 2, HookSeen: true}
-			r.Recall = func(string, string) (int, bool, error) { return gen, true, nil }
+			r.Recall = func(string, string) (int, int, error) { return gen, 0, nil }
 			ctx := context.Background()
 			if mode == "watch heartbeat" {
 				if err := r.Heartbeat(ctx, "watch"); !errors.Is(err, errGenerationFloor) {
@@ -503,7 +582,7 @@ func TestDelayedRegistrationDoesNotPublishALowerBinding(t *testing.T) {
 			}}
 			r := tickResolver(h.client(), "claude", sessionS, proc.Ancestor{})
 			r.CWD = t.TempDir()
-			r.Recall = func(string, string) (int, bool, error) { return gen, gen > 0, nil }
+			r.Recall = func(string, string) (int, int, error) { return gen, 0, nil }
 			if b, err := r.Resolve(context.Background(), ""); b != (Bound{}) || !errors.Is(err, errGenerationFloor) || r.own {
 				t.Fatalf("delayed registration published a lower binding: %+v, %v", b, err)
 			}
@@ -526,7 +605,7 @@ func TestAYoungerProofStopsPendingHandoverToOldTarget(t *testing.T) {
 	}}
 	r := tickResolver(h.client(), "claude", sessionS, proc.Ancestor{})
 	gen := 1
-	r.Recall = func(string, string) (int, bool, error) { return gen, true, nil }
+	r.Recall = func(string, string) (int, int, error) { return gen, 0, nil }
 	r.bound, r.own = Bound{ExecutionID: "ex_fallback", Generation: 1, Rung: 3, SessionID: "fallback"}, true
 	r.adopt(ctx)
 	if r.pending == nil || r.bound.ExecutionID != "ex_hook" {
@@ -549,7 +628,7 @@ func TestPendingHandoverWaitsForReadableProof(t *testing.T) {
 	}}
 	r := tickResolver(h.client(), "claude", sessionS, proc.Ancestor{})
 	readErr := errors.New("temporary read error")
-	r.Recall = func(string, string) (int, bool, error) { return 3, true, readErr }
+	r.Recall = func(string, string) (int, int, error) { return 3, 0, readErr }
 	r.bound = Bound{ExecutionID: "ex_hook", Generation: 3, Rung: 2, SessionID: "S"}
 	pending := &handover{from: Bound{ExecutionID: "ex_fallback", Generation: 1}, to: r.bound}
 	r.pending = pending
@@ -597,7 +676,7 @@ func TestCodexWakeChecksProofAgainBeforeStarting(t *testing.T) {
 	}}
 	r := tickResolver(h.client(), "codex", nil, proc.Ancestor{})
 	gen := 1
-	r.Recall = func(string, string) (int, bool, error) { return gen, true, nil }
+	r.Recall = func(string, string) (int, int, error) { return gen, 0, nil }
 	if _, _, err := r.ResolveCall(ctx, "", "S", "S"); err != nil {
 		t.Fatal(err)
 	}

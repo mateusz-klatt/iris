@@ -14,7 +14,8 @@ func TestWhoamiUsesAuthoritativeHeartbeatBinding(t *testing.T) {
 	srv := httptest.NewServer(f)
 	defer srv.Close()
 	b := binding.Bound{ExecutionID: "ex", Generation: 3, RepositoryID: "retired", Agent: hubclient.Agent{ID: "agent", Name: "original-name"}, Rung: 4}
-	out, err := call(context.Background(), &hubclient.Client{Config: config{srv.URL}}, b, true, "whoami", Input{})
+	resolver := &binding.Resolver{Hub: &hubclient.Client{Config: config{srv.URL}}}
+	out, err := call(context.Background(), resolver, b, true, "whoami", Input{})
 	if err != nil || out["repository_id"] != "merged" || out["execution_id"] != "ex" || out["generation"] != float64(3) || out["binding_rung"] != float64(4) || out["agent"].(map[string]any)["name"] != "original-name" {
 		t.Fatal("whoami returned its cached identity", out, err)
 	}

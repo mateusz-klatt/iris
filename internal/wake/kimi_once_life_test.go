@@ -34,10 +34,9 @@ func (ot *onceTest) count(call string) int {
 	return n
 }
 
-// Every 20 seconds the watcher renews its pinned generation as a shim. A failed heartbeat changes
-// nothing; only one answering lost ends the watcher, which gives up its record without a latch, so the
-// next prompt can ask again once the session is back.
-func TestKimiOnceEndsOnlyOnAHeartbeatAnsweringLost(t *testing.T) {
+// Every 20 seconds the watcher renews its pinned generation as a shim. A lost heartbeat gives up
+// its record without a latch, so the next prompt can ask again once the session is back.
+func TestKimiOnceEndsOnAHeartbeatAnsweringLost(t *testing.T) {
 	synctest.Test(t, func(t *testing.T) {
 		ot, _, done := following(t, t.Context())
 		time.Sleep(onceBeat)

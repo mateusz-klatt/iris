@@ -68,10 +68,12 @@ type Resolver struct {
 	Client, Host, CWD string
 	Getenv            func(string) string
 	Ancestor          func() (proc.Ancestor, error)
-	// Recall reads the hook's local generation memory for client and session without creating
-	// files. Both clients check it before binding or registering a fallback. An unbound shim
-	// can also use it for a reattach-only registration with generation > 0.
-	Recall func(client, session string) (generation int, present bool, err error)
+	// Recall reads the hook's live generation proof and end marker without creating files.
+	// Both clients check them for binding and renewal. Only live proof can enable reattachment.
+	Recall func(client, session string) (generation, endedThrough int, err error)
+	// ObserveBindingRefusal records the local proof that refused binding or renewal. Like Recall,
+	// it may run with the resolver lock held and must not call back into the resolver.
+	ObserveBindingRefusal func(client, session string, ended bool)
 	// HeartbeatSource names the heartbeat source sent during refresh reattachment (default "shim").
 	HeartbeatSource string
 	mu              sync.Mutex
@@ -311,36 +313,42 @@ func (r *Resolver) processGenerationHeld(session string) int {
 	return 0
 }
 
-func (r *Resolver) recallGeneration(session string) (int, error) {
+func (r *Resolver) recallGeneration(session string) (generation, endedThrough int, err error) {
 	if r.Recall == nil {
-		return 0, nil
+		return 0, 0, nil
 	}
-	gen, present, err := r.Recall(r.Client, session)
-	if err != nil || present && gen <= 0 {
-		return 0, errMalformedGeneration
+	gen, ended, err := r.Recall(r.Client, session)
+	if err != nil || gen < 0 || ended < 0 {
+		return 0, 0, errMalformedGeneration
 	}
-	if !present {
-		return 0, nil
-	}
-	return gen, nil
+	return gen, ended, nil
 }
 
-func (r *Resolver) checkGeneration(session string, generation, retained int) error {
-	gen, err := r.recallGeneration(session)
+func (r *Resolver) checkGeneration(session string, generation, retained int, ownSession bool) error {
+	gen, ended, err := r.recallGeneration(session)
 	if err != nil {
 		return err
 	}
-	if generation < max(gen, retained) {
-		return errGenerationFloor
+	endedVeto := ended > 0 && generation <= ended
+	liveVeto := ownSession && gen > 0 && generation < gen
+	if endedVeto || liveVeto || ownSession && generation < max(0, retained) {
+		return r.refuseBindingGeneration(session, liveVeto, endedVeto)
 	}
 	return nil
 }
 
-// checkGenerationHeld applies proof to a process-owned session of the same identity. An
-// explicit handle is checked only if it names the session the process already knows.
+func (r *Resolver) refuseBindingGeneration(session string, liveVeto, endedVeto bool) error {
+	if (liveVeto || endedVeto) && r.ObserveBindingRefusal != nil {
+		r.ObserveBindingRefusal(r.Client, session, endedVeto)
+	}
+	return errGenerationFloor
+}
+
+// checkGenerationHeld applies an end marker to any identified session and live proof to the
+// process's own session.
 func (r *Resolver) checkGenerationHeld(b Bound) error {
-	if b.SessionID != "" && r.processRungHeld(b) > 0 {
-		return r.checkGeneration(b.SessionID, b.Generation, r.processGenerationHeld(b.SessionID))
+	if b.SessionID != "" {
+		return r.checkGeneration(b.SessionID, b.Generation, r.processGenerationHeld(b.SessionID), r.processRungHeld(b) > 0)
 	}
 	return nil
 }
@@ -459,15 +467,18 @@ func (r *Resolver) explicitBindingHeld(handle string) bool {
 // returns attempted=false so nothing is sent. Malformed or mismatched memory returns a lost
 // error with attempted=true and never falls back to a generation-0 registration.
 func (r *Resolver) reattachByMemoryHeld(ctx context.Context, session string, rung int) (Bound, bool, error) {
-	gen, err := r.recallGeneration(session)
+	gen, ended, err := r.recallGeneration(session)
 	if err != nil {
 		return Bound{}, true, err
+	}
+	if ended > 0 && gen <= ended {
+		return Bound{}, true, r.refuseBindingGeneration(session, false, true)
 	}
 	if gen == 0 {
 		return Bound{}, false, nil
 	}
 	if gen < r.processGenerationHeld(session) {
-		return Bound{}, true, errGenerationFloor
+		return Bound{}, true, r.refuseBindingGeneration(session, true, false)
 	}
 	req := hubclient.SessionRequest{
 		Client:     r.Client,
@@ -584,9 +595,9 @@ func (r *Resolver) register(ctx context.Context, session string, a proc.Ancestor
 }
 
 func (r *Resolver) fallbackGenerationError(session string) error {
-	gen, err := r.recallGeneration(session)
-	if max(gen, r.processGenerationHeld(session)) > 0 {
-		return errGenerationFloor
+	gen, ended, err := r.recallGeneration(session)
+	if max(gen, ended, r.processGenerationHeld(session)) > 0 {
+		return r.refuseBindingGeneration(session, gen > 0, ended > 0)
 	}
 	return err
 }
@@ -736,14 +747,22 @@ func (r *Resolver) Heartbeat(ctx context.Context, source string) error {
 	return r.beatOne(ctx, b, source)
 }
 
-func (r *Resolver) beatOne(ctx context.Context, b Bound, source string) error {
+// CheckHeartbeatGeneration checks the exact binding a caller will renew or return after
+// renewal. A stale binding is dropped. A read error keeps the binding for a later check.
+func (r *Resolver) CheckHeartbeatGeneration(b Bound) error {
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	if err := r.checkGenerationHeld(b); err != nil {
 		r.markGenerationLossHeld(b, err)
-		r.mu.Unlock()
 		return err
 	}
-	r.mu.Unlock()
+	return nil
+}
+
+func (r *Resolver) beatOne(ctx context.Context, b Bound, source string) error {
+	if err := r.CheckHeartbeatGeneration(b); err != nil {
+		return err
+	}
 
 	call, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()

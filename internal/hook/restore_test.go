@@ -193,6 +193,38 @@ func storeCall(t *testing.T, s *store.Store, op string, r store.Request) map[str
 	return out
 }
 
+func TestAStaleHookFileCannotReattachALocallyEndedGeneration(t *testing.T) {
+	h, live := newRestoredHook(t, &hookClock{wall: time.Unix(1800000000, 0)})
+	h.prompt()
+	before := h.registered
+	saved := filepath.Join(t.TempDir(), "backup.db")
+	if err := backup.Run(t.Context(), h.livePath, saved, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	h.run("SessionEnd", `{"session_id":"s1","cwd":`+quote(h.root)+`}`)
+	h.prompt()
+	if h.registered.Generation != before.Generation+1 {
+		t.Fatalf("a registering hook could not obtain the successor after SessionEnd: %+v", h.registered)
+	}
+
+	// A delayed registration reply written by an older hook could leave stale live proof beside
+	// the marker. With only the old database restored, that file would otherwise revive G1.
+	proof := sessionsFor(h.getenv).name("claude", "s1")
+	if err := os.WriteFile(proof, []byte(fmt.Sprint(before.Generation)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h.restore(live, saved, true)
+	var sent []floorRequest
+	observeReviewRequests(h, func(req floorRequest) error {
+		sent = append(sent, req)
+		return nil
+	})
+	out := h.run("PreToolUse", writePayload(h.root, "s1", "review.go"))
+	if !strings.Contains(out, `"permissionDecision":"deny"`) || len(sent) != 0 {
+		t.Fatalf("hook with ended proof did not refuse the edit locally: %s, requests %+v", out, sent)
+	}
+}
+
 // A session was told mail at cursor R on the live hub. The hub is then restored from a backup
 // taken before that, and the restored hub's high-water mark passes R before the session's hooks
 // run again, so the told cursor is not above it and the hooks cannot see that the hub went back

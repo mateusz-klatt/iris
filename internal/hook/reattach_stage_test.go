@@ -61,19 +61,19 @@ func TestSessionsRecallGeneration(t *testing.T) {
 func TestBindingProofDamageRecordsTheLocalPath(t *testing.T) {
 	token := filepath.Join(t.TempDir(), "hub.token")
 	s := NewSessions(token)
-	if gen, present, err := s.RecallBindingGeneration("claude", "s"); gen != 0 || present || err != nil {
-		t.Fatalf("missing proof: generation %d, present %t, %v", gen, present, err)
+	if gen, ended, err := s.RecallBindingGeneration("claude", "s"); gen != 0 || ended != 0 || err != nil {
+		t.Fatalf("missing proof: generation %d, ended through %d, %v", gen, ended, err)
 	}
 	s.memory.Remember("claude", "s", 3)
-	if gen, present, err := s.RecallBindingGeneration("claude", "s"); gen != 3 || !present || err != nil {
-		t.Fatalf("readable proof: generation %d, present %t, %v", gen, present, err)
+	if gen, ended, err := s.RecallBindingGeneration("claude", "s"); gen != 3 || ended != 0 || err != nil {
+		t.Fatalf("readable proof: generation %d, ended through %d, %v", gen, ended, err)
 	}
 	path := s.memory.name("claude", "s")
 	if err := os.WriteFile(path, []byte("damaged\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if gen, present, err := s.RecallBindingGeneration("claude", "s"); gen != 0 || !present || !errors.Is(err, ErrInvalidGeneration) {
-		t.Fatalf("damaged proof: generation %d, present %t, %v", gen, present, err)
+	if gen, ended, err := s.RecallBindingGeneration("claude", "s"); gen != 0 || ended != 0 || !errors.Is(err, ErrInvalidGeneration) {
+		t.Fatalf("damaged proof: generation %d, ended through %d, %v", gen, ended, err)
 	}
 	assertRecallObservation(t, token, "damaged generation proof at "+path)
 }
@@ -81,9 +81,7 @@ func TestBindingProofDamageRecordsTheLocalPath(t *testing.T) {
 func TestBindingEndMarkerReadErrorRecordsTheLocalPath(t *testing.T) {
 	token := filepath.Join(t.TempDir(), "hub.token")
 	s := NewSessions(token)
-	if err := s.Protect(); err != nil {
-		t.Fatal(err)
-	}
+	s.memory.Remember("claude", "s", 4)
 	marker := s.memory.name("claude", "s") + ".ended"
 	if err := os.Mkdir(marker, 0o700); err != nil {
 		t.Fatal(err)
@@ -91,10 +89,26 @@ func TestBindingEndMarkerReadErrorRecordsTheLocalPath(t *testing.T) {
 	if _, err := os.ReadFile(marker); err == nil || errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("fixture did not produce a non-NotExist read error: %v", err)
 	}
-	if gen, present, err := s.RecallBindingGeneration("claude", "s"); gen != 0 || !present || !errors.Is(err, ErrInvalidGeneration) {
-		t.Fatalf("unreadable ended marker: generation %d, present %t, %v", gen, present, err)
+	if gen, ended, err := s.RecallBindingGeneration("claude", "s"); gen != 4 || ended != 0 || !errors.Is(err, ErrInvalidGeneration) {
+		t.Fatalf("unreadable ended marker with live proof: generation %d, ended through %d, %v", gen, ended, err)
 	}
 	assertRecallObservation(t, token, DamagedGenerationProof+" at "+marker) // gitleaks:allow (a test observation token and path, not a credential)
+}
+
+func TestBindingRecallKeepsLiveProofAndEndedThroughSeparate(t *testing.T) {
+	s := NewSessions(filepath.Join(t.TempDir(), "hub.token"))
+	if gen, ended, err := s.RecallBindingGeneration("claude", ""); gen != 0 || ended != 0 || err != nil {
+		t.Fatalf("unknown session: generation %d, ended through %d, %v", gen, ended, err)
+	}
+	s.memory.Remember("claude", "s", 3)
+	s.memory.Forget("claude", "s", 3)
+	if gen, ended, err := s.RecallBindingGeneration("claude", "s"); gen != 0 || ended != 3 || err != nil {
+		t.Fatalf("ended session: generation %d, ended through %d, %v", gen, ended, err)
+	}
+	s.memory.Remember("claude", "s", 4)
+	if gen, ended, err := s.RecallBindingGeneration("claude", "s"); gen != 4 || ended != 3 || err != nil {
+		t.Fatalf("new session: generation %d, ended through %d, %v", gen, ended, err)
+	}
 }
 
 func assertRecallObservation(t *testing.T, token, want string) {

@@ -149,7 +149,7 @@ func New(resolver *binding.Resolver, opts ...Option) *mcp.Server {
 			if err != nil {
 				return toolError(err), nil
 			}
-			out, err := call(ctx, resolver.Hub, b, primary, spec.name, in)
+			out, err := call(ctx, resolver, b, primary, spec.name, in)
 			if err != nil {
 				return toolError(err), nil
 			}
@@ -216,16 +216,25 @@ func toolError(err error) *mcp.CallToolResult {
 // receiptDeadline bounds the receipt a fetch posts before its tool result goes back (ADR 010).
 const receiptDeadline = 2 * time.Second
 
-func call(ctx context.Context, h *hubclient.Client, b binding.Bound, primary bool, name string, in Input) (map[string]any, error) {
+func call(ctx context.Context, resolver *binding.Resolver, b binding.Bound, primary bool, name string, in Input) (map[string]any, error) {
+	h := resolver.Hub
 	if name == "whoami" {
 		// Prove liveness and use the hub's current binding after a repository
 		// merge. Legacy lease-only replies leave the resolved binding intact.
 		// Only this process's own binding is renewed: a shim's heartbeat puts an
 		// Execution on a 60-second lease that only its maintainer keeps.
 		if primary {
-			if err := h.Do(ctx, "POST", "/v1/executions/"+url.PathEscape(b.ExecutionID)+"/heartbeat", map[string]any{"generation": b.Generation, "source": "shim"}, &b); err != nil {
+			if err := resolver.CheckHeartbeatGeneration(b); err != nil {
 				return nil, err
 			}
+			renewed := b
+			if err := h.Do(ctx, "POST", "/v1/executions/"+url.PathEscape(b.ExecutionID)+"/heartbeat", map[string]any{"generation": b.Generation, "source": "shim"}, &renewed); err != nil {
+				return nil, err
+			}
+			if err := resolver.CheckHeartbeatGeneration(b); err != nil {
+				return nil, err
+			}
+			b = renewed
 		}
 		raw, _ := json.Marshal(b)
 		out := map[string]any{}

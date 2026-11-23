@@ -193,7 +193,7 @@ type onceTest struct {
 	hub   *onceFake
 	store *kimiwake.Store
 	out   *onceOut
-	procs map[[2]int64]bool
+	procs map[int]int64
 	procM *sync.Mutex
 	toldM sync.Mutex
 	toldV hook.ToldSnapshot
@@ -218,13 +218,14 @@ func (ot *onceTest) told(stream string, cursor int64) {
 
 func newOnceTest(t *testing.T) *onceTest {
 	t.Helper()
-	ot := &onceTest{t: t, out: &onceOut{}, procs: map[[2]int64]bool{}, procM: &sync.Mutex{}}
-	alive := func(pid int, start int64) bool {
+	dir := t.TempDir()
+	ot := &onceTest{t: t, out: &onceOut{}, procs: map[int]int64{}, procM: &sync.Mutex{}}
+	lookup := func(pid int) (proc.Snapshot, bool) {
 		ot.procM.Lock()
 		defer ot.procM.Unlock()
-		return ot.procs[[2]int64{int64(pid), start}]
+		start, alive := ot.procs[pid]
+		return proc.Snapshot{PID: pid, StartMS: start}, alive
 	}
-	ot.store = &kimiwake.Store{Root: kimiwake.Root(t.TempDir()), Alive: alive}
 	ot.hub = &onceFake{t: t, read: func(int64, string) (attentionRead, error) {
 		return attentionRead{Stream: "s1", HighWater: 10, Attention: hubclient.Attention{Identity: hubclient.Identity{Known: true}}}, nil
 	}}
@@ -232,25 +233,32 @@ func newOnceTest(t *testing.T) *onceTest {
 	ot.setAlive(onceKimiPID, onceKimiStart, true)
 	ot.setAlive(self.PID, self.StartMS, true)
 	ot.key = kimiwake.Key{PID: onceKimiPID, StartMS: onceKimiStart, Session: onceSession}
-	ot.w = &kimiOnce{
-		hub: ot.hub, store: ot.store, alive: alive, self: self, host: "host", cwd: "/repo", out: ot.out, now: time.Now,
-		told: func(string) (hook.ToldSnapshot, error) {
-			ot.toldM.Lock()
-			defer ot.toldM.Unlock()
-			return ot.toldV, nil
-		},
-		mapped: func(pid int, start int64) (string, bool, error) {
-			ot.mapM.Lock()
-			err := ot.mapE
-			ot.mapM.Unlock()
-			if err != nil {
-				return "", false, err
-			}
-			return ot.store.Session(pid, start, time.Second)
-		},
-		nearest: func() (proc.Ancestor, error) {
-			return proc.Ancestor{PID: onceKimiPID, StartMS: onceKimiStart, Name: "kimi"}, nil
-		},
+	load := func() (hubclient.Resolved, string, error) {
+		return hubclient.Resolved{URL: "http://127.0.0.1:9", TokenFile: filepath.Join(dir, "hub.token")}, dir, nil
+	}
+	nearest := func() (proc.Ancestor, error) {
+		return proc.Ancestor{PID: onceKimiPID, StartMS: onceKimiStart, Name: "kimi"}, nil
+	}
+	w, ok := newKimiOnce(ot.out, load, nearest, lookup, func() int { return self.PID })
+	if !ok {
+		t.Fatal("could not configure the Kimi watcher")
+	}
+	ot.w, ot.store = w, w.store
+	ot.store.Alive = w.alive
+	w.hub, w.self = ot.hub, self
+	w.told = func(string) (hook.ToldSnapshot, error) {
+		ot.toldM.Lock()
+		defer ot.toldM.Unlock()
+		return ot.toldV, nil
+	}
+	w.mapped = func(pid int, start int64) (string, bool, error) {
+		ot.mapM.Lock()
+		err := ot.mapE
+		ot.mapM.Unlock()
+		if err != nil {
+			return "", false, err
+		}
+		return ot.store.Session(pid, start, time.Second)
 	}
 	if err := ot.store.MapSession(onceKimiPID, onceKimiStart, onceSession, time.Second); err != nil {
 		t.Fatal(err)
@@ -262,7 +270,11 @@ func newOnceTest(t *testing.T) *onceTest {
 func (ot *onceTest) setAlive(pid int, start int64, alive bool) {
 	ot.procM.Lock()
 	defer ot.procM.Unlock()
-	ot.procs[[2]int64{int64(pid), start}] = alive
+	if alive {
+		ot.procs[pid] = start
+	} else {
+		delete(ot.procs, pid)
+	}
 }
 
 func (ot *onceTest) wake(text string) {

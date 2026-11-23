@@ -42,9 +42,9 @@ func TestClientMismatchDisablesEveryBindingRoute(t *testing.T) {
 				Ancestor: func() (proc.Ancestor, error) {
 					return proc.Ancestor{PID: 42, StartMS: 7, Name: tc.ancestor}, nil
 				},
-				Recall: func(string, string) (int, bool, error) {
+				Recall: func(string, string) (int, int, error) {
 					t.Error("a mismatched shim tried generation-memory reattachment")
-					return 1, true, nil
+					return 1, 0, nil
 				},
 			}
 			var observed []string

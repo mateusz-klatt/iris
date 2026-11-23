@@ -53,7 +53,7 @@ var outcomeLines = map[Outcome]string{
 	Duplicate:    "Iris: another watcher already waits for this session. Do not start another.",
 	Failed:       "Iris: this watcher could not start. Do not start another; `iris doctor` can tell why.",
 	Expired:      "Iris: this watcher reached its 24-hour limit. Do not start another.",
-	Lost:         "Iris: the hub no longer has this session. Do not start another watcher.",
+	Lost:         "Iris: this session generation is no longer usable. Do not start another watcher. Run `iris doctor` for local details.",
 	NotCompleted: "Iris: new attention may be waiting, but Iris could not record it. Use the Iris inbox and claims tools. Do not start another watcher.",
 }
 
@@ -72,8 +72,9 @@ type onceHub interface {
 
 // kimiOnce is one run of `iris watch --client kimi --once`.
 type kimiOnce struct {
-	hub   onceHub
-	store *kimiwake.Store
+	hub      onceHub
+	store    *kimiwake.Store
+	sessions *hook.Sessions
 	// mapped reads the session a Kimi process runs now, under the state's lock.
 	mapped  func(pid int, startMS int64) (string, bool, error)
 	told    func(session string) (hook.ToldSnapshot, error)
@@ -109,18 +110,18 @@ func newKimiOnce(out io.Writer, load func() (hubclient.Resolved, string, error),
 	if err != nil || hubclient.ValidateURL(resolved.URL) != nil {
 		return nil, false
 	}
-	token := resolved.TokenFile
 	self, ok := lookup(getpid())
 	if !ok || self.StartMS <= 0 {
 		return nil, false
 	}
 	host, _ := os.Hostname()
 	cwd, _ := os.Getwd()
-	sessions := hook.NewSessions(token)
+	sessions := hook.NewSessions(resolved.TokenFile)
 	store := &kimiwake.Store{Root: kimiwake.Root(dir)}
 	return &kimiOnce{
-		hub:   hubSource{client: &hubclient.Client{Config: resolved}},
-		store: store,
+		hub:      hubSource{client: &hubclient.Client{Config: resolved}},
+		store:    store,
+		sessions: sessions,
 		mapped: func(pid int, startMS int64) (string, bool, error) {
 			return store.Session(pid, startMS, onceLockBudget)
 		},
@@ -259,16 +260,37 @@ func (o *onceRun) checks() (Outcome, bool) {
 	return out, stop
 }
 
-// beat is the 20-second tick of every phase: the pinned generation's heartbeat once bound, then the
-// local checks. Only a heartbeat answering lost ends the watcher for its generation; event reads
-// refused during a hub's recovery do not.
+// staleGeneration checks the end marker and any live hook proof for the mapped session.
+// An unreadable file leaves the result undecided until the next check.
+func (o *onceRun) staleGeneration(generation int) (bool, error) {
+	live, ended, err := o.w.sessions.RecallBindingGeneration("kimi", o.key.Session)
+	if err != nil {
+		return false, err
+	}
+	if generation <= ended || generation < live {
+		o.w.sessions.ObserveBindingRefusal("kimi", o.key.Session, generation <= ended)
+		return true, nil
+	}
+	return false, nil
+}
+
+// beat is the 20-second tick of every phase. A bound watcher checks proof before and after renewing
+// its pinned generation. A local veto or a lost heartbeat ends the watcher for that generation.
 func (o *onceRun) beat(ctx context.Context) (Outcome, bool) {
 	if o.bound {
-		call, cancel := context.WithTimeout(ctx, onceCall)
-		err := o.w.hub.heartbeat(call, o.target)
-		cancel()
-		if hubclient.IsCode(err, "lost") {
+		generation := o.target.Bound.Generation
+		stale, err := o.staleGeneration(generation)
+		if stale {
 			return Lost, true
+		}
+		if err == nil {
+			call, cancel := context.WithTimeout(ctx, onceCall)
+			err := o.w.hub.heartbeat(call, o.target)
+			cancel()
+			stale, _ := o.staleGeneration(generation)
+			if stale || hubclient.IsCode(err, "lost") {
+				return Lost, true
+			}
 		}
 	}
 	return o.checks()
@@ -307,9 +329,15 @@ func (o *onceRun) bind(ctx context.Context, tick *time.Ticker) (Outcome, bool) {
 		b, err := o.w.hub.kimiBind(call, o.w.host, o.w.cwd, o.key.Session, o.key.PID, o.key.StartMS)
 		cancel()
 		if err == nil {
-			o.target = binding.WakeTarget{SessionID: o.key.Session, Bound: b, Host: o.w.host, Client: "kimi"}
-			o.bound = true
-			return 0, false
+			stale, proofErr := o.staleGeneration(b.Generation)
+			if stale {
+				return Lost, true
+			}
+			if proofErr == nil {
+				o.target = binding.WakeTarget{SessionID: o.key.Session, Bound: b, Host: o.w.host, Client: "kimi"}
+				o.bound = true
+				return 0, false
+			}
 		}
 		if errors.Is(err, errUnmatched) || hubclient.IsCode(err, "ambiguous") || hubclient.IsCode(err, "bad_request") ||
 			hubclient.IsCode(err, "unauthorized") || (hubclient.IsCode(err, "unbound") && o.w.now().Sub(start) >= onceUnbound) {
