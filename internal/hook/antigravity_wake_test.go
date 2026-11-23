@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -105,6 +106,13 @@ func TestAntigravityStateCanBeReplacedWhileReadOpen(t *testing.T) {
 	state, ok := readAntigravityProcFile(target)
 	if !ok || state.CurrentSessionID != "new" {
 		t.Fatalf("replacement was not visible to a new reader: %+v, %v", state, ok)
+	}
+	kept, err := io.ReadAll(reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Contains(kept, []byte(`"current_session_id":"old"`)) {
+		t.Fatalf("open reader lost the file it held: %s", kept)
 	}
 	if _, err := readAntigravityStateFile(filepath.Join(dir, "missing.json")); err == nil {
 		t.Fatal("missing state file did not report an error")
