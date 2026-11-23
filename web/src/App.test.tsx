@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import * as api from "./api";
 import type { WatchFrame, WatchStatus } from "./api";
-import i18n from "./i18n";
+import i18n, { englishTranslation } from "./i18n";
 import { reviewAndSend } from "./test/send";
 import { soundPreferenceKey } from "./notificationSound";
 import { uiLocalePreferenceKey } from "./preferences";
@@ -695,7 +695,7 @@ describe("Iris operator console", () => {
     await waitFor(() => expect(bodies).toHaveLength(1));
     expect(bodies[0]).toMatchObject({
       to: ["claude-host"],
-      subject: "Re: Rollout check",
+      subject: englishTranslation.operator.replySubject.replace("{{subject}}", "Rollout check"),
       body: "Noted.",
       reply_to: "ms_root",
     });

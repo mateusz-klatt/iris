@@ -45,6 +45,7 @@ import Login from "./Login";
 import Account from "./Account";
 import AccessPanel from "./access";
 import { recordName } from "./recordName";
+import { consoleLabel, replySubject } from "./consoleText";
 import "./app.css";
 import "./console.css";
 
@@ -111,7 +112,7 @@ const noAgents: Agent[] = [];
 // replyDraft starts a reply to a thread. It answers the other party: the latest sender who is not
 // the operator, or, in a thread only the operator has written to, whom they wrote to. Answering
 // the latest sender would address a follow-up after the operator's own message back to them.
-function replyDraft(messages: ThreadMessage[]): Draft | null {
+function replyDraft(messages: ThreadMessage[], t: TFunction): Draft | null {
   const last = messages.at(-1);
   if (last === undefined) {
     return null;
@@ -123,11 +124,11 @@ function replyDraft(messages: ThreadMessage[]): Draft | null {
       .map((recipient) => recipient.name)
       .filter((name) => name !== operatorName)
       .join(", ");
-  return newDraft({ to, subject: last.subject.startsWith("Re:") ? last.subject : `Re: ${last.subject}`, replyTo: last.id, offered: true });
+  return newDraft({ to, subject: replySubject(last.subject, t), replyTo: last.id, offered: true });
 }
 
-function resolveReplySuggestion(messages: ThreadMessage[], member: boolean, agents: Agent[]): Draft | null {
-  const suggestion = replyDraft(messages);
+function resolveReplySuggestion(messages: ThreadMessage[], member: boolean, agents: Agent[], t: TFunction): Draft | null {
+  const suggestion = replyDraft(messages, t);
   if (suggestion === null || !member) {
     return suggestion;
   }
@@ -263,7 +264,7 @@ function HostReport({ report }: { report: DoctorReport }) {
   const { t, i18n } = useTranslation();
   const stale = isReportStale(report);
   return (
-    <section className="host-report" data-host={report.host} data-stale={stale ? "yes" : "no"} aria-label={report.host}>
+    <section className="host-report" data-host={report.host} data-stale={stale ? "yes" : "no"} aria-label={report.host === "unknown" ? t("operator.doctorUnknownHost") : report.host}>
       <h2>{report.host === "unknown" ? t("operator.doctorUnknownHost") : report.host}</h2>
       {report.checked_at !== null ? <p>{t("operator.checkedAt", { date: formatWhen(report.checked_at, i18n.language) })}</p> : null}
       {stale ? <p className="stale-note">{t("operator.doctorStale")}</p> : null}
@@ -835,11 +836,11 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   }, [participant, openedPages, phase, query, repositoryId, threadRevision]);
 
   const applyReplySuggestion = useCallback((messages: ThreadMessage[], scope: string, agents: Agent[]) => {
-    const fresh = resolveReplySuggestion(messages, member, agents);
+    const fresh = resolveReplySuggestion(messages, member, agents, t);
     if (fresh !== null) {
       setReplies((current) => current[scope]?.offered === false ? current : { ...current, [scope]: fresh });
     }
-  }, [member]);
+  }, [member, t]);
 
   useEffect(() => {
     if (phase !== "ready" || activeView !== "messages" || openedThread === null) {
@@ -1210,7 +1211,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
                           <span className="message-repository">{repositoryName(overview, message.repository_id, t)}</span>
                         ) : null}
                         <small>
-                          {t("message.to")}: {message.recipients.map((recipient) => `${recipient.name} (${recipient.state})`).join(", ")}
+                          {t("message.to")}: {message.recipients.map((recipient) => `${recipient.name} (${consoleLabel("delivery", recipient.state, t)})`).join(", ")}
                         </small>
                         <time dateTime={message.created_at}>{formatWhen(message.created_at, i18n.language)}</time>
                       </header>
@@ -1339,7 +1340,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
                           <tr key={item.id}>
                             <th scope="row">{item.name}</th>
                             <td>
-                              {item.host} · {item.client} · {item.state}<br />{item.branch}
+                              {item.host} · {item.client} · {consoleLabel("session", item.state, t)}<br />{item.branch}
                             </td>
                             <td>{repositoryName(overview, item.repository_id, t)}</td>
                             <td><SessionActivity agent={item} /></td>

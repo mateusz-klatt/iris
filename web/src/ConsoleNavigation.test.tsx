@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { AccountSession } from "./accountApi";
 import type { DeliveryProblems, WatchFrame } from "./api";
-import i18n from "./i18n";
+import i18n, { englishTranslation } from "./i18n";
 import { doctorReport, emptyOverview, operatorSession, server, sessionOverview, threadDetail, threadsPage } from "./test/server";
 
 beforeEach(async () => { await i18n.changeLanguage("en"); });
@@ -347,7 +347,7 @@ it("sends exactly one read for an explicit visible open under StrictMode and non
   messages = [...messages, { ...firstMessage, id: "ms_reply", body: "New rollout details." }];
   act(() => onFrame?.({ cursor: 2, kind: "changed" }));
   const arrived = await screen.findByText("New rollout details.");
-  expect(arrived.closest("article")).toHaveTextContent("To: human (pending)");
+  expect(arrived.closest("article")).toHaveTextContent(`${englishTranslation.message.to}: human (${englishTranslation.operator.deliveryStatePending})`);
   expect(reads()).toHaveLength(1);
   expect(readBodies).toHaveLength(1);
 });
