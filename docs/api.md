@@ -277,14 +277,7 @@ server places an explicit claim's path.
 `POST /v1/claims/release` takes `{"execution_id":"...","generation":1,"fence":12}`, or `"all":true`. An optional `token` validates the complete stream/epoch fence returned
 by explicit claim creation. Generation and ownership are always checked.
 
-`GET /v1/claims?repository_id=...` lists live claims. Each row has `fence`, `path`, `kind`,
-`holder`, `origin`, `expires_at`, and the claim's own checkout as `worktree_path`, `branch` and
-`host` (ADR 037). An empty string means that fact was not recorded. A legacy row therefore shows
-an unknown location; the hub does not copy the holder's current checkout into it. `effective_scope`
-is `worktree` only when the repository's `claim.auto_scope` is `worktree`, the origin is `auto`
-and the claim's worktree key is set. Otherwise it is `repository`: an explicit claim stays
-repository-wide even with a display path, and so does a null-key claim. The key itself is not
-returned. The same fields are on each claim in `GET /v1/ui/overview`.
+`GET /v1/claims?repository_id=...` lists live claims.
 
 ## Messages
 
@@ -770,19 +763,13 @@ It is presentation metadata, not authorization supplied by the browser. Member
 queries remain scoped by current grants in the store transaction.
 
 ```json
-{"repositories":[{"id":"rp_...","name":"iris","aliases":["..."],"kind":"repository","claim_auto_scope":"repository"}],
+{"repositories":[{"id":"rp_...","name":"iris","aliases":["..."],"kind":"repository"}],
  "agents":[{"id":"ag_...","name":"...","client":"claude","host":"...","repository_id":"rp_...",
             "worktree":"...","branch":"main","state":"active","last_seen":"...","hook_seen":"...","watch_seen":"...","unread":0}],
  "claims":[{"fence":1,"repository_id":"rp_...","path":"...","kind":"exact","holder":"...",
-            "origin":"auto","expires_at":"...","worktree_path":"...","branch":"main","host":"...",
-            "effective_scope":"repository"}],
+            "origin":"auto","expires_at":"..."}],
  "human_unread":0}
 ```
-
-A repository's `claim_auto_scope` is `repository` or `worktree` (ADR 037). A host's context of
-sessions outside git (`kind` `outside`) omits it: no scope is in force there. Claim rows carry
-the fields described under `GET /v1/claims`. The console shows the policy and each claim's
-checkout. It does not change the setting; only the owner token does.
 
 Each agent's `last_seen`, `hook_seen` and `watch_seen` come from its latest Execution on the hub
 (`null` when never observed). The console's Fleet → Agents table shows these per-session liveness
@@ -913,23 +900,10 @@ one ask for a single more, which starts when it ends and no sooner than two seco
 `root_commit` and repository-relative `paths`. It creates no Execution, takes no
 claims and allocates no repository: a checkout it cannot place returns `ambiguous` when several
 repositories could be it and `not_found` when none is known, and the CLI then warns and allows
-the commit (ADR 032). The response contains `message`, `conflicts`, `case_policy` and `claim_auto_scope`
-(`repository` or `worktree`, ADR 037). `claim_auto_scope` is always present. A hub from
-before that field omits it, and `iris doctor` then says the scope is unknown. A nonempty
-message means a live claim overlaps a path in another host/worktree. Repository case policy and
+the commit (ADR 032). The response contains `message` and `conflicts`; a nonempty message means a
+live claim overlaps a path in another host/worktree. Repository case policy and
 prefix boundaries apply. Same-worktree claims are excluded. Git's staged rename
 source and destination are both checked by the CLI.
-
-Under `worktree`, a staged path whose only overlaps are automatic claims with different non-null
-worktree keys leaves `message` empty and returns `advisories`. Each advisory has `path`, `holder`,
-`worktree`, `branch`, `repository_id` and `fence`. `advisories` is omitted when there are none.
-An advisory allows the commit: the overlap can meet in one filesystem or at rebase or merge, and
-it does not make concurrent edits safe or prove the edits are disjoint. A real conflict still
-fills `message` and `conflicts`; advisories do not weaken that refusal. `iris guard` prints
-advisories to standard error and exits successfully. An older guard that reads only `message`
-allows the same commit without printing them. Shell reconciliation uses the same check and, when
-`message` would otherwise stay empty, renders those advisories into `message` so the shell hook's
-existing warning shows them.
 
 This endpoint identifies a checkout, not the committing session. Session or Execution fields
 do not exempt claims in another worktree. Each conflict includes the holder's `branch`,
@@ -1024,17 +998,6 @@ rotated through its file rather than this API.
 An Execution in a host's context of sessions outside git takes no claim: `POST /v1/claims/touch`,
 `/v1/claims/touch/files`, `/v1/claims`, `/v1/claims/files` and every shell reconciliation answer
 `outside_git` (HTTP 400), before any replay, wait or conflict. Release and end stay open (ADR 034).
-
-## Claim scope
-
-`POST /v1/admin/policy` takes `{"repository_id":"...","claim_auto_scope":"repository"}` or
-`"worktree"` (ADR 037). Only the owner token may call it. It stores `claim.auto_scope` on that
-repository and does not rewrite existing claims. Later checks, claim lists and the overview read
-the new value. The response is `{"repository_id":"...","claim_auto_scope":"worktree"}`. Any other
-value is `bad_request` (400). An unknown repository is `not_found` (404). A host token or a console
-account gets `forbidden` (403). `iris admin policy --repository <id> --claim-auto-scope
-repository|worktree` prints the response. A hook payload, a message body and a coordination
-envelope are not inputs to this value.
 
 ## Removing aliases
 

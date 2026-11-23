@@ -454,7 +454,7 @@ func TestLeaseRenewedTickUpdatedByRegisterResumeHeartbeatAndHookLeaseCap(t *test
 func TestMigration028AddsLeaseRenewedTickAndRollsBack(t *testing.T) {
 	s, clock, file := testStore(t)
 	a, _ := startHeartbeatSession(t, s, 1, "m28.go")
-	if _, err := s.db.Exec(removeWorktreeScopeSchema + "ALTER TABLE Execution DROP COLUMN lease_renewed_tick_ms; PRAGMA user_version=27"); err != nil {
+	if _, err := s.db.Exec("ALTER TABLE Execution DROP COLUMN lease_renewed_tick_ms; PRAGMA user_version=27"); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Close(); err != nil {
@@ -557,7 +557,7 @@ func TestStallCreditStorageFaultRollbackPreservesLastExpireTick(t *testing.T) {
 func TestPre028ExecutionGetsNoCreditBeforeResumeAndResetsRenewedTickOnResume(t *testing.T) {
 	s, clock, file := testStore(t)
 	a, _ := startHeartbeatSession(t, s, 1, "pre028.go")
-	if _, err := s.db.Exec(removeWorktreeScopeSchema + "ALTER TABLE Execution DROP COLUMN lease_renewed_tick_ms; PRAGMA user_version=27"); err != nil {
+	if _, err := s.db.Exec("ALTER TABLE Execution DROP COLUMN lease_renewed_tick_ms; PRAGMA user_version=27"); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Close(); err != nil {

@@ -1,7 +1,9 @@
 # ADR 037: Worktree-scoped automatic claims are a repository opt-in
 
-Status: accepted, 2026-11-23. Alternative (a), the per-repository `claim.auto_scope` policy, is
-the chosen design. Alternative (b), a hub-issued parent link that would exempt only one
+Status: Accepted; implementation reverted from v0.1.14, re-lands with #415
+The v0.1.14 release-gate review found unresolved fail-open and replay defects.
+
+Alternative (a), the per-repository `claim.auto_scope` policy, is the chosen design. Alternative (b), a hub-issued parent link that would exempt only one
 coordinator's delegates, stays documented and is not implemented. Amends D10, D12 and ADR 033's
 submodule guard consequence only for a repository that opts in. ADR 003 path identity is
 unchanged, and ADR 033 still decides which repository owns a claim.

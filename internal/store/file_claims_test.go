@@ -536,47 +536,6 @@ func TestAGroupedReplaySurvivesAMergeAndARestart(t *testing.T) {
 	}
 }
 
-// A grouped claim stores the checkout the host first named, in display form. Windows
-// separators and the drive letter are canonical, and a later spelling of the same
-// directory, including a different case, does not replace that path.
-func TestAGroupedClaimStoresTheCanonicalWorktreePath(t *testing.T) {
-	s, _, _ := testStore(t)
-	a, ao := checkoutSession(t, s, "codex", "winhost", "win", `c:\Repo\Feature\`, "dev:win", scopeRemote, "root", "main")
-	repo := ao["repository_id"].(string)
-	setScope(t, s, repo, "worktree")
-	group := func(id, worktree, wtID, path string) {
-		t.Helper()
-		out := call(t, s, "touch_files", filesTouch(a, id, ClaimGroup{Worktree: worktree, WorktreeID: wtID, RemoteURL: scopeRemote, RootCommit: "root", Branch: "main", Paths: []string{path}}))
-		if out["action"] != "allow" || len(out["granted"].([]map[string]any)) != 1 {
-			t.Fatal(id, out)
-		}
-	}
-	group("own", `c:\Repo\Feature\`, "dev:win", "a.go")
-	group("other", `d:\Other\Tree\`, "dev:other", "b.go")
-	// Same directory as dev:other, written with the other case and separators.
-	group("other-again", `D:/OTHER/tree/`, "dev:other", "c.go")
-	group("own-again", `C:/repo/feature`, "dev:win", "d.go")
-	want := map[string]string{"a.go": "C:/Repo/Feature", "b.go": "D:/Other/Tree", "c.go": "D:/Other/Tree", "d.go": "C:/Repo/Feature"}
-	for _, row := range liveClaims(t, s, repo) {
-		if got := want[row.path]; got == "" || row.wpath.String != got {
-			t.Fatalf("path %s stored worktree %q, want %q", row.path, row.wpath.String, got)
-		}
-		delete(want, row.path)
-	}
-	if len(want) != 0 {
-		t.Fatal("missing claims", want)
-	}
-	for _, c := range call(t, s, "claims", Request{RepositoryID: repo})["claims"].([]map[string]any) {
-		path, _ := c["path"].(string)
-		if path == "c.go" && c["worktree_path"] != "D:/Other/Tree" {
-			t.Fatalf("claims list shows %v", c["worktree_path"])
-		}
-		if path == "d.go" && c["worktree_path"] != "C:/Repo/Feature" {
-			t.Fatalf("claims list shows %v", c["worktree_path"])
-		}
-	}
-}
-
 // An explicit claim on a submodule's path, sent with that checkout, is taken in the submodule's
 // repository, where the submodule's own sessions meet it. An ambiguous checkout is refused, and the
 // grouped route needs its checkout.

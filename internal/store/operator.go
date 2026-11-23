@@ -227,11 +227,11 @@ func (t *transaction) overview() (map[string]any, error) {
 	}
 	for _, id := range ids {
 		aliases := []string{}
-		var name, access, accountID, scope string
+		var name, access, accountID string
 		if t.console != nil {
 			accountID = t.console.ID
 		}
-		if err = t.row("SELECT name,auto_claim_scope,COALESCE((SELECT mode FROM ConsoleRepositoryAccess WHERE account_id=? AND repository_id=Repository.id),'') FROM Repository WHERE id=?", accountID, id).Scan(&name, &scope, &access); err != nil {
+		if err = t.row("SELECT name,COALESCE((SELECT mode FROM ConsoleRepositoryAccess WHERE account_id=? AND repository_id=Repository.id),'') FROM Repository WHERE id=?", accountID, id).Scan(&name, &access); err != nil {
 			return nil, err
 		}
 		rows, err = t.rows("SELECT alias FROM RepositoryAlias WHERE repository_id=? ORDER BY alias", id)
@@ -258,11 +258,6 @@ func (t *transaction) overview() (map[string]any, error) {
 		repository := map[string]any{"id": id, "name": name, "aliases": aliases, "kind": kind}
 		if host != "" {
 			repository["host"] = host
-		}
-		// A host's context of sessions outside git has no claim.auto_scope in force (ADR 034).
-		// The column still exists; the console must not present that default as a policy.
-		if kind == "repository" {
-			repository["claim_auto_scope"] = scope
 		}
 		// This describes the current console controls; each mutation still checks
 		// authority in its own transaction. Legacy link sessions have no account.

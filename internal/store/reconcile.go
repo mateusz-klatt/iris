@@ -105,7 +105,7 @@ func (t *transaction) reconcileChanges(e execution, r Request) (map[string]any, 
 	// stashed or restored by git in this worktree, which changes nothing in a holder's worktree,
 	// so it is neither warned about nor claimed.
 	changed, left := shellChanges(previous, r.Status, r.Scope)
-	out, err := t.checkPaths(e.Repo, e.Host, e.Worktree, e.WorktreeKey, changed)
+	out, err := t.checkPaths(e.Repo, e.Host, e.Worktree, changed)
 	if err != nil {
 		return nil, err
 	}
@@ -123,22 +123,14 @@ func (t *transaction) reconcileChanges(e execution, r Request) (map[string]any, 
 		return nil, err
 	}
 	out["claimed"] = claimed
-	// The shell hook warns on a non-empty message. A real conflict, the claim-limit
-	// note and an advisory are separate sentences: the limit used to be written
-	// first, and that hid the advisory. The guard does not use this path, so an
-	// advisory-only guard result still leaves message empty (ADR 037).
-	var notes []string
-	if text, _ := out["message"].(string); text != "" {
-		notes = append(notes, text)
-	}
 	if skipped > 0 {
-		notes = append(notes, fmt.Sprintf("Iris claimed %d changed paths for this session and left %d unclaimed, at the limit of %d live claims.", len(claimed), skipped, maxClaims))
+		// One command can change more paths than the claim limit allows. The warning about other
+		// sessions' paths still matters most, so the rest are left unclaimed and that is said.
+		note := fmt.Sprintf("Iris claimed %d changed paths for this session and left %d unclaimed, at the limit of %d live claims.", len(claimed), skipped, maxClaims)
+		out["message"] = strings.TrimSpace(out["message"].(string) + " " + note)
 	}
-	if advisories, _ := out["advisories"].([]map[string]any); len(advisories) > 0 {
-		notes = append(notes, advisoryMessage(advisories))
-	}
-	if len(notes) > 0 {
-		out["message"] = "Shell edit detected. " + strings.Join(notes, " ") + " Iris detects these changes and cannot undo them."
+	if text, _ := out["message"].(string); text != "" {
+		out["message"] = "Shell edit detected. " + text + " Iris detects these changes and cannot undo them."
 	}
 	return out, nil
 }
@@ -192,10 +184,6 @@ func (t *transaction) releaseLeft(e execution, paths []string) error {
 	if err != nil {
 		return err
 	}
-	scope, err := t.claimScope(e.Repo)
-	if err != nil {
-		return err
-	}
 	cs, err := t.claimRows(e.Repo)
 	if err != nil {
 		return err
@@ -206,11 +194,6 @@ func (t *transaction) releaseLeft(e execution, paths []string) error {
 		key := pathKey(p, policy)
 		for _, c := range cs {
 			if c.Execution != e.ID || c.Origin != "auto" || c.Kind != "exact" || c.Key != key {
-				continue
-			}
-			// Under repository every matching automatic exact row is released, whichever
-			// key it carries. Under worktree only the status checkout's key is.
-			if scope == "worktree" && c.WorktreeKey != e.WorktreeKey {
 				continue
 			}
 			if _, err = t.exec("UPDATE Claim SET revoked_ms=? WHERE fence=? AND revoked_ms IS NULL", now, c.Fence); err != nil {
@@ -233,11 +216,6 @@ func (t *transaction) autoClaim(e execution, paths []string) ([]string, int, err
 	if err != nil {
 		return nil, 0, err
 	}
-	scope, err := t.claimScope(e.Repo)
-	if err != nil {
-		return nil, 0, err
-	}
-	loc := e.location()
 	cs, err := t.claimRows(e.Repo)
 	if err != nil {
 		return nil, 0, err
@@ -256,29 +234,19 @@ func (t *transaction) autoClaim(e execution, paths []string) ([]string, int, err
 				continue
 			}
 			if c.Execution == e.ID {
-				if reusesOwn(scope, c.Origin, c.WorktreeKey, loc.key) {
-					mine = true
-					if c.Origin == "auto" {
-						if err = t.renewAuto(c.Fence, expiry, loc.path, loc.branch); err != nil {
-							return nil, 0, err
-						}
+				mine = true
+				if c.Origin == "auto" {
+					if _, err = t.exec("UPDATE Claim SET expires_ms=? WHERE fence=?", expiry, c.Fence); err != nil {
+						return nil, 0, err
 					}
-					continue
 				}
-				if exemptAutoOverlap(scope, c.Origin, c.WorktreeKey, "auto", loc.key) {
-					continue
-				}
-				held = true
 				continue
 			}
 			family, err := t.related(e.ID, c.Execution)
 			if err != nil {
 				return nil, 0, err
 			}
-			if family || exemptAutoOverlap(scope, c.Origin, c.WorktreeKey, "auto", loc.key) {
-				continue
-			}
-			held = true
+			held = held || !family
 		}
 		switch {
 		case held:
@@ -298,13 +266,13 @@ func (t *transaction) autoClaim(e execution, paths []string) ([]string, int, err
 		fresh = fresh[:room]
 	}
 	for _, p := range fresh {
-		if _, err = t.insertClaim(e, e.Repo, "exact", p, pathKey(p, policy), "auto", sql.NullInt64{Int64: expiry, Valid: true}, loc); err != nil {
+		if _, err = t.exec("INSERT INTO Claim(execution_id,repository_id,kind,path,path_key,origin,boot_epoch,expires_ms) VALUES(?,?,'exact',?,?,'auto',?,?)", e.ID, e.Repo, p, pathKey(p, policy), t.s.epoch, expiry); err != nil {
 			return nil, 0, err
 		}
 		claimed = append(claimed, p)
 	}
 	for _, p := range claimed {
-		if err = t.took(e, e.Repo, pathKey(p, policy), loc.key); err != nil {
+		if err = t.took(e, e.Repo, pathKey(p, policy)); err != nil {
 			return nil, 0, err
 		}
 	}
