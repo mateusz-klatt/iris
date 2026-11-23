@@ -281,18 +281,27 @@ of an opted-in repository, not only to a coordinator's delegates.
    is an authority input.
 
 10. **Mixed versions fail toward repository-wide behaviour.** Registration and ADR 033 groups
-    already carry worktree roots and WorktreeID, so no client-supplied scope key is added. Response
-    additions are additive, and older clients can show the hub's advisory text. A client that cannot
-    establish a canonical identity receives null-key, repository-wide claims. A new client never
-    infers policy from a local file.
+    already carry worktree roots and WorktreeID, so no client-supplied scope key is added.
 
-    An older hub has no setting or administration route and continues repository-wide conflict
-    checks. The schema additions are nullable or have defaults, and Waiter keeps its old primary
-    key, so an older hub can continue its existing inserts and conflict handling on a rolled-back
-    database. It ignores the new columns, writes null keys and does not honour `worktree`. Older
-    guards ignore `advisories`, while real conflicts still arrive in `message`. Moving forward
-    again treats every null row as repository-wide. The narrower behaviour needs the new hub, but
-    mixed clients do not silently weaken the default.
+    An older hub has no setting or administration route for this policy. It is not safe on a
+    database this hub has migrated. v0.1.13's waiter upsert replaces the wait's repository and
+    leaves `worktree_key` as it was. After this hub is restored, that leftover key makes an
+    explicit wait look automatic, and under `worktree` an overlap that should still block can
+    wake early. Roll back only from the pre-deploy backup, which is the same rule `docs/deploy.md`
+    states once a deployment has migrated. Do not point the old binary at the migrated database.
+
+    The default `repository` scope keeps v0.1.13 conflict, reuse, release, guard and waiter
+    behaviour, with two deliberate exceptions. Responses gain claim metadata: the claim's
+    worktree, branch and key, `advisories` when a pair is exempt, and `claim_auto_scope`. Older
+    clients ignore fields they do not know. Older guards ignore `advisories`, and a real conflict
+    is still in `message`. A `claim_available` event written before this migration has no
+    `repository_id`. Decision 9 no longer rewinds the first monitor for that event. The wake sent
+    when the path was freed is unchanged. Substituting the Execution's repository could rewind
+    into a claim the event did not see.
+
+    A client that cannot establish a canonical identity still receives null-key, repository-wide
+    claims. A new client never infers policy from a local file. The narrower behaviour needs the
+    new hub, and mixed clients do not silently weaken the default.
 
 11. **The policy and claim locations are visible.** `iris doctor` reports the `claim.auto_scope` in
     force for the checkout it examines. With `worktree`, it says that cross-worktree automatic
@@ -322,8 +331,10 @@ of an opted-in repository, not only to a coordinator's delegates.
 - An advisory is information, not enforcement. The hook's allow and the guard's warning do not make
   concurrent edits safe, resolve their contents or prove that the delegates' work is disjoint.
   Explicit-claim checks and all other guard refusals remain cooperative, not a security boundary.
-- A null key conservatively retains repository-wide blocking. The policy cannot narrow claims for a
-  client or filesystem that cannot supply canonical worktree identity.
+- A null key conservatively retains repository-wide blocking against every other session. The
+  policy cannot narrow those claims for a client or filesystem that cannot supply canonical
+  worktree identity. The holding session adopts its own null-key row when a later observation
+  proves that checkout; that adoption is not a cross-worktree exemption.
 - An explicit upgrade can be refused across worktrees. The incoming explicit claim never uses the
   automatic/automatic exemption, and sibling automatic rows are folded only after that check
   succeeds.
@@ -387,14 +398,18 @@ narrower boundary is required. This ADR does not claim seat-level isolation and 
   work and integrate it, and the same allowance applies to every other participant in that
   repository.
 - Same-worktree automatic conflicts and every explicit-claim conflict keep their current meaning.
-  The default `repository` policy keeps all current behaviour. Real conflicts remain all-or-nothing
-  across grouped edits and retain Codex's `ask`-to-`deny` conversion.
+  The default `repository` policy keeps v0.1.13 conflict, reuse, release, guard and waiter
+  behaviour, with the two exceptions in decision 10: responses carry claim metadata, and a
+  pre-upgrade `claim_available` event without `repository_id` does not rewind the first monitor.
+  Real conflicts remain all-or-nothing across grouped edits and retain Codex's `ask`-to-`deny`
+  conversion.
 - Under `worktree`, several automatic claims can coexist on one path in one repository. Claim
   reuse, renewal, release, waits, replay, doctor, the console and hook output carry worktree
   identity rather than implying that one Execution has only one checkout. Under `repository`, the
   same stored keys have no behavioural effect.
-- Null-key claims can continue to block after opt-in until they expire or are released. This is
-  intentional compatibility behaviour, not evidence that the policy failed.
+- Another session's null-key claim can continue to block after opt-in until it expires or is
+  released. The holding session's own null-key row is adopted into the checkout that next proves
+  it. This is the transition for a claim migrated from v0.1.13, not evidence that the policy failed.
 - The hub owns the policy and classification. No repository content or agent message can change it,
   but the local OS-user trust boundary remains unchanged. Console claim-change triggers must also
   account for visible worktree-path, branch and key changes.
@@ -442,9 +457,11 @@ narrower boundary is required. This ADR does not claim seat-level isolation and 
   missing identity produces null; filesystem moves and ID reuse follow the stated limits; outside
   git takes no claim.
 - Migration and compatibility: existing and explicit claims have null keys, auto-to-explicit upgrade
-  clears a key, recovery and merge preserve keys and display locations, older clients work against
-  the new hub, and an older hub can use a migrated or rolled-back database with repository-wide
-  behaviour. Exercise rollback and forward again with live claims, waits and replay events.
+  clears a key, recovery and merge preserve keys and display locations, and older clients work
+  against the new hub. Roll back only from the pre-deploy backup. An older hub on a database this
+  hub has migrated can leave a stale `worktree_key` on a wait whose repository it replaced, and
+  rolling forward again can wake that wait early. Do not test rollback by running the old binary
+  on the migrated database.
 - Visibility: doctor distinguishes `repository`, `worktree` and unknown; the console shows each
   repository's policy and every claim's own display worktree, branch and effective scope where
   recorded, including unknown locations on legacy null rows; live updates reach the claims view.
