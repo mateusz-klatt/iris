@@ -646,12 +646,21 @@ func (r Runner) sessionReq(ev Event, repo gitinfo.Repo) hubclient.SessionRequest
 	}
 }
 
-var nearestAncestor = proc.Nearest
+// nearestAncestor is a Claude hook's walk, which reads Cursor's marker pair because Cursor
+// cross-loads Claude plugins only (measured). plainAncestor is every other client's walk, as in
+// v0.1.13: a pair there was inherited, and a bare `agent` is not taken for Cursor.
+var (
+	nearestAncestor = proc.Nearest
+	plainAncestor   = proc.NearestWithoutMarkers
+)
 
 func (r Runner) ancestor() proc.Ancestor {
 	fn := r.Ancestor
 	if fn == nil {
-		fn = nearestAncestor
+		fn = plainAncestor
+		if r.ClientName == string(ClientClaude) {
+			fn = nearestAncestor
+		}
 	}
 	a, err := fn()
 	if err != nil {

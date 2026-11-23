@@ -20,7 +20,7 @@ func fixedAncestor() (proc.Ancestor, error) {
 // iris doctor would report them as genuine.
 func TestMain(m *testing.M) {
 	// A Runner without explicit ancestry gets the same non-client process on every host.
-	nearestAncestor = fixedAncestor
+	nearestAncestor, plainAncestor = fixedAncestor, fixedAncestor
 	// A live process with Codex's argv lets the Linux identity regression use the
 	// same /proc evidence as a real exec or app-server, without starting a model.
 	if os.Getenv("IRIS_TEST_CODEX_PROCESS") == "1" {
