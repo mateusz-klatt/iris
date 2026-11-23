@@ -161,15 +161,24 @@ before `priorAgent` and slot allocation:
 Ending the descendant tree is deliberate. `/clear` retires the root conversation and its delegated
 work, so no child remains as an independent live session on that process. The alternative of
 excluding single-session children from Rung 3 would change D6 binding for ordinary subagents
-globally and still leave their claims and heartbeats live. Descendant cleanup is scoped only to the
-selected predecessor roots; ordinary subagent binding and the existing Execution-id end semantics
-do not change, and children of unrelated roots are untouched.
+globally and still leave their claims and heartbeats live. The same descendant closure applies to
+supersession and to `POST /v1/sessions/end` when that route ends a top-level root. Ordinary
+subagent binding and the existing Execution-id end semantics do not change, and children of
+unrelated roots are untouched.
 
 The implementation uses one shared store helper for the selected end set, mail requeue, change
 notification and claim cleanup on supersession, `POST /v1/sessions/end`, and the existing
-Execution-id end route. Supersession supplies the root-and-descendant set; the other routes retain
-their existing selection rules. The helper must not grow a second, subtly different mail or claims
+Execution-id end route. Supersession and a session-keyed top-level root end supply the
+root-and-descendant set; a session-keyed non-root end and the existing Execution-id route retain
+their one-Execution selection. The helper must not grow a second, subtly different mail or claims
 implementation inside `register`.
+
+This closes the end-first race. If `SessionEnd` commits first, it ends the root **and every active
+descendant** in that root's transaction, so `SessionStart` can find no active predecessor root but
+also leaves no `single_session=1` child beside `S_new`. If `SessionStart` commits first,
+supersession ends the same closure and the later session-keyed end is only an idempotent replay.
+Both paths compute the closure before marking the root ended, and both requeue and revoke per
+Execution in the same transaction as that root's end.
 
 Any failure—including repository resolution, Agent allocation, event insertion, the new Execution
 insert, or commit—rolls back every root and descendant end, mail, claims, events and new registration
@@ -221,15 +230,24 @@ after the store operation's normal expiry and stall-credit step, in one transact
 | Active Execution exists | `generation > 0` and differs from the Execution | `409 lost`; change nothing and never retry without the captured proof. |
 | Active Execution is recovering | `generation == 0` | `409 lost`; recovery requires exact proof. |
 | Active, non-recovering Execution has `Generation > 1` | `generation == 0` | `409 lost`; a replacement requires exact proof. Do not risk a delayed old end ending it. |
-| Active, non-recovering generation 1, or any active generation with exact proof | `generation == 0` in the first case, otherwise matching positive generation | End it through the shared helper and return `200 {"ended":true,"execution_id":"...","generation":G}` with the actual ended generation. Exact proof can end a recovering Execution. |
+| Active, non-recovering generation 1, or any active generation with exact proof | `generation == 0` in the first case, otherwise matching positive generation | End it through the shared helper. If the selected Execution is top-level (`parent_id IS NULL`), include its active recursive `parent_id` descendants in the same transaction, with requeue and claim revocation per Execution; a non-root retains one-Execution selection. Return `200 {"ended":true,"execution_id":"...","generation":G}` with the selected Execution's actual generation. Exact proof can end a recovering Execution. |
 | No active Execution; a retained `ended` Execution has the requested positive generation | Exact `generation == G` | Return `200 {"ended":true,"execution_id":"...","generation":G}` for the newest such row by `rowid`. This is an idempotent replay: do not transition state, requeue, release claims or emit an event again. |
-| No active Execution; the newest retained Execution is `ended` | `generation == 0` | Return `200 {"ended":true,"execution_id":"...","generation":G}` with that ended row's actual generation, without any second end or requeue. |
+| No active Execution; a retained `ended` Execution for this session has `generation = 1`, the only generation this proofless request could have ended | `generation == 0` | Return `200 {"ended":true,"execution_id":"...","generation":1}` for the newest such generation-1 row by `rowid`, without any second end or requeue. Never substitute a newer ended generation. |
 | No active Execution and no matching ended replay | Any request generation | Return `200 {"ended":false}`. Create no Repository, Agent, Execution, claim, delivery or event. |
 
 Generation zero is therefore sufficient only for a non-recovering first-generation Execution. A
 legitimate proofless end of a later generation is deliberately refused too, leaving lease expiry as
 the backstop, because the hub cannot distinguish it from a delayed end of an earlier generation.
 The generation counter is not restore provenance; ADR 006's equal-history limit remains.
+
+Proofless replay uses that same eligibility rule, not the newest terminal row. The hub looks up the
+retained `ended` Execution under the request's exact `(host, client, session_id)` whose generation is
+1, the sole generation the request could have ended without proof, and returns generation 1. If
+multiple generation-1 rows remain from different histories, the newest such `rowid` determines only
+the returned `execution_id`; it does not establish restore provenance. A newer ended generation 2 or
+later never satisfies this lookup, and with no retained ended generation 1 the result is
+`ended:false`. Positive-generation replay instead uses its explicitly requested generation as the
+preceding table specifies.
 
 Every `ended:true` response, whether it ended an active row or replayed an already-ended one, must
 carry `generation: G`, including when the request had no proof. The hook treats both identically and
@@ -311,7 +329,9 @@ An accepted implementation must preserve all of these under real concurrency:
 3. Supersession and registration commit or roll back as one state change. After commit, exactly one
    newly registered Execution is active for that start, every matched predecessor root and active
    descendant is ended, each ended Execution's inflight mail is requeued once, and all their claims
-   are revoked, never transferred. No predecessor child remains to make Rung 3 ambiguous.
+   are revoked, never transferred. A session-keyed top-level root end applies the same recursive
+   closure and per-Execution cleanup in its own transaction. Whether root end or supersession commits
+   first, no predecessor child remains to make Rung 3 ambiguous.
 4. A stale session id with an older same-process Execution can neither end nor recreate itself
    beside the newer active Execution. No stale generation, floor retry or shim reattachment revives
    an ended row or lowers the ADR 006 floor.
@@ -325,7 +345,9 @@ An accepted implementation must preserve all of these under real concurrency:
    proofless end can neither bypass recovery nor end a later replacement generation. Every
    `ended:true` response names the generation actually ended so `.ended` and proof cleanup are
    monotonic and exact. A replay matching an already-ended generation returns `ended:true` without a
-   second state transition, requeue, claim release or event.
+   second state transition, requeue, claim release or event. Generation-zero replay reports only a
+   retained ended generation 1 for the exact session key, never a newer ended generation that the
+   proofless request could not have ended.
 8. `t.requeue`, claim release, waiter wakes, stream notification, retention, restore-floor checks,
    and #399 stall-credit bounds retain their existing semantics. A stall-credited predecessor may
    be superseded while active; a lost predecessor is never revived.
@@ -441,9 +463,13 @@ positive single-session classification and the Cursor IDE correction are mandato
    `retry_generation > 0`, `single_session = false`, missing or partial PID/start, different process
    and different host. Same-session renewal, recovery proof and floor checks run first in every case.
 6. Race duplicate starts and different-id starts on one process, including a predecessor with active
-   children. Assert idempotent same-id renewal, at most one active successor for each accepted
-   supersession, no ambiguous Rung-3 result after commit, no duplicate child requeue, and no
-   reverse-supersession or stale re-registration with remembered proof, floor retry, or no proof.
+   children. Exercise `/clear` in both explicit orders: session-keyed root end commits before
+   `SessionStart`, and supersession commits before `SessionEnd`. In both orders, assert the root and
+   every active descendant are ended, no child remains active beside `S_new`, Rung 3 finds only
+   `S_new`, and every root and child gets its mail requeue and claim revocation exactly once; the
+   late root-end replay adds no second requeue. Also assert idempotent same-id renewal, at most one
+   active successor for each accepted supersession, and no reverse-supersession or stale
+   re-registration with remembered proof, floor retry, or no proof.
 7. Immediately after supersession, send generation-zero registrations for the old native id with
    `source` equal to `mcp`, `shim` and `watch`, plus the legacy empty source, on both registration
    routes. Assert #408's `lost`, unchanged retained history, no new Repository, Agent, Execution or
@@ -456,8 +482,10 @@ positive single-session classification and the Cursor IDE correction are mandato
    recovering with zero proof and recovering with exact proof. Commit an end, drop its response, and
    retry both with exact generation and with generation zero for a first-generation end: each retry
    returns `ended:true` with the actual generation and leaves delivery, claim and event counts
-   unchanged, proving no second requeue. Assert zero row/event allocation on every `ended:false`
-   response and the actual ended generation on every `ended:true` response.
+   unchanged, proving no second requeue. With ended generations 1 and 2 both retained, generation-zero
+   replay returns generation 1, never the newer generation 2; with no retained ended generation 1 it
+   returns `ended:false` even when an ended generation 2 exists. Assert zero row/event allocation on
+   every `ended:false` response and the actual ended generation on every `ended:true` response.
 9. Keep the existing stale-end replacement test, recovery-window tests, restore-floor and #408
    terminal-source tests, process-ambiguity tests with supersession disabled, and #399 stall-credit
    tests green.
