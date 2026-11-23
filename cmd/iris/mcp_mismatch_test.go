@@ -70,52 +70,74 @@ func TestCrossLoadedCodexSuppressesWakeWorker(t *testing.T) {
 }
 
 func TestCrossLoadedMCPStaysUpButOnlyAnswersClientMismatch(t *testing.T) {
-	token, requests := mcpWakeTrap(t)
-	t.Setenv("CLAUDE_CODE_SESSION_ID", "inherited-from-an-outer-claude")
-	original := mcpAncestor
-	t.Cleanup(func() { mcpAncestor = original })
-	mcpAncestor = func() (proc.Ancestor, error) {
-		return proc.Ancestor{PID: 42, StartMS: 7, Name: "cursor-agent"}, nil
-	}
-	session, done := connectMCPCommand(t, []string{"--client", "claude"}, "2026.11.22-e9042b2")
-	for range 2 {
-		result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "whoami", Arguments: map[string]any{}})
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !result.IsError {
-			t.Fatalf("cross-loaded whoami succeeded: %+v", result.StructuredContent)
-		}
-		raw, err := json.Marshal(result.StructuredContent)
-		if err != nil {
-			t.Fatal(err)
-		}
-		var out struct {
-			Error hubclient.Error `json:"error"`
-		}
-		if err = json.Unmarshal(raw, &out); err != nil {
-			t.Fatal(err)
-		}
-		if out.Error.Code != "client_mismatch" || !strings.Contains(out.Error.Message, "native Iris MCP server (`iris mcp --client cursor`)") {
-			t.Fatalf("tool error: %+v", out.Error)
-		}
-	}
-	_ = session.Close()
-	waitMCPCommand(t, done)
-	if requests.Load() != 0 {
-		t.Fatalf("cross-loaded MCP made %d hub requests", requests.Load())
-	}
-	want := binding.ClientMismatchObservation("claude", "cursor")
-	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
-		entries, err := hook.ReadRecentObservations(token, 10)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(entries) == 1 && entries[0].Client == "claude" && entries[0].Event == "mcp" && entries[0].Error == want {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("startup observations: %+v; want exactly %q", entries, want)
-		}
+	for _, tc := range []struct {
+		name      string
+		ancestor  string
+		markers   bool
+		toolCalls int
+	}{
+		{name: "cursor ancestor", ancestor: "cursor-agent", toolCalls: 2},
+		{name: "cursor environment only", ancestor: "helper", markers: true, toolCalls: 1},
+		{name: "agent with empty Cursor environment", ancestor: "agent", toolCalls: 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			token, requests := mcpWakeTrap(t)
+			t.Setenv("CLAUDE_CODE_SESSION_ID", "inherited-from-an-outer-claude")
+			if tc.markers {
+				t.Setenv("CURSOR_PROJECT_DIR", "/scratch/project")
+				t.Setenv("CURSOR_VERSION", "2026.11.22-e9042b2")
+			}
+			original := mcpAncestor
+			t.Cleanup(func() { mcpAncestor = original })
+			mcpAncestor = func() (proc.Ancestor, error) {
+				return proc.Ancestor{PID: 42, StartMS: 7, Name: tc.ancestor}, nil
+			}
+			session, done := connectMCPCommand(t, []string{"--client", "claude"}, "2026.11.22-e9042b2")
+			mismatches := 0
+			for range tc.toolCalls {
+				result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "whoami", Arguments: map[string]any{}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if !result.IsError {
+					t.Fatalf("cross-loaded whoami succeeded: %+v", result.StructuredContent)
+				}
+				raw, err := json.Marshal(result.StructuredContent)
+				if err != nil {
+					t.Fatal(err)
+				}
+				var out struct {
+					Error hubclient.Error `json:"error"`
+				}
+				if err = json.Unmarshal(raw, &out); err != nil {
+					t.Fatal(err)
+				}
+				if out.Error.Code != "client_mismatch" || !strings.Contains(out.Error.Message, "native Iris MCP server (`iris mcp --client cursor`)") {
+					t.Fatalf("tool error: %+v", out.Error)
+				}
+				mismatches++
+			}
+			if mismatches != tc.toolCalls {
+				t.Fatalf("got %d client_mismatch results, want %d", mismatches, tc.toolCalls)
+			}
+			_ = session.Close()
+			waitMCPCommand(t, done)
+			if requests.Load() != 0 {
+				t.Fatalf("cross-loaded MCP made %d hub requests", requests.Load())
+			}
+			want := binding.ClientMismatchObservation("claude", "cursor")
+			for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+				entries, err := hook.ReadRecentObservations(token, 10)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(entries) == 1 && entries[0].Client == "claude" && entries[0].Event == "mcp" && entries[0].Error == want {
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("startup observations: %+v; want exactly %q", entries, want)
+				}
+			}
+		})
 	}
 }

@@ -6,7 +6,7 @@ import (
 )
 
 func TestNearestReportsAnEmptyWalk(t *testing.T) {
-	if _, err := nearest(7, func(int) (Snapshot, bool) { return Snapshot{}, false }); !errors.Is(err, ErrNotFound) {
+	if _, err := nearest(7, func(int) (Snapshot, bool) { return Snapshot{}, false }, nil); !errors.Is(err, ErrNotFound) {
 		t.Fatal(err)
 	}
 	got, err := nearest(7, func(pid int) (Snapshot, bool) {
@@ -14,7 +14,7 @@ func TestNearestReportsAnEmptyWalk(t *testing.T) {
 			return Snapshot{PID: 7, PPID: 6, Name: "iris"}, true
 		}
 		return Snapshot{PID: 6, PPID: 1, Name: "claude", StartMS: 9}, true
-	})
+	}, nil)
 	if err != nil || got != (Ancestor{PID: 6, PPID: 1, Name: "claude", StartMS: 9}) {
 		t.Fatalf("%+v %v", got, err)
 	}
@@ -25,7 +25,7 @@ func TestNearestFromStopsAtBrokenChains(t *testing.T) {
 		return NearestFrom(9, func(pid int) (Snapshot, bool) {
 			s, ok := tree[pid]
 			return s, ok
-		})
+		}, nil)
 	}
 	if _, ok := walk(map[int]Snapshot{}); ok {
 		t.Fatal("this process cannot be read")
@@ -53,6 +53,7 @@ func TestClientNameCanonicalizesEveryKnownProcess(t *testing.T) {
 		{"copilot", "copilot", true},
 		{`C:\Tools\Cursor.exe`, "cursor", true},
 		{"cursor-agent", "cursor", true},
+		{"agent", "", false},
 		{"agy", "antigravity", true},
 		{"ANTIGRAVITY", "antigravity", true},
 		{"grok", "grok", true},
@@ -61,6 +62,34 @@ func TestClientNameCanonicalizesEveryKnownProcess(t *testing.T) {
 		{"node", "", false},
 	} {
 		client, known := ClientName(tc.name)
+		if client != tc.client || known != tc.known {
+			t.Errorf("%q: got %q, %v; want %q, %v", tc.name, client, known, tc.client, tc.known)
+		}
+	}
+}
+
+func TestClientNameWithEnvRecognizesAgentOnlyAsMeasuredCursor(t *testing.T) {
+	cursorEnv := func(key string) string {
+		return map[string]string{"CURSOR_PROJECT_DIR": "/project", "CURSOR_VERSION": "2026.11.22"}[key]
+	}
+	projectOnly := func(key string) string {
+		return map[string]string{"CURSOR_PROJECT_DIR": "/project"}[key]
+	}
+	for _, tc := range []struct {
+		name   string
+		getenv func(string) string
+		client string
+		known  bool
+	}{
+		{name: "agent", getenv: cursorEnv, client: "cursor", known: true},
+		{name: `C:\Tools\Agent.EXE`, getenv: cursorEnv, client: "cursor", known: true},
+		{name: "agent", getenv: projectOnly},
+		{name: "agent"},
+		{name: "cursor-agent", client: "cursor", known: true},
+		{name: "claude", getenv: cursorEnv, client: "claude", known: true},
+		{name: "codex", getenv: cursorEnv, client: "codex", known: true},
+	} {
+		client, known := ClientNameWithEnv(tc.name, tc.getenv)
 		if client != tc.client || known != tc.known {
 			t.Errorf("%q: got %q, %v; want %q, %v", tc.name, client, known, tc.client, tc.known)
 		}

@@ -145,8 +145,18 @@ func ClientMismatchObservation(client, runner string) string {
 
 // CheckClient refuses every binding route when another client cross-loaded this shim.
 func (r *Resolver) CheckClient() bool {
-	runner, known := proc.ClientName(r.ancestor().Name)
-	if !known || runner == r.Client {
+	ancestor := r.ancestor()
+	runner, known := proc.ClientNameWithEnv(ancestor.Name, r.Getenv)
+	if known && runner == r.Client {
+		return false
+	}
+	// A matching nearest client keeps a native session nested in Cursor usable. Without one,
+	// Cursor's marker pair identifies its cross-loaded hook shell despite an inherited Claude id.
+	// An unidentified agent is also refused rather than allowed to lend the shim an outer identity.
+	if !known && r.Client != "cursor" && (proc.AgentAlias(ancestor.Name) || proc.CursorEnvironment(r.Getenv)) {
+		runner, known = "cursor", true
+	}
+	if !known {
 		return false
 	}
 	r.mismatch = runner

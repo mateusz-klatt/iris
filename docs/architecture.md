@@ -168,15 +168,23 @@ command path, never a versioned package directory.
 
 Grok loads Claude and Cursor hooks, plugins and MCP servers by default (measured), and Cursor
 exports `CLAUDE_PROJECT_DIR`. Environment variables also leak across nesting: a Copilot session
-started from a Claude session still carries `CLAUDE_CODE_SESSION_ID` (measured).
+started from a Claude session still carries `CLAUDE_CODE_SESSION_ID`, and Cursor's hook shell
+merges that inherited variable too (measured).
 
 So `--client` selects a parser, and the hook then confirms who is really running it. Environment
 markers alone are not proof: a profile can export them, and `GROK_HOOK_EVENT` is also set on
 Claude hooks that Grok runs. A client counts as the runner only when its session variable equals
 the session id on stdin, for example `GROK_SESSION_ID` equal to `sessionId`. Cursor 2026.11.22
 omits `CURSOR_CONVERSATION_ID` from a cross-loaded Claude hook, so Cursor is also confirmed by a
-nearest `cursor-agent` ancestor or by `CURSOR_PROJECT_DIR` together with `CURSOR_VERSION`. A nearest
-client ancestor matching the requested client keeps a real session nested inside another client native.
+nearest `cursor-agent` ancestor or, with no recognized client ancestor, by `CURSOR_PROJECT_DIR`
+together with `CURSOR_VERSION`. Cursor's measured `agent` alias counts as Cursor with that pair.
+Without it, no measured env-free evidence distinguishes the bare alias from an unrelated tool on
+Linux, Windows or macOS. The walk therefore stops at an unidentified `agent`, and the hook and shim
+fail safe with Cursor's mismatch rather than borrow an outer client's identity. An unrelated `agent`
+can be refused too: that false positive is intentional because walking through it can corrupt a real
+session. A nearest recognized client matching the requested client, with no `agent` between, keeps a
+real nested session native, and markers never relabel a known third client. An inherited
+`CLAUDE_CODE_SESSION_ID` never outranks Cursor's process or marker evidence.
 
 When a hook meant for one client runs under another, it prints the runner's allow output, exits
 0 and does not call the hub, whether or not the runner has its own integration. `iris doctor`
@@ -202,11 +210,17 @@ The Grok cell is the stdio MCP child. Grok's `monitor` shell does not inherit
 hook stored for that grok process ([ADR 025](adr/025-grok-stop-monitor.md)).
 
 At MCP startup, a recognized nearest client that does not match `--client` identifies a cross-loaded
-shim. Before any binding or generation-proof check, that shim refuses every rung, including an
-inherited execution or session id, and never registers or heartbeats. Its stdio server stays up;
-tool calls answer typed `client_mismatch` and direct the model to the running client's native Iris
-server. One observation goes to the log doctor reads. A real client nested inside another client
-still binds when its nearest client matches.
+shim. `CURSOR_PROJECT_DIR` together with `CURSOR_VERSION` recognizes Cursor's generic `agent` alias
+during the walk. Cursor's MCP stdio environment has no such markers (measured), and no env-free
+alias measurement reliably distinguishes `agent` from an unrelated tool. An unidentified `agent`
+therefore stops the walk and the shim refuses the mismatch instead of binding through an outer
+client, including through its inherited session id; an unrelated `agent` can be refused for the same
+reason. A recognized nearest client that matches `--client`, with no `agent` between, keeps a real
+nested session native despite inherited markers. Cursor's process or marker evidence outranks an
+inherited `CLAUDE_CODE_SESSION_ID`. Before any binding or generation-proof check, a cross-loaded
+shim refuses every rung, including an inherited execution or session id, and never registers or
+heartbeats. Its stdio server stays up; tool calls answer typed `client_mismatch` and direct the model
+to the running client's native Iris server. One observation goes to the log doctor reads.
 
 `iris mcp` resolves its Execution at the first tool call, by this chain, and outside Codex and id
 mode also on its heartbeat tick (see below):
