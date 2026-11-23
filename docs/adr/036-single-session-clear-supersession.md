@@ -1,9 +1,10 @@
 # ADR 036: Single-session `/clear` supersession and atomic session end
 
-Status: proposed, 2026-11-23. Assessed against `main` at `e03aa76`: **the problem remains open**.
-This ADR proposes changes to D6, D8, D9, `POST /v1/sessions`, `POST /v1/sessions/outside`, a new
-`POST /v1/sessions/end` route, and hook `SingleSession` classification. No implementation starts
-until this ADR is reviewed and accepted.
+Status: accepted, 2026-11-23. Assessed against `main` at `e03aa76`: **the problem remains open**.
+This ADR amends D6, D8, D9, `POST /v1/sessions`, `POST /v1/sessions/outside`, a new
+`POST /v1/sessions/end` route, and hook `SingleSession` classification. Until the implementation
+merges, `main` keeps today's behaviour. That implementation follows ADR 035's, because both change
+registration and session end.
 
 ## Context
 
