@@ -58,7 +58,7 @@ func (t *transaction) merge(r Request, outside bool) (map[string]any, error) {
 	if grants > 0 {
 		return nil, fail("conflict", "member repository grants must be reviewed and removed before merging")
 	}
-	if source.policy != destination.policy || source.action != destination.action || source.scope != destination.scope {
+	if source.policy != destination.policy || source.action != destination.action || effectiveClaimScope(source.scope) != effectiveClaimScope(destination.scope) {
 		return nil, fail("conflict", "repository policies differ; choose matching policies before merging")
 	}
 	if source.contact.Valid && destination.contact.Valid && source.contact.String != destination.contact.String {
@@ -122,8 +122,8 @@ func (t *transaction) merge(r Request, outside bool) (map[string]any, error) {
 	out := map[string]any{"from_repository_id": from, "into_repository_id": into, "dry_run": r.DryRun,
 		"counts": counts, "aliases": aliases, "coalesced_aliases": coalesced, "slot_changes": changes,
 		"contact_agent_id": contactID, "removed_repositories": 1, "created_events": 1,
-		"from_repository": map[string]any{"id": from, "name": source.name, "root_commit": source.root, "case_policy": source.policy, "conflict_action": source.action, "auto_claim_scope": source.scope},
-		"into_repository": map[string]any{"id": into, "name": destination.name, "root_commit": destination.root, "case_policy": destination.policy, "conflict_action": destination.action, "auto_claim_scope": destination.scope}}
+		"from_repository": map[string]any{"id": from, "name": source.name, "root_commit": source.root, "case_policy": source.policy, "conflict_action": source.action, "auto_claim_scope": effectiveClaimScope(source.scope)},
+		"into_repository": map[string]any{"id": into, "name": destination.name, "root_commit": destination.root, "case_policy": destination.policy, "conflict_action": destination.action, "auto_claim_scope": effectiveClaimScope(destination.scope)}}
 	if outside {
 		out["outside"], out["dropped"] = true, dropped
 	}

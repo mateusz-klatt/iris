@@ -1,10 +1,17 @@
 # ADR 037: Worktree-scoped automatic claims are a repository opt-in
 
-Status: accepted, 2026-11-23. Alternative (a), the per-repository `claim.auto_scope` policy, is
-the chosen design. Alternative (b), a hub-issued parent link that would exempt only one
-coordinator's delegates, stays documented and is not implemented. Amends D10, D12 and ADR 033's
+Status: accepted, 2026-11-23. Implemented but disabled in v0.1.14, pending #415.
+Alternative (a), the per-repository `claim.auto_scope` policy, is the chosen design.
+Alternative (b), a hub-issued parent link that would exempt only one coordinator's
+delegates, stays documented and is not implemented. Amends D10, D12 and ADR 033's
 submodule guard consequence only for a repository that opts in. ADR 003 path identity is
 unchanged, and ADR 033 still decides which repository owns a claim.
+
+v0.1.14 keeps the repository-wide default and v0.1.13 conflict behaviour, plus the additive
+claim metadata. `POST /v1/admin/policy` refuses `worktree`. The code is `not_enabled` and the
+message is `worktree claim scope is not enabled in this release`. A repository row that already
+stores `worktree` is treated as `repository`, and `iris doctor` says so. The column and its
+migrations stay. The opt-in below is the design #415 carries; this release does not apply it.
 
 ## Context
 
@@ -286,13 +293,15 @@ of an opted-in repository, not only to a coordinator's delegates.
     establish a canonical identity receives null-key, repository-wide claims. A new client never
     infers policy from a local file.
 
-    An older hub has no setting or administration route and continues repository-wide conflict
-    checks. The schema additions are nullable or have defaults, and Waiter keeps its old primary
-    key, so an older hub can continue its existing inserts and conflict handling on a rolled-back
-    database. It ignores the new columns, writes null keys and does not honour `worktree`. Older
-    guards ignore `advisories`, while real conflicts still arrive in `message`. Moving forward
-    again treats every null row as repository-wide. The narrower behaviour needs the new hub, but
-    mixed clients do not silently weaken the default.
+    An older hub has no setting or administration route. It is not safe on a database this hub
+    has migrated. v0.1.13's waiter upsert replaces the wait's repository and leaves `worktree_key`
+    as it was. After this hub is restored, that leftover key makes an explicit wait look automatic,
+    and a future hub that enables `worktree` can then wake an overlap that should still block.
+    Roll back only from the pre-deploy backup. Do not point the old binary at the migrated database.
+
+    v0.1.14 does not honour `worktree`. The route refuses it, and a stored value is repository.
+    Older guards ignore `advisories`. This release does not produce them. A real conflict is still
+    in `message`.
 
 11. **The policy and claim locations are visible.** `iris doctor` reports the `claim.auto_scope` in
     force for the checkout it examines. With `worktree`, it says that cross-worktree automatic

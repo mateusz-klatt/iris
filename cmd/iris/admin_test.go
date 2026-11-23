@@ -181,18 +181,24 @@ func TestAdminPolicySendsTheOwnerScope(t *testing.T) {
 			t.Error(err)
 		}
 		got = append(got, body)
+		if body["claim_auto_scope"] == "worktree" {
+			w.WriteHeader(http.StatusBadRequest)
+			_ = json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"code": "not_enabled", "message": "worktree claim scope is not enabled in this release"}})
+			return
+		}
 		_ = json.NewEncoder(w).Encode(map[string]any{"repository_id": body["repository_id"], "claim_auto_scope": body["claim_auto_scope"]})
 	})
 	var out bytes.Buffer
-	for _, scope := range []string{"worktree", "repository"} {
-		if err := adminCommand(context.Background(), client, []string{"policy", "--repository", "rp_a", "--claim-auto-scope", scope}, &out); err != nil {
-			t.Fatal(scope, err)
-		}
+	if err := adminCommand(context.Background(), client, []string{"policy", "--repository", "rp_a", "--claim-auto-scope", "worktree"}, &out); err == nil || !strings.Contains(err.Error(), "worktree claim scope is not enabled in this release") {
+		t.Fatal(err)
+	}
+	if err := adminCommand(context.Background(), client, []string{"policy", "--repository", "rp_a", "--claim-auto-scope", "repository"}, &out); err != nil {
+		t.Fatal(err)
 	}
 	if len(got) != 2 || got[0]["repository_id"] != "rp_a" || got[0]["claim_auto_scope"] != "worktree" || got[1]["claim_auto_scope"] != "repository" {
 		t.Fatal(got)
 	}
-	if !strings.Contains(out.String(), `"claim_auto_scope": "worktree"`) || !strings.Contains(out.String(), `"claim_auto_scope": "repository"`) {
+	if !strings.Contains(out.String(), `"claim_auto_scope": "repository"`) {
 		t.Fatal(out.String())
 	}
 }

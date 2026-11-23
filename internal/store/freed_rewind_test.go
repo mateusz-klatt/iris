@@ -179,19 +179,23 @@ func TestFreedRewindFollowsTheRepositoryThatOwnedTheWait(t *testing.T) {
 	if err := s.db.QueryRow("SELECT repository_id FROM Event WHERE seq=?", freed).Scan(&eventRepo); err != nil || eventRepo.String != subRepo {
 		t.Fatalf("event repository %v, %v", eventRepo, err)
 	}
-	// Another worktree of the submodule may hold the path. That pair is exempt only
-	// because the submodule opted into worktree. The superproject did not, and it still
-	// holds the same path name, which would block a replay that read the wrong repository.
-	other, _ := checkoutSession(t, s, "codex", "", "other", "/src/frontend-wt", "dev:fe2", frontendRemote, "frontend-root", "side")
-	if got := call(t, s, "touch", touchRequest(other, "exempt", "src/x.ts")); got["action"] != "allow" {
-		t.Fatal(got)
-	}
+	// The superproject still holds the same path name. That claim is another
+	// repository, so it does not keep the submodule path from rewinding. A claim
+	// in the submodule does, including when the stored scope is worktree.
 	cursor := func() any { return call(t, s, "monitor_cursor", parent)["cursor"] }
 	if got := cursor(); got != freed-1 {
-		t.Fatalf("submodule path did not rewind: %v, freed %d", got, freed)
+		t.Fatalf("superproject claim suppressed the free submodule path: %v, freed %d", got, freed)
 	}
-	if again := cursor(); again != freed-1 {
-		t.Fatalf("replay changed the cursor from %d to %v", freed-1, again)
+	other, _ := checkoutSession(t, s, "codex", "", "other", "/src/frontend-wt", "dev:fe2", frontendRemote, "frontend-root", "side")
+	if got := call(t, s, "touch", touchRequest(other, "covers", "src/x.ts")); got["action"] != "allow" || got["advisories"] != nil {
+		t.Fatal(got)
+	}
+	blocked := cursor()
+	if blocked == freed-1 {
+		t.Fatal("a claim in the submodule did not block rewind")
+	}
+	if again := cursor(); again != blocked {
+		t.Fatalf("replay changed the cursor from %v to %v", blocked, again)
 	}
 	call(t, s, "claim", claimRequest(other, "blocks", "src/x.ts", "exact"))
 	if got := cursor(); got == freed-1 {

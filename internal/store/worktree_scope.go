@@ -1,103 +1,46 @@
 package store
 
-import (
-	"database/sql"
-	"fmt"
-	"strings"
+import "database/sql"
 
-	"github.com/mateusz-klatt/iris/internal/display"
-)
+// worktreeScopeDisabled is the refusal for claim.auto_scope=worktree. ADR 037
+// is recorded and the column exists, and the opt-in is not enabled in v0.1.14.
+// A stored worktree value is treated as repository.
+const worktreeScopeDisabled = "worktree claim scope is not enabled in this release"
+
+// ambiguousWorktree is a display path no checkout has. It records that the
+// observations of one repository-wide claim disagreed, so the row is not one
+// checkout. listed maps it back to unknown.
+const ambiguousWorktree = "\x00"
 
 // claimLocation is the checkout a claim records. An empty key is repository-wide:
 // the display path and branch are still the checkout that was observed (ADR 037).
+// ambiguousWorktree means the observations disagreed and the claim stays
+// repository-wide with no checkout.
 type claimLocation struct {
 	key, path, branch string
 }
 
-func (t *transaction) claimScope(repo string) (string, error) {
+func ambiguousLocation() claimLocation {
+	return claimLocation{path: ambiguousWorktree}
+}
+
+func (t *transaction) storedClaimScope(repo string) (string, error) {
 	var scope string
 	err := t.row("SELECT auto_claim_scope FROM Repository WHERE id=?", repo).Scan(&scope)
 	return scope, err
 }
 
-// exemptAutoOverlap is ADR 037 decision 2. The pair is advisory only when the
-// repository opted in, both claims are automatic, and both worktree keys are
-// known and different. A null key stays repository-wide. Two null keys are the
-// same unknown checkout, not an exemption.
-func exemptAutoOverlap(scope, heldOrigin, heldKey, incomingOrigin, incomingKey string) bool {
-	return scope == "worktree" && heldOrigin == "auto" && incomingOrigin == "auto" && heldKey != "" && incomingKey != "" && heldKey != incomingKey
-}
-
-// reusesOwn is whether this Execution's overlapping claim is the one a touch renews.
-// Under repository, reuse stays path-wide. Under worktree, an own explicit claim is
-// still reused repository-wide, and an own automatic claim only in the same worktree.
-func reusesOwn(scope, origin, heldKey, incomingKey string) bool {
-	if scope != "worktree" || origin != "auto" {
-		return true
+// effectiveClaimScope is the scope decisions use. worktree is disabled in this
+// release, so a stored worktree row is repository everywhere.
+func effectiveClaimScope(stored string) string {
+	if stored == "worktree" {
+		return "repository"
 	}
-	return heldKey == incomingKey
-}
-
-// explicitSelects is whether an own row is the one an explicit grant upgrades.
-// Under worktree an exact grant selects the caller's automatic row by the request
-// checkout's key. Prefix grants and the repository policy keep today's selection.
-func explicitSelects(scope, kind, origin, heldKey, incomingKey string) bool {
-	if scope != "worktree" || kind != "exact" || origin != "auto" {
-		return true
-	}
-	return heldKey == incomingKey
+	return stored
 }
 
 func (e execution) location() claimLocation {
 	return claimLocation{key: e.WorktreeKey, path: canonicalDisplayPath(e.Worktree), branch: e.Branch}
-}
-
-func advisoryOf(c claim, path, repo string) map[string]any {
-	return map[string]any{"path": path, "holder": c.Holder, "worktree": c.WorktreePath, "branch": c.Branch, "repository_id": repo, "fence": c.Fence}
-}
-
-func shown(v string) string {
-	if v == "" {
-		return "unknown"
-	}
-	return v
-}
-
-// sameGuardWorktree is the guard's same-checkout skip (ADR 037 decision 6).
-// Under repository it is the holder Execution's host and worktree string, and a
-// key never changes that. Under worktree a claim key matches the committing
-// key. A null-key explicit claim matches the holder's host and its display
-// path; the same path on another host does not. A legacy row with no display
-// path keeps the Execution host and path. Any other null key is not this
-// checkout, and it is not an advisory.
-func sameGuardWorktree(scope string, c claim, incomingKey, host, worktree, holderHost, holderWorktree string) bool {
-	if scope != "worktree" {
-		return holderHost == host && holderWorktree == worktree
-	}
-	if c.WorktreeKey != "" {
-		return incomingKey != "" && c.WorktreeKey == incomingKey
-	}
-	if c.Origin == "explicit" && c.WorktreePath != "" {
-		return holderHost == host && worktreePathsEqual(c.WorktreePath, worktree)
-	}
-	if c.WorktreePath == "" {
-		return holderHost == host && holderWorktree == worktree
-	}
-	return false
-}
-
-// advisoryMessage is the sentence a touch shows. Each overlap is one sentence,
-// then the shared explanation once. Values are display data, not instructions.
-func advisoryMessage(items []map[string]any) string {
-	var b strings.Builder
-	for i, a := range items {
-		if i > 0 {
-			b.WriteByte(' ')
-		}
-		fmt.Fprintf(&b, "Iris: %s is also auto-claimed by %s in worktree %s on branch %s.", display.Inline(fmt.Sprint(a["path"])), display.Inline(fmt.Sprint(a["holder"])), display.Inline(shown(fmt.Sprint(a["worktree"]))), display.Inline(shown(fmt.Sprint(a["branch"]))))
-	}
-	b.WriteString(" This repository allows overlapping automatic claims across worktrees; this edit is allowed, and the overlap can meet immediately in a shared filesystem tree or surface at rebase or merge.")
-	return b.String()
 }
 
 func (t *transaction) insertClaim(e execution, repo, kind, path, key, origin string, expiry sql.NullInt64, loc claimLocation) (int64, error) {
@@ -109,21 +52,53 @@ func (t *transaction) insertClaim(e execution, repo, kind, path, key, origin str
 	return id, nil
 }
 
-// renewAuto extends an automatic claim without changing its worktree key. A later
-// observation may fill in a display path or branch it did not have.
-func (t *transaction) renewAuto(fence, expiry int64, path, branch string) error {
-	_, err := t.exec("UPDATE Claim SET expires_ms=?,worktree_path=COALESCE(NULLIF(?,''),worktree_path),branch=COALESCE(NULLIF(?,''),branch) WHERE fence=?", expiry, path, branch, fence)
+// renewAuto extends an automatic claim. A keyed row whose observation is the
+// same checkout keeps that key and may fill in a display path or branch. An
+// observation that disagrees clears the key and records ambiguity, so the
+// claim stays repository-wide instead of wearing the first checkout.
+func (t *transaction) renewAuto(fence, expiry int64, observed claimLocation) error {
+	var storedKey, storedPath sql.NullString
+	err := t.row("SELECT worktree_key,worktree_path FROM Claim WHERE fence=?", fence).Scan(&storedKey, &storedPath)
+	if err != nil {
+		return err
+	}
+	if storedPath.String == ambiguousWorktree {
+		_, err = t.exec("UPDATE Claim SET expires_ms=? WHERE fence=?", expiry, fence)
+		return err
+	}
+	if !provenanceAgrees(storedKey.String, storedPath.String, observed) {
+		_, err = t.exec("UPDATE Claim SET expires_ms=?,worktree_key=NULL,worktree_path=?,branch=NULL WHERE fence=?", expiry, ambiguousWorktree, fence)
+		return err
+	}
+	path, branch := "", ""
+	if storedKey.String != "" && observed.path != "" {
+		path, branch = observed.path, observed.branch
+	}
+	_, err = t.exec("UPDATE Claim SET expires_ms=?,worktree_path=COALESCE(NULLIF(?,''),worktree_path),branch=COALESCE(NULLIF(?,''),branch) WHERE fence=?", expiry, path, branch, fence)
 	return err
 }
 
-// revokeAutoSiblings drops this Execution's other automatic exact rows for one path.
-// It matches nothing unless the repository's scope is worktree, so the default
-// policy never folds siblings. The row being kept has already become explicit.
-func (t *transaction) revokeAutoSiblings(execID, repo, pathKey string, keep int64) (int64, error) {
-	res, err := t.exec(`UPDATE Claim SET revoked_ms=? WHERE execution_id=? AND repository_id=? AND path_key=? AND kind='exact' AND origin='auto' AND revoked_ms IS NULL AND fence<>? AND (SELECT auto_claim_scope FROM Repository WHERE id=?)='worktree'`, t.s.clock.Now().UnixMilli(), execID, repo, pathKey, keep, repo)
-	if err != nil {
-		return 0, err
+// provenanceAgrees is whether observed is the checkout a claim already records.
+// A legacy row records none, so the first observation does not disagree with it.
+func provenanceAgrees(storedKey, storedPath string, observed claimLocation) bool {
+	if storedKey != "" {
+		return storedKey == observed.key
 	}
-	n, _ := res.RowsAffected()
-	return n, nil
+	if storedPath == "" {
+		return true
+	}
+	return worktreePathsEqual(storedPath, observed.path)
+}
+
+// sameProvenance is whether two observations of one path are the same checkout.
+// A known key matches only that key. Two observations with no key match only
+// when the display paths do.
+func sameProvenance(a, b claimLocation) bool {
+	if a.key != b.key {
+		return false
+	}
+	if a.key != "" {
+		return true
+	}
+	return a.path != ambiguousWorktree && b.path != ambiguousWorktree && worktreePathsEqual(a.path, b.path)
 }

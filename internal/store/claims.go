@@ -28,19 +28,19 @@ func (c claim) public() map[string]any {
 }
 
 // listed is one claim as the console and GET /v1/claims show it (ADR 037).
-// An empty worktree path is a legacy row: the location is unknown, not the holder's
-// current checkout. effective_scope is worktree only for an automatic claim with a
-// key while the repository has opted in. A null key or an explicit claim stays
-// repository-wide even when a display path is recorded.
-func (c claim) listed(scope string) map[string]any {
+// An empty worktree path, and an ambiguous marker, are an unknown location:
+// neither is the holder's current checkout. effective_scope is repository in
+// this release: the worktree opt-in is disabled, so a key does not narrow a claim.
+func (c claim) listed() map[string]any {
 	out := c.public()
-	out["worktree_path"] = c.WorktreePath
+	path := c.WorktreePath
+	if path == ambiguousWorktree {
+		path = ""
+	}
+	out["worktree_path"] = path
 	out["branch"] = c.Branch
 	out["host"] = c.Host
 	out["effective_scope"] = "repository"
-	if scope == "worktree" && c.Origin == "auto" && c.WorktreeKey != "" {
-		out["effective_scope"] = "worktree"
-	}
 	return out
 }
 func (t *transaction) conflict(c claim) (map[string]any, error) {
@@ -82,15 +82,8 @@ func (t *transaction) claims(repo string) ([]map[string]any, error) {
 		return nil, err
 	}
 	out := []map[string]any{}
-	if len(cs) == 0 {
-		return out, nil
-	}
-	scope, err := t.claimScope(repo)
-	if err != nil {
-		return nil, err
-	}
 	for _, c := range cs {
-		out = append(out, c.listed(scope))
+		out = append(out, c.listed())
 	}
 	return out, nil
 }
@@ -182,7 +175,8 @@ func (s *Store) SetRepositoryPolicy(ctx context.Context, repo, casePolicy, actio
 
 // autoClaimScope is the only writer of Repository.auto_claim_scope (ADR 037).
 // The owner sets it. Other operations ignore the field, and this write does not
-// rekey or rewrite claims.
+// rekey or rewrite claims. worktree is refused: that opt-in is not enabled in
+// v0.1.14, and the column stays repository.
 func (t *transaction) autoClaimScope(r Request) (map[string]any, error) {
 	if r.ClaimAutoScope != "repository" && r.ClaimAutoScope != "worktree" {
 		return nil, fail("bad_request", "claim auto scope must be repository or worktree")
@@ -190,6 +184,9 @@ func (t *transaction) autoClaimScope(r Request) (map[string]any, error) {
 	var repo string
 	if err := t.row("SELECT id FROM Repository WHERE id=?", r.RepositoryID).Scan(&repo); err != nil {
 		return nil, missing(err, "unknown repository")
+	}
+	if r.ClaimAutoScope == "worktree" {
+		return nil, fail("not_enabled", worktreeScopeDisabled)
 	}
 	if _, err := t.exec("UPDATE Repository SET auto_claim_scope=? WHERE id=?", r.ClaimAutoScope, repo); err != nil {
 		return nil, err
@@ -221,18 +218,13 @@ func (t *transaction) touch(r Request) (map[string]any, error) {
 				if err != nil {
 					return nil, err
 				}
-				scope, err := t.claimScope(e.Repo)
-				if err != nil {
-					return nil, err
-				}
 				for _, p := range grants {
 					var n int
 					key := pathKey(p.(string), policy)
 					// Only a claim in e's repository counts: e may hold the same name in another
-					// repository's checkout (ADR 033), which is another file. Under worktree the
-					// live automatic claim must be this checkout's; an explicit claim counts
-					// repository-wide. Under repository the key is ignored (ADR 037).
-					err = t.row("SELECT COUNT(*) FROM Claim WHERE execution_id=? AND repository_id=? AND (path_key=? OR (kind='prefix' AND (path_key='' OR substr(?,1,length(path_key)+1)=path_key||'/'))) AND revoked_ms IS NULL AND boot_epoch=? AND (?<>'worktree' OR origin='explicit' OR COALESCE(worktree_key,'')=?)", e.ID, e.Repo, key, key, t.s.epoch, scope, e.WorktreeKey).Scan(&n)
+					// repository's checkout (ADR 033), which is another file. The worktree key
+					// is ignored: that opt-in is disabled, so reuse stays path-wide.
+					err = t.row("SELECT COUNT(*) FROM Claim WHERE execution_id=? AND repository_id=? AND (path_key=? OR (kind='prefix' AND (path_key='' OR substr(?,1,length(path_key)+1)=path_key||'/'))) AND revoked_ms IS NULL AND boot_epoch=?", e.ID, e.Repo, key, key, t.s.epoch).Scan(&n)
 					if err != nil {
 						return nil, err
 					}
@@ -245,10 +237,6 @@ func (t *transaction) touch(r Request) (map[string]any, error) {
 		return cached, nil
 	}
 	policy, action, err := t.policy(e.Repo)
-	if err != nil {
-		return nil, err
-	}
-	scope, err := t.claimScope(e.Repo)
 	if err != nil {
 		return nil, err
 	}
@@ -290,36 +278,26 @@ func (t *transaction) touch(r Request) (map[string]any, error) {
 		return nil, err
 	}
 	conflicts := []map[string]any{}
-	advisories := []map[string]any{}
 	reuse := map[string]claim{}
 	// Ignored paths take no automatic claim, but another session's explicit claim on one
 	// still applies (D10), so every requested path is checked for conflicts.
+	// An own overlap is reused path-wide, as v0.1.13 did. A relative Execution is not
+	// a conflict. Every other overlap is.
 	for _, p := range append(append([]string{}, normalized...), ignored...) {
 		for _, c := range cs {
 			if !overlaps(pathKey(p, policy), "exact", c.Key, c.Kind) {
 				continue
 			}
 			if c.Execution == e.ID {
-				if reusesOwn(scope, c.Origin, c.WorktreeKey, loc.key) {
-					reuse[p] = c
-					continue
-				}
-				if exemptAutoOverlap(scope, c.Origin, c.WorktreeKey, "auto", loc.key) {
-					advisories = append(advisories, advisoryOf(c, p, e.Repo))
-					continue
-				}
-			} else {
-				family, err := t.related(e.ID, c.Execution)
-				if err != nil {
-					return nil, err
-				}
-				if family {
-					continue
-				}
-				if exemptAutoOverlap(scope, c.Origin, c.WorktreeKey, "auto", loc.key) {
-					advisories = append(advisories, advisoryOf(c, p, e.Repo))
-					continue
-				}
+				reuse[p] = c
+				continue
+			}
+			family, err := t.related(e.ID, c.Execution)
+			if err != nil {
+				return nil, err
+			}
+			if family {
+				continue
 			}
 			v, err := t.conflict(c)
 			if err != nil {
@@ -361,7 +339,7 @@ func (t *transaction) touch(r Request) (map[string]any, error) {
 		for _, p := range normalized {
 			if c, ok := reuse[p]; ok {
 				if c.Origin == "auto" {
-					if err = t.renewAuto(c.Fence, expiry, loc.path, loc.branch); err != nil {
+					if err = t.renewAuto(c.Fence, expiry, loc); err != nil {
 						return nil, err
 					}
 				}
@@ -377,14 +355,6 @@ func (t *transaction) touch(r Request) (map[string]any, error) {
 			}
 		}
 		out["granted"] = normalized
-		if len(advisories) > 0 {
-			out["advisories"] = advisories
-			text := advisoryMessage(advisories)
-			if note, _ := out["message"].(string); note != "" {
-				text += " " + note
-			}
-			out["message"] = text
-		}
 	}
 	if out["attention"], err = t.attention(e); err != nil {
 		return nil, err
@@ -472,10 +442,6 @@ func (t *transaction) explicitIn(r Request, route string) (map[string]any, error
 	if err != nil {
 		return nil, err
 	}
-	scope, err := t.claimScope(repo)
-	if err != nil {
-		return nil, err
-	}
 	loc := e.location()
 	if route == "claim_files" {
 		loc.key, err = t.ensureWorktreeKey(e.Host, r.Checkout.WorktreeID)
@@ -518,10 +484,9 @@ func (t *transaction) explicitIn(r Request, route string) (map[string]any, error
 			continue
 		}
 		if c.Execution == e.ID {
-			// An incoming explicit claim never uses the automatic exemption, including
-			// against this Execution's automatic row in another worktree. That row is
-			// not a conflict with itself; an exact grant selects it only by checkout key.
-			if c.Kind == r.Kind && c.Key == key && explicitSelects(scope, r.Kind, c.Origin, c.WorktreeKey, loc.key) {
+			// An own overlap is not a conflict. The matching row is the one an
+			// explicit grant upgrades, path-wide, as v0.1.13 did.
+			if c.Kind == r.Kind && c.Key == key {
 				copy := c
 				reuse = &copy
 			}
@@ -578,19 +543,6 @@ func (t *transaction) explicitIn(r Request, route string) (map[string]any, error
 			return nil, err
 		}
 		c = claim{Fence: f, Execution: e.ID, Repo: repo, Kind: r.Kind, Path: p, Origin: "explicit", Epoch: t.s.epoch, Expiry: expiry}
-	}
-	if r.Kind == "exact" {
-		n, err := t.revokeAutoSiblings(e.ID, repo, key, c.Fence)
-		if err != nil {
-			return nil, err
-		}
-		// The revoked siblings run a normal release. The new repository-wide explicit
-		// row still blocks overlapping waiters, so a sibling's waiter does not wake.
-		if n > 0 {
-			if err = t.released(repo, e.ID); err != nil {
-				return nil, err
-			}
-		}
 	}
 	out = map[string]any{"fence": c.Fence, "token": t.fenceToken(c), "expires_at": timestamp(c.Expiry)}
 	if err = t.remember(e, r.Key, route, r, out); err != nil {

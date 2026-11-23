@@ -262,7 +262,10 @@ func (t *transaction) overview() (map[string]any, error) {
 		// A host's context of sessions outside git has no claim.auto_scope in force (ADR 034).
 		// The column still exists; the console must not present that default as a policy.
 		if kind == "repository" {
-			repository["claim_auto_scope"] = scope
+			repository["claim_auto_scope"] = effectiveClaimScope(scope)
+			if scope == "worktree" {
+				repository["claim_scope_note"] = worktreeScopeDisabled
+			}
 		}
 		// This describes the current console controls; each mutation still checks
 		// authority in its own transaction. Legacy link sessions have no account.

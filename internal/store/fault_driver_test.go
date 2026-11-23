@@ -202,21 +202,20 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 				r.RepositoryID = independent["repository_id"].(string)
 			case "claim-scope":
 				route = "policy"
-				r = Request{RepositoryID: repo, ClaimAutoScope: "worktree"}
+				r = Request{RepositoryID: repo, ClaimAutoScope: "repository"}
 			case "touch-worktree":
-				// An automatic overlap of two known, different worktrees is allowed.
-				// A fault while that grant is written must not publish half of it.
+				// Two checkouts of one path still conflict. A fault while the
+				// refusal is written must not publish half of it.
 				route = "touch"
-				call(t, s, "policy", Request{RepositoryID: repo, ClaimAutoScope: "worktree"})
 				holder := call(t, s, "sessions", Request{Client: "codex", Host: "host", SessionID: "wt-holder", Cwd: "/repo/wt-h", Worktree: "/repo/wt-h", WorktreeID: "dev:holder", RemoteURL: "https://example.com/team/project.git", RootCommit: "root", Branch: "holder", Source: "hook"})
 				incoming := call(t, s, "sessions", Request{Client: "codex", Host: "host", SessionID: "wt-incoming", Cwd: "/repo/wt-i", Worktree: "/repo/wt-i", WorktreeID: "dev:incoming", RemoteURL: "https://example.com/team/project.git", RootCommit: "root", Branch: "incoming", Source: "hook"})
 				call(t, s, "touch", touchRequest(Request{ExecutionID: holder["execution_id"].(string), Generation: holder["generation"].(int64)}, "wt-held", "overlap.go"))
 				r = touchRequest(Request{ExecutionID: incoming["execution_id"].(string), Generation: incoming["generation"].(int64)}, "wt-take", "overlap.go")
 			case "claim-worktree-fold":
-				// A new explicit claim revokes this Execution's automatic sibling in
-				// another worktree. The revocation and its release wake commit together.
+				// An explicit claim upgrades this Execution's automatic row. The
+				// upgrade commits with the claim; a stored worktree value does not
+				// revoke a sibling, because that opt-in is disabled.
 				route = "claim"
-				call(t, s, "policy", Request{RepositoryID: repo, ClaimAutoScope: "worktree"})
 				call(t, s, "touch_files", filesTouch(a, "fold-auto", ClaimGroup{Worktree: "/repo/wt2", WorktreeID: "dev:fold", RemoteURL: "https://example.com/team/project.git", RootCommit: "root", Branch: "other", Paths: []string{"fold.go"}}))
 				r = claimRequest(a, "fold-explicit", "fold.go", "exact")
 			case "touch-files", "touch-files-known", "touch-files-conflict", "touch-files-cached", "release-foreign":

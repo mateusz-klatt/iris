@@ -105,7 +105,7 @@ func (t *transaction) reconcileChanges(e execution, r Request) (map[string]any, 
 	// stashed or restored by git in this worktree, which changes nothing in a holder's worktree,
 	// so it is neither warned about nor claimed.
 	changed, left := shellChanges(previous, r.Status, r.Scope)
-	out, err := t.checkPaths(e.Repo, e.Host, e.Worktree, e.WorktreeKey, changed)
+	out, err := t.checkPaths(e.Repo, e.Host, e.Worktree, changed)
 	if err != nil {
 		return nil, err
 	}
@@ -123,19 +123,14 @@ func (t *transaction) reconcileChanges(e execution, r Request) (map[string]any, 
 		return nil, err
 	}
 	out["claimed"] = claimed
-	// The shell hook warns on a non-empty message. A real conflict, the claim-limit
-	// note and an advisory are separate sentences: the limit used to be written
-	// first, and that hid the advisory. The guard does not use this path, so an
-	// advisory-only guard result still leaves message empty (ADR 037).
+	// The shell hook warns on a non-empty message. A real conflict and the
+	// claim-limit note are separate sentences. The guard does not use this path.
 	var notes []string
 	if text, _ := out["message"].(string); text != "" {
 		notes = append(notes, text)
 	}
 	if skipped > 0 {
 		notes = append(notes, fmt.Sprintf("Iris claimed %d changed paths for this session and left %d unclaimed, at the limit of %d live claims.", len(claimed), skipped, maxClaims))
-	}
-	if advisories, _ := out["advisories"].([]map[string]any); len(advisories) > 0 {
-		notes = append(notes, advisoryMessage(advisories))
 	}
 	if len(notes) > 0 {
 		out["message"] = "Shell edit detected. " + strings.Join(notes, " ") + " Iris detects these changes and cannot undo them."
@@ -192,10 +187,6 @@ func (t *transaction) releaseLeft(e execution, paths []string) error {
 	if err != nil {
 		return err
 	}
-	scope, err := t.claimScope(e.Repo)
-	if err != nil {
-		return err
-	}
 	cs, err := t.claimRows(e.Repo)
 	if err != nil {
 		return err
@@ -208,11 +199,8 @@ func (t *transaction) releaseLeft(e execution, paths []string) error {
 			if c.Execution != e.ID || c.Origin != "auto" || c.Kind != "exact" || c.Key != key {
 				continue
 			}
-			// Under repository every matching automatic exact row is released, whichever
-			// key it carries. Under worktree only the status checkout's key is.
-			if scope == "worktree" && c.WorktreeKey != e.WorktreeKey {
-				continue
-			}
+			// Every matching automatic exact row is released, whichever key it
+			// carries. That is the v0.1.13 release, and the worktree opt-in is disabled.
 			if _, err = t.exec("UPDATE Claim SET revoked_ms=? WHERE fence=? AND revoked_ms IS NULL", now, c.Fence); err != nil {
 				return err
 			}
@@ -230,10 +218,6 @@ func (t *transaction) releaseLeft(e execution, paths []string) error {
 // and how many it could not claim.
 func (t *transaction) autoClaim(e execution, paths []string) ([]string, int, error) {
 	policy, _, err := t.policy(e.Repo)
-	if err != nil {
-		return nil, 0, err
-	}
-	scope, err := t.claimScope(e.Repo)
 	if err != nil {
 		return nil, 0, err
 	}
@@ -256,26 +240,19 @@ func (t *transaction) autoClaim(e execution, paths []string) ([]string, int, err
 				continue
 			}
 			if c.Execution == e.ID {
-				if reusesOwn(scope, c.Origin, c.WorktreeKey, loc.key) {
-					mine = true
-					if c.Origin == "auto" {
-						if err = t.renewAuto(c.Fence, expiry, loc.path, loc.branch); err != nil {
-							return nil, 0, err
-						}
+				mine = true
+				if c.Origin == "auto" {
+					if err = t.renewAuto(c.Fence, expiry, loc); err != nil {
+						return nil, 0, err
 					}
-					continue
 				}
-				if exemptAutoOverlap(scope, c.Origin, c.WorktreeKey, "auto", loc.key) {
-					continue
-				}
-				held = true
 				continue
 			}
 			family, err := t.related(e.ID, c.Execution)
 			if err != nil {
 				return nil, 0, err
 			}
-			if family || exemptAutoOverlap(scope, c.Origin, c.WorktreeKey, "auto", loc.key) {
+			if family {
 				continue
 			}
 			held = true

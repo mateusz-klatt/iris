@@ -33,9 +33,10 @@ func TestPolicyRequiresOwner(t *testing.T) {
 			t.Fatalf("policy authority: got %d want %d", resp.StatusCode, auth.status)
 		}
 	}
-	set := request(t, s, "POST", "/v1/admin/policy", body, 200)
-	if set["repository_id"] != repo || set["claim_auto_scope"] != "worktree" {
-		t.Fatal(set)
+	refused := request(t, s, "POST", "/v1/admin/policy", body, 400)
+	errBody, _ := refused["error"].(map[string]any)
+	if errBody["code"] != "not_enabled" || errBody["message"] != "worktree claim scope is not enabled in this release" {
+		t.Fatal(refused)
 	}
 	body["claim_auto_scope"] = "repository"
 	back := request(t, s, "POST", "/v1/admin/policy", body, 200)

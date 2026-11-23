@@ -28,14 +28,14 @@ type ClaimGroup struct {
 	Prefix string `json:"prefix,omitempty"`
 }
 
-// filePlace is one repository's share of a grouped touch.
+// filePlace is one repository's share of a grouped touch. locs records the
+// checkout of each path. Disagreeing observations of one path become ambiguous,
+// so the claim stays repository-wide.
 type filePlace struct {
 	repo, policy, action string
-	scope                string
-	loc                  claimLocation
+	locs                 map[string]claimLocation
 	paths, ignored       []string
 	reuse                map[string]claim
-	advisories           []map[string]any
 }
 
 // touchFiles is touch for a tool call whose paths are grouped by the checkout each file lies in
@@ -65,7 +65,6 @@ func (t *transaction) touchFiles(r Request) (map[string]any, error) {
 	}
 	var places []*filePlace
 	byPlace := map[string]*filePlace{}
-	scopeOf := map[string]string{}
 	unclaimed := []string{}
 	seen := map[string]bool{}
 	for _, g := range r.Groups {
@@ -77,18 +76,12 @@ func (t *transaction) touchFiles(r Request) (map[string]any, error) {
 			unclaimed = append(unclaimed, g.Worktree)
 			continue
 		}
-		scope, ok := scopeOf[repo]
-		if !ok {
-			scope, err = t.claimScope(repo)
-			if err != nil {
-				return nil, err
-			}
-			scopeOf[repo] = scope
-		}
 		// The group's own checkout, not the session's. fileRepository folds an alias
 		// to the path this host first named and returns that path in display form.
 		// An omitted WorktreeID has no key, and that claim stays repository-wide.
 		// The branch is the group's, or unknown when an older client left it out.
+		// Equal paths across groups stay one claim. When the checkouts disagree,
+		// that claim records no checkout.
 		loc := claimLocation{path: worktree, branch: g.Branch}
 		if g.WorktreeID != "" {
 			loc.key, err = t.ensureWorktreeKey(e.Host, g.WorktreeID)
@@ -96,22 +89,15 @@ func (t *transaction) touchFiles(r Request) (map[string]any, error) {
 				return nil, err
 			}
 		}
-		// Under repository, equal paths across groups stay one claim. Under worktree,
-		// /wt1, /wt2 and a submodule of the same path are different claims.
-		id := repo
 		seenKey := repo + "\x00"
-		if scope == "worktree" {
-			id += "\x00" + loc.key
-			seenKey = id + "\x00"
-		}
-		p := byPlace[id]
+		p := byPlace[repo]
 		if p == nil {
 			policy, action, err := t.policy(repo)
 			if err != nil {
 				return nil, err
 			}
-			p = &filePlace{repo: repo, policy: policy, action: action, scope: scope, loc: loc, reuse: map[string]claim{}}
-			byPlace[id] = p
+			p = &filePlace{repo: repo, policy: policy, action: action, locs: map[string]claimLocation{}, reuse: map[string]claim{}}
+			byPlace[repo] = p
 			places = append(places, p)
 		}
 		for _, raw := range g.Paths {
@@ -124,9 +110,13 @@ func (t *transaction) touchFiles(r Request) (map[string]any, error) {
 			}
 			k := pathKey(clean, p.policy)
 			if seen[seenKey+k] {
+				if !sameProvenance(p.locs[k], loc) {
+					p.locs[k] = ambiguousLocation()
+				}
 				continue
 			}
 			seen[seenKey+k] = true
+			p.locs[k] = loc
 			if defaultIgnored(k) {
 				p.ignored = append(p.ignored, clean)
 			} else {
@@ -176,18 +166,8 @@ func (t *transaction) touchFiles(r Request) (map[string]any, error) {
 		notes = append([]string{text}, notes...)
 		// No paths are granted on any conflict, even when policy permits proceeding.
 		// An advisory on another path does not split or weaken that refusal.
-	} else {
-		if out["granted"], err = t.grantFiles(e, places); err != nil {
-			return nil, err
-		}
-		var advisories []map[string]any
-		for _, p := range places {
-			advisories = append(advisories, p.advisories...)
-		}
-		if len(advisories) > 0 {
-			out["advisories"] = advisories
-			notes = append([]string{advisoryMessage(advisories)}, notes...)
-		}
+	} else if out["granted"], err = t.grantFiles(e, places); err != nil {
+		return nil, err
 	}
 	for _, w := range unclaimed {
 		notes = append(notes, fmt.Sprintf("Iris: the hub cannot tell which repository %s belongs to, so its paths were not claimed; ask the owner to repair the split with iris admin merge.", display.Inline(w)))
@@ -264,28 +244,17 @@ func (t *transaction) fileConflicts(e execution, p *filePlace, conflicts *[]map[
 				continue
 			}
 			if c.Execution == e.ID {
-				if reusesOwn(p.scope, c.Origin, c.WorktreeKey, p.loc.key) {
-					if i < len(p.paths) {
-						p.reuse[path] = c
-					}
-					continue
+				if i < len(p.paths) {
+					p.reuse[path] = c
 				}
-				if exemptAutoOverlap(p.scope, c.Origin, c.WorktreeKey, "auto", p.loc.key) {
-					p.advisories = append(p.advisories, advisoryOf(c, path, p.repo))
-					continue
-				}
-			} else {
-				family, err := t.related(e.ID, c.Execution)
-				if err != nil {
-					return false, err
-				}
-				if family {
-					continue
-				}
-				if exemptAutoOverlap(p.scope, c.Origin, c.WorktreeKey, "auto", p.loc.key) {
-					p.advisories = append(p.advisories, advisoryOf(c, path, p.repo))
-					continue
-				}
+				continue
+			}
+			family, err := t.related(e.ID, c.Execution)
+			if err != nil {
+				return false, err
+			}
+			if family {
+				continue
 			}
 			v, err := t.conflict(c)
 			if err != nil {
@@ -298,7 +267,7 @@ func (t *transaction) fileConflicts(e execution, p *filePlace, conflicts *[]map[
 			// The holder's release of this path is what this session waits for.
 			// An overlap with this Execution's own other checkout does not wait on itself.
 			if c.Execution != e.ID {
-				if err = t.wait(e, p.repo, k, "exact", p.loc.key); err != nil {
+				if err = t.wait(e, p.repo, k, "exact", p.locs[k].key); err != nil {
 					return false, err
 				}
 			}
@@ -322,19 +291,20 @@ func (t *transaction) grantFiles(e execution, places []*filePlace) ([]map[string
 	for _, p := range places {
 		for _, path := range p.paths {
 			k := pathKey(path, p.policy)
+			loc := p.locs[k]
 			c, ok := p.reuse[path]
 			if !ok {
-				fence, err := t.insertClaim(e, p.repo, "exact", path, k, "auto", sql.NullInt64{Int64: expiry, Valid: true}, p.loc)
+				fence, err := t.insertClaim(e, p.repo, "exact", path, k, "auto", sql.NullInt64{Int64: expiry, Valid: true}, loc)
 				if err != nil {
 					return nil, err
 				}
 				c.Fence = fence
 			} else if c.Origin == "auto" {
-				if err := t.renewAuto(c.Fence, expiry, p.loc.path, p.loc.branch); err != nil {
+				if err := t.renewAuto(c.Fence, expiry, loc); err != nil {
 					return nil, err
 				}
 			}
-			if err := t.took(e, p.repo, k, p.loc.key); err != nil {
+			if err := t.took(e, p.repo, k, loc.key); err != nil {
 				return nil, err
 			}
 			granted = append(granted, map[string]any{"repository_id": p.repo, "path": path, "fence": c.Fence})
@@ -356,24 +326,20 @@ func (t *transaction) stillHeld(e execution, cached map[string]any) error {
 	for _, g := range cached["granted"].([]any) {
 		grant := g.(map[string]any)
 		repo := grant["repository_id"].(string)
-		// A missing fence is an empty key: only an explicit claim or a null-key claim
-		// of this Execution still counts. The fence's own key is what a grouped grant
-		// promised, not the Execution's current checkout (ADR 037).
-		var origin, grantKey string
-		if err := t.row("SELECT repository_id,origin,COALESCE(worktree_key,'') FROM Claim WHERE fence=? AND execution_id=?", grant["fence"], e.ID).Scan(&repo, &origin, &grantKey); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		// A missing fence leaves the repository the grant named. A live claim of this
+		// Execution on the path counts, whichever checkout recorded it.
+		if err := t.row("SELECT repository_id FROM Claim WHERE fence=? AND execution_id=?", grant["fence"], e.ID).Scan(&repo); err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
 		var policy string
 		if err := t.row("SELECT case_policy FROM Repository WHERE id=?", repo).Scan(&policy); err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
 		}
-		scope, err := t.claimScope(repo)
-		if err != nil && !errors.Is(err, sql.ErrNoRows) {
-			return err
-		}
 		k := pathKey(grant["path"].(string), policy)
 		var n int
-		if err := t.row("SELECT COUNT(*) FROM Claim WHERE execution_id=? AND repository_id=? AND revoked_ms IS NULL AND boot_epoch=? AND (path_key=? OR (kind='prefix' AND (path_key='' OR substr(?,1,length(path_key)+1)=path_key||'/'))) AND (?<>'worktree' OR origin='explicit' OR COALESCE(worktree_key,'')=?)", e.ID, repo, t.s.epoch, k, k, scope, grantKey).Scan(&n); err != nil {
+		// A live claim of this Execution on the path counts, whichever checkout
+		// recorded it. The worktree opt-in is disabled, so the key is not a gate.
+		if err := t.row("SELECT COUNT(*) FROM Claim WHERE execution_id=? AND repository_id=? AND revoked_ms IS NULL AND boot_epoch=? AND (path_key=? OR (kind='prefix' AND (path_key='' OR substr(?,1,length(path_key)+1)=path_key||'/')))", e.ID, repo, t.s.epoch, k, k).Scan(&n); err != nil {
 			return err
 		}
 		if n == 0 {

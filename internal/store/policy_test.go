@@ -107,14 +107,23 @@ func TestAutoClaimScopeIsOwnerOnlyAndLeavesClaims(t *testing.T) {
 		t.Fatal("a host token or console account set the scope")
 	}
 	before := consoleRevision(t, s, operator)
-	owned, err := s.CallAuthorized(context.Background(), Principal{Kind: OwnerPrincipal}, "policy", Request{RepositoryID: repo, ClaimAutoScope: "worktree"})
-	if err != nil || owned["repository_id"] != repo || owned["claim_auto_scope"] != "worktree" {
-		t.Fatal(owned, err)
+	_, err = s.CallAuthorized(context.Background(), Principal{Kind: OwnerPrincipal}, "policy", Request{RepositoryID: repo, ClaimAutoScope: "worktree"})
+	consoleError(t, err, "not_enabled")
+	if err.Error() != worktreeScopeDisabled {
+		t.Fatal(err)
 	}
-	if scopeOf() != "worktree" || waiterKey() != "wt_wait" || consoleRevision(t, s, operator) <= before {
-		t.Fatal("the owner's scope write did not stick, rewrote a waiter, or did not move the console", scopeOf())
+	if scopeOf() != "repository" || waiterKey() != "wt_wait" || consoleRevision(t, s, operator) != before {
+		t.Fatal("the refused worktree write changed the repository", scopeOf(), waiterKey())
 	}
 	assertKept()
+	owned := call(t, s, "policy", Request{RepositoryID: repo, ClaimAutoScope: "repository"})
+	if owned["repository_id"] != repo || owned["claim_auto_scope"] != "repository" || scopeOf() != "repository" || consoleRevision(t, s, operator) <= before {
+		t.Fatal("the owner could not confirm repository", owned, scopeOf())
+	}
+	assertKept()
+	if _, err = s.db.Exec("UPDATE Repository SET auto_claim_scope='worktree' WHERE id=?", repo); err != nil {
+		t.Fatal(err)
+	}
 	if err = s.SetRepositoryPolicy(context.Background(), repo, "sensitive", "warn"); err != nil {
 		t.Fatal(err)
 	}
@@ -123,12 +132,15 @@ func TestAutoClaimScopeIsOwnerOnlyAndLeavesClaims(t *testing.T) {
 		t.Fatal("case policy rewrote the claim scope", scope, casePolicy, action, err)
 	}
 	assertKept()
+	noted := call(t, s, "check", Request{Host: "elsewhere", Cwd: "/other", Worktree: "/other", RemoteURL: "https://example.com/team/project.git", RootCommit: "root", Paths: []string{"src/api.go"}})
+	if noted["claim_auto_scope"] != "repository" || noted["claim_scope_note"] != worktreeScopeDisabled || noted["message"] == "" {
+		t.Fatal("a stored worktree value was not repository", noted)
+	}
 	back := call(t, s, "policy", Request{RepositoryID: repo, ClaimAutoScope: "repository"})
 	if back["claim_auto_scope"] != "repository" || scopeOf() != "repository" {
 		t.Fatal(back, scopeOf())
 	}
 	assertKept()
-	call(t, s, "policy", Request{RepositoryID: repo, ClaimAutoScope: "worktree"})
 	if err = s.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -139,7 +151,7 @@ func TestAutoClaimScopeIsOwnerOnlyAndLeavesClaims(t *testing.T) {
 	}
 	defer func() { _ = reopened.Close() }()
 	s = reopened
-	if scopeOf() != "worktree" {
+	if scopeOf() != "repository" {
 		t.Fatal("restart lost the scope", scopeOf())
 	}
 	assertKept()

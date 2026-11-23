@@ -28,10 +28,11 @@ func (t *transaction) wait(e execution, repo, key, kind, worktreeKey string) err
 	return err
 }
 
-// took clears e's waits on key in repo once it holds it there. Under worktree only the
-// wait with the same key is cleared; under repository the key is ignored.
+// took clears e's waits on key in repo once it holds it there. The waiter's
+// worktree key is ignored: the worktree opt-in is disabled, so a take is path-wide.
 func (t *transaction) took(e execution, repo, key, worktreeKey string) error {
-	_, err := t.exec("DELETE FROM Waiter WHERE execution_id=? AND repository_id=? AND path_key=? AND ((SELECT auto_claim_scope FROM Repository WHERE id=?)<>'worktree' OR COALESCE(worktree_key,'')=?)", e.ID, repo, key, repo, worktreeKey)
+	_ = worktreeKey
+	_, err := t.exec("DELETE FROM Waiter WHERE execution_id=? AND repository_id=? AND path_key=?", e.ID, repo, key)
 	return err
 }
 
@@ -66,16 +67,12 @@ func (t *transaction) wakeWaiters(repo string) error {
 	if len(ws) == 0 {
 		return nil
 	}
-	scope, err := t.claimScope(repo)
-	if err != nil {
-		return err
-	}
 	cs, err := t.claimRows(repo)
 	if err != nil {
 		return err
 	}
 	for _, w := range ws {
-		blocked, err := t.blocked(scope, w, cs)
+		blocked, err := t.blocked(w, cs)
 		if err != nil {
 			return err
 		}
@@ -97,19 +94,11 @@ func (t *transaction) wakeWaiters(repo string) error {
 }
 
 // blocked is whether a claim of an unrelated Execution still covers w's path.
-// Under worktree, decision 2's exempt automatic pair does not block. A null waiter
-// key is not an automatic wait, so it is never exempt. Any other overlap blocks,
-// including an explicit or null-key claim. Under repository the key is ignored.
-func (t *transaction) blocked(scope string, w waiter, cs []claim) (bool, error) {
-	incoming := "explicit"
-	if w.worktreeKey != "" {
-		incoming = "auto"
-	}
+// Any overlap blocks, including an automatic claim in another checkout. The
+// waiter's key is not an exemption: the worktree opt-in is disabled.
+func (t *transaction) blocked(w waiter, cs []claim) (bool, error) {
 	for _, c := range cs {
 		if c.Execution == w.execution || !overlaps(w.key, w.kind, c.Key, c.Kind) {
-			continue
-		}
-		if exemptAutoOverlap(scope, c.Origin, c.WorktreeKey, incoming, w.worktreeKey) {
 			continue
 		}
 		family, err := t.related(w.execution, c.Execution)

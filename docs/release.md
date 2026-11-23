@@ -17,6 +17,8 @@ can be public before the draft is published. Homebrew, Scoop and winget remain
 [ADR 022](adr/022-release-container-image.md) records this extension of D15.
 A final release tag is the owner's call ([release candidate runbook](#release-candidate-runbook));
 this configuration neither creates one nor authorizes anyone to create it.
+Worktree-scoped automatic claims (ADR 037) are not available in this release; the repository-wide default is unchanged.
+Roll back only from the pre-deploy backup.
 The GoReleaser dependency is not part of the application module.
 
 The web tooling pins Vitest and its coverage provider together. The `minimatch` override

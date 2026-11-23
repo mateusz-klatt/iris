@@ -25,12 +25,13 @@ func TestClaimListsNameTheCheckoutAndTheEffectiveScope(t *testing.T) {
 	}
 
 	setScope(t, s, repo, "worktree")
-	call(t, s, "touch", touchRequest(other, "auto-other", "src/api.go"))
+	if got := call(t, s, "touch", touchRequest(other, "auto-other", "src/api.go")); got["action"] != "deny" || got["advisories"] != nil {
+		t.Fatal("a stored worktree value allowed the other host", got)
+	}
 	opted := call(t, s, "claims", Request{RepositoryID: repo})["claims"].([]map[string]any)
 	keyed := listedClaim(t, opted, "src/api.go", "host-a")
-	samePath := listedClaim(t, opted, "src/api.go", "host-b")
-	if keyed["effective_scope"] != "worktree" || samePath["effective_scope"] != "worktree" || keyed["host"] == samePath["host"] {
-		t.Fatalf("opted-in automatic claims: %v and %v", keyed, samePath)
+	if keyed["effective_scope"] != "repository" {
+		t.Fatalf("a stored worktree value presented the claim as worktree-scoped: %v", keyed)
 	}
 	if listedClaim(t, opted, "docs/keep.md", "host-a")["effective_scope"] != "repository" {
 		t.Fatal("an explicit claim became worktree-scoped")
@@ -98,16 +99,17 @@ func TestTheOverviewReportsClaimAutoScopeForAProjectOnly(t *testing.T) {
 	}
 	setScope(t, s, repo, "worktree")
 	checked := call(t, s, "check", Request{Host: "host", Cwd: "/repo/w1", Worktree: "/repo/w1", RemoteURL: "https://example.com/team/project.git", RootCommit: "root"})
-	if checked["claim_auto_scope"] != "worktree" {
-		t.Fatalf("check did not report the opted-in scope: %v", checked["claim_auto_scope"])
+	if checked["claim_auto_scope"] != "repository" || checked["claim_scope_note"] != worktreeScopeDisabled {
+		t.Fatalf("check treated a stored worktree value as enabled: %v", checked)
 	}
 	for _, row := range call(t, s, "ui_overview", Request{})["repositories"].([]map[string]any) {
-		if row["id"] == repo && row["claim_auto_scope"] != "worktree" {
-			t.Fatalf("overview did not follow the new scope: %v", row)
+		if row["id"] == repo && (row["claim_auto_scope"] != "repository" || row["claim_scope_note"] != worktreeScopeDisabled) {
+			t.Fatalf("overview treated a stored worktree value as enabled: %v", row)
 		}
 	}
 	setScope(t, s, repo, "repository")
-	if call(t, s, "check", Request{Host: "host", Cwd: "/repo/w1", Worktree: "/repo/w1", RemoteURL: "https://example.com/team/project.git", RootCommit: "root"})["claim_auto_scope"] != "repository" {
-		t.Fatal("check kept the old scope")
+	cleared := call(t, s, "check", Request{Host: "host", Cwd: "/repo/w1", Worktree: "/repo/w1", RemoteURL: "https://example.com/team/project.git", RootCommit: "root"})
+	if cleared["claim_auto_scope"] != "repository" || cleared["claim_scope_note"] != nil {
+		t.Fatal("check kept the disabled note", cleared)
 	}
 }

@@ -304,9 +304,8 @@ const freedRewindSQL = `SELECT seq,object_id,COALESCE(worktree_key,''),COALESCE(
 //
 // Each event is judged against the repository that owned the wait, not e's repository. A
 // superproject Execution can be waiting on a submodule path, and the two repositories can
-// hold the same path name under different policies (ADR 033). Under worktree, only decision
-// 2's exempt automatic pair is non-blocking. Under repository any overlap still blocks, and
-// the event's key is ignored (ADR 037).
+// hold the same path name under different policies (ADR 033). Any overlap still blocks.
+// The event's worktree key is ignored: that opt-in is disabled (ADR 037).
 //
 // An event that names no repository, or names one that is gone, is not rewound. The
 // Execution's repository is not a safe substitute, and waking could let an edit meet a
@@ -318,15 +317,15 @@ func (t *transaction) freedRewind(e execution) (int64, error) {
 		return 0, err
 	}
 	type freed struct {
-		seq         int64
-		key         string
-		worktreeKey string
-		repo        string
+		seq  int64
+		key  string
+		repo string
 	}
 	var fs []freed
 	for rows.Next() {
 		var f freed
-		rows.Scan(&f.seq, &f.key, &f.worktreeKey, &f.repo)
+		var worktreeKey string
+		rows.Scan(&f.seq, &f.key, &worktreeKey, &f.repo)
 		fs = append(fs, f)
 	}
 	err = rows.Err()
@@ -334,47 +333,37 @@ func (t *transaction) freedRewind(e execution) (int64, error) {
 	if err != nil || len(fs) == 0 {
 		return math.MaxInt64, err
 	}
-	scopes := map[string]string{}
 	claims := map[string][]claim{}
 	for _, f := range fs {
 		if f.repo == "" {
 			continue
 		}
-		scope, seen := scopes[f.repo]
+		cs, seen := claims[f.repo]
 		if !seen {
-			scope, err = t.claimScope(f.repo)
-			if errors.Is(err, sql.ErrNoRows) {
-				continue
+			if _, err = t.storedClaimScope(f.repo); err != nil {
+				if errors.Is(err, sql.ErrNoRows) {
+					continue
+				}
+				return 0, err
 			}
+			cs, err = t.claimRows(f.repo)
 			if err != nil {
 				return 0, err
 			}
-			cs, err := t.claimRows(f.repo)
-			if err != nil {
-				return 0, err
-			}
-			scopes[f.repo] = scope
 			claims[f.repo] = cs
 		}
-		if !rewindBlocked(scope, f.key, f.worktreeKey, claims[f.repo]) {
+		if !rewindBlocked(f.key, cs) {
 			return f.seq - 1, nil
 		}
 	}
 	return math.MaxInt64, nil
 }
 
-// rewindBlocked reports whether any live claim still covers the freed path. A null event
-// key is treated as an explicit wait, so it is never the exempt automatic pair.
-func rewindBlocked(scope, key, worktreeKey string, cs []claim) bool {
-	incoming := "explicit"
-	if worktreeKey != "" {
-		incoming = "auto"
-	}
+// rewindBlocked reports whether any live claim still covers the freed path.
+// The event's worktree key is not an exemption.
+func rewindBlocked(key string, cs []claim) bool {
 	for _, c := range cs {
 		if !overlaps(key, "prefix", c.Key, c.Kind) {
-			continue
-		}
-		if exemptAutoOverlap(scope, c.Origin, c.WorktreeKey, incoming, worktreeKey) {
 			continue
 		}
 		return true

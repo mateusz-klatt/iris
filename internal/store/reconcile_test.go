@@ -117,10 +117,10 @@ func TestReconciliationRespectsTheClaimLimit(t *testing.T) {
 	}
 }
 
-// At the claim limit an exempt overlap is still named. The limit note used to
-// replace the message before the advisory was rendered, so the shell warning
-// dropped it.
-func TestReconciliationKeepsTheAdvisoryAtTheClaimLimit(t *testing.T) {
+// At the claim limit a path someone else holds is still a shell warning.
+// The stored worktree value does not turn that overlap into an advisory,
+// and the path is not claimed.
+func TestReconciliationKeepsTheConflictAtTheClaimLimit(t *testing.T) {
 	s, _, _ := testStore(t)
 	holder, ho := scopeSession(t, s, "", "holder", "/repo/wt1", "dev:1", "held-branch")
 	repo := ho["repository_id"].(string)
@@ -138,10 +138,9 @@ SELECT e.id,e.repository_id,'exact','pad/'||n.i||'.go','pad/'||n.i||'.go','auto'
 	shell.Kind, shell.Status = "after", map[string]string{"overlap.go": " M"}
 	out := call(t, s, "reconcile", shell)
 	message, _ := out["message"].(string)
-	notes, _ := out["advisories"].([]map[string]any)
 	claimed, _ := out["claimed"].([]string)
-	if len(claimed) != 0 || len(notes) != 1 || notes[0]["path"] != "overlap.go" || notes[0]["branch"] != "held-branch" || !strings.Contains(message, "left 1 unclaimed") || !strings.Contains(message, "also auto-claimed") || !strings.Contains(message, "on branch held-branch.") {
-		t.Fatalf("claimed %v advisories %v message %q", claimed, notes, message)
+	if len(claimed) != 0 || out["advisories"] != nil || strings.Contains(message, "also auto-claimed") || strings.Contains(message, "left 1 unclaimed") {
+		t.Fatalf("claimed %v message %q", claimed, message)
 	}
 	if !strings.Contains(message, "Shell edit detected.") || !strings.Contains(message, "cannot undo") {
 		t.Fatal(message)

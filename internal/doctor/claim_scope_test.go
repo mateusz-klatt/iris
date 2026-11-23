@@ -27,7 +27,8 @@ func TestDoctorReportsTheClaimAutoScope(t *testing.T) {
 		status           int
 	}{
 		{"repository", `{"message":"","conflicts":[],"claim_auto_scope":"repository"}`, "repository. Automatic claims apply", http.StatusOK},
-		{"worktree", `{"claim_auto_scope":"worktree"}`, "worktree. Cross-worktree automatic overlaps are advisory", http.StatusOK},
+		{"worktree", `{"claim_auto_scope":"worktree"}`, "worktree claim scope is not enabled in this release", http.StatusOK},
+		{"a stored worktree value reported as repository", `{"claim_auto_scope":"repository","claim_scope_note":"worktree claim scope is not enabled in this release"}`, "repository. Automatic claims apply", http.StatusOK},
 		{"a value doctor does not know", `{"claim_auto_scope":"seat"}`, "unknown.", http.StatusOK},
 		{"a hub from before the field", `{"message":"","conflicts":[],"case_policy":"folded"}`, "unknown.", http.StatusOK},
 		{"a hub that fails", `{"claim_auto_scope":"worktree"}`, "unknown.", http.StatusInternalServerError},
@@ -40,12 +41,11 @@ func TestDoctorReportsTheClaimAutoScope(t *testing.T) {
 			if !strings.HasPrefix(got, tc.want) {
 				t.Fatalf("%q", got)
 			}
-			if tc.want == "worktree. Cross-worktree automatic overlaps are advisory" {
-				for _, phrase := range []string{"Explicit claims stay repository-wide", "not enforcement", "two hosts", "rebase or merge", "unrelated agent's"} {
-					if !strings.Contains(got, phrase) {
-						t.Fatalf("the worktree line omits %q:\n%s", phrase, got)
-					}
-				}
+			if tc.name == "worktree" && !strings.Contains(got, "Automatic claims stay repository-wide.") {
+				t.Fatalf("the worktree line omits the repository-wide note:\n%s", got)
+			}
+			if tc.name == "a stored worktree value reported as repository" && !strings.Contains(got, "worktree claim scope is not enabled in this release") {
+				t.Fatalf("the note was dropped:\n%s", got)
 			}
 			if strings.HasPrefix(got, "unknown.") && (strings.Contains(got, "assume repository or worktree.") == false) {
 				t.Fatalf("unknown assumed a value: %q", got)
@@ -64,7 +64,7 @@ func TestDoctorReportsTheClaimAutoScope(t *testing.T) {
 		t.Fatalf("the working directory was %q", got)
 	}
 	shown := (Result{ClaimScope: claimScopeText("worktree")}).Format()
-	if !strings.Contains(shown, "claim auto scope: worktree. Cross-worktree automatic overlaps are advisory") || !strings.Contains(shown, "not enforcement") {
+	if !strings.Contains(shown, "claim auto scope: worktree claim scope is not enabled in this release") || !strings.Contains(shown, "Automatic claims stay repository-wide.") {
 		t.Fatal(shown)
 	}
 	if strings.Contains((Result{}).Format(), "claim auto scope") {

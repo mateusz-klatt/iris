@@ -278,10 +278,10 @@ func TestCheckLinkedWorktreeCannotClaimTheHoldersSession(t *testing.T) {
 }
 
 // Check is the decision an older guard can make: it sees message and not
-// advisories. Against a real hub, that allows only the exempt automatic overlap.
-// An explicit claim is a refusal, and so is an automatic claim from a session
-// that never sent a WorktreeID while the repository is worktree-scoped.
-func TestAnOldGuardAllowsOnlyAnExemptAutomaticOverlap(t *testing.T) {
+// advisories. Against this hub a linked worktree's automatic overlap is a
+// refusal, as it was in v0.1.13. An explicit claim is a refusal, and so is an
+// automatic claim from a session that never sent a WorktreeID.
+func TestAnOldGuardRefusesALinkedWorktreeOverlap(t *testing.T) {
 	dir := realPath(t, t.TempDir())
 	git(t, dir, "init")
 	git(t, dir, "remote", "add", "origin", "https://example.com/guard.git")
@@ -307,9 +307,6 @@ func TestAnOldGuardAllowsOnlyAnExemptAutomaticOverlap(t *testing.T) {
 		t.Fatal(err)
 	}
 	repoID := holder["repository_id"].(string)
-	if _, err = s.Call(ctx, "policy", store.Request{RepositoryID: repoID, ClaimAutoScope: "worktree"}); err != nil {
-		t.Fatal(err)
-	}
 	proof := store.Request{ExecutionID: holder["execution_id"].(string), Generation: holder["generation"].(int64)}
 	touch := proof
 	touch.ToolCallID, touch.Paths = "held", []string{"held.go"}
@@ -328,11 +325,11 @@ func TestAnOldGuardAllowsOnlyAnExemptAutomaticOverlap(t *testing.T) {
 	client := &hubclient.Client{Config: config{server.URL}}
 
 	report, err := Classify(ctx, linked, client)
-	if err != nil || report.Message != "" || len(report.Advisories) != 1 || report.Advisories[0].Path != "held.go" {
-		t.Fatalf("exempt overlap: %+v %v", report, err)
+	if err != nil || report.Message == "" || len(report.Advisories) != 0 {
+		t.Fatalf("linked overlap: %+v %v", report, err)
 	}
-	if message, err := Check(ctx, linked, client); err != nil || message != "" {
-		t.Fatalf("old guard refused the exempt overlap: %q %v", message, err)
+	if message, err := Check(ctx, linked, client); err != nil || message == "" {
+		t.Fatalf("old guard allowed the linked overlap: %q %v", message, err)
 	}
 	if _, err = s.Call(ctx, "claim", store.Request{ExecutionID: proof.ExecutionID, Generation: proof.Generation, Key: "wide", Path: "held.go", Kind: "exact"}); err != nil {
 		t.Fatal(err)

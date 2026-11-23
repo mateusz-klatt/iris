@@ -4,7 +4,6 @@ package store
 import (
 	"context"
 	"crypto/rand"
-	"crypto/sha256"
 	"database/sql"
 	_ "embed"
 	"encoding/hex"
@@ -895,11 +894,7 @@ func (t *transaction) cached(e execution, key, route string, request any) (map[s
 	if key == "" {
 		return nil, false, fail("bad_request", "a retry key is required")
 	}
-	raw, _ := json.Marshal(struct {
-		Route   string
-		Request any
-	}{route, request})
-	hash := sha256.Sum256(raw)
+	hash := operationDigest(route, request)
 	var old []byte
 	var result string
 	err := t.row("SELECT request_hash,result_json FROM Operation WHERE principal_agent_id=? AND key=?", e.AgentID, key).Scan(&old, &result)
@@ -909,7 +904,7 @@ func (t *transaction) cached(e execution, key, route string, request any) (map[s
 	if err != nil {
 		return nil, false, err
 	}
-	if hex.EncodeToString(old) != hex.EncodeToString(hash[:]) {
+	if hex.EncodeToString(old) != hex.EncodeToString(hash) {
 		return nil, false, fail("key_reused", "retry key was used for a different request")
 	}
 	var out map[string]any
@@ -919,13 +914,8 @@ func (t *transaction) cached(e execution, key, route string, request any) (map[s
 	return out, true, err
 }
 func (t *transaction) remember(e execution, key, route string, request any, result any) error {
-	raw, _ := json.Marshal(struct {
-		Route   string
-		Request any
-	}{route, request})
-	hash := sha256.Sum256(raw)
 	body, _ := json.Marshal(result) // results are hub-owned JSON maps, never client metadata
-	_, err := t.exec("INSERT INTO Operation(principal_agent_id,key,request_hash,result_json,created_ms) VALUES(?,?,?,?,?)", e.AgentID, key, hash[:], string(body), t.s.clock.Now().UnixMilli())
+	_, err := t.exec("INSERT INTO Operation(principal_agent_id,key,request_hash,result_json,created_ms) VALUES(?,?,?,?,?)", e.AgentID, key, operationDigest(route, request), string(body), t.s.clock.Now().UnixMilli())
 	return err
 }
 

@@ -3,7 +3,6 @@ package store
 import (
 	"context"
 	"database/sql"
-	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -34,7 +33,15 @@ func checkoutSession(t *testing.T, s *Store, client, host, id, worktree, wtID, r
 
 func setScope(t *testing.T, s *Store, repo, scope string) {
 	t.Helper()
-	call(t, s, "policy", Request{RepositoryID: repo, ClaimAutoScope: scope})
+	if scope == "repository" {
+		call(t, s, "policy", Request{RepositoryID: repo, ClaimAutoScope: scope})
+		return
+	}
+	// worktree cannot be set through the policy route in this release. A test
+	// plants the column to prove a stored value is still treated as repository.
+	if _, err := s.db.Exec("UPDATE Repository SET auto_claim_scope=? WHERE id=?", scope, repo); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func wtGroup(worktree, id, branch, path string) ClaimGroup {
@@ -124,21 +131,22 @@ func TestRepositoryScopeIgnoresWorktreeKeys(t *testing.T) {
 		t.Fatalf("path-wide release did not wake the waiter: waiters=%d wakes=%d", waiterCount(t, s), woken(t, s, b))
 	}
 
-	// Build two keyed rows, then return to repository. Reuse renews across keys and
-	// a status release drops every matching automatic row.
+	// A later observation from another checkout does not open a second claim.
+	// The one row loses its checkout. A stored worktree value does not change that,
+	// and a status release drops the row.
 	setScope(t, s, repo, "worktree")
 	call(t, s, "touch", touchRequest(a, "again", "p.go"))
 	call(t, s, "touch_files", filesTouch(a, "p2", wtGroup("/repo/wt2", "dev:2", "other", "p.go")))
 	setScope(t, s, repo, "repository")
 	rows := claimsOn(liveClaims(t, s, repo), "p.go")
-	if len(rows) != 2 || !rows[0].key.Valid || !rows[1].key.Valid || rows[0].key.String == rows[1].key.String {
-		t.Fatalf("scope change rewrote or dropped keys: %+v", rows)
+	if len(rows) != 1 || rows[0].key.Valid || rows[0].wpath.String != ambiguousWorktree || rows[0].branch.Valid {
+		t.Fatalf("disagreeing observations stayed one checkout: %+v", rows)
 	}
 	clock.advance(time.Minute)
 	call(t, s, "touch", touchRequest(a, "renew", "p.go"))
 	renewed := claimsOn(liveClaims(t, s, repo), "p.go")
-	if len(renewed) != 2 || renewed[0].expires != rows[0].expires || renewed[1].expires <= rows[1].expires {
-		t.Fatalf("repository reuse did not renew across keys: before %+v after %+v", rows, renewed)
+	if len(renewed) != 1 || renewed[0].key.Valid || renewed[0].wpath.String != ambiguousWorktree || renewed[0].expires <= rows[0].expires {
+		t.Fatalf("renewal moved an ambiguous claim: before %+v after %+v", rows, renewed)
 	}
 	a.Kind, a.Status = "before", map[string]string{"p.go": " M"}
 	call(t, s, "reconcile", a)
@@ -148,17 +156,19 @@ func TestRepositoryScopeIgnoresWorktreeKeys(t *testing.T) {
 	}
 }
 
-func TestWorktreeExemptsOnlyDifferentKeyedAutomaticClaims(t *testing.T) {
+// A stored worktree value does not exempt any overlap. Different checkouts,
+// the same checkout, a missing key and an explicit claim all refuse, and none
+// of them opens a second claim.
+func TestAStoredWorktreeValueDoesNotExemptAnAutomaticOverlap(t *testing.T) {
 	cases := []struct {
 		heldOrigin, heldID, incomingID string
-		allow                          bool
 	}{
-		{"auto", "dev:1", "dev:2", true},
-		{"auto", "dev:1", "dev:1", false},
-		{"auto", "", "dev:2", false},
-		{"auto", "dev:1", "", false},
-		{"auto", "", "", false},
-		{"explicit", "dev:1", "dev:2", false},
+		{"auto", "dev:1", "dev:2"},
+		{"auto", "dev:1", "dev:1"},
+		{"auto", "", "dev:2"},
+		{"auto", "dev:1", ""},
+		{"auto", "", ""},
+		{"explicit", "dev:1", "dev:2"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.heldOrigin+"/"+tc.heldID+"/"+tc.incomingID, func(t *testing.T) {
@@ -181,26 +191,11 @@ func TestWorktreeExemptsOnlyDifferentKeyedAutomaticClaims(t *testing.T) {
 				call(t, s, "touch", touchRequest(held, "held", "a.go"))
 			}
 			got := call(t, s, "touch", touchRequest(incoming, "incoming", "a.go"))
-			if tc.allow {
-				advisories, _ := got["advisories"].([]map[string]any)
-				if got["action"] != "allow" || len(got["granted"].([]string)) != 1 || len(advisories) != 1 || waiterCount(t, s) != 0 {
-					t.Fatalf("exempt pair was refused: %v", got)
-				}
-				holder := out["agent"].(map[string]any)["name"].(string)
-				if advisories[0]["holder"] != holder || advisories[0]["worktree"] != heldPath || advisories[0]["branch"] != "held-branch" || advisories[0]["path"] != "a.go" {
-					t.Fatalf("advisory data: %v", advisories[0])
-				}
-				want := fmt.Sprintf("Iris: a.go is also auto-claimed by %s in worktree %s on branch held-branch. This repository allows overlapping automatic claims across worktrees; this edit is allowed, and the overlap can meet immediately in a shared filesystem tree or surface at rebase or merge.", holder, heldPath)
-				if got["message"] != want {
-					t.Fatalf("message %q", got["message"])
-				}
-				if len(claimsOn(liveClaims(t, s, repo), "a.go")) != 2 {
-					t.Fatal(liveClaims(t, s, repo))
-				}
-				return
-			}
 			if got["action"] != "deny" || len(got["granted"].([]string)) != 0 || got["advisories"] != nil || waiterCount(t, s) != 1 {
-				t.Fatalf("non-exempt pair was allowed: %v waiters=%d", got, waiterCount(t, s))
+				t.Fatalf("stored worktree value allowed an overlap: %v waiters=%d", got, waiterCount(t, s))
+			}
+			if len(claimsOn(liveClaims(t, s, repo), "a.go")) != 1 {
+				t.Fatal(liveClaims(t, s, repo))
 			}
 		})
 	}
@@ -217,22 +212,14 @@ func TestSameExecutionReuseFollowsScope(t *testing.T) {
 			call(t, s, "touch_files", filesTouch(a, "two", wtGroup("/repo/wt2", "dev:2", "other", "a.go")))
 			setScope(t, s, repo, scope)
 			before := claimsOn(liveClaims(t, s, repo), "a.go")
-			if len(before) != 2 {
-				t.Fatal(before)
+			if len(before) != 1 || before[0].key.Valid || before[0].wpath.String != ambiguousWorktree {
+				t.Fatalf("%s split one path: %+v", scope, before)
 			}
 			clock.advance(time.Minute)
 			call(t, s, "touch", touchRequest(a, "renew", "a.go"))
 			after := claimsOn(liveClaims(t, s, repo), "a.go")
-			if len(after) != 2 {
-				t.Fatalf("%s reuse inserted a claim: %+v", scope, after)
-			}
-			same, other := after[0], after[1]
-			if scope == "worktree" {
-				if same.expires <= before[0].expires || other.expires != before[1].expires {
-					t.Fatalf("worktree renewed the other checkout: before %+v after %+v", before, after)
-				}
-			} else if other.expires <= before[1].expires || same.expires != before[0].expires {
-				t.Fatalf("repository did not renew across keys: before %+v after %+v", before, after)
+			if len(after) != 1 || after[0].fence != before[0].fence || after[0].key.Valid || after[0].expires <= before[0].expires {
+				t.Fatalf("%s reuse changed the claim: before %+v after %+v", scope, before, after)
 			}
 		})
 	}
@@ -248,8 +235,8 @@ func TestOwnNullKeyClaimStaysRepositoryWide(t *testing.T) {
 	}
 	got := call(t, s, "touch", touchRequest(a, "second", "a.go"))
 	rows := claimsOn(liveClaims(t, s, ao["repository_id"].(string)), "a.go")
-	if got["action"] != "deny" || waiterCount(t, s) != 0 || len(rows) != 1 || rows[0].key.Valid || rows[0].origin != "auto" {
-		t.Fatalf("null-key claim was replaced: %v %+v", got, rows)
+	if got["action"] != "allow" || waiterCount(t, s) != 0 || len(rows) != 1 || rows[0].key.Valid || rows[0].origin != "auto" {
+		t.Fatalf("null-key claim was replaced or refused: %v %+v", got, rows)
 	}
 }
 
@@ -260,24 +247,26 @@ func TestExplicitClaimFoldsSiblingAutomaticRows(t *testing.T) {
 	setScope(t, s, repo, "worktree")
 	call(t, s, "touch_files", filesTouch(a, "both", wtGroup("/repo/wt1", "dev:1", "main", "a.go"), wtGroup("/repo/wt2", "dev:2", "other", "a.go")))
 	other, _ := scopeSession(t, s, "", "other", "/repo/wt3", "dev:3", "third")
-	call(t, s, "touch", touchRequest(other, "other", "a.go"))
+	denied := call(t, s, "touch", touchRequest(other, "other", "a.go"))
+	if denied["action"] != "deny" || denied["advisories"] != nil {
+		t.Fatal(denied)
+	}
 	before := liveClaims(t, s, repo)
-	expectError(t, s, "claim", claimRequest(a, "upgrade", "a.go", "exact"), "conflict")
-	if fmt.Sprint(liveClaims(t, s, repo)) != fmt.Sprint(before) {
-		t.Fatalf("refused upgrade changed claims\nbefore %+v\nafter  %+v", before, liveClaims(t, s, repo))
+	if len(before) != 1 || before[0].origin != "auto" || before[0].key.Valid || before[0].wpath.String != ambiguousWorktree {
+		t.Fatalf("the refused touch changed the claim: %+v", before)
 	}
 
-	// The other session is not holding the path the new grant uses. Drop it, then
-	// upgrade the wt1 row: the wt2 sibling is revoked in the same transaction.
+	// The other session holds no claim. Upgrade the one automatic row. The
+	// upgrade clears the key and keeps the ambiguous display path.
 	call(t, s, "release", releaseAll(other))
 	up := call(t, s, "claim", claimRequest(a, "upgrade-ok", "a.go", "exact"))
 	rows := liveClaims(t, s, repo)
-	if len(rows) != 1 || rows[0].origin != "explicit" || rows[0].key.Valid || rows[0].wpath.String != "/repo/wt1" || rows[0].branch.String != "main" || rows[0].fence != number(up["fence"]) {
+	if len(rows) != 1 || rows[0].origin != "explicit" || rows[0].key.Valid || rows[0].wpath.String != ambiguousWorktree || rows[0].branch.Valid || rows[0].fence != number(up["fence"]) {
 		t.Fatalf("upgrade: %+v", rows)
 	}
 	var revoked int
-	if err := s.db.QueryRow("SELECT COUNT(*) FROM Claim WHERE execution_id=? AND origin='auto' AND revoked_ms IS NOT NULL AND path='a.go'", a.ExecutionID).Scan(&revoked); err != nil || revoked != 1 {
-		t.Fatal("sibling was not revoked", revoked, err)
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM Claim WHERE execution_id=? AND origin='auto' AND revoked_ms IS NOT NULL AND path='a.go'", a.ExecutionID).Scan(&revoked); err != nil || revoked != 0 {
+		t.Fatal("upgrade revoked a sibling", revoked, err)
 	}
 	// The same Execution reuses its explicit claim from any checkout. That reuse
 	// does not grant the revoked automatic sibling again.
@@ -306,7 +295,7 @@ func TestNewExplicitGrantRevokesAnOtherWorktreeAutomaticRow(t *testing.T) {
 	}
 	grant := call(t, s, "claim", claimRequest(a, "wide", "a.go", "exact"))
 	rows := liveClaims(t, s, repo)
-	if len(rows) != 1 || rows[0].origin != "explicit" || rows[0].key.Valid || rows[0].wpath.String != "/repo/wt1" || rows[0].fence != number(grant["fence"]) {
+	if len(rows) != 1 || rows[0].origin != "explicit" || rows[0].key.Valid || rows[0].wpath.String != "/repo/wt2" || rows[0].fence != number(grant["fence"]) {
 		t.Fatalf("new explicit grant: %+v", rows)
 	}
 	if waiterCount(t, s) != 1 || woken(t, s, waiter) != 0 {
@@ -326,14 +315,13 @@ func TestGroupedRenameGrantsBothEndsOrNeither(t *testing.T) {
 	other, _ := scopeSession(t, s, "", "other", "/repo/wt3", "dev:3", "third")
 	call(t, s, "touch", touchRequest(other, "end", "new.go"))
 	grouped := call(t, s, "touch_files", filesTouch(a, "see-other", wtGroup("/repo/wt1", "dev:1", "main", "new.go")))
-	groupedNotes, _ := grouped["advisories"].([]map[string]any)
-	if grouped["action"] != "allow" || len(groupedNotes) != 1 || len(grouped["granted"].([]map[string]any)) != 1 {
+	if grouped["action"] != "deny" || grouped["advisories"] != nil || len(grouped["granted"].([]map[string]any)) != 0 {
 		t.Fatal(grouped)
 	}
 	renamed := touchRequest(a, "rename", "old.go")
 	renamed.RenameFrom, renamed.RenameTo = "old.go", "new.go"
 	got := call(t, s, "touch", renamed)
-	if got["action"] != "allow" || len(got["granted"].([]string)) != 2 || got["advisories"] == nil {
+	if got["action"] != "deny" || len(got["granted"].([]string)) != 0 || got["advisories"] != nil {
 		t.Fatal(got)
 	}
 	call(t, s, "claim", claimRequest(other, "real", "blocked.go", "exact"))
@@ -375,7 +363,7 @@ func TestRepositoryPolicyDoesNotCrossASubmoduleBoundary(t *testing.T) {
 		t.Fatal(got)
 	}
 	call(t, s, "touch", touchRequest(child, "lib", "lib.go"))
-	if got := call(t, s, "touch", touchRequest(child2, "lib2", "lib.go")); got["action"] != "allow" || got["advisories"] == nil {
+	if got := call(t, s, "touch", touchRequest(child2, "lib2", "lib.go")); got["action"] != "deny" || got["advisories"] != nil {
 		t.Fatal(got)
 	}
 }
@@ -393,17 +381,16 @@ func TestShellReleaseAndRenewalFollowScope(t *testing.T) {
 			call(t, s, "claim", claimRequest(a, "explicit", "q.go", "exact"))
 			call(t, s, "touch", touchRequest(other, "theirs", "r.go"))
 			setScope(t, s, repo, scope)
-			// The status checkout is the session root, so renewal reuses that key
-			// under worktree and the later fence under repository. Neither scope
-			// inserts a third row for a path this Execution already holds.
+			// Neither stored scope inserts a second row. Renewal keeps the one
+			// ambiguous claim, and release drops it whichever value is stored.
 			a.Kind, a.Status = "before", map[string]string{}
 			call(t, s, "reconcile", a)
 			a.Kind, a.Status = "after", map[string]string{"p.go": " M"}
 			out := call(t, s, "reconcile", a)
 			claimed, _ := out["claimed"].([]string)
 			rows := claimsOn(liveClaims(t, s, repo), "p.go")
-			if len(claimed) != 1 || claimed[0] != "p.go" || len(rows) != 2 {
-				t.Fatalf("shell renewal changed the row count: %v %+v", out, rows)
+			if len(claimed) != 1 || claimed[0] != "p.go" || len(rows) != 1 || rows[0].key.Valid {
+				t.Fatalf("shell renewal changed the row: %v %+v", out, rows)
 			}
 			a.Kind, a.Status = "before", map[string]string{"p.go": " M", "q.go": " M", "r.go": " M"}
 			call(t, s, "reconcile", a)
@@ -414,11 +401,8 @@ func TestShellReleaseAndRenewalFollowScope(t *testing.T) {
 			if len(q) != 1 || q[0].origin != "explicit" || len(r) != 1 || r[0].exec == a.ExecutionID {
 				t.Fatalf("release touched an explicit or foreign claim: %+v", left)
 			}
-			if scope == "worktree" && len(p) != 1 {
-				t.Fatalf("worktree release was path-wide: %+v", p)
-			}
-			if scope == "repository" && len(p) != 0 {
-				t.Fatalf("repository release left a row: %+v", p)
+			if len(p) != 0 {
+				t.Fatalf("%s release left a row: %+v", scope, p)
 			}
 		})
 	}
@@ -433,8 +417,7 @@ func TestCheckPathsReportsAnExemptOverlapAsAnAdvisory(t *testing.T) {
 	bare := scopeSessionOnly(t, s, "bare")
 	call(t, s, "touch", touchRequest(bare, "legacy", "legacy.go"))
 	exempt := call(t, s, "check", Request{Host: "other", Cwd: "/repo/wt2", Worktree: "/repo/wt2", WorktreeID: "dev:2", RemoteURL: scopeRemote, RootCommit: "root", Paths: []string{"src/api.go"}})
-	advisories, _ := exempt["advisories"].([]map[string]any)
-	if exempt["message"] != "" || len(advisories) != 1 || len(exempt["conflicts"].([]map[string]any)) != 0 {
+	if exempt["message"] == "" || exempt["advisories"] != nil || len(exempt["conflicts"].([]map[string]any)) != 1 || exempt["claim_auto_scope"] != "repository" || exempt["claim_scope_note"] != worktreeScopeDisabled {
 		t.Fatal(exempt)
 	}
 	refused := call(t, s, "check", Request{Host: "other", Cwd: "/repo/wt2", Worktree: "/repo/wt2", RemoteURL: scopeRemote, RootCommit: "root", Paths: []string{"src/api.go"}})
@@ -466,20 +449,20 @@ func TestWaitAndReplayUseTheKeyOnlyUnderWorktree(t *testing.T) {
 	same, _ := scopeSession(t, s, "", "same", "/repo/wt1", "dev:1", "main")
 	other, _ := scopeSession(t, s, "", "other", "/repo/wt2", "dev:2", "other")
 	call(t, s, "touch", touchRequest(holder, "hold", "a.go"))
-	// Same key conflicts and waits. A different key is advisory and waits for nothing.
+	// Both checkouts conflict and wait. A stored worktree value does not make
+	// the other checkout advisory.
 	if got := call(t, s, "touch", touchRequest(same, "same", "a.go")); got["action"] != "deny" || waiterCount(t, s) != 1 {
 		t.Fatal(got)
 	}
-	if got := call(t, s, "touch", touchRequest(other, "other", "a.go")); got["action"] != "allow" || waiterCount(t, s) != 1 {
-		t.Fatal(got)
+	if got := call(t, s, "touch", touchRequest(other, "other", "a.go")); got["action"] != "deny" || got["advisories"] != nil || waiterCount(t, s) != 2 {
+		t.Fatal(got, waiterCount(t, s))
 	}
 	var sameKey string
 	if err := s.db.QueryRow("SELECT COALESCE(worktree_key,'') FROM Waiter WHERE execution_id=?", same.ExecutionID).Scan(&sameKey); err != nil || sameKey == "" {
 		t.Fatal("same-worktree wait lost its key", sameKey, err)
 	}
 	call(t, s, "release", releaseAll(holder))
-	// The other worktree's automatic claim does not keep the same-key waiter asleep.
-	if waiterCount(t, s) != 0 || woken(t, s, same) != 1 || woken(t, s, other) != 0 {
+	if waiterCount(t, s) != 0 || woken(t, s, same) != 1 || woken(t, s, other) != 1 {
 		t.Fatalf("wake waiters=%d same=%d other=%d", waiterCount(t, s), woken(t, s, same), woken(t, s, other))
 	}
 }
@@ -492,9 +475,11 @@ func TestFreedRewindExemptsOnlyTheWorktreePair(t *testing.T) {
 	waiter, _ := scopeSession(t, s, "", "waiter", "/repo/wt1", "dev:1", "main")
 	other, _ := scopeSession(t, s, "", "other", "/repo/wt2", "dev:2", "other")
 	freed := freeFor(t, s, holder, waiter, "a", "a.go")
-	call(t, s, "touch", touchRequest(other, "exempt", "a.go"))
-	if got := call(t, s, "monitor_cursor", waiter)["cursor"]; got != freed-1 {
-		t.Fatalf("exempt overlap blocked rewind: %v freed %d", got, freed)
+	if got := call(t, s, "touch", touchRequest(other, "covers", "a.go")); got["action"] != "allow" || got["advisories"] != nil {
+		t.Fatal(got)
+	}
+	if got := call(t, s, "monitor_cursor", waiter)["cursor"]; got == freed-1 {
+		t.Fatal("another checkout's claim did not block rewind")
 	}
 	// The other worktree holds the path, so the explicit claim is that session's
 	// upgrade. A null-key explicit row is never the exempt pair.
@@ -514,7 +499,7 @@ func TestFreedRewindExemptsOnlyTheWorktreePair(t *testing.T) {
 	if err := s.db.QueryRow("SELECT worktree_key FROM Event WHERE seq=?", nullEvent).Scan(&eventKey); err != nil || eventKey.Valid {
 		t.Fatal("null-key wait recorded a key", eventKey, err)
 	}
-	call(t, s, "touch", touchRequest(other, "covers", "b.go"))
+	call(t, s, "touch", touchRequest(other, "covers-b", "b.go"))
 	if got := call(t, s, "monitor_cursor", legacy)["cursor"]; got == nullEvent-1 {
 		t.Fatal("null-key event was treated as worktree-scoped")
 	}
@@ -552,11 +537,8 @@ func TestTookClearsOnlyTheMatchingKeyUnderWorktree(t *testing.T) {
 			if err := s.db.QueryRow("SELECT COUNT(*) FROM Waiter WHERE execution_id=? AND path_key='free.go'", a.ExecutionID).Scan(&left); err != nil {
 				t.Fatal(err)
 			}
-			if scope == "worktree" && left != 1 {
-				t.Fatal("worktree took cleared a different key")
-			}
-			if scope == "repository" && left != 0 {
-				t.Fatal("repository took kept a keyed waiter")
+			if left != 0 {
+				t.Fatalf("%s took kept a keyed waiter", scope)
 			}
 			if _, err := s.db.Exec("INSERT INTO Waiter(execution_id,repository_id,path_key,kind,expires_ms,worktree_key) VALUES(?,?,'next.go','exact',?,?)", a.ExecutionID, repo, until, key); err != nil {
 				t.Fatal(err)
@@ -575,21 +557,13 @@ func TestReplayOfAGroupedTouchUsesTheGrantKey(t *testing.T) {
 	repo := ao["repository_id"].(string)
 	setScope(t, s, repo, "worktree")
 	req := filesTouch(a, "both", wtGroup("/repo/wt1", "dev:1", "main", "a.go"), wtGroup("/repo/wt2", "dev:2", "other", "a.go"))
-	if len(call(t, s, "touch_files", req)["granted"].([]map[string]any)) != 2 {
-		t.Fatal("two checkouts did not both grant")
+	granted := call(t, s, "touch_files", req)["granted"].([]map[string]any)
+	if len(granted) != 1 {
+		t.Fatal("two checkouts of one path granted twice", granted)
 	}
-	var wt1 int64
-	if err := s.db.QueryRow("SELECT fence FROM Claim WHERE worktree_path=? AND revoked_ms IS NULL", "/repo/wt1").Scan(&wt1); err != nil {
+	if _, err := s.db.Exec("UPDATE Claim SET revoked_ms=1 WHERE fence=?", granted[0]["fence"]); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := s.db.Exec("UPDATE Claim SET revoked_ms=1 WHERE fence=?", wt1); err != nil {
-		t.Fatal(err)
-	}
-	setScope(t, s, repo, "repository")
-	if got := call(t, s, "touch_files", req); got["action"] != "allow" {
-		t.Fatal("repository replay ignored the surviving checkout", got)
-	}
-	setScope(t, s, repo, "worktree")
 	expectError(t, s, "touch_files", req, "lost")
 }
 
@@ -606,11 +580,7 @@ func TestPathIdentityIsUnchangedByTheScope(t *testing.T) {
 			b, _ := scopeSession(t, s, "", "b", "/repo/wt2", "dev:2", "other")
 			call(t, s, "touch", touchRequest(a, "case", "SRC/A.go"))
 			got := call(t, s, "touch", touchRequest(b, "case2", "src/a.go"))
-			want := "deny"
-			if scope == "worktree" {
-				want = "allow"
-			}
-			if got["action"] != want {
+			if got["action"] != "deny" || got["advisories"] != nil {
 				t.Fatalf("%s case fold: %v", scope, got)
 			}
 			boundary := call(t, s, "touch", touchRequest(b, "boundary", "src2/a.go"))
@@ -667,7 +637,7 @@ func TestTwoHostsGetDifferentKeysAndMayBothHoldAnAutomaticClaim(t *testing.T) {
 	call(t, s, "release", releaseAll(wsl))
 	setScope(t, s, repo, "worktree")
 	call(t, s, "touch", touchRequest(wsl, "wsl2", "a.go"))
-	if got := call(t, s, "touch", touchRequest(win, "win2", "a.go")); got["action"] != "allow" || got["advisories"] == nil {
+	if got := call(t, s, "touch", touchRequest(win, "win2", "a.go")); got["action"] != "deny" || got["advisories"] != nil {
 		t.Fatal(got)
 	}
 }
@@ -692,7 +662,7 @@ func TestConcurrentGrantsStayExclusiveExceptForTheExemptPair(t *testing.T) {
 		winners            int
 	}{
 		{"repository", "dev:1", "dev:2", 1},
-		{"worktree", "dev:1", "dev:2", 2},
+		{"worktree", "dev:1", "dev:2", 1},
 		{"worktree", "dev:same", "dev:same", 1},
 	} {
 		t.Run(tc.scope+"/"+tc.left, func(t *testing.T) {
@@ -817,9 +787,7 @@ func TestAGroupedClaimRecordsAndShowsItsCheckoutBranch(t *testing.T) {
 	}
 	incoming, _ := scopeSession(t, s, "", "b", "/repo/wt2", "dev:2", "side")
 	got := call(t, s, "touch", touchRequest(incoming, "overlap", "a.go"))
-	notes, _ := got["advisories"].([]map[string]any)
-	message, _ := got["message"].(string)
-	if got["action"] != "allow" || len(notes) != 1 || notes[0]["branch"] != "feature" || !strings.Contains(message, "on branch feature.") || strings.Contains(message, "on branch main.") {
+	if got["action"] != "deny" || got["advisories"] != nil {
 		t.Fatal(got)
 	}
 	var shown string
@@ -863,11 +831,9 @@ func TestAdvisoryNamesAnUnknownBranchAndKeepsTheIgnoredNote(t *testing.T) {
 	call(t, s, "touch", touchRequest(held, "held", "a.go"))
 	got := call(t, s, "touch", touchRequest(incoming, "incoming", "a.go", "go.sum"))
 	message, _ := got["message"].(string)
-	if got["action"] != "allow" || !strings.Contains(message, "on branch unknown.") || !strings.Contains(message, "ignored paths are advisory only") || !strings.HasPrefix(message, "Iris: a.go is also auto-claimed") {
+	ignored, _ := got["ignored"].([]string)
+	if got["action"] != "deny" || got["advisories"] != nil || strings.Contains(message, "also auto-claimed") || strings.Contains(message, "allows overlapping") || len(ignored) != 1 || ignored[0] != "go.sum" {
 		t.Fatal(got)
-	}
-	if !strings.Contains(message, "This repository allows overlapping automatic claims across worktrees") {
-		t.Fatal(message)
 	}
 }
 
@@ -890,8 +856,9 @@ func TestShellAutoClaimSkipsANullKeyAndTakesAnExemptPath(t *testing.T) {
 		claimed[p] = true
 	}
 	legacy := claimsOn(liveClaims(t, s, repo), "legacy.go")
-	if !claimed["held.go"] || claimed["legacy.go"] || len(claimsOn(liveClaims(t, s, repo), "held.go")) != 2 || len(legacy) != 1 || legacy[0].key.Valid {
-		t.Fatalf("shell claim: %v legacy %+v", out, legacy)
+	heldRows := claimsOn(liveClaims(t, s, repo), "held.go")
+	if claimed["held.go"] || !claimed["legacy.go"] || len(heldRows) != 1 || len(legacy) != 1 || legacy[0].key.Valid || !strings.Contains(messageOf(out), "Shell edit detected") {
+		t.Fatalf("shell claim: %v held %+v legacy %+v", out, heldRows, legacy)
 	}
 }
 
@@ -940,13 +907,12 @@ func TestGuardClassificationFollowsTheClaimKey(t *testing.T) {
 	same = call(t, s, "check", scopeCheck("host", "/repo/wt1", "dev:1", "a.go"))
 	other = call(t, s, "check", scopeCheck("host", "/repo/wt2", "dev:2", "a.go"))
 	crossHost := call(t, s, "check", scopeCheck("windows", "/repo/wt2", "dev:2", "a.go"))
-	if messageOf(same) != "" || same["advisories"] != nil {
-		t.Fatal("same key was not this checkout", same)
+	if messageOf(same) != "" || same["advisories"] != nil || same["claim_scope_note"] != worktreeScopeDisabled {
+		t.Fatal("holder checkout was refused", same)
 	}
 	for _, got := range []map[string]any{other, crossHost} {
-		notes, _ := got["advisories"].([]map[string]any)
-		if messageOf(got) != "" || len(notes) != 1 || len(got["conflicts"].([]map[string]any)) != 0 {
-			t.Fatal("different key was a conflict", got)
+		if messageOf(got) == "" || got["advisories"] != nil || len(got["conflicts"].([]map[string]any)) != 1 {
+			t.Fatal("another checkout was advisory", got)
 		}
 	}
 	missing := call(t, s, "check", scopeCheck("host", "/repo/wt2", "", "a.go"))
@@ -981,16 +947,15 @@ func TestGuardClassificationFollowsTheClaimKey(t *testing.T) {
 		t.Fatal(err)
 	}
 	displayed := call(t, s, "check", scopeCheck("host", "/repo/wt1", "dev:1", "shown.go"))
-	if messageOf(displayed) == "" || displayed["advisories"] != nil {
-		t.Fatal("null-key auto with a display path was skipped or exempt", displayed)
+	if messageOf(displayed) != "" || displayed["advisories"] != nil {
+		t.Fatal("the holder's checkout was refused", displayed)
 	}
 
 	call(t, s, "touch", touchRequest(held, "mix-auto", "mix.go"))
 	call(t, s, "claim", claimRequest(held, "mix-explicit", "real.go", "exact"))
 	mixed := call(t, s, "check", scopeCheck("host", "/repo/wt2", "dev:2", "mix.go", "real.go"))
-	notes, _ := mixed["advisories"].([]map[string]any)
-	if messageOf(mixed) == "" || len(notes) != 1 || len(mixed["conflicts"].([]map[string]any)) != 1 {
-		t.Fatal("mixed advisory and conflict", mixed)
+	if messageOf(mixed) == "" || mixed["advisories"] != nil || len(mixed["conflicts"].([]map[string]any)) != 2 {
+		t.Fatal("another checkout was not a conflict", mixed)
 	}
 }
 
@@ -1010,15 +975,14 @@ func TestSubmoduleGuardRefusalFollowsTheOwningCheckout(t *testing.T) {
 		t.Fatal("repository policy allowed the submodule commit", refused)
 	}
 	setScope(t, s, subRepo, "worktree")
-	if got := call(t, s, "check", ask); messageOf(got) != "" || got["advisories"] != nil || len(got["conflicts"].([]map[string]any)) != 0 {
-		t.Fatal("same submodule checkout was refused", got)
+	if got := call(t, s, "check", ask); messageOf(got) == "" || got["advisories"] != nil || got["claim_auto_scope"] != "repository" || got["claim_scope_note"] != worktreeScopeDisabled {
+		t.Fatal("a submodule checkout of a superproject claim was allowed", got)
 	}
 	ask.WorktreeID = "dev:other"
 	ask.Worktree, ask.Cwd = "/src/frontend-wt", "/src/frontend-wt"
 	got := call(t, s, "check", ask)
-	notes, _ := got["advisories"].([]map[string]any)
-	if messageOf(got) != "" || len(notes) != 1 {
-		t.Fatal("other submodule checkout was a conflict", got)
+	if messageOf(got) == "" || got["advisories"] != nil {
+		t.Fatal("other submodule checkout was advisory", got)
 	}
 }
 
@@ -1038,15 +1002,8 @@ func TestShellRendersAnAdvisoryAndKeepsARealConflict(t *testing.T) {
 			if !strings.Contains(text, "Shell edit detected") || !strings.Contains(text, "cannot undo") {
 				t.Fatal(out)
 			}
-			if scope == "worktree" {
-				notes, _ := out["advisories"].([]map[string]any)
-				if len(notes) != 1 || !strings.Contains(text, "also auto-claimed") || len(out["claimed"].([]string)) != 1 {
-					t.Fatal(out)
-				}
-				return
-			}
 			if _, ok := out["advisories"]; ok || strings.Contains(text, "also auto-claimed") || len(out["claimed"].([]string)) != 0 {
-				t.Fatal("repository shell took or advised a claimed path", out)
+				t.Fatalf("%s shell took or advised a claimed path: %v", scope, out)
 			}
 		})
 	}
@@ -1098,7 +1055,7 @@ func TestExplicitFoldStaysInsideTheSubmodule(t *testing.T) {
 	fe1 := ClaimGroup{Worktree: "/src/snapper/frontend", WorktreeID: "dev:fe1", RemoteURL: frontendRemote, RootCommit: "frontend-root", Branch: "main", Paths: []string{"src/a.ts"}}
 	fe2 := ClaimGroup{Worktree: "/src/snapper/frontend-wt", WorktreeID: "dev:fe2", RemoteURL: frontendRemote, RootCommit: "frontend-root", Branch: "side", Paths: []string{"src/a.ts"}}
 	granted := call(t, s, "touch_files", filesTouch(parent, "both", fe1, fe2))
-	if granted["action"] != "allow" || len(granted["granted"].([]map[string]any)) != 2 {
+	if granted["action"] != "allow" || len(granted["granted"].([]map[string]any)) != 1 {
 		t.Fatal(granted)
 	}
 	for _, g := range granted["granted"].([]map[string]any) {
@@ -1121,8 +1078,8 @@ func TestExplicitFoldStaysInsideTheSubmodule(t *testing.T) {
 		t.Fatalf("submodule fold: %+v", rows)
 	}
 	var revoked int
-	if err := s.db.QueryRow("SELECT COUNT(*) FROM Claim WHERE repository_id=? AND origin='auto' AND path='src/a.ts' AND revoked_ms IS NOT NULL", childRepo).Scan(&revoked); err != nil || revoked != 1 {
-		t.Fatal("sibling was not revoked", revoked, err)
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM Claim WHERE repository_id=? AND origin='auto' AND path='src/a.ts' AND revoked_ms IS NOT NULL", childRepo).Scan(&revoked); err != nil || revoked != 0 {
+		t.Fatal("upgrade revoked a sibling", revoked, err)
 	}
 	superRows := claimsOn(liveClaims(t, s, parentRepo), "src/a.ts")
 	if len(superRows) != 1 || superRows[0].origin != "auto" || !superRows[0].key.Valid {
@@ -1145,17 +1102,17 @@ func TestExplicitFoldRevokesCaseFoldedSiblings(t *testing.T) {
 	}
 	setScope(t, s, repo, "worktree")
 	call(t, s, "touch_files", filesTouch(a, "both", wtGroup("/repo/wt1", "dev:1", "main", "A.go"), wtGroup("/repo/wt2", "dev:2", "other", "a.go")))
-	if len(liveClaims(t, s, repo)) != 2 {
-		t.Fatalf("case siblings collapsed: %+v", liveClaims(t, s, repo))
+	if len(liveClaims(t, s, repo)) != 1 {
+		t.Fatalf("case siblings did not collapse: %+v", liveClaims(t, s, repo))
 	}
 	grant := call(t, s, "claim", claimRequest(a, "wide", "a.go", "exact"))
 	rows := liveClaims(t, s, repo)
 	if len(rows) != 1 || rows[0].origin != "explicit" || rows[0].path != "A.go" || rows[0].key.Valid || rows[0].fence != number(grant["fence"]) {
-		t.Fatalf("fold kept both spellings: %+v", rows)
+		t.Fatalf("upgrade kept a second spelling: %+v", rows)
 	}
-	var sibling string
-	if err := s.db.QueryRow("SELECT path FROM Claim WHERE repository_id=? AND origin='auto' AND revoked_ms IS NOT NULL", repo).Scan(&sibling); err != nil || sibling != "a.go" {
-		t.Fatal("revoked sibling", sibling, err)
+	var sibling int
+	if err := s.db.QueryRow("SELECT COUNT(*) FROM Claim WHERE repository_id=? AND origin='auto' AND revoked_ms IS NOT NULL", repo).Scan(&sibling); err != nil || sibling != 0 {
+		t.Fatal("upgrade revoked a sibling", sibling, err)
 	}
 }
 

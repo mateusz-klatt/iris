@@ -979,11 +979,16 @@ func claimScopeLine(ctx context.Context, base, token, host, dir string, hc *http
 	defer func() { _ = res.Body.Close() }()
 	var out struct {
 		Scope *string `json:"claim_auto_scope"`
+		Note  string  `json:"claim_scope_note"`
 	}
 	if res.StatusCode != http.StatusOK || json.NewDecoder(res.Body).Decode(&out) != nil || out.Scope == nil {
 		return claimScopeText("")
 	}
-	return claimScopeText(*out.Scope)
+	line := claimScopeText(*out.Scope)
+	if out.Note != "" {
+		line += " " + out.Note
+	}
+	return line
 }
 
 // claimScopeUnasked is the scope line when doctor did not ask the hub.
@@ -1001,14 +1006,14 @@ func claimScopeUnasked(dir string) string {
 }
 
 // claimScopeText is the human line after "claim auto scope: ".
-// worktree says what the opt-in means and what it cannot do. It is advice about
-// the policy, not a claim that Iris still prevents those collisions.
+// worktree is not enabled in this release. The line says so. It does not
+// describe an exemption, because this hub does not grant one.
 func claimScopeText(scope string) string {
 	switch scope {
 	case "repository":
 		return "repository. Automatic claims apply across every worktree and branch of this repository. An explicit claim does too."
 	case "worktree":
-		return "worktree. Cross-worktree automatic overlaps are advisory: the edit is allowed, and the overlap can meet immediately in a shared filesystem tree or surface at rebase or merge. Explicit claims stay repository-wide. A claim with no worktree key stays repository-wide. An advisory is information, not enforcement: it does not make concurrent edits safe, resolve their contents or prove that the work is disjoint. The same directory seen from two hosts gets two keys, so those automatic claims become advisory. This covers every worktree in the repository, including a human's or an unrelated agent's, not only one coordinator's delegates."
+		return "worktree claim scope is not enabled in this release. Automatic claims stay repository-wide."
 	default:
 		return "unknown. The hub did not report claim.auto_scope for this checkout, so this does not assume repository or worktree."
 	}

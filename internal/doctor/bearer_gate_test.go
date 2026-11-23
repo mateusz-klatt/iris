@@ -170,10 +170,14 @@ func TestDoctorShowsClaimScopeForHTTPSAndLoopbackHTTP(t *testing.T) {
 			if !res.HubUp || !res.TokenOK || !res.Stored || res.ExitCode() != 0 {
 				t.Fatalf("up=%v token=%v stored=%v exit=%d detail=%s tokenDetail=%s store=%s", res.HubUp, res.TokenOK, res.Stored, res.ExitCode(), res.HubDetail, res.TokenDetail, res.StoreError)
 			}
-			if !strings.HasPrefix(res.ClaimScope, tc.scope+".") || !strings.Contains(res.Format(), "claim auto scope: "+tc.scope+".") {
+			want := tc.scope + "."
+			if tc.scope == "worktree" {
+				want = "worktree claim scope is not enabled in this release"
+			}
+			if !strings.HasPrefix(res.ClaimScope, want) || !strings.Contains(res.Format(), "claim auto scope: "+want) {
 				t.Fatalf("%q\n%s", res.ClaimScope, res.Format())
 			}
-			if tc.scope == "worktree" && !strings.Contains(res.Format(), "not enforcement") {
+			if tc.scope == "worktree" && !strings.Contains(res.Format(), "Automatic claims stay repository-wide.") {
 				t.Fatal(res.Format())
 			}
 			if guardPosts != 1 {

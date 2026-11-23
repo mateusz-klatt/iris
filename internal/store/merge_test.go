@@ -198,10 +198,14 @@ func TestMergeRefusesDifferentPoliciesAndContacts(t *testing.T) {
 		t.Fatal(err)
 	}
 	beforeScope := databaseState(t, s)
-	expectError(t, s, "merge", mergeRequest(from, into, true), "conflict")
-	expectError(t, s, "merge", mergeRequest(from, into, false), "conflict")
+	// A stored worktree value is repository in this release, so it matches the
+	// default and a dry run still writes nothing.
+	scoped := call(t, s, "merge", mergeRequest(from, into, true))
+	if scoped["from_repository"].(map[string]any)["auto_claim_scope"] != "repository" || scoped["into_repository"].(map[string]any)["auto_claim_scope"] != "repository" {
+		t.Fatal(scoped)
+	}
 	if databaseState(t, s) != beforeScope {
-		t.Fatal("scope refusal changed records")
+		t.Fatal("dry run changed records")
 	}
 	if _, err := s.db.Exec("UPDATE Repository SET auto_claim_scope='worktree' WHERE id=?", into); err != nil {
 		t.Fatal(err)
@@ -219,8 +223,8 @@ func TestMergeRefusesDifferentPoliciesAndContacts(t *testing.T) {
 		t.Fatal("destination contact was replaced", plan)
 	}
 	for _, side := range []string{"from_repository", "into_repository"} {
-		if plan[side].(map[string]any)["auto_claim_scope"] != "worktree" {
-			t.Fatal("merge report omitted the claim scope", plan[side])
+		if plan[side].(map[string]any)["auto_claim_scope"] != "repository" {
+			t.Fatal("merge report treated a stored worktree value as enabled", plan[side])
 		}
 	}
 }
