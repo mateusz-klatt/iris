@@ -84,6 +84,43 @@ func TestClientMismatchDisablesEveryBindingRoute(t *testing.T) {
 	}
 }
 
+func TestCheckClientCursorEvidenceOutranksInheritedClaudeSession(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		ancestor proc.Ancestor
+		markers  bool
+	}{
+		{name: "cursor ancestor and environment", ancestor: proc.Ancestor{PID: 42, StartMS: 7, Name: "cursor-agent"}, markers: true},
+		{name: "cursor environment only", ancestor: proc.Ancestor{PID: 42, StartMS: 7, Name: "helper"}, markers: true},
+		{name: "cursor ancestor only", ancestor: proc.Ancestor{PID: 42, StartMS: 7, Name: "cursor-agent"}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h := &scriptedHub{}
+			env := map[string]string{"CLAUDE_CODE_SESSION_ID": "inherited-parent-claude"}
+			if tc.markers {
+				env["CURSOR_PROJECT_DIR"] = "/scratch/project"
+				env["CURSOR_VERSION"] = "2026.11.22-e9042b2"
+			}
+			r := resolverFor(t, h, "claude", env, tc.ancestor)
+			var observed []string
+			r.Observe = func(text string) { observed = append(observed, text) }
+
+			mismatched := r.CheckClient()
+			_, err := r.Resolve(context.Background(), "")
+			if !mismatched || !IsCode(err, "client_mismatch") {
+				t.Errorf("inherited session escaped the Cursor lockout: mismatched %v, resolve error %v", mismatched, err)
+			}
+			if len(h.bound) != 0 || h.session != nil {
+				t.Errorf("cross-loaded shim reached the hub: binds %v, registration %+v", h.bound, h.session)
+			}
+			want := []string{ClientMismatchObservation("claude", "cursor")}
+			if !slices.Equal(observed, want) {
+				t.Errorf("observed %q, want %q", observed, want)
+			}
+		})
+	}
+}
+
 func TestCheckClientKeepsNativeAndUnknownAncestorsUsable(t *testing.T) {
 	t.Run("real Claude nested in Cursor", func(t *testing.T) {
 		h := &scriptedHub{}

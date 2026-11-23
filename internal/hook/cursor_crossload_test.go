@@ -2,54 +2,96 @@ package hook
 
 import (
 	"encoding/json"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/mateusz-klatt/iris/internal/hubclient"
 	"github.com/mateusz-klatt/iris/internal/proc"
 )
 
-// The two proofs that do not need CURSOR_CONVERSATION_ID. The stdin they accept
-// is the real capture in TestCursorCrossLoadedClaudePluginCapture.
-func TestCursorCrossLoadedClaudeHookNeedsNoConversationVariable(t *testing.T) {
+func TestCursorCrossLoadOverridesInheritedClaudeSession(t *testing.T) {
 	for _, tc := range []struct {
 		name     string
 		ancestor proc.Ancestor
 		markers  bool
 	}{
-		{name: "cursor ancestor", ancestor: proc.Ancestor{PID: 42, StartMS: 7, Name: "/opt/cursor-agent"}},
-		{name: "cursor environment", markers: true},
+		{name: "cursor ancestor and environment", ancestor: proc.Ancestor{PID: 42, StartMS: 7, Name: "/opt/cursor-agent"}, markers: true},
+		{name: "cursor environment only", markers: true},
+		{name: "cursor ancestor only", ancestor: proc.Ancestor{PID: 42, StartMS: 7, Name: "/opt/cursor-agent"}},
 	} {
-		t.Run(tc.name, func(t *testing.T) {
-			token := failureEnv(t)("IRIS_TOKEN_FILE")
-			calls := 0
-			out := Runner{
-				ClientName: "claude",
-				EventName:  "PreToolUse",
-				Stdin:      strings.NewReader(editPayload(ClientClaude, gitRepo(t))),
-				Getenv: func(key string) string {
-					values := map[string]string{"IRIS_TOKEN_FILE": token}
-					if tc.markers {
-						values["CURSOR_PROJECT_DIR"] = "/scratch/project"
-						values["CURSOR_VERSION"] = "2026.11.22-e9042b2"
-					}
-					return values[key]
-				},
-				Ancestor: func() (proc.Ancestor, error) { return tc.ancestor, nil },
-				Hub:      &countingHub{fn: func() { calls++ }},
-				after:    never,
-				logAfter: never,
-			}.Run()
-			assertAllow(t, ClientCursor, out)
-			if calls != 0 {
-				t.Fatalf("cross-loaded hook made %d hub calls without CURSOR_CONVERSATION_ID", calls)
-			}
-			got := observedOnly(t, token)
-			if got.Client != "claude" || got.Error != "cross-load: ran in a session of cursor" {
-				t.Fatalf("%+v", got)
-			}
-		})
+		for _, event := range []string{"SessionStart", "PreToolUse"} {
+			t.Run(tc.name+"/"+event, func(t *testing.T) {
+				token := failureEnv(t)("IRIS_TOKEN_FILE")
+				root := gitRepo(t)
+				payload := editPayload(ClientClaude, root)
+				if event == "SessionStart" {
+					payload = fmt.Sprintf(`{"session_id":"s1","cwd":%q,"hook_event_name":"SessionStart"}`, root)
+				}
+				calls := 0
+				out := Runner{
+					ClientName: "claude",
+					EventName:  event,
+					Stdin:      strings.NewReader(payload),
+					Getenv: func(key string) string {
+						values := map[string]string{
+							"IRIS_TOKEN_FILE":        token,
+							"CLAUDE_CODE_SESSION_ID": "inherited-parent-claude",
+						}
+						if tc.markers {
+							values["CURSOR_PROJECT_DIR"] = "/scratch/project"
+							values["CURSOR_VERSION"] = "2026.11.22-e9042b2"
+						}
+						return values[key]
+					},
+					Ancestor: func() (proc.Ancestor, error) { return tc.ancestor, nil },
+					Hub:      &countingHub{fn: func() { calls++ }},
+					after:    never,
+					logAfter: never,
+				}.Run()
+				assertAllow(t, ClientCursor, out)
+				if calls != 0 {
+					t.Fatalf("cross-loaded hook made %d hub calls with an inherited Claude session id", calls)
+				}
+				got := observedOnly(t, token)
+				if got.Client != "claude" || got.Error != "cross-load: ran in a session of cursor" {
+					t.Fatalf("%+v", got)
+				}
+			})
+		}
+	}
+}
+
+func TestNativeClaudeSessionWithSessionVariableStillRegisters(t *testing.T) {
+	root := gitRepo(t)
+	token := failureEnv(t)("IRIS_TOKEN_FILE")
+	var registered hubclient.SessionRequest
+	out := Runner{
+		ClientName: "claude",
+		EventName:  "SessionStart",
+		Stdin: strings.NewReader(fmt.Sprintf(
+			`{"session_id":"native-claude","cwd":%q,"hook_event_name":"SessionStart"}`, root,
+		)),
+		Getenv: func(key string) string {
+			return map[string]string{
+				"IRIS_TOKEN_FILE":        token,
+				"CLAUDE_CODE_SESSION_ID": "native-claude",
+			}[key]
+		},
+		Ancestor: func() (proc.Ancestor, error) {
+			return proc.Ancestor{PID: 43, StartMS: 8, Name: "claude"}, nil
+		},
+		Hub:      scriptHub{sess: &registered},
+		after:    never,
+		logAfter: never,
+	}.Run()
+	if out.Exit != 0 || !strings.Contains(string(out.Stdout), "Iris handle: ex") {
+		t.Fatalf("native Claude SessionStart: %+v", out)
+	}
+	if registered.Client != "claude" || registered.SessionID != "native-claude" || registered.ClientPID != 43 {
+		t.Fatalf("native Claude registration: %+v", registered)
 	}
 }
 

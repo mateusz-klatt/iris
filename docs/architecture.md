@@ -168,7 +168,8 @@ command path, never a versioned package directory.
 
 Grok loads Claude and Cursor hooks, plugins and MCP servers by default (measured), and Cursor
 exports `CLAUDE_PROJECT_DIR`. Environment variables also leak across nesting: a Copilot session
-started from a Claude session still carries `CLAUDE_CODE_SESSION_ID` (measured).
+started from a Claude session still carries `CLAUDE_CODE_SESSION_ID`, and Cursor's hook shell
+merges that inherited variable too (measured).
 
 So `--client` selects a parser, and the hook then confirms who is really running it. Environment
 markers alone are not proof: a profile can export them, and `GROK_HOOK_EVENT` is also set on
@@ -177,6 +178,7 @@ the session id on stdin, for example `GROK_SESSION_ID` equal to `sessionId`. Cur
 omits `CURSOR_CONVERSATION_ID` from a cross-loaded Claude hook, so Cursor is also confirmed by a
 nearest `cursor-agent` ancestor or by `CURSOR_PROJECT_DIR` together with `CURSOR_VERSION`. A nearest
 client ancestor matching the requested client keeps a real session nested inside another client native.
+An inherited `CLAUDE_CODE_SESSION_ID` never outranks Cursor's process or marker evidence.
 
 When a hook meant for one client runs under another, it prints the runner's allow output, exits
 0 and does not call the hub, whether or not the runner has its own integration. `iris doctor`
@@ -202,11 +204,13 @@ The Grok cell is the stdio MCP child. Grok's `monitor` shell does not inherit
 hook stored for that grok process ([ADR 025](adr/025-grok-stop-monitor.md)).
 
 At MCP startup, a recognized nearest client that does not match `--client` identifies a cross-loaded
-shim. Before any binding or generation-proof check, that shim refuses every rung, including an
-inherited execution or session id, and never registers or heartbeats. Its stdio server stays up;
-tool calls answer typed `client_mismatch` and direct the model to the running client's native Iris
-server. One observation goes to the log doctor reads. A real client nested inside another client
-still binds when its nearest client matches.
+shim. With no recognized nearest client, `CURSOR_PROJECT_DIR` together with `CURSOR_VERSION` also
+identifies Cursor; a recognized nearest client that matches `--client` keeps a real nested session
+native despite inherited markers. Cursor's process or marker evidence outranks an inherited
+`CLAUDE_CODE_SESSION_ID`. Before any binding or generation-proof check, a cross-loaded shim refuses
+every rung, including an inherited execution or session id, and never registers or heartbeats. Its
+stdio server stays up; tool calls answer typed `client_mismatch` and direct the model to the running
+client's native Iris server. One observation goes to the log doctor reads.
 
 `iris mcp` resolves its Execution at the first tool call, by this chain, and outside Codex and id
 mode also on its heartbeat tick (see below):
