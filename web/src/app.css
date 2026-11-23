@@ -2692,6 +2692,18 @@ html[data-flag-polyfill="true"] select {
   grid-column: 1 / -1;
 }
 
+/* Per-repository claim.auto_scope, inset like the filter row and claim rows. */
+.claim-scopes {
+  display: grid;
+  gap: 0.35rem;
+  border-bottom: 1px solid var(--line);
+  padding: 1rem 1.2rem;
+}
+
+.claim-scopes .claim-scope {
+  margin: 0;
+}
+
 .claim-filters {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

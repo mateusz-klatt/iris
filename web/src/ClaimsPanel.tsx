@@ -99,7 +99,7 @@ export function ClaimsPanel({
         <h2>{t("operator.claims")}</h2>
       </div>
       {projects.length === 0 ? null : (
-        <div aria-label={t("operator.claimAutoScope")}>
+        <div className="claim-scopes" role="region" aria-label={t("operator.claimAutoScope")}>
           {projects.map((repository) => (
             <ClaimScopeLine key={repository.id} name={repository.name === "" ? repository.id : repository.name} scope={repository.claim_auto_scope} />
           ))}
