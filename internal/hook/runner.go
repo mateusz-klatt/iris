@@ -421,6 +421,14 @@ func registrationProof(state *runState, ev Event, m Memory, retained int) (int, 
 		return retained, nil
 	}
 	generation, err := m.RecallGeneration(string(ev.Client), ev.SessionID)
+	if err == errEndedGeneration {
+		if retained == 0 {
+			return 0, err
+		}
+		// A request already sent can use the proof it saw only as its generation-zero
+		// retry floor. Preserve it for refusal diagnostics.
+		return max(retained, generation), nil
+	}
 	if err != nil {
 		note := RestoreFloorRefused
 		if files, ok := m.(fileMemory); ok && errors.Is(err, ErrInvalidGeneration) {

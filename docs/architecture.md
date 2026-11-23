@@ -258,14 +258,15 @@ correct attribution, not a security property.
 
 The session's hook is its registrar: one session is one Execution and one mailbox. An MCP server
 usually starts before the `SessionStart` hook has run, so when no rung finds the session its
-first bind keeps looking, with backoff, for 15 s. Only then, if it has no hook generation proof,
-can the shim register an MCP-only Execution so that messaging still works, for example in an
-untrusted folder. It needs a session it can name by id or as a single-session process. If
-the hook registers later after all, the shim's heartbeat finds the hook's Execution for the same
-client process, moves to it and ends its own, handing over the mail its stray mailbox received
-meanwhile, so a slow hook cannot leave the session split either. A first tool call that ends
-while the grace period runs is told Iris is still binding the session and to retry. After a loss
-the shim waits for an eligible binding or uses exact generation proof for reattachment (D9).
+first bind keeps looking, with backoff, for 15 s. After that grace period, a shim with neither
+hook generation proof nor a local `.ended` marker can register an MCP-only Execution so that
+messaging still works, for example in an untrusted folder. It needs a session it can name by id
+or as a single-session process. If the hook registers later, the shim's heartbeat finds the
+hook's Execution for the same client process, moves to it and ends its own, handing over the
+mail its stray mailbox received meanwhile, so a slow hook cannot leave the session split either.
+A first tool call that ends during the grace period asks the model to retry because Iris is still
+binding the session. After a loss the shim waits for an eligible binding or uses exact generation
+proof for reattachment (D9).
 A Codex root thread's shim in id mode waits the same grace period on its first bind. Id-mode
 shims never create Executions, adopt them or hand over mail, so this fallback and the adoption
 below belong to the chain above alone.
@@ -589,9 +590,9 @@ Notifications and digests carry the `kind` only.
 ### D8. Liveness comes from the MCP process
 
 A stdio MCP server normally follows the client process that launched it. `iris mcp` sends a
-heartbeat every 20 s for its positively bound Execution generation. In id mode (ADR 017), a Codex
-sub-agent's `iris mcp` renews nothing, and neither does a call that names a session other than its
-shim's.
+heartbeat every 20 s for its positively bound Execution generation, subject to the local `.ended`
+veto in D9. In id mode (ADR 017), a Codex sub-agent's `iris mcp` renews nothing, and neither does
+a call that names a session other than its shim's.
 Before renewing a fallback Execution, the client may look for the hook's Execution and hand over
 to it (D6). That attempt has a five-second deadline, separate from the heartbeat's five seconds,
 so a stalled lookup or handover cannot prevent lease renewal. An outage that also prevents the
@@ -683,10 +684,10 @@ Changes from the reference schema:
    claims still block others, but it may do nothing until it reattaches with the same session
    and generation, which clears the deadline and grants a lease in the new epoch. A heartbeat
    from `iris mcp` or `iris watch` carries that proof if the sender retains the binding, so those
-   idle sessions can reattach too. An unbound shim has no generation to send, and Codex id-mode
-   sub-agent and foreign-session lookups renew nothing. At the deadline, the recovering
-   Execution is lost. Repeated restarts cannot extend the window, because an existing deadline
-   is never moved, and an expired generation is never revived.
+   idle sessions can reattach too. An unbound shim needs the hook's live generation file to
+   reattach. Codex id-mode sub-agent and foreign-session lookups renew nothing. At the deadline,
+   the recovering Execution is lost. Repeated restarts cannot extend the window, because an
+   existing deadline is never moved, and an expired generation is never revived.
 
    A hook is a new process for every tool call, so it keeps the last generation for its session
    in a file beside the token and sends it as that proof. Without proof, a recovering session's
@@ -700,8 +701,9 @@ Changes from the reference schema:
    lost. With a heartbeating `iris mcp` that was one edit. An `iris mcp` binds on its first tool
    call, or, outside Codex and id mode, on its heartbeat tick (D6, ADR 027), and only a bound one
    heartbeats. When a bound `iris mcp` refreshes on a tool call and `/v1/bind` answers `lost`,
-   it immediately heartbeats with its exact remembered generation and retries `/v1/bind`, so a
-   recovering Execution reattaches on the tool call itself without waiting for the next 20 s tick.
+   it checks the local `.ended` veto, then heartbeats with its exact remembered generation and
+   retries `/v1/bind` if the heartbeat succeeds. That lets an eligible Execution reattach on the
+   tool call itself without waiting for the next 20 s tick.
    An unbound `iris mcp` (on a tool call or its heartbeat tick, excluding Codex id-mode sub-agents)
    may also read the hook's local generation memory for a positively identified, hook-registered
    session and send a reattach-only registration (`source: "shim"`, `generation > 0`): missing,
@@ -739,14 +741,18 @@ Changes from the reference schema:
    doctor output names the damaged file. It also names an `.ended` marker that contributed a
    generation or is damaged, and the `.ended` path when SessionEnd could not write that marker
    or take the sessions lock. Those paths stay in the local report. The hook refreshes readable
-   proof under the bounded session lock before sending it. A refusal can restore proof to a
-   missing file only above any ended generation recorded under the same lock. Generation writes
-   keep the highest proof and SessionEnd clears only matching proof. The shim and plain watch check same-session bindings against retained process
-   and disk proof, including the `.ended` marker left when SessionEnd clears ordinary proof, and
-   check disk proof before first-bind generation-zero fallback. A Codex
-   id-mode sub-agent checks disk proof for its native session during its one lookup. These
-   bindings fail when the session's proof file is unreadable or malformed. For
-   deployment order and empty-hub recovery, see the
+   proof under the bounded session lock before sending it. A readable marker vetoes hook
+   proof and delayed generation writes at or below its value. A refusal can restore proof to
+   a missing file only above the recorded end. Generation writes keep the highest proof and
+   SessionEnd clears only matching proof. The shim and plain watch
+   check same-session bindings against retained process proof and live hook-file proof. They
+   also read the local `.ended` marker alongside any live file. A marker recording G vetoes
+   bindings and heartbeats for G and earlier generations, even after a restore. An unbound
+   shim needs a live hook generation above G for reattachment. Either file blocks the
+   first-bind generation-zero fallback. A Codex id-mode lookup checks the named session's end
+   marker, and checks live proof for its native session. The client refuses binding on an
+   unreadable or malformed file and records the path for `iris doctor`. For deployment order and empty-hub
+   recovery, see the
    [ADR 006 addendum](adr/006-retention-and-restore.md#addendum-of-2026-11-22-the-restore-generation-floor).
 
    MCP `lost` answers give fixed, conditional recovery guidance at the shim boundary, without
@@ -1460,6 +1466,9 @@ On `modernc.org/sqlite`, with real concurrency:
   `lost` row; merge liveness shares this predicate without advancing the baseline. A hub stall
   longer than about 120 s since the last committed heartbeat still loses sessions.
 - Repeated restarts cannot extend recovery. An unattached Execution is lost at its deadline.
+- The shim and plain watch refuse bindings and heartbeats at or below the locally recorded
+  `.ended` generation. The marker alone cannot reattach a restored Execution or authorize a
+  first-bind generation-zero fallback.
 - While the newest retained Execution is ended, no generation-zero registration from a non-hook
   source, empty legacy source included, succeeds regardless of its retry floor. The hub trusts the
   host-token holder for that host's sessions and `source` is self-declared: this closes the fallback

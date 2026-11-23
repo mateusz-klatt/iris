@@ -49,9 +49,9 @@ not delete anything early to make room.
 increments the boot epoch. Every active Execution in the restored database enters recovery.
 It must reattach with its remembered generation inside the recovery window or become lost. A
 session whose host has moved on since the backup, to a newer generation, keeps its local proof
-and follows the restore floor addendum below. A monitor whose saved cursor
-is past the restored high-water mark gets a reset, as the events code already does for a cursor
-ahead of the hub.
+and follows the restore floor addendum below. That addendum also describes the veto a client
+applies when it recorded `SessionEnd` after the backup. A monitor whose saved cursor is past the
+restored high-water mark gets a reset, as the events code does for a cursor ahead of the hub.
 
 The restore procedure in `docs/deploy.md` is tested for real against a copy of production's backup,
 which the archive in the volume holds, and never against production itself. The test opens the
@@ -146,17 +146,17 @@ generation or restore checks.
 
 **What changes.**
 - **Bound `iris mcp` reattaches on a tool call.** When refreshing a cached binding gets `lost`
-  from `POST /v1/bind`, the shim immediately sends `POST /v1/executions/{id}/heartbeat` with its
-  exact remembered generation and retries `/v1/bind` once it reattaches, rather than failing the
-  call until the next 20 s tick.
+  from `POST /v1/bind`, the shim checks the local `.ended` veto before sending
+  `POST /v1/executions/{id}/heartbeat` with its exact remembered generation. It retries
+  `/v1/bind` once the heartbeat reattaches the Execution.
 - **Unbound `iris mcp` reads hook generation memory.** For a positively identified,
   hook-registered session (a Codex id-mode root, a client session environment variable, or a
   retained hook-registered session id after a prior loss; never a live `IRIS_EXECUTION` override,
   an explicit non-gone handle, or a Codex id-mode sub-agent), an unbound shim reads the hook's
-  local generation file beside the token and sends a reattach-only registration (`source: "shim"`,
-  `generation > 0`). Missing, malformed or mismatched memory never falls back to a `generation = 0`
-  registration, and the hub enforces `hook_seen_ms > 0` for `source: "shim"` registrations carrying
-  a non-zero generation.
+  live generation file beside the token and sends a reattach-only registration (`source: "shim"`,
+  `generation > 0`) only with proof above any local `.ended` generation. A failed reattachment
+  never falls back to a `generation = 0` registration, and the hub enforces `hook_seen_ms > 0`
+  for `source: "shim"` registrations carrying a non-zero generation.
 - **`iris watch` heartbeats immediately on reconnect and `reset`.** On reconnect after a drop and
   before fetching a `reset` snapshot, `iris watch` sends `POST /v1/executions/{id}/heartbeat` with
   `source: "watch"` immediately while keeping its periodic 20 s heartbeat and reconnect backoff.
@@ -192,8 +192,9 @@ A refused retry leaves the session unregistered by that hook. The hook records
 or reconciling the edit. A proofless edit against a recovering Execution is still deliberately
 denied under D9. Concurrent hooks keep the highest generation in the session file. A successful
 SessionEnd records the ended generation in a marker under the same lock and clears matching
-proof. The hook refreshes proof under that lock before sending it. A refusal can restore a
-missing file only above the ended generation. Idle pruning removes the marker after 30 days.
+proof. Under that lock, the hook refuses to use live proof or write a delayed registration
+reply at or below a readable marker. A refusal can restore a missing file only above the
+ended generation. Idle pruning removes the marker after 30 days.
 
 An unreadable or malformed generation file stops registration and binding, and an unreadable or
 malformed `.ended` marker stops `Forget` and proof restoration. A dangling symlink is unreadable,
@@ -205,22 +206,26 @@ the named file, verify you are connected to the intended hub and check the sessi
 history there. Archive the file only once you have confirmed the session can safely register
 without that proof.
 
-The MCP shim and plain watch use retained process and hook-file proof to reject a lower
-generation when binding the same session. An unreadable or malformed file also prevents that
-binding, including a Codex sub-agent's lookup of its own session. Hook-file proof blocks
-either client's first-bind generation-zero fallback. Eligible exact-generation heartbeats
-and shim reattachment still work during the 120 s recovery window.
+The MCP shim and plain watch use retained process proof and live hook-file proof to reject a
+lower generation for the same session. They read the `.ended` marker independently of that
+proof. A marker recording G vetoes binding and heartbeat for G and earlier generations,
+including cached bindings at G. A shim without a binding needs live hook-file proof above G
+to reattach. Eligible exact-generation heartbeats and shim reattachment still work during the
+120 s recovery window. A backup that predates `SessionEnd` can still show G in recovery. Its
+claims remain recovery reservations until the deadline if no eligible client reattaches. The
+veto depends on the marker kept on the client host.
 
-The proofless ENDED path is closed on both sides. Once SessionEnd clears the ordinary proof,
-`RecallBindingGeneration` treats its `.ended` marker, readable or damaged, as present proof and
-blocks the generation-zero fallback; damage keeps the existing local doctor observation. On
-registration, `source` must be exactly `hook`, `mcp`, `shim` or `watch`; empty or omitted remains
-valid as a legacy non-hook source. Other values and negative `retry_generation` get `bad_request`.
-A generation-zero registration whose newest Execution is `ended` and whose source is anything
-other than `hook`, empty included, gets `409 lost` with `highest_generation`, regardless of
-`retry_generation`. A registering hook still gets G+1 after SessionEnd. After `lost`, proofless
-non-hook registration still gets G+1 as before; this fix deliberately leaves LOST succession
-unchanged, which belongs to ADR 035.
+Either file blocks the first-bind generation-zero fallback, including a readable `.ended`
+marker on its own. The client refuses binding on an unreadable or malformed file and records
+the path for `iris doctor`. A Codex id-mode lookup checks the named session's end marker and
+applies the live-proof floor to its native session.
+
+On registration, `source` must be exactly `hook`, `mcp`, `shim` or `watch`. An empty or omitted
+source remains valid as a legacy non-hook source. Other values and negative `retry_generation`
+get `bad_request`. A generation-zero registration whose newest Execution is `ended` and whose
+source is anything other than `hook`, empty included, gets `409 lost` with `highest_generation`,
+regardless of `retry_generation`. A registering hook still gets G+1 after SessionEnd. After
+`lost`, proofless non-hook registration still gets G+1. ADR 035 covers post-window succession.
 
 The hub trusts the host-token holder for that host's sessions, and `source` is self-declared. This
 guard closes the fallback path of unmodified Iris clients and old or foreign clients using non-hook

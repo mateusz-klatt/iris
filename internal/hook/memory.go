@@ -30,6 +30,9 @@ type Memory interface {
 // session ends normally.
 const memoryAge = 30 * 24 * time.Hour
 
+// errEndedGeneration refuses a hook's stale proof before it can reactivate a restored session.
+var errEndedGeneration = &hubclient.Error{Code: "lost", Message: "remembered session generation has ended"}
+
 // fileMemory stores one small file per session beside the token, protected as the token is:
 // mode 0600 in a 0700 directory, and on Windows the token's owner-only DACL. So anyone who
 // can read it can read the token, which already grants everything the generation would.
@@ -82,10 +85,17 @@ func (m fileMemory) RecallGeneration(client, session string) (int, error) {
 	if err := m.underLock(func() {
 		var current int
 		current, readErr = readGeneration(path)
+		if readErr != nil {
+			return
+		}
 		// Another hook can write newer proof before we take the lock. A prune can also
 		// win the lock, in which case the proof we already read still belongs in the request.
-		if current >= generation {
-			generation = current
+		generation = max(generation, current)
+		if ended, _ := readGeneration(path + ".ended"); generation <= ended {
+			readErr = errEndedGeneration
+			return
+		}
+		if current == generation {
 			m.touchGeneration(path)
 		}
 	}); err != nil {
@@ -94,14 +104,15 @@ func (m fileMemory) RecallGeneration(client, session string) (int, error) {
 	return generation, readErr
 }
 
-// Remember keeps the higher proof when another hook already recorded a newer registration.
+// Remember keeps newer live proof and ignores replies for a generation another hook ended.
 func (m fileMemory) Remember(client, session string, generation int) {
 	if err := m.directory(); err != nil {
 		return
 	}
 	_ = m.underLock(func() {
 		path := m.name(client, session)
-		if current, err := readGeneration(path); err == nil && generation > 0 && generation >= current {
+		ended, _ := readGeneration(path + ".ended")
+		if current, err := readGeneration(path); err == nil && generation > ended && generation >= current {
 			_ = m.replace(path, strconv.Itoa(generation))
 		}
 	})

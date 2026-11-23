@@ -180,6 +180,22 @@ func TestEndMarkerGuardsPrunedProofAndAgesOut(t *testing.T) {
 	}
 }
 
+func TestEndMarkerVetoesDelayedRegistrationReplies(t *testing.T) {
+	m := newFileMemory(t)
+	m.Remember("claude", "s", 3)
+	m.Forget("claude", "s", 3)
+	for _, generation := range []int{2, 3} {
+		m.Remember("claude", "s", generation)
+		if got := m.Recall("claude", "s"); got != 0 {
+			t.Fatalf("a late G%d reply brought back G%d proof", generation, got)
+		}
+	}
+	m.Remember("claude", "s", 4)
+	if got, err := m.RecallGeneration("claude", "s"); got != 4 || err != nil {
+		t.Fatalf("newer hook registration proof = G%d, %v", got, err)
+	}
+}
+
 func TestForgetKeepsProofWhenEndMarkerCannotBeRecorded(t *testing.T) {
 	const (
 		client  = "claude"
