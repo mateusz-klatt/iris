@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -22,7 +23,6 @@ func TestClientMismatchDisablesEveryBindingRoute(t *testing.T) {
 	}{
 		{name: "cursor-agent", ancestor: "/opt/cursor-agent"},
 		{name: "agent alias with Cursor markers", ancestor: "agent", markers: true},
-		{name: "unrelated agent without Cursor markers", ancestor: "/opt/agent"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			requests := 0
@@ -108,7 +108,6 @@ func TestCheckClientCursorEvidenceOutranksInheritedClaudeSession(t *testing.T) {
 	}{
 		{name: "cursor ancestor and environment", ancestor: proc.Ancestor{PID: 42, StartMS: 7, Name: "cursor-agent"}, markers: true},
 		{name: "agent alias and environment before outer claude", markers: true, walk: true},
-		{name: "agent alias with empty Cursor environment before outer claude", walk: true},
 		{name: "cursor environment only", ancestor: proc.Ancestor{PID: 42, StartMS: 7, Name: "helper"}, markers: true},
 		{name: "cursor ancestor only", ancestor: proc.Ancestor{PID: 42, StartMS: 7, Name: "cursor-agent"}},
 	} {
@@ -169,6 +168,93 @@ func TestCheckClientKeepsNativeAndUnknownAncestorsUsable(t *testing.T) {
 		b, err := r.Resolve(context.Background(), "")
 		if err != nil || b.Rung != 2 || len(h.bound) != 1 || h.bound[0]["session_id"] != "native-claude" {
 			t.Fatalf("native Claude binding: %+v, %v, requests %v", b, err, h.bound)
+		}
+	})
+	t.Run("bare agent walks on to native Claude", func(t *testing.T) {
+		h := &scriptedHub{}
+		env := map[string]string{"CLAUDE_CODE_SESSION_ID": "native-claude"}
+		tree := map[int]proc.Snapshot{
+			10: {PID: 10, PPID: 9, Name: "iris"},
+			9:  {PID: 9, PPID: 2, Name: "agent"},
+			2:  {PID: 2, PPID: 1, Name: "claude"},
+		}
+		got, ok := proc.NearestFrom(10, func(pid int) (proc.Snapshot, bool) {
+			s, ok := tree[pid]
+			return s, ok
+		}, func(key string) string { return env[key] })
+		if !ok || got.Name != "claude" {
+			t.Fatalf("bare agent stopped the walk instead of reaching Claude: %+v, %v", got, ok)
+		}
+		r := resolverFor(t, h, "claude", env, proc.Ancestor(got))
+		if r.CheckClient() {
+			t.Fatal("a generic agent name without Cursor markers displaced native Claude")
+		}
+		b, err := r.Resolve(context.Background(), "")
+		if err != nil || b.Rung != 2 || len(h.bound) != 1 || h.bound[0]["session_id"] != "native-claude" {
+			t.Fatalf("native Claude after a bare agent: %+v, %v, requests %v", b, err, h.bound)
+		}
+	})
+	// Grok installs its own `agent` alias (~/.grok/bin/agent, the same binary as grok), so
+	// a native Grok shim can sit under a process named agent with no Cursor markers. It must
+	// keep binding as Grok rather than be refused as a cross-loaded Cursor shim.
+	t.Run("native Grok under its own agent alias binds as grok", func(t *testing.T) {
+		h := &scriptedHub{}
+		env := map[string]string{"GROK_SESSION_ID": "native-grok"}
+		r := resolverFor(t, h, "grok", env, proc.Ancestor{PID: 42, StartMS: 7, Name: "/home/user/.grok/bin/agent"})
+		if r.CheckClient() {
+			t.Fatal("native Grok under its agent alias was refused as another client")
+		}
+		b, err := r.Resolve(context.Background(), "")
+		if err != nil || b.Rung != 2 || len(h.bound) != 1 || h.bound[0]["session_id"] != "native-grok" {
+			t.Fatalf("native Grok binding under agent: %+v, %v, requests %v", b, err, h.bound)
+		}
+	})
+	// Grok started from a Cursor terminal inherits Cursor's marker pair. Cursor cross-loads
+	// Claude plugins only, so for a grok shim the pair is no evidence of Cursor.
+	t.Run("native Grok under agent with inherited Cursor markers binds as grok", func(t *testing.T) {
+		h := &scriptedHub{}
+		env := map[string]string{
+			"GROK_SESSION_ID":    "native-grok",
+			"CURSOR_PROJECT_DIR": "/outer/cursor/project",
+			"CURSOR_VERSION":     "2026.11.22-e9042b2",
+		}
+		r := resolverFor(t, h, "grok", env, proc.Ancestor{PID: 42, StartMS: 7, Name: "/home/user/.grok/bin/agent"})
+		if r.CheckClient() {
+			t.Fatal("inherited Cursor markers refused native Grok as a cross-loaded Cursor shim")
+		}
+		b, err := r.Resolve(context.Background(), "")
+		if err != nil || b.Rung != 2 || len(h.bound) != 1 || h.bound[0]["session_id"] != "native-grok" {
+			t.Fatalf("native Grok binding with inherited markers: %+v, %v, requests %v", b, err, h.bound)
+		}
+	})
+	// The shim's walk reads Cursor's markers only for Claude, so with an inherited pair a
+	// cursor shim under `agent` under grok still reaches grok, as v0.1.13 did.
+	t.Run("only a Claude shim walks with Cursor markers", func(t *testing.T) {
+		if reflect.ValueOf(AncestorFor("claude")).Pointer() != reflect.ValueOf(proc.Nearest).Pointer() {
+			t.Fatal("a Claude shim does not walk with the environment")
+		}
+		for _, client := range []string{"cursor", "grok", "codex", "copilot", "kimi", "antigravity"} {
+			if reflect.ValueOf(AncestorFor(client)).Pointer() != reflect.ValueOf(proc.NearestWithoutMarkers).Pointer() {
+				t.Fatalf("%s shim walks with Cursor markers", client)
+			}
+		}
+		env := map[string]string{"CURSOR_PROJECT_DIR": "/outer/cursor/project", "CURSOR_VERSION": "2026.11.22-e9042b2"}
+		tree := map[int]proc.Snapshot{
+			10: {PID: 10, PPID: 9, Name: "iris"},
+			9:  {PID: 9, PPID: 2, Name: "agent"},
+			2:  {PID: 2, PPID: 1, Name: "grok"},
+		}
+		get := func(pid int) (proc.Snapshot, bool) { s, ok := tree[pid]; return s, ok }
+		if got, ok := proc.NearestFrom(10, get, nil); !ok || got.Name != "grok" {
+			t.Fatalf("walk without markers stopped before grok: %+v, %v", got, ok)
+		}
+		if got, ok := proc.NearestFrom(10, get, func(k string) string { return env[k] }); !ok || got.Name != "agent" {
+			t.Fatalf("walk with markers did not stop at the Cursor agent alias: %+v, %v", got, ok)
+		}
+		h := &scriptedHub{}
+		r := resolverFor(t, h, "cursor", env, proc.Ancestor{PID: 2, StartMS: 7, Name: "grok"})
+		if !r.CheckClient() {
+			t.Fatal("a cursor shim under grok was not refused as a cross-load")
 		}
 	})
 	t.Run("unknown helper is not a mismatched client", func(t *testing.T) {

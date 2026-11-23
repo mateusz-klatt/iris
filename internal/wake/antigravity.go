@@ -77,7 +77,7 @@ func defaultAntigravityOptions() antigravityOptions {
 		getenv:           os.Getenv,
 		pinned:           hubclient.PinnedConfig{},
 		runtimeEnv:       hubclient.PinnedRuntimeEnv,
-		ancestor:         proc.Nearest,
+		ancestor:         proc.NearestWithoutMarkers,
 		lookup:           proc.Lookup,
 		executable:       proc.OpenExecutable,
 		terminate:        proc.Terminate,

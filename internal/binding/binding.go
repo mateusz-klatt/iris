@@ -132,7 +132,17 @@ type handover struct {
 func New(h *hubclient.Client, client string) *Resolver {
 	host, _ := os.Hostname()
 	cwd, _ := os.Getwd()
-	return &Resolver{Hub: h, Client: client, Host: host, CWD: cwd, Getenv: os.Getenv, Ancestor: proc.Nearest, Grace: 15 * time.Second}
+	return &Resolver{Hub: h, Client: client, Host: host, CWD: cwd, Getenv: os.Getenv, Ancestor: AncestorFor(client), Grace: 15 * time.Second}
+}
+
+// AncestorFor is the shim's ancestor walk for client. Cursor cross-loads Claude plugins only
+// (measured), so only a Claude shim reads Cursor's marker pair during the walk. Any other
+// client walks as v0.1.13 did, past a bare `agent`.
+func AncestorFor(client string) func() (proc.Ancestor, error) {
+	if client == "claude" {
+		return proc.Nearest
+	}
+	return proc.NearestWithoutMarkers
 }
 
 // ObservedClientMismatch groups observations of a shim another client cross-loaded.
@@ -145,15 +155,21 @@ func ClientMismatchObservation(client, runner string) string {
 
 // CheckClient refuses every binding route when another client cross-loaded this shim.
 func (r *Resolver) CheckClient() bool {
-	ancestor := r.ancestor()
-	runner, known := proc.ClientNameWithEnv(ancestor.Name, r.Getenv)
+	// Cursor cross-loads Claude plugins only (measured), and its MCP stdio environment carries no
+	// markers, so for any other client a marker pair seen here was inherited, for example by Grok
+	// started from a Cursor terminal, and is no evidence of Cursor.
+	markers := r.Client == "claude" && proc.CursorEnvironment(r.Getenv)
+	name := r.ancestor().Name
+	runner, known := proc.ClientName(name)
+	if markers {
+		runner, known = proc.ClientNameWithEnv(name, r.Getenv)
+	}
 	if known && runner == r.Client {
 		return false
 	}
 	// A matching nearest client keeps a native session nested in Cursor usable. Without one,
 	// Cursor's marker pair identifies its cross-loaded hook shell despite an inherited Claude id.
-	// An unidentified agent is also refused rather than allowed to lend the shim an outer identity.
-	if !known && r.Client != "cursor" && (proc.AgentAlias(ancestor.Name) || proc.CursorEnvironment(r.Getenv)) {
+	if !known && markers {
 		runner, known = "cursor", true
 	}
 	if !known {

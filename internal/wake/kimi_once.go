@@ -90,7 +90,7 @@ type kimiOnce struct {
 // configuration and the wake state come from the OS account's pinned Iris directory, because a
 // model starts this command and its environment cannot be trusted to name a hub or a token.
 func RunKimiOnce(ctx context.Context, out io.Writer) Outcome {
-	w, ok := newKimiOnce(out, loadKimiOnce, proc.Nearest, proc.Lookup, os.Getpid)
+	w, ok := newKimiOnce(out, loadKimiOnce, proc.NearestWithoutMarkers, proc.Lookup, os.Getpid)
 	if !ok {
 		_, _ = fmt.Fprintln(out, outcomeLines[Failed])
 		return Failed
