@@ -126,8 +126,17 @@ func antigravityConvFile(dir, sessionID string) string {
 	return filepath.Join(dir, "conv-"+hex.EncodeToString(sum[:16])+".json")
 }
 
+func readAntigravityStateFile(path string) ([]byte, error) {
+	f, err := openAntigravityStateFile(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	return io.ReadAll(f)
+}
+
 func readAntigravityProcFile(path string) (antigravityProcState, bool) {
-	raw, err := os.ReadFile(path)
+	raw, err := readAntigravityStateFile(path)
 	if err != nil {
 		return antigravityProcState{}, false
 	}
@@ -144,7 +153,7 @@ func readAntigravityProcState(dir string, pid int, startMS int64) antigravityPro
 }
 
 func readAntigravityConvFile(dir, sessionID string) (AntigravityConvState, bool) {
-	raw, err := os.ReadFile(antigravityConvFile(dir, sessionID))
+	raw, err := readAntigravityStateFile(antigravityConvFile(dir, sessionID))
 	if err != nil {
 		return AntigravityConvState{}, false
 	}
@@ -182,7 +191,7 @@ func writeAntigravityJSON(dir, target string, v any) error {
 		err = protectPath(tmp)
 	}
 	if err == nil {
-		err = os.Rename(tmp, target)
+		err = renameAntigravityStateFile(tmp, target)
 	}
 	if err != nil {
 		_ = os.Remove(tmp)
@@ -647,6 +656,7 @@ func (r Runner) antigravityHook(ev Event, note func(string)) (Output, bool) {
 	var askOut Output
 	askContinue := false
 	superseded := false
+	var persistErr error
 
 	func() {
 		defer unlock()
@@ -742,14 +752,21 @@ func (r Runner) antigravityHook(ev Event, note func(string)) (Output, bool) {
 
 		if procDirty {
 			if err := writeAntigravityJSON(m.dir, antigravityProcFile(m.dir, anc.PID, anc.StartMS), procState); err != nil {
-				// Without a persisted arm_requested marker, Stop must fail open rather than loop.
+				// The current session and an arm marker live in this file. A failed replace
+				// leaves the previous contents in place. Stop must not ask again, and the
+				// hook still allows (D3). The failure is recorded once the lock is released,
+				// which is what doctor reports as a hook that failed open.
 				askContinue = false
+				persistErr = err
 			}
 		}
 		if convDirty {
 			_ = writeAntigravityJSON(m.dir, antigravityConvFile(m.dir, ev.SessionID), convState)
 		}
 	}()
+	if persistErr != nil {
+		r.recordFailure("antigravity", persistErr, nil)
+	}
 
 	if superseded {
 		return Output{}, false

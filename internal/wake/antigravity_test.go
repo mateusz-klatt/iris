@@ -874,7 +874,8 @@ func TestAntigravityChildHandshakeValidationSpoofRejectionAndEndToEndWakeAndCont
 			t.Fatalf("child exited with error after /clear: %v", err)
 		}
 	case <-time.After(3 * time.Second):
-		t.Fatal("helper did not exit promptly after /clear switched current_session_id")
+		current, live := hook.ReadAntigravitySession(h.configDir, h.agyPID, h.agyStartMS, nil)
+		t.Fatalf("helper did not exit promptly after /clear switched current_session_id to %q; current=%q helperLive=%v", "99999999-8888-7777-6666-555555555555", current, live)
 	}
 	if _, live := hook.ReadAntigravitySession(h.configDir, h.agyPID, h.agyStartMS, nil); live {
 		t.Fatal("superseded helper record remained live after exit")
