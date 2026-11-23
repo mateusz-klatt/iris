@@ -217,6 +217,7 @@ func TestSuccessionValidatesResponsesAndCASFailures(t *testing.T) {
 		{name: "wrong session", response: map[string]any{"execution_id": "ex_two", "generation": 2, "session_id": "other"}},
 		{name: "wrong generation", response: map[string]any{"execution_id": "ex_two", "generation": 3, "session_id": "S"}},
 		{name: "advance failure", response: map[string]any{"execution_id": "ex_two", "generation": 2, "session_id": "S"}, advance: func(string, int, string) (int, bool, error) { return 0, false, errors.New("CAS") }},
+		{name: "same generation different execution after CAS", response: map[string]any{"execution_id": "ex_two", "generation": 2, "session_id": "S"}, advance: func(string, int, string) (int, bool, error) { return 2, false, nil }},
 		{name: "advance mismatch without winner", response: map[string]any{"execution_id": "ex_two", "generation": 2, "session_id": "S"}, advance: func(string, int, string) (int, bool, error) { return 0, false, nil }, bind: true},
 		{name: "generation recall failure", response: map[string]any{"execution_id": "ex_two", "generation": 2, "session_id": "S"}, recall: func(string, string) (int, bool, error) { return 0, true, nil }},
 	} {
@@ -248,7 +249,7 @@ func TestSuccessionValidatesResponsesAndCASFailures(t *testing.T) {
 }
 
 func TestSuccessionAdoptsValidWinnersAndRejectsOthers(t *testing.T) {
-	validWinner := map[string]any{"execution_id": "ex_two", "generation": 2, "session_id": "S"}
+	validWinner := map[string]any{"execution_id": "ex_two", "generation": 2, "session_id": "S", "match": "succession"}
 	for _, tc := range []struct {
 		name         string
 		bind         map[string]any
@@ -261,14 +262,18 @@ func TestSuccessionAdoptsValidWinnersAndRejectsOthers(t *testing.T) {
 		wantBindOnly bool
 	}{
 		{name: "bind failure", bindErr: true},
+		{name: "divergent next generation after refusal", bind: map[string]any{"execution_id": "ex_divergent", "generation": 2, "session_id": "S"}, advance: func(string, int, string) (int, bool, error) {
+			t.Error("unconfirmed winner overwrote the predecessor proof")
+			return 2, true, nil
+		}},
 		{name: "gone winner", bind: validWinner, gone: true},
-		{name: "wrong session", bind: map[string]any{"execution_id": "ex_two", "generation": 2, "session_id": "other"}},
-		{name: "older winner", bind: map[string]any{"execution_id": "ex_one", "generation": 1, "session_id": "S"}},
+		{name: "wrong session", bind: map[string]any{"execution_id": "ex_two", "generation": 2, "session_id": "other", "match": "succession"}},
+		{name: "older winner", bind: map[string]any{"execution_id": "ex_one", "generation": 1, "session_id": "S", "match": "succession"}},
 		{name: "advance failure", bind: validWinner, advance: func(string, int, string) (int, bool, error) { return 0, false, errors.New("CAS") }},
 		{name: "winner proof failure", bind: validWinner, proofs: []fakeSuccessionProof{{generation: 1, execution: "ex_one"}, {err: errors.New("bad winner proof")}}},
 		{name: "winner proof mismatch", bind: validWinner, proofs: []fakeSuccessionProof{{generation: 1, execution: "ex_one"}, {generation: 3, execution: "ex_two"}}},
 		{name: "winner generation recall failure", bind: validWinner, recall: func(string, string) (int, bool, error) { return 0, true, nil }},
-		{name: "later hook winner", bind: map[string]any{"execution_id": "ex_three", "generation": 3, "session_id": "S"}, proofs: []fakeSuccessionProof{{generation: 1, execution: "ex_one"}, {generation: 3, execution: "ex_three"}}, wantWinner: "ex_three"},
+		{name: "later hook winner", bind: map[string]any{"execution_id": "ex_three", "generation": 3, "session_id": "S", "match": "succession"}, proofs: []fakeSuccessionProof{{generation: 1, execution: "ex_one"}, {generation: 3, execution: "ex_three"}}, wantWinner: "ex_three"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			h := &tickHub{reply: func(req *http.Request, _ map[string]any) (int, any) {
@@ -320,13 +325,13 @@ func TestSuccessionProcessWinnerAndAdvanceRace(t *testing.T) {
 				if body["client_pid"] != float64(42) || body["client_pid_start_ms"] != float64(100) {
 					t.Fatalf("process winner lookup: %+v", body)
 				}
-				return http.StatusOK, map[string]any{"execution_id": "ex_two", "generation": 2}
+				return http.StatusOK, map[string]any{"execution_id": "ex_two", "generation": 2, "match": "succession"}
 			default:
 				t.Fatalf("unexpected request: %s", req.URL.Path)
 				return 0, nil
 			}
 		}}
-		memory := &fakeSuccessionMemory{generation: 1, execution: "ex_one"}
+		memory := &fakeSuccessionMemory{generation: 1, execution: "ex_one", current: "S", currentOK: true}
 		r := scriptedSuccessionResolver(h, memory)
 		r.Client = "cursor"
 		r.Ancestor = func() (proc.Ancestor, error) { return proc.Ancestor{PID: 42, StartMS: 100, Name: "cursor-agent"}, nil }
@@ -335,13 +340,28 @@ func TestSuccessionProcessWinnerAndAdvanceRace(t *testing.T) {
 			t.Fatalf("process winner: bound=%+v attempted=%t err=%v", b, attempted, err)
 		}
 	})
+	t.Run("successful response already committed locally", func(t *testing.T) {
+		h := &tickHub{reply: func(_ *http.Request, _ map[string]any) (int, any) {
+			return http.StatusOK, map[string]any{"execution_id": "ex_two", "generation": 2, "session_id": "S"}
+		}}
+		memory := &fakeSuccessionMemory{generation: 1, execution: "ex_one"}
+		memory.advance = func(string, int, string) (int, bool, error) {
+			memory.generation, memory.execution = 2, "ex_two"
+			return 2, false, nil
+		}
+		r := scriptedSuccessionResolver(h, memory)
+		b, attempted, err := r.succeedAfterLostHeld(t.Context(), "S", 2, 1)
+		if !attempted || err != nil || b.ExecutionID != "ex_two" || memory.prepares < 2 {
+			t.Fatalf("same exact proof after CAS: bound=%+v attempted=%t err=%v proof reads=%d", b, attempted, err, memory.prepares)
+		}
+	})
 	t.Run("successful response overtaken by later hook winner", func(t *testing.T) {
 		h := &tickHub{reply: func(req *http.Request, _ map[string]any) (int, any) {
 			switch req.URL.Path {
 			case "/v1/sessions/succeed":
 				return http.StatusOK, map[string]any{"execution_id": "ex_two", "generation": 2, "session_id": "S"}
 			case "/v1/bind":
-				return http.StatusOK, map[string]any{"execution_id": "ex_three", "generation": 3, "session_id": "S"}
+				return http.StatusOK, map[string]any{"execution_id": "ex_three", "generation": 3, "session_id": "S", "match": "succession"}
 			default:
 				t.Fatalf("unexpected request: %s", req.URL.Path)
 				return 0, nil
@@ -368,7 +388,7 @@ func TestSuccessionProcessWinnerAndAdvanceRace(t *testing.T) {
 			case "/v1/sessions/succeed":
 				return http.StatusOK, map[string]any{"execution_id": "ex_two", "generation": 2, "session_id": "S"}
 			case "/v1/bind":
-				return http.StatusOK, map[string]any{"execution_id": "ex_two", "generation": 2, "session_id": "S"}
+				return http.StatusOK, map[string]any{"execution_id": "ex_two", "generation": 2, "session_id": "S", "match": "succession"}
 			default:
 				t.Fatalf("unexpected request: %s", req.URL.Path)
 				return 0, nil

@@ -68,7 +68,7 @@ func (r *Resolver) succeedAfterLostHeld(ctx context.Context, session string, run
 	b := Bound{SessionID: session, Rung: rung}
 	if err := r.Hub.Do(ctx, "POST", "/v1/sessions/succeed", request, &b); err != nil {
 		if IsCode(err, "lost") {
-			winner, adoptErr := r.adoptSuccessionWinnerHeld(ctx, session, rung, generationFloor, priorGeneration, priorExecution, anc, processBound)
+			winner, adoptErr := r.adoptSuccessionWinnerHeld(ctx, session, rung, priorGeneration, priorExecution, anc, processBound)
 			if adoptErr != nil {
 				return Bound{}, true, &LostError{Cause: adoptErr}
 			}
@@ -84,12 +84,12 @@ func (r *Resolver) succeedAfterLostHeld(ctx context.Context, session string, run
 	if b.SessionID != session || b.Generation != priorGeneration+1 {
 		return Bound{}, true, &LostError{Cause: errGenerationFloor}
 	}
-	current, _, err := r.Succession.AdvanceGeneration(r.Client, session, priorExecution, priorGeneration, b.Generation, b.ExecutionID)
+	current, advanced, err := r.Succession.AdvanceGeneration(r.Client, session, priorExecution, priorGeneration, b.Generation, b.ExecutionID)
 	if err != nil {
 		return Bound{}, true, &LostError{Cause: err}
 	}
 	if current != b.Generation {
-		winner, adoptErr := r.adoptSuccessionWinnerHeld(ctx, session, rung, generationFloor, priorGeneration, priorExecution, anc, processBound)
+		winner, adoptErr := r.adoptSuccessionWinnerHeld(ctx, session, rung, priorGeneration, priorExecution, anc, processBound)
 		if adoptErr != nil {
 			return Bound{}, true, &LostError{Cause: adoptErr}
 		}
@@ -97,6 +97,11 @@ func (r *Resolver) succeedAfterLostHeld(ctx context.Context, session string, run
 			return winner, true, nil
 		}
 		return Bound{}, true, &LostError{Cause: errGenerationFloor}
+	}
+	if !advanced {
+		if err := r.verifySuccessionWinnerHeld(b, anc); err != nil {
+			return Bound{}, true, &LostError{Cause: err}
+		}
 	}
 	if err := r.checkGenerationHeld(b); err != nil {
 		return Bound{}, true, err
@@ -106,17 +111,23 @@ func (r *Resolver) succeedAfterLostHeld(ctx context.Context, session string, run
 
 // adoptSuccessionWinnerHeld performs one read-only lookup and accepts only a winner confirmed by
 // both the hub and the local proof/witness state. Lookup failure leaves the original lost in place.
-func (r *Resolver) adoptSuccessionWinnerHeld(ctx context.Context, session string, rung int, generationFloor, priorGeneration int, priorExecution string, anc proc.Ancestor, processBound bool) (Bound, error) {
-	var b Bound
-	var err error
+func (r *Resolver) adoptSuccessionWinnerHeld(ctx context.Context, session string, rung, priorGeneration int, priorExecution string, anc proc.Ancestor, processBound bool) (Bound, error) {
+	req := map[string]any{"client": r.Client, "host": r.Host, "cwd": r.CWD,
+		"prior_generation": priorGeneration, "prior_execution_id": priorExecution}
 	if processBound {
-		req := map[string]any{"client": r.Client, "host": r.Host, "cwd": r.CWD, "client_pid": anc.PID, "client_pid_start_ms": anc.StartMS}
-		err = r.Hub.Do(ctx, "POST", "/v1/bind", req, &b)
-		b.Rung = 3
+		req["client_pid"], req["client_pid_start_ms"] = anc.PID, anc.StartMS
+		rung = 3
 	} else {
-		b, err = r.bySession(ctx, session)
+		req["session_id"] = session
 	}
-	if err != nil || r.gone[b.ExecutionID] || b.SessionID != "" && b.SessionID != session || b.Generation < generationFloor+1 {
+	var reply struct {
+		Bound
+		Match string `json:"match"`
+	}
+	err := r.Hub.Do(ctx, "POST", "/v1/bind", req, &reply)
+	b := reply.Bound
+	b.Rung = rung
+	if err != nil || reply.Match != "succession" || r.gone[b.ExecutionID] || b.SessionID != "" && b.SessionID != session || b.Generation <= priorGeneration {
 		return Bound{}, nil
 	}
 	if b.SessionID == "" {
@@ -127,15 +138,22 @@ func (r *Resolver) adoptSuccessionWinnerHeld(ctx context.Context, session string
 			return Bound{}, err
 		}
 	}
-	generation, execution, err := r.Succession.PrepareSuccession(r.Client, session, b.Generation, b.ExecutionID, anc)
-	if err != nil {
+	if err := r.verifySuccessionWinnerHeld(b, anc); err != nil {
 		return Bound{}, err
-	}
-	if generation != b.Generation || execution != b.ExecutionID {
-		return Bound{}, errGenerationFloor
 	}
 	if err := r.checkGenerationHeld(b); err != nil {
 		return Bound{}, err
 	}
 	return b, nil
+}
+
+func (r *Resolver) verifySuccessionWinnerHeld(b Bound, anc proc.Ancestor) error {
+	generation, execution, err := r.Succession.PrepareSuccession(r.Client, b.SessionID, b.Generation, b.ExecutionID, anc)
+	if err != nil {
+		return err
+	}
+	if generation != b.Generation || execution != b.ExecutionID {
+		return errGenerationFloor
+	}
+	return nil
 }

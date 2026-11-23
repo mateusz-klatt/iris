@@ -290,6 +290,21 @@ func TestSucceedRefusesClearSupersessionInEverySuccessorState(t *testing.T) {
 	}
 }
 
+func TestBindSuccessionWinnerRequiresExactRetainedPredecessor(t *testing.T) {
+	s, clock, _ := testStore(t)
+	registration := Request{Client: "codex", Host: "host", SessionID: "S", Cwd: "/repo/w", Worktree: "/repo/w", Source: "hook"}
+	proof, _ := successionFixture(t, s, clock, registration)
+	winner := call(t, s, "sessions", registration)
+	out := call(t, s, "bind", proof)
+	if out["execution_id"] != winner["execution_id"] || out["match"] != "succession" {
+		t.Fatalf("exact predecessor did not confirm the hook winner: %+v", out)
+	}
+	proof.PriorExecutionID = "ex_other_history"
+	if out, err := s.Call(t.Context(), "bind", proof); out != nil || !isCode(err, "unbound") {
+		t.Fatalf("another history confirmed the hook winner: %+v %v", out, err)
+	}
+}
+
 func TestSucceedRestoreLineageAndMarkRestoredRotation(t *testing.T) {
 	t.Run("equal-generation diverged restore", func(t *testing.T) {
 		s, clock, file := testStore(t)

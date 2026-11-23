@@ -653,6 +653,15 @@ func (t *transaction) bind(r Request) (map[string]any, error) {
 		query += " AND e.client_pid=? AND e.client_pid_start_ms=? AND (e.single_session=1 OR (e.parent_id IS NULL AND e.client IN ('claude')))"
 		args = append(args, r.ClientPID, r.ClientPIDStartMS)
 	}
+	if r.PriorExecutionID != "" {
+		// This lookup can confirm a winner only in the history that contains the
+		// caller's exact lost predecessor. An older hub ignores the proof and
+		// its answer lacks the succession match marker.
+		query += ` AND e.generation>? AND EXISTS (SELECT 1 FROM Execution p WHERE p.id=?
+			AND p.host_id=e.host_id AND p.client=e.client AND p.session_id=e.session_id
+			AND p.generation=? AND p.hook_seen_ms>0 AND p.state='lost')`
+		args = append(args, r.PriorGeneration, r.PriorExecutionID, r.PriorGeneration)
+	}
 	if r.Exclude != "" {
 		query += " AND e.id<>?"
 		args = append(args, r.Exclude)
@@ -682,6 +691,8 @@ func (t *transaction) bind(r Request) (map[string]any, error) {
 		// Only this branch says so. A hub from before it takes such a request by session alone
 		// and answers without this field, which the asking client must refuse.
 		out["match"] = "process_session"
+	} else if r.PriorExecutionID != "" {
+		out["match"] = "succession"
 	}
 	return out, nil
 }
