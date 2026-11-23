@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -224,6 +225,36 @@ func TestCheckClientKeepsNativeAndUnknownAncestorsUsable(t *testing.T) {
 		b, err := r.Resolve(context.Background(), "")
 		if err != nil || b.Rung != 2 || len(h.bound) != 1 || h.bound[0]["session_id"] != "native-grok" {
 			t.Fatalf("native Grok binding with inherited markers: %+v, %v, requests %v", b, err, h.bound)
+		}
+	})
+	// The shim's walk reads Cursor's markers only for Claude, so with an inherited pair a
+	// cursor shim under `agent` under grok still reaches grok, as v0.1.13 did.
+	t.Run("only a Claude shim walks with Cursor markers", func(t *testing.T) {
+		if reflect.ValueOf(AncestorFor("claude")).Pointer() != reflect.ValueOf(proc.Nearest).Pointer() {
+			t.Fatal("a Claude shim does not walk with the environment")
+		}
+		for _, client := range []string{"cursor", "grok", "codex", "copilot", "kimi", "antigravity"} {
+			if reflect.ValueOf(AncestorFor(client)).Pointer() != reflect.ValueOf(proc.NearestWithoutMarkers).Pointer() {
+				t.Fatalf("%s shim walks with Cursor markers", client)
+			}
+		}
+		env := map[string]string{"CURSOR_PROJECT_DIR": "/outer/cursor/project", "CURSOR_VERSION": "2026.11.22-e9042b2"}
+		tree := map[int]proc.Snapshot{
+			10: {PID: 10, PPID: 9, Name: "iris"},
+			9:  {PID: 9, PPID: 2, Name: "agent"},
+			2:  {PID: 2, PPID: 1, Name: "grok"},
+		}
+		get := func(pid int) (proc.Snapshot, bool) { s, ok := tree[pid]; return s, ok }
+		if got, ok := proc.NearestFrom(10, get, nil); !ok || got.Name != "grok" {
+			t.Fatalf("walk without markers stopped before grok: %+v, %v", got, ok)
+		}
+		if got, ok := proc.NearestFrom(10, get, func(k string) string { return env[k] }); !ok || got.Name != "agent" {
+			t.Fatalf("walk with markers did not stop at the Cursor agent alias: %+v, %v", got, ok)
+		}
+		h := &scriptedHub{}
+		r := resolverFor(t, h, "cursor", env, proc.Ancestor{PID: 2, StartMS: 7, Name: "grok"})
+		if !r.CheckClient() {
+			t.Fatal("a cursor shim under grok was not refused as a cross-load")
 		}
 	})
 	t.Run("unknown helper is not a mismatched client", func(t *testing.T) {

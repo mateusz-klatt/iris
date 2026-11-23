@@ -15,7 +15,9 @@ import (
 // iris doctor would report them as genuine.
 func TestMain(m *testing.M) {
 	// Command tests do not inherit whichever agent happens to be running the test suite.
-	mcpAncestor = func() (proc.Ancestor, error) { return proc.Ancestor{}, proc.ErrNotFound }
+	mcpAncestor = func(string) func() (proc.Ancestor, error) {
+		return func() (proc.Ancestor, error) { return proc.Ancestor{}, proc.ErrNotFound }
+	}
 	// An exported credential must not point hook failures at the real home.
 	for _, key := range []string{"IRIS_HUB_URL", "IRIS_TOKEN_FILE"} {
 		if err := os.Unsetenv(key); err != nil {

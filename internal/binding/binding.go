@@ -132,7 +132,17 @@ type handover struct {
 func New(h *hubclient.Client, client string) *Resolver {
 	host, _ := os.Hostname()
 	cwd, _ := os.Getwd()
-	return &Resolver{Hub: h, Client: client, Host: host, CWD: cwd, Getenv: os.Getenv, Ancestor: proc.Nearest, Grace: 15 * time.Second}
+	return &Resolver{Hub: h, Client: client, Host: host, CWD: cwd, Getenv: os.Getenv, Ancestor: AncestorFor(client), Grace: 15 * time.Second}
+}
+
+// AncestorFor is the shim's ancestor walk for client. Cursor cross-loads Claude plugins only
+// (measured), so only a Claude shim reads Cursor's marker pair during the walk. Any other
+// client walks as v0.1.13 did, past a bare `agent`.
+func AncestorFor(client string) func() (proc.Ancestor, error) {
+	if client == "claude" {
+		return proc.Nearest
+	}
+	return proc.NearestWithoutMarkers
 }
 
 // ObservedClientMismatch groups observations of a shim another client cross-loaded.

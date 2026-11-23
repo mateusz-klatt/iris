@@ -21,8 +21,10 @@ func TestCrossLoadedCodexSuppressesWakeWorker(t *testing.T) {
 	t.Cleanup(func() {
 		mcpAncestor, mcpObserver, newMCPWakeWorker = originalAncestor, originalObserver, originalWorker
 	})
-	mcpAncestor = func() (proc.Ancestor, error) {
-		return proc.Ancestor{PID: 42, StartMS: 7, Name: "cursor-agent"}, nil
+	mcpAncestor = func(string) func() (proc.Ancestor, error) {
+		return func() (proc.Ancestor, error) {
+			return proc.Ancestor{PID: 42, StartMS: 7, Name: "cursor-agent"}, nil
+		}
 	}
 	observed := make(chan string, 1)
 	mcpObserver = func(_ func(string) string, client string) func(string) {
@@ -88,8 +90,10 @@ func TestCrossLoadedMCPStaysUpButOnlyAnswersClientMismatch(t *testing.T) {
 			}
 			original := mcpAncestor
 			t.Cleanup(func() { mcpAncestor = original })
-			mcpAncestor = func() (proc.Ancestor, error) {
-				return proc.Ancestor{PID: 42, StartMS: 7, Name: tc.ancestor}, nil
+			mcpAncestor = func(string) func() (proc.Ancestor, error) {
+				return func() (proc.Ancestor, error) {
+					return proc.Ancestor{PID: 42, StartMS: 7, Name: tc.ancestor}, nil
+				}
 			}
 			session, done := connectMCPCommand(t, []string{"--client", "claude"}, "2026.11.22-e9042b2")
 			mismatches := 0

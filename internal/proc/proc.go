@@ -201,6 +201,11 @@ func terminateFrom(
 
 // Nearest returns the ancestor of the current process that Iris records.
 func Nearest() (Ancestor, error) { return nearest(os.Getpid(), lookupOS, os.Getenv) }
+
+// NearestWithoutMarkers walks like Nearest but ignores Cursor's marker pair, so a bare
+// `agent` is never taken for Cursor. A shim for a client Cursor does not cross-load uses it,
+// because a marker pair in that shim's environment can only have been inherited.
+func NearestWithoutMarkers() (Ancestor, error) { return nearest(os.Getpid(), lookupOS, nil) }
 func nearest(self int, get func(int) (Snapshot, bool), getenv func(string) string) (Ancestor, error) {
 	s, ok := NearestFrom(self, get, getenv)
 	if !ok {

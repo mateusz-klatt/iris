@@ -122,6 +122,24 @@ func TestNearestLive(t *testing.T) {
 	}
 }
 
+func TestNearestWithoutMarkersIgnoresAnInheritedPair(t *testing.T) {
+	t.Setenv("CURSOR_PROJECT_DIR", "/outer/cursor/project")
+	t.Setenv("CURSOR_VERSION", "2026.11.22-e9042b2")
+	with, err := Nearest()
+	if err != nil {
+		t.Fatal(err)
+	}
+	without, err := NearestWithoutMarkers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// This test binary has no `agent` ancestor, so the pair cannot change the walk here:
+	// both find the same process. TestNearestFrom covers the agent tree with and without it.
+	if without != with || without.PID <= 1 {
+		t.Fatalf("walk without markers = %+v, with = %+v", without, with)
+	}
+}
+
 func TestExecutableAndTerminateValidation(t *testing.T) {
 	self, ok := Lookup(os.Getpid())
 	if !ok {

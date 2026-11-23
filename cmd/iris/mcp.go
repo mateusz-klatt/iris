@@ -12,7 +12,6 @@ import (
 	"github.com/mateusz-klatt/iris/internal/hook"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 	"github.com/mateusz-klatt/iris/internal/mcpserver"
-	"github.com/mateusz-klatt/iris/internal/proc"
 	"github.com/mateusz-klatt/iris/internal/wake"
 	"github.com/modelcontextprotocol/go-sdk/mcp"
 )
@@ -23,7 +22,7 @@ type mcpWakeWorker interface{ Run(context.Context) }
 // observable. The normal command uses the real MCP transport and wake runner.
 var mcpStdioTransport = func() mcp.Transport { return &mcp.StdioTransport{} }
 var mcpObserver = hook.Observer
-var mcpAncestor = proc.Nearest
+var mcpAncestor = binding.AncestorFor
 var newMCPWakeWorker = func(resolver *binding.Resolver, sessions *hook.Sessions, version func() string, observe func(string)) mcpWakeWorker {
 	return wake.New(resolver, sessions, version, observe)
 }
@@ -63,7 +62,7 @@ func runMCP(args []string) error {
 	defer func() { cancel(); workers.Wait(); parent.Close() }()
 	config := hubclient.NewConfig()
 	resolver := binding.New(&hubclient.Client{Config: config}, *client)
-	resolver.Ancestor = mcpAncestor
+	resolver.Ancestor = mcpAncestor(*client)
 	// What a tool call's ids show goes to the log doctor reads, within a hook's small budget.
 	// Pin the resolved token path so long-lived observations never re-read client.json.
 	observeEnv := map[string]string{"IRIS_TOKEN_FILE": config.TokenFile}
