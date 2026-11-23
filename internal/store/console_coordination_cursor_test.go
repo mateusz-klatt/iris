@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const schema26UnfilteredClaimAndDeliveryTriggers = removeLeaseRenewedTickSchema + `
+const schema26UnfilteredClaimAndDeliveryTriggers = removeWorktreeScopeSchema + removeLeaseRenewedTickSchema + `
 DROP TRIGGER console_revision_claim_update;
 CREATE TRIGGER console_revision_claim_update AFTER UPDATE ON Claim BEGIN
  INSERT INTO ConsoleRepositoryChange SELECT OLD.repository_id UNION SELECT NEW.repository_id;

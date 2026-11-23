@@ -63,7 +63,7 @@ func TestFreshDatabaseHasVersion24WithoutImportLedgers(t *testing.T) {
 }
 
 // latestVersion is the schema version a store reaches when it opens: the last migration's.
-const latestVersion = 28
+const latestVersion = 29
 
 func assertImportRemoval(t *testing.T, db *sql.DB) {
 	t.Helper()

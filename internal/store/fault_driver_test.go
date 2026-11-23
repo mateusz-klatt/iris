@@ -503,7 +503,7 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 				call(t, s, "claim", claimRequest(otherRequest, "overlapping", "held", "exact"))
 				historySend(t, s, otherRequest, name, "merge-mail", "", "merge", "source mail survives")
 				call(t, s, "contact", Request{RepositoryID: otherID, Agent: otherAgent["name"].(string)})
-				if _, err := s.db.Exec("INSERT INTO Waiter VALUES(?,?,'waiting','exact',?)", otherRequest.ExecutionID, otherID, clock.Now().UnixMilli()+60000); err != nil {
+				if _, err := s.db.Exec("INSERT INTO Waiter(execution_id,repository_id,path_key,kind,expires_ms) VALUES(?,?,'waiting','exact',?)", otherRequest.ExecutionID, otherID, clock.Now().UnixMilli()+60000); err != nil {
 					t.Fatal(err)
 				}
 				r = mergeRequest(otherID, repo, op == "merge-dry-run")
@@ -522,7 +522,7 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 				folderRequest := Request{ExecutionID: folder["execution_id"].(string), Generation: folder["generation"].(int64)}
 				historySend(t, s, folderRequest, name, "folder-mail", "", "folder", "folder mail survives")
 				call(t, s, "end", folderRequest)
-				if _, err := s.db.Exec("INSERT INTO Waiter VALUES(?,?,'waiting','exact',0)", folderRequest.ExecutionID, folder["repository_id"]); err != nil {
+				if _, err := s.db.Exec("INSERT INTO Waiter(execution_id,repository_id,path_key,kind,expires_ms) VALUES(?,?,'waiting','exact',0)", folderRequest.ExecutionID, folder["repository_id"]); err != nil {
 					t.Fatal(err)
 				}
 				if _, err := s.db.Exec("INSERT INTO ShellSnapshot VALUES(?,'{}')", folderRequest.ExecutionID); err != nil {

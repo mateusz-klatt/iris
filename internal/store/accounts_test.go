@@ -24,6 +24,25 @@ const removeAttentionIdentitySchema = "DROP TRIGGER delivery_attention_seq;\nALT
 // and replay 028 without duplicate-column errors.
 const removeLeaseRenewedTickSchema = "ALTER TABLE Execution DROP COLUMN lease_renewed_tick_ms;\n"
 
+// removeWorktreeScopeSchema undoes migration 029. The claim trigger names the new columns, so it
+// is restored to its version-27 shape before those columns are dropped. A fixture that never
+// applied 029 does not have the columns and must not run this.
+const removeWorktreeScopeSchema = `
+DROP TRIGGER console_revision_claim_update;
+CREATE TRIGGER console_revision_claim_update AFTER UPDATE OF execution_id,repository_id,kind,path,origin,revoked_ms ON Claim
+WHEN OLD.execution_id IS NOT NEW.execution_id OR OLD.repository_id IS NOT NEW.repository_id OR OLD.kind IS NOT NEW.kind OR OLD.path IS NOT NEW.path OR OLD.origin IS NOT NEW.origin OR OLD.revoked_ms IS NOT NEW.revoked_ms BEGIN
+ INSERT INTO ConsoleRepositoryChange SELECT OLD.repository_id UNION SELECT NEW.repository_id;
+END;
+DROP TABLE WorktreeIdentity;
+ALTER TABLE Event DROP COLUMN worktree_key;
+ALTER TABLE Waiter DROP COLUMN worktree_key;
+ALTER TABLE Claim DROP COLUMN branch;
+ALTER TABLE Claim DROP COLUMN worktree_path;
+ALTER TABLE Claim DROP COLUMN worktree_key;
+ALTER TABLE Execution DROP COLUMN worktree_key;
+ALTER TABLE Repository DROP COLUMN auto_claim_scope;
+`
+
 // Old-schema fixtures undo only this migration before reconstructing their
 // historical version. Fresh-migration tests remain backed by captured old SQL.
 const removeConsoleRevisionSchema = `
