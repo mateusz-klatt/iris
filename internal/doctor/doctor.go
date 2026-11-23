@@ -92,7 +92,8 @@ type Result struct {
 	// ClaimScope is claim.auto_scope for the checkout doctor examined (ADR 037).
 	// Empty when this directory is not a git repository, so no policy is in force.
 	// The text is repository, worktree or unknown. Unknown means the hub did not
-	// report the setting; doctor does not assume either value.
+	// report the setting, including when the probe did not succeed and doctor
+	// therefore did not ask. Doctor does not assume either value.
 	ClaimScope string
 	// LineEndings warns when the repository doctor ran in holds CRLF files that this git reads
 	// as modified, which keeps the shell reconcile past its budget. Empty means nothing to warn
@@ -200,7 +201,17 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 		applyVersion(&res.Report.Clients[i])
 	}
 	res.Guard = guardLine(ctx, opt.Dir)
-	res.ClaimScope = claimScopeLine(ctx, hubURL, token, opt.host(), opt.Dir, opt.HTTP)
+	// The claim-scope lookup carries the bearer. It runs only after the probe
+	// reached the hub and the token was accepted. A refused address, a hub that
+	// did not answer, or a token the probe did not accept does not ask. A git
+	// checkout is then unknown: silence is not repository or worktree. The line
+	// is what doctor could not read. It does not apply the policy, it does not
+	// make a cleartext hub safe, and it cannot recall a token already sent.
+	if probe.up && probe.tokenOK {
+		res.ClaimScope = claimScopeLine(ctx, hubURL, token, opt.host(), opt.Dir, opt.HTTP)
+	} else {
+		res.ClaimScope = claimScopeUnasked(opt.Dir)
+	}
 	res.LineEndings = lineEndingsLine(ctx, opt.Dir)
 	res.Scope = scopeReport(tokenFile, opt.Now())
 	res.Wake = wakeReport(opt.Layout, tokenFile, opt.Now())
@@ -738,8 +749,22 @@ type hubProbe struct {
 	detail, tokenDetail string
 }
 
-// hubRequest sends one call. An empty token sends no credential.
+// hubRequest sends one call. An empty token sends no credential; the status
+// probe uses that. A non-empty token is a bearer, and this is the only place
+// doctor attaches one: the agents probe, the stored report, last-hook times,
+// the case warning and the claim-scope lookup. The target must pass
+// hubclient.ValidateURL first, the same rule as the probe (https, or http only
+// for the literal hosts 127.0.0.1 and ::1). Anything else is refused before
+// the header is set and before the client runs. The check cannot see a
+// redirect a transport might apply later; NoRedirects refuses every redirect.
+// It cannot catch a bearer attached anywhere else, and a refusal does not
+// recall a token that has already left the machine.
 func hubRequest(ctx context.Context, method, target, token string, body io.Reader, hc *http.Client) (*http.Response, error) {
+	if token != "" {
+		if err := hubclient.ValidateURL(target); err != nil {
+			return nil, err
+		}
+	}
 	req, err := http.NewRequestWithContext(ctx, method, target, body)
 	if err != nil {
 		return nil, err
@@ -935,7 +960,9 @@ func caseLine(ctx context.Context, base, token, host, dir string, hc *http.Clien
 // claimScopeLine asks the hub which claim.auto_scope is in force for dir.
 // A directory that is not a git checkout has none (ADR 034). A hub that cannot
 // report the setting, including one from before ADR 037, is unknown: doctor
-// does not treat silence as repository or as worktree.
+// does not treat silence as repository or as worktree. The call carries the
+// bearer through hubRequest, so a URL the probe refuses is not contacted.
+// That refusal is not the policy, and it cannot recall a token already sent.
 func claimScopeLine(ctx context.Context, base, token, host, dir string, hc *http.Client) string {
 	if dir == "" {
 		dir = "."
@@ -957,6 +984,20 @@ func claimScopeLine(ctx context.Context, base, token, host, dir string, hc *http
 		return claimScopeText("")
 	}
 	return claimScopeText(*out.Scope)
+}
+
+// claimScopeUnasked is the scope line when doctor did not ask the hub.
+// A directory outside git has no setting. A checkout is unknown: the hub did
+// not report one, and doctor does not assume repository or worktree. This does
+// not contact the hub, does not attach a bearer, and does not apply a policy.
+func claimScopeUnasked(dir string) string {
+	if dir == "" {
+		dir = "."
+	}
+	if _, err := gitinfo.Find(dir); err != nil {
+		return ""
+	}
+	return claimScopeText("")
 }
 
 // claimScopeText is the human line after "claim auto scope: ".
