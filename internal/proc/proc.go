@@ -210,9 +210,10 @@ func nearest(self int, get func(int) (Snapshot, bool), getenv func(string) strin
 }
 
 // NearestFrom walks parents of self using get and getenv. Shells are skipped. The first
-// recognized client process or unidentified agent boundary wins, so a parent client is never
-// chosen over the session that actually spawned the hook. When the chain has no client, the nearest
-// non-shell ancestor is returned.
+// recognized client process wins, so a parent client is never chosen over the session
+// that actually spawned the hook. When the chain has no client, the nearest
+// non-shell ancestor is returned. A bare `agent` without Cursor's marker pair is not a
+// client, so the walk continues past it (see docs/architecture.md, D5 and D6, for the limit).
 func NearestFrom(self int, get func(int) (Snapshot, bool), getenv func(string) string) (Snapshot, bool) {
 	cur, ok := get(self)
 	if !ok {
@@ -233,7 +234,7 @@ func NearestFrom(self int, get func(int) (Snapshot, bool), getenv func(string) s
 				cp := p
 				fallback = &cp
 			}
-			if isClient(p.Name, getenv) || AgentAlias(p.Name) {
+			if isClient(p.Name, getenv) {
 				return p, true
 			}
 		}
@@ -262,9 +263,6 @@ func isClient(name string, getenv func(string) string) bool {
 	return ok
 }
 
-// AgentAlias reports Cursor's generic alias, which unrelated tools can also use.
-func AgentAlias(name string) bool { return baseName(name) == "agent" }
-
 // CursorEnvironment reports the marker pair Cursor supplies to a cross-loaded Claude hook.
 func CursorEnvironment(getenv func(string) string) bool {
 	return getenv != nil && getenv("CURSOR_PROJECT_DIR") != "" && getenv("CURSOR_VERSION") != ""
@@ -272,7 +270,7 @@ func CursorEnvironment(getenv func(string) string) bool {
 
 // ClientNameWithEnv also recognizes Cursor's generic agent alias, but only with its marker pair.
 func ClientNameWithEnv(name string, getenv func(string) string) (string, bool) {
-	if AgentAlias(name) && CursorEnvironment(getenv) {
+	if baseName(name) == "agent" && CursorEnvironment(getenv) {
 		return "cursor", true
 	}
 	return ClientName(name)

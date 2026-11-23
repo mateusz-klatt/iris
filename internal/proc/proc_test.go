@@ -97,8 +97,8 @@ func TestNearestFrom(t *testing.T) {
 		t.Fatalf("Cursor's agent alias did not stop before outer Claude: %+v, %v", got, ok)
 	}
 	got, ok = NearestFrom(20, agentGet, nil)
-	if !ok || got.PID != 18 || got.Name != "/opt/agent" {
-		t.Fatalf("unidentified agent did not stop before outer Claude: %+v, %v", got, ok)
+	if !ok || got.PID != 17 || got.Name != "claude" {
+		t.Fatalf("bare agent did not walk on to outer Claude: %+v, %v", got, ok)
 	}
 }
 
