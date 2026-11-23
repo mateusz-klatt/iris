@@ -1,8 +1,10 @@
 # ADR 037: Worktree-scoped automatic claims are a repository opt-in
 
-Status: proposed. Amends D10, D12 and ADR 033's submodule guard consequence only for a repository
-that opts in. ADR 003 path identity is unchanged, and ADR 033 still decides which repository owns
-a claim.
+Status: accepted, 2026-11-23. Alternative (a), the per-repository `claim.auto_scope` policy, is
+the chosen design. Alternative (b), a hub-issued parent link that would exempt only one
+coordinator's delegates, stays documented and is not implemented. Amends D10, D12 and ADR 033's
+submodule guard consequence only for a repository that opts in. ADR 003 path identity is
+unchanged, and ADR 033 still decides which repository owns a claim.
 
 ## Context
 
@@ -365,13 +367,13 @@ touch, and delegates can message or release claims explicitly. Repeated work can
 a claim, and waiting repeatedly spends the idle time this decision addresses. This remains the
 right behaviour for repositories that do not opt in.
 
-**Recommendation: choose (a), explicitly as the wider, owner-accepted loss.** It solves the
-repository's accepted workflow without adding a new identity and lifecycle protocol, is visible and
-reversible, and leaves the default unchanged. Alternative (b) is the better boundary when only one
-coordinator's delegates should be exempt, and it preserves protection from other seats; it should
-be chosen instead if that narrower boundary is required. This ADR does not claim seat-level
-isolation. Alternative (c) remains the default, not the answer for a repository whose owner accepts
-the merge-time trade-off.
+**Accepted: (a), the wider, owner-accepted loss.** On 2026-11-23 the per-repository policy is the
+chosen design. It solves the repository's accepted workflow without adding a new identity and
+lifecycle protocol, is visible and reversible, and leaves the default unchanged. Alternative (b)
+remains the documented alternative: the narrower boundary when only one coordinator's delegates
+should be exempt. It preserves protection from other seats, and it should be chosen instead if that
+narrower boundary is required. This ADR does not claim seat-level isolation and does not implement
+(b). Alternative (c) remains the default for a repository that does not opt in.
 
 ## Consequences
 

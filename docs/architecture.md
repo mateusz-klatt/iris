@@ -797,6 +797,20 @@ submodule's, wherever the session was started (ADR 033). Branch and worktree are
 context, not an exemption: two worktrees editing one file will meet at merge time, which is
 exactly the collision Iris exists to prevent. A narrower policy can be added per repository.
 See [ADR 037](adr/037-worktree-scoped-auto-claims.md) for an opt-in per-repository narrowing of auto claims.
+The setting is `claim.auto_scope` on the repository (`repository` by default, or `worktree`). The
+owner sets it with `iris admin policy --repository <id> --claim-auto-scope repository|worktree`,
+which posts `POST /v1/admin/policy`. A hook payload, message body or coordination envelope cannot
+select it, and a change does not rewrite claims. `iris doctor`, run in a git checkout, reports the
+scope in force. For `worktree` it says that a cross-worktree automatic overlap is advisory: the
+edit is allowed, and the overlap can meet in one filesystem or at rebase or merge. An advisory
+does not make concurrent edits safe, resolve their contents or prove that the work is disjoint.
+Explicit claims and claims with no worktree key stay repository-wide. The same directory on two
+hosts gets two keys. The exemption covers every worktree in the repository, including a human's or
+an unrelated agent's. A hub that omits the setting is reported as unknown. Outside git, doctor
+omits the line: no scope is in force. `GET /v1/claims` and the console name each claim's display
+`worktree_path`, `branch` and `host`, and `effective_scope`. That scope is `worktree` only when the
+policy is `worktree`, the origin is `auto` and the worktree key is set. An empty display path is an
+unknown location. The console shows the policy per repository and has no control that changes it.
 A session outside any git checkout takes no claim at all: it belongs to its host's context of
 sessions outside git, which is for mail only (ADR 034).
 
@@ -956,7 +970,13 @@ same-worktree exemption. That exemption then uses the claim's checkout identity,
 own-session submodule refusal is lifted when the claim and commit are in the same submodule
 checkout. A new guard prints an advisory and allows; an older guard ignores it and allows silently.
 A refusal explains the possible own-session case and gives the fence to release from the holding
-session before retrying. It is the strongest check Iris has, and it is cooperative.
+session before retrying. It is the strongest check Iris has, and it is cooperative. The check
+response always includes `claim_auto_scope` (`repository` or `worktree`). When the only overlaps
+are exempt, `message` stays empty and `advisories` names each one by path, holder, worktree,
+branch, repository and fence. `advisories` is omitted when there are none. A nonempty `message`
+remains a refusal; advisories do not weaken it. An older guard that reads only `message` allows
+an exempt overlap without printing it. A hub from before the field omits `claim_auto_scope`, and
+doctor reports that as unknown.
 
 ### D13. Security
 
