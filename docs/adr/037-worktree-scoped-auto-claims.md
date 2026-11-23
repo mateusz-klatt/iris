@@ -130,8 +130,10 @@ of an opted-in repository, not only to a coordinator's delegates.
    those advisories into the shell response's `message`, with the existing "Shell edit detected"
    and "cannot undo" wording. The current hook warns when that message is non-empty
    (`internal/hook/reconcile.go:155-156`). The guard instead keeps `message` empty for the same
-   advisory-only result, as decision 6 requires. A real shell conflict keeps its current warning,
-   and under `repository` the shared check has no advisories and behaves exactly as today.
+   advisory-only result, as decision 6 requires. A real shell conflict keeps its current warning.
+   Under `repository` the shared check has no advisories and keeps the previous same-checkout
+   skip: a holder in another checkout, including a parent or child, is still a warning. Under
+   `worktree` a relative Execution is skipped, matching the grant, and is not an advisory.
 
    Release is deliberately policy-dependent. Under `repository`, when a path leaves git status,
    the reconcile releases every matching automatic exact claim of that session on that repository

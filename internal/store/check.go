@@ -52,9 +52,11 @@ func (t *transaction) check(r Request) (map[string]any, error) {
 
 // checkPaths classifies staged or shell paths. shell is the Execution a shell
 // reconcile is granting for; it is empty for the commit guard. The guard skips
-// the committing checkout because it cannot tell who started git. The shell
-// knows its Execution, so it uses that grant's classification: a same-checkout
-// claim held by someone else is a real conflict, and the shell's own reusable
+// the committing checkout because it cannot tell who started git. Under
+// repository the shell uses that same skip, so a parent or child in another
+// checkout still warns. Under worktree the shell knows its Execution and uses
+// that grant's classification: a same-checkout claim held by someone else is a
+// real conflict, a relative Execution is not, and the shell's own reusable
 // claim is not.
 func (t *transaction) checkPaths(repo, host, worktree, incomingKey, shell string, paths []string) (map[string]any, error) {
 	policy, _, err := t.policy(repo)
@@ -85,12 +87,14 @@ func (t *transaction) checkPaths(repo, host, worktree, incomingKey, shell string
 			if err = t.row("SELECT host_id,worktree,branch FROM Execution WHERE id=?", c.Execution).Scan(&ch, &cw, &cb); err != nil {
 				return nil, err
 			}
-			if shell == "" {
+			if shell == "" || scope != "worktree" {
 				// Same checkout is not a conflict and not an advisory. Under repository
-				// that is the holder Execution's host and worktree. Under worktree it
-				// is the claim key, then the explicit display path, then a legacy
-				// row's Execution path (ADR 037). An empty incoming key never takes
-				// the cross-worktree exemption. The shell does not use this skip.
+				// that is the holder Execution's host and worktree, for the guard and
+				// the shell: a parent or child in another checkout still warns, as it
+				// did before worktree scope. Under worktree the guard uses the claim
+				// key, then the explicit display path, then a legacy row's Execution
+				// path (ADR 037). An empty incoming key never takes the cross-worktree
+				// exemption. The worktree-scope shell does not use this skip.
 				if sameGuardWorktree(scope, c, incomingKey, host, worktree, ch, cw) {
 					continue
 				}
@@ -137,10 +141,12 @@ func (t *transaction) checkPaths(repo, host, worktree, incomingKey, shell string
 	return out, nil
 }
 
-// shellClaim is autoClaim's decision for one overlapping claim. skip means the
-// grant does not treat it as a conflict. advise means the overlap is exempt and
-// the shell still reports it. A relative Execution is skipped and not advised,
-// matching the grant, which does not refuse a parent or child.
+// shellClaim is autoClaim's decision for one overlapping claim under worktree
+// scope. skip means the grant does not treat it as a conflict. advise means the
+// overlap is exempt and the shell still reports it. A relative Execution is
+// skipped and not advised, matching the grant, which does not refuse a parent
+// or child. Repository scope does not use this: there a different checkout
+// warns, including a parent or child.
 func (t *transaction) shellClaim(shell, scope, incomingKey string, c claim) (skip, advise bool, err error) {
 	if c.Execution == shell {
 		if reusesOwn(scope, c.Origin, c.WorktreeKey, incomingKey) {

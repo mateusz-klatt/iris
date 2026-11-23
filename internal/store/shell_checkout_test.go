@@ -37,8 +37,29 @@ func TestShellWarnsForAnotherExecutionInTheSameCheckout(t *testing.T) {
 	}
 }
 
+// Under repository a child shell is warned about its parent's claim in another
+// checkout, and still takes the path. v0.1.13 warned; the grant does not refuse
+// a relative. The overlap is not an advisory.
+func TestRepositoryShellWarnsAChildAboutItsParent(t *testing.T) {
+	s, _, _ := testStore(t)
+	parent, _ := scopeSession(t, s, "", "parent", "/repo/wt1", "dev:1", "main")
+	call(t, s, "touch", touchRequest(parent, "parent", "a.go"))
+	childReg := call(t, s, "sessions", Request{Client: "codex", Host: "host", SessionID: "child", ParentSessionID: "parent", Cwd: "/repo/wt2", Worktree: "/repo/wt2", WorktreeID: "dev:2", RemoteURL: scopeRemote, RootCommit: "root", Branch: "side", Source: "hook"})
+	child := Request{ExecutionID: childReg["execution_id"].(string), Generation: childReg["generation"].(int64)}
+	child.Kind, child.Status = "before", map[string]string{}
+	call(t, s, "reconcile", child)
+	child.Kind, child.Status = "after", map[string]string{"a.go": " M"}
+	out := call(t, s, "reconcile", child)
+	claimed, _ := out["claimed"].([]string)
+	text := messageOf(out)
+	if !strings.Contains(text, "Shell edit detected") || !strings.Contains(text, "a.go") || len(claimed) != 1 || claimed[0] != "a.go" || out["advisories"] != nil {
+		t.Fatalf("repository child shell: message %q claimed %v advisories %v", text, claimed, out["advisories"])
+	}
+}
+
 // A child shell is not warned about its parent's claim and still takes its own,
-// which is what the grant does. The overlap is not an advisory.
+// which is what the grant does once the repository opts into worktree scope.
+// The overlap is not an advisory.
 func TestShellDoesNotWarnAChildAboutItsParent(t *testing.T) {
 	s, _, _ := testStore(t)
 	parent, po := scopeSession(t, s, "", "parent", "/repo/wt1", "dev:1", "main")
