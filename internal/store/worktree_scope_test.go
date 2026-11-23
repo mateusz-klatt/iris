@@ -853,3 +853,146 @@ func TestAnOlderClaimInsertStaysRepositoryWide(t *testing.T) {
 		t.Fatal("legacy insert was exempt", got)
 	}
 }
+
+func scopeCheck(host, worktree, id string, paths ...string) Request {
+	return Request{Host: host, Cwd: worktree, Worktree: worktree, WorktreeID: id, RemoteURL: scopeRemote, RootCommit: "root", Paths: paths}
+}
+
+func messageOf(out map[string]any) string {
+	text, _ := out["message"].(string)
+	return text
+}
+
+// The guard skips its own checkout and refuses every other overlap while the
+// policy is repository, keys included. Under worktree the skip is the claim
+// key, then an explicit display path on the same host, then a legacy row's
+// Execution path. A null key is never an advisory.
+func TestGuardClassificationFollowsTheClaimKey(t *testing.T) {
+	s, _, _ := testStore(t)
+	held, ho := scopeSession(t, s, "", "held", "/repo/wt1", "dev:1", "feature")
+	repo := ho["repository_id"].(string)
+	call(t, s, "touch", touchRequest(held, "auto", "a.go"))
+	same := call(t, s, "check", scopeCheck("host", "/repo/wt1", "dev:1", "a.go"))
+	other := call(t, s, "check", scopeCheck("host", "/repo/wt2", "dev:2", "a.go"))
+	if messageOf(same) != "" || same["advisories"] != nil || len(same["conflicts"].([]map[string]any)) != 0 {
+		t.Fatal("repository refused the holder's checkout", same)
+	}
+	if messageOf(other) == "" || other["advisories"] != nil || len(other["conflicts"].([]map[string]any)) != 1 {
+		t.Fatal("repository allowed another checkout", other)
+	}
+
+	setScope(t, s, repo, "worktree")
+	same = call(t, s, "check", scopeCheck("host", "/repo/wt1", "dev:1", "a.go"))
+	other = call(t, s, "check", scopeCheck("host", "/repo/wt2", "dev:2", "a.go"))
+	crossHost := call(t, s, "check", scopeCheck("windows", "/repo/wt2", "dev:2", "a.go"))
+	if messageOf(same) != "" || same["advisories"] != nil {
+		t.Fatal("same key was not this checkout", same)
+	}
+	for _, got := range []map[string]any{other, crossHost} {
+		notes, _ := got["advisories"].([]map[string]any)
+		if messageOf(got) != "" || len(notes) != 1 || len(got["conflicts"].([]map[string]any)) != 0 {
+			t.Fatal("different key was a conflict", got)
+		}
+	}
+	missing := call(t, s, "check", scopeCheck("host", "/repo/wt2", "", "a.go"))
+	if messageOf(missing) == "" || missing["advisories"] != nil {
+		t.Fatal("missing committing key was exempt", missing)
+	}
+
+	call(t, s, "claim", claimRequest(held, "wide", "a.go", "exact"))
+	explicitSame := call(t, s, "check", scopeCheck("host", "/repo/wt1", "dev:check", "a.go"))
+	explicitHost := call(t, s, "check", scopeCheck("windows", "/repo/wt1", "dev:win", "a.go"))
+	explicitPath := call(t, s, "check", scopeCheck("host", "/repo/wt2", "dev:else", "a.go"))
+	if messageOf(explicitSame) != "" || explicitSame["advisories"] != nil {
+		t.Fatal("explicit display path on this host was refused", explicitSame)
+	}
+	if messageOf(explicitHost) == "" || explicitHost["advisories"] != nil || messageOf(explicitPath) == "" || explicitPath["advisories"] != nil {
+		t.Fatal("explicit claim was exempt", explicitHost, explicitPath)
+	}
+
+	call(t, s, "release", releaseAll(held))
+	call(t, s, "touch", touchRequest(held, "legacy", "old.go"))
+	if _, err := s.db.Exec("UPDATE Claim SET worktree_key=NULL,worktree_path=NULL WHERE execution_id=? AND path='old.go'", held.ExecutionID); err != nil {
+		t.Fatal(err)
+	}
+	legacySame := call(t, s, "check", scopeCheck("host", "/repo/wt1", "dev:1", "old.go"))
+	legacyOther := call(t, s, "check", scopeCheck("host", "/repo/wt2", "dev:2", "old.go"))
+	if messageOf(legacySame) != "" || legacySame["advisories"] != nil || messageOf(legacyOther) == "" || legacyOther["advisories"] != nil {
+		t.Fatal("legacy fallback", legacySame, legacyOther)
+	}
+
+	call(t, s, "touch", touchRequest(held, "displayed", "shown.go"))
+	if _, err := s.db.Exec("UPDATE Claim SET worktree_key=NULL WHERE execution_id=? AND path='shown.go'", held.ExecutionID); err != nil {
+		t.Fatal(err)
+	}
+	displayed := call(t, s, "check", scopeCheck("host", "/repo/wt1", "dev:1", "shown.go"))
+	if messageOf(displayed) == "" || displayed["advisories"] != nil {
+		t.Fatal("null-key auto with a display path was skipped or exempt", displayed)
+	}
+
+	call(t, s, "touch", touchRequest(held, "mix-auto", "mix.go"))
+	call(t, s, "claim", claimRequest(held, "mix-explicit", "real.go", "exact"))
+	mixed := call(t, s, "check", scopeCheck("host", "/repo/wt2", "dev:2", "mix.go", "real.go"))
+	notes, _ := mixed["advisories"].([]map[string]any)
+	if messageOf(mixed) == "" || len(notes) != 1 || len(mixed["conflicts"].([]map[string]any)) != 1 {
+		t.Fatal("mixed advisory and conflict", mixed)
+	}
+}
+
+func TestSubmoduleGuardRefusalFollowsTheOwningCheckout(t *testing.T) {
+	s, _, _ := testStore(t)
+	parent, _ := checkoutSession(t, s, "codex", "", "parent", "/src/snapper", "dev:super", superRemote, "snapper-root", "main")
+	group := submodule("src/a.ts")
+	group.WorktreeID = "dev:fe"
+	granted := call(t, s, "touch_files", filesTouch(parent, "into-fe", group))
+	if granted["action"] != "allow" || len(granted["granted"].([]map[string]any)) != 1 {
+		t.Fatal(granted)
+	}
+	subRepo := granted["granted"].([]map[string]any)[0]["repository_id"].(string)
+	ask := Request{Host: "host", Cwd: "/src/snapper/frontend", Worktree: "/src/snapper/frontend", WorktreeID: "dev:fe", RemoteURL: frontendRemote, RootCommit: "frontend-root", Paths: []string{"src/a.ts"}}
+	refused := call(t, s, "check", ask)
+	if messageOf(refused) == "" || refused["advisories"] != nil {
+		t.Fatal("repository policy allowed the submodule commit", refused)
+	}
+	setScope(t, s, subRepo, "worktree")
+	if got := call(t, s, "check", ask); messageOf(got) != "" || got["advisories"] != nil || len(got["conflicts"].([]map[string]any)) != 0 {
+		t.Fatal("same submodule checkout was refused", got)
+	}
+	ask.WorktreeID = "dev:other"
+	ask.Worktree, ask.Cwd = "/src/frontend-wt", "/src/frontend-wt"
+	got := call(t, s, "check", ask)
+	notes, _ := got["advisories"].([]map[string]any)
+	if messageOf(got) != "" || len(notes) != 1 {
+		t.Fatal("other submodule checkout was a conflict", got)
+	}
+}
+
+func TestShellRendersAnAdvisoryAndKeepsARealConflict(t *testing.T) {
+	for _, scope := range []string{"repository", "worktree"} {
+		t.Run(scope, func(t *testing.T) {
+			s, _, _ := testStore(t)
+			holder, ho := scopeSession(t, s, "", "holder", "/repo/wt1", "dev:1", "main")
+			setScope(t, s, ho["repository_id"].(string), scope)
+			call(t, s, "touch", touchRequest(holder, "held", "a.go"))
+			incoming, _ := scopeSession(t, s, "", "incoming", "/repo/wt2", "dev:2", "other")
+			incoming.Kind, incoming.Status = "before", map[string]string{}
+			call(t, s, "reconcile", incoming)
+			incoming.Kind, incoming.Status = "after", map[string]string{"a.go": " M"}
+			out := call(t, s, "reconcile", incoming)
+			text := messageOf(out)
+			if !strings.Contains(text, "Shell edit detected") || !strings.Contains(text, "cannot undo") {
+				t.Fatal(out)
+			}
+			if scope == "worktree" {
+				notes, _ := out["advisories"].([]map[string]any)
+				if len(notes) != 1 || !strings.Contains(text, "also auto-claimed") || len(out["claimed"].([]string)) != 1 {
+					t.Fatal(out)
+				}
+				return
+			}
+			if _, ok := out["advisories"]; ok || strings.Contains(text, "also auto-claimed") || len(out["claimed"].([]string)) != 0 {
+				t.Fatal("repository shell took or advised a claimed path", out)
+			}
+		})
+	}
+}

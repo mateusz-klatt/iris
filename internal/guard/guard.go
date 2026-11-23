@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/mateusz-klatt/iris/internal/display"
 	"github.com/mateusz-klatt/iris/internal/gitinfo"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 )
@@ -168,42 +169,84 @@ func Remove(ctx context.Context, dir string) error {
 	return nil
 }
 
+// Report is the guard's answer. Message refuses the commit. Advisories do not:
+// the CLI prints them and exits successfully. Folding an advisory into Message
+// would make an older guard refuse a commit this policy allows (ADR 037).
+type Report struct {
+	Message    string
+	Advisories []hubclient.Advisory
+}
+
 // Check inspects both ends of staged renames, including deletions and unusual names.
 // Hub errors are returned separately so the CLI can warn and allow a commit.
+// The returned message is empty when the only overlaps are advisories.
 func Check(ctx context.Context, dir string, hub *hubclient.Client) (string, error) {
-	repo, err := gitinfo.Find(dir)
+	report, err := Classify(ctx, dir, hub)
 	if err != nil {
 		return "", err
+	}
+	return report.Message, nil
+}
+
+// Classify is Check with the advisory list kept apart from the refusal.
+func Classify(ctx context.Context, dir string, hub *hubclient.Client) (Report, error) {
+	repo, err := gitinfo.Find(dir)
+	if err != nil {
+		return Report{}, err
 	}
 	paths, err := staged(ctx, repo.Worktree)
 	if err != nil {
-		return "", err
+		return Report{}, err
 	}
 	heads, err := incoming(repo.GitDir)
 	if err != nil {
-		return "", err
+		return Report{}, err
 	}
 	for _, head := range heads {
 		// A staged path equal to an incoming commit's version is that commit's content, not
 		// this side's change: only paths that differ from every side are checked.
 		differs, err := staged(ctx, repo.Worktree, head)
 		if err != nil {
-			return "", err
+			return Report{}, err
 		}
 		paths = intersect(paths, differs)
 	}
 	if len(paths) == 0 {
-		return "", nil
+		return Report{}, nil
 	}
 	host, err := hostname()
 	if err != nil {
-		return "", err
+		return Report{}, err
 	}
 	result, err := hub.CheckPaths(ctx, hubclient.CheckRequest{CommonDir: repo.CommonDir, Host: host, Worktree: repo.Worktree, WorktreeID: repo.WorktreeID, RemoteURL: repo.RemoteURL, RootCommit: repo.RootCommit, Paths: paths})
 	if err != nil {
-		return "", err
+		return Report{}, err
 	}
-	return result.Message, nil
+	return Report{Message: result.Message, Advisories: result.Advisories}, nil
+}
+
+// AdvisoryText is the sentence a new guard prints. It is not part of Message:
+// an empty result refuses nothing. Empty display values are unknown.
+func AdvisoryText(items []hubclient.Advisory) string {
+	if len(items) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	for i, a := range items {
+		if i > 0 {
+			b.WriteByte(' ')
+		}
+		worktree, branch := a.Worktree, a.Branch
+		if worktree == "" {
+			worktree = "unknown"
+		}
+		if branch == "" {
+			branch = "unknown"
+		}
+		fmt.Fprintf(&b, "Iris: %s is also auto-claimed by %s in worktree %s on branch %s.", display.Inline(a.Path), display.Inline(a.Holder), display.Inline(worktree), display.Inline(branch))
+	}
+	b.WriteString(" This repository allows overlapping automatic claims across worktrees; this edit is allowed, and the overlap can meet immediately in a shared filesystem tree or surface at rebase or merge.")
+	return b.String()
 }
 
 // staged lists the paths whose staged content differs from HEAD's, or from the commit given,

@@ -421,9 +421,24 @@ type CheckRequest struct {
 	Paths      []string `json:"paths"`
 }
 
+// Advisory is an exempt automatic overlap. An older guard has no field for it
+// and ignores it. A real conflict stays in Message, so ignoring this cannot
+// allow a refusal (ADR 037).
+type Advisory struct {
+	Path         string `json:"path"`
+	Holder       string `json:"holder"`
+	Worktree     string `json:"worktree"`
+	Branch       string `json:"branch"`
+	RepositoryID string `json:"repository_id"`
+	Fence        int64  `json:"fence"`
+}
+
 type CheckResponse struct {
 	Message   string  `json:"message"`
 	Conflicts []Claim `json:"conflicts"`
+	// Advisories is empty unless the only overlaps are exempt automatic claims
+	// in other worktrees. Omitempty keeps an older response byte-compatible.
+	Advisories []Advisory `json:"advisories,omitempty"`
 	// CasePolicy is the repository's case policy, folded or sensitive (ADR 003).
 	CasePolicy string `json:"case_policy,omitempty"`
 	// Attention is in every successful shell reconcile answer from a hub that names attention,

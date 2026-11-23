@@ -79,10 +79,12 @@ func (t *transaction) checkPaths(repo, host, worktree, incomingKey string, paths
 			if err = t.row("SELECT host_id,worktree,branch FROM Execution WHERE id=?", c.Execution).Scan(&ch, &cw, &cb); err != nil {
 				return nil, err
 			}
-			// The same host and worktree string is this checkout. Key comparison for
-			// that exemption, including a null-key explicit claim, is the guard's
-			// later step. An empty incoming key never takes the cross-worktree exemption.
-			if ch == host && cw == worktree {
+			// Same checkout is not a conflict and not an advisory. Under repository
+			// that is the holder Execution's host and worktree. Under worktree it
+			// is the claim key, then the explicit display path, then a legacy
+			// row's Execution path (ADR 037). An empty incoming key never takes
+			// the cross-worktree exemption.
+			if sameGuardWorktree(scope, c, incomingKey, host, worktree, ch, cw) {
 				continue
 			}
 			if exemptAutoOverlap(scope, c.Origin, c.WorktreeKey, "auto", incomingKey) {

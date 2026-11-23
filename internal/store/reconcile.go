@@ -129,6 +129,14 @@ func (t *transaction) reconcileChanges(e execution, r Request) (map[string]any, 
 		note := fmt.Sprintf("Iris claimed %d changed paths for this session and left %d unclaimed, at the limit of %d live claims.", len(claimed), skipped, maxClaims)
 		out["message"] = strings.TrimSpace(out["message"].(string) + " " + note)
 	}
+	// An advisory-only overlap stays out of the guard's message. The shell hook
+	// warns on a non-empty message, so the advisory is rendered here, and a real
+	// conflict keeps the warning it already has (ADR 037).
+	if text, _ := out["message"].(string); text == "" {
+		if advisories, _ := out["advisories"].([]map[string]any); len(advisories) > 0 {
+			out["message"] = advisoryMessage(advisories)
+		}
+	}
 	if text, _ := out["message"].(string); text != "" {
 		out["message"] = "Shell edit detected. " + text + " Iris detects these changes and cannot undo them."
 	}

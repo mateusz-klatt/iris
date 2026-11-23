@@ -63,6 +63,29 @@ func shown(v string) string {
 	return v
 }
 
+// sameGuardWorktree is the guard's same-checkout skip (ADR 037 decision 6).
+// Under repository it is the holder Execution's host and worktree string, and a
+// key never changes that. Under worktree a claim key matches the committing
+// key. A null-key explicit claim matches the holder's host and its display
+// path; the same path on another host does not. A legacy row with no display
+// path keeps the Execution host and path. Any other null key is not this
+// checkout, and it is not an advisory.
+func sameGuardWorktree(scope string, c claim, incomingKey, host, worktree, holderHost, holderWorktree string) bool {
+	if scope != "worktree" {
+		return holderHost == host && holderWorktree == worktree
+	}
+	if c.WorktreeKey != "" {
+		return incomingKey != "" && c.WorktreeKey == incomingKey
+	}
+	if c.Origin == "explicit" && c.WorktreePath != "" {
+		return holderHost == host && worktreePathsEqual(c.WorktreePath, worktree)
+	}
+	if c.WorktreePath == "" {
+		return holderHost == host && holderWorktree == worktree
+	}
+	return false
+}
+
 // advisoryMessage is the sentence a touch shows. Each overlap is one sentence,
 // then the shared explanation once. Values are display data, not instructions.
 func advisoryMessage(items []map[string]any) string {
