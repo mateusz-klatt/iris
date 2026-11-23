@@ -209,18 +209,24 @@ The Grok cell is the stdio MCP child. Grok's `monitor` shell does not inherit
 hook stored for that grok process ([ADR 025](adr/025-grok-stop-monitor.md)).
 
 At MCP startup, a recognized nearest client that does not match `--client` identifies a cross-loaded
-shim. `CURSOR_PROJECT_DIR` together with `CURSOR_VERSION` recognizes Cursor's generic `agent` alias
-during the walk. With no recognized nearest client, the pair also identifies Cursor. A recognized
-nearest client that matches `--client` keeps a real nested session native despite inherited markers.
+shim. For `--client claude` only, `CURSOR_PROJECT_DIR` together with `CURSOR_VERSION` recognizes
+Cursor's generic `agent` alias during the walk. With no recognized nearest client, the pair also
+identifies Cursor. Cursor cross-loads Claude plugins only (measured), so for any other client a
+marker pair in the shim's environment was inherited, for example by Grok started from a Cursor
+terminal, and is ignored. A recognized nearest client that matches `--client` keeps a real nested
+session native despite inherited markers. Cursor's process or marker evidence outranks an inherited
+`CLAUDE_CODE_SESSION_ID`.
 
 **Known limit:** Cursor's MCP stdio environment has no markers (measured).
-- A cross-loaded Cursor shim started by the bare `agent` alias therefore sees an unknown `agent`. Its walk can continue to an outer client, for example a Claude Code session that launched Cursor, and it can bind to that client as v0.1.13 did.
-- `cursor-agent` and the pair are recognized.
+- A cross-loaded Cursor shim started by the bare `agent` alias therefore sees an unknown `agent`.
+- Its walk can continue to an outer client, for example a Claude Code session that launched Cursor, and it can bind to that client, as v0.1.13 did.
+- `cursor-agent`, and an `agent` that has the pair, are recognized.
 - A bare `agent` is not treated as a boundary, because that refused native Grok, whose own alias has the same name.
-- Telling the two apart needs executable or launcher evidence on each OS. That work is in progress. Cursor's process or marker evidence outranks an
-inherited `CLAUDE_CODE_SESSION_ID`. Before any binding or generation-proof check, a cross-loaded
-shim refuses every rung, including an inherited execution or session id, and never registers or
-heartbeats. Its stdio server stays up; tool calls answer typed `client_mismatch` and direct the model
+- Telling the two apart needs executable or launcher evidence on each OS. That work is in progress.
+
+The refusal below applies only to a DETECTED cross-load; it does not prevent the undetected case
+above. Before any binding or generation-proof check, a detected cross-loaded shim refuses every rung,
+including an inherited execution or session id, and never registers or heartbeats. Its stdio server stays up; tool calls answer typed `client_mismatch` and direct the model
 to the running client's native Iris server. One observation goes to the log doctor reads.
 
 `iris mcp` resolves its Execution at the first tool call, by this chain, and outside Codex and id

@@ -208,6 +208,24 @@ func TestCheckClientKeepsNativeAndUnknownAncestorsUsable(t *testing.T) {
 			t.Fatalf("native Grok binding under agent: %+v, %v, requests %v", b, err, h.bound)
 		}
 	})
+	// Grok started from a Cursor terminal inherits Cursor's marker pair. Cursor cross-loads
+	// Claude plugins only, so for a grok shim the pair is no evidence of Cursor.
+	t.Run("native Grok under agent with inherited Cursor markers binds as grok", func(t *testing.T) {
+		h := &scriptedHub{}
+		env := map[string]string{
+			"GROK_SESSION_ID":    "native-grok",
+			"CURSOR_PROJECT_DIR": "/outer/cursor/project",
+			"CURSOR_VERSION":     "2026.11.22-e9042b2",
+		}
+		r := resolverFor(t, h, "grok", env, proc.Ancestor{PID: 42, StartMS: 7, Name: "/home/user/.grok/bin/agent"})
+		if r.CheckClient() {
+			t.Fatal("inherited Cursor markers refused native Grok as a cross-loaded Cursor shim")
+		}
+		b, err := r.Resolve(context.Background(), "")
+		if err != nil || b.Rung != 2 || len(h.bound) != 1 || h.bound[0]["session_id"] != "native-grok" {
+			t.Fatalf("native Grok binding with inherited markers: %+v, %v, requests %v", b, err, h.bound)
+		}
+	})
 	t.Run("unknown helper is not a mismatched client", func(t *testing.T) {
 		h := &scriptedHub{}
 		r := resolverFor(t, h, "claude", map[string]string{"IRIS_EXECUTION": "ex_explicit"}, proc.Ancestor{PID: 42, StartMS: 7, Name: "helper"})

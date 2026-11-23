@@ -145,13 +145,21 @@ func ClientMismatchObservation(client, runner string) string {
 
 // CheckClient refuses every binding route when another client cross-loaded this shim.
 func (r *Resolver) CheckClient() bool {
-	runner, known := proc.ClientNameWithEnv(r.ancestor().Name, r.Getenv)
+	// Cursor cross-loads Claude plugins only (measured), and its MCP stdio environment carries no
+	// markers, so for any other client a marker pair seen here was inherited, for example by Grok
+	// started from a Cursor terminal, and is no evidence of Cursor.
+	markers := r.Client == "claude" && proc.CursorEnvironment(r.Getenv)
+	name := r.ancestor().Name
+	runner, known := proc.ClientName(name)
+	if markers {
+		runner, known = proc.ClientNameWithEnv(name, r.Getenv)
+	}
 	if known && runner == r.Client {
 		return false
 	}
 	// A matching nearest client keeps a native session nested in Cursor usable. Without one,
 	// Cursor's marker pair identifies its cross-loaded hook shell despite an inherited Claude id.
-	if !known && r.Client != "cursor" && proc.CursorEnvironment(r.Getenv) {
+	if !known && markers {
 		runner, known = "cursor", true
 	}
 	if !known {

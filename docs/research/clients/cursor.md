@@ -108,7 +108,7 @@ A nearest recognized client matching the requested integration still keeps a rea
 warning: Cursor cross-loads the Claude Code plugin. For one project, `agent mcp disable plugin-iris-iris` (~/.cursor/projects/<project>/mcp-disabled.json) is the only control. Iris cannot stop Cursor from spawning the plugin's processes.
 ```
 
-The command is per-project and writes `~/.cursor/projects/<project>/mcp-disabled.json`. It is the only known control for the plugin's MCP server. Iris cannot stop Cursor from spawning the plugin's processes; the hook and shim guards only prevent those processes from acting as a Claude session in Iris. [MEASURED]
+The command is per-project and writes `~/.cursor/projects/<project>/mcp-disabled.json`. It is the only known control for the plugin's MCP server. Iris cannot stop Cursor from spawning the plugin's processes. The hook and shim guards prevent those processes from acting as a Claude session in Iris only when they DETECT the cross-load: through a `cursor-agent` ancestor, or the marker pair, which an MCP shim cross-loaded under the bare `agent` alias does not have (see the known limit above). In the shim, the marker pair is honoured only for `--client claude`, because Cursor cross-loads Claude plugins only, and a pair seen by another client's shim was inherited. [MEASURED]
 
 ## B. Minimal Iris integration
 
