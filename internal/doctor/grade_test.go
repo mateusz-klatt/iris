@@ -66,6 +66,31 @@ func TestFailuresAreGradedByStage(t *testing.T) {
 	}
 }
 
+func TestAntigravityConversationFailuresAreFailedOpen(t *testing.T) {
+	now := time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
+	for _, event := range []string{"SessionStart", "PreInvocation", "PostInvocation", "Stop"} {
+		t.Run(event, func(t *testing.T) {
+			token := filepath.Join(t.TempDir(), "hub.token")
+			entry := fmt.Sprintf(`{"time":%q,"client":"antigravity","event":%q,"stage":"antigravity","error":"permission denied"}`+"\n",
+				now.Add(-time.Hour).Format(time.RFC3339), event)
+			if err := os.WriteFile(filepath.Join(filepath.Dir(token), "hook-failures.log"), []byte(entry), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			res := Result{HubUp: true, TokenOK: true, Report: Report{Clients: []ClientReport{
+				{Client: integrate.Antigravity, Status: StatusOK},
+			}}}
+			if err := applyFailures(&res, token, now); err != nil {
+				t.Fatal(err)
+			}
+			row := res.Report.Clients[0]
+			wantDetail := "hook failed open in the last 24 h; edits may have gone unclaimed: " + event + " antigravity: permission denied, at 11:00 UTC"
+			if row.Status != StatusSilent || row.Detail != wantDetail || res.ExitCode() != 1 {
+				t.Fatalf("Antigravity failure grade = %+v, exit %d", row, res.ExitCode())
+			}
+		})
+	}
+}
+
 func TestLivePlansKeepReadinessDespiteFailureHistory(t *testing.T) {
 	now := time.Date(2026, 11, 9, 12, 0, 0, 0, time.UTC)
 	deadline := fmt.Sprintf(`{"time":%q,"client":"codex","event":"post_tool","stage":"shell status","error":"shell reconciliation passed its deadline"}`+"\n", now.Format(time.RFC3339))
