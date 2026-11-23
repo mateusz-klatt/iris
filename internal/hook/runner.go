@@ -181,14 +181,6 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 	if out, ok := r.antigravityHook(ev, state.observe); ok {
 		return r.finish(state, ev, out)
 	}
-	// A native SessionStart supersedes the old local witness even when the hub is unavailable.
-	if ev.Kind == KindSessionStart && ev.ParentSessionID == "" && ev.SessionID != CanarySession {
-		if files, ok := r.memory().(fileMemory); ok {
-			if err := files.rememberProcessSession(string(ev.Client), ev.SessionID, r.ancestor()); err != nil {
-				r.recordFailure(stageSessionFiles, err, nil)
-			}
-		}
-	}
 	if ev.Client == ClientCodex && ev.Kind == KindPrompt {
 		r.consumeWake(ev)
 	}
@@ -224,6 +216,14 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 	switch ev.Kind {
 	case KindSessionStart, KindSubagentStart:
 		state.at("session")
+		// A native SessionStart supersedes the old local witness even when the hub is unavailable.
+		if ev.Kind == KindSessionStart && ev.ParentSessionID == "" && ev.SessionID != CanarySession {
+			if files, ok := r.memory().(fileMemory); ok {
+				if err := files.rememberProcessSession(string(ev.Client), ev.SessionID, r.ancestor()); err != nil {
+					r.recordFailure(stageSessionFiles, err, nil)
+				}
+			}
+		}
 		// What the session was told is read before the hub answers; see attentionNote.
 		rev := r.toldRevision(ev)
 		sess, err := r.register(ctx, state, ev, repo)
