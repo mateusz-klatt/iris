@@ -82,7 +82,7 @@ func TestConsoleMutationCSRFAndMachineBoundariesApplyAcrossRoutes(t *testing.T) 
 	for _, route := range []struct{ method, path string }{
 		{"PATCH", "/v1/ui/profile"}, {"POST", "/v1/ui/password"},
 		{"PUT", "/v1/ui/accounts/" + a.ID + "/access"}, {"POST", "/v1/ui/messages"},
-		{"POST", "/v1/ui/threads/unknown/read"}, {"POST", "/v1/ui/claims/1/revoke"},
+		{"POST", "/v1/ui/threads/unknown/read"}, {"POST", "/v1/ui/threads/unknown/read/ms_unknown"}, {"POST", "/v1/ui/claims/1/revoke"},
 	} {
 		for _, csrf := range []string{"", "incorrect"} {
 			consoleDo(t, h, server.URL, route.method, route.path, map[string]any{}, consoleBrowser{cookie: b.cookie, csrf: csrf}, 403)

@@ -380,7 +380,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const [showInactive, setShowInactive] = useState(false);
   const [agentSearch, setAgentSearch] = useState("");
   const [threadError, setThreadError] = useState(false);
-  const [readWatermarkStale, setReadWatermarkStale] = useState(false);
+  const [readReloadOpening, setReadReloadOpening] = useState<ThreadOpening | null>(null);
   const readerTitle = useRef<HTMLHeadingElement>(null);
   const lastThreadButton = useRef<HTMLButtonElement | null>(null);
   const sessions = useMemo(() => overview?.agents ?? [], [overview]);
@@ -404,7 +404,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const [openedThread, setOpenedThread] = useState<ThreadOpening | null>(null);
   const selectedId = openedThread?.id ?? null;
   const readRequestedFor = useRef<ThreadOpening | Promise<ThreadDetail> | null>(null);
-  const pendingRead = useRef<{ id: string; repositoryId: string; lastMessageId: string } | null>(null);
+  const pendingRead = useRef<{ opening: ThreadOpening; id: string; repositoryId: string; lastMessageId: string } | null>(null);
   const [loadedThread, setLoadedThread] = useState<{ opening: ThreadOpening; detail: ThreadDetail } | null>(null);
   const loadedThreadRef = useRef(loadedThread);
   loadedThreadRef.current = loadedThread;
@@ -583,14 +583,15 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     pendingRead.current = null;
     return readThread(pending.id, pending.repositoryId, pending.lastMessageId)
       .then((read) => {
-        setReadWatermarkStale(false);
+        setReadReloadOpening(null);
         if (!deferReload && read > 0) {
           postReadRefresh.current?.();
         }
       })
       .catch((error: unknown) => {
-        if (error instanceof ApiError && error.status === 400) {
-          setReadWatermarkStale(true);
+        // 400 is this hub refusing a watermark. 404 is a v0.1.13 hub, which has no path-watermark route.
+        if (error instanceof ApiError && (error.status === 400 || error.status === 404)) {
+          setReadReloadOpening(pending.opening);
         }
       });
   }, []);
@@ -847,9 +848,13 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
         }
         setLoadedThread({ opening: openedThread, detail });
         setThreadError(false);
-        setReadWatermarkStale(false);
-        if (releaseReadAuthorization() && !member && unreadForOperator(detail)) {
-          pendingRead.current = { id, repositoryId, lastMessageId: detail.high_water_message_id };
+        const highWater = detail.high_water_message_id ?? "";
+        // A passive refresh may replace the snapshot. It must not post, and it must not drop a
+        // reload hint for this opening. An old hub omits the high-water id; do not acknowledge.
+        if (!member && unreadForOperator(detail) && highWater === "") {
+          setReadReloadOpening(openedThread);
+        } else if (releaseReadAuthorization() && !member && unreadForOperator(detail)) {
+          pendingRead.current = { opening: openedThread, id, repositoryId, lastMessageId: highWater };
           void flushRead();
         }
         // Refresh an untouched suggestion together with loaded detail, retaining edited drafts (A14).
@@ -1177,7 +1182,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
                         <h2 id="thread-title" tabIndex={-1} ref={readerTitle}>{thread === null ? t(threadError ? "operator.loadError" : "message.loading") : thread.messages[0]?.subject ?? thread.id}</h2>
                       </header>
                       {threadError ? <div className="state-panel"><p role="alert">{t("operator.loadError")}</p><button type="button" onClick={() => { readerTitle.current?.focus(); setThreadError(false); setThreadRevision((value) => value + 1); }}>{t("operator.retry")}</button></div> : null}
-                      {readWatermarkStale ? <p role="alert">{t("operator.readReload")}</p> : null}
+                      {readReloadOpening === openedThread ? <p role="alert">{t("operator.readReload")}</p> : null}
                       {thread !== null ? <>
                   {thread.messages.map((message) => (
                     <article key={message.id} className="thread-message">

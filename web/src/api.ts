@@ -101,8 +101,11 @@ export interface ThreadMessage extends MessageAuthor {
 
 export interface ThreadDetail {
   id: string;
-  /** Visible message with the greatest Message rowid, in insertion order. */
-  high_water_message_id: string;
+  /**
+   * Visible message with the greatest Message rowid, in insertion order.
+   * A hub from before this field omits it. The console then does not acknowledge.
+   */
+  high_water_message_id?: string;
   messages: ThreadMessage[];
 }
 
@@ -277,10 +280,17 @@ export function getThread(id: string, repositoryId = "", signal?: AbortSignal): 
   return getJson(`/v1/ui/threads/${encodeURIComponent(id)}${suffix}`, signal);
 }
 
-/** Acknowledges operator mail through lastMessageId, the snapshot's insertion-order high water. */
+/**
+ * Acknowledges operator mail through lastMessageId, the snapshot's insertion-order high water.
+ * The id is a path segment. v0.1.13 only acknowledges `POST .../read` and ignores a body watermark,
+ * so that hub rejects this route. An empty id is not sent.
+ */
 export async function readThread(id: string, repositoryId = "", lastMessageId: string, signal?: AbortSignal): Promise<number> {
+  if (lastMessageId === "") {
+    throw new ApiError(400);
+  }
   const token = consoleCsrf;
-  const response = await request(`/v1/ui/threads/${encodeURIComponent(id)}/read`, {
+  const response = await request(`/v1/ui/threads/${encodeURIComponent(id)}/read/${encodeURIComponent(lastMessageId)}`, {
     method: "POST",
     signal,
     headers: { "Content-Type": "application/json" },

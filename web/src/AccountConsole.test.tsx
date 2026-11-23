@@ -120,7 +120,7 @@ describe("named console", () => {
     serveAccount();
     const forbidden = vi.fn();
     server.use(
-      http.post("*/v1/ui/threads/:id/read", () => { forbidden(); return HttpResponse.json({ read: 1 }); }),
+      http.post("*/v1/ui/threads/:id/read/:message", () => { forbidden(); return HttpResponse.json({ read: 1 }); }),
       http.get("*/v1/ui/doctor", () => { forbidden(); return HttpResponse.json({ hosts: [] }); }),
     );
     const user = userEvent.setup();

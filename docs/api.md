@@ -846,16 +846,30 @@ same order. `high_water_message_id` does not: it is the maximum `rowid` among th
 this response. After a wall-clock step back, the last displayed message can have a smaller
 `rowid` than one shown above it.
 
-`POST /v1/ui/threads/{id}/read` requires `{"repository_id":"...","last_message_id":"ms_..."}`.
-Omitting `last_message_id` returns `bad_request` and acknowledges nothing. The error tells the
-operator to reload the console, because a tab opened before this requirement has no watermark.
-The message must belong to the thread and be visible in that view; an unknown, foreign or hidden
-id returns `not_found`. The hub then acknowledges human deliveries whose Message `rowid` is no
-greater than that message's `rowid`: the selected repository's deliveries, or every repository's
-when `repository_id` is empty. This insertion-order bound keeps later commits unread even when
-their wall-clock timestamps or random ids sort before the watermark. It returns `{"read": n}`.
-The console sends `high_water_message_id` from the detail response loaded by an explicit, visible
-open. A passive refresh does not advance that high-water mark or authorize another read. Mail
+`POST /v1/ui/threads/{id}/read/{message_id}` acknowledges through the message id in the path.
+The body is `{"repository_id":"..."}`. The path id is the watermark; a `last_message_id` in the
+body does not replace it. An unknown thread, or an unknown, foreign or hidden id, returns
+`not_found` and acknowledges nothing. The hub then acknowledges human deliveries whose Message
+`rowid` is no greater than that message's `rowid`: the selected repository's deliveries, or every
+repository's when `repository_id` is empty. This insertion-order bound keeps later commits unread
+even when their wall-clock timestamps or random ids sort before the watermark. It returns
+`{"read": n}`.
+
+The console sends this request only for an explicit, visible open whose detail response included
+a non-empty `high_water_message_id`, and that id is the path segment. A snapshot that omits the
+field is not acknowledged; the console asks the operator to reload. v0.1.13 does not have this route.
+Its handler returns `not_found` (`unknown console route`) before any acknowledgement. That hub's
+`POST /v1/ui/threads/{id}/read` acknowledges every visible human delivery in the thread and
+ignores `last_message_id`: its decoder accepts unknown fields, and its read takes no watermark.
+The current console does not call that route.
+
+`POST /v1/ui/threads/{id}/read` remains for a console opened before the path watermark. An unknown
+thread is still `not_found` and acknowledges nothing. When the thread exists, omitting
+`last_message_id` returns `bad_request` and acknowledges nothing. The error tells the operator
+to reload the console, because a tab opened before this requirement has no watermark. A supplied
+`last_message_id` uses the same `rowid` bound as the path form.
+
+A passive refresh does not advance that high-water mark or authorize another read. Mail
 committed after that snapshot stays unread until the next explicit open. There is no way to mark
 mail unread again.
 

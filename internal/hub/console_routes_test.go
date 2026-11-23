@@ -108,6 +108,20 @@ func TestConsoleObjectRoutingUsesPathIDsAndReturnsOperationResults(t *testing.T)
 	if read["read"] != float64(0) {
 		t.Fatal("opening sent mail acknowledged unrelated deliveries")
 	}
+	// The path is the watermark. A body without last_message_id must not become a whole-thread read.
+	// v0.1.13's read is exactly three segments ending in "read"; this fourth segment is unknown there.
+	marked := consoleRoute(t, h, server, cookie, csrf, "POST", "/v1/ui/threads/"+thread+"/read/"+message, `{"key":"forged-body-id"}`, 200)
+	if marked["read"] != float64(0) {
+		t.Fatal("path watermark acknowledged unrelated deliveries", marked)
+	}
+	watermark := strings.Split(strings.TrimPrefix("/v1/ui/threads/"+thread+"/read/"+message, "/v1/ui/"), "/")
+	if len(watermark) == 3 && watermark[0] == "threads" && watermark[2] == "read" {
+		t.Fatal("watermark path is the v0.1.13 read route")
+	}
+	missing := consoleRoute(t, h, server, cookie, csrf, "POST", "/v1/ui/threads/"+thread+"/read/ms_missing", `{}`, 404)
+	if missing["error"].(map[string]any)["code"] != "not_found" {
+		t.Fatal("unknown path watermark", missing)
+	}
 	claimBody := authority(session)
 	claimBody["key"], claimBody["path"], claimBody["kind"] = "route-claim", "file.go", "exact"
 	claim := request(t, server, "POST", "/v1/claims", claimBody, 200)

@@ -22,7 +22,7 @@ function mockVisibility(initial: DocumentVisibilityState) {
 
 function observeThreadReads(fetch = vi.spyOn(globalThis, "fetch")) {
   // Observe dispatch synchronously while MSW still handles the requests.
-  return () => fetch.mock.calls.filter(([url, init]) => init?.method === "POST" && String(url).endsWith("/read"));
+  return () => fetch.mock.calls.filter(([url, init]) => init?.method === "POST" && /\/read\/[^/]+$/.test(String(url)));
 }
 
 it("starts with operator conversations, keeps fleet activity separate and exposes shortcuts", async () => {
@@ -298,7 +298,7 @@ it("neither selects nor reads a new thread when a refresh changes the list", asy
       details++;
       return HttpResponse.json({ ...threadDetail, id: "ms_new" });
     }),
-    http.post("*/v1/ui/threads/:id/read", () => {
+    http.post("*/v1/ui/threads/:id/read/:message", () => {
       reads++;
       return HttpResponse.json({ read: 1 });
     }),
@@ -328,7 +328,7 @@ it("sends exactly one read for an explicit visible open under StrictMode and non
   let messages = threadDetail.messages;
   server.use(
     http.get("*/v1/ui/threads/:id", () => HttpResponse.json({ ...threadDetail, messages })),
-    http.post("*/v1/ui/threads/:id/read", async ({ request }) => {
+    http.post("*/v1/ui/threads/:id/read/:message", async ({ request }) => {
       readBodies.push(await request.json());
       messages = messages.map((message) => ({ ...message, recipients: [{ name: "human", state: "acked" }] }));
       return HttpResponse.json({ read: 1 });
@@ -473,7 +473,7 @@ it.each(["visible", "hidden"] as const)("reads newly arrived mail once when reop
   server.use(
     http.get("*/v1/ui/overview", () => HttpResponse.json({ ...sessionOverview, human_unread: unread })),
     http.get("*/v1/ui/threads/:id", () => HttpResponse.json({ ...threadDetail, messages })),
-    http.post("*/v1/ui/threads/:id/read", () => {
+    http.post("*/v1/ui/threads/:id/read/:message", () => {
       unread--;
       return HttpResponse.json({ read: 1 });
     }),
@@ -659,7 +659,7 @@ describe("console view URL routing", () => {
     const threadReads = vi.fn();
     server.use(
       http.get("*/v1/ui/threads/:id", () => { threadGets(); return HttpResponse.json(threadDetail); }),
-      http.post("*/v1/ui/threads/:id/read", () => { threadReads(); return HttpResponse.json({ read: 1 }); }),
+      http.post("*/v1/ui/threads/:id/read/:message", () => { threadReads(); return HttpResponse.json({ read: 1 }); }),
     );
     window.location.hash = badHash;
     render(<App connect={() => () => {}} />);
@@ -796,7 +796,7 @@ describe("console view URL routing", () => {
         detailCalls++;
         return HttpResponse.json(threadDetail);
       }),
-      http.post("*/v1/ui/threads/:id/read", () => {
+      http.post("*/v1/ui/threads/:id/read/:message", () => {
         readCalls++;
         return HttpResponse.json({ read: 1 });
       }),

@@ -31,6 +31,27 @@ afterEach(() => {
   vi.useRealTimers();
 });
 
+describe("thread acknowledgement", () => {
+  it("posts the watermark as a path an older hub does not acknowledge", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(() => Promise.resolve(new Response(JSON.stringify({ read: 1 }), {
+      status: 200,
+      headers: { "Content-Type": "application/json" },
+    })));
+    vi.stubGlobal("fetch", fetch);
+    await expect(readThread("ms_first", "rp_1", "ms_water")).resolves.toBe(1);
+    const [url, init] = fetch.mock.calls[0] ?? [];
+    expect(String(url)).toContain("/v1/ui/threads/ms_first/read/ms_water");
+    expect(JSON.parse(String(init?.body))).toEqual({ repository_id: "rp_1", last_message_id: "ms_water" });
+  });
+
+  it("does not post a read without a watermark", async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>();
+    vi.stubGlobal("fetch", fetch);
+    await expect(readThread("ms_first", "", "")).rejects.toMatchObject({ status: 400 });
+    expect(fetch).not.toHaveBeenCalled();
+  });
+});
+
 describe("operator watch", () => {
   it("binds reads to the mounted session and requests a reset when the shared cookie changes", async () => {
     setConsoleCsrf("iris-first-csrf");

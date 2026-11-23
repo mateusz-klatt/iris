@@ -20,7 +20,12 @@ this configuration neither creates one nor authorizes anyone to create it.
 
 ## Notes for the next operator release
 
+Publish this in the release notes:
+
 Reload any console tab opened before the upgrade; an old tab can no longer mark threads read (it now gets an error asking you to reload).
+
+Reload console tabs after a rollback to an older hub as well. A tab left open from this console does not mark a thread read against that hub.
+
 The GoReleaser dependency is not part of the application module.
 
 The web tooling pins Vitest and its coverage provider together. The `minimatch` override
