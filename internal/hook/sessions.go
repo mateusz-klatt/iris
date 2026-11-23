@@ -109,15 +109,26 @@ func (s *Sessions) RecallGeneration(client, session string) (int, bool, error) {
 func (s *Sessions) RecallBindingGeneration(client, session string) (int, bool, error) {
 	generation, present, err := s.RecallGeneration(client, session)
 	path := s.memory.name(client, session)
+	if err == nil && client != "" && session != "" {
+		executionPath := path + ".execution"
+		_, err = readExecutionProof(executionPath)
+		if err != nil {
+			path, present = executionPath, true
+		}
+	}
 	if !present && client != "" && session != "" {
 		path += ".ended"
 		generation, err = readGeneration(path)
 		present = generation > 0 || err != nil
 	}
 	if err != nil {
-		env := map[string]string{"IRIS_TOKEN_FILE": s.tokenPath}
-		recorder := Runner{ClientName: client, EventName: "bind", Getenv: func(key string) string { return env[key] }}
-		recorder.record(stageObserved, damagedGenerationObservation(path), nil)
+		s.recordDamagedGeneration(client, path)
 	}
 	return generation, present, err
+}
+
+func (s *Sessions) recordDamagedGeneration(client, path string) {
+	env := map[string]string{"IRIS_TOKEN_FILE": s.tokenPath}
+	recorder := Runner{ClientName: client, EventName: "bind", Getenv: func(key string) string { return env[key] }}
+	recorder.record(stageObserved, damagedGenerationObservation(path), nil)
 }

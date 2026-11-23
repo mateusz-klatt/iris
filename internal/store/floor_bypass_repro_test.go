@@ -42,31 +42,74 @@ func TestFloorBypassHubRefusesProofLessMCPAndWatch(t *testing.T) {
 	}
 }
 
-func TestFloorBypassProofLessMCPAndWatchAfterLossKeepsCurrentSuccession(t *testing.T) {
-	for _, source := range []string{"mcp", "watch"} {
-		t.Run(source+"/lost", func(t *testing.T) {
+func TestFloorBypassProofLessMCPAndWatchAfterLossAreRefused(t *testing.T) {
+	for _, source := range []string{"mcp", "watch", ""} {
+		name := source
+		if name == "" {
+			name = "legacy"
+		}
+		t.Run(name+"/lost", func(t *testing.T) {
 			s, clock, _ := testStore(t)
 			registration := Request{Client: "claude", Host: "host", SessionID: "S", Cwd: "/repo/w", Worktree: "/repo/w", Source: "hook"}
-			first := call(t, s, "sessions", registration)
-			id := first["execution_id"].(string)
+			call(t, s, "sessions", registration)
 			clock.advance(15*time.Minute + time.Millisecond)
-			if _, err := s.Call(t.Context(), "expire", Request{}); err != nil {
-				t.Fatal(err)
-			}
+			call(t, s, "expire", Request{})
 			registration.Source = source
+			before := databaseState(t, s)
 			out, err := s.Call(t.Context(), "sessions", registration)
-			if err != nil || out["generation"] != int64(2) || out["execution_id"] == id {
-				t.Fatalf("%s after loss did not get G+1: out=%+v err=%v", source, out, err)
+			if out != nil {
+				t.Fatalf("%s after loss returned authority: %+v", source, out)
 			}
-			var state string
-			var generation int64
-			if err := s.db.QueryRow("SELECT state, generation FROM Execution WHERE id=?", id).Scan(&state, &generation); err != nil {
-				t.Fatal(err)
-			}
-			if state != "lost" || generation != 1 {
-				t.Fatalf("succession changed the lost generation: state=%s generation=%d", state, generation)
+			assertRegistrationLost(t, err, 1)
+			if databaseState(t, s) != before {
+				t.Fatalf("%s after loss changed the mailbox, deliveries, claims or retained history", source)
 			}
 		})
+	}
+}
+
+func TestEndedSessionWithoutHookHistoryRefusesNonHookGenerationZero(t *testing.T) {
+	s, _, _ := testStore(t)
+	registration := Request{Client: "claude", Host: "host", SessionID: "S", Cwd: "/repo/w", Worktree: "/repo/w", Source: "mcp"}
+	first := call(t, s, "sessions", registration)
+	id := first["execution_id"].(string)
+	var hookSeen int64
+	var state string
+	if err := s.db.QueryRow("SELECT hook_seen_ms, state FROM Execution WHERE id=?", id).Scan(&hookSeen, &state); err != nil {
+		t.Fatal(err)
+	}
+	if hookSeen != 0 || state != "active" {
+		t.Fatalf("setup recorded a hook or was not active: hook_seen=%d state=%s", hookSeen, state)
+	}
+	call(t, s, "end", Request{ExecutionID: id, Generation: 1})
+	if err := s.db.QueryRow("SELECT hook_seen_ms, state FROM Execution WHERE id=?", id).Scan(&hookSeen, &state); err != nil || hookSeen != 0 || state != "ended" {
+		t.Fatalf("ended row hook_seen=%d state=%s err=%v", hookSeen, state, err)
+	}
+	for _, source := range []string{"mcp", "shim", "watch", ""} {
+		registration.Source = source
+		registration.Generation = 0
+		registration.RetryGeneration = 0
+		before := databaseState(t, s)
+		out, err := s.Call(t.Context(), "sessions", registration)
+		if out != nil {
+			t.Fatalf("%q revived an ended session: %+v", source, out)
+		}
+		assertRegistrationLost(t, err, 1)
+		var lost *Error
+		if !errors.As(err, &lost) || lost.Message != "non-hook generation-zero registration cannot succeed an ended session" {
+			t.Fatalf("%q refusal: %v", source, err)
+		}
+		if databaseState(t, s) != before {
+			t.Fatalf("%q changed retained rows", source)
+		}
+	}
+	registration.Source = "hook"
+	out := call(t, s, "sessions", registration)
+	if out["generation"] != int64(2) || out["execution_id"] == id {
+		t.Fatalf("hook did not advance the ended session: %+v", out)
+	}
+	if err := s.db.QueryRow("SELECT state FROM Execution WHERE id=?", id).Scan(&state); err != nil || state != "ended" {
+		t.Fatalf("hook changed the ended row: state=%s err=%v", state, err)
 	}
 }
 
@@ -195,5 +238,33 @@ func TestFloorBypassHubRefusesExactGenerationAfterEnd(t *testing.T) {
 	assertRegistrationLost(t, err, 1)
 	if out != nil || databaseState(t, s) != before {
 		t.Fatalf("exact-generation refusal changed history: %v", out)
+	}
+}
+
+func TestFloorBypassHubRefusesSyntheticRegistrationOverHookProcessHistory(t *testing.T) {
+	for _, state := range []string{"active", "lost", "ended"} {
+		t.Run(state, func(t *testing.T) {
+			s, clock, _ := testStore(t)
+			hook := Request{Client: "cursor", Host: "host", SessionID: "real-session", Cwd: "/repo/w", Worktree: "/repo/w", Source: "hook", ClientPID: 42, ClientPIDStartMS: 100, SingleSession: true}
+			first := call(t, s, "sessions", hook)
+			switch state {
+			case "lost":
+				clock.advance(16 * time.Minute)
+				call(t, s, "expire", Request{})
+			case "ended":
+				call(t, s, "end", Request{ExecutionID: first["execution_id"].(string), Generation: 1})
+			}
+			registration := hook
+			registration.SessionID, registration.Source = "mcp-42-100", "mcp"
+			before := databaseState(t, s)
+			out, err := s.Call(t.Context(), "sessions", registration)
+			if out != nil {
+				t.Fatalf("synthetic registration returned authority: %+v", out)
+			}
+			assertRegistrationLost(t, err, 0)
+			if databaseState(t, s) != before {
+				t.Fatal("synthetic registration changed hook history or mailbox state")
+			}
+		})
 	}
 }

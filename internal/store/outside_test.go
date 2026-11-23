@@ -84,7 +84,7 @@ func TestAnActiveExecutionKeepsItsRecordAcrossKinds(t *testing.T) {
 	repo := git["repository_id"].(string)
 	before := aliasesOf(t, s, repo)
 	// The same session, now seen without a checkout, stays in its repository.
-	again := call(t, s, "sessions", Request{Client: "codex", Host: "host", SessionID: "1", Cwd: "/repo/w1", Source: "mcp"})
+	again := call(t, s, "sessions", Request{Client: "codex", Host: "host", SessionID: "1", Cwd: "/repo/w1", Source: "hook"})
 	if again["repository_id"] != repo || again["execution_id"] != git["execution_id"] {
 		t.Fatalf("a repository's session moved: %v", again)
 	}

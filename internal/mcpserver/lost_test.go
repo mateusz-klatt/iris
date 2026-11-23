@@ -37,10 +37,12 @@ const wantLostMessage = "This call's Execution or cached claim is not usable. " 
 	"reaches the hub does not reattach. " +
 	"An MCP tool retry with a retained binding heartbeats immediately to reattach inside the 120 s window. " +
 	"An unbound shim can reattach a positively identified, hook-registered session inside that window using the hook's remembered generation, never with generation 0. " +
-	"Without matching proof, or after the window or SessionEnd, the shim cannot reattach. " +
-	"Codex id-mode sub-agents never renew or reattach the Execution. " +
-	"Waiting past the recovery deadline cannot revive the old Execution; " +
-	"a registering hook must obtain a new generation. " +
+	"Without matching proof or after SessionEnd, the shim cannot reattach. " +
+	"After the window, an eligible MCP shim with exact generation and execution-ID proof can create one successor from a lost hook-registered Execution, never from an active or ended one and never with generation 0. " +
+	"The successor starts with no inherited claims and no hook evidence, so another automatic hop first needs a registering hook. " +
+	"Missing or damaged local proof, /clear or client-process changes, and restore mismatches also require a registering hook; iris doctor names damaged proof. " +
+	"iris watch never succeeds an Execution. Codex id-mode sub-agents never renew or reattach it. " +
+	"Waiting past the recovery deadline cannot revive the old Execution. " +
 	"For IRIS_EXECUTION, hooks must belong to the session whose Execution the override names. " +
 	"Another session's hooks do not reattach that Execution. " +
 	"Legacy binding may need the current SessionStart execution handle, or a shim restart with " +

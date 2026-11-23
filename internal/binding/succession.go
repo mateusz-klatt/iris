@@ -1,0 +1,141 @@
+package binding
+
+import (
+	"context"
+
+	"github.com/mateusz-klatt/iris/internal/hubclient"
+	"github.com/mateusz-klatt/iris/internal/proc"
+)
+
+// succeedAfterLostHeld makes one guarded post-window attempt after exact-generation reattachment
+// was refused. It never converts the attempt into generation-zero registration.
+func (r *Resolver) succeedAfterLostHeld(ctx context.Context, session string, rung, generationFloor int) (Bound, bool, error) {
+	if r.Succession == nil || r.HeartbeatSource == "watch" || r.wakeSession != "" || r.ParentAlive == nil {
+		return Bound{}, false, nil
+	}
+	if !r.ParentAlive() {
+		return Bound{}, true, errLost
+	}
+	processBound := rung == 3 || r.last.SessionID == session && r.last.Rung == 3
+	var anc proc.Ancestor
+	// Id-mode root succession is pinned to the session id, so its rung is 2. When the shim's own
+	// ancestor walk finds the session's single-session client process, the hub still requires that
+	// verified process identity. The pid and start come from the walk, never from the environment
+	// or the tool-call request.
+	if !processBound {
+		if mode := r.decided.Load(); mode != nil && mode.mode == root && r.Ancestor != nil {
+			if walked, err := r.Ancestor(); err == nil && walked.PID > 0 && walked.StartMS > 0 && proc.SingleSession(walked, r.Client) {
+				anc = walked
+				processBound = true
+			}
+		}
+	}
+	if processBound && anc == (proc.Ancestor{}) {
+		if r.Ancestor == nil {
+			return Bound{}, true, errGenerationFloor
+		}
+		var err error
+		anc, err = r.Ancestor()
+		if err != nil {
+			return Bound{}, true, &LostError{Cause: err}
+		}
+		if anc.PID <= 0 || anc.StartMS <= 0 || (!proc.SingleSession(anc, r.Client) && (r.Client != "claude" || rung != 3)) {
+			return Bound{}, true, errGenerationFloor
+		}
+	}
+	priorGeneration, priorExecution, err := r.Succession.PrepareSuccession(r.Client, session, max(generationFloor, r.processGenerationHeld(session)), r.last.ExecutionID, anc)
+	if err != nil {
+		return Bound{}, true, &LostError{Cause: err}
+	}
+	if processBound {
+		after, err := r.Ancestor()
+		if err != nil {
+			return Bound{}, true, &LostError{Cause: err}
+		}
+		if after.PID != anc.PID || after.StartMS != anc.StartMS || after.Name != anc.Name {
+			return Bound{}, true, errGenerationFloor
+		}
+	}
+	request := map[string]any{
+		"client": r.Client, "host": r.Host, "session_id": session, "source": "shim",
+		"prior_generation": priorGeneration, "prior_execution_id": priorExecution,
+		"client_pid": 0, "client_pid_start_ms": 0,
+	}
+	if processBound {
+		request["client_pid"] = anc.PID
+		request["client_pid_start_ms"] = anc.StartMS
+	}
+	b := Bound{SessionID: session, Rung: rung}
+	if err := r.Hub.Do(ctx, "POST", "/v1/sessions/succeed", request, &b); err != nil {
+		if IsCode(err, "lost") {
+			winner, adoptErr := r.adoptSuccessionWinnerHeld(ctx, session, rung, generationFloor, priorGeneration, priorExecution, anc, processBound)
+			if adoptErr != nil {
+				return Bound{}, true, &LostError{Cause: adoptErr}
+			}
+			if winner.ExecutionID != "" {
+				return winner, true, nil
+			}
+		}
+		return Bound{}, true, &LostError{Cause: err}
+	}
+	if b.ExecutionID == "" {
+		return Bound{}, true, &LostError{Cause: hubclient.ErrNoExecution}
+	}
+	if b.SessionID != session || b.Generation != priorGeneration+1 {
+		return Bound{}, true, &LostError{Cause: errGenerationFloor}
+	}
+	current, _, err := r.Succession.AdvanceGeneration(r.Client, session, priorExecution, priorGeneration, b.Generation, b.ExecutionID)
+	if err != nil {
+		return Bound{}, true, &LostError{Cause: err}
+	}
+	if current != b.Generation {
+		winner, adoptErr := r.adoptSuccessionWinnerHeld(ctx, session, rung, generationFloor, priorGeneration, priorExecution, anc, processBound)
+		if adoptErr != nil {
+			return Bound{}, true, &LostError{Cause: adoptErr}
+		}
+		if winner.ExecutionID != "" {
+			return winner, true, nil
+		}
+		return Bound{}, true, &LostError{Cause: errGenerationFloor}
+	}
+	if err := r.checkGenerationHeld(b); err != nil {
+		return Bound{}, true, err
+	}
+	return b, true, nil
+}
+
+// adoptSuccessionWinnerHeld performs one read-only lookup and accepts only a winner confirmed by
+// both the hub and the local proof/witness state. Lookup failure leaves the original lost in place.
+func (r *Resolver) adoptSuccessionWinnerHeld(ctx context.Context, session string, rung int, generationFloor, priorGeneration int, priorExecution string, anc proc.Ancestor, processBound bool) (Bound, error) {
+	var b Bound
+	var err error
+	if processBound {
+		req := map[string]any{"client": r.Client, "host": r.Host, "cwd": r.CWD, "client_pid": anc.PID, "client_pid_start_ms": anc.StartMS}
+		err = r.Hub.Do(ctx, "POST", "/v1/bind", req, &b)
+		b.Rung = 3
+	} else {
+		b, err = r.bySession(ctx, session)
+	}
+	if err != nil || r.gone[b.ExecutionID] || b.SessionID != "" && b.SessionID != session || b.Generation < generationFloor+1 {
+		return Bound{}, nil
+	}
+	if b.SessionID == "" {
+		b.SessionID = session
+	}
+	if b.Generation == priorGeneration+1 {
+		if _, _, err := r.Succession.AdvanceGeneration(r.Client, session, priorExecution, priorGeneration, b.Generation, b.ExecutionID); err != nil {
+			return Bound{}, err
+		}
+	}
+	generation, execution, err := r.Succession.PrepareSuccession(r.Client, session, b.Generation, b.ExecutionID, anc)
+	if err != nil {
+		return Bound{}, err
+	}
+	if generation != b.Generation || execution != b.ExecutionID {
+		return Bound{}, errGenerationFloor
+	}
+	if err := r.checkGenerationHeld(b); err != nil {
+		return Bound{}, err
+	}
+	return b, nil
+}

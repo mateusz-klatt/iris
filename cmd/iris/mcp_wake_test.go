@@ -148,7 +148,7 @@ func TestMCPWakeDefaultsOnForCodexSharesInitializeVersionAndJoinsItsWorker(t *te
 	release := make(chan struct{})
 	defer close(release)
 	newMCPWakeWorker = func(resolver *binding.Resolver, sessions *hook.Sessions, version func() string, observe func(string)) mcpWakeWorker {
-		if version() != "" || resolver.Client != "codex" || resolver.Observe == nil || observe == nil || sessions.Dir() != filepath.Join(filepath.Dir(token), "sessions") {
+		if version() != "" || resolver.Client != "codex" || resolver.Observe == nil || resolver.Succession == nil || resolver.ParentAlive == nil || observe == nil || sessions.Dir() != filepath.Join(filepath.Dir(token), "sessions") {
 			t.Error("the worker did not receive the uninitialized version and shared resolver/session paths")
 		}
 		return mcpWakeFunction(func(ctx context.Context) {

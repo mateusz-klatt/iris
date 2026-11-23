@@ -98,6 +98,9 @@ type Request struct {
 	// RetryGeneration is a registration floor when Generation is zero. It does
 	// not prove ownership of a recovering Execution.
 	RetryGeneration int64 `json:"retry_generation,omitempty"`
+	// PriorGeneration and PriorExecutionID are the exact proof required by post-window succession.
+	PriorGeneration  int64  `json:"prior_generation"`
+	PriorExecutionID string `json:"prior_execution_id"`
 }
 
 // Receipt names one delivery a fetch returned, at the attempt that fetch gave it.
@@ -425,6 +428,9 @@ func (t *transaction) register(r Request, outside bool) (map[string]any, error) 
 	if err := t.canonicalWorktree(&r); err != nil {
 		return nil, err
 	}
+	if err := t.refuseProoflessRegistration(r); err != nil {
+		return nil, err
+	}
 	e, err := scanExecution(t.row(executionSelect+"WHERE e.host_id=? AND e.client=? AND e.session_id=? AND e.state='active'", r.Host, r.Client, r.SessionID))
 	if err == nil {
 		if r.Generation != 0 && e.Generation != r.Generation {
@@ -489,6 +495,8 @@ func (t *transaction) register(r Request, outside bool) (map[string]any, error) 
 		return nil, err
 	}
 	generation := previous.Generation + 1
+	// #408: an ended session stays ended for every non-hook generation-zero
+	// registration, whether or not any retained row recorded a hook.
 	if previous.State == "ended" && r.Source != "hook" {
 		return nil, fail("lost", "non-hook generation-zero registration cannot succeed an ended session")
 	}

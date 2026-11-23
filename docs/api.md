@@ -102,11 +102,61 @@ This applies to ordinary, outside-git and combined shell registrations.
 A hook with remembered generation G retries once only if that detail is valid and at least G.
 It sends `generation:0` and `retry_generation:G`. A positive retry floor requires both the
 retained history and the resulting binding to be at least G in the registration transaction.
-Resume and reattachment preserve the generation. A new Execution after loss advances it. After
-SessionEnd, only a generation-zero hook registration can advance it: every non-hook source, legacy
-empty included, gets `409 lost` regardless of `retry_generation`. If retention has removed the
-ended Execution, that state is no longer available to check. An older hub omits the detail, so an
-upgraded hook keeps its proof and skips the retry.
+Resume and reattachment preserve the generation. A registering hook after loss or SessionEnd
+advances it. A generation-zero registration from `mcp`, `shim`, `watch` or the legacy empty
+source is refused with `409 lost` over any retained hook-registered Execution for that session,
+whether its state is active, lost or ended and regardless of `retry_generation`. The same
+refusal applies when the newest retained Execution is `ended`, even if that row never recorded
+a hook. With a positive
+single-session process identity (or top-level Claude), the same refusal applies to any hook
+history for that process, including a synthetic `mcp-<pid>-<start_ms>` registration. If retention
+has removed all relevant Executions, that history is no longer available to check. A fresh client
+whose hooks never reached the hub keeps the untrusted-folder generation-zero fallback. An older
+hub omits `highest_generation`, so an upgraded hook keeps its proof and skips the retry.
+
+`POST /v1/sessions/succeed` is the separate, one-hop post-window succession operation:
+
+```json
+{"client":"claude","session_id":"...","host":"...","source":"shim",
+ "prior_generation":1,"prior_execution_id":"ex_...",
+ "client_pid":123,"client_pid_start_ms":1793917887311}
+```
+
+Both `prior_generation > 0` and non-empty `prior_execution_id` are required; missing or invalid
+request fields are `bad_request`. The route has no working-directory or git-discovery fields and
+does not resolve a repository or mutate aliases. Its successful response has the registration
+shape, with `generation = prior_generation + 1`, the same Agent and repository (or outside-host
+context), `lease_ms:60000`, and no inherited claims. The new Execution has `hook_seen_ms = 0`,
+initializes its stall-credit baseline at creation, and cannot be succeeded automatically again
+until a real hook reaches it. Requeued deliveries on its preserved mailbox can be fetched and
+acknowledged normally.
+
+The hub requires the newest retained Execution for `(host, client, session_id)` to have exactly
+the supplied generation and ID, be `lost`, and have `hook_seen_ms > 0`. `active` and `ended`
+predecessors are refused, including inside the recovery window. Process fields, when present or
+required by the predecessor, must equal its complete process identity. For a single-session or
+top-level Claude process, a newer hook Execution of another native session on that process is
+`/clear` supersession and refuses succession in every state. An active Execution already holding
+the mailbox also refuses it. These domain refusals return `409 lost` with
+`error.details.highest_generation` and do not change Agent, Execution, Delivery or Claim state.
+The route emits a generation-change diagnostic with source `shim` and proof `shim_succession`.
+An older hub answers `404 not_found`; an upgraded shim treats that, a timeout and every refusal
+as `lost`, keeps local proof, and never falls back to generation zero or `retry_generation`.
+
+Only an eligible `iris mcp` shim uses this route: Rung 2 or a Codex id-mode root with exact local
+proof, or a verified single-session Rung-3 process whose identity is rechecked around the local
+read and whose current-session witness still names the same session. A Codex id-mode root whose
+verified nearest ancestor is that session's single-session client process, such as Linux
+`codex exec`, sends that ancestor's pid and start time from the shim's own walk. Its OS parent must be live.
+`iris watch`, Codex sub-agents and foreign-session lookups, wake helpers, live `IRIS_EXECUTION`
+overrides and explicit handles never succeed. `<hash>.execution` is required beside `<hash>`;
+missing or damaged proof, an `.ended` marker at or above the generation, a `/clear` witness
+mismatch, a changed process, or restore lineage mismatch fails closed. Exact generation and ID
+checks detect counter rollback and equal-generation divergent history. Restore markers and
+`stream_id` rotation grant no authority; identical `(execution_id, generation)` history shared
+by a backup and the live hub remains indistinguishable. These fields are self-declared within
+D13's host-token boundary: they provide attribution and accidental-race protection, not
+authentication against a malicious token holder.
 
 A shim or `iris watch` that retains the binding reattaches by heartbeat: a heartbeat with the
 current generation does the same work during the recovery window and returns the same response.
@@ -176,7 +226,15 @@ accept the remembered generation before the persisted 120 s recovery deadline:
 | A heartbeat from a shim or `iris watch` retaining the binding | Reattaches with its generation on periodic ticks, immediately on an MCP tool-call refresh after `lost`, and immediately on `iris watch` reconnect or `reset`. Codex id-mode sub-agent lookups never renew. |
 | An unbound shim's heartbeat tick (ADR 027) | Looks the session up as a call without a handle would, and if `unbound` may send a reattach-only registration (`source: "shim"`, `generation > 0`) from hook generation memory for a positively identified, hook-registered session. It never registers with `generation = 0`, never binds by a handle and never binds one found lost. Not for Codex, a process in id mode or `iris watch`. |
 | Another MCP call | A bound shim immediately heartbeats on a `lost` refresh and retries `/v1/bind`. An unbound shim (including a Codex id-mode root, excluding sub-agents) may reattach a recovering, hook-registered session using hook generation memory (`generation > 0`), never falling back to `generation = 0` on missing, malformed or mismatched memory. Primary `whoami` also heartbeats after a successful bind. |
-| Waiting past the deadline or `SessionEnd` | Loses or ends the old Execution and its reservations. `ended` stays terminal; neither `iris mcp` nor `iris watch` can revive an expired or ended generation. A later registering hook must obtain a new generation. |
+| An eligible MCP shim after the deadline | After exact-generation reattachment answers `lost`, calls `POST /v1/sessions/succeed` once with exact generation and Execution-ID proof and the required process/current-session evidence. It creates a fresh, hook-unseen G+1 with zero inherited claims, never revives the old Execution, and never falls back to generation zero. A concurrent valid winner is adopted by one read-only bind. |
+| Waiting past the deadline without intact eligible proof, or `SessionEnd` | Loses or ends the old Execution and its reservations. `ended` stays terminal. A generation-zero registration from `mcp`, `shim`, `watch` or a legacy empty source is refused when the newest retained Execution is `ended`, with or without hook history, so neither `iris mcp` nor `iris watch` can revive an expired or ended generation. A later registering hook must obtain a new generation. A second automatic succession also needs a real hook on the current successor first. |
+
+Cursor and Grok prompts do not register, so after their hook-registered Execution is lost, absent
+local proof no longer recovers on a prompt alone: recovery needs a recognized pre-edit,
+`SessionStart` or resume. Intact eligible proof permits the one MCP succession above. Damaged
+`<hash>`, `<hash>.execution` or `.ended` stops succession, fallback and hook registration;
+`iris doctor` reports `damaged generation proof at <path>`. Verify the intended hub and its session
+history, then archive or repair the named proof as ADR 006 directs.
 
 Resume the session owning the Execution to fire its enabled `SessionStart` hook, or submit a
 prompt on a client whose Iris hook registers it, then retry the tool. Hooks must be working

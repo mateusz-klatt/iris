@@ -28,10 +28,9 @@ func TestTheClientProcessFindsItsTopLevelSession(t *testing.T) {
 	codex := bind
 	codex.Client = "codex"
 	expectError(t, s, "bind", codex, "unbound")
-	// A second live top-level session of the process is ambiguous, unless the asker excludes
-	// its own, as an MCP that had to register one does.
+	// A second live top-level session of the process is ambiguous, unless the asker excludes one.
 	own := hook
-	own.SessionID, own.Source = "session-b", "mcp"
+	own.SessionID = "session-b"
 	mine := call(t, s, "sessions", own)
 	expectError(t, s, "bind", bind, "ambiguous")
 	past := bind

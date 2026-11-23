@@ -265,7 +265,16 @@ the hook registers later after all, the shim's heartbeat finds the hook's Execut
 client process, moves to it and ends its own, handing over the mail its stray mailbox received
 meanwhile, so a slow hook cannot leave the session split either. A first tool call that ends
 while the grace period runs is told Iris is still binding the session and to retry. After a loss
-the shim waits for an eligible binding or uses exact generation proof for reattachment (D9).
+the shim first waits for an eligible binding or uses exact generation proof for reattachment (D9).
+If that proof is refused after the recovery window, an eligible shim with exact generation and
+Execution identity proof can request one post-window succession instead (D9). A generation-zero
+registration from `mcp`, `shim`, `watch` or a legacy non-hook client is refused over any retained
+hook-registered history for that session, and over hook history for the same positively
+single-session client process (or top-level Claude process), in every state. It is also refused
+when the newest retained Execution is `ended`, even if that row recorded no hook. This closes the
+synthetic `mcp-<pid>-<start_ms>` fallback as well. The initial fallback above is unchanged only where no hook ever reached the hub,
+as in an untrusted folder. Cursor IDE does not supply single-session process evidence and is not
+eligible for process-bound succession.
 A Codex root thread's shim in id mode waits the same grace period on its first bind. Id-mode
 shims never create Executions, adopt them or hand over mail, so this fallback and the adoption
 below belong to the chain above alone.
@@ -600,7 +609,10 @@ It stops on stdin EOF or when its immediate OS parent process is gone, checked b
 renewal, so that an orphan cannot keep claims alive. The parent is checked by identity, because
 on Windows a process keeps its parent pid after the parent dies (found by CI). A heartbeat
 reporting a lost generation drops the binding and keeps the MCP process available for a fresh
-bind (D9). Its next tick looks for the session's current Execution (D6, ADR 027).
+bind (D9). Its next tick looks for the session's current Execution (D6, ADR 027), reattaches in
+the recovery window when proof allows, or attempts the one guarded post-window succession in D9.
+A successor has no inherited claims and starts with `hook_seen_ms = 0`; a second automatic hop
+therefore requires a real hook on the successor first. `iris watch` never performs succession.
 
 An Execution shown as `active` has not been ended or expired by the hub, including during D9's
 recovery window; the hub does not check whether its client process is alive. Ending a session
@@ -749,8 +761,8 @@ Changes from the reference schema:
    deployment order and empty-hub recovery, see the
    [ADR 006 addendum](adr/006-retention-and-restore.md#addendum-of-2026-11-22-the-restore-generation-floor).
 
-   MCP `lost` answers give fixed, conditional recovery guidance at the shim boundary, without
-   changing the hub API or granting authority. They also cover a replayed claim whose cached
+   MCP `lost` answers give fixed, conditional recovery guidance at the shim boundary; the guidance
+   itself grants no authority. They also cover a replayed claim whose cached
    fence is no longer live, so they do not assert that every such answer proves session loss.
    Reattachment needs a successful registering hook with remembered proof, a bound shim's or
    watch's heartbeat (periodic, on a tool-call refresh, or on watch reconnect/reset), or an
@@ -759,10 +771,62 @@ Changes from the reference schema:
    prompt registration depends on the client. A shell reconcile can register, but one whose
    budget ends before registration reaches the hub does not; the ADR 018 breaker only changes
    later hooks' scope. Plain binding lookups do not reattach on their own. A shim reattachment
-   from memory never falls back to a generation-0 registration. After the
-   deadline or `SessionEnd`, a registering hook must obtain a new generation. The
+   from memory never falls back to a generation-0 registration. After `SessionEnd`, a
+   generation-zero registration from `mcp`, `shim`, `watch` or a legacy empty source is refused
+   when the newest retained Execution is `ended`, including when that row has no hook history,
+   so only a registering hook can obtain a new generation. After the deadline, a registering hook or one
+   eligible post-window succession can do so. The
    [API recovery guidance](api.md#mcp-tools-answering-lost) lists the events and the binding-mode
    limits.
+
+   `POST /v1/sessions/succeed` is the only post-window succession route. Its request names
+   `client`, `host`, `session_id`, `source:"shim"`, positive `prior_generation`, non-empty
+   `prior_execution_id`, and, for process-bound sessions, `client_pid` and `client_pid_start_ms`.
+   An id-mode root whose verified nearest ancestor is the session's single-session client process
+   sends that identity too; the hub's exact process match is unchanged.
+   The route deliberately has no checkout fields: the new Execution keeps its predecessor's repository
+   or outside-host context, worktree, branch, parent, process and Agent mailbox, and no repository
+   resolution or alias mutation runs. In one ordinary writer transaction, the hub requires the
+   newest retained Execution for that exact session to be the identified generation and Execution,
+   `lost`, and hook-registered. `active` and `ended` predecessors are refused. A process-bound
+   predecessor must match the whole process identity; for a single-session process or top-level
+   Claude process, any newer hook-registered Execution of another native session on that process
+   refuses succession as `/clear` supersession, whether the newer Execution is active, lost or
+   ended. An active Execution already holding the mailbox also refuses the operation.
+
+   Success inserts, rather than revives, generation G+1 with a 60-second heartbeat lease,
+   `lease_renewed_tick_ms` initialized at creation, zero claims and `hook_seen_ms = 0`. Requeued
+   deliveries on the preserved mailbox remain fetchable and acknowledgeable. The successor's
+   hook-unseen state both preserves wake-arming semantics and bounds automatic succession to one
+   hop without an intervening hook. The operation emits the usual generation-change diagnostic
+   with source `shim` and proof `shim_succession`. Missing proof is `bad_request`; every domain
+   refusal is `lost` with `highest_generation`, leaving Agent, Execution, Delivery and Claim
+   state unchanged. An older hub's `not_found` is also fail-closed for the shim.
+
+   Only an MCP shim with a live parent, positive Rung-2 or Codex id-mode-root identity, or a
+   verified single-session Rung-3 process (including top-level Claude) is eligible. Codex
+   sub-agent and foreign-session lookups, `iris watch`, Antigravity/Kimi wake helpers, live
+   `IRIS_EXECUTION` overrides and explicit handles never succeed. The shim rechecks its process
+   before and after reading local state. Hooks store `<hash>.execution` next to `<hash>` under
+   `Sessions.Lock`; SessionEnd removes both only for matching generation proof. Generic
+   single-session launchers record `sessions/proc-<pid>-<start_ms>` at SessionStart, while
+   Antigravity and Kimi use their existing current-session records. Succession requires readable
+   matching generation and Execution proof, an `.ended` marker below that generation, and a
+   current-session witness for the same native session. Missing, stale, mismatched, locked or
+   damaged evidence fails closed. A damaged `.execution` also blocks proofless fallback and keeps
+   the existing `damaged generation proof at <path>` doctor observation. After the hub commits,
+   `AdvanceGeneration` compares and advances both proof files under the bounded lock, never
+   downgrading a newer hook or recreating forgotten proof. No sessions lock spans network I/O.
+
+   Exact generation and Execution identity are what make succession safe across restores: local
+   proof ahead of the hub and an equal-generation Execution from a different history are refused.
+   `RestoreMarker` handling and stream rotation grant no lineage or succession authority. If a
+   backup and live history contain the identical Execution ID and generation because no replacement
+   happened before restore, this mechanism cannot distinguish them. On every refusal, timeout or
+   older-hub answer, the shim keeps all local proof and never retries with generation zero or
+   `retry_generation`; only registering hooks retain that restore-floor retry. See
+   [ADR 035](adr/035-post-window-shim-succession.md) and the
+   [ADR 006 restore amendment](adr/006-retention-and-restore.md#amendment-of-2026-11-23-proof-required-post-window-succession).
 3. A claim has `origin` (`explicit` or `auto`) and an optional expiry instead of a mandatory
    renewed deadline.
 4. A Delivery keeps four separate facts. `attempt` guards acknowledgements: each fetch raises it,
@@ -1052,8 +1116,12 @@ browser authority and must remain behind the rollback filter.
 The trust boundary is the OS user on a host, plus a token per host across hosts. The token
 separates users and hosts, nothing finer. Any process running as that user, including a hook
 from a repository the user trusted, can read it and act as any Execution. Agents under one user
-are not isolated from each other, and Iris does not claim otherwise. Inside that boundary Iris
-relies on leases, delimited bodies and text-free wake frames.
+are not isolated from each other, and Iris does not claim otherwise. Registration `source`,
+session and process identities, and succession's prior generation and Execution ID are
+self-declared evidence inside this boundary. Their checks improve attribution and prevent
+accidental races and stale unmodified clients; they are not authority against a malicious
+host-token holder, who can already claim `source:"hook"` and register sessions. Inside that
+boundary Iris relies on leases, delimited bodies and text-free wake frames.
 
 - **Credentials.** The token is in a user-only file: mode 0600, and an owner-only DACL on Windows.
   Never in hook environments.
@@ -1460,12 +1528,21 @@ On `modernc.org/sqlite`, with real concurrency:
   `lost` row; merge liveness shares this predicate without advancing the baseline. A hub stall
   longer than about 120 s since the last committed heartbeat still loses sessions.
 - Repeated restarts cannot extend recovery. An unattached Execution is lost at its deadline.
-- While the newest retained Execution is ended, no generation-zero registration from a non-hook
-  source, empty legacy source included, succeeds regardless of its retry floor. The hub trusts the
-  host-token holder for that host's sessions and `source` is self-declared: this closes the fallback
-  path of unmodified Iris clients and old or foreign non-hook clients, not a malicious host-token
-  holder who can claim `hook` and already register sessions. If the 30-day retention sweep removes
-  the ended row, the guard has nothing left to check.
+- Over any retained hook-registered Execution for a session, no generation-zero registration from
+  a non-hook source, empty legacy source included, succeeds in active, lost or ended state,
+  regardless of retry floor. The same registration is refused when the newest retained Execution
+  is `ended`, even if that row recorded no hook. The same refusal covers a positively single-session
+  process's hook history and its synthetic MCP session ID. A registering hook still advances lost or ended history
+  to G+1. A truly hook-less session keeps the untrusted-folder fallback. If the 30-day retention
+  sweep removes all relevant rows, these guards have nothing left to check.
+- Post-window succession creates exactly one G+1 Execution only from the newest retained, lost,
+  hook-registered Execution named by exact generation and ID proof, never from active or ended
+  history and never with inherited claims. Process identity, `/clear` supersession, mailbox
+  occupancy, restore lineage and local current-session proof all hold; the successor has
+  `hook_seen_ms = 0`, so a second automatic hop needs an intervening hook. Stream rotation grants
+  no authority. Every refusal leaves mailbox and claim state unchanged and never triggers a
+  generation-zero retry. The hub trusts the host-token holder: `source` and proof fields are
+  self-declared attribution and accidental-race checks, not authentication against that holder.
 - An orphaned heartbeat cannot preserve ownership. A second, unregistered session in one process
   cannot bind to the first. In id mode, a tool call that names its session binds only that
   session's Execution, never through a handle.

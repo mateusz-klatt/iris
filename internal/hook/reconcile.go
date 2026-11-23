@@ -260,7 +260,7 @@ func (r Runner) answered(m Memory, ev Event, res hubclient.ShellResponse, err er
 		return
 	}
 	if m != nil && res.Session.Generation > 0 {
-		m.Remember(string(ev.Client), ev.SessionID, res.Session.Generation)
+		rememberGeneration(m, string(ev.Client), ev.SessionID, res.Session.Generation, res.Session.ExecutionID)
 	}
 	r.learnScope(res.Session.Capabilities)
 }

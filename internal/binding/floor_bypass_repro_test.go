@@ -195,7 +195,7 @@ func TestFloorBypassRung3BindsTheLiveHookSession(t *testing.T) {
 	}
 }
 
-func TestFloorBypassRung3AfterEndDoesNotAdvanceTheHookSession(t *testing.T) {
+func TestFloorBypassRung3AfterEndRefusesSyntheticSession(t *testing.T) {
 	ctx := t.Context()
 	h, cwd, token, anc := endedOrLiveCursor(t, true)
 	dir := filepath.Join(filepath.Dir(token), "sessions")
@@ -216,26 +216,23 @@ func TestFloorBypassRung3AfterEndDoesNotAdvanceTheHookSession(t *testing.T) {
 	b, err := r.Resolve(ctx, "")
 	requests := h.sessions()[before:]
 	rows = executionRows(t, h.file)
-	// D6 names this process as its own session when no live Execution matches it. The floor
-	// for that synthetic id is empty. The hook's session is a different id and stays ended.
+	// Choice A refuses the synthetic generation-zero registration over hook process history.
 	wantID := "mcp-42-100"
-	if err != nil || b.SessionID != wantID || b.Generation != 1 || b.Rung != 3 || !r.own {
+	if b.ExecutionID != "" || !IsCode(err, "lost") || r.own {
 		t.Fatalf("rung 3 fallback after SessionEnd: bound=%+v own=%t err=%v\nrecall %v\nrequests %+v\nrows %+v", b, r.own, err, recalls, requests, rows)
 	}
 	if len(requests) != 1 || requests[0].SessionID != wantID || requests[0].Source != "mcp" || requests[0].Generation != 0 || requests[0].RetryGeneration != 0 {
 		t.Fatalf("synthetic registration: %+v", requests)
 	}
-	var hookRow, synthetic executionRow
-	for _, row := range rows {
-		switch row.session {
-		case "real-session":
-			hookRow = row
-		case wantID:
-			synthetic = row
-		}
+	var hubErr *hubclient.Error
+	if !errors.As(err, &hubErr) {
+		t.Fatalf("synthetic refusal is not a hub error: %v", err)
 	}
-	if hookRow.id != endedID || hookRow.state != "ended" || hookRow.generation != 1 || synthetic.generation != 1 || synthetic.state != "active" || synthetic.hookSeen != 0 {
-		t.Fatalf("hook session was advanced or the synthetic execution is not its own generation 1: %+v", rows)
+	if highest, valid, present := hubErr.HighestGeneration(); highest != 0 || !valid || !present {
+		t.Fatalf("synthetic session acquired a generation floor: highest=%d valid=%t present=%t", highest, valid, present)
+	}
+	if len(rows) != 1 || rows[0].id != endedID || rows[0].state != "ended" || rows[0].generation != 1 || rows[0].session != "real-session" {
+		t.Fatalf("synthetic refusal changed the ended session: %+v", rows)
 	}
 	for _, recall := range recalls {
 		if strings.Contains(recall, "real-session") {

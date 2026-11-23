@@ -2,8 +2,9 @@
 
 Status: accepted. The decisions below were made by `claude-holzera-iris` under the owner's
 delegation, from a proposal by `claude-home-iris` (gap review D3). Implementation is planned, not
-done. Decision 7 is amended below, on 2026-11-13 (a restored copy runs on a new stream) and on
-2026-11-22 (in-window reattachment by `iris mcp` and `iris watch`, and the restore generation floor).
+done. Decision 7 is amended below, on 2026-11-13 (a restored copy runs on a new stream), on
+2026-11-22 (in-window reattachment by `iris mcp` and `iris watch`, and the restore generation floor),
+and on 2026-11-23 (proof-required post-window succession, ADR 035).
 
 ## Problem
 
@@ -173,8 +174,8 @@ generation or restore checks.
 - On a restored backup whose generation is older than the host's local generation memory,
   presenting the newer remembered generation is still refused with `lost` and never downgraded or
   retried with `generation = 0`, so restored authority is never granted.
-- Automatic post-120 s succession without a registering hook is deliberately out of scope here and
-  deferred to its own ADR.
+- Automatic post-120 s succession without a registering hook is outside this amendment's scope.
+  ADR 035 later adds its proof-required, one-hop form without changing these in-window rules.
 
 ## Addendum of 2026-11-22: the restore generation floor
 
@@ -218,9 +219,9 @@ registration, `source` must be exactly `hook`, `mcp`, `shim` or `watch`; empty o
 valid as a legacy non-hook source. Other values and negative `retry_generation` get `bad_request`.
 A generation-zero registration whose newest Execution is `ended` and whose source is anything
 other than `hook`, empty included, gets `409 lost` with `highest_generation`, regardless of
-`retry_generation`. A registering hook still gets G+1 after SessionEnd. After `lost`, proofless
-non-hook registration still gets G+1 as before; this fix deliberately leaves LOST succession
-unchanged, which belongs to ADR 035.
+`retry_generation`. A registering hook still gets G+1 after SessionEnd and after loss. ADR 035
+later closes the proofless non-hook LOST and ACTIVE fallbacks too, and adds its separate
+proof-required succession route; the ENDED guard here remains unchanged.
 
 The hub trusts the host-token holder for that host's sessions, and `source` is self-declared. This
 guard closes the fallback path of unmodified Iris clients and old or foreign clients using non-hook
@@ -258,3 +259,45 @@ Upgrade the hub first and then the clients in the same release. An upgraded hook
 an older hub treats a missing `highest_generation` as a refusal to retry, keeps its proof and
 fails open for the edit. Doctor reports “hub predates restore floor” from that observation.
 The full protection requires both the hub and clients to be upgraded.
+
+## Amendment of 2026-11-23: proof-required post-window succession
+
+[ADR 035](035-post-window-shim-succession.md), with the owner's Choice A, amends decision 7 and
+the recovery amendments above. It does not extend a recovery deadline or revive a lost Execution.
+An eligible `iris mcp` may instead create one new G+1 Execution through
+`POST /v1/sessions/succeed`, but only when the newest retained Execution for that native session
+is the exact `(prior_execution_id, prior_generation)` named by local proof, is `lost`, and was
+hook-registered. ACTIVE and ENDED predecessors, including a recovering ACTIVE Execution, are
+refused. The successor keeps the mailbox and repository context, starts with zero inherited
+claims and `hook_seen_ms = 0`, and therefore permits no second automatic hop without a real hook.
+
+Choice A withdraws the former proofless generation-zero `mcp`, `shim`, `watch` and legacy non-hook
+fallback over every retained hook-registered session history, not only ENDED. It also refuses a
+synthetic Rung-3 registration over retained hook process history. A registering hook can still
+advance LOST or ENDED history to G+1. A genuinely hook-less session, such as one in an untrusted
+folder whose hooks never reached the hub, keeps its existing fallback. Retention limits all of
+these guards: once the relevant rows are gone, there is no history left to check.
+
+Hooks persist `<hash>.execution` beside `<hash>` under `Sessions.Lock`, and SessionEnd removes
+both only for the matching generation. Succession also requires the current-session witness and
+an `.ended` generation below the proof. Missing or damaged proof fails closed; a damaged
+`.execution` blocks generation-zero fallback as well and retains the local doctor observation
+`damaged generation proof at <path>`. After a hub commit, `AdvanceGeneration` advances both
+files under the same bounded lock without downgrading a newer hook or recreating forgotten proof.
+
+The restore guarantees are deliberately narrower than authority over history:
+
+- Local proof ahead of the restored hub fails the exact generation check and returns `lost` with
+  `highest_generation`, creating no Execution and no generation-zero or `retry_generation` retry.
+- Equal generation counters alone still carry no restore provenance. Requiring the exact prior
+  Execution ID refuses an equal-generation Execution produced by a different restored history.
+- `RestoreMarker`, `iris admin mark-restored` and `stream_id` rotation affect event and attention
+  identity only. They never waive generation, Execution-ID, state, process or `/clear` checks.
+- If no replacement occurred before the backup, so the restored and live histories contain the
+  identical Execution ID and generation, this mechanism cannot distinguish them. That is the same
+  residual counter-based ambiguity described above, now bounded by the exact ID as well.
+
+Every refusal leaves Agent, Execution, Delivery and Claim state unchanged and keeps local proof.
+The new route's 404 on an older hub is fail-closed. Registration `source` and succession proof are
+self-declared inside D13's host-token boundary: they provide attribution and protection against
+accidental races and stale unmodified clients, not authentication against a malicious token holder.

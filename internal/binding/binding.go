@@ -63,6 +63,13 @@ func (c Capabilities) List() []string {
 	return strings.Split(string(c), "\n")
 }
 
+// SuccessionMemory is the hook-owned local proof and current-session state an MCP shim uses.
+type SuccessionMemory interface {
+	CurrentSession(client string, anc proc.Ancestor) (string, bool, error)
+	PrepareSuccession(client, session string, minimumGeneration int, lastExecution string, anc proc.Ancestor) (int, string, error)
+	AdvanceGeneration(client, session, expectedExec string, expectedOld, newGen int, newExec string) (int, bool, error)
+}
+
 type Resolver struct {
 	Hub               *hubclient.Client
 	Client, Host, CWD string
@@ -72,6 +79,11 @@ type Resolver struct {
 	// files. Both clients check it before binding or registering a fallback. An unbound shim
 	// can also use it for a reattach-only registration with generation > 0.
 	Recall func(client, session string) (generation int, present bool, err error)
+	// Succession reads and advances exact post-window proof. Nil disables succession without
+	// changing the existing in-window reattachment or untrusted-folder fallback.
+	Succession SuccessionMemory
+	// ParentAlive is checked immediately before local succession work.
+	ParentAlive func() bool
 	// HeartbeatSource names the heartbeat source sent during refresh reattachment (default "shim").
 	HeartbeatSource string
 	mu              sync.Mutex
@@ -245,10 +257,8 @@ func (r *Resolver) resolveHeld(ctx context.Context, handle string) (Bound, error
 	}
 	b, err := r.resolve(ctx, handle, "")
 	if IsCode(err, "unbound") {
-		if session, rung := r.recallSessionHeld(handle); session != "" {
-			if rb, attempted, rerr := r.reattachByMemoryHeld(ctx, session, rung); attempted {
-				b, err = rb, rerr
-			}
+		if rb, attempted, rerr := r.reattachRecalledHeld(ctx, handle); attempted {
+			b, err = rb, rerr
 		}
 	}
 	b, err = r.orRegister(ctx, handle, b, err)
@@ -417,20 +427,45 @@ func (r *Resolver) refresh(ctx context.Context) (Bound, error) {
 // recallSessionHeld returns the positively identified hook-registered session and binding rung
 // eligible for generation-memory reattachment, with mu held. A live IRIS_EXECUTION override or
 // an explicit non-gone handle takes precedence and disables memory reattachment.
-func (r *Resolver) recallSessionHeld(handle string) (string, int) {
+func (r *Resolver) recallSessionHeld(handle string) (string, int, error) {
 	if r.Recall == nil || r.HeartbeatSource == "watch" {
-		return "", 0
+		return "", 0, nil
 	}
 	if r.explicitBindingHeld(handle) {
-		return "", 0
+		return "", 0, nil
 	}
 	if r.last.HookSeen && r.last.SessionID != "" {
-		return r.last.SessionID, r.last.Rung
+		return r.last.SessionID, r.last.Rung, nil
 	}
 	if session := r.envSession(); session != "" {
-		return session, 2
+		return session, 2, nil
 	}
-	return "", 0
+	if r.Succession == nil {
+		return "", 0, nil
+	}
+	anc := r.ancestor()
+	if anc.PID <= 0 || anc.StartMS <= 0 || !proc.SingleSession(anc, r.Client) {
+		return "", 0, nil
+	}
+	session, ok, err := r.Succession.CurrentSession(r.Client, anc)
+	if err != nil {
+		return "", 0, &LostError{Cause: err}
+	}
+	if !ok {
+		return "", 0, nil
+	}
+	return session, 3, nil
+}
+
+func (r *Resolver) reattachRecalledHeld(ctx context.Context, handle string) (Bound, bool, error) {
+	session, rung, err := r.recallSessionHeld(handle)
+	if err != nil {
+		return Bound{}, true, err
+	}
+	if session == "" {
+		return Bound{}, false, nil
+	}
+	return r.reattachByMemoryHeld(ctx, session, rung)
 }
 
 func (r *Resolver) explicitBindingHeld(handle string) bool {
@@ -471,6 +506,11 @@ func (r *Resolver) reattachByMemoryHeld(ctx context.Context, session string, run
 	}
 	resp, err := r.Hub.RegisterSession(ctx, req)
 	if err != nil {
+		if IsCode(err, "lost") {
+			if b, attempted, succeedErr := r.succeedAfterLostHeld(ctx, session, rung, gen); attempted {
+				return b, true, succeedErr
+			}
+		}
 		return Bound{}, true, err
 	}
 	b := Bound{
@@ -837,10 +877,8 @@ func (r *Resolver) lookupHeld(ctx context.Context) bool {
 	} else {
 		b, err = r.resolve(ctx, "", "")
 		if IsCode(err, "unbound") {
-			if session, rung := r.recallSessionHeld(""); session != "" {
-				if rb, attempted, rerr := r.reattachByMemoryHeld(ctx, session, rung); attempted {
-					b, err = rb, rerr
-				}
+			if rb, attempted, rerr := r.reattachRecalledHeld(ctx, ""); attempted {
+				b, err = rb, rerr
 			}
 		}
 	}

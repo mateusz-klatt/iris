@@ -51,6 +51,7 @@ type restartableBindingHub struct {
 	serving     atomic.Pointer[hub.Hub]
 	mu          sync.Mutex
 	sessionReqs []hubclient.SessionRequest
+	succeedReqs []map[string]any
 	heartbeats  []string
 }
 
@@ -62,6 +63,15 @@ func newRestartableBindingHub(t *testing.T) *restartableBindingHub {
 		clock: newTestRealClock(),
 	}
 	h.srv = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/sessions/succeed" {
+			var body map[string]any
+			_ = json.NewDecoder(r.Body).Decode(&body)
+			h.mu.Lock()
+			h.succeedReqs = append(h.succeedReqs, body)
+			h.mu.Unlock()
+			raw, _ := json.Marshal(body)
+			r.Body = nopReadCloser{strings.NewReader(string(raw))}
+		}
 		if r.URL.Path == "/v1/sessions" || r.URL.Path == "/v1/sessions/outside" {
 			var copyBody hubclient.SessionRequest
 			raw, _ := json.Marshal(r.Body)
@@ -166,6 +176,12 @@ func (h *restartableBindingHub) sessions() []hubclient.SessionRequest {
 	h.mu.Lock()
 	defer h.mu.Unlock()
 	return append([]hubclient.SessionRequest(nil), h.sessionReqs...)
+}
+
+func (h *restartableBindingHub) successions() []map[string]any {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return append([]map[string]any(nil), h.succeedReqs...)
 }
 
 func (h *restartableBindingHub) beats() []string {

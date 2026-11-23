@@ -49,7 +49,7 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 			}
 			r.RepositoryID = e.Repo
 		}
-		registers := operation == "sessions" || operation == "sessions_outside"
+		registers := operation == "sessions" || operation == "sessions_outside" || operation == "succeed"
 		registersShell := shellSession(operation, r)
 		var err error
 		switch operation {
@@ -90,6 +90,8 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 			out, err = t.session(r)
 		case "sessions_outside":
 			out, err = t.sessionOutside(r)
+		case "succeed":
+			out, err = t.succeed(r)
 		case "bind":
 			out, err = t.bind(r)
 		case "heartbeat":
@@ -203,7 +205,7 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 		}
 		if err == nil {
 			switch operation {
-			case "sessions", "sessions_outside", "end", "touch", "touch_files", "claim", "claim_files", "release", "messages", "ack":
+			case "sessions", "sessions_outside", "succeed", "end", "touch", "touch_files", "claim", "claim_files", "release", "messages", "ack":
 				err = t.event("", "", "changed", "")
 			}
 		}

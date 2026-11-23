@@ -1,6 +1,7 @@
 package binding
 
 import (
+	"io"
 	"os"
 	"path/filepath"
 	"testing"
@@ -17,6 +18,12 @@ const testDirKey = "IRIS_BINDING_TEST_DIR"
 // each of them would leave a directory of its own behind. They inherit the
 // directory of the run that started them instead, and only that run removes it.
 func TestMain(m *testing.M) {
+	// A live process whose argv is `codex exec` is the Linux evidence proc.SingleSession reads.
+	// It stays alive until the test closes its stdin.
+	if os.Getenv("IRIS_TEST_CODEX_PROCESS") == "1" {
+		_, _ = io.Copy(io.Discard, os.Stdin)
+		os.Exit(0)
+	}
 	if os.Getenv("IRIS_ORPHAN_TEST") != "" {
 		restore := irisconfig.SetPinnedForTest(filepath.Join(os.Getenv(testDirKey), "pinned-iris"))
 		code := m.Run()

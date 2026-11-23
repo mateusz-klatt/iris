@@ -33,12 +33,13 @@ func TestAHookResumedInANewProcessNamesThatProcess(t *testing.T) {
 	}
 	expectError(t, s, "bind", Request{Client: "antigravity", Host: "host", ClientPID: 100, ClientPIDStartMS: 1}, "unbound")
 
-	// Registrations that are not the hook's, and a hook without a whole process identity, leave it.
+	// Choice A refuses proofless non-hook registration over active hook history; none rewrites it.
 	for _, source := range []string{"mcp", "shim", "watch"} {
 		other := hook
 		other.Source, other.ClientPID, other.ClientPIDStartMS = source, 300, 3
-		call(t, s, "sessions", other)
+		expectError(t, s, "sessions", other, "lost")
 	}
+	// A hook without a whole process identity still resumes without rewriting it.
 	partial := hook
 	partial.ClientPID, partial.ClientPIDStartMS = 400, 0
 	call(t, s, "sessions", partial)

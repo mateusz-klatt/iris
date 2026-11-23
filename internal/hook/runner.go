@@ -437,6 +437,9 @@ func registrationProof(state *runState, ev Event, m Memory, retained int) (int, 
 func (r Runner) register(ctx context.Context, state *runState, ev Event, repo gitinfo.Repo) (hubclient.SessionResponse, error) {
 	m := r.memory()
 	req := r.sessionReq(ev, repo)
+	if files, ok := m.(fileMemory); ok && ev.Kind == KindSessionStart {
+		_ = files.rememberProcessSession(string(ev.Client), ev.SessionID, r.ancestor())
+	}
 	generation, err := registrationProof(state, ev, m, 0)
 	if err != nil {
 		return hubclient.SessionResponse{}, err
@@ -480,7 +483,7 @@ func (r Runner) register(ctx context.Context, state *runState, ev Event, repo gi
 		r.learnScope(sess.Capabilities)
 	}
 	if err == nil && m != nil {
-		m.Remember(string(ev.Client), ev.SessionID, sess.Generation)
+		rememberGeneration(m, string(ev.Client), ev.SessionID, sess.Generation, sess.ExecutionID)
 		if ev.Kind == KindSessionStart {
 			if f, ok := m.(fileMemory); ok {
 				if err := f.prune(); err != nil {
@@ -642,7 +645,7 @@ func (r Runner) sessionReq(ev Event, repo gitinfo.Repo) hubclient.SessionRequest
 		ParentSessionID:  ev.ParentSessionID,
 		ClientPID:        anc.PID,
 		ClientPIDStartMS: anc.StartMS,
-		SingleSession:    singleSession(ev.Client) || proc.SingleSession(anc, string(ev.Client)),
+		SingleSession:    proc.SingleSession(anc, string(ev.Client)),
 		Source:           "hook",
 	}
 }
@@ -659,17 +662,6 @@ func (r Runner) ancestor() proc.Ancestor {
 		return proc.Ancestor{}
 	}
 	return a
-}
-
-// singleSession names clients whose launchers need no command-line check.
-// Codex exec is checked separately; app-server, Claude and Grok can multiplex.
-func singleSession(c Client) bool {
-	switch c {
-	case ClientCursor, ClientAntigravity, ClientKimi:
-		return true
-	default:
-		return false
-	}
 }
 
 func (r Runner) claimPaths(repo gitinfo.Repo, ev Event) (paths []string, from, to string) {

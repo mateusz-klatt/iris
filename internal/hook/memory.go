@@ -87,6 +87,7 @@ func (m fileMemory) RecallGeneration(client, session string) (int, error) {
 		if current >= generation {
 			generation = current
 			m.touchGeneration(path)
+			m.touchGeneration(path + ".execution")
 		}
 	}); err != nil {
 		return 0, err
@@ -96,15 +97,29 @@ func (m fileMemory) RecallGeneration(client, session string) (int, error) {
 
 // Remember keeps the higher proof when another hook already recorded a newer registration.
 func (m fileMemory) Remember(client, session string, generation int) {
+	m.remember(client, session, generation, "")
+}
+
+func (m fileMemory) remember(client, session string, generation int, executionID string) {
 	if err := m.directory(); err != nil {
 		return
 	}
 	_ = m.underLock(func() {
 		path := m.name(client, session)
 		if current, err := readGeneration(path); err == nil && generation > 0 && generation >= current {
-			_ = m.replace(path, strconv.Itoa(generation))
+			if m.replace(path, strconv.Itoa(generation)) == nil && executionID != "" {
+				_ = m.replace(path+".execution", executionID)
+			}
 		}
 	})
+}
+
+func rememberGeneration(m Memory, client, session string, generation int, executionID string) {
+	if files, ok := m.(fileMemory); ok {
+		files.remember(client, session, generation, executionID)
+		return
+	}
+	m.Remember(client, session, generation)
 }
 
 // Forget removes only the proof of the Execution that successfully ended.
@@ -136,6 +151,7 @@ func (m fileMemory) forget(client, session string, generation int) string {
 		}
 		if current, readErr := readGeneration(path); readErr == nil && current == generation {
 			_ = os.Remove(path)
+			_ = os.Remove(path + ".execution")
 		}
 	})
 	if err != nil && generation > 0 {
