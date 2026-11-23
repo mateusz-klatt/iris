@@ -458,7 +458,7 @@ const translation = {
     subject: "主旨",
     body: "訊息",
     loadError: "Iris 無法載入此檢視。",
-    readReload: "重新載入主控台以將此對話標為已讀。",
+    readReload: "重新載入主控台以將此討論串標為已讀。",
     emptyThreads: "此檢視中沒有討論串。",
     olderThreads: "較早的討論串",
     participants: "參與者",

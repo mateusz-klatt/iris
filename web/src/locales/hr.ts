@@ -467,7 +467,7 @@ const translation = {
     subject: "Naslov",
     body: "Poruka",
     loadError: "Iris nije mogao učitati ovaj prikaz.",
-    readReload: "Ponovno učitajte konzolu da biste ovu nit označili kao pročitanu.",
+    readReload: "Ponovno učitaj konzolu da ovu nit označiš kao pročitanu.",
     emptyThreads: "U ovom prikazu nema niti.",
     olderThreads: "Starije niti",
     participants: "Sudionici",

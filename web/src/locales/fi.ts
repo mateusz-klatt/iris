@@ -467,7 +467,7 @@ const translation = {
     subject: "Aihe",
     body: "Viesti",
     loadError: "Iris ei voinut ladata tätä näkymää.",
-    readReload: "Lataa konsoli uudelleen merkitäksesi tämän viestiketjun luetuksi.",
+    readReload: "Lataa konsoli uudelleen merkitäksesi tämän ketjun luetuksi.",
     emptyThreads: "Tässä näkymässä ei ole ketjuja.",
     olderThreads: "Vanhemmat ketjut",
     participants: "Osallistujat",

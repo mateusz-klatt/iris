@@ -467,7 +467,7 @@ const translation = {
     subject: "Onderwerp",
     body: "Bericht",
     loadError: "Iris kon deze weergave niet laden.",
-    readReload: "Laad de console opnieuw om deze conversatie als gelezen te markeren.",
+    readReload: "Laad de console opnieuw om dit gesprek als gelezen te markeren.",
     emptyThreads: "Geen gesprekken in deze weergave.",
     olderThreads: "Oudere gesprekken",
     participants: "Deelnemers",

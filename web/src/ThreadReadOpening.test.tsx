@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { App } from "./App";
 import * as api from "./api";
 import type { ThreadDetail, WatchFrame } from "./api";
-import { loadLocale } from "./i18n";
+import { englishTranslation, loadLocale } from "./i18n";
 import { server, sessionOverview, threadDetail, threadsPage } from "./test/server";
 
 let changeVisibility: (state: DocumentVisibilityState) => void;
@@ -228,6 +228,26 @@ it("retains authorization after empty detail until a response supplies a high-wa
   await waitFor(() => expect(view.reads).toEqual([
     { id: "ms_root", body: { repository_id: "", last_message_id: "ms_new" } },
   ]));
+});
+
+it.each([undefined, ""])("retains authorization when the opening first receives a missing watermark (%s)", async (highWater) => {
+  const user = userEvent.setup({ delay: null });
+  const view = show();
+  await user.click(await screen.findByRole("button", { name: /Open thread: Rollout check/ }));
+  await waitFor(() => expect(view.requests).toHaveLength(1));
+  await view.finish(0, { ...original, high_water_message_id: highWater });
+  expect(screen.getByRole("alert")).toHaveTextContent(englishTranslation.operator.readReload);
+  expect(view.readCalls).not.toHaveBeenCalled();
+
+  view.refresh();
+  await waitFor(() => expect(view.requests).toHaveLength(2));
+  expect(screen.getByRole("alert")).toHaveTextContent(englishTranslation.operator.readReload);
+  await view.finish(1, refreshed);
+  await waitFor(() => expect(view.reads).toEqual([
+    { id: "ms_root", body: { repository_id: "", last_message_id: "ms_new" } },
+  ]));
+  await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  expect(view.readCalls).toHaveBeenCalledTimes(1);
 });
 
 it("defers a superseded opening response's watermark until overview recovery reveals the reader", async () => {

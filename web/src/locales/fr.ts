@@ -467,7 +467,7 @@ const translation = {
     subject: "Objet",
     body: "Message",
     loadError: "Iris n'a pas pu charger cette vue.",
-    readReload: "Rechargez la console pour marquer cette conversation comme lue.",
+    readReload: "Rechargez la console pour marquer ce fil comme lu.",
     emptyThreads: "Aucun fil dans cette vue.",
     olderThreads: "Fils plus anciens",
     participants: "Participants",

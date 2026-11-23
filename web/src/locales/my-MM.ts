@@ -467,7 +467,7 @@ const translation = {
     subject: "ခေါင်းစဉ်",
     body: "မက်ဆေ့ချ်",
     loadError: "Iris သည် ဤမြင်ကွင်းကို ဖွင့်၍ မရပါ။",
-    readReload: "ဤစာတွဲကို ဖတ်ပြီးဟု မှတ်သားရန် ကွန်ဆိုလ်ကို ပြန်ဖွင့်ပါ။",
+    readReload: "ဤ Thread ကို ဖတ်ပြီးဟု မှတ်သားရန် ကွန်ဆိုလ်ကို ပြန်လည်တင်ပါ။",
     emptyThreads: "ဤမြင်ကွင်းတွင် thread မရှိပါ။",
     olderThreads: "ယခင် thread များ",
     participants: "ပါဝင်သူများ",

@@ -467,7 +467,7 @@ const translation = {
     subject: "Temat",
     body: "Wiadomość",
     loadError: "Iris nie mógł wczytać tego widoku.",
-    readReload: "Przeładuj konsolę, aby oznaczyć ten wątek jako przeczytany.",
+    readReload: "Wczytaj konsolę ponownie, aby oznaczyć ten wątek jako przeczytany.",
     emptyThreads: "Brak wątków w tym widoku.",
     olderThreads: "Starsze wątki",
     participants: "Uczestnicy",
