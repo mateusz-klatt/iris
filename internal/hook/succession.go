@@ -66,12 +66,16 @@ func readExecutionProof(path string) (string, error) {
 func currentProcessSession(client string, anc proc.Ancestor, sessionsDir string) (string, []string, error) {
 	switch client {
 	case string(ClientAntigravity):
-		dir, err := successionPinnedDir()
-		if err != nil {
-			return "", nil, err
+		m := antigravityHelpersMemory(filepath.Dir(sessionsDir))
+		dir, err := os.Lstat(m.dir)
+		if errors.Is(err, os.ErrNotExist) {
+			return "", nil, nil
 		}
-		m := antigravityHelpersMemory(dir)
-		if _, err := os.Stat(m.dir); err != nil {
+		if err != nil || !dir.IsDir() {
+			return "", nil, ErrSuccessionProof
+		}
+		path := antigravityProcFile(m.dir, anc.PID, anc.StartMS)
+		if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
 			return "", nil, nil
 		}
 		unlock, err := m.lock(hookLockBudget)
@@ -79,7 +83,7 @@ func currentProcessSession(client string, anc proc.Ancestor, sessionsDir string)
 			return "", nil, err
 		}
 		defer unlock()
-		state, ok := readAntigravityProcFile(antigravityProcFile(m.dir, anc.PID, anc.StartMS))
+		state, ok := readAntigravityProcFile(path)
 		if !ok || state.CurrentSessionID == "" {
 			return "", nil, ErrSuccessionProof
 		}

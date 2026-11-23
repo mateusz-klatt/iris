@@ -289,9 +289,16 @@ func TestGenericProcessWitnessAndCursorIDEExclusion(t *testing.T) {
 
 func TestAntigravityAndKimiCurrentSessionChecks(t *testing.T) {
 	t.Run("antigravity", func(t *testing.T) {
-		restore := config.SetPinnedForTest(t.TempDir())
-		t.Cleanup(restore)
+		pinned := t.TempDir()
+		t.Cleanup(config.SetPinnedForTest(pinned))
 		anc := proc.Ancestor{PID: 42, StartMS: 100, Name: "agy"}
+		other := antigravityHelpersMemory(pinned)
+		if err := other.directory(); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeAntigravityJSON(other.dir, antigravityProcFile(other.dir, anc.PID, anc.StartMS), antigravityProcState{CurrentSessionID: "unrelated"}); err != nil {
+			t.Fatal(err)
+		}
 		s := successionSessionFiles(t, "antigravity", "S1", 1, "ex_one")
 		if current, ok, err := s.CurrentSession("antigravity", anc); current != "" || ok || err != nil {
 			t.Fatalf("missing Antigravity state: %q %t %v", current, ok, err)
@@ -299,10 +306,12 @@ func TestAntigravityAndKimiCurrentSessionChecks(t *testing.T) {
 		if _, _, err := s.PrepareSuccession("antigravity", "S1", 1, "ex_one", anc); !errors.Is(err, ErrSuccessionProof) {
 			t.Fatalf("missing Antigravity state passed: %v", err)
 		}
-		dir, _ := config.PinnedDir()
-		m := antigravityHelpersMemory(dir)
+		m := antigravityHelpersMemory(filepath.Dir(s.tokenPath))
 		if err := m.directory(); err != nil {
 			t.Fatal(err)
+		}
+		if current, ok, err := s.CurrentSession("antigravity", anc); current != "" || ok || err != nil {
+			t.Fatalf("existing helper directory supplied absent process state: %q %t %v", current, ok, err)
 		}
 		path := antigravityProcFile(m.dir, anc.PID, anc.StartMS)
 		if err := writeAntigravityJSON(m.dir, path, antigravityProcState{CurrentSessionID: "S1"}); err != nil {
@@ -548,13 +557,24 @@ func TestProcessWitnessReadAndDirectoryFailures(t *testing.T) {
 }
 
 func TestProcessStateLookupFailures(t *testing.T) {
+	t.Run("antigravity helper path is a file", func(t *testing.T) {
+		s := successionSessionFiles(t, "antigravity", "S1", 1, "ex_one")
+		anc := proc.Ancestor{PID: 42, StartMS: 100, Name: "agy"}
+		m := antigravityHelpersMemory(filepath.Dir(s.tokenPath))
+		if err := os.WriteFile(m.dir, []byte("invalid directory"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := s.CurrentSession("antigravity", anc); err == nil {
+			t.Fatal("invalid helper directory was treated as hookless")
+		}
+	})
 	t.Run("pinned directory", func(t *testing.T) {
 		original := successionPinnedDir
 		successionPinnedDir = func() (string, error) { return "", errors.New("pinned lookup failed") }
 		t.Cleanup(func() { successionPinnedDir = original })
 		for _, tc := range []struct {
 			client, ancestor string
-		}{{"antigravity", "agy"}, {"kimi", "kimi"}} {
+		}{{"kimi", "kimi"}} {
 			s := successionSessionFiles(t, tc.client, "S1", 1, "ex_one")
 			anc := proc.Ancestor{PID: 42, StartMS: 100, Name: tc.ancestor}
 			if _, _, err := s.CurrentSession(tc.client, anc); err == nil || err.Error() != "pinned lookup failed" {
@@ -563,19 +583,19 @@ func TestProcessStateLookupFailures(t *testing.T) {
 		}
 	})
 	t.Run("antigravity lock", func(t *testing.T) {
-		restore := config.SetPinnedForTest(t.TempDir())
-		t.Cleanup(restore)
-		dir, _ := config.PinnedDir()
-		m := antigravityHelpersMemory(dir)
+		s := successionSessionFiles(t, "antigravity", "S1", 1, "ex_one")
+		anc := proc.Ancestor{PID: 42, StartMS: 100, Name: "agy"}
+		m := antigravityHelpersMemory(filepath.Dir(s.tokenPath))
 		if err := m.directory(); err != nil {
+			t.Fatal(err)
+		}
+		if err := writeAntigravityJSON(m.dir, antigravityProcFile(m.dir, anc.PID, anc.StartMS), antigravityProcState{CurrentSessionID: "S1"}); err != nil {
 			t.Fatal(err)
 		}
 		unlock, err := m.lock(hookLockBudget)
 		if err != nil {
 			t.Fatal(err)
 		}
-		s := successionSessionFiles(t, "antigravity", "S1", 1, "ex_one")
-		anc := proc.Ancestor{PID: 42, StartMS: 100, Name: "agy"}
 		if _, _, err := s.CurrentSession("antigravity", anc); !errors.Is(err, ErrSessionsLocked) {
 			t.Fatalf("Antigravity lock was ignored: %v", err)
 		}
