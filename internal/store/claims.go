@@ -151,6 +151,24 @@ func (s *Store) SetRepositoryPolicy(ctx context.Context, repo, casePolicy, actio
 		return t.rekeyRepository(repo)
 	})
 }
+
+// autoClaimScope is the only writer of Repository.auto_claim_scope (ADR 037).
+// The owner sets it. Other operations ignore the field, and this write does not
+// rekey or rewrite claims.
+func (t *transaction) autoClaimScope(r Request) (map[string]any, error) {
+	if r.ClaimAutoScope != "repository" && r.ClaimAutoScope != "worktree" {
+		return nil, fail("bad_request", "claim auto scope must be repository or worktree")
+	}
+	var repo string
+	if err := t.row("SELECT id FROM Repository WHERE id=?", r.RepositoryID).Scan(&repo); err != nil {
+		return nil, missing(err, "unknown repository")
+	}
+	if _, err := t.exec("UPDATE Repository SET auto_claim_scope=? WHERE id=?", r.ClaimAutoScope, repo); err != nil {
+		return nil, err
+	}
+	return map[string]any{"repository_id": repo, "claim_auto_scope": r.ClaimAutoScope}, t.event("", "", "changed", "")
+}
+
 func (t *transaction) touch(r Request) (map[string]any, error) {
 	e, err := t.live(r.ExecutionID, r.Generation)
 	if err != nil {

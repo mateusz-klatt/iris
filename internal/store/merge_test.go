@@ -62,6 +62,9 @@ func TestMergeDryRunAndLosslessRepair(t *testing.T) {
 	if plan["from_repository"].(map[string]any)["id"] != from || plan["into_repository"].(map[string]any)["root_commit"] != "root" {
 		t.Fatal("plan does not describe the chosen identities", plan)
 	}
+	if plan["from_repository"].(map[string]any)["auto_claim_scope"] != "repository" || plan["into_repository"].(map[string]any)["auto_claim_scope"] != "repository" {
+		t.Fatal("merge report omitted the default claim scope", plan)
+	}
 	untouched := map[string]int{}
 	for _, table := range []string{"Message", "Delivery", "Ack", "Operation", "ShellSnapshot", "Cursor", "Claim", "Execution", "Agent"} {
 		untouched[table] = count(t, s, "SELECT COUNT(*) FROM "+table)
@@ -191,6 +194,18 @@ func TestMergeRefusesDifferentPoliciesAndContacts(t *testing.T) {
 	if _, err := s.db.Exec("UPDATE Repository SET conflict_action='deny' WHERE id=?", from); err != nil {
 		t.Fatal(err)
 	}
+	if _, err := s.db.Exec("UPDATE Repository SET auto_claim_scope='worktree' WHERE id=?", from); err != nil {
+		t.Fatal(err)
+	}
+	beforeScope := databaseState(t, s)
+	expectError(t, s, "merge", mergeRequest(from, into, true), "conflict")
+	expectError(t, s, "merge", mergeRequest(from, into, false), "conflict")
+	if databaseState(t, s) != beforeScope {
+		t.Fatal("scope refusal changed records")
+	}
+	if _, err := s.db.Exec("UPDATE Repository SET auto_claim_scope='worktree' WHERE id=?", into); err != nil {
+		t.Fatal(err)
+	}
 	call(t, s, "contact", Request{RepositoryID: into, Agent: ar["agent"].(map[string]any)["name"].(string)})
 	call(t, s, "contact", Request{RepositoryID: from, Agent: br["agent"].(map[string]any)["name"].(string)})
 	before := databaseState(t, s)
@@ -202,6 +217,11 @@ func TestMergeRefusesDifferentPoliciesAndContacts(t *testing.T) {
 	plan := call(t, s, "merge", mergeRequest(from, into, false))
 	if plan["contact_agent_id"] != ar["agent"].(map[string]any)["id"] {
 		t.Fatal("destination contact was replaced", plan)
+	}
+	for _, side := range []string{"from_repository", "into_repository"} {
+		if plan[side].(map[string]any)["auto_claim_scope"] != "worktree" {
+			t.Fatal("merge report omitted the claim scope", plan[side])
+		}
 	}
 }
 

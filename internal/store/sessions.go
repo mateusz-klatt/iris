@@ -65,23 +65,26 @@ type Request struct {
 	Groups []ClaimGroup `json:"groups,omitempty"`
 	// Checkout is the checkout of an explicit claim's path on the grouped route, whose Paths it
 	// leaves out (ADR 033).
-	Checkout       *ClaimGroup `json:"checkout,omitempty"`
-	Kind           string      `json:"kind"`
-	Path           string      `json:"path"`
-	RepoWide       bool        `json:"repo_wide"`
-	TTLS           int64       `json:"ttl_s"`
-	Fence          int64       `json:"fence"`
-	All            bool        `json:"all"`
-	Token          string      `json:"token"`
-	To             []string    `json:"to"`
-	Subject        string      `json:"subject"`
-	Body           string      `json:"body"`
-	Attempt        int64       `json:"attempt"`
-	Handled        bool        `json:"handled"`
-	RepositoryID   string      `json:"repository_id"`
-	LastMessageID  string      `json:"last_message_id,omitempty"`
-	FromRepository string      `json:"from_repository_id,omitempty"`
-	IntoRepository string      `json:"into_repository_id,omitempty"`
+	Checkout      *ClaimGroup `json:"checkout,omitempty"`
+	Kind          string      `json:"kind"`
+	Path          string      `json:"path"`
+	RepoWide      bool        `json:"repo_wide"`
+	TTLS          int64       `json:"ttl_s"`
+	Fence         int64       `json:"fence"`
+	All           bool        `json:"all"`
+	Token         string      `json:"token"`
+	To            []string    `json:"to"`
+	Subject       string      `json:"subject"`
+	Body          string      `json:"body"`
+	Attempt       int64       `json:"attempt"`
+	Handled       bool        `json:"handled"`
+	RepositoryID  string      `json:"repository_id"`
+	LastMessageID string      `json:"last_message_id,omitempty"`
+	// ClaimAutoScope is read only by the policy operation. A session, touch, check
+	// or message that carries it does not change the repository (ADR 037).
+	ClaimAutoScope string `json:"claim_auto_scope,omitempty"`
+	FromRepository string `json:"from_repository_id,omitempty"`
+	IntoRepository string `json:"into_repository_id,omitempty"`
 	// Aliases names the exact alias mappings an owner unalias removes from RepositoryID.
 	Aliases    []string `json:"aliases,omitempty"`
 	After      int64    `json:"after"`

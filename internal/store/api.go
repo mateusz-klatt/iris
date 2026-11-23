@@ -146,6 +146,8 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 			out, err = t.events(r)
 		case "contact":
 			out, err = t.contact(r)
+		case "policy":
+			out, err = t.autoClaimScope(r)
 		case "hooks_seen":
 			out, err = t.hooksSeen(r.Host)
 		case "forget":

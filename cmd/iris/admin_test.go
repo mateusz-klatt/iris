@@ -48,7 +48,7 @@ func TestAdminForgetReportsARefusal(t *testing.T) {
 }
 
 func TestAdminUsage(t *testing.T) {
-	for _, args := range [][]string{nil, {"nope"}, {"forget"}, {"forget", "--agent", "a", "--repository", "r"}, {"forget", "--bogus"}, {"forget", "--agent", "a", "extra"}, {"restore-check", "only-one"}, {"backup", "only-one"}, {"mark-restored"}, {"mark-restored", "a.db", "b.db"}, {"merge"}, {"merge", "--from", "a"}, {"merge", "--into", "b"}, {"merge", "--from", "a", "--into", "a"}, {"merge", "--bogus"}, {"merge", "--from", "a", "--into", "b", "extra"}, {"unalias"}, {"unalias", "--repository", "rp_a"}, {"unalias", "local:x"}, {"unalias", "--bogus"}} {
+	for _, args := range [][]string{nil, {"nope"}, {"forget"}, {"forget", "--agent", "a", "--repository", "r"}, {"forget", "--bogus"}, {"forget", "--agent", "a", "extra"}, {"restore-check", "only-one"}, {"backup", "only-one"}, {"mark-restored"}, {"mark-restored", "a.db", "b.db"}, {"merge"}, {"merge", "--from", "a"}, {"merge", "--into", "b"}, {"merge", "--from", "a", "--into", "a"}, {"merge", "--bogus"}, {"merge", "--from", "a", "--into", "b", "extra"}, {"unalias"}, {"unalias", "--repository", "rp_a"}, {"unalias", "local:x"}, {"unalias", "--bogus"}, {"policy"}, {"policy", "--repository", "rp"}, {"policy", "--claim-auto-scope", "worktree"}, {"policy", "--repository", "rp", "--claim-auto-scope", "seat"}, {"policy", "--repository", "rp", "--claim-auto-scope", "worktree", "extra"}, {"policy", "--bogus"}} {
 		if err := runAdmin(args); err == nil || err.Error() != adminUsage {
 			t.Errorf("%v: %v", args, err)
 		}
@@ -167,6 +167,33 @@ func TestAdminContactSetsAndClears(t *testing.T) {
 		if err := adminCommand(context.Background(), client, bad, &out); err == nil || err.Error() != adminUsage {
 			t.Errorf("%v: %v", bad, err)
 		}
+	}
+}
+
+func TestAdminPolicySendsTheOwnerScope(t *testing.T) {
+	var got []map[string]any
+	client := tokenClient(t, func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/admin/policy" || r.Method != "POST" {
+			t.Errorf("%s %s", r.Method, r.URL.Path)
+		}
+		var body map[string]any
+		if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+			t.Error(err)
+		}
+		got = append(got, body)
+		_ = json.NewEncoder(w).Encode(map[string]any{"repository_id": body["repository_id"], "claim_auto_scope": body["claim_auto_scope"]})
+	})
+	var out bytes.Buffer
+	for _, scope := range []string{"worktree", "repository"} {
+		if err := adminCommand(context.Background(), client, []string{"policy", "--repository", "rp_a", "--claim-auto-scope", scope}, &out); err != nil {
+			t.Fatal(scope, err)
+		}
+	}
+	if len(got) != 2 || got[0]["repository_id"] != "rp_a" || got[0]["claim_auto_scope"] != "worktree" || got[1]["claim_auto_scope"] != "repository" {
+		t.Fatal(got)
+	}
+	if !strings.Contains(out.String(), `"claim_auto_scope": "worktree"`) || !strings.Contains(out.String(), `"claim_auto_scope": "repository"`) {
+		t.Fatal(out.String())
 	}
 }
 
