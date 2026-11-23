@@ -56,10 +56,10 @@ func TestShellDoesNotWarnAChildAboutItsParent(t *testing.T) {
 	}
 }
 
-// The shell's own automatic claim in another checkout is an advisory, and its
-// own null-key claim is a conflict: the grant refuses that one and the warning
-// says so. A reusable claim in this checkout stays quiet.
-func TestShellWarnsForItsOwnNonReusableClaim(t *testing.T) {
+// The shell adopts its own null-key claim instead of warning about it. A keyed
+// claim in another checkout, while this Execution still has no key, is a conflict
+// the grant also refuses.
+func TestShellAdoptsItsOwnNullKeyClaim(t *testing.T) {
 	s, _, _ := testStore(t)
 	a, ao := scopeSession(t, s, "", "a", "/repo/wt1", "dev:1", "main")
 	repo := ao["repository_id"].(string)
@@ -73,9 +73,28 @@ func TestShellWarnsForItsOwnNonReusableClaim(t *testing.T) {
 	call(t, s, "reconcile", a)
 	a.Kind, a.Status = "after", map[string]string{"mine.go": " M", "null.go": " M"}
 	out := call(t, s, "reconcile", a)
-	text := messageOf(out)
+	rows := claimsOn(liveClaims(t, s, repo), "null.go")
+	key := executionKey(t, s, a.ExecutionID)
 	claimed, _ := out["claimed"].([]string)
-	if !strings.Contains(text, "null.go") || strings.Contains(text, "mine.go") || len(claimed) != 1 || claimed[0] != "mine.go" {
-		t.Fatalf("own claims: message %q claimed %v", text, claimed)
+	if messageOf(out) != "" || len(claimed) != 2 || len(rows) != 1 || !rows[0].key.Valid || rows[0].key.String != key.String {
+		t.Fatalf("null key was not adopted: message %q claimed %v rows %+v", messageOf(out), claimed, rows)
+	}
+
+	bare := scopeSessionOnly(t, s, "bare")
+	setScope(t, s, repo, "worktree")
+	other := ClaimGroup{Worktree: "/repo/wt2", WorktreeID: "dev:2", RemoteURL: scopeRemote, RootCommit: "root", Branch: "other", Paths: []string{"away.go"}}
+	if got := call(t, s, "touch_files", filesTouch(bare, "away", other)); got["action"] != "allow" {
+		t.Fatal(got)
+	}
+	if executionKey(t, s, bare.ExecutionID).Valid {
+		t.Fatal("another checkout keyed the execution")
+	}
+	bare.Kind, bare.Status = "before", map[string]string{}
+	call(t, s, "reconcile", bare)
+	bare.Kind, bare.Status = "after", map[string]string{"away.go": " M"}
+	out = call(t, s, "reconcile", bare)
+	claimed, _ = out["claimed"].([]string)
+	if !strings.Contains(messageOf(out), "away.go") || len(claimed) != 0 {
+		t.Fatalf("other checkout was silent: message %q claimed %v", messageOf(out), claimed)
 	}
 }

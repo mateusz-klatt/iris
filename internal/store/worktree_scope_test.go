@@ -238,18 +238,38 @@ func TestSameExecutionReuseFollowsScope(t *testing.T) {
 	}
 }
 
-func TestOwnNullKeyClaimStaysRepositoryWide(t *testing.T) {
+func TestOwnNullKeyClaimIsAdoptedInPlace(t *testing.T) {
 	s, _, _ := testStore(t)
 	a, ao := scopeSession(t, s, "", "a", "/repo/wt1", "dev:1", "main")
-	setScope(t, s, ao["repository_id"].(string), "worktree")
+	repo := ao["repository_id"].(string)
+	call(t, s, "touch", touchRequest(a, "repo-first", "repo.go"))
+	if _, err := s.db.Exec("UPDATE Claim SET worktree_key=NULL WHERE execution_id=? AND path='repo.go'", a.ExecutionID); err != nil {
+		t.Fatal(err)
+	}
+	repoTouch := call(t, s, "touch", touchRequest(a, "repo-second", "repo.go"))
+	repoRows := claimsOn(liveClaims(t, s, repo), "repo.go")
+	if repoTouch["action"] != "allow" || len(repoRows) != 1 || repoRows[0].key.Valid {
+		t.Fatalf("repository scope filled a key: %v %+v", repoTouch, repoRows)
+	}
+	setScope(t, s, repo, "worktree")
 	call(t, s, "touch", touchRequest(a, "first", "a.go"))
-	if _, err := s.db.Exec("UPDATE Claim SET worktree_key=NULL WHERE execution_id=?", a.ExecutionID); err != nil {
+	fence := claimsOn(liveClaims(t, s, repo), "a.go")[0].fence
+	if _, err := s.db.Exec("UPDATE Claim SET worktree_key=NULL WHERE execution_id=? AND path='a.go'", a.ExecutionID); err != nil {
 		t.Fatal(err)
 	}
 	got := call(t, s, "touch", touchRequest(a, "second", "a.go"))
-	rows := claimsOn(liveClaims(t, s, ao["repository_id"].(string)), "a.go")
-	if got["action"] != "deny" || waiterCount(t, s) != 0 || len(rows) != 1 || rows[0].key.Valid || rows[0].origin != "auto" {
-		t.Fatalf("null-key claim was replaced: %v %+v", got, rows)
+	rows := claimsOn(liveClaims(t, s, repo), "a.go")
+	key := executionKey(t, s, a.ExecutionID)
+	if got["action"] != "allow" || got["advisories"] != nil || waiterCount(t, s) != 0 || len(rows) != 1 || rows[0].fence != fence || !rows[0].key.Valid || rows[0].key.String != key.String || rows[0].origin != "auto" {
+		t.Fatalf("own null key was not adopted: %v %+v", got, rows)
+	}
+	other, _ := scopeSession(t, s, "", "other", "/repo/wt2", "dev:2", "other")
+	if _, err := s.db.Exec("UPDATE Claim SET worktree_key=NULL WHERE execution_id=? AND path='a.go'", a.ExecutionID); err != nil {
+		t.Fatal(err)
+	}
+	denied := call(t, s, "touch", touchRequest(other, "blocked", "a.go"))
+	if denied["action"] != "deny" || denied["advisories"] != nil {
+		t.Fatal("another session treated the null key as exempt", denied)
 	}
 }
 
@@ -764,11 +784,17 @@ func TestResumeCopiesTheWorktreeIdentity(t *testing.T) {
 	if executionKey(t, s, outside["execution_id"].(string)).Valid {
 		t.Fatal("a session outside git stored a worktree key")
 	}
-	again := reg
-	again.SessionID, again.WorktreeID = "bare", "dev:later"
-	call(t, s, "sessions", again)
+	elsewhere := reg
+	elsewhere.SessionID, elsewhere.Worktree, elsewhere.Cwd, elsewhere.WorktreeID = "bare", "/repo/elsewhere", "/repo/elsewhere", "dev:elsewhere"
+	call(t, s, "sessions", elsewhere)
 	if executionKey(t, s, bare["execution_id"].(string)).Valid {
-		t.Fatal("resume backfilled a key onto an execution that already had claims without one")
+		t.Fatal("a different checkout backfilled the execution")
+	}
+	again := reg
+	again.SessionID, again.Cwd, again.Worktree, again.WorktreeID = "bare", "/repo/bare", "/repo/bare", "dev:later"
+	call(t, s, "sessions", again)
+	if !executionKey(t, s, bare["execution_id"].(string)).Valid {
+		t.Fatal("resume of this checkout left the execution without a key")
 	}
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
@@ -871,7 +897,7 @@ func TestAdvisoryNamesAnUnknownBranchAndKeepsTheIgnoredNote(t *testing.T) {
 	}
 }
 
-func TestShellAutoClaimSkipsANullKeyAndTakesAnExemptPath(t *testing.T) {
+func TestShellAutoClaimAdoptsANullKeyAndTakesAnExemptPath(t *testing.T) {
 	s, _, _ := testStore(t)
 	a, ao := scopeSession(t, s, "", "a", "/repo/wt1", "dev:1", "main")
 	repo := ao["repository_id"].(string)
@@ -890,7 +916,8 @@ func TestShellAutoClaimSkipsANullKeyAndTakesAnExemptPath(t *testing.T) {
 		claimed[p] = true
 	}
 	legacy := claimsOn(liveClaims(t, s, repo), "legacy.go")
-	if !claimed["held.go"] || claimed["legacy.go"] || len(claimsOn(liveClaims(t, s, repo), "held.go")) != 2 || len(legacy) != 1 || legacy[0].key.Valid {
+	key := executionKey(t, s, a.ExecutionID)
+	if !claimed["held.go"] || !claimed["legacy.go"] || len(claimsOn(liveClaims(t, s, repo), "held.go")) != 2 || len(legacy) != 1 || !legacy[0].key.Valid || legacy[0].key.String != key.String {
 		t.Fatalf("shell claim: %v legacy %+v", out, legacy)
 	}
 }

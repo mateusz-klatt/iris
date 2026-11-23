@@ -115,8 +115,9 @@ type execution struct {
 	// Outside says e belongs to its host's context of sessions outside git (ADR 034).
 	Outside bool
 	// WorktreeKey is the session root's canonical key, empty when registration had
-	// no usable WorktreeID. It is fixed at insert: a later resume does not backfill
-	// it, or a null-key claim this Execution already holds would stop matching itself.
+	// no usable WorktreeID. A later observation that proves this same checkout
+	// fills it in, and release uses that key. The session's own null-key claim
+	// stays its claim until that observation adopts the row.
 	WorktreeKey string
 }
 
@@ -458,6 +459,11 @@ func (t *transaction) register(r Request, outside bool) (map[string]any, error) 
 				return nil, fail("conflict", "this active Execution belongs to another repository history; end the session or ask the owner to repair the split with iris admin merge")
 			}
 			if err := t.rememberRepository(r, e.Repo); err != nil {
+				return nil, err
+			}
+			// The same checkout, now with a directory id, is the key acquisition and
+			// release will share. A hook seen in some other checkout must not supply it.
+			if _, err := t.adoptExecutionKey(&e, r.Worktree, r.WorktreeID); err != nil {
 				return nil, err
 			}
 		}

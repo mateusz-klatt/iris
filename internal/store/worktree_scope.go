@@ -31,8 +31,14 @@ func exemptAutoOverlap(scope, heldOrigin, heldKey, incomingOrigin, incomingKey s
 // reusesOwn is whether this Execution's overlapping claim is the one a touch renews.
 // Under repository, reuse stays path-wide. Under worktree, an own explicit claim is
 // still reused repository-wide, and an own automatic claim only in the same worktree.
+// An own automatic claim with a null key is this session's legacy row: it is renewed
+// and never a conflict with the session that holds it. Another session still sees
+// that null key as repository-wide.
 func reusesOwn(scope, origin, heldKey, incomingKey string) bool {
 	if scope != "worktree" || origin != "auto" {
+		return true
+	}
+	if heldKey == "" {
 		return true
 	}
 	return heldKey == incomingKey
@@ -50,6 +56,23 @@ func explicitSelects(scope, kind, origin, heldKey, incomingKey string) bool {
 
 func (e execution) location() claimLocation {
 	return claimLocation{key: e.WorktreeKey, path: canonicalDisplayPath(e.Worktree), branch: e.Branch}
+}
+
+// adoptExecutionKey resolves one checkout's key. When the observation is this
+// Execution's own worktree and the Execution still has no key, it records that
+// key on the Execution. A later release of this checkout uses the same key. A
+// group for another checkout does not change the Execution, and a key already
+// recorded stays.
+func (t *transaction) adoptExecutionKey(e *execution, worktree, worktreeID string) (string, error) {
+	key, err := t.ensureWorktreeKey(e.Host, worktreeID)
+	if err != nil || key == "" || e.WorktreeKey != "" || !sameWorktree(worktree, e.Worktree) {
+		return key, err
+	}
+	if _, err = t.exec("UPDATE Execution SET worktree_key=? WHERE id=? AND worktree_key IS NULL", key, e.ID); err != nil {
+		return "", err
+	}
+	e.WorktreeKey = key
+	return key, nil
 }
 
 func advisoryOf(c claim, path, repo string) map[string]any {
@@ -109,10 +132,12 @@ func (t *transaction) insertClaim(e execution, repo, kind, path, key, origin str
 	return id, nil
 }
 
-// renewAuto extends an automatic claim without changing its worktree key. A later
-// observation may fill in a display path or branch it did not have.
-func (t *transaction) renewAuto(fence, expiry int64, path, branch string) error {
-	_, err := t.exec("UPDATE Claim SET expires_ms=?,worktree_path=COALESCE(NULLIF(?,''),worktree_path),branch=COALESCE(NULLIF(?,''),branch) WHERE fence=?", expiry, path, branch, fence)
+// renewAuto extends an automatic claim. key is written only when the stored key
+// is null, so a legacy row is adopted in place and a keyed row does not move.
+// The caller passes a key only for the Execution's own checkout under worktree
+// scope; anything else passes "" and the stored key stays.
+func (t *transaction) renewAuto(fence, expiry int64, path, branch, key string) error {
+	_, err := t.exec("UPDATE Claim SET expires_ms=?,worktree_path=COALESCE(NULLIF(?,''),worktree_path),branch=COALESCE(NULLIF(?,''),branch),worktree_key=COALESCE(worktree_key, NULLIF(?,'')) WHERE fence=?", expiry, path, branch, key, fence)
 	return err
 }
 

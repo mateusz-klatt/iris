@@ -105,6 +105,11 @@ func (t *transaction) reconcileChanges(e execution, r Request) (map[string]any, 
 	// stashed or restored by git in this worktree, which changes nothing in a holder's worktree,
 	// so it is neither warned about nor claimed.
 	changed, left := shellChanges(previous, r.Status, r.Scope)
+	// The status was taken in this checkout. Record its key before the warning,
+	// the grant and the release, so all three name the same checkout.
+	if _, err = t.adoptExecutionKey(&e, e.Worktree, r.WorktreeID); err != nil {
+		return nil, err
+	}
 	// The warning uses the same classification as the grant below. The guard's
 	// same-checkout skip would hide a claim another Execution holds in this
 	// checkout, while autoClaim still refuses it.
@@ -212,8 +217,10 @@ func (t *transaction) releaseLeft(e execution, paths []string) error {
 				continue
 			}
 			// Under repository every matching automatic exact row is released, whichever
-			// key it carries. Under worktree only the status checkout's key is.
-			if scope == "worktree" && c.WorktreeKey != e.WorktreeKey {
+			// key it carries. Under worktree the status checkout's key is released,
+			// and so is this Execution's legacy null key: that row is its own claim,
+			// not another checkout. A key for another checkout stays.
+			if scope == "worktree" && c.WorktreeKey != "" && c.WorktreeKey != e.WorktreeKey {
 				continue
 			}
 			if _, err = t.exec("UPDATE Claim SET revoked_ms=? WHERE fence=? AND revoked_ms IS NULL", now, c.Fence); err != nil {
@@ -262,7 +269,11 @@ func (t *transaction) autoClaim(e execution, paths []string) ([]string, int, err
 				if reusesOwn(scope, c.Origin, c.WorktreeKey, loc.key) {
 					mine = true
 					if c.Origin == "auto" {
-						if err = t.renewAuto(c.Fence, expiry, loc.path, loc.branch); err != nil {
+						adopt := ""
+						if scope == "worktree" {
+							adopt = loc.key
+						}
+						if err = t.renewAuto(c.Fence, expiry, loc.path, loc.branch, adopt); err != nil {
 							return nil, 0, err
 						}
 					}

@@ -121,7 +121,7 @@ func installFaultDriver(t *testing.T, s *Store, file string) *storageFault {
 }
 
 func TestStorageFailuresRollBackAndRetry(t *testing.T) {
-	for _, op := range []string{"sessions", "session-resume", "session-resume-new-process", "session-resume-learns-root", "session-remote-learns-root", "session-checkout-continuity", "session-checkout-rewrite", "session-isolated", "heartbeat-recovery", "session-new-slot", "session-learns-root", "touch-cached", "touch-conflict", "claim-conflict", "check-known", "policy", "bind", "heartbeat", "end", "end-handover", "touch", "claim", "claim-reuse", "claim-cached", "release", "claims", "messages", "message-repo", "contact", "message-cached", "inbox", "ack", "ack-handled", "inbox-receipt", "receipt-sweep", "receipts", "read_body", "agents", "agents-all", "hooks_seen", "events", "events-reset", "status", "validate", "monitor_cursor", "check", "check-alias", "session-alias", "reconcile", "reconcile-release", "reconcile-session", "reconcile-scoped", "reconcile-scoped-compare", "reconcile-full-after-scoped", "reconcile-shared", "ui_overview", "ui_deliveries", "ui_threads", "ui_threads-human", "ui_thread", "ui_read", "ui_messages", "ui_messages-existing-human", "ui_messages-cached", "ui_messages-merged-cached", "ui_messages-retired-cached", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_events", "expire", "sweep", "forget", "forget-repository", "history", "thread", "read_message_body", "merge", "merge-dry-run", "unalias", "unalias-dry-run", "touch-files", "touch-files-known", "touch-files-conflict", "touch-files-cached", "release-foreign", "reconcile-foreign", "claim-files", "claim-files-reuse", "sessions-outside", "sessions-outside-known", "merge-outside", "merge-outside-dry-run", "claim-scope", "touch-worktree", "claim-worktree-fold"} {
+	for _, op := range []string{"sessions", "session-resume", "session-resume-new-process", "session-adopt-key", "session-resume-learns-root", "session-remote-learns-root", "session-checkout-continuity", "session-checkout-rewrite", "session-isolated", "heartbeat-recovery", "session-new-slot", "session-learns-root", "touch-cached", "touch-conflict", "claim-conflict", "check-known", "policy", "bind", "heartbeat", "end", "end-handover", "touch", "claim", "claim-reuse", "claim-cached", "release", "claims", "messages", "message-repo", "contact", "message-cached", "inbox", "ack", "ack-handled", "inbox-receipt", "receipt-sweep", "receipts", "read_body", "agents", "agents-all", "hooks_seen", "events", "events-reset", "status", "validate", "monitor_cursor", "check", "check-alias", "session-alias", "reconcile", "reconcile-release", "reconcile-session", "reconcile-scoped", "reconcile-scoped-compare", "reconcile-full-after-scoped", "reconcile-shared", "ui_overview", "ui_deliveries", "ui_threads", "ui_threads-human", "ui_thread", "ui_read", "ui_messages", "ui_messages-existing-human", "ui_messages-cached", "ui_messages-merged-cached", "ui_messages-retired-cached", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_events", "expire", "sweep", "forget", "forget-repository", "history", "thread", "read_message_body", "merge", "merge-dry-run", "unalias", "unalias-dry-run", "touch-files", "touch-files-known", "touch-files-conflict", "touch-files-cached", "release-foreign", "reconcile-foreign", "claim-files", "claim-files-reuse", "sessions-outside", "sessions-outside-known", "merge-outside", "merge-outside-dry-run", "claim-scope", "touch-worktree", "claim-worktree-fold"} {
 		t.Run(op, func(t *testing.T) {
 			s, clock, file := testStore(t)
 			a, ar := session(t, s, 1)
@@ -299,6 +299,11 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 			case "session-resume":
 				route = "sessions"
 				r = Request{Client: "codex", Host: "host", SessionID: "1", Cwd: "/repo/w1", Worktree: "/repo/w1"}
+			case "session-adopt-key":
+				// A resumed pre-upgrade Execution has no key. The same checkout, now
+				// named by a directory id, records that key. A fault leaves it null.
+				route = "sessions"
+				r = Request{Client: "codex", Host: "host", SessionID: "1", Cwd: "/repo/w1", Worktree: "/repo/w1", WorktreeID: "dev:adopt", RemoteURL: "https://example.com/team/project.git", RootCommit: "root", Source: "hook"}
 			case "session-resume-new-process":
 				// The session's hook, now in another client process: the resume rewrites the
 				// Execution's process identity, which a storage fault must leave as it was.
@@ -390,9 +395,11 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 				r.Status = map[string]string{"file": "MM", "dir/x": " M", "dir/y": " M"}
 			case "reconcile-release":
 				// file leaves a's status, so a's own automatic claim on it is released.
+				// The directory id is this checkout's, and a's key is still null.
 				call(t, s, "touch", touchRequest(a, "file-a", "file"))
 				route = "reconcile"
 				r.Kind = "after"
+				r.WorktreeID = "dev:release"
 				r.Status = map[string]string{}
 			case "reconcile-scoped":
 				// A reduced snapshot replaces a's full one, row for row, and attributes nothing.

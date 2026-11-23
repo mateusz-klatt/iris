@@ -361,7 +361,11 @@ func (t *transaction) touch(r Request) (map[string]any, error) {
 		for _, p := range normalized {
 			if c, ok := reuse[p]; ok {
 				if c.Origin == "auto" {
-					if err = t.renewAuto(c.Fence, expiry, loc.path, loc.branch); err != nil {
+					adopt := ""
+					if scope == "worktree" {
+						adopt = loc.key
+					}
+					if err = t.renewAuto(c.Fence, expiry, loc.path, loc.branch, adopt); err != nil {
 						return nil, err
 					}
 				}

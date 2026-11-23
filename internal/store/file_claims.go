@@ -103,7 +103,9 @@ func (t *transaction) touchFiles(r Request) (map[string]any, error) {
 		// The branch is the group's, or unknown when an older client left it out.
 		loc := claimLocation{path: worktree, branch: g.Branch}
 		if g.WorktreeID != "" {
-			loc.key, err = t.ensureWorktreeKey(e.Host, g.WorktreeID)
+			// The session's own checkout records the key on the Execution too, so a
+			// later shell release names the same checkout as this grant.
+			loc.key, err = t.adoptExecutionKey(&e, worktree, g.WorktreeID)
 			if err != nil {
 				return nil, err
 			}
@@ -421,7 +423,13 @@ func (t *transaction) grantFiles(e execution, places []*filePlace) ([]map[string
 				}
 				c.Fence = fence
 			} else if c.Origin == "auto" {
-				if err := t.renewAuto(c.Fence, expiry, g.loc.path, g.loc.branch); err != nil {
+				// Only the Execution's own checkout adopts a null key. Another
+				// checkout renews the legacy row without moving it.
+				adopt := ""
+				if p.scope == "worktree" && g.loc.key != "" && g.loc.key == e.WorktreeKey {
+					adopt = g.loc.key
+				}
+				if err := t.renewAuto(c.Fence, expiry, g.loc.path, g.loc.branch, adopt); err != nil {
 					return nil, err
 				}
 			}
