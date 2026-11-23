@@ -107,9 +107,8 @@ func (m fileMemory) remember(client, session string, generation int, executionID
 	_ = m.underLock(func() {
 		path := m.name(client, session)
 		if current, err := readGeneration(path); err == nil && generation > 0 && generation >= current {
-			if m.replace(path, strconv.Itoa(generation)) == nil && executionID != "" {
-				_ = m.replace(path+".execution", executionID)
-			}
+			proofs, _ := readExecutionProofs(path + ".execution")
+			_ = m.publishGeneration(path, current, proofs, generation, executionID)
 		}
 	})
 }
@@ -193,7 +192,8 @@ func (m fileMemory) retainGeneration(client, session string, generation int) end
 				return
 			}
 			if generation > ended {
-				_ = m.replace(path, strconv.Itoa(generation))
+				proofs, _ := readExecutionProofs(path + ".execution")
+				_ = m.publishGeneration(path, current, proofs, generation, "")
 			}
 		case current == generation:
 			m.touchGeneration(path)

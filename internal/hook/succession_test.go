@@ -32,7 +32,7 @@ func TestExecutionProofRememberRecallAndForget(t *testing.T) {
 	s := successionSessionFiles(t, "claude", "s", 1, "ex_one")
 	path := s.memory.name("claude", "s")
 	executionPath := path + ".execution"
-	if got, err := readExecutionProof(executionPath); got != "ex_one" || err != nil {
+	if got, err := readExecutionProof(executionPath, 1); got != "ex_one" || err != nil {
 		t.Fatalf("execution proof: %q, %v", got, err)
 	}
 	s.memory.remember("claude", "s", 2, "ex_two")
@@ -40,12 +40,12 @@ func TestExecutionProofRememberRecallAndForget(t *testing.T) {
 	if generation, _ := readGeneration(path); generation != 2 {
 		t.Fatalf("older Remember downgraded generation to %d", generation)
 	}
-	if got, _ := readExecutionProof(executionPath); got != "ex_two" {
+	if got, _ := readExecutionProof(executionPath, 2); got != "ex_two" {
 		t.Fatalf("older Remember changed execution to %q", got)
 	}
 	// The interface-compatible generation-only form does not erase intact execution proof.
 	s.memory.Remember("claude", "s", 2)
-	if got, _ := readExecutionProof(executionPath); got != "ex_two" {
+	if got, _ := readExecutionProof(executionPath, 2); got != "ex_two" {
 		t.Fatalf("generation-only Remember erased %q", got)
 	}
 	old := time.Now().Add(-time.Hour)
@@ -91,7 +91,7 @@ func TestForgetFailureKeepsGenerationAndExecutionProof(t *testing.T) {
 	if generation, err := readGeneration(path); generation != 1 || err != nil {
 		t.Fatalf("generation proof was removed: %d, %v", generation, err)
 	}
-	if execution, err := readExecutionProof(path + ".execution"); execution != "ex_one" || err != nil {
+	if execution, err := readExecutionProof(path+".execution", 1); execution != "ex_one" || err != nil {
 		t.Fatalf("execution proof was removed: %q, %v", execution, err)
 	}
 }
@@ -117,15 +117,15 @@ func TestRecallBindingGenerationRejectsDamagedExecutionProof(t *testing.T) {
 			if err := tc.damage(executionPath); err != nil {
 				t.Fatal(err)
 			}
-			generation, present, err := s.RecallBindingGeneration("claude", "s")
+			generation, ended, err := s.RecallBindingGeneration("claude", "s")
 			if tc.missing {
-				if generation != 1 || !present || err != nil {
-					t.Fatalf("missing execution changed generation recall: %d %t %v", generation, present, err)
+				if generation != 1 || ended != 0 || err != nil {
+					t.Fatalf("missing execution changed generation recall: %d %d %v", generation, ended, err)
 				}
 				return
 			}
-			if generation != 1 || !present || !errors.Is(err, ErrInvalidGeneration) {
-				t.Fatalf("damaged execution recall: %d %t %v", generation, present, err)
+			if generation != 1 || ended != 0 || !errors.Is(err, ErrInvalidGeneration) {
+				t.Fatalf("damaged execution recall: %d %d %v", generation, ended, err)
 			}
 			assertRecallObservation(t, s.tokenPath, DamagedGenerationProof+" at "+executionPath) // gitleaks:allow (a test observation token and path, not a credential)
 		})
@@ -136,19 +136,49 @@ func TestReadExecutionProofValidation(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "proof")
 	for _, tc := range []struct {
-		body  string
-		valid bool
-	}{{"ex_one", true}, {"ex_OK-1_", true}, {"", false}, {"ex_", false}, {"other", false}, {"ex_bad space", false}, {"ex_bad\nline", false}} {
+		body       string
+		generation int
+		want       string
+		invalid    bool
+	}{
+		{body: "1 ex_one", generation: 1, want: "ex_one"},
+		{body: "1 ex_one\n2 ex_OK-1_", generation: 2, want: "ex_OK-1_"},
+		{body: "1 ex_one\n2 ex_OK-1_", generation: 3},
+		{body: "1 ex_legacy", generation: 2},
+		{body: "ex_legacy", generation: 1},
+		{body: "1 ex_one\n2 -", generation: 2},
+		{body: "", invalid: true},
+		{body: "1 ex_", invalid: true},
+		{body: "1 other", invalid: true},
+		{body: "1 ex_bad!", invalid: true},
+		{body: "1 ex_bad\nline", invalid: true},
+		{body: "0 ex_zero", invalid: true},
+		{body: "1 ex_one\n1 ex_other", invalid: true},
+		{body: "1 ex_one\n2 ex_two\n3 ex_three", invalid: true},
+	} {
 		if err := os.WriteFile(path, []byte(tc.body), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		got, err := readExecutionProof(path)
-		if tc.valid && (got != tc.body || err != nil) {
+		got, err := readExecutionProof(path, tc.generation)
+		if (!tc.invalid && (got != tc.want || err != nil)) || (tc.invalid && !errors.Is(err, ErrInvalidGeneration)) {
 			t.Fatalf("%q: got %q, %v", tc.body, got, err)
 		}
-		if !tc.valid && !errors.Is(err, ErrInvalidGeneration) {
-			t.Fatalf("%q: got %q, %v", tc.body, got, err)
-		}
+	}
+}
+
+func TestRememberReplacesUnversionedExecutionProof(t *testing.T) {
+	s := successionSessionFiles(t, "claude", "s", 1, "ex_one")
+	path := s.memory.name("claude", "s")
+	if err := os.WriteFile(path+".execution", []byte("ex_legacy"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := s.PrepareSuccession("claude", "s", 1, "", proc.Ancestor{}); !errors.Is(err, ErrSuccessionProof) {
+		t.Fatalf("unversioned ID supplied exact generation proof: %v", err)
+	}
+	s.memory.remember("claude", "s", 1, "ex_one")
+	assertSuccessionProof(t, s, 1, "ex_one")
+	if generation, err := readGeneration(path); generation != 1 || err != nil {
+		t.Fatalf("legacy integer marker changed: %d, %v", generation, err)
 	}
 }
 
@@ -430,7 +460,7 @@ func TestAdvanceGenerationCASAndConcurrentMemoryWriters(t *testing.T) {
 		close(start)
 		wg.Wait()
 		generation, generationErr := readGeneration(s.memory.name("claude", "s"))
-		execution, executionErr := readExecutionProof(s.memory.name("claude", "s") + ".execution")
+		execution, executionErr := readExecutionProof(s.memory.name("claude", "s")+".execution", generation)
 		if generationErr != nil || executionErr != nil || generation == 0 && execution != "" || generation != 0 && generation != 2 {
 			t.Fatalf("advance recreated or mismatched forgotten proof: generation=%d execution=%q errors=%v/%v", generation, execution, generationErr, executionErr)
 		}
@@ -518,7 +548,7 @@ func TestSessionStartWritesExecutionProofAndProcessEvidence(t *testing.T) {
 			if out.Exit != 0 || hub.request.SingleSession != tc.single {
 				t.Fatalf("SessionStart: %+v single=%t", out, hub.request.SingleSession)
 			}
-			execution, err := readExecutionProof(m.name("cursor", "S") + ".execution")
+			execution, err := readExecutionProof(m.name("cursor", "S")+".execution", 1)
 			if execution != "ex_one" || err != nil {
 				t.Fatalf("SessionStart execution proof: %q %v", execution, err)
 			}
@@ -624,43 +654,79 @@ func TestAdvanceGenerationWriteFailures(t *testing.T) {
 	for _, failAt := range []int{1, 2} {
 		t.Run(fmt.Sprintf("write %d", failAt), func(t *testing.T) {
 			s := successionSessionFiles(t, "claude", "s", 1, "ex_one")
-			writes := 0
-			restrict := s.memory.restrict
-			s.memory.restrict = func(path string) error {
-				if strings.HasPrefix(filepath.Base(path), ".tmp-") {
-					writes++
-					if writes == failAt {
-						return errors.New("injected proof write failure")
-					}
-				}
-				return restrict(path)
-			}
-			if _, _, err := s.AdvanceGeneration("claude", "s", "ex_one", 1, 2, "ex_two"); err == nil || err.Error() != "injected proof write failure" {
+			failure := failProofWrite(s, failAt)
+			if _, _, err := s.AdvanceGeneration("claude", "s", "ex_one", 1, 2, "ex_two"); !errors.Is(err, failure) {
 				t.Fatalf("write failure %d: %v", failAt, err)
 			}
-			generation, generationErr := readGeneration(s.memory.name("claude", "s"))
-			execution, executionErr := readExecutionProof(s.memory.name("claude", "s") + ".execution")
-			wantExecution := "ex_one"
-			if failAt == 2 {
-				wantExecution = "ex_two"
-			}
-			if generation != 1 || execution != wantExecution || generationErr != nil || executionErr != nil {
-				t.Fatalf("write failure %d left generation=%d execution=%q errors=%v/%v", failAt, generation, execution, generationErr, executionErr)
-			}
-			if failAt != 2 {
-				return
-			}
+			assertSuccessionProof(t, s, 1, "ex_one")
 			current, updated, err := s.AdvanceGeneration("claude", "s", "ex_one", 1, 2, "ex_two")
-			if err != nil || updated || current != 1 {
-				t.Fatalf("partial write did not fail closed: current=%d updated=%t err=%v", current, updated, err)
+			if err != nil || !updated || current != 2 {
+				t.Fatalf("retry after interrupted advance: current=%d updated=%t err=%v", current, updated, err)
 			}
-			if generation, err = readGeneration(s.memory.name("claude", "s")); err != nil || generation != 1 {
-				t.Fatalf("partial write published generation %d: %v", generation, err)
+			assertSuccessionProof(t, s, 2, "ex_two")
+		})
+	}
+}
+
+func TestRememberGenerationWriteFailures(t *testing.T) {
+	for _, failAt := range []int{1, 2} {
+		t.Run(fmt.Sprintf("write %d", failAt), func(t *testing.T) {
+			s := successionSessionFiles(t, "claude", "s", 1, "ex_one")
+			failProofWrite(s, failAt)
+			s.memory.remember("claude", "s", 2, "ex_two")
+			assertSuccessionProof(t, s, 1, "ex_one")
+			s.memory.remember("claude", "s", 2, "ex_two")
+			assertSuccessionProof(t, s, 2, "ex_two")
+		})
+	}
+}
+
+func TestCounterOnlyWritesDoNotCommitAStagedExecution(t *testing.T) {
+	for _, restorePrunedProof := range []bool{false, true} {
+		t.Run(fmt.Sprintf("restore pruned proof %t", restorePrunedProof), func(t *testing.T) {
+			s := successionSessionFiles(t, "claude", "s", 1, "ex_one")
+			failure := failProofWrite(s, 2)
+			if _, _, err := s.AdvanceGeneration("claude", "s", "ex_one", 1, 2, "ex_two"); !errors.Is(err, failure) {
+				t.Fatalf("expected an uncommitted proof write: %v", err)
 			}
-			if _, _, err = s.PrepareSuccession("claude", "s", 1, "ex_one", proc.Ancestor{}); !errors.Is(err, ErrSuccessionProof) {
-				t.Fatalf("stale execution proof was accepted after a partial write: %v", err)
+			if restorePrunedProof {
+				if err := os.Remove(s.memory.name("claude", "s")); err != nil {
+					t.Fatal(err)
+				}
+				s.memory.retainGeneration("claude", "s", 2)
+			} else {
+				s.memory.Remember("claude", "s", 2)
+			}
+			if generation, err := s.memory.RecallGeneration("claude", "s"); generation != 2 || err != nil {
+				t.Fatalf("counter-only proof = %d, %v", generation, err)
+			}
+			if _, _, err := s.PrepareSuccession("claude", "s", 2, "", proc.Ancestor{}); !errors.Is(err, ErrSuccessionProof) {
+				t.Fatalf("counter-only write committed a staged Execution: %v", err)
 			}
 		})
+	}
+}
+
+func failProofWrite(s *Sessions, failAt int) error {
+	failure := errors.New("injected proof write failure")
+	restrict := s.memory.restrict
+	writes := 0
+	s.memory.restrict = func(path string) error {
+		if strings.HasPrefix(filepath.Base(path), ".tmp-") {
+			writes++
+			if writes == failAt {
+				return failure
+			}
+		}
+		return restrict(path)
+	}
+	return failure
+}
+
+func assertSuccessionProof(t *testing.T, s *Sessions, generation int, execution string) {
+	t.Helper()
+	if gotGeneration, gotExecution, err := s.PrepareSuccession("claude", "s", generation, execution, proc.Ancestor{}); gotGeneration != generation || gotExecution != execution || err != nil {
+		t.Fatalf("proof = G%d %q %v, want G%d %q", gotGeneration, gotExecution, err, generation, execution)
 	}
 }
 
@@ -699,7 +765,7 @@ func TestPrepareSuccessionReadsProcessWitnessOutsideTheSessionsLock(t *testing.T
 				t.Fatalf("witness reads = %d, want %d", calls, len(tc.reads))
 			}
 			gotGeneration, generationErr := readGeneration(s.memory.name("cursor", "S1"))
-			gotExecution, executionErr := readExecutionProof(s.memory.name("cursor", "S1") + ".execution")
+			gotExecution, executionErr := readExecutionProof(s.memory.name("cursor", "S1")+".execution", gotGeneration)
 			if gotGeneration != 1 || gotExecution != "ex_one" || generationErr != nil || executionErr != nil {
 				t.Fatalf("proof changed: generation=%d execution=%q errors=%v/%v", gotGeneration, gotExecution, generationErr, executionErr)
 			}

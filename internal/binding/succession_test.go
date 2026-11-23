@@ -215,7 +215,7 @@ func TestSuccessionExecutionProofDamageAndRestoreMismatchStayLocalAndUnchanged(t
 				}
 			}
 			if tc.execution != "" {
-				if err := os.WriteFile(path+".execution", []byte(tc.execution), 0o600); err != nil {
+				if err := os.WriteFile(path+".execution", []byte(tc.generation+" "+tc.execution), 0o600); err != nil {
 					t.Fatal(err)
 				}
 			}

@@ -49,26 +49,94 @@ func (m fileMemory) rememberProcessSession(client, session string, anc proc.Ance
 	return m.replace(path, session)
 }
 
-func readExecutionProof(path string) (string, error) {
+type executionProof struct {
+	generation int
+	id         string
+}
+
+type executionProofs [2]executionProof
+
+func (proofs executionProofs) at(generation int) string {
+	for _, proof := range proofs {
+		if proof.generation == generation && proof.id != "-" {
+			return proof.id
+		}
+	}
+	return ""
+}
+
+func readExecutionProofs(path string) (executionProofs, error) {
+	var proofs executionProofs
 	raw, err := os.ReadFile(path)
 	if errors.Is(err, os.ErrNotExist) {
 		if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
-			return "", nil
+			return proofs, nil
 		}
 	}
 	if err != nil {
-		return "", ErrInvalidGeneration
+		return proofs, ErrInvalidGeneration
 	}
-	id := strings.TrimSpace(string(raw))
+	fields := strings.Fields(string(raw))
+	// Pre-release sidecars stored a bare ID. Its generation cannot be established, so it
+	// remains readable but supplies no exact proof until a registering hook records the pair.
+	if len(fields) == 1 && validExecutionProofID(fields[0]) {
+		return proofs, nil
+	}
+	if len(fields) != 2 && len(fields) != 4 {
+		return proofs, ErrInvalidGeneration
+	}
+	previous := 0
+	for i := 0; i < len(fields); i += 2 {
+		generation, err := strconv.Atoi(fields[i])
+		id := fields[i+1]
+		if err != nil || generation <= previous || (id != "-" && !validExecutionProofID(id)) {
+			return executionProofs{}, ErrInvalidGeneration
+		}
+		proofs[i/2] = executionProof{generation, id}
+		previous = generation
+	}
+	return proofs, nil
+}
+
+func validExecutionProofID(id string) bool {
 	if !strings.HasPrefix(id, "ex_") || len(id) == 3 {
-		return "", ErrInvalidGeneration
+		return false
 	}
 	for _, c := range id[3:] {
 		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '_' && c != '-' {
-			return "", ErrInvalidGeneration
+			return false
 		}
 	}
-	return id, nil
+	return true
+}
+
+func readExecutionProof(path string, generation int) (string, error) {
+	proofs, err := readExecutionProofs(path)
+	return proofs.at(generation), err
+}
+
+// publishGeneration prepares the sidecar while preserving the pair named by the integer marker.
+// The marker keeps its legacy format and a failed rename leaves the old pair available for retry.
+// The caller holds Sessions.Lock for both replacements.
+func (m fileMemory) publishGeneration(path string, current int, proofs executionProofs, generation int, executionID string) error {
+	// A counter-only write must not accidentally commit an ID staged by an earlier write.
+	if executionID == "" && current < generation && proofs.at(generation) != "" {
+		executionID = "-"
+	}
+	if executionID != "" {
+		body := strconv.Itoa(generation) + " " + executionID
+		if priorID := proofs.at(current); current < generation && priorID != "" {
+			body = strconv.Itoa(current) + " " + priorID + "\n" + body
+		}
+		if err := m.replace(path+".execution", body); err != nil {
+			return err
+		}
+	}
+	if current == generation {
+		m.touchGeneration(path)
+		return nil
+	}
+	return m.replace(path, strconv.Itoa(generation))
 }
 
 func currentProcessSession(client string, anc proc.Ancestor, sessionsDir string) (string, []string, error) {
@@ -185,7 +253,7 @@ func (s *Sessions) readSuccessionProof(client, session string, minimumGeneration
 		return 0, "", ErrSuccessionProof
 	}
 	executionPath := path + ".execution"
-	executionID, err = readExecutionProof(executionPath)
+	executionID, err = readExecutionProof(executionPath, generation)
 	if err != nil {
 		damaged = executionPath
 		return 0, "", err
@@ -205,7 +273,7 @@ func (s *Sessions) readSuccessionProof(client, session string, minimumGeneration
 	return generation, executionID, nil
 }
 
-// AdvanceGeneration compares and advances both local proof files without recreating forgotten proof.
+// AdvanceGeneration compares and advances the local proof pair without recreating forgotten proof.
 func (s *Sessions) AdvanceGeneration(client, session, expectedExec string, expectedOld, newGen int, newExec string) (current int, updated bool, err error) {
 	if expectedOld <= 0 || expectedExec == "" || newGen != expectedOld+1 || newExec == "" {
 		return 0, false, ErrSuccessionProof
@@ -231,7 +299,7 @@ func (s *Sessions) AdvanceGeneration(client, session, expectedExec string, expec
 		return 0, false, err
 	}
 	executionPath := path + ".execution"
-	executionID, execErr := readExecutionProof(executionPath)
+	proofs, execErr := readExecutionProofs(executionPath)
 	if execErr != nil {
 		damaged = executionPath
 		return current, false, execErr
@@ -248,16 +316,10 @@ func (s *Sessions) AdvanceGeneration(client, session, expectedExec string, expec
 	if current == 0 || ended >= expectedOld {
 		return 0, false, nil
 	}
-	if current != expectedOld || executionID != expectedExec {
+	if current != expectedOld || proofs.at(current) != expectedExec {
 		return current, false, nil
 	}
-	// Replace the execution file first. A failure before the generation file is replaced leaves
-	// the remembered generation at expectedOld, so a reader of <hash> does not observe an advance
-	// that did not finish.
-	if err := s.memory.replace(executionPath, newExec); err != nil {
-		return current, false, err
-	}
-	if err := s.memory.replace(path, strconv.Itoa(newGen)); err != nil {
+	if err := s.memory.publishGeneration(path, current, proofs, newGen, newExec); err != nil {
 		return current, false, err
 	}
 	return newGen, true, nil
