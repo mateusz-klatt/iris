@@ -79,9 +79,9 @@ func TestConsoleAssignmentMigrationFromPopulatedVersion19PreservesHistory(t *tes
 	if err := s.db.QueryRow("SELECT stream_id,boot_epoch,(SELECT user_version FROM pragma_user_version) FROM Meta").Scan(&stream, &epoch, &version); err != nil || version != 19 {
 		t.Fatal("fixture is not version 19")
 	}
-	// Today's code filled the fixture, so it still has migration 023's column. Take it out now,
-	// so the deliveries have version 19's shape too.
-	if _, err := s.db.Exec(removeAttentionIdentitySchema); err != nil {
+	// Today's code filled the fixture, so it still has migrations 023 and 028's columns. Take
+	// them out now, so the tables have version 19's shape too.
+	if _, err := s.db.Exec(removeAttentionIdentitySchema + removeLeaseRenewedTickSchema); err != nil {
 		t.Fatal("could not reconstruct version 19 deliveries")
 	}
 	before := consoleMigrationState(t, s)

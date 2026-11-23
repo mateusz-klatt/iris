@@ -103,6 +103,9 @@ var presenceCursorSchema string
 //go:embed migrations/027.sql
 var coordinationCursorSchema string
 
+//go:embed migrations/028.sql
+var leaseRenewedTickSchema string
+
 // Clock separates lease ticks from persisted wall-clock expiries. Tick must be monotonic
 // within a Store's lifetime; client timestamps never participate in lease decisions.
 type Clock interface {
@@ -164,6 +167,10 @@ type Store struct {
 	// guarded by mu, which every transaction holds, and lost on restart, which is fine
 	// for a rate.
 	cross map[string]crossWindow
+	// sweepArmed tracks whether the hub's stream expiry sweep is armed.
+	// lastExpireTick holds the monotonic tick of the last committed expire or arming.
+	sweepArmed     bool
+	lastExpireTick int64
 }
 type transaction struct {
 	// console is set only after transactional account/session authorization.
@@ -172,6 +179,10 @@ type transaction struct {
 	ctx     context.Context
 	s       *Store
 	notify  bool
+	// expireTick records the monotonic tick of expire calls in this transaction,
+	// published to Store.lastExpireTick only after COMMIT.
+	expireTick    int64
+	hasExpireTick bool
 	// refused is a refusal whose side effects must still commit, such as the
 	// waiter a conflicting claim leaves. Call returns it after the commit.
 	refused *Error
@@ -409,6 +420,11 @@ func openDatabase(filename string, clock Clock, driverName string) (*Store, erro
 				return err
 			}
 		}
+		if version < 28 {
+			if _, err := t.exec(leaseRenewedTickSchema); err != nil {
+				return err
+			}
+		}
 		// No shell baseline crosses a hub start. An older hub that ran in between could not keep
 		// a reduced one current (ADR 018), and one writes full ones without naming the checkout
 		// they came from, so they may be another checkout's (ADR 033). The first snapshot after a
@@ -538,6 +554,17 @@ func (s *Store) endConsoleRead() { s.readWG.Done() }
 
 func (s *Store) Changes() <-chan struct{} { s.mu.Lock(); defer s.mu.Unlock(); return s.changed }
 
+// SetStreamSweep records whether the hub's stream expiry sweep is armed.
+// Arming snapshots the monotonic tick so an earlier idle gap is not credited.
+func (s *Store) SetStreamSweep(armed bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if armed && !s.sweepArmed {
+		s.lastExpireTick = s.clock.Tick()
+	}
+	s.sweepArmed = armed
+}
+
 // Restored reports whether this start consumed a restore marker, and so runs on a new stream
 // (ADR 006). It never changes after Open.
 func (s *Store) Restored() bool { return s.restored }
@@ -601,6 +628,9 @@ func (s *Store) transact(ctx context.Context, f func(*transaction) error) error 
 	if _, err = c.ExecContext(ctx, "COMMIT"); err != nil {
 		return err
 	}
+	if tx.hasExpireTick {
+		s.lastExpireTick = tx.expireTick
+	}
 	if tx.notify {
 		close(s.changed)
 		s.changed = make(chan struct{})
@@ -639,6 +669,42 @@ func (s *Store) readTransact(ctx context.Context, f func(*transaction) error) er
 	return err
 }
 
+const (
+	stallThresholdMS = 5000
+	stallStepMS      = 20000
+	stallCapMS       = 60000
+)
+
+// stallCapSQL returns the SQL expression for an Execution's stall-credit deadline ceiling.
+func stallCapSQL(prefix string) string {
+	return prefix + `lease_renewed_tick_ms+CASE WHEN ` + prefix + `heartbeat_mode<>0 THEN 60000 ELSE 900000 END+?`
+}
+
+// stallCreditWhereSQL returns the shared SQL predicate identifying non-recovering active
+// Executions in the current epoch whose deadline fell due in (prev, tick] and remains below cap.
+func stallCreditWhereSQL(prefix string) string {
+	return prefix + `recovery_deadline IS NULL AND ` + prefix + `boot_epoch=? AND ` +
+		prefix + `deadline_tick_ms>? AND ` + prefix + `deadline_tick_ms<=? AND ` +
+		stallCapSQL(prefix) + `>?`
+}
+
+var creditStallSQL = `UPDATE Execution SET deadline_tick_ms=MIN(?+?,` + stallCapSQL("") + `) WHERE state='active' AND ` + stallCreditWhereSQL("")
+
+// stallCreditGap reports the previous committed expire tick in this transaction or store
+// and whether a monotonic gap past 5 s with the stream sweep armed qualifies as a hub stall.
+func (t *transaction) stallCreditGap(tick int64) (prev int64, stalled bool) {
+	prev = t.s.lastExpireTick
+	if t.hasExpireTick {
+		prev = t.expireTick
+	}
+	return prev, t.s.sweepArmed && tick-prev > stallThresholdMS
+}
+
+// stallCreditArgs returns the bound parameters matching stallCreditWhereSQL.
+func (t *transaction) stallCreditArgs(prev, tick int64) []any {
+	return []any{t.s.epoch, prev, tick, stallCapMS, tick}
+}
+
 const expireExecutionsSQL = `UPDATE Execution SET state='lost' WHERE state='active' AND
  ((recovery_deadline IS NOT NULL AND recovery_deadline<=?) OR
  (recovery_deadline IS NULL AND (boot_epoch<>? OR deadline_tick_ms<=?))) RETURNING id`
@@ -654,6 +720,13 @@ const expireConsoleSessionsSQL = `DELETE FROM ConsoleSession WHERE expires_ms<=?
 
 func (t *transaction) expire() error {
 	now, tick := t.s.clock.Now().UnixMilli(), t.s.clock.Tick()
+	if prev, stalled := t.stallCreditGap(tick); stalled {
+		args := append([]any{tick, stallStepMS, stallCapMS}, t.stallCreditArgs(prev, tick)...)
+		if _, err := t.execQuiet(creditStallSQL, args...); err != nil {
+			return err
+		}
+	}
+	t.expireTick, t.hasExpireTick = tick, true
 	rows, err := t.rows(expireExecutionsSQL, now, t.s.epoch, tick)
 	if err != nil {
 		return err

@@ -610,6 +610,23 @@ has not passed.
 does not fire reliably, and it has a 1 to 1.5 s budget. Leases are measured on the hub's
 monotonic clock within one boot. Claim expiries must survive a restart, so they use the hub's
 wall clock. Client clocks are never trusted.
+
+While the stream expiry sweep is armed, a gap of more than 5 s on the hub's monotonic clock since
+the previous expiry run counts as a hub stall, whether the first expiry after it arrives from the
+sweep or from a domain call. Active, non-recovering Executions whose deadlines fell due during
+that gap move to `min(now + 20 s, lease_renewed_tick_ms + lease + 60 s)` instead of being
+marked `lost`, giving queued heartbeats one 20 s client interval to land; a committed renewal
+restores the full cap (up to 60 s past the 60 s heartbeat lease, or 60 s past the 15-minute
+hook-only lease). Read-only merge liveness checks (`merge` and `merge_outside`, which skip
+`expire`) share this same eligibility predicate without writing state or advancing the baseline,
+so a merge during a stall still detects collisions on executions eligible for credit. With no
+stream armed, a quiet gap expires leases without credit. What this cannot do: a hub stall longer
+than about 120 s since the last committed heartbeat (the 60 s lease plus the 60 s cap, or
+16 minutes for a hook-only lease) still loses sessions; a stall of a client, network or machine
+while the hub's sweep keeps running on time is not credited; and the credit never moves
+`recovery_deadline`, never uses wall-clock time, never credits an execution already due before
+the gap, and never revives a `lost` row.
+
 A `SessionEnd` carrying stale remembered proof is not retried without that proof: a delayed end
 must not acquire a healthy replacement generation and end it.
 
@@ -1372,6 +1389,11 @@ On `modernc.org/sqlite`, with real concurrency:
 - Cursors never regress. A reconnect neither loses committed events nor exposes another recipient
   or any content. An expired cursor returns a reset with a snapshot.
 - Clock skew on clients cannot extend a lease.
+- While the stream expiry sweep is armed, stall credit is bounded by
+  `lease_renewed_tick_ms + lease + 60 s`, uses the hub's monotonic tick only, never applies to
+  recovering, `lost` or `ended` rows or to an old boot epoch, and never renews or revives a
+  `lost` row; merge liveness shares this predicate without advancing the baseline. A hub stall
+  longer than about 120 s since the last committed heartbeat still loses sessions.
 - Repeated restarts cannot extend recovery. An unattached Execution is lost at its deadline.
 - An orphaned heartbeat cannot preserve ownership. A second, unregistered session in one process
   cannot bind to the first. In id mode, a tool call that names its session binds only that

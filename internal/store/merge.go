@@ -169,14 +169,22 @@ func (t *transaction) merge(r Request, outside bool) (map[string]any, error) {
 	return out, t.event("", "", "changed", "")
 }
 
-// Liveness matches expire without changing the stored sessions, claims or mail.
-// Recovering claims still block until their persisted recovery deadline.
+// Liveness matches expire (including pending stall-credit eligibility) without changing the
+// stored sessions, claims or mail. Recovering claims still block until their persisted recovery
+// deadline.
 func (t *transaction) mergeClaimCheck(from, into, policy string) error {
+	now, tick := t.s.clock.Now().UnixMilli(), t.s.clock.Tick()
+	liveExec := `e.recovery_deadline IS NULL AND e.boot_epoch=? AND e.deadline_tick_ms>?`
+	args := []any{from, into, now, now, t.s.epoch, tick}
+	if prev, stalled := t.stallCreditGap(tick); stalled {
+		liveExec = `(` + liveExec + `) OR (` + stallCreditWhereSQL("e.") + `)`
+		args = append(args, t.stallCreditArgs(prev, tick)...)
+	}
 	rows, err := t.rows(`SELECT c.fence,c.execution_id,c.repository_id,c.kind,c.path FROM Claim c JOIN Execution e ON e.id=c.execution_id
  WHERE c.repository_id IN (?,?) AND c.revoked_ms IS NULL AND e.state='active'
  AND (c.expires_ms IS NULL OR c.expires_ms>?)
  AND ((e.recovery_deadline IS NOT NULL AND e.recovery_deadline>?)
- OR (e.recovery_deadline IS NULL AND e.boot_epoch=? AND e.deadline_tick_ms>?)) ORDER BY c.fence`, from, into, t.s.clock.Now().UnixMilli(), t.s.clock.Now().UnixMilli(), t.s.epoch, t.s.clock.Tick())
+ OR (`+liveExec+`)) ORDER BY c.fence`, args...)
 	if err != nil {
 		return err
 	}
