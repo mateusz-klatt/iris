@@ -140,12 +140,15 @@ type TouchResponse struct {
 // ClaimGroup is one checkout's share of a grouped touch (ADR 033): the paths of a tool call that
 // lie in that checkout, relative to its worktree, with what the hook read of the checkout.
 type ClaimGroup struct {
-	Worktree   string   `json:"worktree"`
-	WorktreeID string   `json:"worktree_id,omitempty"`
-	CommonDir  string   `json:"common_dir,omitempty"`
-	RemoteURL  string   `json:"remote_url,omitempty"`
-	RootCommit string   `json:"root_commit,omitempty"`
-	Paths      []string `json:"paths"`
+	Worktree   string `json:"worktree"`
+	WorktreeID string `json:"worktree_id,omitempty"`
+	CommonDir  string `json:"common_dir,omitempty"`
+	RemoteURL  string `json:"remote_url,omitempty"`
+	RootCommit string `json:"root_commit,omitempty"`
+	// Branch is optional. An older client omits it and the hub records the branch
+	// as unknown rather than borrowing another checkout's branch (ADR 037).
+	Branch string   `json:"branch,omitempty"`
+	Paths  []string `json:"paths"`
 }
 
 // TouchFilesRequest is a pre-edit touch whose paths are grouped by the checkout each file lies
@@ -418,11 +421,29 @@ type CheckRequest struct {
 	Paths      []string `json:"paths"`
 }
 
+// Advisory is an exempt automatic overlap. An older guard has no field for it
+// and ignores it. A real conflict stays in Message, so ignoring this cannot
+// allow a refusal (ADR 037).
+type Advisory struct {
+	Path         string `json:"path"`
+	Holder       string `json:"holder"`
+	Worktree     string `json:"worktree"`
+	Branch       string `json:"branch"`
+	RepositoryID string `json:"repository_id"`
+	Fence        int64  `json:"fence"`
+}
+
 type CheckResponse struct {
 	Message   string  `json:"message"`
 	Conflicts []Claim `json:"conflicts"`
+	// Advisories is empty unless the only overlaps are exempt automatic claims
+	// in other worktrees. Omitempty keeps an older response byte-compatible.
+	Advisories []Advisory `json:"advisories,omitempty"`
 	// CasePolicy is the repository's case policy, folded or sensitive (ADR 003).
 	CasePolicy string `json:"case_policy,omitempty"`
+	// ClaimAutoScope is repository or worktree (ADR 037). Empty when a hub from
+	// before that decision omits the field; doctor then says the scope is unknown.
+	ClaimAutoScope string `json:"claim_auto_scope,omitempty"`
 	// Attention is in every successful shell reconcile answer from a hub that names attention,
 	// and nil from one before it (ADR 017, decision 6).
 	Attention *Attention `json:"attention,omitempty"`

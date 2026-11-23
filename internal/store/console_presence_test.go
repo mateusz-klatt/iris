@@ -48,7 +48,7 @@ func TestMigration26StopsPresenceFromMovingConsoleCursors(t *testing.T) {
 	s, clock, file := testStore(t)
 	r, _ := session(t, s, 1)
 	operator := createTestConsoleAccount(t, s, "Operator", "operator")
-	if _, err := s.db.Exec(removeLeaseRenewedTickSchema + `DROP TRIGGER console_revision_execution_update;
+	if _, err := s.db.Exec(removeWorktreeScopeSchema + removeLeaseRenewedTickSchema + `DROP TRIGGER console_revision_execution_update;
 CREATE TRIGGER console_revision_execution_update AFTER UPDATE OF repository_id,branch,state,last_seen_ms ON Execution BEGIN
  INSERT INTO ConsoleRepositoryChange SELECT OLD.repository_id UNION SELECT NEW.repository_id;
 END;

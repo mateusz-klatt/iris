@@ -44,7 +44,7 @@ func (t *transaction) authorize(p Principal, operation string, r Request) error 
 		if operation == "ui_messages" || operation == "ui_profile" || operation == "ui_access" || operation == "ui_accounts" {
 			return fail("forbidden", "a console account session is required")
 		}
-		if p.Kind == HostPrincipal && (operation == "forget" || operation == "merge" || operation == "merge_outside" || operation == "contact" || operation == "unalias") {
+		if p.Kind == HostPrincipal && (operation == "forget" || operation == "merge" || operation == "merge_outside" || operation == "contact" || operation == "unalias" || operation == "policy") {
 			return fail("forbidden", "only the owner may manage repositories")
 		}
 		return nil

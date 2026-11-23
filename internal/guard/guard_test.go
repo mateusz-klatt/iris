@@ -277,6 +277,96 @@ func TestCheckLinkedWorktreeCannotClaimTheHoldersSession(t *testing.T) {
 	}
 }
 
+// Check is the decision an older guard can make: it sees message and not
+// advisories. Against a real hub, that allows only the exempt automatic overlap.
+// An explicit claim is a refusal, and so is an automatic claim from a session
+// that never sent a WorktreeID while the repository is worktree-scoped.
+func TestAnOldGuardAllowsOnlyAnExemptAutomaticOverlap(t *testing.T) {
+	dir := realPath(t, t.TempDir())
+	git(t, dir, "init")
+	git(t, dir, "remote", "add", "origin", "https://example.com/guard.git")
+	git(t, dir, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "init")
+	linked := filepath.Join(realPath(t, t.TempDir()), "linked")
+	git(t, dir, "worktree", "add", "-b", "linked", linked)
+	repo, err := gitinfo.Find(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host, err := os.Hostname()
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := store.Open(filepath.Join(t.TempDir(), "hub.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	ctx := context.Background()
+	holder, err := s.Call(ctx, "sessions", store.Request{Client: "codex", Host: host, SessionID: "holder", Cwd: repo.Worktree, Worktree: repo.Worktree, WorktreeID: repo.WorktreeID, CommonDir: repo.CommonDir, RemoteURL: repo.RemoteURL, RootCommit: repo.RootCommit, Source: "hook"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	repoID := holder["repository_id"].(string)
+	if _, err = s.Call(ctx, "policy", store.Request{RepositoryID: repoID, ClaimAutoScope: "worktree"}); err != nil {
+		t.Fatal(err)
+	}
+	proof := store.Request{ExecutionID: holder["execution_id"].(string), Generation: holder["generation"].(int64)}
+	touch := proof
+	touch.ToolCallID, touch.Paths = "held", []string{"held.go"}
+	if out, err := s.Call(ctx, "touch", touch); err != nil || out["action"] != "allow" {
+		t.Fatal(out, err)
+	}
+	if err = os.WriteFile(filepath.Join(linked, "held.go"), []byte("package held\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	git(t, linked, "add", "held.go")
+	server := httptest.NewUnstartedServer(nil)
+	u, _ := url.Parse("http://" + server.Listener.Addr().String())
+	server.Config.Handler = hub.New(s, "test-token", []string{u.Host})
+	server.Start()
+	defer server.Close()
+	client := &hubclient.Client{Config: config{server.URL}}
+
+	report, err := Classify(ctx, linked, client)
+	if err != nil || report.Message != "" || len(report.Advisories) != 1 || report.Advisories[0].Path != "held.go" {
+		t.Fatalf("exempt overlap: %+v %v", report, err)
+	}
+	if message, err := Check(ctx, linked, client); err != nil || message != "" {
+		t.Fatalf("old guard refused the exempt overlap: %q %v", message, err)
+	}
+	if _, err = s.Call(ctx, "claim", store.Request{ExecutionID: proof.ExecutionID, Generation: proof.Generation, Key: "wide", Path: "held.go", Kind: "exact"}); err != nil {
+		t.Fatal(err)
+	}
+	explicit, err := Classify(ctx, linked, client)
+	if err != nil || explicit.Message == "" || len(explicit.Advisories) != 0 {
+		t.Fatalf("explicit claim: %+v %v", explicit, err)
+	}
+	if message, err := Check(ctx, linked, client); err != nil || message == "" {
+		t.Fatalf("old guard allowed an explicit claim: %q %v", message, err)
+	}
+
+	old, err := s.Call(ctx, "sessions", store.Request{Client: "codex", Host: host, SessionID: "old", Cwd: repo.Worktree, Worktree: repo.Worktree, CommonDir: repo.CommonDir, RemoteURL: repo.RemoteURL, RootCommit: repo.RootCommit, Source: "hook"})
+	if err != nil || old["repository_id"] != repoID {
+		t.Fatal("old session split the repository", old, err)
+	}
+	oldTouch := store.Request{ExecutionID: old["execution_id"].(string), Generation: old["generation"].(int64), ToolCallID: "old", Paths: []string{"legacy.go"}}
+	if out, err := s.Call(ctx, "touch", oldTouch); err != nil || out["action"] != "allow" {
+		t.Fatal(out, err)
+	}
+	git(t, linked, "rm", "--cached", "held.go")
+	if err = os.WriteFile(filepath.Join(linked, "legacy.go"), []byte("package legacy\n"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	git(t, linked, "add", "legacy.go")
+	legacy, err := Classify(ctx, linked, client)
+	if err != nil || legacy.Message == "" || len(legacy.Advisories) != 0 {
+		t.Fatalf("claim without a worktree id was exempt: %+v %v", legacy, err)
+	}
+	if message, err := Check(ctx, linked, client); err != nil || message == "" {
+		t.Fatalf("old guard allowed a claim with no worktree id: %q %v", message, err)
+	}
+}
+
 func TestInstalledHookChainsAndStopsOnDenial(t *testing.T) {
 	dir := t.TempDir()
 	git(t, dir, "init")

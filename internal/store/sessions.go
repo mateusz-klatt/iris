@@ -65,23 +65,26 @@ type Request struct {
 	Groups []ClaimGroup `json:"groups,omitempty"`
 	// Checkout is the checkout of an explicit claim's path on the grouped route, whose Paths it
 	// leaves out (ADR 033).
-	Checkout       *ClaimGroup `json:"checkout,omitempty"`
-	Kind           string      `json:"kind"`
-	Path           string      `json:"path"`
-	RepoWide       bool        `json:"repo_wide"`
-	TTLS           int64       `json:"ttl_s"`
-	Fence          int64       `json:"fence"`
-	All            bool        `json:"all"`
-	Token          string      `json:"token"`
-	To             []string    `json:"to"`
-	Subject        string      `json:"subject"`
-	Body           string      `json:"body"`
-	Attempt        int64       `json:"attempt"`
-	Handled        bool        `json:"handled"`
-	RepositoryID   string      `json:"repository_id"`
-	LastMessageID  string      `json:"last_message_id,omitempty"`
-	FromRepository string      `json:"from_repository_id,omitempty"`
-	IntoRepository string      `json:"into_repository_id,omitempty"`
+	Checkout      *ClaimGroup `json:"checkout,omitempty"`
+	Kind          string      `json:"kind"`
+	Path          string      `json:"path"`
+	RepoWide      bool        `json:"repo_wide"`
+	TTLS          int64       `json:"ttl_s"`
+	Fence         int64       `json:"fence"`
+	All           bool        `json:"all"`
+	Token         string      `json:"token"`
+	To            []string    `json:"to"`
+	Subject       string      `json:"subject"`
+	Body          string      `json:"body"`
+	Attempt       int64       `json:"attempt"`
+	Handled       bool        `json:"handled"`
+	RepositoryID  string      `json:"repository_id"`
+	LastMessageID string      `json:"last_message_id,omitempty"`
+	// ClaimAutoScope is read only by the policy operation. A session, touch, check
+	// or message that carries it does not change the repository (ADR 037).
+	ClaimAutoScope string `json:"claim_auto_scope,omitempty"`
+	FromRepository string `json:"from_repository_id,omitempty"`
+	IntoRepository string `json:"into_repository_id,omitempty"`
 	// Aliases names the exact alias mappings an owner unalias removes from RepositoryID.
 	Aliases    []string `json:"aliases,omitempty"`
 	After      int64    `json:"after"`
@@ -111,12 +114,16 @@ type execution struct {
 	Single, Heartbeat                                                       bool
 	// Outside says e belongs to its host's context of sessions outside git (ADR 034).
 	Outside bool
+	// WorktreeKey is the session root's canonical key, empty when registration had
+	// no usable WorktreeID. It is fixed at insert: a later resume does not backfill
+	// it, or a null-key claim this Execution already holds would stop matching itself.
+	WorktreeKey string
 }
 
-const executionSelect = `SELECT e.id,e.agent_id,e.repository_id,e.host_id,e.client,e.session_id,e.worktree,e.branch,e.state,a.name,e.generation,e.boot_epoch,e.deadline_tick_ms,e.client_pid,e.client_pid_start_ms,e.hook_seen_ms,e.recovery_deadline,e.parent_id,e.single_session,e.heartbeat_mode,EXISTS(SELECT 1 FROM RepositoryAlias o WHERE o.alias='outside:'||e.host_id AND o.repository_id=e.repository_id) FROM Execution e JOIN Agent a ON a.id=e.agent_id `
+const executionSelect = `SELECT e.id,e.agent_id,e.repository_id,e.host_id,e.client,e.session_id,e.worktree,e.branch,e.state,a.name,e.generation,e.boot_epoch,e.deadline_tick_ms,e.client_pid,e.client_pid_start_ms,e.hook_seen_ms,e.recovery_deadline,e.parent_id,e.single_session,e.heartbeat_mode,COALESCE(e.worktree_key,''),EXISTS(SELECT 1 FROM RepositoryAlias o WHERE o.alias='outside:'||e.host_id AND o.repository_id=e.repository_id) FROM Execution e JOIN Agent a ON a.id=e.agent_id `
 
 func (e *execution) fields() []any {
-	return []any{&e.ID, &e.AgentID, &e.Repo, &e.Host, &e.Client, &e.Session, &e.Worktree, &e.Branch, &e.State, &e.Name, &e.Generation, &e.Epoch, &e.Deadline, &e.PID, &e.PIDStart, &e.HookSeenMS, &e.Recovery, &e.Parent, &e.Single, &e.Heartbeat, &e.Outside}
+	return []any{&e.ID, &e.AgentID, &e.Repo, &e.Host, &e.Client, &e.Session, &e.Worktree, &e.Branch, &e.State, &e.Name, &e.Generation, &e.Epoch, &e.Deadline, &e.PID, &e.PIDStart, &e.HookSeenMS, &e.Recovery, &e.Parent, &e.Single, &e.Heartbeat, &e.WorktreeKey, &e.Outside}
 }
 
 func scanExecution(row interface{ Scan(...any) error }) (e execution, err error) {
@@ -380,8 +387,10 @@ func (t *transaction) resume(e *execution, strong bool) (int64, error) {
 	e.Deadline = tick + lease
 	// Rotate the numeric fence as well as the epoch: release accepts a fence
 	// without a complete token, so retaining the number would admit zombies.
-	if _, err := t.exec(`INSERT INTO Claim(execution_id,repository_id,kind,path,path_key,origin,boot_epoch,expires_ms)
-            SELECT execution_id,repository_id,kind,path,path_key,origin,?,expires_ms FROM Claim
+	// The copy keeps the claim's worktree key and display location. Recovery
+	// must not turn a keyed claim into a repository-wide one (ADR 037).
+	if _, err := t.exec(`INSERT INTO Claim(execution_id,repository_id,kind,path,path_key,origin,boot_epoch,expires_ms,worktree_key,worktree_path,branch)
+            SELECT execution_id,repository_id,kind,path,path_key,origin,?,expires_ms,worktree_key,worktree_path,branch FROM Claim
             WHERE execution_id=? AND revoked_ms IS NULL AND boot_epoch<>?`, t.s.epoch, e.ID, t.s.epoch); err != nil {
 		return 0, err
 	}
@@ -554,7 +563,14 @@ func (t *transaction) register(r Request, outside bool) (map[string]any, error) 
 	}
 	ex := id("ex_")
 	tick := t.s.clock.Tick()
-	_, err = t.exec(`INSERT INTO Execution(id,agent_id,repository_id,host_id,client,session_id,generation,worktree,branch,boot_epoch,deadline_tick_ms,lease_renewed_tick_ms,state,parent_id,client_pid,client_pid_start_ms,single_session,heartbeat_mode) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'active',?,?,?,?,?)`, ex, agent, repo, r.Host, r.Client, r.SessionID, generation, r.Worktree, r.Branch, t.s.epoch, tick+lease, tick, parent, r.ClientPID, r.ClientPIDStartMS, r.SingleSession, heartbeat)
+	// The session root's key. An empty WorktreeID, including a session outside git,
+	// stores null and stays repository-wide. The same directory keeps this key
+	// across alias replacement because ensureWorktreeKey is not WorktreeAlias.
+	worktreeKey, err := t.ensureWorktreeKey(r.Host, r.WorktreeID)
+	if err != nil {
+		return nil, err
+	}
+	_, err = t.exec(`INSERT INTO Execution(id,agent_id,repository_id,host_id,client,session_id,generation,worktree,branch,boot_epoch,deadline_tick_ms,lease_renewed_tick_ms,state,parent_id,client_pid,client_pid_start_ms,single_session,heartbeat_mode,worktree_key) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'active',?,?,?,?,?,NULLIF(?,''))`, ex, agent, repo, r.Host, r.Client, r.SessionID, generation, r.Worktree, r.Branch, t.s.epoch, tick+lease, tick, parent, r.ClientPID, r.ClientPIDStartMS, r.SingleSession, heartbeat, worktreeKey)
 	if err != nil {
 		return nil, err
 	}

@@ -796,6 +796,21 @@ of its file: the innermost checkout that contains it, which for a submodule's fi
 submodule's, wherever the session was started (ADR 033). Branch and worktree are
 context, not an exemption: two worktrees editing one file will meet at merge time, which is
 exactly the collision Iris exists to prevent. A narrower policy can be added per repository.
+See [ADR 037](adr/037-worktree-scoped-auto-claims.md) for an opt-in per-repository narrowing of auto claims.
+The setting is `claim.auto_scope` on the repository (`repository` by default, or `worktree`). The
+owner sets it with `iris admin policy --repository <id> --claim-auto-scope repository|worktree`,
+which posts `POST /v1/admin/policy`. A hook payload, message body or coordination envelope cannot
+select it, and a change does not rewrite claims. `iris doctor`, run in a git checkout, reports the
+scope in force. For `worktree` it says that a cross-worktree automatic overlap is advisory: the
+edit is allowed, and the overlap can meet in one filesystem or at rebase or merge. An advisory
+does not make concurrent edits safe, resolve their contents or prove that the work is disjoint.
+Explicit claims and claims with no worktree key stay repository-wide. The same directory on two
+hosts gets two keys. The exemption covers every worktree in the repository, including a human's or
+an unrelated agent's. A hub that omits the setting is reported as unknown. Outside git, doctor
+omits the line: no scope is in force. `GET /v1/claims` and the console name each claim's display
+`worktree_path`, `branch` and `host`, and `effective_scope`. That scope is `worktree` only when the
+policy is `worktree`, the origin is `auto` and the worktree key is set. An empty display path is an
+unknown location. The console shows the policy per repository and has no control that changes it.
 A session outside any git checkout takes no claim at all: it belongs to its host's context of
 sessions outside git, which is for mail only (ADR 034).
 
@@ -806,14 +821,18 @@ exist yet still conflict. An empty prefix, meaning the whole repository, needs a
 **A pre-edit hook checks and claims in one step**, so protection exists without the model doing
 anything, and `explicit` claims are for planned work. The step is one idempotent transaction
 over every path in the tool call, including both ends of a rename. It grants all missing claims
-or none. Paths the caller already holds are reused, and an `explicit` claim is never downgraded.
-An `auto` claim lasts 10 minutes from the last touch. A retried call, identified by its tool call
+or none. Under `repository`, paths the caller already holds are reused exactly as today. Under ADR
+037's `worktree` opt-in, automatic self-reuse also requires the same worktree key. An `explicit`
+claim is never downgraded. An `auto` claim lasts 10 minutes from the last touch. A retried call, identified by its tool call
 id, does not extend it.
 
 An `auto` claim means "this session has uncommitted changes here". When a shell command takes a
 path out of the session's git status, by commit, stash or restore, the reconcile releases the
 session's own `auto` claim on that path in the same transaction, and wakes whoever waited for it.
-An `explicit` claim, and every other session's claim, stays. Committed but unmerged work is
+Under the default `repository` policy this release stays path-wide across that session's matching
+claims, exactly as before. Under ADR 037's `worktree` opt-in it releases only the claim with the
+status checkout's worktree key; the session's automatic claim on the same path in another worktree
+stays. An `explicit` claim, and every other session's claim, stays. Committed but unmerged work is
 git's business, not a claim's. This happens only at the session's next shell reconcile: a commit
 made outside the session, or an edit-tool claim on a path no shell command ever saw dirty,
 keeps its claim until it expires.
@@ -941,11 +960,23 @@ inode, size, modification and change times, and checksum at its end. It never re
 scoped call on the plain route. `iris doctor` shows what each breaker suggests. Windows takes no
 reduced snapshot and keeps no breaker.
 
-`iris guard` is a pre-commit check, installed per repository on request. It refuses a commit
-of paths claimed from another host/worktree, even by the same session: the checkout does not
-prove who started Git. Same-host/worktree claims are skipped. A refusal explains the possible
-own-session case and gives the fence to release from the holding session before retrying.
-It is the strongest check Iris has, and it is cooperative.
+`iris guard` is a pre-commit check, installed per repository on request. Under the default
+`repository` policy it refuses a commit of paths claimed from another host/worktree, even by the
+same session, exactly as before: the checkout does not prove who started Git. Same-host/worktree
+claims are skipped. Under ADR 037's `worktree` opt-in, a staged path whose only overlaps are
+automatic claims with different, non-null worktree keys receives an advisory instead of a refusal;
+explicit claims, null-key claims and a committing checkout without a key still refuse outside the
+same-worktree exemption. That exemption then uses the claim's checkout identity, so ADR 033's
+own-session submodule refusal is lifted when the claim and commit are in the same submodule
+checkout. A new guard prints an advisory and allows; an older guard ignores it and allows silently.
+A refusal explains the possible own-session case and gives the fence to release from the holding
+session before retrying. It is the strongest check Iris has, and it is cooperative. The check
+response always includes `claim_auto_scope` (`repository` or `worktree`). When the only overlaps
+are exempt, `message` stays empty and `advisories` names each one by path, holder, worktree,
+branch, repository and fence. `advisories` is omitted when there are none. A nonempty `message`
+remains a refusal; advisories do not weaken it. An older guard that reads only `message` allows
+an exempt overlap without printing it. A hub from before the field omits `claim_auto_scope`, and
+doctor reports that as unknown.
 
 ### D13. Security
 
@@ -1389,10 +1420,16 @@ was measured, the tool was unknown to Iris, so its writes went unreconciled and 
 
 On `modernc.org/sqlite`, with real concurrency:
 
-- Of concurrent overlapping grants, exactly one wins. A multi-path grant is all or nothing.
-- Prefix, case-folding and rename boundaries hold across worktrees.
-- A self-touch reuses a claim and never downgrades an `explicit` one. A replayed tool call does
-  not extend an expiry.
+- Of concurrent overlapping grants, exactly one wins, except that ADR 037's `worktree` opt-in lets
+  an automatic/automatic pair with different, non-null worktree keys both win. A multi-path grant
+  is all or nothing.
+- Prefix, case-folding and rename boundaries hold across worktrees. For ADR 037's sole exempted
+  automatic/automatic pair with different, non-null keys, ADR 003 path identity and those boundaries
+  are unchanged; only the conflict action changes.
+- Under `repository`, a self-touch reuses a claim and shell release stays path-wide exactly as
+  today, even when rows carry worktree keys. Under ADR 037's `worktree` opt-in, automatic
+  self-reuse and release are key-scoped. An own explicit claim is reused repository-wide and is
+  never downgraded. A replayed tool call does not extend an expiry.
 - Expired, released, wrong-owner and old-epoch fence tokens fail. A lost lease cannot renew.
 - Retries cannot double-send or resurrect a claim. A key reused with a different request gets 409.
 - A failed transaction exposes nothing.
@@ -1419,5 +1456,6 @@ On `modernc.org/sqlite`, with real concurrency:
   cannot bind to the first. In id mode, a tool call that names its session binds only that
   session's Execution, never through a handle.
 - An ambiguous URL cannot join a repository automatically.
-- A policy a client cannot express never becomes an allow.
+- A policy a client cannot express never becomes an allow. Under ADR 037, every real conflict still
+  turns Codex `ask` into `deny` (R5).
 - For every client, a crash, a timeout and a missing binary all leave the tool usable.

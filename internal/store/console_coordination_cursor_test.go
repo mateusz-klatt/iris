@@ -9,7 +9,9 @@ import (
 	"time"
 )
 
-const schema26UnfilteredClaimAndDeliveryTriggers = removeLeaseRenewedTickSchema + `
+// schema26UnfilteredTriggers is the claim and delivery console triggers from
+// before migration 027. They fire on every update, including expiry renewals.
+const schema26UnfilteredTriggers = `
 DROP TRIGGER console_revision_claim_update;
 CREATE TRIGGER console_revision_claim_update AFTER UPDATE ON Claim BEGIN
  INSERT INTO ConsoleRepositoryChange SELECT OLD.repository_id UNION SELECT NEW.repository_id;
@@ -18,6 +20,13 @@ DROP TRIGGER console_revision_delivery_update;
 CREATE TRIGGER console_revision_delivery_update AFTER UPDATE ON Delivery BEGIN
  INSERT INTO ConsoleRepositoryChange SELECT repository_id FROM Agent WHERE id=OLD.recipient_agent_id UNION SELECT repository_id FROM Agent WHERE id=NEW.recipient_agent_id;
 END;
+`
+
+// schema26UnfilteredClaimAndDeliveryTriggers returns a database to version 26
+// with those triggers. Migration 029's columns are removed first so reopening
+// can add them again. A measurement that still calls today's statements keeps
+// the columns until it has finished, then applies this.
+const schema26UnfilteredClaimAndDeliveryTriggers = removeWorktreeScopeSchema + removeLeaseRenewedTickSchema + schema26UnfilteredTriggers + `
 PRAGMA user_version=26;
 `
 
@@ -535,7 +544,9 @@ func TestConsoleRevisionBurstFrameRateBeforeAndAfterMigration27(t *testing.T) {
 		return totalMoves, renewalMoves, deliveryBookkeepingMoves, realChangeMoves
 	}
 
-	if _, err := s.db.Exec(schema26UnfilteredClaimAndDeliveryTriggers); err != nil {
+	// Keep the worktree columns for the measurement: today's statements read them.
+	// Drop the columns afterwards so Open from version 26 can apply migration 029.
+	if _, err := s.db.Exec(removeLeaseRenewedTickSchema + schema26UnfilteredTriggers + "PRAGMA user_version=26;"); err != nil {
 		t.Fatal(err)
 	}
 	beforeTotal, beforeClaim, beforeDelivery, beforeReal := runBurst(s, "before")
@@ -546,6 +557,9 @@ func TestConsoleRevisionBurstFrameRateBeforeAndAfterMigration27(t *testing.T) {
 	//   Total = 154 moves for 2 real state changes.
 	if beforeClaim != renewals || beforeDelivery != renewals*2+1 || beforeReal != 3 || beforeTotal != 154 {
 		t.Fatalf("unexpected schema-26 burst counts: total=%d claim=%d delivery=%d real=%d", beforeTotal, beforeClaim, beforeDelivery, beforeReal)
+	}
+	if _, err := s.db.Exec(removeWorktreeScopeSchema + schema26UnfilteredTriggers); err != nil {
+		t.Fatal(err)
 	}
 
 	if err := s.Close(); err != nil {

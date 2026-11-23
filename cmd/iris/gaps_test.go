@@ -154,7 +154,14 @@ func TestGuardWarnsWhenTheHubFailsAndBlocksOnAConflict(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"message":"held by someone","conflicts":[]}`))
+		switch mode {
+		case "advisory":
+			_, _ = w.Write([]byte(`{"message":"","advisories":[{"path":"held.go","holder":"codex","worktree":"/repo/wt","branch":""}]}`))
+		case "mixed":
+			_, _ = w.Write([]byte(`{"message":"held by someone","advisories":[{"path":"other.go","holder":"codex","worktree":"/wt","branch":"main"}]}`))
+		default:
+			_, _ = w.Write([]byte(`{"message":"held by someone","conflicts":[]}`))
+		}
 	}))
 	defer srv.Close()
 	token := filepath.Join(t.TempDir(), "token")
@@ -175,6 +182,24 @@ func TestGuardWarnsWhenTheHubFailsAndBlocksOnAConflict(t *testing.T) {
 	mode = "conflict"
 	if err := runGuard([]string{"check"}); err == nil || !strings.Contains(err.Error(), "held by someone") {
 		t.Fatal(err)
+	}
+	mode = "mixed"
+	_, errText = capture(t, func() {
+		if err := runGuard([]string{"check"}); err == nil || !strings.Contains(err.Error(), "held by someone") {
+			t.Fatal(err)
+		}
+	})
+	if strings.Contains(errText, "this edit is allowed") {
+		t.Fatal("an advisory was printed for a refused commit", errText)
+	}
+	mode = "advisory"
+	_, errText = capture(t, func() {
+		if err := runGuard([]string{"check"}); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if !strings.Contains(errText, "also auto-claimed by codex in worktree /repo/wt on branch unknown") || !strings.Contains(errText, "this edit is allowed") {
+		t.Fatal(errText)
 	}
 }
 

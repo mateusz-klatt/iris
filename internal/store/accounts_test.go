@@ -24,6 +24,43 @@ const removeAttentionIdentitySchema = "DROP TRIGGER delivery_attention_seq;\nALT
 // and replay 028 without duplicate-column errors.
 const removeLeaseRenewedTickSchema = "ALTER TABLE Execution DROP COLUMN lease_renewed_tick_ms;\n"
 
+// dropHistoricalWorktreeColumns removes the columns and table historicalStore adds so
+// today's statements can name them. A fixture that then opens below version 29 must
+// drop them first: migration 029 adds them again. These fixtures still have the
+// version-18 claim trigger, which does not name the columns, so this is not
+// removeWorktreeScopeSchema. A fixture that never received the columns must not run this.
+const dropHistoricalWorktreeColumns = `
+DROP TABLE IF EXISTS WorktreeIdentity;
+ALTER TABLE Event DROP COLUMN repository_id;
+ALTER TABLE Event DROP COLUMN worktree_key;
+ALTER TABLE Waiter DROP COLUMN worktree_key;
+ALTER TABLE Claim DROP COLUMN branch;
+ALTER TABLE Claim DROP COLUMN worktree_path;
+ALTER TABLE Claim DROP COLUMN worktree_key;
+ALTER TABLE Execution DROP COLUMN worktree_key;
+ALTER TABLE Repository DROP COLUMN auto_claim_scope;
+`
+
+// removeWorktreeScopeSchema undoes migration 029. The claim trigger names the new columns, so it
+// is restored to its version-27 shape before those columns are dropped. A fixture that never
+// applied 029 does not have the columns and must not run this.
+const removeWorktreeScopeSchema = `
+DROP TRIGGER console_revision_claim_update;
+CREATE TRIGGER console_revision_claim_update AFTER UPDATE OF execution_id,repository_id,kind,path,origin,revoked_ms ON Claim
+WHEN OLD.execution_id IS NOT NEW.execution_id OR OLD.repository_id IS NOT NEW.repository_id OR OLD.kind IS NOT NEW.kind OR OLD.path IS NOT NEW.path OR OLD.origin IS NOT NEW.origin OR OLD.revoked_ms IS NOT NEW.revoked_ms BEGIN
+ INSERT INTO ConsoleRepositoryChange SELECT OLD.repository_id UNION SELECT NEW.repository_id;
+END;
+DROP TABLE WorktreeIdentity;
+ALTER TABLE Event DROP COLUMN repository_id;
+ALTER TABLE Event DROP COLUMN worktree_key;
+ALTER TABLE Waiter DROP COLUMN worktree_key;
+ALTER TABLE Claim DROP COLUMN branch;
+ALTER TABLE Claim DROP COLUMN worktree_path;
+ALTER TABLE Claim DROP COLUMN worktree_key;
+ALTER TABLE Execution DROP COLUMN worktree_key;
+ALTER TABLE Repository DROP COLUMN auto_claim_scope;
+`
+
 // Old-schema fixtures undo only this migration before reconstructing their
 // historical version. Fresh-migration tests remain backed by captured old SQL.
 const removeConsoleRevisionSchema = `
@@ -423,7 +460,7 @@ func TestConsoleMigrationPreservesLegacyMailAndRetryNamespaces(t *testing.T) {
 	repo := registered["repository_id"].(string)
 	r := Request{RepositoryID: repo, Key: "legacy-retry", To: []string{registered["agent"].(map[string]any)["id"].(string)}, Body: "unattributed shared mail"}
 	accepted := call(t, s, "ui_messages", r)
-	if _, err := s.db.Exec(removeLeaseRenewedTickSchema + removeAttentionIdentitySchema + removeConsoleSchema + "PRAGMA user_version=16"); err != nil {
+	if _, err := s.db.Exec(dropHistoricalWorktreeColumns + removeLeaseRenewedTickSchema + removeAttentionIdentitySchema + removeConsoleSchema + "PRAGMA user_version=16"); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Close(); err != nil {

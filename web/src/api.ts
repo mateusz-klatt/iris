@@ -14,6 +14,11 @@ export interface Repository {
   host?: string;
   /** Current account capability, checked again by the store. */
   console_access?: "ro" | "rw";
+  /**
+   * claim.auto_scope for a project (ADR 037). Absent for a host's context of
+   * sessions outside git, and for a hub that cannot report it.
+   */
+  claim_auto_scope?: string;
 }
 
 export interface Agent {
@@ -39,6 +44,14 @@ export interface Claim {
   holder: string;
   origin: string;
   expires_at: string | null;
+  /** Canonical display path of the claim's own checkout. Empty means unknown. */
+  worktree_path?: string;
+  /** Branch observed for that checkout. Empty means unknown. */
+  branch?: string;
+  /** Holding Execution's host, shown when two claims share a display path. */
+  host?: string;
+  /** `worktree` only for an opted-in automatic claim with a key. Otherwise `repository`. */
+  effective_scope?: string;
 }
 
 export interface Overview {

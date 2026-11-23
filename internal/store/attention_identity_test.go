@@ -242,7 +242,7 @@ func TestTheMigrationStampsMailThatNeedsAttention(t *testing.T) {
 	}{
 		{"DELETE FROM Event WHERE object_id=?", []any{deliveries["pruned"]}},
 		{"INSERT INTO Ack(delivery_id,execution_id,attempt,acked_ms) VALUES(?,?,1,1)", []any{deliveries["handled"], b.ExecutionID}},
-		{removeLeaseRenewedTickSchema + removeAttentionIdentitySchema + "PRAGMA user_version=22", nil},
+		{dropHistoricalWorktreeColumns + removeLeaseRenewedTickSchema + removeAttentionIdentitySchema + "PRAGMA user_version=22", nil},
 	} {
 		if _, err := s.db.Exec(q.sql, q.args...); err != nil {
 			t.Fatal(err)

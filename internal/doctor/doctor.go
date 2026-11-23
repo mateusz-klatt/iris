@@ -89,6 +89,11 @@ type Result struct {
 	// Case warns when the repository doctor ran in is case-sensitive at the hub while this
 	// checkout folds case. Empty means there is nothing to warn about, or nothing known.
 	Case string
+	// ClaimScope is claim.auto_scope for the checkout doctor examined (ADR 037).
+	// Empty when this directory is not a git repository, so no policy is in force.
+	// The text is repository, worktree or unknown. Unknown means the hub did not
+	// report the setting; doctor does not assume either value.
+	ClaimScope string
 	// LineEndings warns when the repository doctor ran in holds CRLF files that this git reads
 	// as modified, which keeps the shell reconcile past its budget. Empty means nothing to warn
 	// about, or nothing known.
@@ -195,6 +200,7 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 		applyVersion(&res.Report.Clients[i])
 	}
 	res.Guard = guardLine(ctx, opt.Dir)
+	res.ClaimScope = claimScopeLine(ctx, hubURL, token, opt.host(), opt.Dir, opt.HTTP)
 	res.LineEndings = lineEndingsLine(ctx, opt.Dir)
 	res.Scope = scopeReport(tokenFile, opt.Now())
 	res.Wake = wakeReport(opt.Layout, tokenFile, opt.Now())
@@ -298,6 +304,9 @@ func (r Result) Format() string {
 	}
 	if r.Case != "" {
 		fmt.Fprintf(&b, "case policy: %s\n", r.Case)
+	}
+	if r.ClaimScope != "" {
+		fmt.Fprintf(&b, "claim auto scope: %s\n", r.ClaimScope)
 	}
 	if r.Guard != "" {
 		fmt.Fprintf(&b, "pre-commit guard: %s\n", r.Guard)
@@ -921,6 +930,47 @@ func caseLine(ctx context.Context, base, token, host, dir string, hc *http.Clien
 		return ""
 	}
 	return "this repository is case-sensitive at the hub, but this checkout folds case (core.ignorecase), so a claim on a.go does not stop an edit of A.GO here"
+}
+
+// claimScopeLine asks the hub which claim.auto_scope is in force for dir.
+// A directory that is not a git checkout has none (ADR 034). A hub that cannot
+// report the setting, including one from before ADR 037, is unknown: doctor
+// does not treat silence as repository or as worktree.
+func claimScopeLine(ctx context.Context, base, token, host, dir string, hc *http.Client) string {
+	if dir == "" {
+		dir = "."
+	}
+	repo, err := gitinfo.Find(dir)
+	if err != nil {
+		return ""
+	}
+	body, _ := json.Marshal(hubclient.CheckRequest{CommonDir: repo.CommonDir, Host: host, Worktree: repo.Worktree, WorktreeID: repo.WorktreeID, RemoteURL: repo.RemoteURL, RootCommit: repo.RootCommit, Paths: []string{}})
+	res, err := hubRequest(ctx, http.MethodPost, strings.TrimRight(base, "/")+"/v1/guard/check", token, bytes.NewReader(body), hc)
+	if err != nil {
+		return claimScopeText("")
+	}
+	defer func() { _ = res.Body.Close() }()
+	var out struct {
+		Scope *string `json:"claim_auto_scope"`
+	}
+	if res.StatusCode != http.StatusOK || json.NewDecoder(res.Body).Decode(&out) != nil || out.Scope == nil {
+		return claimScopeText("")
+	}
+	return claimScopeText(*out.Scope)
+}
+
+// claimScopeText is the human line after "claim auto scope: ".
+// worktree says what the opt-in means and what it cannot do. It is advice about
+// the policy, not a claim that Iris still prevents those collisions.
+func claimScopeText(scope string) string {
+	switch scope {
+	case "repository":
+		return "repository. Automatic claims apply across every worktree and branch of this repository. An explicit claim does too."
+	case "worktree":
+		return "worktree. Cross-worktree automatic overlaps are advisory: the edit is allowed, and the overlap can meet immediately in a shared filesystem tree or surface at rebase or merge. Explicit claims stay repository-wide. A claim with no worktree key stays repository-wide. An advisory is information, not enforcement: it does not make concurrent edits safe, resolve their contents or prove that the work is disjoint. The same directory seen from two hosts gets two keys, so those automatic claims become advisory. This covers every worktree in the repository, including a human's or an unrelated agent's, not only one coordinator's delegates."
+	default:
+		return "unknown. The hub did not report claim.auto_scope for this checkout, so this does not assume repository or worktree."
+	}
 }
 
 // lineEndingsLine names a worktree where this git reads many tracked files as modified only

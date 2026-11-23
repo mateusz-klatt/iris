@@ -32,8 +32,22 @@ func historicalStore(t *testing.T, version int) (*Store, *fakeClock, string) {
 			t.Fatal("could not build historical schema", err)
 		}
 	}
-	// Today's sessions code writes lease_renewed_tick_ms; migration tests drop it before reopening.
-	if _, err = db.Exec("ALTER TABLE Execution ADD COLUMN lease_renewed_tick_ms INTEGER NOT NULL DEFAULT 0"); err != nil {
+	// Today's sessions code writes lease_renewed_tick_ms and the ADR 037 worktree columns.
+	// Migration tests that reopen below version 29 drop those columns first; migration 029
+	// adds them again. console_import_migration keeps them, because it never reopens.
+	if _, err = db.Exec(`ALTER TABLE Execution ADD COLUMN lease_renewed_tick_ms INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE Repository ADD COLUMN auto_claim_scope TEXT NOT NULL DEFAULT 'repository' CHECK(auto_claim_scope IN ('repository','worktree'));
+ALTER TABLE Execution ADD COLUMN worktree_key TEXT;
+ALTER TABLE Claim ADD COLUMN worktree_key TEXT;
+ALTER TABLE Claim ADD COLUMN worktree_path TEXT;
+ALTER TABLE Claim ADD COLUMN branch TEXT;
+ALTER TABLE Waiter ADD COLUMN worktree_key TEXT;
+ALTER TABLE Event ADD COLUMN worktree_key TEXT;
+ALTER TABLE Event ADD COLUMN repository_id TEXT;
+CREATE TABLE WorktreeIdentity (
+ host_id TEXT NOT NULL, worktree_id TEXT NOT NULL, worktree_key TEXT NOT NULL UNIQUE,
+ PRIMARY KEY (host_id, worktree_id)
+);`); err != nil {
 		t.Fatal(err)
 	}
 	stream := newStreamID()
@@ -63,7 +77,7 @@ func TestFreshDatabaseHasVersion24WithoutImportLedgers(t *testing.T) {
 }
 
 // latestVersion is the schema version a store reaches when it opens: the last migration's.
-const latestVersion = 28
+const latestVersion = 30
 
 func assertImportRemoval(t *testing.T, db *sql.DB) {
 	t.Helper()
@@ -114,7 +128,7 @@ func populateVersion23(t *testing.T) (*Store, *fakeClock, string) {
 			t.Fatal(err)
 		}
 	}
-	if _, err = s.db.Exec(removeLeaseRenewedTickSchema); err != nil {
+	if _, err = s.db.Exec(removeLeaseRenewedTickSchema + dropHistoricalWorktreeColumns); err != nil {
 		t.Fatal(err)
 	}
 	return s, clock, file

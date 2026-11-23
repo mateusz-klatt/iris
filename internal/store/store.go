@@ -106,6 +106,12 @@ var coordinationCursorSchema string
 //go:embed migrations/028.sql
 var leaseRenewedTickSchema string
 
+//go:embed migrations/029.sql
+var worktreeScopeSchema string
+
+//go:embed migrations/030.sql
+var eventRepositorySchema string
+
 // Clock separates lease ticks from persisted wall-clock expiries. Tick must be monotonic
 // within a Store's lifetime; client timestamps never participate in lease decisions.
 type Clock interface {
@@ -422,6 +428,16 @@ func openDatabase(filename string, clock Clock, driverName string) (*Store, erro
 		}
 		if version < 28 {
 			if _, err := t.exec(leaseRenewedTickSchema); err != nil {
+				return err
+			}
+		}
+		if version < 29 {
+			if _, err := t.exec(worktreeScopeSchema); err != nil {
+				return err
+			}
+		}
+		if version < 30 {
+			if _, err := t.exec(eventRepositorySchema); err != nil {
 				return err
 			}
 		}
@@ -853,7 +869,16 @@ func (t *transaction) requeue(ex string) error {
 	return nil
 }
 func (t *transaction) event(agent, ex, kind, object string) error {
-	_, err := t.exec("INSERT INTO Event(kind,agent_id,execution_id,object_id,created_ms) VALUES(?,NULLIF(?,''),NULLIF(?,''),?,?)", kind, agent, ex, object, t.s.clock.Now().UnixMilli())
+	return t.eventAt(agent, ex, kind, object, "", "")
+}
+
+// eventAt records an event. worktreeKey and repo are set on claim_available.
+// Waking deletes the Waiter, so the event has to remember the waiter's checkout
+// and the repository that owned the wait. Replay must not guess that repository
+// from the Execution: a submodule wait belongs to the submodule (ADR 033).
+// Every other event leaves both columns null.
+func (t *transaction) eventAt(agent, ex, kind, object, worktreeKey, repo string) error {
+	_, err := t.exec("INSERT INTO Event(kind,agent_id,execution_id,object_id,created_ms,worktree_key,repository_id) VALUES(?,NULLIF(?,''),NULLIF(?,''),?,?,NULLIF(?,''),NULLIF(?,''))", kind, agent, ex, object, t.s.clock.Now().UnixMilli(), worktreeKey, repo)
 	if err == nil {
 		t.notify = true
 	}

@@ -45,6 +45,6 @@ func fileClaim(b binding.Bound, raw string) (map[string]any, bool, error) {
 	}
 	// Place stops at the session's worktree, so a checkout it finds lies inside it.
 	prefix, _ := gitinfo.Relative(own.Worktree, filepath.Join(place.Worktree, ".git"))
-	checkout := map[string]any{"worktree": place.Worktree, "worktree_id": place.WorktreeID, "common_dir": place.CommonDir, "remote_url": place.RemoteURL, "root_commit": place.RootCommit, "paths": []string{}, "prefix": strings.TrimSuffix(prefix, "/.git")}
+	checkout := map[string]any{"worktree": place.Worktree, "worktree_id": place.WorktreeID, "common_dir": place.CommonDir, "remote_url": place.RemoteURL, "root_commit": place.RootCommit, "branch": place.Branch, "paths": []string{}, "prefix": strings.TrimSuffix(prefix, "/.git")}
 	return checkout, true, nil
 }
