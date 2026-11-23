@@ -82,9 +82,11 @@ func (t *transaction) wakeWaiters(repo string) error {
 		if blocked {
 			continue
 		}
-		// The event keeps the waiter's key: waking deletes the Waiter, and a later
-		// replay of the event is what freedRewind reads (ADR 037).
-		if err = t.eventAt(w.agent, w.execution, "claim_available", w.key, w.worktreeKey); err != nil {
+		// The event keeps the waiter's key and the repository that owned the wait.
+		// Waking deletes the Waiter, and a later replay of the event is what
+		// freedRewind reads (ADR 037). The Execution's repository is not that
+		// repository when the file is in a submodule (ADR 033).
+		if err = t.eventAt(w.agent, w.execution, "claim_available", w.key, w.worktreeKey, repo); err != nil {
 			return err
 		}
 		if _, err = t.exec("DELETE FROM Waiter WHERE execution_id=? AND path_key=? AND kind=?", w.execution, w.key, w.kind); err != nil {

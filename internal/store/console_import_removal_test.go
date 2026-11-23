@@ -43,6 +43,7 @@ ALTER TABLE Claim ADD COLUMN worktree_path TEXT;
 ALTER TABLE Claim ADD COLUMN branch TEXT;
 ALTER TABLE Waiter ADD COLUMN worktree_key TEXT;
 ALTER TABLE Event ADD COLUMN worktree_key TEXT;
+ALTER TABLE Event ADD COLUMN repository_id TEXT;
 CREATE TABLE WorktreeIdentity (
  host_id TEXT NOT NULL, worktree_id TEXT NOT NULL, worktree_key TEXT NOT NULL UNIQUE,
  PRIMARY KEY (host_id, worktree_id)
@@ -76,7 +77,7 @@ func TestFreshDatabaseHasVersion24WithoutImportLedgers(t *testing.T) {
 }
 
 // latestVersion is the schema version a store reaches when it opens: the last migration's.
-const latestVersion = 29
+const latestVersion = 30
 
 func assertImportRemoval(t *testing.T, db *sql.DB) {
 	t.Helper()

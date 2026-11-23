@@ -266,14 +266,19 @@ of an opted-in repository, not only to a coordinator's delegates.
    as does any other overlap outside the sole exemption, so none can be skipped by a keyed waiter's
    wake.
 
-   A `claim_available` Event also stores the waiter's key in a new nullable `Event.worktree_key`.
-   This is necessary because waking deletes the Waiter while replay later reads the Event.
-   `freedRewind` (`internal/store/api.go:294-333`) selects that key with the event's path and keeps
-   its current conservative prefix comparison, own-claim treatment and age bound. Under
-   `repository`, its current overlap test is unchanged. Under `worktree`, only decision 2's
-   exempted pair is non-blocking; every overlapping explicit or null-key claim still prevents the
-   rewind. An old event with a null key retains repository-wide replay behaviour. No claim event or
-   wake is an authority input.
+   A `claim_available` Event also stores the waiter's key in a nullable `Event.worktree_key` and
+   the repository that owned the wait in a nullable `Event.repository_id`. Both are necessary
+   because waking deletes the Waiter while replay later reads the Event, and the Execution's
+   repository is not the wait's repository when the file is in a submodule (ADR 033).
+   `freedRewind` selects that key and repository with the event's path and keeps its conservative
+   prefix comparison, own-claim treatment and age bound. It evaluates each event against that
+   repository's claims and policy. Under `repository`, the overlap test is unchanged. Under
+   `worktree`, only decision 2's exempted pair is non-blocking; every overlapping explicit or
+   null-key claim still prevents the rewind. An old event with a null key retains repository-wide
+   replay behaviour within the repository the event names. An event with no repository, or one
+   whose repository is gone, is not rewound: guessing the Execution's repository could wake an
+   edit into a claim the replay did not see, and a missed replay cannot. No claim event or wake
+   is an authority input.
 
 10. **Mixed versions fail toward repository-wide behaviour.** Registration and ADR 033 groups
     already carry worktree roots and WorktreeID, so no client-supplied scope key is added. Response

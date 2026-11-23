@@ -31,6 +31,7 @@ const removeLeaseRenewedTickSchema = "ALTER TABLE Execution DROP COLUMN lease_re
 // removeWorktreeScopeSchema. A fixture that never received the columns must not run this.
 const dropHistoricalWorktreeColumns = `
 DROP TABLE IF EXISTS WorktreeIdentity;
+ALTER TABLE Event DROP COLUMN repository_id;
 ALTER TABLE Event DROP COLUMN worktree_key;
 ALTER TABLE Waiter DROP COLUMN worktree_key;
 ALTER TABLE Claim DROP COLUMN branch;
@@ -50,6 +51,7 @@ WHEN OLD.execution_id IS NOT NEW.execution_id OR OLD.repository_id IS NOT NEW.re
  INSERT INTO ConsoleRepositoryChange SELECT OLD.repository_id UNION SELECT NEW.repository_id;
 END;
 DROP TABLE WorktreeIdentity;
+ALTER TABLE Event DROP COLUMN repository_id;
 ALTER TABLE Event DROP COLUMN worktree_key;
 ALTER TABLE Waiter DROP COLUMN worktree_key;
 ALTER TABLE Claim DROP COLUMN branch;
