@@ -322,10 +322,18 @@ it("sends exactly one read for an explicit visible open under StrictMode and non
   const user = userEvent.setup({ delay: null });
   mockVisibility("visible");
   const reads = observeThreadReads();
+  const readBodies: unknown[] = [];
   let onFrame: ((frame: WatchFrame) => void) | undefined;
   const firstMessage = threadDetail.messages[0]!;
   let messages = threadDetail.messages;
-  server.use(http.get("*/v1/ui/threads/:id", () => HttpResponse.json({ ...threadDetail, messages })));
+  server.use(
+    http.get("*/v1/ui/threads/:id", () => HttpResponse.json({ ...threadDetail, messages })),
+    http.post("*/v1/ui/threads/:id/read", async ({ request }) => {
+      readBodies.push(await request.json());
+      messages = messages.map((message) => ({ ...message, recipients: [{ name: "human", state: "acked" }] }));
+      return HttpResponse.json({ read: 1 });
+    }),
+  );
   render(
     <StrictMode>
       <App connect={(frame) => { onFrame = frame; return () => {}; }} />
@@ -334,11 +342,14 @@ it("sends exactly one read for an explicit visible open under StrictMode and non
   await user.click(await screen.findByRole("button", { name: /Open thread: Rollout check/ }));
   expect(await screen.findByText("All checks passed.")).toBeVisible();
   expect(reads()).toHaveLength(1);
+  await waitFor(() => expect(readBodies).toEqual([{ repository_id: "", last_message_id: "ms_root" }]));
 
   messages = [...messages, { ...firstMessage, id: "ms_reply", body: "New rollout details." }];
   act(() => onFrame?.({ cursor: 2, kind: "changed" }));
-  expect(await screen.findByText("New rollout details.")).toBeVisible();
+  const arrived = await screen.findByText("New rollout details.");
+  expect(arrived.closest("article")).toHaveTextContent("To: human (pending)");
   expect(reads()).toHaveLength(1);
+  expect(readBodies).toHaveLength(1);
 });
 
 it("defers a hidden open under StrictMode until visible and cancels it on Back", async () => {

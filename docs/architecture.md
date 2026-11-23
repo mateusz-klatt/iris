@@ -1279,6 +1279,13 @@ controls. These controls describe current capabilities; every request remains
 subject to store authorization. Messages show immutable person attribution
 alongside the shared human transport and explain that replies use a shared mailbox.
 
+An operator's explicit, visible thread open acknowledges only through `last_message_id`, the
+newest message in the detail response that open loaded. The hub requires that message to belong
+to the thread and be visible in the requested view, then acknowledges human deliveries through
+it in `(created_ms, id)` order. A passive refresh does not advance the mark or authorize a read.
+For one release, omitting `last_message_id` retains the legacy thread-wide acknowledgement; a
+later release will require the field.
+
 The new-message recipient picker stores Agent IDs, not display names, and sends those IDs
 through the existing address resolver. If a selected ID disappears from the directory, review
 and send are disabled until the operator clears and selects again. An agent recreated under

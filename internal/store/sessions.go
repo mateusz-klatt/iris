@@ -77,6 +77,7 @@ type Request struct {
 	Attempt        int64       `json:"attempt"`
 	Handled        bool        `json:"handled"`
 	RepositoryID   string      `json:"repository_id"`
+	LastMessageID  string      `json:"last_message_id,omitempty"`
 	FromRepository string      `json:"from_repository_id,omitempty"`
 	IntoRepository string      `json:"into_repository_id,omitempty"`
 	// Aliases names the exact alias mappings an owner unalias removes from RepositoryID.

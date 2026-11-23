@@ -403,7 +403,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const [openedThread, setOpenedThread] = useState<ThreadOpening | null>(null);
   const selectedId = openedThread?.id ?? null;
   const readRequestedFor = useRef<ThreadOpening | Promise<ThreadDetail> | null>(null);
-  const pendingRead = useRef<{ id: string; repositoryId: string } | null>(null);
+  const pendingRead = useRef<{ id: string; repositoryId: string; lastMessageId: string } | null>(null);
   const [loadedThread, setLoadedThread] = useState<{ opening: ThreadOpening; detail: ThreadDetail } | null>(null);
   const loadedThreadRef = useRef(loadedThread);
   loadedThreadRef.current = loadedThread;
@@ -580,7 +580,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       return null;
     }
     pendingRead.current = null;
-    return readThread(pending.id, pending.repositoryId)
+    return readThread(pending.id, pending.repositoryId, pending.lastMessageId)
       .then((read) => {
         if (!deferReload && read > 0) {
           postReadRefresh.current?.();
@@ -842,7 +842,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
         setLoadedThread({ opening: openedThread, detail });
         setThreadError(false);
         if (releaseReadAuthorization() && !member && unreadForOperator(detail)) {
-          pendingRead.current = { id, repositoryId };
+          pendingRead.current = { id, repositoryId, lastMessageId: detail.messages.at(-1)!.id };
           void flushRead();
         }
         // Refresh an untouched suggestion together with loaded detail, retaining edited drafts (A14).
