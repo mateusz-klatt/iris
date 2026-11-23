@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { consoleLabel, replySubject } from "./consoleText";
 import i18n, { englishTranslation, loadLocale, supportedLocales } from "./i18n";
@@ -49,7 +49,7 @@ it("suggests a localized reply subject in every locale and preserves existing pr
   for (const locale of supportedLocales) {
     const t = i18n.getFixedT(locale);
     for (const subject of subjects) {
-      for (const variant of [subject, subject.toUpperCase(), subject.toLowerCase()]) {
+      for (const variant of [subject, subject.toUpperCase(), subject.toLowerCase(), subject.replace(/([:：]) /u, "$1")]) {
         expect(replySubject(variant, t, true, 1024), locale).toBe(variant);
       }
     }
@@ -67,11 +67,20 @@ describe("reply subjects", () => {
 
   it.each([
     "Re:Rollout",
+    "RE:Rollout",
+    "Re: Rollout",
     "Odp:parser test plan",
+    "Re\u00a0:Rollout",
+    "回复：Rollout",
+    "Re:\nRollout",
+  ])("preserves an existing reply prefix with or without a following space: %j", (subject) => {
+    expect(replySubject(subject, i18n.getFixedT("en"), true, 1024)).toBe(subject);
+  });
+
+  it.each([
     "prefix Odp: parser test plan",
     " Odp: parser test plan",
     "Re\n: Rollout",
-    "Re:\nRollout",
     "Re\t: Rollout",
     "Re : Rollout",
   ])("requires a known prefix and its exact delimiter at the start: %j", (subject) => {
@@ -101,5 +110,25 @@ describe("reply subjects", () => {
 
     const overflows = `${fits}a`;
     expect(replySubject(`${overflows}${grapheme}x`, t, false, 1024)).toBe(`Odp: ${overflows}`);
+  });
+
+  it("loads without Segmenter and truncates at complete code points in older browsers", async () => {
+    const descriptor = Object.getOwnPropertyDescriptor(Intl, "Segmenter")!;
+    Object.defineProperty(Intl, "Segmenter", { configurable: true, writable: true, value: undefined });
+    try {
+      // A fresh import also proves that an unsupported browser can start the console.
+      vi.resetModules();
+      const { replySubject: legacyReplySubject } = await import("./consoleText");
+      const t = i18n.getFixedT("en");
+      const fits = "a".repeat(1016);
+      const exact = legacyReplySubject(`${fits}😀x`, t, false, 1024);
+      expect(exact).toBe(`Re: ${fits}😀`);
+      expect(new TextEncoder().encode(exact).byteLength).toBe(1024);
+      const overflows = `${fits}a`;
+      expect(legacyReplySubject(`${overflows}😀x`, t, false, 1024)).toBe(`Re: ${overflows}`);
+      expect(legacyReplySubject("Re:Rollout", t, true, 1024)).toBe("Re:Rollout");
+    } finally {
+      Object.defineProperty(Intl, "Segmenter", descriptor);
+    }
   });
 });

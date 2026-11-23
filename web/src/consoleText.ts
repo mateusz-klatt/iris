@@ -26,12 +26,11 @@ export function consoleLabel(kind: keyof typeof labelKeys, value: string, t: TFu
 }
 
 // Subjects cross account languages. Recognize every catalog's reply prefix without
-// loading all 44 catalogs into the initial bundle. Match each catalog's exact
-// delimiter: a colon and space, or the Chinese fullwidth colon without a space.
-// French adds a nonbreaking space before its colon. The tests check every pair.
-const replyPrefix = /^(?:(?:Re\u00a0?|Sv|Απ|رد|پاسخ|Odp|Ynt): |(?:回复|回覆)：)/iu;
+// loading all 44 catalogs into the initial bundle. Older replies may omit the
+// space after the colon. French adds a nonbreaking space before its colon, and
+// Chinese uses a fullwidth colon. The tests check every catalog pair.
+const replyPrefix = /^(?:(?:Re\u00a0?|Sv|Απ|رد|پاسخ|Odp|Ynt):|(?:回复|回覆)：)/iu;
 const encoder = new TextEncoder();
-const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
 // Only message metadata establishes that the source is a reply. A root subject
 // can legitimately start with text such as "Odp: parser test plan".
@@ -42,9 +41,13 @@ export function replySubject(subject: string, t: TFunction, originalIsReply: boo
   const available = maximumBytes - encoder.encode(prefix).byteLength;
   let truncated = "";
   let bytes = 0;
-  // Keep whole user-perceived characters, including combining marks and joined
-  // emoji, while reserving enough UTF-8 bytes for the localized prefix.
-  for (const { segment } of graphemes.segment(subject)) {
+  // Keep whole graphemes when supported. Older browsers fall back to whole code
+  // points: this preserves surrogate pairs, but may separate combining marks or
+  // joined emoji. Construct Segmenter only after checking support, not at startup.
+  const segments = typeof Intl.Segmenter === "function"
+    ? Array.from(new Intl.Segmenter(undefined, { granularity: "grapheme" }).segment(subject), ({ segment }) => segment)
+    : Array.from(subject);
+  for (const segment of segments) {
     const size = encoder.encode(segment).byteLength;
     if (bytes + size > available) {
       break;

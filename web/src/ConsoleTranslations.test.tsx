@@ -5,6 +5,7 @@ import { StrictMode } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 
 import { App } from "./App";
+import type { WatchFrame } from "./api";
 import { loadLocale } from "./i18n";
 import pl from "./locales/pl";
 import { doctorReport, operatorSession, server, sessionOverview, threadDetail } from "./test/server";
@@ -45,14 +46,24 @@ it("renders translated protocol labels, reply subjects and the unknown-host acce
   expect(screen.getByRole("region", { name: pl.operator.doctorUnknownHost })).toBeVisible();
 });
 
-it("acknowledges an in-flight thread open exactly once when the language changes", async () => {
+it("keeps the watch connected and acknowledges an in-flight open once when the language changes", async () => {
   const user = userEvent.setup();
   vi.spyOn(document, "visibilityState", "get").mockReturnValue("visible");
   let finishDetail!: () => void;
   const detailReady = new Promise<void>((resolve) => { finishDetail = resolve; });
   let detailRequests = 0;
+  let overviewRequests = 0;
   const readBodies: unknown[] = [];
+  const stopped = vi.fn();
+  const connect = vi.fn((frame: (value: WatchFrame) => void) => {
+    // The real hub emits an initial frame on every connection, including reconnects.
+    frame({ cursor: 1, kind: "changed" });
+    return stopped;
+  });
   server.use(
+    http.get("*/v1/ui/overview", () => HttpResponse.json({
+      ...sessionOverview, human_unread: ++overviewRequests,
+    })),
     http.get("*/v1/ui/threads/:id", async () => {
       detailRequests++;
       await detailReady;
@@ -63,12 +74,19 @@ it("acknowledges an in-flight thread open exactly once when the language changes
       return HttpResponse.json({ read: 1 });
     }),
   );
-  render(<StrictMode><App connect={() => () => {}} /></StrictMode>);
+  render(<StrictMode><App connect={connect} refreshGap={0} /></StrictMode>);
+  // Settle both StrictMode mount loads and the live watch's initial-frame refresh
+  // before opening the thread; the unread count confirms the refresh was rendered.
+  await waitFor(() => expect(document.body.dataset.humanUnread).toBe("3"));
+  const connectionsBeforeLocale = connect.mock.calls.length;
+  const stopsBeforeLocale = stopped.mock.calls.length;
   await user.click(await screen.findByRole("button", { name: /^Rollout check/ }));
   await waitFor(() => expect(detailRequests).toBe(1));
   await user.click(screen.getByRole("button", { name: "Choose language. Current language: English" }));
   await user.click(screen.getByRole("option", { name: "Use Polski" }));
   await waitFor(() => expect(document.documentElement.lang).toBe("pl"));
+  expect(connect).toHaveBeenCalledTimes(connectionsBeforeLocale);
+  expect(stopped).toHaveBeenCalledTimes(stopsBeforeLocale);
   finishDetail();
   const detail = within(await screen.findByRole("article", { name: "Rollout check" }));
   expect(detail.getByRole("textbox", { name: pl.operator.subject })).toHaveValue("Odp: Rollout check");
@@ -81,6 +99,7 @@ it("acknowledges an in-flight thread open exactly once when the language changes
 it.each([
   ["Odp: parser test plan", "", "Re: Odp: parser test plan"],
   ["RE: Rollout", "ms_root", "RE: Rollout"],
+  ["Re:Rollout", "ms_root", "Re:Rollout"],
   ["oDp: Rollout", "ms_root", "oDp: Rollout"],
 ])("uses message reply metadata when suggesting a subject for %s", async (subject, replyTo, expected) => {
   const user = userEvent.setup();

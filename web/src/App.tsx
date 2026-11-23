@@ -364,6 +364,9 @@ export function App({ connect = watchUi, refreshGap = frameRefreshGap }: { conne
 
 function Console({ connect, refreshGap, session, onSession, onSignedOut }: { connect: typeof watchUi; refreshGap: number; session: AccountSession; onSession: (session: AccountSession) => void; onSignedOut: (passwordChanged?: boolean) => void }) {
   const { t, i18n } = useTranslation();
+  // Reconnects validate the mounted account, auth version and token. Profile
+  // changes do not replace that authentication or require a new watch connection.
+  const watchSession = useRef(session);
   const member = session.account.role === "member";
   const isOperator = session.account.role === "operator";
   const [locale, setLocale] = useState<SupportedLocale>("en");
@@ -780,7 +783,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
         return;
       }
       setStream(status);
-    }, { check: () => getSession(undefined, session) });
+    }, { check: () => getSession(undefined, watchSession.current) });
     return () => {
       // A load still in flight lands on a closed view, so it is dropped.
       requests.current++;
@@ -791,7 +794,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       document.removeEventListener("visibilitychange", onVisibilityChange);
       stop();
     };
-  }, [connect, flushRead, reload, refreshGap, revision, onUnauthorized, session]);
+  }, [connect, flushRead, reload, refreshGap, revision, onUnauthorized]);
 
   useEffect(() => {
     if (phase !== "ready") {
