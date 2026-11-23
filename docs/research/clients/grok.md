@@ -4,6 +4,10 @@
 
 Binary `grok 1.0.77 (50ca579fa996) [stable]` [MEASURED `grok --version`]. Vendor docs for this build are `~/.grok/docs/user-guide/`. Payloads are in `fixtures/`. Trust used an isolated `GROK_HOME`. User config was not edited.
 
+### Agent alias (1.0.92, Linux, 2026-11-23)
+
+`~/.grok/bin/agent` and `~/.grok/bin/grok` are both symlinks to `~/.grok/downloads/grok-1.0.92-linux-x86_64`, a static ELF. A process started as `agent` has argv[0] `agent` and that executable. [MEASURED] Iris treats the alias as grok when the executable's basename starts with `grok` or the executable lives under a `.grok` directory. Linux sees this in `/proc/<pid>/exe`. macOS sees the executable path in `kern.procargs2`; a refused buffer leaves `p_comm` and is not guessed. Windows sees the image path and does not read the command line on this walk. An `agent` whose executable matches neither this nor Cursor's launcher stays an unidentified boundary and is not called grok.
+
 ## A. Facts
 
 ### A1 Hooks

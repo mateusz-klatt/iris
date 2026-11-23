@@ -123,6 +123,9 @@ type Resolver struct {
 	// mismatch is the running client found at MCP startup when it is not the requested client.
 	// It is set before the resolver's workers start and never changes afterwards.
 	mismatch string
+	// unidentified is an agent boundary that did not resolve to a client. It refuses every
+	// rung without naming a client. Set once, with mismatch, before workers start.
+	unidentified bool
 }
 
 type handover struct {
@@ -143,17 +146,29 @@ func ClientMismatchObservation(client, runner string) string {
 	return ObservedClientMismatch + ": " + client + " MCP shim ran under " + runner
 }
 
+// UnidentifiedAgentObservation is the refusal when an agent process is not Cursor or Grok.
+// It names no client: the shim must not invent one.
+func UnidentifiedAgentObservation(client string) string {
+	return ObservedClientMismatch + ": " + client + " MCP shim stopped at an unidentified agent"
+}
+
 // CheckClient refuses every binding route when another client cross-loaded this shim.
 func (r *Resolver) CheckClient() bool {
 	ancestor := r.ancestor()
-	runner, known := proc.ClientNameWithEnv(ancestor.Name, r.Getenv)
+	runner, known := proc.ClientNameOf(proc.Snapshot(ancestor), r.Getenv)
 	if known && runner == r.Client {
 		return false
 	}
-	// A matching nearest client keeps a native session nested in Cursor usable. Without one,
-	// Cursor's marker pair identifies its cross-loaded hook shell despite an inherited Claude id.
-	// An unidentified agent is also refused rather than allowed to lend the shim an outer identity.
-	if !known && r.Client != "cursor" && (proc.AgentAlias(ancestor.Name) || proc.CursorEnvironment(r.Getenv)) {
+	// ClientNameOf already accepts Cursor's marker pair on an unresolved agent, and it
+	// does not relabel an executable that is already Grok or another client. What remains
+	// is an agent with no executable evidence and no markers: a boundary, not a client.
+	if !known && proc.AgentAlias(ancestor.Name) {
+		r.unidentified = true
+		r.observe(UnidentifiedAgentObservation(r.Client))
+		return true
+	}
+	// A helper that is not itself a client can still be Cursor's hook shell.
+	if !known && r.Client != "cursor" && proc.CursorEnvironment(r.Getenv) {
 		runner, known = "cursor", true
 	}
 	if !known {
@@ -165,6 +180,9 @@ func (r *Resolver) CheckClient() bool {
 }
 
 func (r *Resolver) clientMismatchError() error {
+	if r.unidentified {
+		return &hubclient.Error{Code: "client_mismatch", Message: "This Iris MCP server is for " + r.Client + ", but an unidentified agent process is running it. This server cannot bind, register, or heartbeat a session."}
+	}
 	if r.mismatch == "" {
 		return nil
 	}
@@ -767,7 +785,7 @@ func (r *Resolver) beatOne(ctx context.Context, b Bound, source string) error {
 // session's current Execution, as a call would (ADR 027); the watch's own loop and a call's
 // Resolve bind afresh too.
 func (r *Resolver) Maintain(ctx context.Context, source string, interval time.Duration, parentAlive func() bool, onStop func()) {
-	if r.mismatch != "" {
+	if r.mismatch != "" || r.unidentified {
 		return
 	}
 	tick := time.NewTicker(interval)

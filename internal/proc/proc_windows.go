@@ -37,10 +37,15 @@ func lookupOS(pid int) (Snapshot, bool) {
 	_ = windows.NtQueryInformationProcess(h, int32(windows.ProcessBasicInformation), unsafe.Pointer(&info), uint32(unsafe.Sizeof(info)), &n)
 	var created, exit, kernel, user windows.Filetime
 	_ = windows.GetProcessTimes(h, &created, &exit, &kernel, &user)
+	// The image path is the executable. The command line is not read on this walk,
+	// so an index.js launcher argument is invisible; an agent image with no Cursor
+	// or Grok path stays an unidentified boundary.
+	image := imageName(h)
 	return Snapshot{
 		PID:     pid,
 		PPID:    int(info.InheritedFromUniqueProcessId),
-		Name:    imageName(h),
+		Name:    resolveVisibleName(image, image, ""),
+		Exe:     image,
 		StartMS: created.Nanoseconds() / 1e6,
 	}, true
 }
@@ -55,6 +60,12 @@ func imageName(h windows.Handle) string {
 }
 
 func executableOS(_ int, s Snapshot) (string, error) {
+	// A resolved alias retitles Name to grok or cursor-agent. The image path
+	// stays on Exe, which is what a restart must open. A snapshot that still
+	// carries the image only in Name keeps that path.
+	if s.Exe != "" {
+		return s.Exe, nil
+	}
 	return s.Name, nil
 }
 

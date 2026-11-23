@@ -163,16 +163,14 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 	state.at("decode")
 	ev, err := Decode(client, r.EventName, payload)
 	if err != nil {
-		if runner, cross := r.crossLoad(peekSessionID(payload), client); cross {
-			state.observe(crossLoadText(runner))
-			return FallbackAllow(runner)
+		if out, stop := r.foreignRunner(peekSessionID(payload), client, state); stop {
+			return out
 		}
 		state.shaped(payloadShape(payload))
 		return state.fail(err, allow)
 	}
-	if runner, cross := r.crossLoad(ev.SessionID, client); cross {
-		state.observe(crossLoadText(runner))
-		return FallbackAllow(runner)
+	if out, stop := r.foreignRunner(ev.SessionID, client, state); stop {
+		return out
 	}
 	state.received(r.canaryReceipt(ev))
 	if ev.Client == ClientAntigravity {
@@ -575,18 +573,43 @@ func (r Runner) crossLoad(sessionID string, requested Client) (Client, bool) {
 		return found[0], true
 	}
 	process := r.ancestor()
-	ancestor, hasAncestor := proc.ClientNameWithEnv(process.Name, getenv)
+	ancestor, hasAncestor := proc.ClientNameOf(proc.Snapshot(process), getenv)
 	if hasAncestor && Client(ancestor) == requested {
 		return "", false
 	}
 	if requested != ClientCursor && hasAncestor && Client(ancestor) == ClientCursor {
 		return ClientCursor, true
 	}
+	// ClientNameOf has already applied Cursor's markers and any executable evidence.
+	// An agent that is still anonymous is a boundary, not a client.
+	if !hasAncestor && proc.AgentAlias(process.Name) {
+		return "", true
+	}
 	// Cursor 2026.11.22 omits CURSOR_CONVERSATION_ID from cross-loaded Claude hooks.
-	if requested != ClientCursor && !hasAncestor && (proc.AgentAlias(process.Name) || proc.CursorEnvironment(getenv)) {
+	if requested != ClientCursor && !hasAncestor && proc.CursorEnvironment(getenv) {
 		return ClientCursor, true
 	}
 	return "", false
+}
+
+// unidentifiedAgentObservation records a hook that stopped at an agent alias
+// the executable did not identify. It names no client.
+const unidentifiedAgentObservation = "cross-load: stopped at an unidentified agent"
+
+// foreignRunner answers a hook that is running under someone else.
+// An empty runner with cross set is the unidentified agent boundary: the hook
+// answers as the client it was invoked for and does not call the hub.
+func (r Runner) foreignRunner(sessionID string, requested Client, state *runState) (Output, bool) {
+	runner, cross := r.crossLoad(sessionID, requested)
+	if !cross {
+		return Output{}, false
+	}
+	if runner == "" {
+		state.observe(unidentifiedAgentObservation)
+		return FallbackAllow(requested), true
+	}
+	state.observe(crossLoadText(runner))
+	return FallbackAllow(runner), true
 }
 
 func (r Runner) repoFor(ev Event) (gitinfo.Repo, error) {

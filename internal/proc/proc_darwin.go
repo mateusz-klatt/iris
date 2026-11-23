@@ -27,27 +27,45 @@ func lookupOS(pid int) (Snapshot, bool) {
 		name = name[:i]
 	}
 	ms := k.Proc.P_starttime.Sec*1000 + int64(k.Proc.P_starttime.Usec)/1000
+	comm := string(name)
+	visible, exe, launcher := comm, "", ""
+	// kern.procargs2 is the executable path plus argv. There is no separate exe link.
+	// A refused buffer leaves p_comm, so a node whose arguments cannot be read is not guessed.
+	if raw, err := unix.SysctlRaw("kern.procargs2", pid); err == nil {
+		visible, exe, launcher = identityFromProcargs(comm, raw)
+	}
 	return Snapshot{
-		PID:     pid,
-		PPID:    int(k.Eproc.Ppid),
-		Name:    processName(pid, string(name)),
-		StartMS: ms,
+		PID:      pid,
+		PPID:     int(k.Eproc.Ppid),
+		Name:     visible,
+		StartMS:  ms,
+		Exe:      exe,
+		Launcher: launcher,
 	}, true
 }
 
-// processName keeps p_comm unless the first argument names a client. Claude Code's native
-// binary lives at a path ending in its version, so p_comm is "2.1.319" and only the title it
-// writes over argv[0] says "claude". Everything else keeps p_comm, because a login shell's
-// argv[0] is "-zsh". The kernel refuses another user's arguments, and those keep p_comm too.
+// processName keeps p_comm unless the first argument names a client or the executable
+// resolves the agent alias. Claude Code's native binary lives at a path ending in its
+// version, so p_comm is "2.1.319" and only the title it writes over argv[0] says "claude".
+// Cursor's launcher is the opposite: p_comm is "node" and argv[0] is "agent". A login
+// shell's argv[0] is "-zsh", so anything that is not a client or that alias keeps p_comm.
+// The kernel refuses another user's arguments, and those keep p_comm too.
 func processName(pid int, comm string) string {
 	raw, err := unix.SysctlRaw("kern.procargs2", pid)
 	if err != nil {
 		return comm
 	}
-	if arg := firstArgument(raw); isClient(arg, nil) {
-		return baseName(arg)
+	name, _, _ := identityFromProcargs(comm, raw)
+	return name
+}
+
+func identityFromProcargs(comm string, raw []byte) (name, exe, launcher string) {
+	exe = executablePath(raw)
+	argv0 := firstArgument(raw)
+	if args, err := procargsArgs(raw); err == nil {
+		launcher = launcherArg(args)
 	}
-	return comm
+	return promotedProcessName(comm, argv0, exe, launcher), exe, launcher
 }
 
 func executableOS(pid int, _ Snapshot) (string, error) {

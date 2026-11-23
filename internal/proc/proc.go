@@ -21,19 +21,26 @@ var ErrNotFound = errors.New("no ancestor process")
 var ErrExecutableDeleted = errors.New("process executable was deleted")
 
 // Ancestor is the process a hook records at session start.
+// Exe and Launcher are the executable path and a launcher argv entry when the OS provided them.
+// Either may be empty: macOS can refuse kern.procargs2, and Windows does not read a command line
+// on this walk, so an index.js argument is invisible there.
 type Ancestor struct {
-	PID     int
-	PPID    int
-	Name    string
-	StartMS int64 // Unix epoch milliseconds, 0 when the OS does not say
+	PID      int
+	PPID     int
+	Name     string
+	StartMS  int64 // Unix epoch milliseconds, 0 when the OS does not say
+	Exe      string
+	Launcher string
 }
 
 // Snapshot is one process as seen by the walk.
 type Snapshot struct {
-	PID     int
-	PPID    int
-	Name    string
-	StartMS int64
+	PID      int
+	PPID     int
+	Name     string
+	StartMS  int64
+	Exe      string
+	Launcher string
 }
 
 // Lookup returns one live process using the same platform evidence as the ancestor walk.
@@ -233,7 +240,9 @@ func NearestFrom(self int, get func(int) (Snapshot, bool), getenv func(string) s
 				cp := p
 				fallback = &cp
 			}
-			if isClient(p.Name, getenv) || AgentAlias(p.Name) {
+			// A resolved alias is a client. An unresolved agent is still a boundary:
+			// walking through it bound the wrong session.
+			if _, known := ClientNameOf(p, getenv); known || AgentAlias(p.Name) {
 				return p, true
 			}
 		}
@@ -257,12 +266,9 @@ func isShell(name string) bool {
 	}
 }
 
-func isClient(name string, getenv func(string) string) bool {
-	_, ok := ClientNameWithEnv(name, getenv)
-	return ok
-}
-
-// AgentAlias reports Cursor's generic alias, which unrelated tools can also use.
+// AgentAlias reports the generic alias Cursor's launcher and Grok's binary share,
+// which unrelated tools can also use. It is a process boundary even when the
+// executable does not identify a client.
 func AgentAlias(name string) bool { return baseName(name) == "agent" }
 
 // CursorEnvironment reports the marker pair Cursor supplies to a cross-loaded Claude hook.
@@ -272,10 +278,144 @@ func CursorEnvironment(getenv func(string) string) bool {
 
 // ClientNameWithEnv also recognizes Cursor's generic agent alias, but only with its marker pair.
 func ClientNameWithEnv(name string, getenv func(string) string) (string, bool) {
-	if AgentAlias(name) && CursorEnvironment(getenv) {
+	return ClientNameOf(Snapshot{Name: name}, getenv)
+}
+
+// ClientNameOf resolves a process from its name, executable and launcher argument.
+// The generic agent alias is Cursor or Grok only when that evidence says so.
+// Cursor's marker pair still applies when the executable does not, and never
+// relabels a process the executable already identified.
+func ClientNameOf(s Snapshot, getenv func(string) string) (string, bool) {
+	if client, ok := ClientName(s.Name); ok {
+		return client, true
+	}
+	if client, ok := evidenceClient(s); ok {
+		return client, true
+	}
+	if AgentAlias(s.Name) && CursorEnvironment(getenv) {
 		return "cursor", true
 	}
-	return ClientName(name)
+	return "", false
+}
+
+// evidenceClient reads the executable and one launcher argument.
+// Grok's versioned binary and Cursor's node launcher are identified here;
+// a bare agent is not a client.
+func evidenceClient(s Snapshot) (string, bool) {
+	exe := evidencePath(s)
+	if cursorExecutable(exe) || cursorIndex(s.Launcher) {
+		return "cursor", true
+	}
+	if grokBinary(exe) || (AgentAlias(s.Name) && underDotGrok(exe)) {
+		return "grok", true
+	}
+	return "", false
+}
+
+func evidencePath(s Snapshot) string {
+	if exe := cleanExe(s.Exe); exe != "" {
+		return exe
+	}
+	return cleanExe(s.Name)
+}
+
+func cleanExe(exe string) string {
+	return strings.TrimSuffix(exe, " (deleted)")
+}
+
+func cursorExecutable(exe string) bool {
+	switch baseName(exe) {
+	case "cursor-agent":
+		return true
+	case "node":
+		return underCursorVersions(exe)
+	default:
+		return false
+	}
+}
+
+func cursorIndex(p string) bool {
+	p = strings.ToLower(strings.ReplaceAll(p, "\\", "/"))
+	return strings.Contains(p, "/cursor-agent/versions/") && strings.HasSuffix(p, "/index.js")
+}
+
+func underCursorVersions(p string) bool {
+	p = strings.ToLower(strings.ReplaceAll(p, "\\", "/"))
+	return strings.Contains(p, "/cursor-agent/versions/")
+}
+
+func grokBinary(exe string) bool {
+	return strings.HasPrefix(baseName(exe), "grok")
+}
+
+func underDotGrok(p string) bool {
+	p = strings.ToLower(strings.ReplaceAll(p, "\\", "/"))
+	for _, part := range strings.Split(p, "/") {
+		if part == ".grok" {
+			return true
+		}
+	}
+	return false
+}
+
+func launcherArg(args []string) string {
+	for _, arg := range args {
+		if cursorIndex(arg) {
+			return arg
+		}
+	}
+	return ""
+}
+
+// resolveVisibleName retitles a generic alias, or Cursor's node, when evidence
+// names a client. A process that already carries a client name keeps it.
+func resolveVisibleName(name, exe, launcher string) string {
+	if _, named := ClientName(name); named {
+		return name
+	}
+	client, known := evidenceClient(Snapshot{Name: name, Exe: exe, Launcher: launcher})
+	if !known {
+		return name
+	}
+	if client == "cursor" {
+		return "cursor-agent"
+	}
+	return client
+}
+
+// commandIdentity is Linux's view of a process: argv[0] when it has one, otherwise
+// the kernel comm, retitled when the executable or a launcher argument resolves an alias.
+func commandIdentity(comm, argv0, exe string, args []string) (name, cleaned, launcher string) {
+	name = comm
+	if argv0 != "" {
+		name = argv0
+	}
+	cleaned = cleanExe(exe)
+	launcher = launcherArg(args)
+	name = resolveVisibleName(name, cleaned, launcher)
+	return name, cleaned, launcher
+}
+
+// promotedProcessName is macOS's view. p_comm stays in place unless argv[0] names a
+// client or the executable resolves an alias. An unidentified agent is kept as "agent"
+// so the walk does not continue through p_comm "node".
+func promotedProcessName(comm, argv0, exe, launcher string) string {
+	// A title that is already a client stays that title. Evidence is applied
+	// afterwards, so a path that only looks like a client is not reduced to its basename.
+	if _, named := ClientName(argv0); named {
+		return baseName(argv0)
+	}
+	subject := argv0
+	if subject == "" {
+		subject = comm
+	}
+	if resolved := resolveVisibleName(subject, exe, launcher); resolved != subject {
+		return resolved
+	}
+	if AgentAlias(argv0) {
+		return "agent"
+	}
+	return comm
 }
 
 // ClientName maps a client process's executable name to Iris's client name.

@@ -19,15 +19,22 @@ func lookupOS(pid int) (Snapshot, bool) {
 		return Snapshot{}, false
 	}
 	ppid, _ := strconv.Atoi(statusValue(status, "PPid:"))
-	name := statusValue(status, "Name:")
-	if argv := argv0(pid); argv != "" {
-		name = argv
-	}
+	comm := statusValue(status, "Name:")
 	state, start, err := statEvidence(pid)
 	if err == nil && (state == "Z" || state == "X" || state == "x") {
 		return Snapshot{}, false
 	}
-	return Snapshot{PID: pid, PPID: ppid, Name: name, StartMS: start}, true
+	// /proc/<pid>/cmdline and /proc/<pid>/exe are the evidence this OS has.
+	// A deleted executable's " (deleted)" suffix is removed for identity only;
+	// OpenExecutable still sees the raw link.
+	args, _ := argsOS(pid)
+	argv0 := ""
+	if len(args) > 0 {
+		argv0 = args[0]
+	}
+	exe, _ := os.Readlink("/proc/" + strconv.Itoa(pid) + "/exe")
+	name, exe, launcher := commandIdentity(comm, argv0, exe, args)
+	return Snapshot{PID: pid, PPID: ppid, Name: name, StartMS: start, Exe: exe, Launcher: launcher}, true
 }
 
 func executableOS(pid int, _ Snapshot) (string, error) {
@@ -72,15 +79,6 @@ func statusValue(status []byte, key string) string {
 		}
 	}
 	return ""
-}
-
-func argv0(pid int) string {
-	b, err := os.ReadFile("/proc/" + strconv.Itoa(pid) + "/cmdline")
-	if err != nil {
-		return ""
-	}
-	first, _, _ := strings.Cut(string(b), "\x00")
-	return first
 }
 
 func statEvidence(pid int) (string, int64, error) {

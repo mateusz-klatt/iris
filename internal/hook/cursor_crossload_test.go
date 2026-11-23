@@ -20,7 +20,7 @@ func TestCursorCrossLoadOverridesInheritedClaudeSession(t *testing.T) {
 	}{
 		{name: "cursor ancestor and environment", ancestor: proc.Ancestor{PID: 42, StartMS: 7, Name: "/opt/cursor-agent"}, markers: true},
 		{name: "agent alias and environment", ancestor: proc.Ancestor{PID: 42, StartMS: 7, Name: "/opt/agent"}, markers: true},
-		{name: "agent alias with empty Cursor environment", ancestor: proc.Ancestor{PID: 42, StartMS: 7, Name: "/opt/agent"}},
+		{name: "cursor agent executable with empty environment", ancestor: proc.Ancestor{PID: 42, StartMS: 7, Name: "agent", Exe: "/home/user/.local/share/cursor-agent/versions/2026.11.22-e9042b2/node"}},
 		{name: "cursor environment only", markers: true},
 		{name: "cursor ancestor only", ancestor: proc.Ancestor{PID: 42, StartMS: 7, Name: "/opt/cursor-agent"}},
 	} {
