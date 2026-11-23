@@ -436,7 +436,7 @@ func TestSuccessionRetainedRung3UsesProcessIdentity(t *testing.T) {
 		}
 		return http.StatusOK, map[string]any{"execution_id": "ex_two", "generation": 2, "session_id": "S"}
 	}}
-	memory := &fakeSuccessionMemory{generation: 1, execution: "ex_one"}
+	memory := &fakeSuccessionMemory{generation: 1, execution: "ex_one", current: "S", currentOK: true}
 	r := scriptedSuccessionResolver(h, memory)
 	r.Client = "cursor"
 	r.Ancestor = func() (proc.Ancestor, error) { return proc.Ancestor{PID: 42, StartMS: 100, Name: "cursor-agent"}, nil }

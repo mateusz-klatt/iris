@@ -88,6 +88,9 @@ func (r *Resolver) succeedAfterLostHeld(ctx context.Context, session string, run
 	if b.SessionID != session || b.Generation != priorGeneration+1 {
 		return Bound{}, true, &LostError{Cause: errGenerationFloor}
 	}
+	if err := r.recheckSuccessionWitness(session, anc); err != nil {
+		return Bound{}, true, &LostError{Cause: err}
+	}
 	current, advanced, err := r.Succession.AdvanceGeneration(r.Client, session, priorExecution, priorGeneration, b.Generation, b.ExecutionID)
 	if err != nil {
 		return Bound{}, true, &LostError{Cause: err}
@@ -109,6 +112,11 @@ func (r *Resolver) succeedAfterLostHeld(ctx context.Context, session string, run
 	}
 	if err := r.checkGenerationHeld(b); err != nil {
 		return Bound{}, true, err
+	}
+	if advanced {
+		if err := r.recheckSuccessionWitness(session, anc); err != nil {
+			return Bound{}, true, &LostError{Cause: err}
+		}
 	}
 	return b, true, nil
 }
@@ -139,6 +147,9 @@ func (r *Resolver) adoptSuccessionWinnerHeld(ctx context.Context, session string
 		b.SessionID = session
 	}
 	if b.Generation == priorGeneration+1 {
+		if err := r.recheckSuccessionWitness(session, anc); err != nil {
+			return Bound{}, err
+		}
 		if _, _, err := r.Succession.AdvanceGeneration(r.Client, session, priorExecution, priorGeneration, b.Generation, b.ExecutionID); err != nil {
 			return Bound{}, err
 		}
@@ -150,6 +161,23 @@ func (r *Resolver) adoptSuccessionWinnerHeld(ctx context.Context, session string
 		return Bound{}, err
 	}
 	return b, nil
+}
+
+// recheckSuccessionWitness covers a SessionStart that ran while the hub request was in flight.
+func (r *Resolver) recheckSuccessionWitness(session string, anc proc.Ancestor) error {
+	// Every verified process-bound launcher has a witness except top-level Claude, which
+	// can bind by process but has no per-process current-session record.
+	if anc.PID == 0 || r.Client == "claude" {
+		return nil
+	}
+	current, ok, err := r.Succession.CurrentSession(r.Client, anc)
+	if err != nil {
+		return err
+	}
+	if !ok || current != session {
+		return errGenerationFloor
+	}
+	return nil
 }
 
 func (r *Resolver) verifySuccessionWinnerHeld(b Bound, anc proc.Ancestor) error {

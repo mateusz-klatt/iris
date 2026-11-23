@@ -9,15 +9,11 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/mateusz-klatt/iris/internal/config"
-	"github.com/mateusz-klatt/iris/internal/kimiwake"
 	"github.com/mateusz-klatt/iris/internal/proc"
 )
 
 // ErrSuccessionProof means local proof or current-session evidence does not permit succession.
 var ErrSuccessionProof = errors.New("session succession proof does not match")
-
-var successionPinnedDir = config.PinnedDir
 
 // processSessionLookup reads a single-session process's current session. PrepareSuccession calls
 // it outside the sessions lock, twice, and fails closed if the two reads differ.
@@ -28,17 +24,29 @@ func processWitnessPath(dir string, anc proc.Ancestor) string {
 }
 
 // rememberProcessSession records a single-session launcher's current native session before its
-// SessionStart registration. Antigravity and Kimi publish their established process state instead.
-func (m fileMemory) rememberProcessSession(client, session string, anc proc.Ancestor) error {
-	if anc.PID <= 0 || anc.StartMS <= 0 || !proc.SingleSession(anc, client) || client == string(ClientAntigravity) || client == string(ClientKimi) {
+// SessionStart registration. Antigravity publishes its established process state separately.
+func (m fileMemory) rememberProcessSession(client, session string, anc proc.Ancestor) (err error) {
+	if anc.PID <= 0 || anc.StartMS <= 0 || !proc.SingleSession(anc, client) || client == string(ClientAntigravity) {
 		return nil
 	}
+	path := processWitnessPath(m.dir, anc)
+	defer func() {
+		if err != nil {
+			// A missed lock or failed replace withdraws the old witness without another lock wait.
+			if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+				err = errors.Join(err, removeErr)
+			}
+		}
+	}()
 	if err := m.directory(); err != nil {
 		return err
 	}
-	return m.underLock(func() {
-		_ = m.replace(processWitnessPath(m.dir, anc), session)
-	})
+	unlock, err := m.lock(hookLockBudget)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	return m.replace(path, session)
 }
 
 func readExecutionProof(path string) (string, error) {
@@ -88,13 +96,6 @@ func currentProcessSession(client string, anc proc.Ancestor, sessionsDir string)
 			return "", nil, ErrSuccessionProof
 		}
 		return state.CurrentSessionID, state.SupersededSessionIDs, nil
-	case string(ClientKimi):
-		dir, err := successionPinnedDir()
-		if err != nil {
-			return "", nil, err
-		}
-		current, _, err := (&kimiwake.Store{Root: kimiwake.Root(dir)}).Session(anc.PID, anc.StartMS, hookLockBudget)
-		return current, nil, err
 	default:
 		raw, err := os.ReadFile(processWitnessPath(sessionsDir, anc))
 		if errors.Is(err, os.ErrNotExist) {
@@ -120,7 +121,10 @@ func (s *Sessions) CurrentSession(client string, anc proc.Ancestor) (string, boo
 	if anc.PID <= 0 || anc.StartMS <= 0 || !proc.SingleSession(anc, client) {
 		return "", false, nil
 	}
-	current, _, err := s.currentSession(client, anc)
+	current, superseded, err := s.currentSession(client, anc)
+	if slices.Contains(superseded, current) {
+		return "", false, ErrSuccessionProof
+	}
 	return current, current != "", err
 }
 

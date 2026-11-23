@@ -329,6 +329,12 @@ func TestAntigravityAndKimiCurrentSessionChecks(t *testing.T) {
 		if _, _, err := s.PrepareSuccession("antigravity", "S1", 1, "ex_one", anc); !errors.Is(err, ErrSuccessionProof) {
 			t.Fatalf("Antigravity supersession was not refused: %v", err)
 		}
+		if err := writeAntigravityJSON(m.dir, path, antigravityProcState{CurrentSessionID: "S1", SupersededSessionIDs: []string{"S1"}}); err != nil {
+			t.Fatal(err)
+		}
+		if _, _, err := s.CurrentSession("antigravity", anc); !errors.Is(err, ErrSuccessionProof) {
+			t.Fatalf("Antigravity treated a superseded witness as current: %v", err)
+		}
 		if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
 			t.Fatal(err)
 		}
@@ -337,8 +343,6 @@ func TestAntigravityAndKimiCurrentSessionChecks(t *testing.T) {
 		}
 	})
 	t.Run("kimi", func(t *testing.T) {
-		restore := config.SetPinnedForTest(t.TempDir())
-		t.Cleanup(restore)
 		anc := proc.Ancestor{PID: 42, StartMS: 100, Name: "kimi"}
 		const s1 = "session_00000000-0000-4000-8000-000000000001"
 		const s2 = "session_00000000-0000-4000-8000-000000000002"
@@ -346,9 +350,7 @@ func TestAntigravityAndKimiCurrentSessionChecks(t *testing.T) {
 		if current, ok, err := s.CurrentSession("kimi", anc); current != "" || ok || err != nil {
 			t.Fatalf("missing Kimi state: %q %t %v", current, ok, err)
 		}
-		dir, _ := config.PinnedDir()
-		wake := &kimiwake.Store{Root: kimiwake.Root(dir)}
-		if err := wake.MapSession(anc.PID, anc.StartMS, s1, time.Second); err != nil {
+		if err := s.memory.rememberProcessSession("kimi", s1, anc); err != nil {
 			t.Fatal(err)
 		}
 		if current, ok, err := s.CurrentSession("kimi", anc); current != s1 || !ok || err != nil {
@@ -357,7 +359,7 @@ func TestAntigravityAndKimiCurrentSessionChecks(t *testing.T) {
 		if _, _, err := s.PrepareSuccession("kimi", s1, 1, "ex_one", anc); err != nil {
 			t.Fatalf("Kimi current state was refused: %v", err)
 		}
-		if err := wake.MapSession(anc.PID, anc.StartMS, s2, time.Second); err != nil {
+		if err := s.memory.rememberProcessSession("kimi", s2, anc); err != nil {
 			t.Fatal(err)
 		}
 		if _, _, err := s.PrepareSuccession("kimi", s1, 1, "ex_one", anc); !errors.Is(err, ErrSuccessionProof) {
@@ -568,20 +570,6 @@ func TestProcessStateLookupFailures(t *testing.T) {
 			t.Fatal("invalid helper directory was treated as hookless")
 		}
 	})
-	t.Run("pinned directory", func(t *testing.T) {
-		original := successionPinnedDir
-		successionPinnedDir = func() (string, error) { return "", errors.New("pinned lookup failed") }
-		t.Cleanup(func() { successionPinnedDir = original })
-		for _, tc := range []struct {
-			client, ancestor string
-		}{{"kimi", "kimi"}} {
-			s := successionSessionFiles(t, tc.client, "S1", 1, "ex_one")
-			anc := proc.Ancestor{PID: 42, StartMS: 100, Name: tc.ancestor}
-			if _, _, err := s.CurrentSession(tc.client, anc); err == nil || err.Error() != "pinned lookup failed" {
-				t.Fatalf("%s ignored pinned lookup failure: %v", tc.client, err)
-			}
-		}
-	})
 	t.Run("antigravity lock", func(t *testing.T) {
 		s := successionSessionFiles(t, "antigravity", "S1", 1, "ex_one")
 		anc := proc.Ancestor{PID: 42, StartMS: 100, Name: "agy"}
@@ -601,7 +589,7 @@ func TestProcessStateLookupFailures(t *testing.T) {
 		}
 		unlock()
 	})
-	t.Run("kimi lock", func(t *testing.T) {
+	t.Run("Kimi succession is independent of its wake lock", func(t *testing.T) {
 		restore := config.SetPinnedForTest(t.TempDir())
 		t.Cleanup(restore)
 		dir, _ := config.PinnedDir()
@@ -618,12 +606,17 @@ func TestProcessStateLookupFailures(t *testing.T) {
 		if err := tryLockFile(file); err != nil {
 			t.Fatal(err)
 		}
+		t.Cleanup(func() {
+			unlockFile(file)
+			_ = file.Close()
+		})
 		s := successionSessionFiles(t, "kimi", session, 1, "ex_one")
-		if _, _, err := s.CurrentSession("kimi", anc); !errors.Is(err, kimiwake.ErrLocked) {
-			t.Fatalf("Kimi lock was ignored: %v", err)
+		if err := s.memory.rememberProcessSession("kimi", session, anc); err != nil {
+			t.Fatal(err)
 		}
-		unlockFile(file)
-		_ = file.Close()
+		if _, _, err := s.PrepareSuccession("kimi", session, 1, "ex_one", anc); err != nil {
+			t.Fatalf("Kimi wake lock blocked succession: %v", err)
+		}
 	})
 }
 
