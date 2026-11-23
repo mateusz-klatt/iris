@@ -14,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -459,17 +460,16 @@ func TestSessionEndWithDamagedEndMarkerKeepsProofAndRecordsObservation(t *testin
 
 func TestSessionEndThatCannotRecordTheMarkerKeepsProofAndNamesIt(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		hold func(dir string) (func(), error)
+		name      string
+		failWrite bool
+		hold      func(dir string) (func(), error)
 	}{
 		{
-			name: "marker write fails",
-			hold: func(dir string) (func(), error) {
-				if err := os.Chmod(dir, 0o555); err != nil {
-					return nil, err
-				}
-				return func() { _ = os.Chmod(dir, 0o700) }, nil
-			},
+			// A directory mode of 0555 does not stop CreateTemp on Windows, so the
+			// marker write is refused through fileMemory.restrict. replace checks
+			// that before the rename, on every OS, and leaves no marker behind.
+			name:      "marker write fails",
+			failWrite: true,
 		},
 		{
 			name: "sessions lock missed",
@@ -487,6 +487,20 @@ func TestSessionEndThatCannotRecordTheMarkerKeepsProofAndNamesIt(t *testing.T) {
 			mem := sessionsFor(h.getenv)
 			proof := mem.name("claude", "s1")
 			marker := proof + ".ended"
+			var block atomic.Bool
+			if tc.failWrite {
+				previous := mem.restrict
+				mem.restrict = func(path string) error {
+					if block.Load() {
+						return errors.New("marker write")
+					}
+					return previous(path)
+				}
+				tc.hold = func(string) (func(), error) {
+					block.Store(true)
+					return func() { block.Store(false) }, nil
+				}
+			}
 			var mu sync.Mutex
 			var release func()
 			finish := func() {
@@ -514,8 +528,18 @@ func TestSessionEndThatCannotRecordTheMarkerKeepsProofAndNamesIt(t *testing.T) {
 				}
 				return transport.RoundTrip(r)
 			})}
-			out := h.run("SessionEnd", `{"session_id":"s1","cwd":`+quote(h.root)+`}`)
+			payload := `{"session_id":"s1","cwd":` + quote(h.root) + `}`
+			client := lastSession{Client: &hubclient.Client{Config: hubclient.EnvConfig{Getenv: h.getenv}, HTTP: h.http}, last: &h.registered}
+			runner := h.runner("SessionEnd", payload, client)
+			if tc.failWrite {
+				runner.Memory = mem
+			}
+			ran := runner.Run()
 			finish()
+			if ran.Exit != 0 {
+				t.Fatalf("exit %d: %s", ran.Exit, ran.Stderr)
+			}
+			out := string(ran.Stdout)
 			if out != string(FallbackAllow(ClientClaude).Stdout) {
 				t.Fatalf("SessionEnd output %q", out)
 			}
