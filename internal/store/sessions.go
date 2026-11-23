@@ -43,8 +43,10 @@ type Request struct {
 	ClientPID        int64     `json:"client_pid"`
 	ClientPIDStartMS int64     `json:"client_pid_start_ms"`
 	SingleSession    bool      `json:"single_session"`
-	Source           string    `json:"source"`
-	Execution        string    `json:"execution"`
+	// Source is self-declared. Registration accepts hook, mcp, shim and watch; empty is a legacy
+	// non-hook source.
+	Source    string `json:"source"`
+	Execution string `json:"execution"`
 	// Exclude names an Execution a bind must skip: an MCP that had to register its own asks
 	// past it for the session's hook's.
 	Exclude string `json:"exclude"`
@@ -399,6 +401,14 @@ func (t *transaction) register(r Request, outside bool) (map[string]any, error) 
 	if r.Client == "" || r.SessionID == "" || r.Host == "" || r.Cwd == "" {
 		return nil, fail("bad_request", "client, session_id, host and cwd are required")
 	}
+	if r.RetryGeneration < 0 {
+		return nil, fail("bad_request", "retry_generation cannot be negative")
+	}
+	switch r.Source {
+	case "", "hook", "mcp", "shim", "watch":
+	default:
+		return nil, fail("bad_request", "source must be empty for legacy clients, hook, mcp, shim or watch")
+	}
 	if r.Worktree == "" {
 		r.Worktree = r.Cwd
 	}
@@ -469,6 +479,9 @@ func (t *transaction) register(r Request, outside bool) (map[string]any, error) 
 		return nil, err
 	}
 	generation := previous.Generation + 1
+	if previous.State == "ended" && r.Source != "hook" {
+		return nil, fail("lost", "non-hook generation-zero registration cannot succeed an ended session")
+	}
 	if r.RetryGeneration > 0 && (previous.Generation < r.RetryGeneration || generation < r.RetryGeneration) {
 		return nil, fail("lost", "session history is below the retry generation floor")
 	}

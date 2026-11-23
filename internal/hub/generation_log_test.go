@@ -90,7 +90,7 @@ func TestGenerationBumpLogsItsCauseWithoutSessionContent(t *testing.T) {
 	}
 	call("POST", "/v1/executions/"+second["execution_id"].(string)+"/end", map[string]any{"generation": 2}, 200)
 	delete(registration, "retry_generation") // An older client sends no diagnostic marker.
-	registration["source"] = "sensitive-source"
+	registration["source"] = "hook"
 	registration["kind"] = "before"
 	registration["status"] = map[string]string{}
 	third := call("POST", "/v1/shell/reconcile", registration, 200)["session"].(map[string]any)
@@ -98,7 +98,7 @@ func TestGenerationBumpLogsItsCauseWithoutSessionContent(t *testing.T) {
 		t.Fatalf("shell registration did not replace its ended session: %v", third)
 	}
 	line = logs.String()
-	for _, want := range []string{"operation=reconcile reason=ended proof=absent source=other", "previous_generation=2", "generation=3"} {
+	for _, want := range []string{"operation=reconcile reason=ended proof=absent source=hook", "previous_generation=2", "generation=3"} {
 		if !strings.Contains(line, want) {
 			t.Fatalf("missing %q in %s", want, line)
 		}

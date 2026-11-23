@@ -75,17 +75,44 @@ func TestBindingProofDamageRecordsTheLocalPath(t *testing.T) {
 	if gen, present, err := s.RecallBindingGeneration("claude", "s"); gen != 0 || !present || !errors.Is(err, ErrInvalidGeneration) {
 		t.Fatalf("damaged proof: generation %d, present %t, %v", gen, present, err)
 	}
+	assertRecallObservation(t, token, "damaged generation proof at "+path)
+}
+
+func TestBindingEndMarkerReadErrorRecordsTheLocalPath(t *testing.T) {
+	token := filepath.Join(t.TempDir(), "hub.token")
+	s := NewSessions(token)
+	if err := s.Protect(); err != nil {
+		t.Fatal(err)
+	}
+	marker := s.memory.name("claude", "s") + ".ended"
+	if err := os.Mkdir(marker, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.ReadFile(marker); err == nil || errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("fixture did not produce a non-NotExist read error: %v", err)
+	}
+	if gen, present, err := s.RecallBindingGeneration("claude", "s"); gen != 0 || !present || !errors.Is(err, ErrInvalidGeneration) {
+		t.Fatalf("unreadable ended marker: generation %d, present %t, %v", gen, present, err)
+	}
+	assertRecallObservation(t, token, DamagedGenerationProof+" at "+marker) // gitleaks:allow (a test observation token and path, not a credential)
+}
+
+func assertRecallObservation(t *testing.T, token, want string) {
+	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	for {
 		notes, err := ReadRecentObservations(token, 10)
 		if err != nil {
 			t.Fatal(err)
 		}
-		if len(notes) > 0 || time.Now().After(deadline) {
-			if len(notes) != 1 || notes[0].Client != "claude" || notes[0].Event != "bind" || notes[0].Error != "damaged generation proof at "+path {
-				t.Fatalf("observations: %+v", notes)
+		if len(notes) > 0 {
+			if len(notes) != 1 || notes[0].Client != "claude" || notes[0].Event != "bind" || notes[0].Error != want {
+				t.Fatalf("observations: %+v, want %q", notes, want)
 			}
-			break
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("observation %q was not recorded", want)
 		}
 		time.Sleep(time.Millisecond)
 	}

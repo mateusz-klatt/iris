@@ -53,8 +53,6 @@ func (t *transaction) generationChanged(previous, current execution, r Request) 
 	case "hook", "shim", "watch", "mcp":
 	case "":
 		source = "legacy"
-	default:
-		source = "other"
 	}
 	proof := "absent"
 	if r.RetryGeneration > 0 {

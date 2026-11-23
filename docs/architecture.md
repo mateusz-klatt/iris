@@ -728,7 +728,8 @@ Changes from the reference schema:
    proof under the bounded session lock before sending it. A refusal can restore proof to a
    missing file only above any ended generation recorded under the same lock. Generation writes
    keep the highest proof and SessionEnd clears only matching proof. The shim and plain watch check same-session bindings against retained process
-   and disk proof, and check disk proof before first-bind generation-zero fallback. A Codex
+   and disk proof, including the `.ended` marker left when SessionEnd clears ordinary proof, and
+   check disk proof before first-bind generation-zero fallback. A Codex
    id-mode sub-agent checks disk proof for its native session during its one lookup. These
    bindings fail when the session's proof file is unreadable or malformed. For
    deployment order and empty-hub recovery, see the
@@ -1395,6 +1396,12 @@ On `modernc.org/sqlite`, with real concurrency:
   `lost` row; merge liveness shares this predicate without advancing the baseline. A hub stall
   longer than about 120 s since the last committed heartbeat still loses sessions.
 - Repeated restarts cannot extend recovery. An unattached Execution is lost at its deadline.
+- While the newest retained Execution is ended, no generation-zero registration from a non-hook
+  source, empty legacy source included, succeeds regardless of its retry floor. The hub trusts the
+  host-token holder for that host's sessions and `source` is self-declared: this closes the fallback
+  path of unmodified Iris clients and old or foreign non-hook clients, not a malicious host-token
+  holder who can claim `hook` and already register sessions. If the 30-day retention sweep removes
+  the ended row, the guard has nothing left to check.
 - An orphaned heartbeat cannot preserve ownership. A second, unregistered session in one process
   cannot bind to the first. In id mode, a tool call that names its session binds only that
   session's Execution, never through a handle.

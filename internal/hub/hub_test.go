@@ -63,7 +63,7 @@ func request(t *testing.T, s *httptest.Server, method, path string, value any, s
 	return out
 }
 func register(t *testing.T, s *httptest.Server, n int) map[string]any {
-	return request(t, s, "POST", "/v1/sessions", map[string]any{"client": "codex", "session_id": fmt.Sprint(n), "host": "host", "cwd": fmt.Sprintf("/repo/%d", n), "worktree": fmt.Sprintf("/repo/%d", n), "remote_url": "https://example.com/repo.git", "root_commit": "root"}, 200)
+	return request(t, s, "POST", "/v1/sessions", map[string]any{"client": "codex", "session_id": fmt.Sprint(n), "host": "host", "cwd": fmt.Sprintf("/repo/%d", n), "worktree": fmt.Sprintf("/repo/%d", n), "remote_url": "https://example.com/repo.git", "root_commit": "root", "source": "hook"}, 200)
 }
 func authority(session map[string]any) map[string]any {
 	return map[string]any{"execution_id": session["execution_id"], "generation": session["generation"]}
