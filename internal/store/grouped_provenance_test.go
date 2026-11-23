@@ -1,6 +1,9 @@
 package store
 
-import "testing"
+import (
+	"encoding/json"
+	"testing"
+)
 
 func listedPath(t *testing.T, s *Store, repo, path string) string {
 	t.Helper()
@@ -183,5 +186,119 @@ func TestANullKeyRecordedElsewhereIsNotAdoptedOrReleased(t *testing.T) {
 	left := liveClaims(t, s, repo)
 	if len(claimsOn(left, "b.go")) != 1 || len(claimsOn(left, "blank.go")) != 0 || len(claimsOn(left, "old.go")) != 0 {
 		t.Fatalf("release: %+v", left)
+	}
+}
+
+// Two keyed groups can both select one own null-key fence. Adoption would
+// narrow it to one checkout, so the call grants nothing and leaves the fence.
+// The same fence already explicit covers a keyed request and an unkeyed one.
+// A null fence neither group adopts still covers both. An existing keyed fence
+// and a different checkout's new grant stay an exempt pair.
+func TestPlannedGrantsFollowTheFenceTheyWillHold(t *testing.T) {
+	s, _, _ := testStore(t)
+	a, ao := scopeSession(t, s, "", "a", "/repo/wt1", "dev:1", "main")
+	repo := ao["repository_id"].(string)
+	setScope(t, s, repo, "worktree")
+	if call(t, s, "touch", touchRequest(a, "seed", "a.go"))["action"] != "allow" {
+		t.Fatal("seed")
+	}
+	if _, err := s.db.Exec("UPDATE Claim SET worktree_key=NULL,worktree_path=NULL,branch=NULL WHERE execution_id=? AND path='a.go'", a.ExecutionID); err != nil {
+		t.Fatal(err)
+	}
+	narrowed := call(t, s, "touch_files", filesTouch(a, "narrow", wtGroup("/repo/wt1", "dev:1", "main", "a.go"), wtGroup("/repo/wt2", "dev:2", "other", "a.go")))
+	rows := claimsOn(liveClaims(t, s, repo), "a.go")
+	if narrowed["action"] != "deny" || len(narrowed["granted"].([]map[string]any)) != 0 || len(rows) != 1 || rows[0].key.Valid || rows[0].wpath.Valid {
+		t.Fatalf("both grants took the narrowed fence: %v %+v", narrowed, rows)
+	}
+
+	if _, err := s.db.Exec("UPDATE Claim SET worktree_path='/repo/wt1' WHERE execution_id=? AND path='a.go'", a.ExecutionID); err != nil {
+		t.Fatal(err)
+	}
+	samePath := wtGroup("/repo/wt1", "dev:1", "main", "a.go")
+	otherID := samePath
+	otherID.WorktreeID = "dev:9"
+	split := call(t, s, "touch_files", filesTouch(a, "split-key", samePath, otherID))
+	rows = claimsOn(liveClaims(t, s, repo), "a.go")
+	if split["action"] != "deny" || len(rows) != 1 || rows[0].key.Valid {
+		t.Fatalf("two adoptions shared one fence: %v %+v", split, rows)
+	}
+
+	call(t, s, "claim", claimRequest(a, "explicit", "held.go", "exact"))
+	explicit := claimsOn(liveClaims(t, s, repo), "held.go")
+	unkeyed := ClaimGroup{Worktree: "/repo/wt2", RemoteURL: scopeRemote, RootCommit: "root", Branch: "other", Paths: []string{"held.go"}}
+	shared := call(t, s, "touch_files", filesTouch(a, "shared", wtGroup("/repo/wt1", "dev:1", "main", "held.go"), unkeyed))
+	got := shared["granted"].([]map[string]any)
+	if shared["action"] != "allow" || len(got) != 2 || got[0]["fence"] != explicit[0].fence || got[1]["fence"] != explicit[0].fence || len(claimsOn(liveClaims(t, s, repo), "held.go")) != 1 {
+		t.Fatalf("explicit fence was not reused: %v %+v", shared, liveClaims(t, s, repo))
+	}
+
+	if call(t, s, "touch_files", filesTouch(a, "recorded", wtGroup("/repo/wt2", "dev:2", "other", "b.go")))["action"] != "allow" {
+		t.Fatal("recorded")
+	}
+	if _, err := s.db.Exec("UPDATE Claim SET worktree_key=NULL WHERE execution_id=? AND path='b.go'", a.ExecutionID); err != nil {
+		t.Fatal(err)
+	}
+	both := call(t, s, "touch_files", filesTouch(a, "stay", wtGroup("/repo/wt1", "dev:1", "main", "b.go"), wtGroup("/repo/wt3", "dev:3", "third", "b.go")))
+	brows := claimsOn(liveClaims(t, s, repo), "b.go")
+	bgot := both["granted"].([]map[string]any)
+	if both["action"] != "allow" || len(bgot) != 2 || bgot[0]["fence"] != brows[0].fence || bgot[1]["fence"] != brows[0].fence || brows[0].key.Valid || brows[0].wpath.String != "/repo/wt2" {
+		t.Fatalf("null fence was narrowed: %v %+v", both, brows)
+	}
+
+	if call(t, s, "touch", touchRequest(a, "keyed", "c.go"))["action"] != "allow" {
+		t.Fatal("keyed")
+	}
+	exempt := call(t, s, "touch_files", filesTouch(a, "exempt-existing", wtGroup("/repo/wt1", "dev:1", "main", "c.go"), wtGroup("/repo/wt2", "dev:2", "other", "c.go")))
+	if exempt["action"] != "allow" || len(exempt["granted"].([]map[string]any)) != 2 || len(claimsOn(liveClaims(t, s, repo), "c.go")) != 2 {
+		t.Fatalf("existing key refused an exempt checkout: %v %+v", exempt, liveClaims(t, s, repo))
+	}
+	reversed := call(t, s, "touch_files", filesTouch(a, "exempt-reversed", wtGroup("/repo/wt2", "dev:2", "other", "c.go"), wtGroup("/repo/wt1", "dev:1", "main", "c.go")))
+	if reversed["action"] != "allow" || len(reversed["granted"].([]map[string]any)) != 2 {
+		t.Fatalf("reversed exempt pair: %v", reversed)
+	}
+}
+
+// A replay matches the checkout the allow recorded. After that fence's key
+// changes, the replay is lost. An allow cached before the field existed follows
+// the fence's key at replay time.
+func TestCachedAllowMatchesTheCheckoutItGranted(t *testing.T) {
+	s, _, _ := testStore(t)
+	a, ao := scopeSession(t, s, "", "a", "/repo/wt1", "dev:1", "main")
+	repo := ao["repository_id"].(string)
+	setScope(t, s, repo, "worktree")
+	req := filesTouch(a, "once", wtGroup("/repo/wt1", "dev:1", "main", "a.go"))
+	allowed := call(t, s, "touch_files", req)
+	granted := allowed["granted"].([]map[string]any)
+	key := executionKey(t, s, a.ExecutionID)
+	if allowed["action"] != "allow" || len(granted) != 1 || granted[0]["worktree_key"] != key.String {
+		t.Fatalf("grant omitted its checkout: %v", allowed)
+	}
+	if again := call(t, s, "touch_files", req); again["action"] != "allow" {
+		t.Fatal(again)
+	}
+	if _, err := s.db.Exec("UPDATE Claim SET worktree_key='wt_other' WHERE execution_id=? AND path='a.go'", a.ExecutionID); err != nil {
+		t.Fatal(err)
+	}
+	expectError(t, s, "touch_files", req, "lost")
+
+	var raw string
+	if err := s.db.QueryRow("SELECT result_json FROM Operation WHERE key=?", "touch_files:once").Scan(&raw); err != nil {
+		t.Fatal(err)
+	}
+	var body map[string]any
+	if err := json.Unmarshal([]byte(raw), &body); err != nil {
+		t.Fatal(err)
+	}
+	items := body["granted"].([]any)
+	delete(items[0].(map[string]any), "worktree_key")
+	encoded, err := json.Marshal(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.db.Exec("UPDATE Operation SET result_json=? WHERE key=?", string(encoded), "touch_files:once"); err != nil {
+		t.Fatal(err)
+	}
+	if replay := call(t, s, "touch_files", req); replay["action"] != "allow" {
+		t.Fatal("a cached allow without a checkout followed the new fence key", replay)
 	}
 }

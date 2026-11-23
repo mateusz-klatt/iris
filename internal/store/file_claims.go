@@ -170,11 +170,14 @@ func (t *transaction) touchFiles(r Request) (map[string]any, error) {
 			action = stricter(action, p.action)
 		}
 	}
-	// Planned grants are not rows yet, so fileConflicts cannot see a keyed
-	// claim and an unkeyed claim of the same path in this request. Classify
-	// them against each other before either is inserted.
-	if act := t.plannedOverlap(e, places, &conflicts); act != "" {
-		action = stricter(action, act)
+	// Planned grants are not rows yet. A real conflict already denies the
+	// whole call, so the pair scan is not required for that answer. Repository
+	// scope has folded each path to one grant. What remains is a worktree
+	// scope whose grants may share a fence or an exempt pair.
+	if action != "deny" {
+		if act := t.plannedOverlap(e, places, &conflicts); act != "" {
+			action = stricter(action, act)
+		}
 	}
 	ignored := []map[string]any{}
 	for _, p := range places {
@@ -359,45 +362,150 @@ func sameProvenance(a, b claimLocation) bool {
 	return worktreePathsEqual(a.path, b.path)
 }
 
-// plannedOverlap classifies grants this request is about to insert against
-// each other. fileConflicts only reads rows already stored, so a keyed claim
-// and a null-key claim of one path in the same call would both be inserted.
-// A null key is repository-wide and is a real conflict. An exempt automatic
-// pair may both be granted. The caller grants nothing when this returns an action.
+// plan is one grant this request would make, after fileConflicts has named the
+// fence it reuses. A zero fence is a row that does not exist yet.
+type plan struct {
+	path, repo, scope, policy, action string
+	loc                               claimLocation
+	reuse                             claim
+	reused, own                       bool
+}
+
+// cover is the checkout a plan holds once reused fences have been adopted.
+// ok is false when adoption narrows a shared fence to a different checkout.
+type cover struct {
+	key string
+	ok  bool
+}
+
+// plannedOverlap classifies grants this request would make against each other.
+// Reused fences are resolved first: two grants of one explicit fence are that
+// fence, and a null automatic fence that adoption narrows covers only the
+// checkout it adopts. A keyed grant and an unkeyed grant with no shared fence
+// are a real conflict. An exempt automatic pair may both be granted. Repository
+// scope does not reach here. The caller grants nothing when this returns an action.
 func (t *transaction) plannedOverlap(e execution, places []*filePlace, conflicts *[]map[string]any) string {
-	type plan struct {
-		path, key, repo, scope, policy, action string
-	}
-	var plans []plan
+	buckets := map[string][]plan{}
 	for _, p := range places {
+		if p.scope != "worktree" {
+			continue
+		}
 		for _, g := range p.grants {
-			plans = append(plans, plan{g.path, g.loc.key, p.repo, p.scope, p.policy, p.action})
+			c, ok := p.reuse[g.path]
+			item := plan{
+				path: g.path, repo: p.repo, scope: p.scope, policy: p.policy, action: p.action,
+				loc: g.loc, reuse: c, reused: ok, own: g.loc.key != "" && g.loc.key == e.WorktreeKey,
+			}
+			k := p.repo + "\x00" + pathKey(g.path, p.policy)
+			buckets[k] = append(buckets[k], item)
 		}
 	}
 	action := ""
-	for i := range plans {
-		for j := i + 1; j < len(plans); j++ {
-			a, b := plans[i], plans[j]
-			if a.repo != b.repo || !overlaps(pathKey(a.path, a.policy), "exact", pathKey(b.path, b.policy), "exact") {
-				continue
+	for _, group := range buckets {
+		if len(group) < 2 {
+			continue
+		}
+		held := coverOf(group)
+		for i := range group {
+			for j := i + 1; j < len(group); j++ {
+				if !plannedConflict(group[i], group[j], held[i], held[j]) {
+					continue
+				}
+				action = stricter(action, group[i].action)
+				expiry := t.s.clock.Now().Add(10 * time.Minute).UnixMilli()
+				*conflicts = append(*conflicts, map[string]any{
+					"path":          group[i].path,
+					"claimed_path":  group[j].path,
+					"holder":        e.Name,
+					"origin":        "auto",
+					"kind":          "exact",
+					"repository_id": group[i].repo,
+					"expires_at":    timestamp(sql.NullInt64{Int64: expiry, Valid: true}),
+				})
 			}
-			if exemptAutoOverlap(a.scope, "auto", a.key, "auto", b.key) {
-				continue
-			}
-			action = stricter(action, a.action)
-			expiry := t.s.clock.Now().Add(10 * time.Minute).UnixMilli()
-			*conflicts = append(*conflicts, map[string]any{
-				"path":          a.path,
-				"claimed_path":  b.path,
-				"holder":        e.Name,
-				"origin":        "auto",
-				"kind":          "exact",
-				"repository_id": a.repo,
-				"expires_at":    timestamp(sql.NullInt64{Int64: expiry, Valid: true}),
-			})
 		}
 	}
 	return action
+}
+
+// coverOf is the coverage each plan has after a shared fence is adopted once.
+// Grants are compared against the fence as it is now, not against a key a
+// previous grant in this call would already have written.
+func coverOf(group []plan) []cover {
+	out := make([]cover, len(group))
+	byFence := map[int64][]int{}
+	for i, g := range group {
+		out[i] = cover{key: g.loc.key, ok: true}
+		if !g.reused {
+			continue
+		}
+		out[i].key = g.reuse.WorktreeKey
+		byFence[g.reuse.Fence] = append(byFence[g.reuse.Fence], i)
+	}
+	for _, idxs := range byFence {
+		stored := group[idxs[0]].reuse
+		if stored.Origin != "auto" || stored.WorktreeKey != "" {
+			for _, i := range idxs {
+				out[i].ok = true
+				out[i].key = stored.WorktreeKey
+				if stored.Origin != "auto" {
+					out[i].key = ""
+				}
+			}
+			continue
+		}
+		adopted := ""
+		split := false
+		for _, i := range idxs {
+			if !adoptsFence(stored, group[i]) {
+				continue
+			}
+			if adopted == "" {
+				adopted = group[i].loc.key
+			} else if adopted != group[i].loc.key {
+				split = true
+			}
+		}
+		for _, i := range idxs {
+			switch {
+			case split || (adopted != "" && group[i].loc.key != adopted):
+				out[i].ok = false
+			case adopted != "":
+				out[i].key = adopted
+				out[i].ok = true
+			default:
+				out[i].key = ""
+				out[i].ok = true
+			}
+		}
+	}
+	return out
+}
+
+// adoptsFence is renewAuto's adoption decision for a null automatic fence.
+// The Execution's own checkout adopts a legacy row. Any observation adopts a
+// row whose recorded path is that observation. A keyed fence is not moved.
+func adoptsFence(stored claim, g plan) bool {
+	legacy := stored.WorktreePath == "" && g.own
+	recorded := stored.WorktreePath != "" && worktreePathsEqual(stored.WorktreePath, g.loc.path)
+	return g.loc.key != "" && (legacy || recorded)
+}
+
+// plannedConflict reports whether two plans of one path cannot both be granted.
+// Two plans covered by one fence are that fence. Anything else conflicts unless
+// the two automatic keys are an exempt pair.
+func plannedConflict(a, b plan, ca, cb cover) bool {
+	if a.reused && b.reused && a.reuse.Fence == b.reuse.Fence {
+		return !ca.ok || !cb.ok
+	}
+	ak, bk := a.loc.key, b.loc.key
+	if a.reused && ca.ok {
+		ak = ca.key
+	}
+	if b.reused && cb.ok {
+		bk = cb.key
+	}
+	return !exemptAutoOverlap(a.scope, "auto", ak, "auto", bk)
 }
 
 // grantFiles takes or renews every path of places for e, within the claim limit, and returns
@@ -433,7 +541,15 @@ func (t *transaction) grantFiles(e execution, places []*filePlace) ([]map[string
 			if err := t.took(e, p.repo, k, g.loc.key); err != nil {
 				return nil, err
 			}
-			granted = append(granted, map[string]any{"repository_id": p.repo, "path": g.path, "fence": c.Fence})
+			// The key this grant promised. A later adoption can change the fence,
+			// and a replay has to match the checkout that was granted, not the
+			// fence's key at replay time. A missing key on an older cached allow
+			// still means the fence's current key.
+			var grantedKey sql.NullString
+			if err := t.row("SELECT worktree_key FROM Claim WHERE fence=?", c.Fence).Scan(&grantedKey); err != nil {
+				return nil, err
+			}
+			granted = append(granted, map[string]any{"repository_id": p.repo, "path": g.path, "fence": c.Fence, "worktree_key": grantedKey.String})
 		}
 	}
 	return granted, nil
@@ -455,9 +571,16 @@ func (t *transaction) stillHeld(e execution, cached map[string]any) error {
 		// A missing fence is an empty key: only an explicit claim or a null-key claim
 		// of this Execution still counts. The fence's own key is what a grouped grant
 		// promised, not the Execution's current checkout (ADR 037).
-		var origin, grantKey string
-		if err := t.row("SELECT repository_id,origin,COALESCE(worktree_key,'') FROM Claim WHERE fence=? AND execution_id=?", grant["fence"], e.ID).Scan(&repo, &origin, &grantKey); err != nil && !errors.Is(err, sql.ErrNoRows) {
+		var currentKey string
+		if err := t.row("SELECT repository_id,COALESCE(worktree_key,'') FROM Claim WHERE fence=? AND execution_id=?", grant["fence"], e.ID).Scan(&repo, &currentKey); err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return err
+		}
+		// A grant records the checkout it promised. The fence's key now can be a
+		// later adoption. An allow cached before that field existed still follows
+		// the fence's current key.
+		grantKey := currentKey
+		if promised, ok := grant["worktree_key"]; ok {
+			grantKey, _ = promised.(string)
 		}
 		var policy string
 		if err := t.row("SELECT case_policy FROM Repository WHERE id=?", repo).Scan(&policy); err != nil && !errors.Is(err, sql.ErrNoRows) {
