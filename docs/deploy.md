@@ -223,6 +223,14 @@ existing browser connections. Agents can prepare and rehearse it. While the owne
 keep a supported named-authentication image, or stop/move the hub off the proxied port; the latter
 makes agent coordination unavailable too. Do not start an exposed old backend.
 
+Reload every console tab after the rollback, including one that was already open. This console
+acknowledges a thread with `POST /v1/ui/threads/{id}/read/{message_id}`. A v0.1.13 hub does not
+have that route and answers `not_found` before it acknowledges anything. Its
+`POST /v1/ui/threads/{id}/read` acknowledges the whole thread and ignores `last_message_id`.
+The open tab does not send that older request. When the thread snapshot has no
+`high_water_message_id`, the tab sends nothing and tells the operator to reload. Reloading
+loads the console from the image that is now running.
+
 Then put `$previous` back as the pinned image in `<host-compose>`, and replace the container the
 same way. Install the command-line `iris` from that image with step 5, using `$previous` in place of
 `$IMAGE`:
@@ -268,6 +276,9 @@ What this cannot do:
 - The version check catches the wrong image, not a dishonest build.
 - Step 4 is the first time a new release image serves, unless it was rehearsed first on a scratch
   database, as the first cutover to named accounts requires.
+- An open console tab keeps the script it already loaded. Rolling the image back does not drop
+  that script. Until the operator reloads, that tab does not mark threads read against a v0.1.13
+  hub. After the reload, the previous console acknowledges a thread the way that hub does.
 
 ### Deploying a main commit between releases
 

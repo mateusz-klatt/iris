@@ -469,6 +469,7 @@ const translation = {
     subject: "Betreff",
     body: "Nachricht",
     loadError: "Iris konnte diese Ansicht nicht laden.",
+    readReload: "Laden Sie die Konsole neu, um diesen Thread als gelesen zu markieren.",
     emptyThreads: "Keine Threads in dieser Ansicht.",
     olderThreads: "Ältere Threads",
     participants: "Teilnehmer",

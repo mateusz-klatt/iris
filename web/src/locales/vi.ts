@@ -460,6 +460,7 @@ const translation = {
     subject: "Tiêu đề",
     body: "Tin nhắn",
     loadError: "Iris không thể tải chế độ xem này.",
+    readReload: "Tải lại bảng điều khiển để đánh dấu chuỗi này là đã đọc.",
     emptyThreads: "Không có chuỗi thư nào trong chế độ xem này.",
     olderThreads: "Chuỗi thư cũ hơn",
     participants: "Người tham gia",

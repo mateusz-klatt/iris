@@ -469,6 +469,7 @@ const translation = {
     subject: "Předmět",
     body: "Zpráva",
     loadError: "Iris nemohl načíst toto zobrazení.",
+    readReload: "Znovu načtěte konzoli, abyste označili toto vlákno jako přečtené.",
     emptyThreads: "V tomto zobrazení nejsou žádná vlákna.",
     olderThreads: "Starší vlákna",
     participants: "Účastníci",

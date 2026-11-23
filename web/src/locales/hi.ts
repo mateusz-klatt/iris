@@ -469,6 +469,7 @@ const translation = {
     subject: "विषय",
     body: "संदेश",
     loadError: "Iris यह दृश्य लोड नहीं कर सका।",
+    readReload: "इस थ्रेड को पढ़ा हुआ चिह्नित करने के लिए कंसोल फिर से लोड करें।",
     emptyThreads: "इस दृश्य में कोई थ्रेड नहीं है।",
     olderThreads: "पुराने थ्रेड",
     participants: "प्रतिभागी",

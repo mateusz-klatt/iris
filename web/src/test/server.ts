@@ -96,6 +96,7 @@ export const threadsPage: ThreadsPage = {
 
 export const threadDetail: ThreadDetail = {
   id: "ms_root",
+  high_water_message_id: "ms_root",
   messages: [
     {
       id: "ms_root",
@@ -168,7 +169,7 @@ export const server = setupServer(
     }
     return HttpResponse.json(threadDetail);
   }),
-  http.post("*/v1/ui/threads/:id/read", () => HttpResponse.json({ read: 1 })),
+  http.post("*/v1/ui/threads/:id/read/:message", () => HttpResponse.json({ read: 1 })),
   http.post("*/v1/ui/messages", () => new HttpResponse(null, { status: 204 })),
   http.post("*/v1/ui/claims/:fence/revoke", ({ params }) => {
     const fence = Number(params.fence);

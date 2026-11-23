@@ -460,6 +460,7 @@ const translation = {
     subject: "Mada",
     body: "Ujumbe",
     loadError: "Iris haikuweza kupakia mwonekano huu.",
+    readReload: "Pakia upya kiweko ili kuashiria mazungumzo haya kuwa yamesomwa.",
     emptyThreads: "Hakuna mazungumzo katika mwonekano huu.",
     olderThreads: "Mazungumzo ya zamani zaidi",
     participants: "Washiriki",

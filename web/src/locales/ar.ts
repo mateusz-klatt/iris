@@ -469,6 +469,7 @@ const translation = {
     subject: "العنوان",
     body: "الرسالة",
     loadError: "تعذّر على Iris تحميل هذا العرض.",
+    readReload: "أعد تحميل وحدة التحكم لتعليم هذه المحادثة كمقروءة.",
     emptyThreads: "لا توجد سلاسل رسائل في هذا العرض.",
     olderThreads: "سلاسل رسائل أقدم",
     participants: "المشاركون",

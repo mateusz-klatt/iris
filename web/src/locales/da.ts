@@ -469,6 +469,7 @@ const translation = {
     subject: "Emne",
     body: "Besked",
     loadError: "Iris kunne ikke indlæse denne visning.",
+    readReload: "Genindlæs konsollen for at markere denne tråd som læst.",
     emptyThreads: "Ingen tråde i denne visning.",
     olderThreads: "Ældre tråde",
     participants: "Deltagere",

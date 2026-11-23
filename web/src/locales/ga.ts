@@ -469,6 +469,7 @@ const translation = {
     subject: "Ábhar",
     body: "Teachtaireacht",
     loadError: "Ní raibh Iris in ann an t-amharc seo a lódáil.",
+    readReload: "Athlódáil an consól chun an snáithe seo a mharcáil mar léite.",
     emptyThreads: "Níl aon snáitheanna san amharc seo.",
     olderThreads: "Snáitheanna níos sine",
     participants: "Rannpháirtithe",

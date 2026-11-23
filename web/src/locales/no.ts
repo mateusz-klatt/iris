@@ -469,6 +469,7 @@ const translation = {
     subject: "Emne",
     body: "Melding",
     loadError: "Iris kunne ikke laste inn denne visningen.",
+    readReload: "Last inn konsollen på nytt for å merke denne tråden som lest.",
     emptyThreads: "Ingen tråder i denne visningen.",
     olderThreads: "Eldre tråder",
     participants: "Deltakere",

@@ -481,7 +481,7 @@ describe("Iris operator console", () => {
     const user = userEvent.setup({ delay: null });
     const reads: { url: string; body: unknown }[] = [];
     server.use(
-      http.post("*/v1/ui/threads/:id/read", async ({ request }) => {
+      http.post("*/v1/ui/threads/:id/read/:message", async ({ request }) => {
         reads.push({ url: request.url, body: await request.json() });
         return reads.length === 1 ? new HttpResponse(null, { status: 204 }) : new HttpResponse(null, { status: 500 });
       }),
@@ -490,12 +490,223 @@ describe("Iris operator console", () => {
     await user.click(await screen.findByRole("button", { name: /Rollout check/ }));
     await screen.findByRole("article", { name: "Rollout check" });
     await waitFor(() => expect(reads).toHaveLength(1));
-    expect(reads[0]?.url).toContain("/v1/ui/threads/ms_root/read");
+    expect(reads[0]?.url).toContain("/v1/ui/threads/ms_root/read/ms_root");
     expect(reads[0]?.body).toEqual({ repository_id: "", last_message_id: "ms_root" });
     await user.click(screen.getByRole("button", { name: "Back to threads" }));
     await user.click(await screen.findByRole("button", { name: /Rollout check/ }));
     await waitFor(() => expect(reads).toHaveLength(2));
     expect(await screen.findByRole("article", { name: "Rollout check" })).toBeVisible();
+  }, 40000);
+
+  it("sends the snapshot high-water id, not the last displayed message", async () => {
+    const user = userEvent.setup({ delay: null });
+    const reads: { url: string; body: unknown }[] = [];
+    const insertedLast = {
+      ...threadDetail.messages[0]!,
+      id: "ms_inserted",
+      created_at: "2026-11-06T09:00:00Z",
+      body: "Inserted later and shown first.",
+    };
+    const displayedLast = {
+      ...threadDetail.messages[0]!,
+      id: "ms_displayed",
+      created_at: "2026-11-06T11:00:00Z",
+      body: "Shown last after the clock moved forward.",
+    };
+    server.use(
+      http.get("*/v1/ui/threads/:id", () => HttpResponse.json({
+        ...threadDetail,
+        high_water_message_id: "ms_inserted",
+        messages: [insertedLast, displayedLast],
+      })),
+      http.post("*/v1/ui/threads/:id/read/:message", async ({ request }) => {
+        reads.push({ url: new URL(request.url).pathname, body: await request.json() });
+        return HttpResponse.json({ read: 2 });
+      }),
+    );
+    await showSession();
+    await user.click(await screen.findByRole("button", { name: /Rollout check/ }));
+    expect(await screen.findByText("Shown last after the clock moved forward.")).toBeVisible();
+    await waitFor(() => expect(reads).toEqual([{
+      url: "/v1/ui/threads/ms_root/read/ms_inserted",
+      body: { repository_id: "", last_message_id: "ms_inserted" },
+    }]));
+  }, 40000);
+
+  it("shows a reload hint when acknowledgement is refused", async () => {
+    const user = userEvent.setup({ delay: null });
+    server.use(
+      http.post("*/v1/ui/threads/:id/read/:message", () => HttpResponse.json(
+        { error: { code: "bad_request", message: "reload the console to acknowledge this thread" } },
+        { status: 400 },
+      )),
+    );
+    await showSession();
+    await user.click(await screen.findByRole("button", { name: /Rollout check/ }));
+    expect(await screen.findByText("All checks passed.")).toBeVisible();
+    expect(await screen.findByRole("alert")).toHaveTextContent("Reload the console to mark this thread read.");
+  }, 40000);
+
+  it("does not acknowledge a snapshot from an old hub", async () => {
+    const user = userEvent.setup({ delay: null });
+    const reads: string[] = [];
+    server.events.on("request:start", ({ request }) => {
+      if (request.method === "POST" && new URL(request.url).pathname.includes("/read")) {
+        reads.push(new URL(request.url).pathname);
+      }
+    });
+    server.use(http.get("*/v1/ui/threads/:id", () => HttpResponse.json({
+      ...threadDetail,
+      high_water_message_id: undefined,
+    })));
+    await showSession();
+    await user.click(await screen.findByRole("button", { name: /Rollout check/ }));
+    expect(await screen.findByText("All checks passed.")).toBeVisible();
+    expect(await screen.findByRole("alert")).toHaveTextContent("Reload the console to mark this thread read.");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(reads).toEqual([]);
+    server.events.removeAllListeners();
+  }, 40000);
+
+  it("shows a reload hint when the acknowledgement reaches an old hub", async () => {
+    const user = userEvent.setup({ delay: null });
+    const legacy: string[] = [];
+    const watermark: string[] = [];
+    server.use(
+      http.post("*/v1/ui/threads/:id/read", ({ request }) => {
+        const path = new URL(request.url).pathname;
+        if (path.split("/").filter(Boolean).length !== 5) {
+          return undefined;
+        }
+        legacy.push(path);
+        return HttpResponse.json({ read: 1 });
+      }),
+      http.post("*/v1/ui/threads/:id/read/:message", ({ request }) => {
+        watermark.push(new URL(request.url).pathname);
+        return HttpResponse.json({ error: { code: "not_found", message: "unknown console route" } }, { status: 404 });
+      }),
+    );
+    await showSession();
+    await user.click(await screen.findByRole("button", { name: /Rollout check/ }));
+    expect(await screen.findByText("All checks passed.")).toBeVisible();
+    expect(await screen.findByRole("alert")).toHaveTextContent("Reload the console to mark this thread read.");
+    await waitFor(() => expect(watermark).toEqual(["/v1/ui/threads/ms_root/read/ms_root"]));
+    expect(legacy).toEqual([]);
+  }, 40000);
+
+  it("keeps the reload hint across a passive refresh of that opening", async () => {
+    const user = userEvent.setup({ delay: null });
+    let onFrame: ((frame: WatchFrame) => void) | undefined;
+    let reads = 0;
+    let details = 0;
+    const other = { ...threadsPage.threads[0]!, id: "ms_other", subject: "Other thread", unread: 1 };
+    server.events.on("request:start", ({ request }) => {
+      if (request.method === "GET" && new URL(request.url).pathname === "/v1/ui/threads/ms_root") {
+        details++;
+      }
+    });
+    server.use(
+      http.get("*/v1/ui/threads", ({ request }) => {
+        const url = new URL(request.url);
+        if (url.pathname !== "/v1/ui/threads") {
+          return undefined;
+        }
+        return HttpResponse.json({ threads: [...threadsPage.threads, other] });
+      }),
+      http.get("*/v1/ui/threads/:id", ({ params }) => {
+        const id = String(params.id);
+        return HttpResponse.json({
+          ...threadDetail,
+          id,
+          high_water_message_id: id,
+          messages: [{
+            ...threadDetail.messages[0]!,
+            id,
+            subject: id === "ms_other" ? "Other thread" : "Rollout check",
+          }],
+        });
+      }),
+      http.post("*/v1/ui/threads/:id/read/:message", ({ params }) => {
+        reads++;
+        if (params.id === "ms_root") {
+          return HttpResponse.json(
+            { error: { code: "bad_request", message: "reload the console to acknowledge this thread" } },
+            { status: 400 },
+          );
+        }
+        return HttpResponse.json({ read: 1 });
+      }),
+    );
+    render(<App refreshGap={0} connect={(frame) => { onFrame = frame; return () => {}; }} />);
+    await user.click(await screen.findByRole("button", { name: /Rollout check/ }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Reload the console to mark this thread read.");
+    const afterOpen = details;
+    const readsAfterOpen = reads;
+    onFrame?.({ cursor: 9, kind: "changed" });
+    await waitFor(() => expect(details).toBeGreaterThan(afterOpen));
+    expect(screen.getByRole("alert")).toHaveTextContent("Reload the console to mark this thread read.");
+    expect(reads).toBe(readsAfterOpen);
+    await user.click(screen.getByRole("button", { name: "Back to threads" }));
+    await user.click(await screen.findByRole("button", { name: /Other thread/ }));
+    expect(await screen.findByRole("article", { name: "Other thread" })).toBeVisible();
+    expect(screen.queryByRole("alert")).toBeNull();
+    server.events.removeAllListeners();
+  }, 40000);
+
+  it("ignores a late acknowledgement for a different opening", async () => {
+    const user = userEvent.setup({ delay: null });
+    const other = { ...threadsPage.threads[0]!, id: "ms_other", subject: "Other thread", unread: 1 };
+    let release: (value?: void) => void = () => undefined;
+    let gate = new Promise<void>((resolve) => { release = resolve; });
+    let reads = 0;
+    const arm = () => {
+      gate = new Promise<void>((resolve) => { release = resolve; });
+    };
+    server.use(
+      http.get("*/v1/ui/threads", ({ request }) => {
+        const url = new URL(request.url);
+        if (url.pathname !== "/v1/ui/threads") {
+          return undefined;
+        }
+        return HttpResponse.json({ threads: [...threadsPage.threads, other] });
+      }),
+      http.get("*/v1/ui/threads/:id", ({ params }) => {
+        const id = String(params.id);
+        return HttpResponse.json({
+          ...threadDetail,
+          id,
+          high_water_message_id: id === "ms_root" ? undefined : id,
+          messages: [{
+            ...threadDetail.messages[0]!,
+            id,
+            subject: id === "ms_other" ? "Other thread" : "Rollout check",
+          }],
+        });
+      }),
+      http.post("*/v1/ui/threads/:id/read/:message", async () => {
+        const pending = gate;
+        reads++;
+        await pending;
+        return HttpResponse.json({ read: 1 });
+      }),
+    );
+    await showSession();
+    await user.click(await screen.findByRole("button", { name: /Other thread/ }));
+    await waitFor(() => expect(reads).toBe(1));
+    await user.click(screen.getByRole("button", { name: "Back to threads" }));
+    await waitFor(() => expect(screen.queryByRole("article")).toBeNull());
+    release();
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+    arm();
+    await user.click(await screen.findByRole("button", { name: /Other thread/ }));
+    await waitFor(() => expect(reads).toBe(2));
+    await user.click(screen.getByRole("button", { name: "Back to threads" }));
+    await user.click(await screen.findByRole("button", { name: /Rollout check/ }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Reload the console to mark this thread read.");
+    expect(reads).toBe(2);
+    release();
+    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+    expect(screen.getByRole("alert")).toHaveTextContent("Reload the console to mark this thread read.");
   }, 40000);
 
   it("replies and sends as human", async () => {
@@ -608,7 +819,7 @@ describe("Iris operator console", () => {
     let connects = 0;
     let reads = 0;
     server.use(
-      http.post("*/v1/ui/threads/:id/read", () => {
+      http.post("*/v1/ui/threads/:id/read/:message", () => {
         reads++;
         return new HttpResponse(null, { status: 204 });
       }),
@@ -644,7 +855,7 @@ describe("Iris operator console", () => {
       http.get("*/v1/ui/threads/:id", () =>
         HttpResponse.json({ ...threadDetail, messages: threadDetail.messages.map((message) => ({ ...message, recipients: [{ name: "human", state }] })) }),
       ),
-      http.post("*/v1/ui/threads/:id/read", () => {
+      http.post("*/v1/ui/threads/:id/read/:message", () => {
         reads++;
         return HttpResponse.json({ read });
       }),

@@ -460,6 +460,7 @@ const translation = {
     subject: "Konu",
     body: "İleti",
     loadError: "Iris bu görünümü yükleyemedi.",
+    readReload: "Bu ileti dizisini okundu olarak işaretlemek için konsolu yeniden yükleyin.",
     emptyThreads: "Bu görünümde ileti dizisi yok.",
     olderThreads: "Daha eski ileti dizileri",
     participants: "Katılımcılar",

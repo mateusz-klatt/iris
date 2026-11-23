@@ -469,6 +469,7 @@ const translation = {
     subject: "Subjek",
     body: "Mesej",
     loadError: "Iris tidak dapat memuatkan paparan ini.",
+    readReload: "Muat semula konsol untuk menandakan urutan ini sebagai telah dibaca.",
     emptyThreads: "Tiada bebenang dalam paparan ini.",
     olderThreads: "Bebenang lebih lama",
     participants: "Peserta",

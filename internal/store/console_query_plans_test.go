@@ -69,7 +69,7 @@ func TestConsoleReadQueryPlansAvoidAckSubqueryScan(t *testing.T) {
 			To:  to, Subject: fmt.Sprintf("Subject %03d", i), Body: fmt.Sprintf("needle body %03d", i),
 		})
 		if i%4 == 0 {
-			call(t, s, "ui_read", Request{Key: sent["thread_id"].(string), RepositoryID: repoA})
+			call(t, s, "ui_read", Request{Key: sent["thread_id"].(string), RepositoryID: repoA, LastMessageID: sent["message_id"].(string)})
 		}
 	}
 
@@ -227,7 +227,7 @@ func TestThreadsSplitPreservesVariantsTitlesParticipantsAuthorsUnreadAndCursor(t
 	})
 	// Deliver to repoB human as well so repoA vs "" scopes differ on unread.
 	clock.advance(time.Second)
-	call(t, s, "messages", Request{
+	reply2 := call(t, s, "messages", Request{
 		ExecutionID: execB.ExecutionID, Generation: execB.Generation,
 		Key: "beh-reply-2", ReplyTo: reply1["message_id"].(string),
 		To: []string{"human"}, Subject: "RepoB Reply", Body: "to repoB human",
@@ -300,12 +300,12 @@ func TestThreadsSplitPreservesVariantsTitlesParticipantsAuthorsUnreadAndCursor(t
 		t.Fatalf("expected repoA unread=1, got %+v", humanRepoA)
 	}
 	// Mark repoA read -> repoA unread becomes 0, repoB/global unread becomes 1, next ack -> 0.
-	call(t, s, "ui_read", Request{Key: thread0, RepositoryID: repoA})
+	call(t, s, "ui_read", Request{Key: thread0, RepositoryID: repoA, LastMessageID: reply1["message_id"].(string)})
 	humanRepoAAfter := call(t, s, "ui_threads", Request{RepositoryID: repoA, Agent: "human", Limit: 50})["threads"].([]map[string]any)
 	if humanRepoAAfter[0]["unread"] != int64(0) {
 		t.Fatalf("expected repoA unread=0 after ui_read, got %+v", humanRepoAAfter)
 	}
-	call(t, s, "ui_read", Request{Key: thread0, RepositoryID: repoB})
+	call(t, s, "ui_read", Request{Key: thread0, RepositoryID: repoB, LastMessageID: reply2["message_id"].(string)})
 	humanAllAfter := call(t, s, "ui_threads", Request{Agent: "human", Limit: 50})["threads"].([]map[string]any)
 	if humanAllAfter[0]["unread"] != int64(0) {
 		t.Fatalf("expected global unread=0 after reading both repos, got %+v", humanAllAfter)

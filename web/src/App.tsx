@@ -48,7 +48,11 @@ import { recordName } from "./recordName";
 import "./app.css";
 import "./console.css";
 
-type ThreadOpening = { id: string };
+type ThreadOpening = { id: string; generation: number };
+
+function openingKey(opening: ThreadOpening): string {
+  return `${opening.id}:${opening.generation}`;
+}
 
 // The hub limits a message by its UTF-8 bytes, not by characters: a draft of 16 KiB of
 // characters outside ASCII can be several times that (gap review A11).
@@ -380,6 +384,8 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const [showInactive, setShowInactive] = useState(false);
   const [agentSearch, setAgentSearch] = useState("");
   const [threadError, setThreadError] = useState(false);
+  const [readReloadKey, setReadReloadKey] = useState<string | null>(null);
+  const openingGeneration = useRef(0);
   const readerTitle = useRef<HTMLHeadingElement>(null);
   const lastThreadButton = useRef<HTMLButtonElement | null>(null);
   const sessions = useMemo(() => overview?.agents ?? [], [overview]);
@@ -401,9 +407,12 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const [olderCursor, setOlderCursor] = useState<string | undefined>(undefined);
   const [threadsError, setThreadsError] = useState(false);
   const [openedThread, setOpenedThread] = useState<ThreadOpening | null>(null);
+  const openedThreadRef = useRef<ThreadOpening | null>(null);
+  openedThreadRef.current = openedThread;
   const selectedId = openedThread?.id ?? null;
+  const showReadReload = openedThread !== null && readReloadKey === openingKey(openedThread);
   const readRequestedFor = useRef<ThreadOpening | Promise<ThreadDetail> | null>(null);
-  const pendingRead = useRef<{ id: string; repositoryId: string; lastMessageId: string } | null>(null);
+  const pendingRead = useRef<{ opening: ThreadOpening; id: string; repositoryId: string; lastMessageId: string } | null>(null);
   const [loadedThread, setLoadedThread] = useState<{ opening: ThreadOpening; detail: ThreadDetail } | null>(null);
   const loadedThreadRef = useRef(loadedThread);
   loadedThreadRef.current = loadedThread;
@@ -580,13 +589,29 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       return null;
     }
     pendingRead.current = null;
+    // A response belongs to the opening that sent it. A later opening, including another
+    // visit to the same thread, keeps its own reload hint.
+    const applyRead = (refused: boolean) => {
+      const current = openedThreadRef.current;
+      const currentKey = current === null ? "" : openingKey(current);
+      if (currentKey !== openingKey(pending.opening)) {
+        return;
+      }
+      setReadReloadKey(refused ? currentKey : null);
+    };
     return readThread(pending.id, pending.repositoryId, pending.lastMessageId)
       .then((read) => {
+        applyRead(false);
         if (!deferReload && read > 0) {
           postReadRefresh.current?.();
         }
       })
-      .catch(() => undefined);
+      .catch((error: unknown) => {
+        // 400 is this hub refusing a watermark. 404 is a v0.1.13 hub, which has no path-watermark route.
+        if (error instanceof ApiError && (error.status === 400 || error.status === 404)) {
+          applyRead(true);
+        }
+      });
   }, []);
 
   useEffect(() => () => cancelThreadRead(), [cancelThreadRead]);
@@ -841,8 +866,13 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
         }
         setLoadedThread({ opening: openedThread, detail });
         setThreadError(false);
-        if (releaseReadAuthorization() && !member && unreadForOperator(detail)) {
-          pendingRead.current = { id, repositoryId, lastMessageId: detail.messages.at(-1)!.id };
+        const highWater = detail.high_water_message_id ?? "";
+        // A passive refresh may replace the snapshot. It must not post, and it must not drop a
+        // reload hint for this opening. An old hub omits the high-water id; do not acknowledge.
+        if (!member && unreadForOperator(detail) && highWater === "") {
+          setReadReloadKey(openingKey(openedThread));
+        } else if (releaseReadAuthorization() && !member && unreadForOperator(detail)) {
+          pendingRead.current = { opening: openedThread, id, repositoryId, lastMessageId: highWater };
           void flushRead();
         }
         // Refresh an untouched suggestion together with loaded detail, retaining edited drafts (A14).
@@ -1015,7 +1045,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     lastThreadButton.current = trigger;
     chooseView("messages");
     // Each click requests fresh detail, even when the selected ID stays the same.
-    const opened = { id };
+    const opened = { id, generation: ++openingGeneration.current };
     readRequestedFor.current = opened;
     pendingRead.current = null;
     setOpenedThread(opened);
@@ -1170,6 +1200,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
                         <h2 id="thread-title" tabIndex={-1} ref={readerTitle}>{thread === null ? t(threadError ? "operator.loadError" : "message.loading") : thread.messages[0]?.subject ?? thread.id}</h2>
                       </header>
                       {threadError ? <div className="state-panel"><p role="alert">{t("operator.loadError")}</p><button type="button" onClick={() => { readerTitle.current?.focus(); setThreadError(false); setThreadRevision((value) => value + 1); }}>{t("operator.retry")}</button></div> : null}
+                      {showReadReload ? <p role="alert">{t("operator.readReload")}</p> : null}
                       {thread !== null ? <>
                   {thread.messages.map((message) => (
                     <article key={message.id} className="thread-message">

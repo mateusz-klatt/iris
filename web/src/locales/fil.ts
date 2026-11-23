@@ -469,6 +469,7 @@ const translation = {
     subject: "Paksa",
     body: "Mensahe",
     loadError: "Hindi ma-load ng Iris ang view na ito.",
+    readReload: "I-reload ang console para markahan ang thread na ito bilang nabasa na.",
     emptyThreads: "Walang thread sa view na ito.",
     olderThreads: "Mas lumang mga thread",
     participants: "Mga kalahok",

@@ -39,7 +39,7 @@ func TestMergePreservesHumanMailboxesAndOperatorReplies(t *testing.T) {
 			if reply["thread_id"] != sourceMail["thread_id"] || count(t, s, "SELECT COUNT(*) FROM Message WHERE id=? AND sender_execution_id=?", reply["message_id"], "operator_"+into) != 1 {
 				t.Fatal("operator could not continue the preserved source thread", reply)
 			}
-			read := call(t, s, "ui_read", Request{RepositoryID: into, Key: sourceMail["thread_id"].(string)})
+			read := call(t, s, "ui_read", Request{RepositoryID: into, Key: sourceMail["thread_id"].(string), LastMessageID: sourceMail["message_id"].(string)})
 			if read["read"] != 1 {
 				t.Fatal("source human mail was not operator-readable after repair", read)
 			}

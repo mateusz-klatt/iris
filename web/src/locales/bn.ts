@@ -469,6 +469,7 @@ const translation = {
     subject: "বিষয়",
     body: "বার্তা",
     loadError: "Iris এই ভিউ লোড করতে পারেনি।",
+    readReload: "এই থ্রেডটি পঠিত হিসেবে চিহ্নিত করতে কনসোল আবার লোড করুন।",
     emptyThreads: "এই ভিউতে কোনো থ্রেড নেই।",
     olderThreads: "পুরোনো থ্রেড",
     participants: "অংশগ্রহণকারী",

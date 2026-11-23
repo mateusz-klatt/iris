@@ -276,7 +276,7 @@ func TestConsoleAuthorizationStorageFailuresRollback(t *testing.T) {
 				case "accounts":
 					_, err = s.ListConsoleAccounts(context.Background(), p)
 				case "ack":
-					_, err = s.CallConsole(context.Background(), p, "ui_read", Request{RepositoryID: repo, Key: mail["thread_id"].(string)})
+					_, err = s.CallConsole(context.Background(), p, "ui_read", Request{RepositoryID: repo, Key: mail["thread_id"].(string), LastMessageID: mail["message_id"].(string)})
 				case "revoke":
 					_, err = s.CallConsole(context.Background(), p, "ui_revoke", Request{Fence: claim["fence"].(int64)})
 				}

@@ -469,6 +469,7 @@ const translation = {
     subject: "موضوع",
     body: "پیام",
     loadError: "Iris نتوانست این نما را بارگیری کند.",
+    readReload: "برای علامت‌گذاری این رشته به‌عنوان خوانده‌شده، کنسول را دوباره بارگیری کنید.",
     emptyThreads: "در این نما رشته‌ای نیست.",
     olderThreads: "رشته‌های قدیمی‌تر",
     participants: "شرکت‌کنندگان",

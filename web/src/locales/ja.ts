@@ -469,6 +469,7 @@ const translation = {
     subject: "件名",
     body: "メッセージ",
     loadError: "Iris はこのビューを読み込めませんでした。",
+    readReload: "このスレッドを既読にするにはコンソールを再読み込みしてください。",
     emptyThreads: "このビューにはスレッドがありません。",
     olderThreads: "以前のスレッド",
     participants: "参加者",

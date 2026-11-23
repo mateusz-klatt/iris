@@ -47,6 +47,8 @@ const agents = repositories.map((repository) => ({
 const summary = { id: "ms_shared", subject: "Shared review", participants: ["human", "codex-target"], count: 2, last_at: "2026-11-09T10:00:00Z", unread: 1 };
 const detail = {
   id: summary.id,
+  // Insertion-order high water. The last displayed message is ms_reply.
+  high_water_message_id: "ms_authored",
   messages: [
     {
       id: "ms_authored", sender: "human", sender_account_id: "ca_author", sender_username: "author", sender_display_name: "Earlier author",
@@ -122,9 +124,10 @@ async function installAccounts(page: Page, signedIn = true) {
       await route.fulfill({ status: 204 });
       return;
     }
-    if (path === "/v1/ui/doctor" || path === "/v1/ui/accounts" || path.endsWith("/read") || path.includes("/revoke")) {
+    const watermarkRead = /^\/v1\/ui\/threads\/[^/]+\/read\/[^/]+$/.test(path);
+    if (path === "/v1/ui/doctor" || path === "/v1/ui/accounts" || watermarkRead || path.endsWith("/read") || path.includes("/revoke")) {
       if (state.account.role === "member") { state.deniedRequests.push(path); await route.fulfill({ status: 403 }); return; }
-      await route.fulfill({ json: path.endsWith("/read") ? { read: 1 } : { hosts: [] } });
+      await route.fulfill({ json: watermarkRead || path.endsWith("/read") ? { read: 1 } : { hosts: [] } });
       return;
     }
     if (!state.signedIn) { await route.fulfill({ status: 401 }); return; }
@@ -450,7 +453,8 @@ test("named operators retain acknowledgement, claim and diagnostics controls wit
   await expect(page.getByRole("heading", { name: "My messages", exact: true })).toBeVisible();
   await expect(navigation.getByRole("button", { name: "Diagnostics", exact: true })).toBeVisible();
   await page.getByRole("button", { name: "Open thread: Shared review", exact: false }).click();
-  await expect.poll(() => state.mutations.filter((mutation) => mutation.path.endsWith("/read")).length).toBeGreaterThan(0);
+  await expect.poll(() => state.mutations.filter((mutation) => mutation.path === "/v1/ui/threads/ms_shared/read/ms_authored").length).toBe(1);
+  expect(state.mutations.filter((mutation) => mutation.path.endsWith("/read"))).toEqual([]);
   await navigation.getByRole("button", { name: /^Claims/ }).click();
   page.once("dialog", (dialog) => { void dialog.accept(); });
   await page.getByRole("button", { name: "Revoke", exact: true }).click();
