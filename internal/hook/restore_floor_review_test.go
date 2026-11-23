@@ -87,7 +87,7 @@ func observeReviewRequests(h *restoredHook, observe func(floorRequest) error) {
 		if err := json.NewDecoder(body).Decode(&registration); err != nil {
 			return nil, err
 		}
-		if err := observe(floorRequest{r.URL.Path, registration.Generation, registration.RetryGeneration}); err != nil {
+		if err := observe(floorRequest{route: r.URL.Path, generation: registration.Generation, floor: registration.RetryGeneration, endedThrough: registration.EndedThrough}); err != nil {
 			return nil, err
 		}
 		return transport.RoundTrip(r)
@@ -620,7 +620,7 @@ func TestRefusalNamesAContributingEndMarker(t *testing.T) {
 	}
 }
 
-func TestRefusalWithPrunedProofAndDamagedEndMarkerKeepsAbsentProofAndRecordsBoth(t *testing.T) {
+func TestDamagedEndMarkerDuringRegistrationKeepsPrunedProofAbsent(t *testing.T) {
 	for _, unreadable := range []bool{false, true} {
 		name := "malformed marker"
 		if unreadable {
@@ -632,28 +632,21 @@ func TestRefusalWithPrunedProofAndDamagedEndMarkerKeepsAbsentProofAndRecordsBoth
 			m := sessionsFor(h.getenv)
 			proof := m.name("claude", "s1")
 			marker := proof + ".ended"
-			if unreadable {
-				if err := os.Mkdir(marker, 0o700); err != nil {
-					t.Fatal(err)
-				}
-			} else if err := os.WriteFile(marker, []byte("damaged\n"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			// Keep marker newer than the prune cutoff while aging proof past it via pruner.now,
-			// so prune removes only proof after RecallGeneration refreshes proof's mtime.
-			newer := time.Now().Add(2 * time.Hour)
-			if err := os.Chtimes(marker, newer, newer); err != nil {
-				t.Fatal(err)
-			}
+			var requests []floorRequest
 			observeReviewRequests(h, func(req floorRequest) error {
-				if req.route == route && req.generation == 3 {
-					pruner := m
-					pruner.now = func() time.Time { return time.Now().Add(memoryAge + time.Hour) }
-					if err := pruner.prune(); err != nil {
-						return err
-					}
+				requests = append(requests, req)
+				if req.route != route || req.generation != 3 {
+					return nil
 				}
-				return nil
+				pruner := m
+				pruner.now = func() time.Time { return time.Now().Add(memoryAge + time.Hour) }
+				if err := pruner.prune(); err != nil {
+					return err
+				}
+				if unreadable {
+					return os.Mkdir(marker, 0o700)
+				}
+				return os.WriteFile(marker, []byte("damaged\n"), 0o600)
 			})
 			out := runReviewHook(h, route)
 			if gen, present, err := NewSessions(h.getenv("IRIS_TOKEN_FILE")).RecallGeneration("claude", "s1"); gen != 0 || present || err != nil {
@@ -666,21 +659,31 @@ func TestRefusalWithPrunedProofAndDamagedEndMarkerKeepsAbsentProofAndRecordsBoth
 			} else if raw, err := os.ReadFile(marker); err != nil || string(raw) != "damaged\n" {
 				t.Fatalf("refusal replaced malformed marker with %q, %v", raw, err)
 			}
-			notes, err := ReadRecentObservations(h.getenv("IRIS_TOKEN_FILE"), 10)
-			if err != nil {
-				t.Fatal(err)
+			if len(requests) != 1 || requests[0].generation != 3 {
+				t.Fatalf("damaged marker allowed another registration: %+v", requests)
 			}
-			var got []string
-			for _, note := range notes {
-				got = append(got, note.Error)
-			}
-			want := []string{RestoreFloorRefused + " at " + marker, "damaged generation proof at " + marker}
-			if !slices.Equal(got, want) {
-				t.Fatalf("observations = %v, want %v", got, want)
-			}
-			if out != string(FallbackAllow(ClientClaude).Stdout) {
+			if !strings.Contains(out, `"permissionDecision":"deny"`) {
 				t.Fatalf("refused hook output %q", out)
 			}
+			assertReviewObservation(t, h, "damaged generation proof at "+marker) // gitleaks:allow (a test observation token and path, not a credential)
 		})
+	}
+}
+
+func TestRestoreFloorRefusalReportsMarkerDamagedDuringDiagnostics(t *testing.T) {
+	m := newFileMemory(t)
+	m.Remember("claude", "s1", 3)
+	marker := m.name("claude", "s1") + ".ended"
+	if err := os.WriteFile(marker, []byte("damaged\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	state := &runState{}
+	err := refuseRestoreFloor(state, Event{Client: ClientClaude, SessionID: "s1"}, m, 3, RestoreFloorRefused)
+	want := []string{RestoreFloorRefused + " at " + marker, "damaged generation proof at " + marker} // gitleaks:allow (a test observation token and path, not a credential)
+	if err != errRestoreFloor || !slices.Equal(state.observations(), want) {
+		t.Fatalf("refusal diagnostics = %v, %v, want %v", err, state.observations(), want)
+	}
+	if generation, readErr := readGeneration(m.name("claude", "s1")); generation != 3 || readErr != nil {
+		t.Fatalf("refusal damaged retained proof: G%d, %v", generation, readErr)
 	}
 }

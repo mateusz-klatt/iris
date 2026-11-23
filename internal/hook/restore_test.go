@@ -328,9 +328,10 @@ type restoreTransport func(*http.Request) (*http.Response, error)
 func (f restoreTransport) RoundTrip(r *http.Request) (*http.Response, error) { return f(r) }
 
 type floorRequest struct {
-	route      string
-	generation int
-	floor      int
+	route        string
+	generation   int
+	floor        int
+	endedThrough int
 }
 
 func TestHookKeepsItsProofAcrossARestore(t *testing.T) {
@@ -434,7 +435,7 @@ func checkRestoredHookFloor(t *testing.T, state, route string, prepare func(*res
 		if err := json.NewDecoder(body).Decode(&req); err != nil {
 			return nil, err
 		}
-		seen = append(seen, floorRequest{r.URL.Path, req.Generation, req.RetryGeneration})
+		seen = append(seen, floorRequest{route: r.URL.Path, generation: req.Generation, floor: req.RetryGeneration, endedThrough: req.EndedThrough})
 		return transport.RoundTrip(r)
 	})}
 	run := func() {

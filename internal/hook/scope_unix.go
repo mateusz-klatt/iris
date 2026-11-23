@@ -366,12 +366,14 @@ func (r Runner) shellReduced(ctx context.Context, hub scopedShellHub, plain shel
 func (r Runner) reconcileScopedSession(ctx context.Context, state *runState, hub scopedShellHub, ev Event, repo gitinfo.Repo, phase string, snapshot map[string]string, scope hubclient.Scope) (hubclient.CheckResponse, error) {
 	req := hubclient.ScopedSessionRequest{ShellSessionRequest: hubclient.ShellSessionRequest{SessionRequest: r.sessionReq(ev, repo), Kind: phase, Status: snapshot}, Scope: scope}
 	m := r.memory()
-	generation, err := registrationProof(state, ev, m, 0)
+	generation, endedThrough, err := registrationProof(state, ev, m, 0)
 	if err != nil {
 		return hubclient.CheckResponse{}, err
 	}
 	req.Generation = generation
+	req.EndedThrough = endedThrough
 	res, err := hub.ReconcileScopedSession(ctx, req)
+	err = checkEndedRegistration(state, ev, m, endedThrough, res.Session.Generation, req.Generation == 0, err)
 	r.answered(m, ev, res, err)
 	return res.CheckResponse, checkRestoreFloor(state, ev, m, req.Generation, err)
 }

@@ -17,8 +17,10 @@ import (
 type SessionRequest struct {
 	CommonDir  string `json:"common_dir"`
 	Generation int    `json:"generation"`
-	// RetryGeneration is the remembered floor for a generation-zero retry.
-	RetryGeneration  int    `json:"retry_generation,omitempty"`
+	// RetryGeneration is the remembered inclusive floor for a generation-zero retry.
+	RetryGeneration int `json:"retry_generation,omitempty"`
+	// EndedThrough is the strict floor imposed by the local SessionEnd marker.
+	EndedThrough     int    `json:"ended_through,omitempty"`
 	Client           string `json:"client"`
 	SessionID        string `json:"session_id"`
 	Host             string `json:"host"`

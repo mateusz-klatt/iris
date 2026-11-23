@@ -41,8 +41,8 @@ Codes: `unauthorized`, `bad_request`, `not_found`, `conflict`, `key_reused`, `un
 ```
 
 Registration `source` is exactly `hook`, `mcp`, `shim` or `watch`. An empty or omitted source stays
-valid as a legacy non-hook source; any other value gets `bad_request`. `retry_generation` must not
-be negative.
+valid as a legacy non-hook source; any other value gets `bad_request`. `retry_generation` and
+`ended_through` must not be negative.
 
 Response:
 
@@ -107,6 +107,14 @@ SessionEnd, only a generation-zero hook registration can advance it: every non-h
 empty included, gets `409 lost` regardless of `retry_generation`. If retention has removed the
 ended Execution, that state is no longer available to check. An older hub omits the detail, so an
 upgraded hook keeps its proof and skips the retry.
+
+An unexpired local `.ended` marker for generation G is sent as `ended_through:G` on ordinary,
+outside-git and combined shell registration, including SessionStart. This is a strict floor,
+unlike `retry_generation`: retained history must be at least G, and the active or newly created
+Execution must be above G. The hub refuses an equal active generation before renewing it and a
+candidate at or below G before creating it. A terminal G still permits a normal G+1 successor.
+The hook re-checks the marker before using the response. An older hub can ignore the field, and
+an old hook that omits it cannot be protected server-side.
 
 A shim or `iris watch` that retains the binding reattaches by heartbeat: a heartbeat with the
 current generation does the same work during the recovery window and returns the same response.

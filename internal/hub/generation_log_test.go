@@ -174,3 +174,75 @@ func TestRegistrationRoutesReportAndEnforceTheGenerationFloor(t *testing.T) {
 		})
 	}
 }
+
+func TestEndedThroughFloorIsStrictOnRegistrationRoutes(t *testing.T) {
+	for _, route := range []struct {
+		path    string
+		outside bool
+		shell   bool
+		scope   *store.ShellScope
+	}{
+		{path: "/v1/sessions"},
+		{path: "/v1/sessions/outside", outside: true},
+		{path: "/v1/shell/reconcile", shell: true},
+		{path: "/v1/shell/scoped", shell: true, scope: &store.ShellScope{Mode: "dirty"}},
+	} {
+		t.Run(route.path, func(t *testing.T) {
+			_, server := setup(t)
+			registration := store.Request{Client: "claude", SessionID: "session", Host: "host", Cwd: "/project", Worktree: "/project", Source: "hook", Kind: "before", Scope: route.scope}
+			if route.outside {
+				registration.Worktree = ""
+			}
+			call := func(r store.Request, status int) map[string]any {
+				t.Helper()
+				return request(t, server, http.MethodPost, route.path, r, status)
+			}
+			session := func(out map[string]any) map[string]any {
+				t.Helper()
+				if route.shell {
+					return out["session"].(map[string]any)
+				}
+				return out
+			}
+			refuse := func(r store.Request, highest float64) {
+				t.Helper()
+				out := call(r, http.StatusConflict)
+				failure := out["error"].(map[string]any)
+				details := failure["details"].(map[string]any)
+				if failure["code"] != "lost" || details["highest_generation"] != highest {
+					t.Fatalf("strict-floor refusal = %v, want lost with highest_generation %v", out, highest)
+				}
+			}
+
+			first := session(call(registration, http.StatusOK))
+			strict := registration
+			strict.EndedThrough = 1
+			refuse(strict, 1)
+			inclusive := registration
+			inclusive.RetryGeneration = 1
+			if resumed := session(call(inclusive, http.StatusOK)); resumed["execution_id"] != first["execution_id"] || resumed["generation"] != float64(1) {
+				t.Fatalf("inclusive retry semantics changed: %v", resumed)
+			}
+			request(t, server, http.MethodPost, "/v1/executions/"+first["execution_id"].(string)+"/end", authority(first), http.StatusOK)
+
+			tooEarly := registration
+			tooEarly.EndedThrough = 2
+			refuse(tooEarly, 1)
+			successor := registration
+			successor.EndedThrough = 1
+			second := session(call(successor, http.StatusOK))
+			if second["generation"] != float64(2) || second["execution_id"] == first["execution_id"] {
+				t.Fatalf("ordinary successor above the marker = %v", second)
+			}
+			strict.EndedThrough = 2
+			refuse(strict, 2)
+			negative := registration
+			negative.EndedThrough = -1
+			call(negative, http.StatusBadRequest)
+			status := request(t, server, http.MethodGet, "/v1/status", nil, http.StatusOK)
+			if count := status["counts"].(map[string]any)["Execution"]; count != float64(2) {
+				t.Fatalf("strict-floor refusals created an Execution: %v", status)
+			}
+		})
+	}
+}

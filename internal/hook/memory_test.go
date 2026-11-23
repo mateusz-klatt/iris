@@ -451,7 +451,7 @@ func TestRepeatedRefusalObservationNamesTheEndMarker(t *testing.T) {
 	}
 }
 
-func TestDamagedProofObservationDoesNotAbsorbTheEndMarker(t *testing.T) {
+func TestDamagedEndMarkerRefusesRetainedProofBeforeRegistration(t *testing.T) {
 	root := gitRepo(t)
 	getenv := failureEnv(t)
 	m := sessionsFor(getenv)
@@ -463,21 +463,17 @@ func TestDamagedProofObservationDoesNotAbsorbTheEndMarker(t *testing.T) {
 	}
 	h := &recoveryHub{generation: 1}
 	wrapped := interceptedRegistration{Client: &hubclient.Client{}, register: func(context.Context, hubclient.SessionRequest) (hubclient.SessionResponse, error) {
-		// The hook already read G4. Damage it before the refusal reads the proof again.
-		if err := os.WriteFile(proof, []byte("damaged\n"), 0o600); err != nil {
-			t.Errorf("corrupt proof: %v", err)
-		}
-		return h.RegisterSession(context.Background(), hubclient.SessionRequest{Generation: 4})
+		t.Error("a hook with a damaged end marker tried to register")
+		return hubclient.SessionResponse{}, errors.New("unexpected registration")
 	}}
 	out := Runner{
 		ClientName: "claude", EventName: "PreToolUse", Stdin: strings.NewReader(writePayload(root, "s", "a.go")),
 		Hub: wrapped, Getenv: getenv, after: never, logAfter: never,
 	}.Run()
-	assertAllow(t, ClientClaude, out)
-	if h.touched != 0 {
-		t.Fatal("damaged proof was claimed")
+	if !strings.Contains(string(out.Stdout), `"permissionDecision":"deny"`) || h.touched != 0 || len(h.sent) != 0 {
+		t.Fatalf("damaged marker output %q, requests %v, touches %d", out.Stdout, h.sent, h.touched)
 	}
-	if raw, err := os.ReadFile(proof); err != nil || string(raw) != "damaged\n" {
+	if raw, err := os.ReadFile(proof); err != nil || string(raw) != "4\n" {
 		t.Fatalf("proof = %q, %v", raw, err)
 	}
 	if raw, err := os.ReadFile(marker); err != nil || string(raw) != "also damaged\n" {
@@ -491,7 +487,7 @@ func TestDamagedProofObservationDoesNotAbsorbTheEndMarker(t *testing.T) {
 	for _, note := range notes {
 		got = append(got, note.Error)
 	}
-	want := []string{"damaged generation proof at " + proof, "damaged generation proof at " + marker}
+	want := []string{"damaged generation proof at " + marker} // gitleaks:allow (a test observation token and path, not a credential)
 	if !slices.Equal(got, want) {
 		t.Fatalf("observations = %v, want %v", got, want)
 	}
@@ -757,7 +753,7 @@ func TestMalformedOrMissingFloorDetailsAndLowerRetryRepliesFailOpen(t *testing.T
 					t.Error(err)
 				}
 				mu.Lock()
-				sent = append(sent, floorRequest{r.URL.Path, req.Generation, req.RetryGeneration})
+				sent = append(sent, floorRequest{route: r.URL.Path, generation: req.Generation, floor: req.RetryGeneration, endedThrough: req.EndedThrough})
 				second := len(sent) == 2
 				mu.Unlock()
 				if second && tc.retry {

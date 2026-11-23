@@ -143,7 +143,7 @@ func TestSessionStartRecoversFromStaleEndedProof(t *testing.T) {
 	if h.registered.Generation != 3 || h.registered.ExecutionID == second.ExecutionID {
 		t.Fatalf("SessionStart with stale proof failed to obtain G3: %+v", h.registered)
 	}
-	if want := []floorRequest{{route: "/v1/sessions", floor: 2}}; !slices.Equal(requests, want) {
+	if want := []floorRequest{{route: "/v1/sessions", endedThrough: 2}}; !slices.Equal(requests, want) {
 		t.Fatalf("SessionStart requests = %+v, want %+v", requests, want)
 	}
 	if generation, err := readGeneration(proof); generation != 3 || err != nil {
@@ -250,7 +250,7 @@ func TestSessionStartEndFloorStopsRestoredHistory(t *testing.T) {
 			})
 			out := h.run("SessionStart", payload)
 			assertReviewRefusal(t, h, out, "ended generation refused at "+marker)
-			if want := []floorRequest{{route: "/v1/sessions", floor: 2}}; !slices.Equal(requests, want) {
+			if want := []floorRequest{{route: "/v1/sessions", endedThrough: 2}}; !slices.Equal(requests, want) {
 				t.Fatalf("SessionStart requests = %+v, want %+v", requests, want)
 			}
 		})
@@ -317,6 +317,39 @@ func TestRememberedGenerationRefusesDamageWhileWaitingForTheLock(t *testing.T) {
 		}
 		if err := <-result; err != ErrInvalidGeneration {
 			t.Fatalf("a read started at G1 accepted damaged proof: %v", err)
+		}
+	})
+}
+
+func TestRegistrationProofRefusesMarkerDamagedWhileWaitingForLock(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m := newFileMemory(t)
+		m.Remember("claude", "s1", 2)
+		unlock, err := m.lock(hookLockBudget)
+		if err != nil {
+			t.Fatal(err)
+		}
+		type result struct {
+			generation, endedThrough int
+			err                      error
+			observations             []string
+		}
+		finished := make(chan result, 1)
+		state := &runState{}
+		go func() {
+			generation, endedThrough, err := registrationProof(state, Event{Client: ClientClaude, SessionID: "s1", Kind: KindPrompt}, m, 0)
+			finished <- result{generation, endedThrough, err, state.observations()}
+		}()
+		synctest.Wait()
+		marker := m.name("claude", "s1") + ".ended"
+		if err := os.WriteFile(marker, []byte("damaged\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		unlock()
+		got := <-finished
+		wantObservation := "damaged generation proof at " + marker // gitleaks:allow (a test observation token and path, not a credential)
+		if got.generation != 0 || got.endedThrough != 0 || got.err != errEndedGeneration || !slices.Equal(got.observations, []string{wantObservation}) {
+			t.Fatalf("registration with newly damaged marker = %+v, want local refusal naming the marker", got)
 		}
 	})
 }

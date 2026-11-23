@@ -423,35 +423,47 @@ func refuseRestoreFloor(state *runState, ev Event, m Memory, generation int, not
 	return errRestoreFloor
 }
 
-func registrationProof(state *runState, ev Event, m Memory, retained int) (int, error) {
+func registrationProof(state *runState, ev Event, m Memory, retained int) (generation, endedThrough int, err error) {
 	if m == nil {
-		return retained, nil
+		return retained, 0, nil
 	}
-	generation, err := m.RecallGeneration(string(ev.Client), ev.SessionID)
+	if files, ok := m.(fileMemory); ok {
+		var err error
+		endedThrough, err = sessionEndFloor(state, ev, files)
+		if err != nil {
+			return 0, 0, err
+		}
+	}
+	generation, err = m.RecallGeneration(string(ev.Client), ev.SessionID)
+	var damaged damagedEndMarker
+	if errors.As(err, &damaged) {
+		state.observe(damaged.Error())
+		return 0, 0, errEndedGeneration
+	}
 	var ended endedProof
 	if errors.As(err, &ended) {
 		if retained == 0 {
 			if ev.Kind == KindSessionStart {
-				return 0, nil
+				return 0, endedThrough, nil
 			}
 			state.observe(ended.Error())
-			return 0, errEndedGeneration
+			return 0, 0, errEndedGeneration
 		}
 		// A request already sent can use the proof it saw only as its generation-zero
 		// retry floor. Preserve it for refusal diagnostics.
-		return max(retained, generation), nil
+		return max(retained, generation), endedThrough, nil
 	}
 	if err != nil {
 		note := RestoreFloorRefused
 		if files, ok := m.(fileMemory); ok && errors.Is(err, ErrInvalidGeneration) {
 			note = damagedGenerationObservation(files.name(string(ev.Client), ev.SessionID))
 		}
-		return 0, refuseRestoreFloor(state, ev, m, retained, note)
+		return 0, 0, refuseRestoreFloor(state, ev, m, retained, note)
 	}
-	return max(retained, generation), nil
+	return max(retained, generation), endedThrough, nil
 }
 
-func sessionStartFloor(state *runState, ev Event, files fileMemory) (int, error) {
+func sessionEndFloor(state *runState, ev Event, files fileMemory) (int, error) {
 	marker := files.name(string(ev.Client), ev.SessionID) + ".ended"
 	ended, expired, err := files.readEndMarker(marker)
 	if err != nil {
@@ -464,29 +476,37 @@ func sessionStartFloor(state *runState, ev Event, files fileMemory) (int, error)
 	return ended, nil
 }
 
+func checkEndedRegistration(state *runState, ev Event, m Memory, sentEndedThrough, generation int, proofless bool, err error) error {
+	files, ok := m.(fileMemory)
+	if !ok {
+		return err
+	}
+	ended, proofErr := sessionEndFloor(state, ev, files)
+	if proofErr != nil {
+		return proofErr
+	}
+	ended = max(ended, sentEndedThrough)
+	if ended > 0 && (err == nil && generation <= ended || proofless && sentEndedThrough > 0 && hubclient.IsCode(err, "lost")) {
+		state.observe(endedProof(files.name(string(ev.Client), ev.SessionID) + ".ended").Error())
+		return errEndedGeneration
+	}
+	return err
+}
+
 // register attaches a hook to its Execution. It can retry stale proof once when the hub retains
 // at least that generation, which the retry carries as a floor. SessionEnd keeps exact proof to
 // avoid ending a newer Execution.
 func (r Runner) register(ctx context.Context, state *runState, ev Event, repo gitinfo.Repo) (hubclient.SessionResponse, error) {
 	m := r.memory()
 	req := r.sessionReq(ev, repo)
-	generation, err := registrationProof(state, ev, m, 0)
+	generation, sentEndedThrough, err := registrationProof(state, ev, m, 0)
 	if err != nil {
 		return hubclient.SessionResponse{}, err
 	}
 	req.Generation = generation
-	files, fileBacked := m.(fileMemory)
-	checkEnd := fileBacked && ev.Kind == KindSessionStart
-	var sentEndFloor int
-	if checkEnd {
-		sentEndFloor, err = sessionStartFloor(state, ev, files)
-		if err != nil {
-			return hubclient.SessionResponse{}, err
-		}
-		if req.Generation <= sentEndFloor {
-			req.Generation = 0
-			req.RetryGeneration = sentEndFloor
-		}
+	req.EndedThrough = sentEndedThrough
+	if req.Generation <= sentEndedThrough {
+		req.Generation = 0
 	}
 	send := r.Hub.RegisterSession
 	if repo.Worktree == "" {
@@ -500,7 +520,7 @@ func (r Runner) register(ctx context.Context, state *runState, ev Event, repo gi
 	}
 	sess, err := send(ctx, req)
 	if req.Generation > 0 && ev.Kind != KindSessionEnd && hubclient.IsCode(err, "lost") {
-		floor, proofErr := registrationProof(state, ev, m, req.Generation)
+		floor, endedThrough, proofErr := registrationProof(state, ev, m, req.Generation)
 		if proofErr != nil {
 			return hubclient.SessionResponse{}, proofErr
 		}
@@ -508,8 +528,10 @@ func (r Runner) register(ctx context.Context, state *runState, ev Event, repo gi
 		if hubclient.IsCode(err, "lost") && ctx.Err() == nil {
 			req.RetryGeneration = floor
 			req.Generation = 0
+			req.EndedThrough = max(req.EndedThrough, endedThrough)
+			sentEndedThrough = req.EndedThrough
 			sess, err = send(ctx, req)
-			floor, proofErr = registrationProof(state, ev, m, floor)
+			floor, _, proofErr = registrationProof(state, ev, m, floor)
 			if proofErr != nil {
 				return hubclient.SessionResponse{}, proofErr
 			}
@@ -522,25 +544,17 @@ func (r Runner) register(ctx context.Context, state *runState, ev Event, repo gi
 	if hubclient.OlderHub(err) && repo.Worktree == "" {
 		return hubclient.SessionResponse{}, errOlderHub
 	}
-	if checkEnd {
-		ended, proofErr := sessionStartFloor(state, ev, files)
-		if proofErr != nil {
-			return hubclient.SessionResponse{}, proofErr
-		}
-		ended = max(ended, sentEndFloor)
-		if ended > 0 && (err == nil && sess.Generation <= ended || sentEndFloor > 0 && req.Generation == 0 && hubclient.IsCode(err, "lost")) {
-			state.observe(endedProof(files.name(string(ev.Client), ev.SessionID) + ".ended").Error())
-			return hubclient.SessionResponse{}, errEndedGeneration
-		}
-	}
+	err = checkEndedRegistration(state, ev, m, sentEndedThrough, sess.Generation, req.Generation == 0, err)
 	if err == nil {
 		r.learnScope(sess.Capabilities)
 	}
 	if err == nil && m != nil {
 		m.Remember(string(ev.Client), ev.SessionID, sess.Generation)
-		if checkEnd {
-			if err := files.prune(); err != nil {
-				r.recordFailure(stageSessionFiles, err, nil)
+		if ev.Kind == KindSessionStart {
+			if files, ok := m.(fileMemory); ok {
+				if err := files.prune(); err != nil {
+					r.recordFailure(stageSessionFiles, err, nil)
+				}
 			}
 		}
 	}

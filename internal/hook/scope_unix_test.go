@@ -1088,3 +1088,36 @@ func TestAReducedReconcileAgainstTheRealHub(t *testing.T) {
 		t.Fatalf("after the repair: %s", text)
 	}
 }
+
+func TestScopedShellRegistrationUsesStrictEndFloor(t *testing.T) {
+	for _, response := range []int64{2, 3} {
+		t.Run(fmt.Sprintf("reply G%d", response), func(t *testing.T) {
+			m := newFileMemory(t)
+			m.Remember("claude", "s", 2)
+			m.Forget("claude", "s", 2)
+			hub := &scopeHub{generation: int(response)}
+			r := Runner{Memory: m}
+			ev := Event{Client: ClientClaude, SessionID: "s", Kind: KindPreTool, CWD: "/repo"}
+			state := &runState{}
+			_, err := r.reconcileScopedSession(context.Background(), state, hub, ev, gitinfo.Repo{Worktree: "/repo"}, "before", map[string]string{}, hubclient.Scope{Mode: "dirty"})
+			if len(hub.scopedOneCall) != 1 {
+				t.Fatalf("scoped registrations = %+v", hub.scopedOneCall)
+			}
+			req := hub.scopedOneCall[0]
+			if req.Generation != 0 || req.RetryGeneration != 0 || req.EndedThrough != 2 {
+				t.Fatalf("scoped registration = %+v, want G0 with ended_through G2", req)
+			}
+			if response == 2 {
+				marker := m.name("claude", "s") + ".ended"
+				want := []string{endedProof(marker).Error()} // gitleaks:allow (a test observation token and path, not a credential)
+				if err != errEndedGeneration || !slices.Equal(state.observations(), want) || m.Recall("claude", "s") != 0 {
+					t.Fatalf("equal reply was used: err %v, observations %v, proof G%d", err, state.observations(), m.Recall("claude", "s"))
+				}
+				return
+			}
+			if err != nil || m.Recall("claude", "s") != 3 {
+				t.Fatalf("successor above the marker was not remembered: G%d, %v", m.Recall("claude", "s"), err)
+			}
+		})
+	}
+}

@@ -92,9 +92,11 @@ type Request struct {
 	// ask; a watch socket's own reads never do.
 	Attention bool `json:"attention"`
 
-	// RetryGeneration is a registration floor when Generation is zero. It does
+	// RetryGeneration is an inclusive registration floor when Generation is zero. It does
 	// not prove ownership of a recovering Execution.
 	RetryGeneration int64 `json:"retry_generation,omitempty"`
+	// EndedThrough refuses registration at or below a generation the client ended locally.
+	EndedThrough int64 `json:"ended_through,omitempty"`
 }
 
 // Receipt names one delivery a fetch returned, at the attempt that fetch gave it.
@@ -405,6 +407,9 @@ func (t *transaction) register(r Request, outside bool) (map[string]any, error) 
 	if r.RetryGeneration < 0 {
 		return nil, fail("bad_request", "retry_generation cannot be negative")
 	}
+	if r.EndedThrough < 0 {
+		return nil, fail("bad_request", "ended_through cannot be negative")
+	}
 	switch r.Source {
 	case "", "hook", "mcp", "shim", "watch":
 	default:
@@ -420,6 +425,9 @@ func (t *transaction) register(r Request, outside bool) (map[string]any, error) 
 	if err == nil {
 		if r.Generation != 0 && e.Generation != r.Generation {
 			return nil, fail("lost", "session generation no longer exists")
+		}
+		if r.EndedThrough > 0 && e.Generation <= r.EndedThrough {
+			return nil, fail("lost", "active session is at or below the ended generation")
 		}
 		// The active row itself provides retained history at or above the floor.
 		if r.Generation == 0 && e.Generation < r.RetryGeneration {
@@ -485,6 +493,9 @@ func (t *transaction) register(r Request, outside bool) (map[string]any, error) 
 	}
 	if r.RetryGeneration > 0 && (previous.Generation < r.RetryGeneration || generation < r.RetryGeneration) {
 		return nil, fail("lost", "session history is below the retry generation floor")
+	}
+	if r.EndedThrough > 0 && (previous.Generation < r.EndedThrough || generation <= r.EndedThrough) {
+		return nil, fail("lost", "session history cannot advance beyond the ended generation")
 	}
 	var repo string
 	if outside {
