@@ -77,29 +77,35 @@ func (h realHub) watchFor(t *testing.T, ex string, wait time.Duration) string {
 	return out.String()
 }
 
-// watchUntilSaid runs a monitor for the Execution until it has printed want, and returns what it
-// printed. A fixed window for mail the monitor must announce missed it on a loaded machine; the
-// bound only ends a monitor that never says it. A window still serves where a monitor must stay
-// quiet, since a slower monitor is only quieter.
+// watchUntilSaid runs the full monitor until it has printed and saved want. A single connection
+// can fail on a loaded machine, while the real monitor reconnects. The completed save is the event
+// that ends the wait; the timeout only bounds a monitor that never says it. A window still serves
+// where a monitor must stay quiet, since a slower monitor is only quieter.
 func (h realHub) watchUntilSaid(t *testing.T, ex, want string) string {
 	t.Helper()
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 	out := &lines{}
-	r := &Runner{Resolver: &binding.Resolver{Hub: &hubclient.Client{Config: testConfig{url: h.url}}}, Output: out, Backoff: 10 * time.Millisecond}
+	r := &Runner{
+		Resolver: &binding.Resolver{Hub: &hubclient.Client{Config: testConfig{url: h.url}}, Client: "claude", Host: "host", Getenv: func(key string) string {
+			if key == "IRIS_EXECUTION" {
+				return ex
+			}
+			return ""
+		}},
+		Output:  out,
+		Backoff: 10 * time.Millisecond,
+		checkpointed: func(int64) {
+			if strings.Contains(out.String(), want) {
+				cancel()
+			}
+		},
+	}
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		_ = r.connect(ctx, binding.Bound{ExecutionID: ex}, new(int64), new(string), &Coalescer{Output: out})
+		_ = r.Run(ctx)
 	}()
-	for !strings.Contains(out.String(), want) {
-		select {
-		case <-done:
-			return out.String()
-		case <-time.After(time.Millisecond):
-		}
-	}
-	cancel()
 	<-done
 	return out.String()
 }
