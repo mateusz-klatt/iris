@@ -824,7 +824,9 @@ an unrelated agent's. A hub that omits the setting is reported as unknown. Outsi
 omits the line: no scope is in force. `GET /v1/claims` and the console name each claim's display
 `worktree_path`, `branch` and `host`, and `effective_scope`. That scope is `worktree` only when the
 policy is `worktree`, the origin is `auto` and the worktree key is set. An empty display path is an
-unknown location. The console shows the policy per repository and has no control that changes it.
+unknown location, including a legacy row and a repository-wide claim whose observations disagreed.
+The commit guard's legacy same-checkout skip applies only to a row with no display path. An
+ambiguous row is not that skip. The console shows the policy per repository and has no control that changes it.
 A session outside any git checkout takes no claim at all: it belongs to its host's context of
 sessions outside git, which is for mail only (ADR 034).
 
@@ -835,18 +837,25 @@ exist yet still conflict. An empty prefix, meaning the whole repository, needs a
 **A pre-edit hook checks and claims in one step**, so protection exists without the model doing
 anything, and `explicit` claims are for planned work. The step is one idempotent transaction
 over every path in the tool call, including both ends of a rename. It grants all missing claims
-or none. Under `repository`, paths the caller already holds are reused exactly as today. Under ADR
-037's `worktree` opt-in, automatic self-reuse also requires the same worktree key. An `explicit`
-claim is never downgraded. An `auto` claim lasts 10 minutes from the last touch. A retried call, identified by its tool call
-id, does not extend it.
+or none. Under `repository`, paths the caller already holds are reused exactly as today. A renewal
+whose checkout disagrees with the checkout the claim recorded clears the worktree key and the
+display location, so the claim stays repository-wide and a later opt-in does not treat the stale
+key as an exemption. Under ADR 037's `worktree` opt-in, automatic self-reuse also requires the same
+worktree key. An own automatic claim with a null key is still this session's row: the edit is
+allowed, and the row is adopted only when it recorded no checkout and this is the Execution's
+checkout, or its recorded path is this observation. A null key recorded in another checkout is not
+adopted. An `explicit` claim is never downgraded. An `auto` claim lasts 10 minutes from the last
+touch. A retried call, identified by its tool call id, does not extend it. A grouped allow records
+the checkout it granted, and a replay matches that checkout rather than a key the fence gained later.
 
 An `auto` claim means "this session has uncommitted changes here". When a shell command takes a
 path out of the session's git status, by commit, stash or restore, the reconcile releases the
 session's own `auto` claim on that path in the same transaction, and wakes whoever waited for it.
 Under the default `repository` policy this release stays path-wide across that session's matching
-claims, exactly as before. Under ADR 037's `worktree` opt-in it releases only the claim with the
-status checkout's worktree key; the session's automatic claim on the same path in another worktree
-stays. An `explicit` claim, and every other session's claim, stays. Committed but unmerged work is
+claims, exactly as before. Under ADR 037's `worktree` opt-in it releases the claim with the status
+checkout's worktree key, a legacy automatic row that recorded no checkout, and a null-key row whose
+display path is this checkout. A null-key row recorded in another checkout stays, and so does an
+ambiguous row. An `explicit` claim, and every other session's claim, stays. Committed but unmerged work is
 git's business, not a claim's. This happens only at the session's next shell reconcile: a commit
 made outside the session, or an edit-tool claim on a path no shell command ever saw dirty,
 keeps its claim until it expires.

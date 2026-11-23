@@ -139,12 +139,11 @@ of an opted-in repository, not only to a coordinator's delegates.
    the reconcile releases every matching automatic exact claim of that session on that repository
    and path, regardless of worktree key, exactly as today. One Execution claiming the same path
    from two checkouts therefore keeps the current path-wide release; no key splits it. Under
-   `worktree`, the same event releases only the claim with the status checkout's worktree key. It
-   then releases no explicit claim, no other session's claim, and no claim the same session holds
-   on that path in another worktree. The existing refusal to attribute a status from another
-   checkout to the Execution's baseline remains unchanged. Today `releaseLeft` matches only
-   Execution, origin, kind and path (`internal/store/reconcile.go:193-203`), so the key filter is
-   added only on the `worktree` path.
+   `worktree`, the same event releases the claim whose worktree key is the status checkout's, a
+   legacy automatic row that recorded no checkout, and a null-key row whose display path is this
+   checkout. It does not release an explicit claim, another session's claim, a null-key row
+   recorded in another checkout, or an ambiguous row whose observations disagreed. The existing
+   refusal to attribute a status from another checkout to the Execution's baseline remains unchanged.
 
 6. **The commit guard has a separate warning contract.** `iris guard` checks staged paths but makes
    no incoming claim. Its checkout supplies only the committing worktree key used for comparison.
@@ -167,8 +166,10 @@ of an opted-in repository, not only to a coordinator's delegates.
      when it has one. For a null-key explicit claim with a known display path, the holder
      Execution's `host_id` and that canonical path must both match the committing checkout's host
      and path; equal paths on two hosts do not qualify. A legacy row with no per-claim location
-     retains the current holder-Execution host/path fallback. No fallback makes a null-key claim
-     advisory.
+     retains the current holder-Execution host/path fallback. An ambiguous automatic row, whose
+     observations disagreed, is not that fallback, so a commit at the holder's root is still
+     refused. The claims list shows that row's location as unknown, as it does for a legacy row
+     with no display path. No fallback makes a null-key claim advisory.
 
    This settles ADR 033's own-session submodule guard case. Under `repository`, the existing
    refusal remains. Under `worktree`, a superproject session's claim placed in a submodule has that
@@ -244,12 +245,17 @@ of an opted-in repository, not only to a coordinator's delegates.
    `fileConflicts` currently reuses a same-Execution claim by path without a key
    (`internal/store/file_claims.go:206-216`), and grouped de-duplication folds equal paths across
    groups (`internal/store/file_claims.go:90-99`); the default deliberately retains both behaviours.
+   A renewal whose checkout disagrees with the one recorded clears the key and marks the location
+   unknown, rather than keeping the first checkout's key for a later opt-in to treat as exempt.
 
    Under `worktree`, those operations use repository, path identity and worktree key together. An
-   Execution touching `/wt1/a.go`, `/wt2/a.go` and a submodule path neither reuses nor renews
-   another checkout's automatic claim. Replay's path-based fallback and shell `autoClaim` own-claim
-   renewal carry the key only on the `worktree` path. Release by fence and release-all keep their
-   current ownership and generation checks under both policies.
+   Execution does not reuse or renew another checkout's keyed automatic claim. An own null-key row
+   is reused and is not a conflict with the session that holds it. That row is adopted only when it
+   recorded no checkout and the observation is this Execution's checkout, or the recorded path is
+   the observation. A null key recorded in another checkout is not adopted. Replay of an allowed
+   grouped touch matches the checkout the grant recorded, because a fence's key can change later.
+   Release by fence and release-all keep their current ownership and generation checks under both
+   policies.
 
 9. **Waiters and their replay carry the key without changing the default.** Waiter gains nullable
    `worktree_key`. Under `repository`, waits, `took`, blocking, wakes and replay keep their current
@@ -335,8 +341,10 @@ of an opted-in repository, not only to a coordinator's delegates.
   Explicit-claim checks and all other guard refusals remain cooperative, not a security boundary.
 - A null key conservatively retains repository-wide blocking against every other session. The
   policy cannot narrow those claims for a client or filesystem that cannot supply canonical
-  worktree identity. The holding session adopts its own null-key row when a later observation
-  proves that checkout; that adoption is not a cross-worktree exemption.
+  worktree identity. The holding session adopts a legacy row that recorded no checkout when its
+  own checkout next observes it, and adopts a null-key row whose recorded path is the observation.
+  Activity in another checkout does not adopt that row and, under `worktree`, does not release it.
+  That adoption is not a cross-worktree exemption.
 - An explicit upgrade can be refused across worktrees. The incoming explicit claim never uses the
   automatic/automatic exemption, and sibling automatic rows are folded only after that check
   succeeds.
@@ -407,11 +415,15 @@ narrower boundary is required. This ADR does not claim seat-level isolation and 
   conversion.
 - Under `worktree`, several automatic claims can coexist on one path in one repository. Claim
   reuse, renewal, release, waits, replay, doctor, the console and hook output carry worktree
-  identity rather than implying that one Execution has only one checkout. Under `repository`, the
-  same stored keys have no behavioural effect.
+  identity rather than implying that one Execution has only one checkout. Under `repository`,
+  stored keys do not change conflict, reuse, release, guard or waiter results. A renewal that
+  disagrees with the recorded checkout clears the key and the display location, which is what a
+  later opt-in then sees.
 - Another session's null-key claim can continue to block after opt-in until it expires or is
-  released. The holding session's own null-key row is adopted into the checkout that next proves
-  it. This is the transition for a claim migrated from v0.1.13, not evidence that the policy failed.
+  released. The holding session adopts a legacy row that recorded no checkout when its own
+  checkout observes it, and adopts a null-key row whose recorded path is that observation. It does
+  not adopt a row recorded in another checkout. This is the transition for a claim migrated from
+  v0.1.13, not evidence that the policy failed.
 - The hub owns the policy and classification. No repository content or agent message can change it,
   but the local OS-user trust boundary remains unchanged. Console claim-change triggers must also
   account for visible worktree-path, branch and key changes.

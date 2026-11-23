@@ -223,23 +223,12 @@ existing browser connections. Agents can prepare and rehearse it. While the owne
 keep a supported named-authentication image, or stop/move the hub off the proxied port; the latter
 makes agent coordination unavailable too. Do not start an exposed old backend.
 
-Then put `$previous` back as the pinned image in `<host-compose>`, and replace the container the
-same way. Install the command-line `iris` from that image with step 5, using `$previous` in place of
-`$IMAGE`:
-
-```sh
-docker compose -f <host-compose> up -d --no-build --pull never iris
-```
-
-The host keeps pulled images until they are removed. Keep the one running and the two before it.
-GHCR keeps the release images, so a removed one can be pulled again by digest and verified as in
-step 1.
-
-Going back to the image alone is enough only when the deployment added no migration. To check, take
-the commit from `$previous_version` and run
+Going back to the image alone is enough only when the deployment added no migration. Check that
+before the previous image starts. Take the commit from `$previous_version` and run
 `git log --oneline "<previous commit>..$commit" -- internal/store/migrations`. Iris does not refuse
 an older hub on a newer database, and it is not safe there. After a migration, stop the hub and
-restore the backup from step 3, which also loses the mail and other writes made since.
+restore the backup from step 3 before starting the previous image. That restore also loses the mail
+and other writes made since.
 Migration 024 drops the account and assignment import ledgers. A pre-024 binary
 can open a version-24 database because the store has no maximum-version fence;
 it fails only where it touches a dropped table. Use the matching pre-deploy
@@ -255,6 +244,18 @@ already carried a marker, or you mark the copy with `iris admin mark-restored` b
 place ([Retention and restore](#retention-and-restore-adr-006)). A hub from before migration 025
 ignores the marker, so after a rollback to one the stream changes only at the next start of a
 binary with that migration.
+
+Then put `$previous` back as the pinned image in `<host-compose>`, and replace the container the
+same way. Install the command-line `iris` from that image with step 5, using `$previous` in place of
+`$IMAGE`:
+
+```sh
+docker compose -f <host-compose> up -d --no-build --pull never iris
+```
+
+The host keeps pulled images until they are removed. Keep the one running and the two before it.
+GHCR keeps the release images, so a removed one can be pulled again by digest and verified as in
+step 1.
 
 What this cannot do:
 
