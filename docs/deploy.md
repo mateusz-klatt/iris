@@ -223,15 +223,7 @@ existing browser connections. Agents can prepare and rehearse it. While the owne
 keep a supported named-authentication image, or stop/move the hub off the proxied port; the latter
 makes agent coordination unavailable too. Do not start an exposed old backend.
 
-Reload every console tab after the rollback, including one that was already open. This console
-acknowledges a thread with `POST /v1/ui/threads/{id}/read/{message_id}`. A v0.1.13 hub does not
-have that route and answers `not_found` before it acknowledges anything. Its
-`POST /v1/ui/threads/{id}/read` acknowledges the whole thread and ignores `last_message_id`.
-The open tab does not send that older request. When the thread snapshot has no
-`high_water_message_id`, the tab sends nothing and tells the operator to reload. Reloading
-loads the console from the image that is now running.
-
-Then put `$previous` back as the pinned image in `<host-compose>`, and replace the container the
+Put `$previous` back as the pinned image in `<host-compose>`, and replace the container the
 same way. Install the command-line `iris` from that image with step 5, using `$previous` in place of
 `$IMAGE`:
 
@@ -239,13 +231,26 @@ same way. Install the command-line `iris` from that image with step 5, using `$p
 docker compose -f <host-compose> up -d --no-build --pull never iris
 ```
 
+Once the previous image is running, reload every console tab, including one that was already open.
+Reloading loads the console from the image that is now running.
+- **The current console's read route:** it acknowledges a thread with `POST /v1/ui/threads/{id}/read/{message_id}`. A v0.1.13 hub does not have that route, and answers `not_found` before it acknowledges anything.
+- **The older route:** v0.1.13's `POST /v1/ui/threads/{id}/read` acknowledges the whole thread and ignores `last_message_id`. An open current tab never sends it.
+- **A snapshot without a watermark:** when the thread snapshot has no `high_water_message_id`, the tab sends nothing and tells the operator to reload.
+
 The host keeps pulled images until they are removed. Keep the one running and the two before it.
 GHCR keeps the release images, so a removed one can be pulled again by digest and verified as in
 step 1.
 
 Going back to the image alone is enough only when the deployment added no migration. To check, take
-the commit from `$previous_version` and run
-`git log --oneline "<previous commit>..$commit" -- internal/store/migrations`. Iris does not refuse
+the commit from `$previous_version` and compare the migrations of the two release trees directly:
+`git diff --quiet "<previous commit>" "$commit" -- internal/store/migrations`.
+
+- **Exit status 0:** the two releases ship identical migrations. Going back to the previous image keeps the live database and every write made since, with no restore needed. This holds, for example, for a direct upgrade from v0.1.13 to v0.1.14, which both stop at schema 28.
+- **Exit status 1:** the migrations differ.
+
+Do not use `git log` over that range for this check: it also lists a migration that was added and
+later reverted within the range, as ADR 037's 029 and 030 were before v0.1.14, although the release
+trees are identical. Iris does not refuse
 an older hub on a newer database, and it is not safe there. After a migration, stop the hub and
 restore the backup from step 3, which also loses the mail and other writes made since.
 Migration 024 drops the account and assignment import ledgers. A pre-024 binary
