@@ -200,7 +200,9 @@ func (t *transaction) operator(op string, r Request) (map[string]any, error) {
 // the caller appends the repository scope. Unread mail is counted once for every recipient:
 // counted per agent, it read the whole Delivery table once for each one, which with 14,000
 // deliveries and 226 agents took 0.9 s of every overview.
-const overviewAgentsSQL = `SELECT a.id,a.name,a.client,a.host,a.repository_id,a.worktree,COALESCE(e.branch,''),COALESCE(e.state,'offline'),COALESCE(e.last_seen_ms,0),COALESCE(e.hook_seen_ms,0),COALESCE(e.watch_seen_ms,0),COALESCE(u.n,0) FROM Agent a LEFT JOIN Execution e ON e.id=(SELECT id FROM Execution WHERE agent_id=a.id ORDER BY rowid DESC LIMIT 1) LEFT JOIN (SELECT d.recipient_agent_id agent_id,COUNT(*) n FROM Delivery d WHERE d.id NOT IN (SELECT delivery_id FROM Ack) GROUP BY d.recipient_agent_id) u ON u.agent_id=a.id WHERE a.client<>'human' AND `
+const overviewAgentsSQL = `SELECT a.id,a.name,a.client,a.host,a.repository_id,a.worktree,COALESCE(e.branch,''),COALESCE(e.state,'offline'),COALESCE(e.last_seen_ms,0),COALESCE(e.hook_seen_ms,0),COALESCE(e.watch_seen_ms,0),COALESCE(u.n,0) FROM Agent a LEFT JOIN Execution e ON e.id=(SELECT id FROM Execution WHERE agent_id=a.id ORDER BY rowid DESC LIMIT 1) LEFT JOIN (SELECT d.recipient_agent_id agent_id,COUNT(*) n FROM Delivery d WHERE NOT EXISTS (SELECT 1 FROM Ack WHERE Ack.delivery_id=d.id) GROUP BY d.recipient_agent_id) u ON u.agent_id=a.id WHERE a.client<>'human' AND `
+
+const overviewHumanUnreadSQL = `SELECT COUNT(*) FROM Delivery d JOIN Agent a ON a.id=d.recipient_agent_id WHERE a.client='human' AND NOT EXISTS (SELECT 1 FROM Ack WHERE Ack.delivery_id=d.id) AND `
 
 func (t *transaction) overview() (map[string]any, error) {
 	repos := []map[string]any{}
@@ -211,6 +213,7 @@ func (t *transaction) overview() (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer func(rows *queryRows) { _ = rows.Close() }(rows)
 	ids := []string{}
 	for rows.Next() {
 		var id string
@@ -235,6 +238,7 @@ func (t *transaction) overview() (map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
+		defer func(rows *queryRows) { _ = rows.Close() }(rows)
 		kind, host := "repository", ""
 		for rows.Next() {
 			var a string
@@ -278,6 +282,7 @@ func (t *transaction) overview() (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer func(rows *queryRows) { _ = rows.Close() }(rows)
 	for rows.Next() {
 		var id, name, client, host, repo, worktree, branch, state string
 		var seen, hookSeen, watchSeen int64
@@ -304,7 +309,7 @@ func (t *transaction) overview() (map[string]any, error) {
 		return nil, err
 	}
 	var unread int
-	err = t.row(`SELECT COUNT(*) FROM Delivery d JOIN Agent a ON a.id=d.recipient_agent_id WHERE a.client='human' AND d.id NOT IN (SELECT delivery_id FROM Ack) AND `+agentScope, agentArgs...).Scan(&unread)
+	err = t.row(overviewHumanUnreadSQL+agentScope, agentArgs...).Scan(&unread)
 	return map[string]any{"repositories": repos, "agents": agents, "claims": claims, "human_unread": unread}, err
 }
 
@@ -323,15 +328,10 @@ func (t *transaction) threads(r Request) (map[string]any, error) {
 	if err := t.validateConsoleThreadFilters(r); err != nil {
 		return nil, err
 	}
-	// A thread is titled by its earliest message visible here, because its first message
-	// may belong to another repository's view, or have been removed by forget.
-	title, titleArgs := t.visibleIn("m2", r.RepositoryID)
 	visible, visibleArgs := t.visibleIn("m", r.RepositoryID)
 	humanScope, humanArgs := t.repositoryVisibleSQL("a.repository_id")
-	q := `SELECT m.thread_id,(SELECT m2.subject FROM Message m2 WHERE m2.thread_id=m.thread_id AND ` + title + ` ORDER BY m2.created_ms,m2.rowid LIMIT 1),COUNT(*),MAX(m.created_ms),SUM((SELECT COUNT(*) FROM Delivery d JOIN Agent a ON a.id=d.recipient_agent_id WHERE d.message_id=m.id AND a.client='human' AND (?='' OR a.repository_id=?) AND d.id NOT IN (SELECT delivery_id FROM Ack) AND ` + humanScope + `)) FROM Message m WHERE ` + visible
-	// Unread counts this view's human inbox only: in a thread that crosses repositories,
-	// another repository's unread mail is not this view's to clear.
-	args := append(append(append(append([]any{}, titleArgs...), r.RepositoryID, r.RepositoryID), humanArgs...), visibleArgs...)
+	q := `SELECT m.thread_id,COUNT(*),MAX(m.created_ms) FROM Message m WHERE ` + visible
+	args := append([]any{}, visibleArgs...)
 	if match := literalMatch(r.Q); match != "" {
 		search, searchArgs := t.consoleMatchIn("ms", r.RepositoryID)
 		q += " AND m.thread_id IN (SELECT ms.thread_id FROM Message ms WHERE ms.rowid IN (SELECT rowid FROM MessageSearch WHERE MessageSearch MATCH ?) AND " + search + ")"
@@ -371,12 +371,13 @@ func (t *transaction) threads(r Request) (map[string]any, error) {
 	if err != nil {
 		return nil, matchError(err)
 	}
+	defer func(rows *queryRows) { _ = rows.Close() }(rows)
 	out := []map[string]any{}
 	for rows.Next() {
-		var id, subject string
-		var count, at, unread int64
-		rows.Scan(&id, &subject, &count, &at, &unread)
-		out = append(out, map[string]any{"id": id, "subject": subject, "count": count, "last_at": timestamp(sql.NullInt64{Int64: at, Valid: true}), "unread": unread})
+		var id string
+		var count, at int64
+		rows.Scan(&id, &count, &at)
+		out = append(out, map[string]any{"id": id, "count": count, "last_at": timestamp(sql.NullInt64{Int64: at, Valid: true}), "unread": int64(0)})
 	}
 	err = rows.Err()
 	_ = rows.Close()
@@ -389,14 +390,54 @@ func (t *transaction) threads(r Request) (map[string]any, error) {
 		page["next"] = out[limit-1]["id"]
 	}
 	page["threads"] = out
+	if len(out) > 0 {
+		// Unread counts this view's human inbox only for the selected page: in a thread
+		// that crosses repositories, another repository's unread mail is not this view's
+		// to clear.
+		marks := strings.Repeat(",?", len(out))[1:]
+		unreadArgs := make([]any, 0, len(out)+len(visibleArgs)+2+len(humanArgs))
+		byID := make(map[string]map[string]any, len(out))
+		for _, th := range out {
+			id := th["id"].(string)
+			unreadArgs = append(unreadArgs, id)
+			byID[id] = th
+		}
+		unreadArgs = append(unreadArgs, visibleArgs...)
+		unreadArgs = append(unreadArgs, r.RepositoryID, r.RepositoryID)
+		unreadArgs = append(unreadArgs, humanArgs...)
+		rows, err = t.rows(`SELECT m.thread_id,COUNT(*) FROM Message m JOIN Delivery d ON d.message_id=m.id JOIN Agent a ON a.id=d.recipient_agent_id WHERE m.thread_id IN (`+marks+`) AND `+visible+` AND a.client='human' AND (?='' OR a.repository_id=?) AND NOT EXISTS (SELECT 1 FROM Ack WHERE Ack.delivery_id=d.id) AND `+humanScope+` GROUP BY m.thread_id`, unreadArgs...)
+		if err != nil {
+			return nil, err
+		}
+		defer func(rows *queryRows) { _ = rows.Close() }(rows)
+		for rows.Next() {
+			var id string
+			var unread int64
+			rows.Scan(&id, &unread)
+			byID[id]["unread"] = unread
+		}
+		err = rows.Err()
+		_ = rows.Close()
+		if err != nil {
+			return nil, err
+		}
+	}
 	recipientScope, recipientArgs := t.repositoryVisibleSQL("ar.repository_id")
 	for _, th := range out {
+		var subject string
+		// A thread is titled by its earliest message visible here, because its first message
+		// may belong to another repository's view, or have been removed by forget.
+		if err = t.row(`SELECT m.subject FROM Message m WHERE m.thread_id=? AND `+visible+` ORDER BY m.created_ms,m.rowid LIMIT 1`, append([]any{th["id"]}, visibleArgs...)...).Scan(&subject); err != nil {
+			return nil, err
+		}
+		th["subject"] = subject
 		names := []string{}
 		// Participants of the messages visible here only, not of the whole thread.
 		rows, err = t.rows(`SELECT DISTINCT CASE WHEN a.client='human' THEN 'human' ELSE a.name END FROM Agent a WHERE a.id IN (SELECT e.agent_id FROM Message m JOIN Execution e ON e.id=m.sender_execution_id WHERE m.thread_id=? AND `+visible+` UNION SELECT d.recipient_agent_id FROM Delivery d JOIN Message m ON m.id=d.message_id JOIN Agent ar ON ar.id=d.recipient_agent_id WHERE m.thread_id=? AND `+visible+` AND `+recipientScope+`) ORDER BY 1`, append(append(append(append([]any{th["id"]}, visibleArgs...), th["id"]), visibleArgs...), recipientArgs...)...)
 		if err != nil {
 			return nil, err
 		}
+		defer func(rows *queryRows) { _ = rows.Close() }(rows)
 		for rows.Next() {
 			var name string
 			rows.Scan(&name)
@@ -421,6 +462,7 @@ func (t *transaction) thread(id, repo string) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer func(rows *queryRows) { _ = rows.Close() }(rows)
 	messages := []map[string]any{}
 	for rows.Next() {
 		var mid, sender, subject, body, repo, accountID, username, displayName string
@@ -453,6 +495,7 @@ func (t *transaction) thread(id, repo string) (map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
+		defer func(rows *queryRows) { _ = rows.Close() }(rows)
 		for rows.Next() {
 			var name, state string
 			rows.Scan(&name, &state)

@@ -42,7 +42,7 @@ func (t *transaction) consoleSession(digest []byte) (ConsoleSession, error) {
 // Password work must finish outside the store lock before its version recheck.
 func (s *Store) ConsoleSessionAccount(ctx context.Context, digest []byte) (ConsoleAccount, error) {
 	var session ConsoleSession
-	err := s.transact(ctx, func(t *transaction) error {
+	err := s.readTransact(ctx, func(t *transaction) error {
 		var err error
 		session, err = t.consoleSession(digest)
 		return err
@@ -52,7 +52,7 @@ func (s *Store) ConsoleSessionAccount(ctx context.Context, digest []byte) (Conso
 
 func (s *Store) ConsoleSessionInfo(ctx context.Context, digest []byte) (ConsoleSession, error) {
 	var session ConsoleSession
-	err := s.transact(ctx, func(t *transaction) error {
+	err := s.readTransact(ctx, func(t *transaction) error {
 		var err error
 		session, err = t.consoleSession(digest)
 		return err

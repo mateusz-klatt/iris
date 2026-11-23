@@ -11,6 +11,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -138,13 +139,23 @@ func absent(err error, code, message string) error {
 }
 
 type Store struct {
-	mu      sync.Mutex
-	db      *sql.DB
-	lock    *os.File
-	clock   Clock
-	epoch   int64
-	stream  string
-	changed chan struct{}
+	mu     sync.Mutex
+	db     *sql.DB
+	readDB *sql.DB
+	// reads is cancelled when Close begins. readMu guards readsClosed and admission
+	// onto readWG. Close waits out the reads it cancelled before it closes either
+	// pool or releases the database lock: sql.DB.Close does not wait for a Conn
+	// that readTransact has checked out, and those reads do not hold Store.mu.
+	reads       context.Context
+	stopReads   context.CancelFunc
+	readMu      sync.Mutex
+	readWG      sync.WaitGroup
+	readsClosed bool
+	lock        *os.File
+	clock       Clock
+	epoch       int64
+	stream      string
+	changed     chan struct{}
 	// restored says this start consumed a restore marker and so runs on a new stream (ADR 006).
 	restored bool
 	// transactions is process-local diagnostic state, never part of a durable cursor.
@@ -248,22 +259,13 @@ func openDatabase(filename string, clock Clock, driverName string) (*Store, erro
 		unlockDatabase(lock)
 		return nil, err
 	}
-	db, err := sql.Open(driverName, abs)
+	db, err := openSQLite(driverName, abs, 1, "PRAGMA foreign_keys=ON", "PRAGMA journal_mode=WAL", "PRAGMA synchronous=FULL", "PRAGMA busy_timeout=5000", "PRAGMA temp_store=MEMORY")
 	if err != nil {
 		unlockDatabase(lock)
 		return nil, err
 	}
-	db.SetMaxOpenConns(1)
-	s := &Store{db: db, lock: lock, clock: clock, changed: make(chan struct{})}
-	// temp_store=MEMORY: the hub's image is FROM scratch, with no temporary directory, and a large
-	// delete's statement journal or a sort would otherwise need one. A sweep of 17,153 events made
-	// the hub crash-loop with IOERR_GETTEMPPATH before this (ADR 006's first deploy).
-	for _, q := range []string{"PRAGMA foreign_keys=ON", "PRAGMA journal_mode=WAL", "PRAGMA synchronous=FULL", "PRAGMA busy_timeout=5000", "PRAGMA temp_store=MEMORY"} {
-		if _, err = db.Exec(q); err != nil {
-			_ = s.Close()
-			return nil, err
-		}
-	}
+	reads, stopReads := context.WithCancel(context.Background())
+	s := &Store{db: db, lock: lock, clock: clock, changed: make(chan struct{}), reads: reads, stopReads: stopReads}
 	err = s.transact(context.Background(), func(t *transaction) error {
 		if _, err := t.exec(schema); err != nil {
 			return err
@@ -459,15 +461,81 @@ func openDatabase(filename string, clock Clock, driverName string) (*Store, erro
 		_ = s.Close()
 		return nil, err
 	}
+	// Console reads share a dedicated query_only pool outside Store.mu so slow snapshots never
+	// delay heartbeats, claims, or lease expiry on the single serialized writer connection.
+	readDB, err := openSQLite(driverName, readOnlyDSN(abs), 4, "PRAGMA foreign_keys=ON", "PRAGMA query_only=ON", "PRAGMA busy_timeout=5000", "PRAGMA temp_store=MEMORY")
+	if err != nil {
+		_ = s.Close()
+		return nil, err
+	}
+	s.readDB = readDB
 	return s, nil
 }
+func readOnlyDSN(abs string) string {
+	return "file:" + (&url.URL{Path: filepath.ToSlash(abs)}).EscapedPath() + "?_pragma=foreign_keys(ON)&_pragma=query_only(ON)&_pragma=busy_timeout(5000)&_pragma=temp_store(2)"
+}
+
+// temp_store=MEMORY: the hub's image is FROM scratch, with no temporary directory, and a large
+// delete's statement journal or a sort would otherwise need one. A sweep of 17,153 events made
+// the hub crash-loop with IOERR_GETTEMPPATH before this (ADR 006's first deploy).
+func openSQLite(driverName, dsn string, maxConns int, pragmas ...string) (*sql.DB, error) {
+	db, err := sql.Open(driverName, dsn)
+	if err != nil {
+		return nil, err
+	}
+	db.SetMaxOpenConns(maxConns)
+	for _, q := range pragmas {
+		if _, err = db.Exec(q); err != nil {
+			_ = db.Close()
+			return nil, err
+		}
+	}
+	return db, nil
+}
+
+// errStoreClosed is what a console read receives once Close has begun. The
+// database lock is still held until every read that started earlier returns.
+var errStoreClosed = errors.New("store closed")
+
 func (s *Store) Close() error {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	// Admit no further console read, then cancel the ones already in readTransact.
+	// The flag and the WaitGroup share readMu, so a read cannot pass the gate
+	// after Close has decided to wait and then be missed by that wait.
+	s.readMu.Lock()
+	s.readsClosed = true
+	s.readMu.Unlock()
+	// Historical fixtures build a Store with no read pool, so there is no cancel.
+	if s.stopReads != nil {
+		s.stopReads()
+	}
+	// sql.DB.Close does not wait for a Conn readTransact has checked out, and
+	// those reads do not hold Store.mu. Wait while still holding mu, so no writer
+	// begins, then close the pools and only then drop the database lock.
+	s.readWG.Wait()
+	var readErr error
+	if s.readDB != nil {
+		readErr = s.readDB.Close()
+	}
 	err := s.db.Close()
 	unlockDatabase(s.lock)
-	return err
+	s.lock = nil
+	return errors.Join(readErr, err)
 }
+
+func (s *Store) beginConsoleRead() error {
+	s.readMu.Lock()
+	defer s.readMu.Unlock()
+	if s.readsClosed {
+		return errStoreClosed
+	}
+	s.readWG.Add(1)
+	return nil
+}
+
+func (s *Store) endConsoleRead() { s.readWG.Done() }
+
 func (s *Store) Changes() <-chan struct{} { s.mu.Lock(); defer s.mu.Unlock(); return s.changed }
 
 // Restored reports whether this start consumed a restore marker, and so runs on a new stream
@@ -478,9 +546,42 @@ func (s *Store) Restored() bool { return s.restored }
 // It includes transactions that later rolled back and resets when the Store is reopened.
 func (s *Store) TransactionCount() uint64 { return s.transactions.Load() }
 
+type lockObserver struct {
+	beforeLock  func()
+	afterUnlock func(wait, held time.Duration)
+}
+
+type lockObserverKey struct{}
+
+func withLockObserver(ctx context.Context, observer lockObserver) context.Context {
+	return context.WithValue(ctx, lockObserverKey{}, observer)
+}
+
 func (s *Store) transact(ctx context.Context, f func(*transaction) error) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
+	observer, hasObserver := ctx.Value(lockObserverKey{}).(lockObserver)
+	var wait time.Duration
+	var acquired time.Time
+	if hasObserver {
+		if observer.beforeLock != nil {
+			observer.beforeLock()
+		}
+		requested := time.Now()
+		s.mu.Lock()
+		acquired = time.Now()
+		wait = acquired.Sub(requested)
+	} else {
+		s.mu.Lock()
+	}
+	defer func() {
+		var held time.Duration
+		if hasObserver {
+			held = time.Since(acquired)
+		}
+		s.mu.Unlock()
+		if hasObserver {
+			observer.afterUnlock(wait, held)
+		}
+	}()
 	c, err := s.db.Conn(ctx)
 	if err != nil {
 		return err
@@ -505,6 +606,37 @@ func (s *Store) transact(ctx context.Context, f func(*transaction) error) error 
 		s.changed = make(chan struct{})
 	}
 	return nil
+}
+
+func (s *Store) readTransact(ctx context.Context, f func(*transaction) error) error {
+	if err := s.beginConsoleRead(); err != nil {
+		return err
+	}
+	defer s.endConsoleRead()
+	// The caller's deadline and Close both end the snapshot. Close waits until
+	// this returns, so a read cannot still hold SQLite after the lock is released.
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stop := context.AfterFunc(s.reads, cancel)
+	defer stop()
+	c, err := s.readDB.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = c.Close() }()
+	// Cancellation can be reported after SQLite has executed BEGIN DEFERRED. Install cleanup
+	// before starting it, so an aborted call never leaves a read snapshot pinned on the connection.
+	defer func() { _, _ = c.ExecContext(context.Background(), "ROLLBACK") }()
+	if _, err = c.ExecContext(ctx, "BEGIN DEFERRED"); err != nil {
+		return err
+	}
+	s.transactions.Add(1)
+	tx := &transaction{conn: c, ctx: ctx, s: s}
+	if err = f(tx); err != nil {
+		return err
+	}
+	_, err = c.ExecContext(ctx, "COMMIT")
+	return err
 }
 
 const expireExecutionsSQL = `UPDATE Execution SET state='lost' WHERE state='active' AND

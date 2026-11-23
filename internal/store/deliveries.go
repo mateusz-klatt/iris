@@ -50,6 +50,7 @@ func (t *transaction) deliveries(r Request) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
+	defer func(rows *queryRows) { _ = rows.Close() }(rows)
 	messages := []map[string]any{}
 	byID := map[string]map[string]any{}
 	more := false
