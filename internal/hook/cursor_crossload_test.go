@@ -19,6 +19,7 @@ func TestCursorCrossLoadOverridesInheritedClaudeSession(t *testing.T) {
 		markers  bool
 	}{
 		{name: "cursor ancestor and environment", ancestor: proc.Ancestor{PID: 42, StartMS: 7, Name: "/opt/cursor-agent"}, markers: true},
+		{name: "agent alias and environment", ancestor: proc.Ancestor{PID: 42, StartMS: 7, Name: "/opt/agent"}, markers: true},
 		{name: "cursor environment only", markers: true},
 		{name: "cursor ancestor only", ancestor: proc.Ancestor{PID: 42, StartMS: 7, Name: "/opt/cursor-agent"}},
 	} {
@@ -115,6 +116,23 @@ func TestCursorMarkersDoNotDisplaceANativeClaudeHook(t *testing.T) {
 	}.Run()
 	if calls == 0 || !denied(ClientClaude, out) {
 		t.Fatalf("native Claude was displaced: calls %d, output %+v", calls, out)
+	}
+}
+
+func TestCursorMarkersDoNotRenameAKnownThirdClient(t *testing.T) {
+	runner, cross := (Runner{
+		Getenv: func(key string) string {
+			return map[string]string{
+				"CURSOR_PROJECT_DIR": "/outer/cursor/project",
+				"CURSOR_VERSION":     "2026.11.22-e9042b2",
+			}[key]
+		},
+		Ancestor: func() (proc.Ancestor, error) {
+			return proc.Ancestor{PID: 44, StartMS: 9, Name: "codex"}, nil
+		},
+	}).crossLoad("s1", ClientClaude)
+	if cross && runner == ClientCursor {
+		t.Fatal("Cursor markers renamed known Codex ancestry to Cursor")
 	}
 }
 

@@ -50,19 +50,19 @@ func TestNearestFrom(t *testing.T) {
 		s, ok := tree[pid]
 		return s, ok
 	}
-	got, ok := NearestFrom(10, get)
+	got, ok := NearestFrom(10, get, nil)
 	if !ok || got.PID != 7 || got.Name != "grok" {
 		t.Fatalf("past a shell and a helper = %+v ok=%v", got, ok)
 	}
-	got, ok = NearestFrom(7, get)
+	got, ok = NearestFrom(7, get, nil)
 	if !ok || got.PID != 2 {
 		t.Fatalf("stop at the first client = %+v", got)
 	}
-	got, ok = NearestFrom(6, get)
+	got, ok = NearestFrom(6, get, nil)
 	if !ok || got.PID != 4 {
 		t.Fatalf("windows shell = %+v", got)
 	}
-	got, ok = NearestFrom(3, get)
+	got, ok = NearestFrom(3, get, nil)
 	if ok {
 		t.Fatalf("init is not an ancestor worth recording, got %+v", got)
 	}
@@ -74,9 +74,31 @@ func TestNearestFrom(t *testing.T) {
 	got, ok = NearestFrom(4, func(pid int) (Snapshot, bool) {
 		s, ok := onlyHelper[pid]
 		return s, ok
-	})
+	}, nil)
 	if !ok || got.Name != "python3" {
 		t.Fatalf("fallback nearest non-shell = %+v", got)
+	}
+
+	agentTree := map[int]Snapshot{
+		20: {PID: 20, PPID: 19, Name: "iris"},
+		19: {PID: 19, PPID: 18, Name: "bash"},
+		18: {PID: 18, PPID: 17, Name: "/opt/agent"},
+		17: {PID: 17, PPID: 1, Name: "claude"},
+	}
+	agentGet := func(pid int) (Snapshot, bool) {
+		s, ok := agentTree[pid]
+		return s, ok
+	}
+	cursorEnv := func(key string) string {
+		return map[string]string{"CURSOR_PROJECT_DIR": "/project", "CURSOR_VERSION": "2026.11.22"}[key]
+	}
+	got, ok = NearestFrom(20, agentGet, cursorEnv)
+	if !ok || got.PID != 18 || got.Name != "/opt/agent" {
+		t.Fatalf("Cursor's agent alias did not stop before outer Claude: %+v, %v", got, ok)
+	}
+	got, ok = NearestFrom(20, agentGet, nil)
+	if !ok || got.PID != 17 || got.Name != "claude" {
+		t.Fatalf("bare agent did not walk on to outer Claude: %+v, %v", got, ok)
 	}
 }
 

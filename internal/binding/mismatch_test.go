@@ -15,72 +15,86 @@ import (
 )
 
 func TestClientMismatchDisablesEveryBindingRoute(t *testing.T) {
-	requests := 0
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		requests++
-		_ = json.NewEncoder(w).Encode(map[string]any{"execution_id": "ex_wrong", "generation": 1})
-	}))
-	defer srv.Close()
-	r := &Resolver{
-		Hub: &hubclient.Client{Config: config{srv.URL}}, Client: "claude", Host: "host", CWD: t.TempDir(),
-		Getenv: func(key string) string {
-			return map[string]string{"IRIS_EXECUTION": "ex_inherited", "CLAUDE_CODE_SESSION_ID": "inherited-session"}[key]
-		},
-		Ancestor: func() (proc.Ancestor, error) {
-			return proc.Ancestor{PID: 42, StartMS: 7, Name: "/opt/cursor-agent"}, nil
-		},
-		Recall: func(string, string) (int, bool, error) {
-			t.Error("a mismatched shim tried generation-memory reattachment")
-			return 1, true, nil
-		},
-	}
-	var observed []string
-	r.Observe = func(text string) { observed = append(observed, text) }
-	if !r.CheckClient() {
-		t.Fatal("a Claude shim under cursor-agent was accepted")
-	}
-	if !slices.Equal(observed, []string{ClientMismatchObservation("claude", "cursor")}) {
-		t.Fatalf("observed %q", observed)
-	}
-
-	for _, call := range []struct {
-		name string
-		run  func() error
+	for _, tc := range []struct {
+		name     string
+		ancestor string
+		markers  bool
 	}{
-		{"ordinary resolve and registration", func() error {
-			_, err := r.Resolve(context.Background(), "ex_explicit")
-			return err
-		}},
-		{"tool call id mode", func() error {
-			_, _, err := r.ResolveCall(context.Background(), "ex_explicit", "call-session", "call-session")
-			return err
-		}},
-		{"cached heartbeat", func() error {
-			r.bound = Bound{ExecutionID: "ex_cached", Generation: 1}
-			return r.Heartbeat(context.Background(), "shim")
-		}},
+		{name: "cursor-agent", ancestor: "/opt/cursor-agent"},
+		{name: "agent alias with Cursor markers", ancestor: "agent", markers: true},
 	} {
-		t.Run(call.name, func(t *testing.T) {
-			err := call.run()
-			if !IsCode(err, "client_mismatch") || !strings.Contains(err.Error(), "native Iris MCP server (`iris mcp --client cursor`)") {
-				t.Fatalf("%v", err)
+		t.Run(tc.name, func(t *testing.T) {
+			requests := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requests++
+				_ = json.NewEncoder(w).Encode(map[string]any{"execution_id": "ex_wrong", "generation": 1})
+			}))
+			defer srv.Close()
+			env := map[string]string{"IRIS_EXECUTION": "ex_inherited", "CLAUDE_CODE_SESSION_ID": "inherited-session"}
+			if tc.markers {
+				env["CURSOR_PROJECT_DIR"] = "/scratch/project"
+				env["CURSOR_VERSION"] = "2026.11.22-e9042b2"
+			}
+			r := &Resolver{
+				Hub: &hubclient.Client{Config: config{srv.URL}}, Client: "claude", Host: "host", CWD: t.TempDir(),
+				Getenv: func(key string) string { return env[key] },
+				Ancestor: func() (proc.Ancestor, error) {
+					return proc.Ancestor{PID: 42, StartMS: 7, Name: tc.ancestor}, nil
+				},
+				Recall: func(string, string) (int, bool, error) {
+					t.Error("a mismatched shim tried generation-memory reattachment")
+					return 1, true, nil
+				},
+			}
+			var observed []string
+			r.Observe = func(text string) { observed = append(observed, text) }
+			if !r.CheckClient() {
+				t.Fatal("a Claude shim cross-loaded by Cursor was accepted")
+			}
+			if !slices.Equal(observed, []string{ClientMismatchObservation("claude", "cursor")}) {
+				t.Fatalf("observed %q", observed)
+			}
+
+			for _, call := range []struct {
+				name string
+				run  func() error
+			}{
+				{"ordinary resolve and registration", func() error {
+					_, err := r.Resolve(context.Background(), "ex_explicit")
+					return err
+				}},
+				{"tool call id mode", func() error {
+					_, _, err := r.ResolveCall(context.Background(), "ex_explicit", "call-session", "call-session")
+					return err
+				}},
+				{"cached heartbeat", func() error {
+					r.bound = Bound{ExecutionID: "ex_cached", Generation: 1}
+					return r.Heartbeat(context.Background(), "shim")
+				}},
+			} {
+				t.Run(call.name, func(t *testing.T) {
+					err := call.run()
+					if !IsCode(err, "client_mismatch") || !strings.Contains(err.Error(), "native Iris MCP server (`iris mcp --client cursor`)") {
+						t.Fatalf("%v", err)
+					}
+				})
+			}
+
+			stopped := false
+			r.Maintain(context.Background(), "shim", time.Millisecond, func() bool {
+				t.Error("maintenance checked the parent despite its mismatch")
+				return true
+			}, func() { stopped = true })
+			if stopped {
+				t.Fatal("a mismatched maintenance worker stopped the MCP server")
+			}
+			if requests != 0 {
+				t.Fatalf("a mismatched shim made %d hub requests", requests)
+			}
+			if !slices.Equal(observed, []string{ClientMismatchObservation("claude", "cursor")}) {
+				t.Fatalf("calls repeated the startup observation: %q", observed)
 			}
 		})
-	}
-
-	stopped := false
-	r.Maintain(context.Background(), "shim", time.Millisecond, func() bool {
-		t.Error("maintenance checked the parent despite its mismatch")
-		return true
-	}, func() { stopped = true })
-	if stopped {
-		t.Fatal("a mismatched maintenance worker stopped the MCP server")
-	}
-	if requests != 0 {
-		t.Fatalf("a mismatched shim made %d hub requests", requests)
-	}
-	if !slices.Equal(observed, []string{ClientMismatchObservation("claude", "cursor")}) {
-		t.Fatalf("calls repeated the startup observation: %q", observed)
 	}
 }
 
@@ -89,8 +103,10 @@ func TestCheckClientCursorEvidenceOutranksInheritedClaudeSession(t *testing.T) {
 		name     string
 		ancestor proc.Ancestor
 		markers  bool
+		walk     bool
 	}{
 		{name: "cursor ancestor and environment", ancestor: proc.Ancestor{PID: 42, StartMS: 7, Name: "cursor-agent"}, markers: true},
+		{name: "agent alias and environment before outer claude", markers: true, walk: true},
 		{name: "cursor environment only", ancestor: proc.Ancestor{PID: 42, StartMS: 7, Name: "helper"}, markers: true},
 		{name: "cursor ancestor only", ancestor: proc.Ancestor{PID: 42, StartMS: 7, Name: "cursor-agent"}},
 	} {
@@ -101,7 +117,23 @@ func TestCheckClientCursorEvidenceOutranksInheritedClaudeSession(t *testing.T) {
 				env["CURSOR_PROJECT_DIR"] = "/scratch/project"
 				env["CURSOR_VERSION"] = "2026.11.22-e9042b2"
 			}
-			r := resolverFor(t, h, "claude", env, tc.ancestor)
+			ancestor := tc.ancestor
+			if tc.walk {
+				tree := map[int]proc.Snapshot{
+					10: {PID: 10, PPID: 9, Name: "iris"},
+					9:  {PID: 9, PPID: 2, Name: "agent"},
+					2:  {PID: 2, PPID: 1, Name: "claude"},
+				}
+				got, ok := proc.NearestFrom(10, func(pid int) (proc.Snapshot, bool) {
+					s, ok := tree[pid]
+					return s, ok
+				}, func(key string) string { return env[key] })
+				if !ok || got.Name != "agent" {
+					t.Fatalf("agent alias did not win the walk before outer Claude: %+v, %v", got, ok)
+				}
+				ancestor = proc.Ancestor(got)
+			}
+			r := resolverFor(t, h, "claude", env, ancestor)
 			var observed []string
 			r.Observe = func(text string) { observed = append(observed, text) }
 
@@ -124,13 +156,41 @@ func TestCheckClientCursorEvidenceOutranksInheritedClaudeSession(t *testing.T) {
 func TestCheckClientKeepsNativeAndUnknownAncestorsUsable(t *testing.T) {
 	t.Run("real Claude nested in Cursor", func(t *testing.T) {
 		h := &scriptedHub{}
-		r := resolverFor(t, h, "claude", map[string]string{"CLAUDE_CODE_SESSION_ID": "native-claude"}, proc.Ancestor{PID: 42, StartMS: 7, Name: "claude"})
+		r := resolverFor(t, h, "claude", map[string]string{
+			"CLAUDE_CODE_SESSION_ID": "native-claude",
+			"CURSOR_PROJECT_DIR":     "/outer/cursor/project",
+			"CURSOR_VERSION":         "2026.11.22-e9042b2",
+		}, proc.Ancestor{PID: 42, StartMS: 7, Name: "claude"})
 		if r.CheckClient() {
 			t.Fatal("the nearest claude process was rejected because an outer client may be Cursor")
 		}
 		b, err := r.Resolve(context.Background(), "")
 		if err != nil || b.Rung != 2 || len(h.bound) != 1 || h.bound[0]["session_id"] != "native-claude" {
 			t.Fatalf("native Claude binding: %+v, %v, requests %v", b, err, h.bound)
+		}
+	})
+	t.Run("bare agent walks on to native Claude", func(t *testing.T) {
+		h := &scriptedHub{}
+		env := map[string]string{"CLAUDE_CODE_SESSION_ID": "native-claude"}
+		tree := map[int]proc.Snapshot{
+			10: {PID: 10, PPID: 9, Name: "iris"},
+			9:  {PID: 9, PPID: 2, Name: "agent"},
+			2:  {PID: 2, PPID: 1, Name: "claude"},
+		}
+		got, ok := proc.NearestFrom(10, func(pid int) (proc.Snapshot, bool) {
+			s, ok := tree[pid]
+			return s, ok
+		}, func(key string) string { return env[key] })
+		if !ok || got.Name != "claude" {
+			t.Fatalf("bare agent stopped the walk instead of reaching Claude: %+v, %v", got, ok)
+		}
+		r := resolverFor(t, h, "claude", env, proc.Ancestor(got))
+		if r.CheckClient() {
+			t.Fatal("a generic agent name without Cursor markers displaced native Claude")
+		}
+		b, err := r.Resolve(context.Background(), "")
+		if err != nil || b.Rung != 2 || len(h.bound) != 1 || h.bound[0]["session_id"] != "native-claude" {
+			t.Fatalf("native Claude after a bare agent: %+v, %v, requests %v", b, err, h.bound)
 		}
 	})
 	t.Run("unknown helper is not a mismatched client", func(t *testing.T) {

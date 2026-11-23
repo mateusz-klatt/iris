@@ -200,20 +200,20 @@ func terminateFrom(
 }
 
 // Nearest returns the ancestor of the current process that Iris records.
-func Nearest() (Ancestor, error) { return nearest(os.Getpid(), lookupOS) }
-func nearest(self int, get func(int) (Snapshot, bool)) (Ancestor, error) {
-	s, ok := NearestFrom(self, get)
+func Nearest() (Ancestor, error) { return nearest(os.Getpid(), lookupOS, os.Getenv) }
+func nearest(self int, get func(int) (Snapshot, bool), getenv func(string) string) (Ancestor, error) {
+	s, ok := NearestFrom(self, get, getenv)
 	if !ok {
 		return Ancestor{}, ErrNotFound
 	}
 	return Ancestor(s), nil
 }
 
-// NearestFrom walks parents of self using get. Shells are skipped. The first
-// client process wins, so a parent client is never chosen over the session
+// NearestFrom walks parents of self using get and getenv. Shells are skipped. The first
+// recognized client process wins, so a parent client is never chosen over the session
 // that actually spawned the hook. When the chain has no client, the nearest
 // non-shell ancestor is returned.
-func NearestFrom(self int, get func(int) (Snapshot, bool)) (Snapshot, bool) {
+func NearestFrom(self int, get func(int) (Snapshot, bool), getenv func(string) string) (Snapshot, bool) {
 	cur, ok := get(self)
 	if !ok {
 		return Snapshot{}, false
@@ -233,7 +233,7 @@ func NearestFrom(self int, get func(int) (Snapshot, bool)) (Snapshot, bool) {
 				cp := p
 				fallback = &cp
 			}
-			if isClient(p.Name) {
+			if isClient(p.Name, getenv) {
 				return p, true
 			}
 		}
@@ -257,9 +257,22 @@ func isShell(name string) bool {
 	}
 }
 
-func isClient(name string) bool {
-	_, ok := ClientName(name)
+func isClient(name string, getenv func(string) string) bool {
+	_, ok := ClientNameWithEnv(name, getenv)
 	return ok
+}
+
+// CursorEnvironment reports the marker pair Cursor supplies to a cross-loaded Claude hook.
+func CursorEnvironment(getenv func(string) string) bool {
+	return getenv != nil && getenv("CURSOR_PROJECT_DIR") != "" && getenv("CURSOR_VERSION") != ""
+}
+
+// ClientNameWithEnv also recognizes Cursor's generic agent alias, but only with its marker pair.
+func ClientNameWithEnv(name string, getenv func(string) string) (string, bool) {
+	if baseName(name) == "agent" && CursorEnvironment(getenv) {
+		return "cursor", true
+	}
+	return ClientName(name)
 }
 
 // ClientName maps a client process's executable name to Iris's client name.
