@@ -596,6 +596,15 @@ func (r *Resolver) register(ctx context.Context, session string, a proc.Ancestor
 			r.olderHub = r.olderHub || err == nil
 		}
 	}
+	if IsCode(err, "lost") {
+		// SessionStart can commit between the final lookup and this registration.
+		// One more lookup can bind its live Execution under the usual proof checks.
+		lookupCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
+		defer cancel()
+		if winner, lookupErr := r.resolve(lookupCtx, "", ""); lookupErr == nil && winner.HookSeen && winner.ExecutionID != "" {
+			return winner, nil
+		}
+	}
 	if err != nil {
 		return Bound{}, err
 	}
