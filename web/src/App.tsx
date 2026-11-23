@@ -124,7 +124,12 @@ function replyDraft(messages: ThreadMessage[], t: TFunction): Draft | null {
       .map((recipient) => recipient.name)
       .filter((name) => name !== operatorName)
       .join(", ");
-  return newDraft({ to, subject: replySubject(last.subject, t), replyTo: last.id, offered: true });
+  return newDraft({
+    to,
+    subject: replySubject(last.subject, t, Boolean(last.reply_to), maximumSubjectBytes),
+    replyTo: last.id,
+    offered: true,
+  });
 }
 
 function resolveReplySuggestion(messages: ThreadMessage[], member: boolean, agents: Agent[], t: TFunction): Draft | null {
@@ -835,12 +840,16 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     };
   }, [participant, openedPages, phase, query, repositoryId, threadRevision]);
 
+  // Language changes affect the suggestion, not the in-flight detail request's
+  // read authorization. Read the latest translator without restarting that request.
+  const replyTranslationRef = useRef(t);
+  replyTranslationRef.current = t;
   const applyReplySuggestion = useCallback((messages: ThreadMessage[], scope: string, agents: Agent[]) => {
-    const fresh = resolveReplySuggestion(messages, member, agents, t);
+    const fresh = resolveReplySuggestion(messages, member, agents, replyTranslationRef.current);
     if (fresh !== null) {
       setReplies((current) => current[scope]?.offered === false ? current : { ...current, [scope]: fresh });
     }
-  }, [member, t]);
+  }, [member]);
 
   useEffect(() => {
     if (phase !== "ready" || activeView !== "messages" || openedThread === null) {

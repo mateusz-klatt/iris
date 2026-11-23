@@ -77,6 +77,8 @@ export interface ThreadRecipient {
 
 export interface ThreadMessage extends MessageAuthor {
   id: string;
+  /** Parent message ID for a reply; empty or absent for a root message. */
+  reply_to?: string;
   sender: string;
   /** The sender's repository. A thread can cross repositories (ADR 004). */
   repository_id?: string;

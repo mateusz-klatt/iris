@@ -26,11 +26,31 @@ export function consoleLabel(kind: keyof typeof labelKeys, value: string, t: TFu
 }
 
 // Subjects cross account languages. Recognize every catalog's reply prefix without
-// loading all 44 catalogs into the initial bundle. The catalog test checks every pair.
-const replyPrefix = /^(?:(?:Re\s*|Sv|Απ|رد|پاسخ|Odp|Ynt):|(?:回复|回覆)：)/u;
+// loading all 44 catalogs into the initial bundle. Match each catalog's exact
+// delimiter: a colon and space, or the Chinese fullwidth colon without a space.
+// French adds a nonbreaking space before its colon. The tests check every pair.
+const replyPrefix = /^(?:(?:Re\u00a0?|Sv|Απ|رد|پاسخ|Odp|Ynt): |(?:回复|回覆)：)/iu;
+const encoder = new TextEncoder();
+const graphemes = new Intl.Segmenter(undefined, { granularity: "grapheme" });
 
-export function replySubject(subject: string, t: TFunction): string {
-  return replyPrefix.test(subject)
-    ? subject
-    : t("operator.replySubject", { subject });
+// Only message metadata establishes that the source is a reply. A root subject
+// can legitimately start with text such as "Odp: parser test plan".
+export function replySubject(subject: string, t: TFunction, originalIsReply: boolean, maximumBytes: number): string {
+  const prefix = originalIsReply && replyPrefix.test(subject)
+    ? ""
+    : t("operator.replySubject", { subject: "" });
+  const available = maximumBytes - encoder.encode(prefix).byteLength;
+  let truncated = "";
+  let bytes = 0;
+  // Keep whole user-perceived characters, including combining marks and joined
+  // emoji, while reserving enough UTF-8 bytes for the localized prefix.
+  for (const { segment } of graphemes.segment(subject)) {
+    const size = encoder.encode(segment).byteLength;
+    if (bytes + size > available) {
+      break;
+    }
+    truncated += segment;
+    bytes += size;
+  }
+  return prefix + truncated;
 }
