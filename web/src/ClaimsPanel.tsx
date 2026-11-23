@@ -3,6 +3,7 @@ import { useTranslation } from "react-i18next";
 
 import type { Claim, Repository } from "./api";
 import { second, timeLeft } from "./timeLeft";
+import { consoleLabel } from "./consoleText";
 
 // The claims panel: every live claim, narrowed by repository, holder and path, each with the
 // time left on it. Rows stack, so a long path and holder fit a phone without a table to scroll.
@@ -121,7 +122,7 @@ export function ClaimsPanel({
                   <div>
                     <strong>{claim.path}</strong>
                     <small>
-                      {nameOf(claim.repository_id)} · {claim.holder} · {claim.kind}
+                      {nameOf(claim.repository_id)} · {claim.holder} · {consoleLabel("claim", claim.kind, t)}
                     </small>
                   </div>
                   {claim.expires_at === null ? (

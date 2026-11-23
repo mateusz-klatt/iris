@@ -45,9 +45,11 @@ import Login from "./Login";
 import Account from "./Account";
 import AccessPanel from "./access";
 import { recordName } from "./recordName";
+import { consoleLabel, replySubject } from "./consoleText";
 import "./app.css";
 import "./console.css";
 
+// Each explicit open gets its own generation, shared by all of its refresh requests.
 type ThreadOpening = { id: string; generation: number };
 
 function openingKey(opening: ThreadOpening): string {
@@ -111,7 +113,7 @@ const noAgents: Agent[] = [];
 // replyDraft starts a reply to a thread. It answers the other party: the latest sender who is not
 // the operator, or, in a thread only the operator has written to, whom they wrote to. Answering
 // the latest sender would address a follow-up after the operator's own message back to them.
-function replyDraft(messages: ThreadMessage[]): Draft | null {
+function replyDraft(messages: ThreadMessage[], t: TFunction): Draft | null {
   const last = messages.at(-1);
   if (last === undefined) {
     return null;
@@ -123,11 +125,16 @@ function replyDraft(messages: ThreadMessage[]): Draft | null {
       .map((recipient) => recipient.name)
       .filter((name) => name !== operatorName)
       .join(", ");
-  return newDraft({ to, subject: last.subject.startsWith("Re:") ? last.subject : `Re: ${last.subject}`, replyTo: last.id, offered: true });
+  return newDraft({
+    to,
+    subject: replySubject(last.subject, t, Boolean(last.reply_to), maximumSubjectBytes),
+    replyTo: last.id,
+    offered: true,
+  });
 }
 
-function resolveReplySuggestion(messages: ThreadMessage[], member: boolean, agents: Agent[]): Draft | null {
-  const suggestion = replyDraft(messages);
+function resolveReplySuggestion(messages: ThreadMessage[], member: boolean, agents: Agent[], t: TFunction): Draft | null {
+  const suggestion = replyDraft(messages, t);
   if (suggestion === null || !member) {
     return suggestion;
   }
@@ -263,7 +270,7 @@ function HostReport({ report }: { report: DoctorReport }) {
   const { t, i18n } = useTranslation();
   const stale = isReportStale(report);
   return (
-    <section className="host-report" data-host={report.host} data-stale={stale ? "yes" : "no"} aria-label={report.host}>
+    <section className="host-report" data-host={report.host} data-stale={stale ? "yes" : "no"} aria-label={report.host === "unknown" ? t("operator.doctorUnknownHost") : report.host}>
       <h2>{report.host === "unknown" ? t("operator.doctorUnknownHost") : report.host}</h2>
       {report.checked_at !== null ? <p>{t("operator.checkedAt", { date: formatWhen(report.checked_at, i18n.language) })}</p> : null}
       {stale ? <p className="stale-note">{t("operator.doctorStale")}</p> : null}
@@ -358,6 +365,9 @@ export function App({ connect = watchUi, refreshGap = frameRefreshGap }: { conne
 
 function Console({ connect, refreshGap, session, onSession, onSignedOut }: { connect: typeof watchUi; refreshGap: number; session: AccountSession; onSession: (session: AccountSession) => void; onSignedOut: (passwordChanged?: boolean) => void }) {
   const { t, i18n } = useTranslation();
+  // Reconnects validate the mounted account, auth version and token. Profile
+  // changes do not replace that authentication or require a new watch connection.
+  const watchSession = useRef(session);
   const member = session.account.role === "member";
   const isOperator = session.account.role === "operator";
   const [locale, setLocale] = useState<SupportedLocale>("en");
@@ -411,8 +421,11 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   openedThreadRef.current = openedThread;
   const selectedId = openedThread?.id ?? null;
   const showReadReload = openedThread !== null && readReloadKey === openingKey(openedThread);
-  const readRequestedFor = useRef<ThreadOpening | Promise<ThreadDetail> | null>(null);
-  const pendingRead = useRef<{ opening: ThreadOpening; id: string; repositoryId: string; lastMessageId: string } | null>(null);
+  const activeOpening = useRef<ThreadOpening | null>(null);
+  const readRequestedFor = useRef<ThreadOpening | null>(null);
+  const pendingRead = useRef<{ opening: ThreadOpening; repositoryId: string; lastMessageId: string } | null>(null);
+  const readerReady = useRef(false);
+  readerReady.current = phase === "ready" && activeView === "messages";
   const [loadedThread, setLoadedThread] = useState<{ opening: ThreadOpening; detail: ThreadDetail } | null>(null);
   const loadedThreadRef = useRef(loadedThread);
   loadedThreadRef.current = loadedThread;
@@ -578,14 +591,14 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       if (current !== overviewRequest.current || isAbort(error)) {
         return;
       }
-      cancelThreadRead();
+      readerReady.current = false;
       setPhase("error");
     }
-  }, [cancelThreadRead, member]);
+  }, [member]);
 
   const flushRead = useCallback((deferReload = false) => {
     const pending = pendingRead.current;
-    if (pending === null || document.visibilityState === "hidden") {
+    if (pending === null || document.visibilityState === "hidden" || !readerReady.current) {
       return null;
     }
     pendingRead.current = null;
@@ -599,7 +612,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       }
       setReadReloadKey(refused ? currentKey : null);
     };
-    return readThread(pending.id, pending.repositoryId, pending.lastMessageId)
+    return readThread(pending.opening.id, pending.repositoryId, pending.lastMessageId)
       .then((read) => {
         applyRead(false);
         if (!deferReload && read > 0) {
@@ -774,7 +787,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
         return;
       }
       setStream(status);
-    }, { check: () => getSession(undefined, session) });
+    }, { check: () => getSession(undefined, watchSession.current) });
     return () => {
       // A load still in flight lands on a closed view, so it is dropped.
       requests.current++;
@@ -785,7 +798,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       document.removeEventListener("visibilitychange", onVisibilityChange);
       stop();
     };
-  }, [connect, flushRead, reload, refreshGap, revision, onUnauthorized, session]);
+  }, [connect, flushRead, reload, refreshGap, revision, onUnauthorized]);
 
   useEffect(() => {
     if (phase !== "ready") {
@@ -834,8 +847,12 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     };
   }, [participant, openedPages, phase, query, repositoryId, threadRevision]);
 
+  // Language changes affect the suggestion, not the in-flight detail request's
+  // read authorization. Read the latest translator without restarting that request.
+  const replyTranslationRef = useRef(t);
+  replyTranslationRef.current = t;
   const applyReplySuggestion = useCallback((messages: ThreadMessage[], scope: string, agents: Agent[]) => {
-    const fresh = resolveReplySuggestion(messages, member, agents);
+    const fresh = resolveReplySuggestion(messages, member, agents, replyTranslationRef.current);
     if (fresh !== null) {
       setReplies((current) => current[scope]?.offered === false ? current : { ...current, [scope]: fresh });
     }
@@ -845,48 +862,49 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     if (phase !== "ready" || activeView !== "messages" || openedThread === null) {
       return;
     }
+    // A temporary overview error may have hidden an already loaded opening.
+    // Once its reader returns, flush its original watermark before refreshing.
+    void flushRead();
     const { id } = openedThread;
     let ignore = false;
     const request = getThread(id, repositoryId);
-    // The first detail request for an explicit open takes its read authorization.
-    if (readRequestedFor.current === openedThread) {
-      readRequestedFor.current = request;
-    }
-    const releaseReadAuthorization = () => {
-      if (readRequestedFor.current !== request) {
-        return false;
-      }
-      readRequestedFor.current = null;
-      return true;
-    };
     void request
       .then((detail) => {
-        if (ignore) {
+        if (activeOpening.current !== openedThread) {
+          return;
+        }
+        const highWater = detail.high_water_message_id ?? "";
+        const acceptsRead = readRequestedFor.current === openedThread && highWater !== "";
+        // Request freshness and opening authorization are separate. The first
+        // response with a watermark can complete the opening after a refresh starts
+        // another request. After that, superseded responses cannot replace it.
+        if (ignore && !acceptsRead) {
           return;
         }
         setLoadedThread({ opening: openedThread, detail });
         setThreadError(false);
-        const highWater = detail.high_water_message_id ?? "";
-        // A passive refresh may replace the snapshot. It must not post, and it must not drop a
-        // reload hint for this opening. An old hub omits the high-water id; do not acknowledge.
+        // A passive refresh cannot authorize another read or clear this opening's
+        // reload hint. An old hub omits the snapshot watermark; never acknowledge it.
         if (!member && unreadForOperator(detail) && highWater === "") {
           setReadReloadKey(openingKey(openedThread));
-        } else if (releaseReadAuthorization() && !member && unreadForOperator(detail)) {
-          pendingRead.current = { opening: openedThread, id, repositoryId, lastMessageId: highWater };
-          void flushRead();
         }
+        if (acceptsRead) {
+          readRequestedFor.current = null;
+          if (!member && unreadForOperator(detail)) {
+            pendingRead.current = { opening: openedThread, repositoryId, lastMessageId: highWater };
+          }
+        }
+        void flushRead();
         // Refresh an untouched suggestion together with loaded detail, retaining edited drafts (A14).
         applyReplySuggestion(detail.messages, JSON.stringify([repositoryId, id]), replyAgentsRef.current);
       })
       .catch((error: unknown) => {
-        releaseReadAuthorization();
         if (!ignore && !isAbort(error)) {
           setThreadError(true);
         }
       });
     return () => {
       ignore = true;
-      releaseReadAuthorization();
     };
   }, [activeView, applyReplySuggestion, phase, repositoryId, openedThread, threadRevision, member, flushRead]);
 
@@ -1025,6 +1043,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     replyReview.stop();
     composeReview.stop();
     cancelThreadRead();
+    activeOpening.current = null;
     setOpenedThread(null);
     setLoadedThread(null);
     setThreadError(false);
@@ -1046,6 +1065,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     chooseView("messages");
     // Each click requests fresh detail, even when the selected ID stays the same.
     const opened = { id, generation: ++openingGeneration.current };
+    activeOpening.current = opened;
     readRequestedFor.current = opened;
     pendingRead.current = null;
     setOpenedThread(opened);
@@ -1210,7 +1230,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
                           <span className="message-repository">{repositoryName(overview, message.repository_id, t)}</span>
                         ) : null}
                         <small>
-                          {t("message.to")}: {message.recipients.map((recipient) => `${recipient.name} (${recipient.state})`).join(", ")}
+                          {t("message.to")}: {message.recipients.map((recipient) => `${recipient.name} (${consoleLabel("delivery", recipient.state, t)})`).join(", ")}
                         </small>
                         <time dateTime={message.created_at}>{formatWhen(message.created_at, i18n.language)}</time>
                       </header>
@@ -1339,7 +1359,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
                           <tr key={item.id}>
                             <th scope="row">{item.name}</th>
                             <td>
-                              {item.host} · {item.client} · {item.state}<br />{item.branch}
+                              {item.host} · {item.client} · {consoleLabel("session", item.state, t)}<br />{item.branch}
                             </td>
                             <td>{repositoryName(overview, item.repository_id, t)}</td>
                             <td><SessionActivity agent={item} /></td>

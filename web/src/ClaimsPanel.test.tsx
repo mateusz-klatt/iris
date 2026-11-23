@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Claim, Repository } from "./api";
 import { ClaimsPanel } from "./ClaimsPanel";
-import "./i18n";
+import { englishTranslation } from "./i18n";
 import { timeLeft } from "./timeLeft";
 
 const now = Date.parse("2026-11-08T10:00:00Z");
@@ -57,7 +57,7 @@ describe("ClaimsPanel", () => {
     vi.useFakeTimers({ now, toFake: ["Date", "setInterval", "clearInterval"] });
     show();
     const first = screen.getAllByRole("listitem")[0]!;
-    expect(first).toHaveTextContent("iris · claude-laptop-iris · exact");
+    expect(first).toHaveTextContent(`iris · claude-laptop-iris · ${englishTranslation.operator.claimKindExact}`);
     const left = within(first).getByText("in 45 seconds");
     expect(left.tagName).toBe("TIME");
     expect(left).toHaveAttribute("dateTime", "2026-11-08T10:00:45Z");

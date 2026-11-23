@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import type { AccountSession } from "./accountApi";
 import type { DeliveryProblems, WatchFrame } from "./api";
-import i18n from "./i18n";
+import i18n, { englishTranslation } from "./i18n";
 import { doctorReport, emptyOverview, operatorSession, server, sessionOverview, threadDetail, threadsPage } from "./test/server";
 
 beforeEach(async () => { await i18n.changeLanguage("en"); });
@@ -126,7 +126,7 @@ it("keeps focus in an edited reply when a live refresh fails and recovers", asyn
   expect(body).toHaveValue("Keep typing through live updates");
 });
 
-it("leaves mail unread when a watch refresh recovers a failed open", async () => {
+it("acknowledges the opening when a watch refresh recovers its failed request", async () => {
   const user = userEvent.setup({ delay: null });
   mockVisibility("visible");
   const reads = observeThreadReads();
@@ -135,7 +135,7 @@ it("leaves mail unread when a watch refresh recovers a failed open", async () =>
   const arrived = { ...threadDetail.messages[0]!, id: "ms_reply", body: "Mail arrived after the failed open." };
   server.use(http.get("*/v1/ui/threads/:id", () => fails
     ? new HttpResponse(null, { status: 500 })
-    : HttpResponse.json({ ...threadDetail, messages: [...threadDetail.messages, arrived] })));
+    : HttpResponse.json({ ...threadDetail, high_water_message_id: arrived.id, messages: [...threadDetail.messages, arrived] })));
   render(<App connect={(frame) => { onFrame = frame; return () => {}; }} />);
   const row = await screen.findByRole("button", { name: /Open thread: Rollout check/ });
   await user.click(row);
@@ -145,13 +145,14 @@ it("leaves mail unread when a watch refresh recovers a failed open", async () =>
   fails = false;
   act(() => onFrame?.({ cursor: 2, kind: "changed" }));
   expect(await screen.findByText(arrived.body)).toBeVisible();
-  expect(reads()).toHaveLength(0);
+  await waitFor(() => expect(reads()).toHaveLength(1));
+  expect(JSON.parse(String(reads()[0]![1]!.body))).toEqual({ repository_id: "", last_message_id: "ms_reply" });
 
   await user.click(row);
-  await waitFor(() => expect(reads()).toHaveLength(1));
+  await waitFor(() => expect(reads()).toHaveLength(2));
 });
 
-it("leaves mail unread when a watch refresh supersedes a failing open", async () => {
+it("keeps opening authorization when a refresh supersedes a failing request", async () => {
   const user = userEvent.setup({ delay: null });
   mockVisibility("visible");
   const fetch = vi.spyOn(globalThis, "fetch");
@@ -170,7 +171,7 @@ it("leaves mail unread when a watch refresh supersedes a failing open", async ()
       return new HttpResponse(null, { status: 500 });
     }
     await refreshReady;
-    return HttpResponse.json({ ...threadDetail, messages: [...threadDetail.messages, arrived] });
+    return HttpResponse.json({ ...threadDetail, high_water_message_id: arrived.id, messages: [...threadDetail.messages, arrived] });
   }));
   render(<App connect={(frame) => { onFrame = frame; return () => {}; }} />);
   const row = await screen.findByRole("button", { name: /Open thread: Rollout check/ });
@@ -189,10 +190,11 @@ it("leaves mail unread when a watch refresh supersedes a failing open", async ()
 
   finishRefresh();
   expect(await screen.findByText(arrived.body)).toBeVisible();
-  expect(reads()).toHaveLength(0);
+  await waitFor(() => expect(reads()).toHaveLength(1));
+  expect(JSON.parse(String(reads()[0]![1]!.body))).toEqual({ repository_id: "", last_message_id: "ms_reply" });
 
   await user.click(row);
-  await waitFor(() => expect(reads()).toHaveLength(1));
+  await waitFor(() => expect(reads()).toHaveLength(2));
 });
 
 it("blocks sending a reviewed reply after a same-row reopen fails", async () => {
@@ -347,7 +349,7 @@ it("sends exactly one read for an explicit visible open under StrictMode and non
   messages = [...messages, { ...firstMessage, id: "ms_reply", body: "New rollout details." }];
   act(() => onFrame?.({ cursor: 2, kind: "changed" }));
   const arrived = await screen.findByText("New rollout details.");
-  expect(arrived.closest("article")).toHaveTextContent("To: human (pending)");
+  expect(arrived.closest("article")).toHaveTextContent(`${englishTranslation.message.to}: human (${englishTranslation.operator.deliveryStatePending})`);
   expect(reads()).toHaveLength(1);
   expect(readBodies).toHaveLength(1);
 });
@@ -400,7 +402,7 @@ it.each(otherViews)("cancels a deferred read when switching from the thread to %
   expect(reads()).toHaveLength(0);
 });
 
-it("cancels a deferred read when an overview error replaces the reader", async () => {
+it("defers the original opening watermark while an overview error hides the reader", async () => {
   const user = userEvent.setup({ delay: null });
   const changeVisibility = mockVisibility("visible");
   const reads = observeThreadReads();
@@ -414,6 +416,7 @@ it("cancels a deferred read when an overview error replaces the reader", async (
   const detailReady = new Promise<void>((resolve) => { finishDetail = resolve; });
   const retryDetail = {
     ...threadDetail,
+    high_water_message_id: "ms_retry",
     messages: [{ ...threadDetail.messages[0]!, id: "ms_retry", body: "Fresh detail after retry." }],
   };
   let serveRetryDetail = false;
@@ -459,7 +462,8 @@ it("cancels a deferred read when an overview error replaces the reader", async (
   serveRetryDetail = true;
   await user.click(within(error).getByRole("button", { name: "Try again" }));
   expect(await screen.findByText("Fresh detail after retry.")).toBeVisible();
-  expect(reads()).toHaveLength(0);
+  await waitFor(() => expect(reads()).toHaveLength(1));
+  expect(JSON.parse(String(reads()[0]![1]!.body))).toEqual({ repository_id: "", last_message_id: "ms_root" });
 });
 
 it.each(["visible", "hidden"] as const)("reads newly arrived mail once when reopening the selected row while %s", async (visibility) => {

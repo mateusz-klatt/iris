@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import * as api from "./api";
 import type { WatchFrame, WatchStatus } from "./api";
-import i18n from "./i18n";
+import i18n, { englishTranslation } from "./i18n";
 import { reviewAndSend } from "./test/send";
 import { soundPreferenceKey } from "./notificationSound";
 import { uiLocalePreferenceKey } from "./preferences";
@@ -695,7 +695,7 @@ describe("Iris operator console", () => {
     await waitFor(() => expect(bodies).toHaveLength(1));
     expect(bodies[0]).toMatchObject({
       to: ["claude-host"],
-      subject: "Re: Rollout check",
+      subject: englishTranslation.operator.replySubject.replace("{{subject}}", "Rollout check"),
       body: "Noted.",
       reply_to: "ms_root",
     });
@@ -1465,14 +1465,14 @@ describe("Iris operator console", () => {
     expect(within(detail).queryByRole("button", { name: "Review" })).toBeNull();
   });
 
-  it("keeps a subject that already starts with Re: and sends the edited reply", async () => {
+  it("keeps an existing reply subject when its parent is outside the view and sends the edited reply", async () => {
     const user = userEvent.setup();
     const bodies: unknown[] = [];
     server.use(
       http.get("*/v1/ui/threads/:id", () =>
         HttpResponse.json({
           ...threadDetail,
-          messages: [{ ...threadDetail.messages[0], subject: "Re: Rollout check" }],
+          messages: [{ ...threadDetail.messages[0], id: "ms_reply", reply_to: "ms_root", subject: "Re: Rollout check" }],
         }),
       ),
       http.post("*/v1/ui/messages", async ({ request }) => {
@@ -1493,7 +1493,7 @@ describe("Iris operator console", () => {
     await user.type(within(detail).getByRole("textbox", { name: "Message" }), "Ok.");
     await reviewAndSend(user, within(detail), "Reply");
     await waitFor(() => expect(bodies).toHaveLength(1));
-    expect(bodies[0]).toMatchObject({ to: ["human"], subject: "Re: Noted", body: "Ok.", reply_to: "ms_root" });
+    expect(bodies[0]).toMatchObject({ to: ["human"], subject: "Re: Noted", body: "Ok.", reply_to: "ms_reply" });
   }, 20000);
 
   it("keeps the draft when sending fails and signs out on an expired session", async () => {
