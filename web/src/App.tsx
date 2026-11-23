@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 
@@ -423,9 +423,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const showReadReload = openedThread !== null && readReloadKey === openingKey(openedThread);
   const activeOpening = useRef<ThreadOpening | null>(null);
   const readRequestedFor = useRef<ThreadOpening | null>(null);
-  const pendingRead = useRef<{ opening: ThreadOpening; repositoryId: string; lastMessageId: string } | null>(null);
-  const readerReady = useRef(false);
-  readerReady.current = phase === "ready" && activeView === "messages";
+  const renderedThread = useRef<{ opening: ThreadOpening; repositoryId: string; detail: ThreadDetail } | null>(null);
   const [loadedThread, setLoadedThread] = useState<{ opening: ThreadOpening; detail: ThreadDetail } | null>(null);
   const loadedThreadRef = useRef(loadedThread);
   loadedThreadRef.current = loadedThread;
@@ -503,7 +501,6 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
 
   const cancelThreadRead = useCallback(() => {
     readRequestedFor.current = null;
-    pendingRead.current = null;
   }, []);
 
   const transientState = {
@@ -591,28 +588,37 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       if (current !== overviewRequest.current || isAbort(error)) {
         return;
       }
-      readerReady.current = false;
+      renderedThread.current = null;
       setPhase("error");
     }
   }, [member]);
 
   const flushRead = useCallback((deferReload = false) => {
-    const pending = pendingRead.current;
-    if (pending === null || document.visibilityState === "hidden" || !readerReady.current) {
+    const rendered = renderedThread.current;
+    if (rendered === null || document.visibilityState === "hidden" || readRequestedFor.current !== rendered.opening) {
       return null;
     }
-    pendingRead.current = null;
+    const highWater = rendered.detail.high_water_message_id ?? "";
+    if (highWater === "") {
+      return null;
+    }
+    // Only a committed, visible snapshot consumes this opening's authorization.
+    // Refresh responses received while hidden may replace it before the tab resumes.
+    readRequestedFor.current = null;
+    if (member || !unreadForOperator(rendered.detail)) {
+      return null;
+    }
     // A response belongs to the opening that sent it. A later opening, including another
     // visit to the same thread, keeps its own reload hint.
     const applyRead = (refused: boolean) => {
       const current = openedThreadRef.current;
       const currentKey = current === null ? "" : openingKey(current);
-      if (currentKey !== openingKey(pending.opening)) {
+      if (currentKey !== openingKey(rendered.opening)) {
         return;
       }
       setReadReloadKey(refused ? currentKey : null);
     };
-    return readThread(pending.opening.id, pending.repositoryId, pending.lastMessageId)
+    return readThread(rendered.opening.id, rendered.repositoryId, highWater)
       .then((read) => {
         applyRead(false);
         if (!deferReload && read > 0) {
@@ -625,7 +631,16 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
           applyRead(true);
         }
       });
-  }, []);
+  }, [member]);
+
+  useLayoutEffect(() => {
+    // Publish the reader only after React commits its DOM. Promise callbacks may
+    // enqueue several snapshots together; none can acknowledge an unrendered one.
+    renderedThread.current = phase === "ready" && activeView === "messages" && loadedThread !== null && loadedThread.opening === openedThread
+      ? { ...loadedThread, repositoryId }
+      : null;
+    void flushRead();
+  }, [activeView, flushRead, loadedThread, openedThread, phase, repositoryId]);
 
   useEffect(() => () => cancelThreadRead(), [cancelThreadRead]);
 
@@ -862,9 +877,6 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     if (phase !== "ready" || activeView !== "messages" || openedThread === null) {
       return;
     }
-    // A temporary overview error may have hidden an already loaded opening.
-    // Once its reader returns, flush its original watermark before refreshing.
-    void flushRead();
     const { id } = openedThread;
     let ignore = false;
     const request = getThread(id, repositoryId);
@@ -875,9 +887,8 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
         }
         const highWater = detail.high_water_message_id ?? "";
         const acceptsRead = readRequestedFor.current === openedThread && highWater !== "";
-        // Request freshness and opening authorization are separate. The first
-        // response with a watermark can complete the opening after a refresh starts
-        // another request. After that, superseded responses cannot replace it.
+        // A superseded request may still supply an authorized opening's detail.
+        // Once a snapshot is shown visibly, superseded responses cannot replace it.
         if (ignore && !acceptsRead) {
           return;
         }
@@ -888,13 +899,6 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
         if (!member && unreadForOperator(detail) && highWater === "") {
           setReadReloadKey(openingKey(openedThread));
         }
-        if (acceptsRead) {
-          readRequestedFor.current = null;
-          if (!member && unreadForOperator(detail)) {
-            pendingRead.current = { opening: openedThread, repositoryId, lastMessageId: highWater };
-          }
-        }
-        void flushRead();
         // Refresh an untouched suggestion together with loaded detail, retaining edited drafts (A14).
         applyReplySuggestion(detail.messages, JSON.stringify([repositoryId, id]), replyAgentsRef.current);
       })
@@ -906,7 +910,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     return () => {
       ignore = true;
     };
-  }, [activeView, applyReplySuggestion, phase, repositoryId, openedThread, threadRevision, member, flushRead]);
+  }, [activeView, applyReplySuggestion, phase, repositoryId, openedThread, threadRevision, member]);
 
   useEffect(() => {
     // Re-resolve an untouched member suggestion whenever the active-agent directory changes
@@ -1067,7 +1071,6 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     const opened = { id, generation: ++openingGeneration.current };
     activeOpening.current = opened;
     readRequestedFor.current = opened;
-    pendingRead.current = null;
     setOpenedThread(opened);
     if (id === selectedId) {
       readerTitle.current?.focus();

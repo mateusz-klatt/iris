@@ -51,7 +51,12 @@ function deferredDetail() {
 function show() {
   const requests: ReturnType<typeof deferredDetail>[] = [];
   const reads: { id: string; body: unknown }[] = [];
-  const readCalls = vi.spyOn(api, "readThread");
+  const renderedReads: { watermark: string; text: string | null | undefined; visibility: DocumentVisibilityState }[] = [];
+  const readThread = api.readThread;
+  const readCalls = vi.spyOn(api, "readThread").mockImplementation((...args) => {
+    renderedReads.push({ watermark: args[2], text: document.querySelector(".thread-reader")?.textContent, visibility: document.visibilityState });
+    return readThread(...args);
+  });
   let onFrame!: (frame: WatchFrame) => void;
   let cursor = 0;
   vi.spyOn(api, "getThread").mockImplementation(() => {
@@ -76,6 +81,7 @@ function show() {
     requests,
     reads,
     readCalls,
+    renderedReads,
     unmount,
     refresh: () => { act(() => onFrame({ cursor: ++cursor, kind: "changed" })); },
     finish: async (index: number, detail: ThreadDetail) => {
@@ -94,6 +100,86 @@ function show() {
     },
   };
 }
+
+it.each([
+  ["newer", "opening"],
+  ["newer", "refresh"],
+  ["older", "opening"],
+  ["older", "refresh"],
+] as const)("acknowledges the rendered snapshot on resume when the opening is %s and %s responds first", async (openingAge, first) => {
+  const user = userEvent.setup({ delay: null });
+  const view = show();
+  await user.click(await screen.findByRole("button", { name: /Open thread: Rollout check/ }));
+  await waitFor(() => expect(view.requests).toHaveLength(1));
+  view.refresh();
+  await waitFor(() => expect(view.requests).toHaveLength(2));
+  changeVisibility("hidden");
+
+  const details = openingAge === "newer" ? [refreshed, original] : [original, refreshed];
+  const firstIndex = first === "opening" ? 0 : 1;
+  await view.finish(firstIndex, details[firstIndex]!);
+  await view.finish(1 - firstIndex, details[1 - firstIndex]!);
+  const rendered = details[1 - firstIndex]!;
+  expect(screen.queryByText("Fresh detail response.") !== null).toBe(rendered === refreshed);
+  expect(view.readCalls).not.toHaveBeenCalled();
+
+  changeVisibility("visible");
+  await waitFor(() => expect(view.reads).toEqual([
+    { id: "ms_root", body: { repository_id: "", last_message_id: rendered.high_water_message_id } },
+  ]));
+  expect(view.renderedReads).toEqual([
+    { watermark: rendered.high_water_message_id, text: expect.stringContaining("Original detail response."), visibility: "visible" },
+  ]);
+  expect(view.renderedReads[0]!.text?.includes("Fresh detail response.")).toBe(rendered === refreshed);
+
+  // The resume's refresh and further visibility events cannot acknowledge again.
+  await waitFor(() => expect(view.requests).toHaveLength(3));
+  await view.finish(2, refreshed);
+  changeVisibility("hidden");
+  changeVisibility("visible");
+  expect(view.readCalls).toHaveBeenCalledTimes(1);
+});
+
+it("acknowledges visible detail only after its reader commits, once per opening", async () => {
+  const user = userEvent.setup({ delay: null });
+  const view = show();
+  await user.click(await screen.findByRole("button", { name: /Open thread: Rollout check/ }));
+  await waitFor(() => expect(view.requests).toHaveLength(1));
+  await view.finish(0, refreshed);
+  await waitFor(() => expect(view.reads).toHaveLength(1));
+  expect(view.renderedReads).toEqual([
+    { watermark: "ms_new", text: expect.stringContaining("Fresh detail response."), visibility: "visible" },
+  ]);
+
+  view.refresh();
+  await waitFor(() => expect(view.requests).toHaveLength(2));
+  await view.finish(1, original);
+  expect(screen.queryByText("Fresh detail response.")).toBeNull();
+  expect(view.readCalls).toHaveBeenCalledTimes(1);
+});
+
+it("acknowledges only the final snapshot when visible responses are batched into one render", async () => {
+  const user = userEvent.setup({ delay: null });
+  const view = show();
+  await user.click(await screen.findByRole("button", { name: /Open thread: Rollout check/ }));
+  await waitFor(() => expect(view.requests).toHaveLength(1));
+  view.refresh();
+  await waitFor(() => expect(view.requests).toHaveLength(2));
+  await act(async () => {
+    view.requests[0]!.resolve(refreshed);
+    view.requests[1]!.resolve(original);
+    await Promise.all(view.requests.map((request) => request.promise));
+  });
+  expect(screen.getByText("Original detail response.")).toBeVisible();
+  expect(screen.queryByText("Fresh detail response.")).toBeNull();
+  await waitFor(() => expect(view.reads).toEqual([
+    { id: "ms_root", body: { repository_id: "", last_message_id: "ms_root" } },
+  ]));
+  expect(view.renderedReads).toEqual([
+    { watermark: "ms_root", text: expect.stringContaining("Original detail response."), visibility: "visible" },
+  ]);
+  expect(view.readCalls).toHaveBeenCalledTimes(1);
+});
 
 it.each(["original", "replacement"] as const)("acknowledges the first successful response for an opening when the %s request finishes first", async (first) => {
   const user = userEvent.setup({ delay: null });
