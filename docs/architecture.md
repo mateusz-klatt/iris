@@ -428,13 +428,16 @@ duplicate. Otherwise the claim clears the request and any latch: a watcher's sta
 explicit start.
 
 It then looks up, and never registers, the Execution a hook registered for its Kimi process and
-session, and requires the hub's combined match (#335). A watcher with no record takes the hub's
-high-water mark as a baseline and announces no history.
+session, and requires the hub's combined match (#335). The returned generation must pass the
+local hook-file and `.ended` checks in D9 before the watcher accepts it. A watcher with no record
+takes the hub's high-water mark as a baseline and announces no history.
 
-It follows the stream without a `consumer_id`. Every 20 seconds it renews only its pinned generation
-as a shim, so the session is not marked monitored, and checks its Kimi process, the preference and
-the session map. Event reads that a recovering hub refuses are retried. Only a heartbeat that
-answers `lost` ends the watcher for its generation.
+It follows the stream without a `consumer_id`. Every 20 seconds it tries to renew only its pinned
+generation as a shim, so the session is not marked monitored, and checks its Kimi process, the
+preference and the session map. It checks local generation files before and after the heartbeat.
+A read error before the heartbeat skips renewal for that tick. The watcher exits `Lost` if the
+local check vetoes the pinned generation or the hub refuses to renew it as `lost`. Event reads
+that a recovering hub refuses are retried.
 
 Before a line, an authoritative read and the session's told state decide what is new:
 - Mail fetched or told is checkpointed silently.
@@ -744,15 +747,28 @@ Changes from the reference schema:
    proof under the bounded session lock before sending it. A readable marker vetoes hook
    proof and delayed generation writes at or below its value. A refusal can restore proof to
    a missing file only above the recorded end. Generation writes keep the highest proof and
-   SessionEnd clears only matching proof. The shim and plain watch
-   check same-session bindings against retained process proof and live hook-file proof. They
-   also read the local `.ended` marker alongside any live file. A marker recording G vetoes
-   bindings and heartbeats for G and earlier generations, even after a restore. An unbound
-   shim needs a live hook generation above G for reattachment. Either file blocks the
-   first-bind generation-zero fallback. A Codex id-mode lookup checks the named session's end
-   marker, and checks live proof for its native session. The client refuses binding on an
-   unreadable or malformed file and records the path for `iris doctor`. For deployment order and empty-hub
-   recovery, see the
+   SessionEnd clears proof at or below the generation it ended. When a SessionStart finds proof
+   vetoed by the marker, it registers without live proof. A SessionStart without live proof
+   sends any unexpired marker as its `retry_generation` floor and accepts only a reply above
+   that floor. A recovering Execution still requires exact live proof. An ordinary hook with
+   stale proof makes no registration request and records the marker path for `iris doctor`.
+   With only an unexpired marker, an ordinary hook can still register without proof. A hub
+   restored to older terminal history can give that hook a generation the marker vetoes for
+   local proof and binding. After a successful registration, the hook can discard vetoed proof
+   and remove the expired marker before publishing replacement proof, under the same lock and
+   independent of the general sweep. The hook reads and refreshes any
+   still-usable idle proof before successful SessionStart pruning can remove old files.
+
+   The shim, plain watch and Antigravity wake helper check same-session bindings against
+   retained process proof and live hook-file proof. They also read the local `.ended` marker
+   alongside any live file. A marker recording G vetoes bindings and heartbeats for G and
+   earlier generations, even after a restore. The Kimi one-shot watcher checks its pinned
+   generation on binding and before and after renewal. A `whoami` call that renews its own
+   binding applies the resolver's generation check before and after the heartbeat. An unbound
+   shim needs a live hook generation above G for reattachment. Either file blocks the first-bind
+   generation-zero fallback. A Codex id-mode lookup checks the named session's end marker, and
+   checks live proof for its native session. Generation refusals based on local files report the
+   path in `iris doctor`. For deployment order and empty-hub recovery, see the
    [ADR 006 addendum](adr/006-retention-and-restore.md#addendum-of-2026-11-22-the-restore-generation-floor).
 
    MCP `lost` answers give fixed, conditional recovery guidance at the shim boundary, without
@@ -1466,9 +1482,9 @@ On `modernc.org/sqlite`, with real concurrency:
   `lost` row; merge liveness shares this predicate without advancing the baseline. A hub stall
   longer than about 120 s since the last committed heartbeat still loses sessions.
 - Repeated restarts cannot extend recovery. An unattached Execution is lost at its deadline.
-- The shim and plain watch refuse bindings and heartbeats at or below the locally recorded
-  `.ended` generation. The marker alone cannot reattach a restored Execution or authorize a
-  first-bind generation-zero fallback.
+- The shim, plain watch, Antigravity wake and Kimi one-shot watch refuse bindings and heartbeats
+  at or below the locally recorded `.ended` generation. The marker alone cannot reattach a
+  restored Execution or authorize a first-bind generation-zero fallback.
 - While the newest retained Execution is ended, no generation-zero registration from a non-hook
   source, empty legacy source included, succeeds regardless of its retry floor. The hub trusts the
   host-token holder for that host's sessions and `source` is self-declared: this closes the fallback

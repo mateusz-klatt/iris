@@ -132,6 +132,14 @@ func (r Runner) reconcile(ctx context.Context, ev Event, state *runState) Output
 			done <- settle(err, allow)
 			return
 		}
+		if err == errEndedGeneration {
+			decision := Decision{Action: ActionWarn, Context: endedSessionRefused}
+			if ev.Kind == KindPreTool {
+				decision = Decision{Action: ActionDeny, Reason: endedSessionRefused}
+			}
+			done <- settle(err, Encode(ev, decision))
+			return
+		}
 		if hubclient.IsCode(err, "lost") {
 			// A recovering session without its proof must not run unclaimed changes past it, as
 			// an edit may not. After the call, only a warning is possible.

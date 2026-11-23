@@ -95,5 +95,6 @@ func bindingSessions(resolver *binding.Resolver, config hubclient.Resolved) (*ho
 	}
 	sessions := hook.NewSessions(tokenPath)
 	resolver.Recall = sessions.RecallBindingGeneration
+	resolver.ObserveBindingRefusal = sessions.ObserveBindingRefusal
 	return sessions, nil
 }

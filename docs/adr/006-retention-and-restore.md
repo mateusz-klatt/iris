@@ -191,10 +191,35 @@ A refused retry leaves the session unregistered by that hook. The hook records
 `restore_floor_refused` for `iris doctor` and returns the client's normal allow without claiming
 or reconciling the edit. A proofless edit against a recovering Execution is still deliberately
 denied under D9. Concurrent hooks keep the highest generation in the session file. A successful
-SessionEnd records the ended generation in a marker under the same lock and clears matching
-proof. Under that lock, the hook refuses to use live proof or write a delayed registration
-reply at or below a readable marker. A refusal can restore a missing file only above the
-ended generation. Idle pruning removes the marker after 30 days.
+SessionEnd records the ended generation in a marker under the same lock and clears proof at
+or below the generation it ended. Under that lock, the hook refuses to use live proof or write
+a delayed registration reply at or below a readable marker. A refusal can restore a missing
+file only above the ended generation. Idle pruning removes the marker after 30 days. After a
+successful registration, the hook can discard vetoed proof and remove the session's expired
+marker before publishing replacement proof. All three steps use the same lock and are
+independent of the sweep limit. Registration reads still-usable live proof before pruning,
+including proof that has been idle for more than 30 days.
+
+If the marker vetoes the live proof, SessionStart registers with `generation:0`. A SessionStart
+without usable live proof sends an unexpired marker as `retry_generation`. A hub whose newest
+retained generation is below that floor refuses registration. A hub that is recovering an
+Execution still requires exact live proof. Retained terminal history at the floor lets the hub
+allocate the next generation. The hook accepts only a reply strictly above the end marker.
+The hub's floor is inclusive, so the request can renew the lease of an already-live Execution
+equal to the marker. The hook discards that response and records the marker path for `iris doctor`.
+
+Other hooks that try to register with stale live proof refuse locally and report the marker
+path as an observation. This includes prompt, edit, reconcile and SessionEnd. If the hub retains
+the recorded end, starting or resuming the session through a fresh SessionStart can register a
+new generation. If that still fails, use `iris doctor` to locate the marker and verify the
+intended hub and the session's generation history. Stop the hook, shim and watch before
+archiving any local file. Starting a new native session uses a different session ID and avoids
+that marker.
+
+With only an unexpired `.ended` marker, other hooks can still register with `generation:0`
+and no `retry_generation`. For example, after restoring terminal G1 with a local marker at G2,
+a proofless prompt or edit hook can receive a new G2. It can use that registration while the
+marker vetoes writing proof and binding to G2. A recovering Execution still refuses this request.
 
 An unreadable or malformed generation file stops registration and binding, and an unreadable or
 malformed `.ended` marker stops `Forget` and proof restoration. A dangling symlink is unreadable,
@@ -206,19 +231,26 @@ the named file, verify you are connected to the intended hub and check the sessi
 history there. Archive the file only once you have confirmed the session can safely register
 without that proof.
 
-The MCP shim and plain watch use retained process proof and live hook-file proof to reject a
-lower generation for the same session. They read the `.ended` marker independently of that
-proof. A marker recording G vetoes binding and heartbeat for G and earlier generations,
-including cached bindings at G. A shim without a binding needs live hook-file proof above G
-to reattach. Eligible exact-generation heartbeats and shim reattachment still work during the
-120 s recovery window. A backup that predates `SessionEnd` can still show G in recovery. Its
-claims remain recovery reservations until the deadline if no eligible client reattaches. The
-veto depends on the marker kept on the client host.
+The MCP shim, plain watch and Antigravity wake helper use retained process proof and live
+hook-file proof to reject a lower generation for the same session. They read the `.ended`
+marker independently of that proof. A marker recording G vetoes binding and heartbeat for G
+and earlier generations, including cached bindings at G. The Kimi one-shot watcher checks
+those local files before accepting its combined process and session binding and before and
+after a heartbeat. If it cannot read either file before a heartbeat, it skips that renewal.
+An MCP `whoami` renewal of the shim's own binding uses the resolver's generation check before
+and after the heartbeat.
+A shim without a binding needs live hook-file proof above G to reattach. Eligible
+exact-generation heartbeats and shim reattachment still work during the 120 s recovery
+window. A backup that predates `SessionEnd` can still show G in recovery. Its claims remain
+recovery reservations until the deadline if no eligible client reattaches. The veto depends on
+the marker kept on the client host and cannot undo a heartbeat already sent.
 
 Either file blocks the first-bind generation-zero fallback, including a readable `.ended`
 marker on its own. The client refuses binding on an unreadable or malformed file and records
-the path for `iris doctor`. A Codex id-mode lookup checks the named session's end marker and
-applies the live-proof floor to its native session.
+the path for `iris doctor`. A generation veto based on either file also names the path as
+`ended generation refused` or `binding generation proof refused`. The path stays in the local
+report. A Codex id-mode lookup checks the named session's end marker and applies the live-proof
+floor to its native session.
 
 On registration, `source` must be exactly `hook`, `mcp`, `shim` or `watch`. An empty or omitted
 source remains valid as a legacy non-hook source. Other values and negative `retry_generation`

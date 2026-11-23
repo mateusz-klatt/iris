@@ -27,6 +27,12 @@ var ErrInvalidGeneration = errors.New("invalid remembered generation")
 // DamagedGenerationProof is the fixed kind for observations about unreadable generation files.
 const DamagedGenerationProof = "damaged generation proof"
 
+// EndedGenerationRefused identifies a local refusal because of an end marker.
+const EndedGenerationRefused = "ended generation refused"
+
+// BindingGenerationRefused identifies a binding refusal involving the hook's live proof.
+const BindingGenerationRefused = "binding generation proof refused"
+
 func damagedGenerationObservation(path string) string { return DamagedGenerationProof + " at " + path }
 
 // Sessions shares the hooks' session paths and lock with a wake runner. Only hooks write told
@@ -116,9 +122,23 @@ func (s *Sessions) RecallBindingGeneration(client, session string) (generation, 
 		endedThrough, err = readGeneration(path)
 	}
 	if err != nil {
-		env := map[string]string{"IRIS_TOKEN_FILE": s.tokenPath}
-		recorder := Runner{ClientName: client, EventName: "bind", Getenv: func(key string) string { return env[key] }}
-		recorder.record(stageObserved, damagedGenerationObservation(path), nil)
+		s.observeBinding(client, damagedGenerationObservation(path))
 	}
 	return generation, endedThrough, err
+}
+
+// ObserveBindingRefusal names the file that vetoed a binding or renewal in the local doctor report.
+func (s *Sessions) ObserveBindingRefusal(client, session string, ended bool) {
+	path := s.memory.name(client, session)
+	if ended {
+		s.observeBinding(client, endedProof(path+".ended").Error())
+		return
+	}
+	s.observeBinding(client, BindingGenerationRefused+" at "+path)
+}
+
+func (s *Sessions) observeBinding(client, observation string) {
+	env := map[string]string{"IRIS_TOKEN_FILE": s.tokenPath}
+	recorder := Runner{ClientName: client, EventName: "bind", Getenv: func(key string) string { return env[key] }}
+	recorder.record(stageObserved, observation, nil)
 }

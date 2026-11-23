@@ -882,6 +882,73 @@ func TestAntigravityChildHandshakeValidationSpoofRejectionAndEndToEndWakeAndCont
 	}
 }
 
+func TestAntigravityChildVetoesAnEndedBinding(t *testing.T) {
+	const convID = "e28a6164-6409-4810-b8ee-df8202a16a0a"
+	const attempt = "00112233445566778899aabbccddeeff"
+	h := newAgyTestHarness(t, convID)
+	marker := wakeGenerationPath(h.tokenPath, "antigravity", convID) + ".ended"
+	writeWakeProof(t, marker, "1")
+
+	// The restored hub offers the old generation. Watch startup and its next maintenance tick
+	// may look it up, but neither may accept it and turn it into a streaming or renewable target.
+	requests := make(chan string, 8)
+	hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		kind := r.URL.Path
+		if kind == "/v1/bind" {
+			var bind struct {
+				PID int `json:"client_pid"`
+			}
+			if err := json.NewDecoder(r.Body).Decode(&bind); err == nil && bind.PID == h.agyPID {
+				kind = "process lookup"
+			}
+		}
+		select {
+		case requests <- kind:
+		default:
+		}
+		_, _ = fmt.Fprintf(w, `{"execution_id":"ex_old","generation":1,"hook_seen":true,"session_id":%q}`, convID)
+	}))
+	defer hub.Close()
+	if err := os.WriteFile(filepath.Join(h.configDir, "client.json"), fmt.Appendf(nil, `{"hub_url":%q}`, hub.URL), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	owner := hook.AntigravityHelperOwner{
+		AgyPID: h.agyPID, AgyStartMS: h.agyStartMS, HelperPID: h.agyPID, HelperStartMS: h.agyStartMS,
+		SessionID: convID, AttemptID: attempt,
+	}
+	if _, err := hook.PublishAntigravityHelper(h.configDir, owner, nil); err != nil {
+		t.Fatal(err)
+	}
+	opts := h.baseOptions(convID, "synthetic-csrf")
+	base := opts.getenv
+	opts.getenv = func(k string) string {
+		if k == antigravityHelperEnv {
+			return fmt.Sprintf("%d:%d:%s", h.agyPID, h.agyStartMS, attempt)
+		}
+		return base(k)
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	done := make(chan error, 1)
+	go func() { done <- runAntigravity(ctx, opts) }()
+	defer func() {
+		cancel()
+		if err := <-done; err != nil {
+			t.Error(err)
+		}
+	}()
+	for range 2 {
+		select {
+		case request := <-requests:
+			if request != "process lookup" {
+				t.Fatalf("used the ended generation for %s", request)
+			}
+		case <-ctx.Done():
+			t.Fatal("helper did not look up the session")
+		}
+	}
+	requireWakeObservation(t, h.tokenPath, "antigravity", marker)
+}
+
 func TestAntigravityClassificationFinalAdmissionDeferralsAndStateEdges(t *testing.T) {
 	const convID = "e28a6164-6409-4810-b8ee-df8202a16a0a"
 	h := newAgyTestHarness(t, convID)

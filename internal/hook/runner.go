@@ -38,6 +38,10 @@ const RestoreFloorHubTooOld = RestoreFloorRefused + ": hub predates restore floo
 
 const errRestoreFloor hookFailure = RestoreFloorRefused
 
+var errEndedGeneration = errors.New("remembered session generation has ended")
+
+const endedSessionRefused = "Iris: local session proof belongs to an ended session. Start a new client session or run `iris doctor` for recovery details."
+
 type Hub interface {
 	RegisterSession(ctx context.Context, req hubclient.SessionRequest) (hubclient.SessionResponse, error)
 	Touch(ctx context.Context, req hubclient.TouchRequest) (hubclient.TouchResponse, error)
@@ -313,6 +317,9 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		// so it reattaches through POST /v1/sessions, which is defined as idempotent.
 		state.at("session")
 		sess, err := r.register(ctx, state, ev, repo)
+		if err == errEndedGeneration {
+			return r.finish(state, ev, Encode(ev, Decision{Action: ActionDeny, Reason: endedSessionRefused}))
+		}
 		if hubclient.IsCode(err, "lost") {
 			// Only a recovering Execution refuses a request that carries no generation. Its
 			// claims still block others, so allowing the edit would leave it unclaimed.
@@ -421,9 +428,14 @@ func registrationProof(state *runState, ev Event, m Memory, retained int) (int, 
 		return retained, nil
 	}
 	generation, err := m.RecallGeneration(string(ev.Client), ev.SessionID)
-	if err == errEndedGeneration {
+	var ended endedProof
+	if errors.As(err, &ended) {
 		if retained == 0 {
-			return 0, err
+			if ev.Kind == KindSessionStart {
+				return 0, nil
+			}
+			state.observe(ended.Error())
+			return 0, errEndedGeneration
 		}
 		// A request already sent can use the proof it saw only as its generation-zero
 		// retry floor. Preserve it for refusal diagnostics.
@@ -439,6 +451,19 @@ func registrationProof(state *runState, ev Event, m Memory, retained int) (int, 
 	return max(retained, generation), nil
 }
 
+func sessionStartFloor(state *runState, ev Event, files fileMemory) (int, error) {
+	marker := files.name(string(ev.Client), ev.SessionID) + ".ended"
+	ended, expired, err := files.readEndMarker(marker)
+	if err != nil {
+		state.observe(damagedGenerationObservation(marker))
+		return 0, errEndedGeneration
+	}
+	if expired {
+		return 0, nil
+	}
+	return ended, nil
+}
+
 // register attaches a hook to its Execution. It can retry stale proof once when the hub retains
 // at least that generation, which the retry carries as a floor. SessionEnd keeps exact proof to
 // avoid ending a newer Execution.
@@ -450,6 +475,19 @@ func (r Runner) register(ctx context.Context, state *runState, ev Event, repo gi
 		return hubclient.SessionResponse{}, err
 	}
 	req.Generation = generation
+	files, fileBacked := m.(fileMemory)
+	checkEnd := fileBacked && ev.Kind == KindSessionStart
+	var sentEndFloor int
+	if checkEnd {
+		sentEndFloor, err = sessionStartFloor(state, ev, files)
+		if err != nil {
+			return hubclient.SessionResponse{}, err
+		}
+		if req.Generation <= sentEndFloor {
+			req.Generation = 0
+			req.RetryGeneration = sentEndFloor
+		}
+	}
 	send := r.Hub.RegisterSession
 	if repo.Worktree == "" {
 		// A session outside git registers on its own route (ADR 034). A hub without it refuses as
@@ -484,16 +522,25 @@ func (r Runner) register(ctx context.Context, state *runState, ev Event, repo gi
 	if hubclient.OlderHub(err) && repo.Worktree == "" {
 		return hubclient.SessionResponse{}, errOlderHub
 	}
+	if checkEnd {
+		ended, proofErr := sessionStartFloor(state, ev, files)
+		if proofErr != nil {
+			return hubclient.SessionResponse{}, proofErr
+		}
+		ended = max(ended, sentEndFloor)
+		if ended > 0 && (err == nil && sess.Generation <= ended || sentEndFloor > 0 && req.Generation == 0 && hubclient.IsCode(err, "lost")) {
+			state.observe(endedProof(files.name(string(ev.Client), ev.SessionID) + ".ended").Error())
+			return hubclient.SessionResponse{}, errEndedGeneration
+		}
+	}
 	if err == nil {
 		r.learnScope(sess.Capabilities)
 	}
 	if err == nil && m != nil {
 		m.Remember(string(ev.Client), ev.SessionID, sess.Generation)
-		if ev.Kind == KindSessionStart {
-			if f, ok := m.(fileMemory); ok {
-				if err := f.prune(); err != nil {
-					r.recordFailure(stageSessionFiles, err, nil)
-				}
+		if checkEnd {
+			if err := files.prune(); err != nil {
+				r.recordFailure(stageSessionFiles, err, nil)
 			}
 		}
 	}
