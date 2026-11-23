@@ -196,11 +196,14 @@ proof. The hook refreshes proof under that lock before sending it. A refusal can
 missing file only above the ended generation. Idle pruning removes the marker after 30 days.
 
 An unreadable or malformed generation file stops registration and binding, and an unreadable or
-malformed `.ended` marker stops `Forget` and proof restoration; only an absent file allows a hook
-to start registration without proof. Local `iris doctor` output reports
-`damaged generation proof at <path>`. Before archiving the named file, verify you are connected
-to the intended hub and check the session's generation history there. Archive the file only
-once you have confirmed the session can safely register without that proof.
+malformed `.ended` marker stops `Forget` and proof restoration. A dangling symlink is unreadable,
+not absent: only a path that is not there at all, link and all, allows a hook to start
+registration without proof or allows `Forget` to record an end. Local `iris doctor` output reports
+`damaged generation proof at <path>`. The same observation names the `.ended` path when `Forget`
+cannot write that marker or cannot take the sessions lock, and the proof stays. Before archiving
+the named file, verify you are connected to the intended hub and check the session's generation
+history there. Archive the file only once you have confirmed the session can safely register
+without that proof.
 
 The MCP shim and plain watch use retained process and hook-file proof to reject a lower
 generation when binding the same session. An unreadable or malformed file also prevents that
@@ -221,14 +224,18 @@ archiving its local generation file, then relaunch the session. Archive only the
 token in place. `iris admin forget` deletes hub records and mail and is unsuitable for this
 local recovery.
 
-When `Forget` cannot record its `.ended` marker on `SessionEnd` (for example, when the marker is
-damaged or cannot be written), it keeps the local generation proof rather than deleting it without
-a record. While that kept proof `G` remains on disk, an unbound `iris mcp` answers `lost` until a
-hook registers `G+1`. Against an older hub, an empty replacement hub, or after retention has swept
-the ended row, the kept proof yields `restore_floor_refused`. The recovery is the same as for
-damaged proof: verify the hub and check the session's generation history there, stop its hook, shim
-and watch, then archive that file (the kept proof file, or the damaged `.ended` marker named by
-`iris doctor`).
+When `Forget` cannot record its `.ended` marker on `SessionEnd` (the marker is damaged, the write
+fails, or the sessions lock is missed), it keeps the local generation proof rather than deleting
+it without a record, and local `iris doctor` output names that `.ended` path. While that kept
+proof `G` remains on disk, an unbound `iris mcp` answers `lost` until a hook registers `G+1`.
+Against an older hub, an empty replacement hub, or after retention has swept the ended row, the
+kept proof yields `restore_floor_refused`. When the `.ended` marker contributed its generation to
+the decision to keep or restore proof, or the marker is damaged, that refusal names the `.ended`
+path as well, including on a later refusal that finds the proof file already present. The path
+stays in the local doctor report; the report stored on the hub keeps the observation kind and
+count. The recovery is the same as for damaged proof: verify the hub and check the session's
+generation history there, stop its hook, shim and watch, then archive that file (the kept proof
+file, or the `.ended` marker named by `iris doctor`).
 
 Upgrade the hub first and then the clients in the same release. An upgraded hook against
 an older hub treats a missing `highest_generation` as a refusal to retry, keeps its proof and

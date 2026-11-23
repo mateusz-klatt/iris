@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -12,6 +13,8 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"testing/synctest"
 	"time"
@@ -281,8 +284,9 @@ func TestRefusalKeepsSessionEndProofCleared(t *testing.T) {
 			if got, present, err := m.RecallGeneration("claude", "s1"); got != tc.generation || present != (tc.generation > 0) || err != nil {
 				t.Errorf("refused edit left proof = G%d, present %t, %v, want G%d", got, present, err, tc.generation)
 			}
+			marker := sessionsFor(h.getenv).name("claude", "s1") + ".ended"
 			notes, err := ReadRecentObservations(h.getenv("IRIS_TOKEN_FILE"), 1)
-			if err != nil || len(notes) != 1 || notes[0].Error != RestoreFloorHubTooOld {
+			if err != nil || len(notes) != 1 || notes[0].Error != RestoreFloorHubTooOld+" at "+marker {
 				t.Errorf("legacy refusal observation = %+v, %v", notes, err)
 			}
 		})
@@ -454,6 +458,155 @@ func TestSessionEndWithDamagedEndMarkerKeepsProofAndRecordsObservation(t *testin
 	}
 }
 
+func TestSessionEndThatCannotRecordTheMarkerKeepsProofAndNamesIt(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		failWrite bool
+		hold      func(dir string) (func(), error)
+	}{
+		{
+			// A directory mode of 0555 does not stop CreateTemp on Windows, so the
+			// marker write is refused through fileMemory.restrict. replace checks
+			// that before the rename, on every OS, and leaves no marker behind.
+			name:      "marker write fails",
+			failWrite: true,
+		},
+		{
+			name: "sessions lock missed",
+			hold: func(dir string) (func(), error) {
+				return (&fileMemory{dir: dir, now: time.Now, restrict: func(string) error { return nil }}).lock(time.Second)
+			},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, _ := newRestoredHook(t, &hookClock{wall: time.Unix(1800000000, 0)})
+			h.prompt()
+			if h.registered.Generation != 1 {
+				t.Fatalf("initial registration = %+v", h.registered)
+			}
+			mem := sessionsFor(h.getenv)
+			proof := mem.name("claude", "s1")
+			marker := proof + ".ended"
+			var block atomic.Bool
+			if tc.failWrite {
+				previous := mem.restrict
+				mem.restrict = func(path string) error {
+					if block.Load() {
+						return errors.New("marker write")
+					}
+					return previous(path)
+				}
+				tc.hold = func(string) (func(), error) {
+					block.Store(true)
+					return func() { block.Store(false) }, nil
+				}
+			}
+			var mu sync.Mutex
+			var release func()
+			finish := func() {
+				mu.Lock()
+				unlock := release
+				release = nil
+				mu.Unlock()
+				if unlock != nil {
+					unlock()
+				}
+			}
+			t.Cleanup(finish)
+			transport := h.server.Client().Transport
+			h.http = &http.Client{Transport: restoreTransport(func(r *http.Request) (*http.Response, error) {
+				if strings.HasSuffix(r.URL.Path, "/end") {
+					// Remember has finished. Hold the failure across Forget, which runs
+					// after this response is read.
+					unlock, err := tc.hold(mem.dir)
+					if err != nil {
+						return nil, err
+					}
+					mu.Lock()
+					release = unlock
+					mu.Unlock()
+				}
+				return transport.RoundTrip(r)
+			})}
+			payload := `{"session_id":"s1","cwd":` + quote(h.root) + `}`
+			client := lastSession{Client: &hubclient.Client{Config: hubclient.EnvConfig{Getenv: h.getenv}, HTTP: h.http}, last: &h.registered}
+			runner := h.runner("SessionEnd", payload, client)
+			if tc.failWrite {
+				runner.Memory = mem
+			}
+			ran := runner.Run()
+			finish()
+			if ran.Exit != 0 {
+				t.Fatalf("exit %d: %s", ran.Exit, ran.Stderr)
+			}
+			out := string(ran.Stdout)
+			if out != string(FallbackAllow(ClientClaude).Stdout) {
+				t.Fatalf("SessionEnd output %q", out)
+			}
+			if gen, err := readGeneration(proof); gen != 1 || err != nil {
+				t.Fatalf("SessionEnd removed proof it could not mark ended: G%d, %v", gen, err)
+			}
+			if _, err := os.Lstat(marker); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("failed SessionEnd left a marker: %v", err)
+			}
+			assertReviewObservation(t, h, "damaged generation proof at "+marker)
+		})
+	}
+}
+
+func TestRefusalNamesAContributingEndMarker(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		ended     string
+		prune     bool
+		wantProof string
+	}{
+		{name: "pruned proof stays below the marker", ended: "5\n", prune: true, wantProof: ""},
+		{name: "pruned proof is restored above the marker", ended: "1\n", prune: true, wantProof: "3"},
+		{name: "proof already present still names the marker", ended: "2\n", wantProof: "3"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const route = "/v1/sessions"
+			h := reviewRestoredHook(t, route, false)
+			m := sessionsFor(h.getenv)
+			proof := m.name("claude", "s1")
+			marker := proof + ".ended"
+			if err := os.WriteFile(marker, []byte(tc.ended), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if tc.prune {
+				newer := time.Now().Add(2 * time.Hour)
+				if err := os.Chtimes(marker, newer, newer); err != nil {
+					t.Fatal(err)
+				}
+			}
+			observeReviewRequests(h, func(req floorRequest) error {
+				if tc.prune && req.route == route && req.generation == 3 {
+					pruner := m
+					pruner.now = func() time.Time { return time.Now().Add(memoryAge + time.Hour) }
+					return pruner.prune()
+				}
+				return nil
+			})
+			out := runReviewHook(h, route)
+			raw, err := os.ReadFile(proof)
+			switch {
+			case tc.wantProof == "" && !errors.Is(err, os.ErrNotExist):
+				t.Fatalf("refusal restored ended proof: %q, %v", raw, err)
+			case tc.wantProof != "" && (err != nil || strings.TrimSpace(string(raw)) != tc.wantProof):
+				t.Fatalf("proof after refusal = %q, %v, want %q", raw, err, tc.wantProof)
+			}
+			if got, err := os.ReadFile(marker); err != nil || string(got) != tc.ended {
+				t.Fatalf("marker after refusal = %q, %v", got, err)
+			}
+			assertReviewObservation(t, h, RestoreFloorRefused+" at "+marker)
+			if out != string(FallbackAllow(ClientClaude).Stdout) {
+				t.Fatalf("refused hook output %q", out)
+			}
+		})
+	}
+}
+
 func TestRefusalWithPrunedProofAndDamagedEndMarkerKeepsAbsentProofAndRecordsBoth(t *testing.T) {
 	for _, unreadable := range []bool{false, true} {
 		name := "malformed marker"
@@ -508,7 +661,7 @@ func TestRefusalWithPrunedProofAndDamagedEndMarkerKeepsAbsentProofAndRecordsBoth
 			for _, note := range notes {
 				got = append(got, note.Error)
 			}
-			want := []string{RestoreFloorRefused, "damaged generation proof at " + marker}
+			want := []string{RestoreFloorRefused + " at " + marker, "damaged generation proof at " + marker}
 			if !slices.Equal(got, want) {
 				t.Fatalf("observations = %v, want %v", got, want)
 			}

@@ -704,11 +704,13 @@ Changes from the reference schema:
    combined shell registration. If the retry is unsafe, the hook keeps G, records
    `restore_floor_refused` for doctor, and fails open without claiming or reconciling the edit.
    The proofless-edit denial during recovery still applies. An unreadable or malformed
-   generation file also fails open before registration. Local doctor output names the damaged
-   file. The hook refreshes readable proof under the bounded session lock before sending it.
-   A refusal can restore proof to a missing file only above any ended generation recorded
-   under the same lock. Generation writes keep the highest proof and SessionEnd clears only
-   matching proof. The shim and plain watch check same-session bindings against retained process
+   generation file, including a dangling symlink, also fails open before registration. Local
+   doctor output names the damaged file. It also names an `.ended` marker that contributed a
+   generation or is damaged, and the `.ended` path when SessionEnd could not write that marker
+   or take the sessions lock. Those paths stay in the local report. The hook refreshes readable
+   proof under the bounded session lock before sending it. A refusal can restore proof to a
+   missing file only above any ended generation recorded under the same lock. Generation writes
+   keep the highest proof and SessionEnd clears only matching proof. The shim and plain watch check same-session bindings against retained process
    and disk proof, and check disk proof before first-bind generation-zero fallback. A Codex
    id-mode sub-agent checks disk proof for its native session during its one lookup. These
    bindings fail when the session's proof file is unreadable or malformed. For

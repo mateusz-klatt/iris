@@ -186,14 +186,12 @@ func TestForgetKeepsProofWhenEndMarkerCannotBeRecorded(t *testing.T) {
 		session = "s"
 	)
 	for _, tc := range []struct {
-		name        string
-		wantDamaged bool
-		prepare     func(t *testing.T, m *fileMemory, marker string)
-		verify      func(t *testing.T, marker string)
+		name    string
+		prepare func(t *testing.T, m *fileMemory, marker string)
+		verify  func(t *testing.T, marker string)
 	}{
 		{
-			name:        "malformed marker",
-			wantDamaged: true,
+			name: "malformed marker",
 			prepare: func(t *testing.T, _ *fileMemory, marker string) {
 				if err := os.WriteFile(marker, []byte("damaged\n"), 0o600); err != nil {
 					t.Fatal(err)
@@ -206,8 +204,7 @@ func TestForgetKeepsProofWhenEndMarkerCannotBeRecorded(t *testing.T) {
 			},
 		},
 		{
-			name:        "unreadable marker",
-			wantDamaged: true,
+			name: "unreadable marker",
 			prepare: func(t *testing.T, _ *fileMemory, marker string) {
 				if err := os.MkdirAll(filepath.Join(marker, "keep"), 0o700); err != nil {
 					t.Fatal(err)
@@ -252,13 +249,8 @@ func TestForgetKeepsProofWhenEndMarkerCannotBeRecorded(t *testing.T) {
 			marker := path + ".ended"
 			tc.prepare(t, &m, marker)
 
-			damaged := m.forget(client, session, 3)
-			want := ""
-			if tc.wantDamaged {
-				want = marker
-			}
-			if damaged != want {
-				t.Fatalf("forget reported damaged=%q, want %q", damaged, want)
+			if damaged := m.forget(client, session, 3); damaged != marker {
+				t.Fatalf("forget reported damaged=%q, want %q", damaged, marker)
 			}
 
 			if gen, err := readGeneration(path); gen != 3 || err != nil {
@@ -271,6 +263,30 @@ func TestForgetKeepsProofWhenEndMarkerCannotBeRecorded(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestForgetNamesTheMarkerWhenTheSessionsLockIsMissed(t *testing.T) {
+	m := newFileMemory(t)
+	m.Remember("claude", "s", 3)
+	path := m.name("claude", "s")
+	marker := path + ".ended"
+	unlock, err := m.lock(hookLockBudget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(unlock)
+	if got := m.forget("claude", "s", 3); got != marker {
+		t.Fatalf("forget named %q, want the marker %q", got, marker)
+	}
+	if gen, err := readGeneration(path); gen != 3 || err != nil {
+		t.Fatalf("a missed lock changed proof to G%d, %v", gen, err)
+	}
+	if _, err := os.Lstat(marker); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a missed lock created a marker: %v", err)
+	}
+	if got := m.forget("claude", "s", 0); got != "" {
+		t.Fatalf("a generation of 0 named %q", got)
 	}
 }
 
@@ -299,13 +315,169 @@ func TestRetainGenerationRefusesAndReportsDamagedEndMarker(t *testing.T) {
 				t.Fatal(err)
 			}
 
-			if damaged := m.retainGeneration(client, session, 4); damaged != marker {
-				t.Fatalf("retainGeneration reported damaged=%q, want %q", damaged, marker)
+			if marker := m.retainGeneration(client, session, 4); marker.Path != path+".ended" || !marker.Damaged {
+				t.Fatalf("retainGeneration reported %+v, want the damaged marker", marker)
 			}
 			if gen, err := readGeneration(path); gen != 0 || err != nil {
 				t.Fatalf("retainGeneration restored proof over damaged marker: G%d, %v", gen, err)
 			}
 		})
+	}
+}
+
+func TestRetainGenerationNamesAMarkerThatContributed(t *testing.T) {
+	const (
+		client  = "claude"
+		session = "s"
+	)
+	m := newFileMemory(t)
+	if err := m.directory(); err != nil {
+		t.Fatal(err)
+	}
+	path := m.name(client, session)
+	marker := path + ".ended"
+	absent := filepath.Join(m.dir, "not-there")
+	if gen, err := readGeneration(absent); gen != 0 || err != nil {
+		t.Fatalf("absent path = G%d, %v; want (0, nil)", gen, err)
+	}
+	if err := os.WriteFile(marker, []byte("5\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Proof is absent and the marker is at least this generation, so the end still rules it out.
+	if got := m.retainGeneration(client, session, 4); got.Path != marker || got.Damaged {
+		t.Fatalf("blocking marker = %+v", got)
+	}
+	if gen, err := readGeneration(path); gen != 0 || err != nil {
+		t.Fatalf("retainGeneration restored ended proof: G%d, %v", gen, err)
+	}
+	// A newer generation is still restored, and the marker that allowed it is named.
+	if got := m.retainGeneration(client, session, 6); got.Path != marker || got.Damaged {
+		t.Fatalf("allowing marker = %+v", got)
+	}
+	if gen, err := readGeneration(path); gen != 6 || err != nil {
+		t.Fatalf("retainGeneration lost newer proof: G%d, %v", gen, err)
+	}
+	// A later refusal finds the proof already present. The marker is still named, and the proof stays.
+	if got := m.retainGeneration(client, session, 6); got.Path != marker || got.Damaged {
+		t.Fatalf("repeated refusal marker = %+v", got)
+	}
+	if raw, err := os.ReadFile(path); err != nil || strings.TrimSpace(string(raw)) != "6" {
+		t.Fatalf("repeated refusal rewrote proof to %q, %v", raw, err)
+	}
+	if raw, err := os.ReadFile(marker); err != nil || string(raw) != "5\n" {
+		t.Fatalf("repeated refusal rewrote the marker to %q, %v", raw, err)
+	}
+}
+
+func TestDanglingEndedMarkerIsDamageAndOnlyAnAbsentPathIsEmpty(t *testing.T) {
+	m := newFileMemory(t)
+	if err := m.directory(); err != nil {
+		t.Fatal(err)
+	}
+	path := m.name("claude", "s")
+	marker := path + ".ended"
+	absent := filepath.Join(m.dir, "missing-ended")
+	if gen, err := readGeneration(absent); gen != 0 || err != nil {
+		t.Fatalf("absent path = G%d, %v; want (0, nil)", gen, err)
+	}
+	symlinkToMissing(t, marker)
+	if gen, err := readGeneration(marker); gen != 0 || !errors.Is(err, ErrInvalidGeneration) {
+		t.Fatalf("dangling marker = G%d, %v; want invalid generation", gen, err)
+	}
+	if got := m.retainGeneration("claude", "s", 4); got.Path != marker || !got.Damaged {
+		t.Fatalf("retainGeneration reported %+v for a dangling marker", got)
+	}
+	if gen, err := readGeneration(path); gen != 0 || err != nil {
+		t.Fatalf("retainGeneration restored proof over a dangling marker: G%d, %v", gen, err)
+	}
+	if info, err := os.Lstat(marker); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("retainGeneration replaced the dangling marker: %v, %v", info, err)
+	}
+	m.Remember("claude", "s", 3)
+	if got := m.forget("claude", "s", 3); got != marker {
+		t.Fatalf("forget named %q for a dangling marker, want %q", got, marker)
+	}
+	if gen, err := readGeneration(path); gen != 3 || err != nil {
+		t.Fatalf("Forget removed proof despite a dangling marker: G%d, %v", gen, err)
+	}
+	if info, err := os.Lstat(marker); err != nil || info.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("Forget replaced the dangling marker: %v, %v", info, err)
+	}
+}
+
+func TestRepeatedRefusalObservationNamesTheEndMarker(t *testing.T) {
+	root := gitRepo(t)
+	getenv := failureEnv(t)
+	m := sessionsFor(getenv)
+	m.Remember("claude", "s", 4)
+	marker := m.name("claude", "s") + ".ended"
+	if err := os.WriteFile(marker, []byte("2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := &recoveryHub{generation: 1}
+	out := Runner{
+		ClientName: "claude", EventName: "PreToolUse", Stdin: strings.NewReader(writePayload(root, "s", "a.go")),
+		Hub: h, Getenv: getenv, after: never, logAfter: never,
+	}.Run()
+	assertAllow(t, ClientClaude, out)
+	if h.touched != 0 || len(h.sent) != 1 || h.sent[0] != 4 {
+		t.Fatalf("refusal sent %+v and touched %d", h.sent, h.touched)
+	}
+	if got := m.Recall("claude", "s"); got != 4 {
+		t.Fatalf("repeated refusal changed proof to G%d", got)
+	}
+	if raw, err := os.ReadFile(marker); err != nil || string(raw) != "2\n" {
+		t.Fatalf("marker after refusal = %q, %v", raw, err)
+	}
+	notes, err := ReadRecentObservations(getenv("IRIS_TOKEN_FILE"), 10)
+	if err != nil || len(notes) != 1 || notes[0].Error != RestoreFloorRefused+" at "+marker {
+		t.Fatalf("observations %+v, %v", notes, err)
+	}
+}
+
+func TestDamagedProofObservationDoesNotAbsorbTheEndMarker(t *testing.T) {
+	root := gitRepo(t)
+	getenv := failureEnv(t)
+	m := sessionsFor(getenv)
+	m.Remember("claude", "s", 4)
+	proof := m.name("claude", "s")
+	marker := proof + ".ended"
+	if err := os.WriteFile(marker, []byte("also damaged\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	h := &recoveryHub{generation: 1}
+	wrapped := interceptedRegistration{Client: &hubclient.Client{}, register: func(context.Context, hubclient.SessionRequest) (hubclient.SessionResponse, error) {
+		// The hook already read G4. Damage it before the refusal reads the proof again.
+		if err := os.WriteFile(proof, []byte("damaged\n"), 0o600); err != nil {
+			t.Errorf("corrupt proof: %v", err)
+		}
+		return h.RegisterSession(context.Background(), hubclient.SessionRequest{Generation: 4})
+	}}
+	out := Runner{
+		ClientName: "claude", EventName: "PreToolUse", Stdin: strings.NewReader(writePayload(root, "s", "a.go")),
+		Hub: wrapped, Getenv: getenv, after: never, logAfter: never,
+	}.Run()
+	assertAllow(t, ClientClaude, out)
+	if h.touched != 0 {
+		t.Fatal("damaged proof was claimed")
+	}
+	if raw, err := os.ReadFile(proof); err != nil || string(raw) != "damaged\n" {
+		t.Fatalf("proof = %q, %v", raw, err)
+	}
+	if raw, err := os.ReadFile(marker); err != nil || string(raw) != "also damaged\n" {
+		t.Fatalf("marker = %q, %v", raw, err)
+	}
+	notes, err := ReadRecentObservations(getenv("IRIS_TOKEN_FILE"), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, note := range notes {
+		got = append(got, note.Error)
+	}
+	want := []string{"damaged generation proof at " + proof, "damaged generation proof at " + marker}
+	if !slices.Equal(got, want) {
+		t.Fatalf("observations = %v, want %v", got, want)
 	}
 }
 

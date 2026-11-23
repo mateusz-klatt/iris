@@ -113,45 +113,67 @@ func (m fileMemory) Forget(client, session string, generation int) {
 }
 
 func (m fileMemory) forget(client, session string, generation int) string {
+	path := m.name(client, session)
+	// The marker is the path doctor can name when the end is not recorded. A missed lock
+	// never enters the callback, so the path has to be known out here.
+	marker := path + ".ended"
 	var damaged string
-	_ = m.underLock(func() {
+	err := m.underLock(func() {
 		if generation <= 0 {
 			return
 		}
-		path := m.name(client, session)
 		// Record the end first, even if pruning already removed the proof. The same lock
 		// prevents a delayed refusal from treating a cleared file as merely pruned.
-		marker := path + ".ended"
-		ended, err := readGeneration(marker)
-		if err != nil {
+		ended, readErr := readGeneration(marker)
+		if readErr != nil {
 			damaged = marker
 			return
 		}
 		if m.replace(marker, strconv.Itoa(max(ended, generation))) != nil {
+			// The proof stays: deleting it would forget the generation with no record of the end.
+			damaged = marker
 			return
 		}
-		if current, err := readGeneration(path); err == nil && current == generation {
+		if current, readErr := readGeneration(path); readErr == nil && current == generation {
 			_ = os.Remove(path)
 		}
 	})
+	if err != nil && generation > 0 {
+		return marker
+	}
 	return damaged
+}
+
+// endMarker is the .ended path a refusal should name. Path is set when the marker
+// contributed a generation or could not be read. Damaged is set only when it could
+// not be read. An absent marker leaves Path empty.
+type endMarker struct {
+	Path    string
+	Damaged bool
 }
 
 // retainGeneration restores proof that pruning removed after it was read. Only an absent
 // entry may be recreated, and a successful end rules out that generation and earlier ones.
-func (m fileMemory) retainGeneration(client, session string, generation int) string {
-	var damaged string
+// The marker is read even when proof is present, so a later refusal can name it; that read
+// does not change whether proof is restored, touched or left alone.
+func (m fileMemory) retainGeneration(client, session string, generation int) endMarker {
+	var marker endMarker
 	_ = m.underLock(func() {
 		path := m.name(client, session)
-		current, err := readGeneration(path)
+		endedPath := path + ".ended"
+		current, proofErr := readGeneration(path)
+		ended, markerErr := readGeneration(endedPath)
 		switch {
-		case err != nil:
+		case markerErr != nil:
+			marker = endMarker{Path: endedPath, Damaged: true}
+		case proofErr == nil && ended > 0:
+			marker = endMarker{Path: endedPath}
+		}
+		switch {
+		case proofErr != nil:
 			return
 		case current == 0:
-			marker := path + ".ended"
-			ended, err := readGeneration(marker)
-			if err != nil {
-				damaged = marker
+			if markerErr != nil {
 				return
 			}
 			if generation > ended {
@@ -161,7 +183,7 @@ func (m fileMemory) retainGeneration(client, session string, generation int) str
 			m.touchGeneration(path)
 		}
 	})
-	return damaged
+	return marker
 }
 
 func (m fileMemory) touchGeneration(path string) {
