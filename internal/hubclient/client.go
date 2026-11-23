@@ -140,12 +140,15 @@ type TouchResponse struct {
 // ClaimGroup is one checkout's share of a grouped touch (ADR 033): the paths of a tool call that
 // lie in that checkout, relative to its worktree, with what the hook read of the checkout.
 type ClaimGroup struct {
-	Worktree   string   `json:"worktree"`
-	WorktreeID string   `json:"worktree_id,omitempty"`
-	CommonDir  string   `json:"common_dir,omitempty"`
-	RemoteURL  string   `json:"remote_url,omitempty"`
-	RootCommit string   `json:"root_commit,omitempty"`
-	Paths      []string `json:"paths"`
+	Worktree   string `json:"worktree"`
+	WorktreeID string `json:"worktree_id,omitempty"`
+	CommonDir  string `json:"common_dir,omitempty"`
+	RemoteURL  string `json:"remote_url,omitempty"`
+	RootCommit string `json:"root_commit,omitempty"`
+	// Branch is optional. An older client omits it and the hub records the branch
+	// as unknown rather than borrowing another checkout's branch (ADR 037).
+	Branch string   `json:"branch,omitempty"`
+	Paths  []string `json:"paths"`
 }
 
 // TouchFilesRequest is a pre-edit touch whose paths are grouped by the checkout each file lies

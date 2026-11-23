@@ -267,8 +267,10 @@ func TestMigration029LeavesLegacyRowsRepositoryWide(t *testing.T) {
 	if err := s.db.QueryRow("SELECT fence,path,worktree_key,worktree_path,branch FROM Claim WHERE execution_id=?", a.ExecutionID).Scan(&fence, &path, &claimKey, &claimPath, &claimBranch); err != nil {
 		t.Fatal(err)
 	}
-	if path != "src/api.go" || claimKey.Valid || claimPath.Valid || claimBranch.Valid {
-		t.Fatalf("new automatic claim was not a legacy null row: %s %#v %#v %#v", path, claimKey, claimPath, claimBranch)
+	// No WorktreeID was established, so the key stays null and the claim is repository-wide.
+	// The display path is the registered checkout. The session named no branch.
+	if path != "src/api.go" || claimKey.Valid || claimPath.String != "/repo/w1" || claimBranch.Valid {
+		t.Fatalf("automatic claim without a worktree id: %s key=%#v path=%#v branch=%#v", path, claimKey, claimPath, claimBranch)
 	}
 	var executionKey sql.NullString
 	if err := s.db.QueryRow("SELECT worktree_key FROM Execution WHERE id=?", a.ExecutionID).Scan(&executionKey); err != nil || executionKey.Valid {

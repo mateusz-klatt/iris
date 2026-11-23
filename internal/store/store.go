@@ -861,7 +861,14 @@ func (t *transaction) requeue(ex string) error {
 	return nil
 }
 func (t *transaction) event(agent, ex, kind, object string) error {
-	_, err := t.exec("INSERT INTO Event(kind,agent_id,execution_id,object_id,created_ms) VALUES(?,NULLIF(?,''),NULLIF(?,''),?,?)", kind, agent, ex, object, t.s.clock.Now().UnixMilli())
+	return t.eventAt(agent, ex, kind, object, "")
+}
+
+// eventAt records an event. worktreeKey is set on claim_available, which has to
+// remember the waiter's checkout after the Waiter row is deleted (ADR 037).
+// Every other event leaves the column null.
+func (t *transaction) eventAt(agent, ex, kind, object, worktreeKey string) error {
+	_, err := t.exec("INSERT INTO Event(kind,agent_id,execution_id,object_id,created_ms,worktree_key) VALUES(?,NULLIF(?,''),NULLIF(?,''),?,?,NULLIF(?,''))", kind, agent, ex, object, t.s.clock.Now().UnixMilli(), worktreeKey)
 	if err == nil {
 		t.notify = true
 	}

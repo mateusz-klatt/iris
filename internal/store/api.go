@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"math"
-	"slices"
 
 	"github.com/mateusz-klatt/iris/internal/buildinfo"
 )
@@ -290,8 +289,9 @@ func (t *transaction) monitorCursor(r Request) (map[string]any, error) {
 const pendingReplaySQL = `SELECT COUNT(*),COALESCE(SUM(NOT EXISTS(SELECT 1 FROM Event WHERE seq=Delivery.attention_seq AND kind='inbox_changed' AND object_id=Delivery.id AND created_ms>=?)),0),MIN(attention_seq)
  FROM Delivery WHERE recipient_agent_id=? AND attention=1 AND id NOT IN (SELECT delivery_id FROM Ack)`
 
-// freedRewindSQL lists the paths freed for e within the last waitLimit, newest first.
-const freedRewindSQL = `SELECT seq,object_id FROM Event WHERE agent_id=? AND kind='claim_available' AND execution_id=? AND created_ms>=? ORDER BY seq DESC`
+// freedRewindSQL lists the paths freed for e within the last waitLimit, newest first,
+// with the waiter's worktree key. An old event has a null key and stays repository-wide.
+const freedRewindSQL = `SELECT seq,object_id,COALESCE(worktree_key,'') FROM Event WHERE agent_id=? AND kind='claim_available' AND execution_id=? AND created_ms>=? ORDER BY seq DESC`
 
 // freedRewind is the cursor just before the newest path freed for e that is still free, or the
 // largest cursor when there is none. Unlike freedPathsSQL, which counts every such event because
@@ -300,19 +300,27 @@ const freedRewindSQL = `SELECT seq,object_id FROM Event WHERE agent_id=? AND kin
 // but not whether the wait was exact or prefix, so the path is compared as a prefix, which skips
 // more rather than less. An event older than waitLimit is skipped too, as its waiter would have
 // expired. That bounds the replay to the agent's events of the last hour.
+//
+// Under worktree, only decision 2's exempt automatic pair is non-blocking. Under repository
+// any overlap still blocks, and the event's key is ignored (ADR 037).
 func (t *transaction) freedRewind(e execution) (int64, error) {
+	scope, err := t.claimScope(e.Repo)
+	if err != nil {
+		return 0, err
+	}
 	rows, err := t.rows(freedRewindSQL, e.AgentID, e.ID, t.s.clock.Now().Add(-waitLimit).UnixMilli())
 	if err != nil {
 		return 0, err
 	}
 	type freed struct {
-		seq int64
-		key string
+		seq         int64
+		key         string
+		worktreeKey string
 	}
 	var fs []freed
 	for rows.Next() {
 		var f freed
-		rows.Scan(&f.seq, &f.key)
+		rows.Scan(&f.seq, &f.key, &f.worktreeKey)
 		fs = append(fs, f)
 	}
 	err = rows.Err()
@@ -325,11 +333,30 @@ func (t *transaction) freedRewind(e execution) (int64, error) {
 		return 0, err
 	}
 	for _, f := range fs {
-		if !slices.ContainsFunc(cs, func(c claim) bool { return overlaps(f.key, "prefix", c.Key, c.Kind) }) {
+		if !rewindBlocked(scope, f.key, f.worktreeKey, cs) {
 			return f.seq - 1, nil
 		}
 	}
 	return math.MaxInt64, nil
+}
+
+// rewindBlocked reports whether any live claim still covers the freed path. A null event
+// key is treated as an explicit wait, so it is never the exempt automatic pair.
+func rewindBlocked(scope, key, worktreeKey string, cs []claim) bool {
+	incoming := "explicit"
+	if worktreeKey != "" {
+		incoming = "auto"
+	}
+	for _, c := range cs {
+		if !overlaps(key, "prefix", c.Key, c.Kind) {
+			continue
+		}
+		if exemptAutoOverlap(scope, c.Origin, c.WorktreeKey, incoming, worktreeKey) {
+			continue
+		}
+		return true
+	}
+	return false
 }
 
 const agentEventsSQL = `SELECT seq,kind,kind='inbox_changed' AND object_id NOT IN (SELECT id FROM Delivery WHERE attention=1 AND id NOT IN (SELECT delivery_id FROM Ack)) FROM Event WHERE seq>? AND agent_id=? AND (execution_id IS NULL OR execution_id=?) ORDER BY seq LIMIT ?`
