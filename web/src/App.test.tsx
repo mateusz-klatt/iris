@@ -459,7 +459,7 @@ describe("Iris operator console", () => {
     await screen.findByRole("article", { name: "Rollout check" });
     await waitFor(() => expect(reads).toHaveLength(1));
     expect(reads[0]?.url).toContain("/v1/ui/threads/ms_root/read");
-    expect(reads[0]?.body).toEqual({ repository_id: "" });
+    expect(reads[0]?.body).toEqual({ repository_id: "", last_message_id: "ms_root" });
     await user.click(screen.getByRole("button", { name: "Back to threads" }));
     await user.click(await screen.findByRole("button", { name: /Rollout check/ }));
     await waitFor(() => expect(reads).toHaveLength(2));

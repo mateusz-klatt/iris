@@ -262,15 +262,14 @@ export function getThread(id: string, repositoryId = "", signal?: AbortSignal): 
   return getJson(`/v1/ui/threads/${encodeURIComponent(id)}${suffix}`, signal);
 }
 
-/** Marks the operator's mail in a thread as read, in repositoryId or the whole hub (A13). */
-/** Reads the operator's mail in a thread, and says how many deliveries that read. */
-export async function readThread(id: string, repositoryId = "", signal?: AbortSignal): Promise<number> {
+/** Reads operator mail through lastMessageId, or the whole thread when it is omitted for legacy callers. */
+export async function readThread(id: string, repositoryId = "", lastMessageId?: string, signal?: AbortSignal): Promise<number> {
   const token = consoleCsrf;
   const response = await request(`/v1/ui/threads/${encodeURIComponent(id)}/read`, {
     method: "POST",
     signal,
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ repository_id: repositoryId }),
+    body: JSON.stringify({ repository_id: repositoryId, ...(lastMessageId === undefined ? {} : { last_message_id: lastMessageId }) }),
   });
   const out = (await response.json()) as { read: number };
   requireConsoleSession(token);

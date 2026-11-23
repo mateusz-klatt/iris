@@ -1279,6 +1279,19 @@ controls. These controls describe current capabilities; every request remains
 subject to store authorization. Messages show immutable person attribution
 alongside the shared human transport and explain that replies use a shared mailbox.
 
+An operator's explicit, visible thread open acknowledges only through `last_message_id`, the
+newest message in the detail response that open loaded. The hub requires that message to belong
+to the thread and be visible in the requested view, then acknowledges human deliveries whose
+Message `rowid` is no greater than its `rowid`. This insertion-order bound excludes later commits
+even if their wall-clock timestamps or random ids sort earlier. Thread detail orders messages by
+`(created_ms, rowid)`, and list titles select the first message in that same order. Because the
+display order uses the hub's wall clock while the bound uses insertion order, a message shown
+before the watermark but inserted after it, which needs a wall-clock step back, stays unread
+until the next open: the bound can under-acknowledge, never over-acknowledge. A passive
+refresh does not advance the mark or authorize a read. For one release, omitting
+`last_message_id` retains the legacy thread-wide acknowledgement; a later release will require
+the field.
+
 The new-message recipient picker stores Agent IDs, not display names, and sends those IDs
 through the existing address resolver. If a selected ID disappears from the directory, review
 and send are disabled until the operator clears and selects again. An agent recreated under

@@ -511,10 +511,11 @@ func (t *transaction) thread(id, repo string) (map[string]any, error) {
 	return map[string]any{"id": id, "messages": messages}, nil
 }
 
-// readThread acknowledges the operator's unread mail in a thread, which is how the human
-// inbox's unread count goes down (gap review A13): opening a thread, or replying in it,
-// reads it. With a repository, only that repository's human deliveries are read; from the
-// whole-hub view, every repository's. There is no way back to unread.
+// readThread acknowledges the operator's unread mail through the requested high-water
+// message, or the whole thread for a legacy request without one. Opening a thread lowers
+// the human inbox's unread count (gap review A13). With a repository, only that repository's
+// human deliveries are read; from the whole-hub view, every repository's. There is no way
+// back to unread.
 func (t *transaction) readThread(r Request) (map[string]any, error) {
 	var n int
 	if err := t.row("SELECT COUNT(*) FROM Message WHERE thread_id=?", r.Key).Scan(&n); err != nil {
@@ -523,8 +524,21 @@ func (t *transaction) readThread(r Request) (map[string]any, error) {
 	if n == 0 {
 		return nil, fail("not_found", "unknown thread")
 	}
+	boundary := ""
+	args := []any{r.Key}
+	if r.LastMessageID != "" {
+		visible, visibleArgs := t.visibleIn("m", r.RepositoryID)
+		var highWaterRowID int64
+		highWaterArgs := append([]any{r.LastMessageID, r.Key}, visibleArgs...)
+		if err := t.row("SELECT m.rowid FROM Message m WHERE m.id=? AND m.thread_id=? AND "+visible, highWaterArgs...).Scan(&highWaterRowID); err != nil {
+			return nil, missing(err, "unknown message in thread")
+		}
+		boundary = " AND m.rowid<=?"
+		args = append(args, highWaterRowID)
+	}
+	args = append(args, r.RepositoryID, r.RepositoryID)
 	rows, err := t.rows(`SELECT d.id,d.attempt,a.repository_id FROM Delivery d JOIN Message m ON m.id=d.message_id JOIN Agent a ON a.id=d.recipient_agent_id
- WHERE m.thread_id=? AND a.client='human' AND (?='' OR a.repository_id=?) AND d.id NOT IN (SELECT delivery_id FROM Ack) ORDER BY d.id`, r.Key, r.RepositoryID, r.RepositoryID)
+ WHERE m.thread_id=?`+boundary+` AND a.client='human' AND (?='' OR a.repository_id=?) AND d.id NOT IN (SELECT delivery_id FROM Ack) ORDER BY d.id`, args...)
 	if err != nil {
 		return nil, err
 	}
