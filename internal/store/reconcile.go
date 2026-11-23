@@ -217,10 +217,11 @@ func (t *transaction) releaseLeft(e execution, paths []string) error {
 				continue
 			}
 			// Under repository every matching automatic exact row is released, whichever
-			// key it carries. Under worktree the status checkout's key is released,
-			// and so is this Execution's legacy null key: that row is its own claim,
-			// not another checkout. A key for another checkout stays.
-			if scope == "worktree" && c.WorktreeKey != "" && c.WorktreeKey != e.WorktreeKey {
+			// key it carries. Under worktree the status checkout releases its key,
+			// a legacy row that recorded no checkout, and a null key whose display
+			// path is this checkout. A null key recorded in another checkout stays,
+			// and so does an ambiguous row.
+			if scope == "worktree" && !releasesInCheckout(c, e) {
 				continue
 			}
 			if _, err = t.exec("UPDATE Claim SET revoked_ms=? WHERE fence=? AND revoked_ms IS NULL", now, c.Fence); err != nil {
@@ -269,11 +270,7 @@ func (t *transaction) autoClaim(e execution, paths []string) ([]string, int, err
 				if reusesOwn(scope, c.Origin, c.WorktreeKey, loc.key) {
 					mine = true
 					if c.Origin == "auto" {
-						adopt := ""
-						if scope == "worktree" {
-							adopt = loc.key
-						}
-						if err = t.renewAuto(c.Fence, expiry, loc.path, loc.branch, adopt); err != nil {
+						if err = t.renewAuto(c.Fence, expiry, loc, scope, true); err != nil {
 							return nil, 0, err
 						}
 					}

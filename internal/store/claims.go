@@ -28,13 +28,17 @@ func (c claim) public() map[string]any {
 }
 
 // listed is one claim as the console and GET /v1/claims show it (ADR 037).
-// An empty worktree path is a legacy row: the location is unknown, not the holder's
-// current checkout. effective_scope is worktree only for an automatic claim with a
-// key while the repository has opted in. A null key or an explicit claim stays
-// repository-wide even when a display path is recorded.
+// An empty worktree path is a legacy row, and an ambiguous marker is the same
+// unknown location: neither is the holder's current checkout. effective_scope is
+// worktree only for an automatic claim with a key while the repository has opted
+// in. A null key or an explicit claim stays repository-wide even when a display
+// path is recorded.
 func (c claim) listed(scope string) map[string]any {
 	out := c.public()
 	out["worktree_path"] = c.WorktreePath
+	if c.WorktreePath == ambiguousWorktree {
+		out["worktree_path"] = ""
+	}
 	out["branch"] = c.Branch
 	out["host"] = c.Host
 	out["effective_scope"] = "repository"
@@ -361,11 +365,7 @@ func (t *transaction) touch(r Request) (map[string]any, error) {
 		for _, p := range normalized {
 			if c, ok := reuse[p]; ok {
 				if c.Origin == "auto" {
-					adopt := ""
-					if scope == "worktree" {
-						adopt = loc.key
-					}
-					if err = t.renewAuto(c.Fence, expiry, loc.path, loc.branch, adopt); err != nil {
+					if err = t.renewAuto(c.Fence, expiry, loc, scope, true); err != nil {
 						return nil, err
 					}
 				}

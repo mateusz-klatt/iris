@@ -8,10 +8,22 @@ import (
 	"github.com/mateusz-klatt/iris/internal/display"
 )
 
+// ambiguousWorktree is a display path no checkout has. It records that the
+// observations of one repository-wide claim disagreed, so the guard cannot
+// treat a missing path as the holder's current root. listed maps it back to
+// unknown.
+const ambiguousWorktree = "\x00"
+
 // claimLocation is the checkout a claim records. An empty key is repository-wide:
 // the display path and branch are still the checkout that was observed (ADR 037).
+// ambiguousWorktree means the observations disagreed and the claim stays
+// repository-wide with no checkout.
 type claimLocation struct {
 	key, path, branch string
+}
+
+func ambiguousLocation() claimLocation {
+	return claimLocation{path: ambiguousWorktree}
 }
 
 func (t *transaction) claimScope(repo string) (string, error) {
@@ -100,6 +112,9 @@ func sameGuardWorktree(scope string, c claim, incomingKey, host, worktree, holde
 	if c.WorktreeKey != "" {
 		return incomingKey != "" && c.WorktreeKey == incomingKey
 	}
+	if c.WorktreePath == ambiguousWorktree {
+		return false
+	}
 	if c.Origin == "explicit" && c.WorktreePath != "" {
 		return holderHost == host && worktreePathsEqual(c.WorktreePath, worktree)
 	}
@@ -107,6 +122,23 @@ func sameGuardWorktree(scope string, c claim, incomingKey, host, worktree, holde
 		return holderHost == host && holderWorktree == worktree
 	}
 	return false
+}
+
+// releasesInCheckout is whether a worktree-scoped reconcile may release this
+// automatic claim. A key must be this checkout's. A legacy row recorded no
+// checkout and still releases with the Execution. A null key releases only when
+// its display path is this checkout. An ambiguous row stays.
+func releasesInCheckout(c claim, e execution) bool {
+	if c.WorktreeKey != "" {
+		return c.WorktreeKey == e.WorktreeKey
+	}
+	if c.WorktreePath == "" {
+		return true
+	}
+	if c.WorktreePath == ambiguousWorktree {
+		return false
+	}
+	return worktreePathsEqual(c.WorktreePath, e.Worktree)
 }
 
 // advisoryMessage is the sentence a touch shows. Each overlap is one sentence,
@@ -132,13 +164,54 @@ func (t *transaction) insertClaim(e execution, repo, kind, path, key, origin str
 	return id, nil
 }
 
-// renewAuto extends an automatic claim. key is written only when the stored key
-// is null, so a legacy row is adopted in place and a keyed row does not move.
-// The caller passes a key only for the Execution's own checkout under worktree
-// scope; anything else passes "" and the stored key stays.
-func (t *transaction) renewAuto(fence, expiry int64, path, branch, key string) error {
-	_, err := t.exec("UPDATE Claim SET expires_ms=?,worktree_path=COALESCE(NULLIF(?,''),worktree_path),branch=COALESCE(NULLIF(?,''),branch),worktree_key=COALESCE(worktree_key, NULLIF(?,'')) WHERE fence=?", expiry, path, branch, key, fence)
+// renewAuto extends an automatic claim. A legacy null key is adopted only when
+// this observation is the Execution's own checkout and the row recorded no
+// checkout, or the recorded path is this observation. A keyed row is not moved.
+// Under repository, an observation that disagrees clears the key and records
+// ambiguity, so a later opt-in cannot treat that row as one of the checkouts.
+// Under worktree the same disagreement leaves the row where it was recorded.
+func (t *transaction) renewAuto(fence, expiry int64, observed claimLocation, scope string, own bool) error {
+	var storedKey, storedPath sql.NullString
+	err := t.row("SELECT worktree_key,worktree_path FROM Claim WHERE fence=?", fence).Scan(&storedKey, &storedPath)
+	if err != nil {
+		return err
+	}
+	if storedPath.String == ambiguousWorktree {
+		_, err = t.exec("UPDATE Claim SET expires_ms=? WHERE fence=?", expiry, fence)
+		return err
+	}
+	if !provenanceAgrees(storedKey.String, storedPath.String, observed) {
+		if scope == "worktree" {
+			_, err = t.exec("UPDATE Claim SET expires_ms=? WHERE fence=?", expiry, fence)
+			return err
+		}
+		_, err = t.exec("UPDATE Claim SET expires_ms=?,worktree_key=NULL,worktree_path=?,branch=NULL WHERE fence=?", expiry, ambiguousWorktree, fence)
+		return err
+	}
+	key := ""
+	legacy := storedPath.String == "" && own
+	recorded := storedPath.String != "" && worktreePathsEqual(storedPath.String, observed.path)
+	if scope == "worktree" && observed.key != "" && (legacy || recorded) {
+		key = observed.key
+	}
+	path, branch := "", ""
+	if observed.path != "" && (storedKey.String != "" || (storedPath.String == "" && own && scope == "worktree")) {
+		path, branch = observed.path, observed.branch
+	}
+	_, err = t.exec("UPDATE Claim SET expires_ms=?,worktree_path=COALESCE(NULLIF(?,''),worktree_path),branch=COALESCE(NULLIF(?,''),branch),worktree_key=COALESCE(worktree_key, NULLIF(?,'')) WHERE fence=?", expiry, path, branch, key, fence)
 	return err
+}
+
+// provenanceAgrees is whether observed is the checkout a claim already records.
+// A legacy row records none, so the first observation does not disagree with it.
+func provenanceAgrees(storedKey, storedPath string, observed claimLocation) bool {
+	if storedKey != "" {
+		return storedKey == observed.key
+	}
+	if storedPath == "" {
+		return true
+	}
+	return worktreePathsEqual(storedPath, observed.path)
 }
 
 // revokeAutoSiblings drops this Execution's other automatic exact rows for one path.

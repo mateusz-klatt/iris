@@ -143,7 +143,7 @@ func (t *transaction) touchFiles(r Request) (map[string]any, error) {
 				// instead of keeping the first group's key. After opt-in that
 				// key would make the second checkout look exempt.
 				if i, ok := p.byPath[k]; ok && p.scope != "worktree" && !sameProvenance(p.grants[i].loc, loc) {
-					p.grants[i].loc = claimLocation{}
+					p.grants[i].loc = ambiguousLocation()
 				}
 				continue
 			}
@@ -423,13 +423,10 @@ func (t *transaction) grantFiles(e execution, places []*filePlace) ([]map[string
 				}
 				c.Fence = fence
 			} else if c.Origin == "auto" {
-				// Only the Execution's own checkout adopts a null key. Another
-				// checkout renews the legacy row without moving it.
-				adopt := ""
-				if p.scope == "worktree" && g.loc.key != "" && g.loc.key == e.WorktreeKey {
-					adopt = g.loc.key
-				}
-				if err := t.renewAuto(c.Fence, expiry, g.loc.path, g.loc.branch, adopt); err != nil {
+				// own is this Execution's checkout. Another checkout may renew a
+				// null key it already recorded, and must not adopt a different one.
+				own := g.loc.key != "" && g.loc.key == e.WorktreeKey
+				if err := t.renewAuto(c.Fence, expiry, g.loc, p.scope, own); err != nil {
 					return nil, err
 				}
 			}
