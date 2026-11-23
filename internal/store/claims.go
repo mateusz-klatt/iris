@@ -456,11 +456,12 @@ func (t *transaction) explicitIn(r Request, route string) (map[string]any, error
 		return nil, fail("bad_request", "ttl_s is outside the supported range")
 	}
 	repo := e.Repo
+	shown := ""
 	if route == "claim_files" {
 		if r.Checkout == nil {
 			return nil, fail("bad_request", "checkout is required")
 		}
-		if repo, err = t.fileRepository(e, *r.Checkout); err != nil {
+		if repo, shown, err = t.fileRepository(e, *r.Checkout); err != nil {
 			return nil, err
 		}
 		if repo == "" {
@@ -481,7 +482,8 @@ func (t *transaction) explicitIn(r Request, route string) (map[string]any, error
 		if err != nil {
 			return nil, err
 		}
-		loc.path, loc.branch = canonicalDisplayPath(r.Checkout.Worktree), r.Checkout.Branch
+		// shown is the alias-folded display path. The raw checkout spelling is not stored.
+		loc.path, loc.branch = shown, r.Checkout.Branch
 	}
 	if err = refuseControl(r.Path); err != nil {
 		return nil, err

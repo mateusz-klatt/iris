@@ -69,7 +69,7 @@ func (t *transaction) touchFiles(r Request) (map[string]any, error) {
 	unclaimed := []string{}
 	seen := map[string]bool{}
 	for _, g := range r.Groups {
-		repo, err := t.fileRepository(e, g)
+		repo, worktree, err := t.fileRepository(e, g)
 		if err != nil {
 			return nil, err
 		}
@@ -85,10 +85,11 @@ func (t *transaction) touchFiles(r Request) (map[string]any, error) {
 			}
 			scopeOf[repo] = scope
 		}
-		// The group's own checkout, not the session's. An omitted WorktreeID has no
-		// key, and that claim stays repository-wide. The branch is the group's, or
-		// unknown when an older client left it out.
-		loc := claimLocation{path: canonicalDisplayPath(g.Worktree), branch: g.Branch}
+		// The group's own checkout, not the session's. fileRepository folds an alias
+		// to the path this host first named and returns that path in display form.
+		// An omitted WorktreeID has no key, and that claim stays repository-wide.
+		// The branch is the group's, or unknown when an older client left it out.
+		loc := claimLocation{path: worktree, branch: g.Branch}
 		if g.WorktreeID != "" {
 			loc.key, err = t.ensureWorktreeKey(e.Host, g.WorktreeID)
 			if err != nil {
@@ -201,41 +202,49 @@ func (t *transaction) touchFiles(r Request) (map[string]any, error) {
 	return out, nil
 }
 
-// fileRepository places one group's checkout. The Execution's own worktree is its repository.
-// Another checkout is resolved by the registration rules (D11, ADR 012), never from the session.
-// One that matches no repository allocates one, as a session started there would, so a later
-// session in that checkout meets the claim. An ambiguous one answers "": allocating there could
+// fileRepository places one group's checkout and returns the display path to store.
+// The Execution's own worktree is its repository. Another checkout is resolved by the
+// registration rules (D11, ADR 012), never from the session. One that matches no
+// repository allocates one, as a session started there would, so a later session in
+// that checkout meets the claim. An ambiguous one answers "": allocating there could
 // only add one more candidate (ADR 032).
-func (t *transaction) fileRepository(e execution, g ClaimGroup) (string, error) {
+//
+// The path is the one this host first named for the directory, then the display form:
+// slashes, no trailing separator, and an upper-case Windows drive letter. A later
+// spelling of the same directory, including a different case, does not replace it.
+// The comparison that places the checkout still uses the alias path, not the display form.
+func (t *transaction) fileRepository(e execution, g ClaimGroup) (string, string, error) {
 	if g.Worktree == "" {
-		return "", fail("bad_request", "every group needs its worktree")
+		return "", "", fail("bad_request", "every group needs its worktree")
 	}
 	r := Request{Host: e.Host, Cwd: g.Worktree, Worktree: g.Worktree, WorktreeID: g.WorktreeID, CommonDir: g.CommonDir, RemoteURL: g.RemoteURL, RootCommit: g.RootCommit}
 	if err := t.canonicalWorktree(&r); err != nil {
-		return "", err
+		return "", "", err
 	}
+	shown := canonicalDisplayPath(r.Worktree)
 	if sameWorktree(r.Worktree, e.Worktree) {
 		// The Execution's checkout still has to be the history its repository records, as a
 		// registration from there checks: an event from elsewhere did not check it.
 		var root string
 		if err := t.row("SELECT root_commit FROM Repository WHERE id=?", e.Repo).Scan(&root); err != nil {
-			return "", err
+			return "", "", err
 		}
 		if root != "" && r.RootCommit != "" && root != r.RootCommit {
-			return "", fail("conflict", "this active Execution belongs to another repository history; end the session or ask the owner to repair the split with iris admin merge")
+			return "", "", fail("conflict", "this active Execution belongs to another repository history; end the session or ask the owner to repair the split with iris admin merge")
 		}
 		// It is the Execution's own worktree, so its repository learns from it as a registration
 		// from there would (ADR 032), without redirecting any checkout continuity.
-		return e.Repo, t.rememberRepository(r, e.Repo)
+		return e.Repo, shown, t.rememberRepository(r, e.Repo)
 	}
 	repo, ambiguous, err := t.resolveRepository(r)
 	if err != nil || (repo == "" && ambiguous) {
-		return "", err
+		return "", "", err
 	}
 	if repo == "" {
-		return t.repository(r)
+		repo, err = t.repository(r)
+		return repo, shown, err
 	}
-	return repo, t.adoptRepository(r, repo)
+	return repo, shown, t.adoptRepository(r, repo)
 }
 
 // fileConflicts adds every conflict of p's paths to conflicts, and records that e waits for
