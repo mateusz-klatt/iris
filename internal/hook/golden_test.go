@@ -231,7 +231,9 @@ func argvEvent(client, file string) string {
 			return "UserPromptSubmit"
 		}
 	case "cursor":
-		return name
+		// claude-plugin-SessionStart.json is the --event the cross-loaded command
+		// was given. The payload's own hook_event_name is Cursor's sessionStart.
+		return strings.TrimPrefix(name, "claude-plugin-")
 	default:
 		if i := strings.IndexByte(name, '-'); i > 0 {
 			return name[:i]
@@ -241,21 +243,23 @@ func argvEvent(client, file string) string {
 }
 
 const (
-	claudeSession  = "b9f244d4-4326-45bf-8c3d-1d249f8f21b2"
-	codexSession   = "01a1adf0-8c32-7dd1-915f-250ba6059254"
-	codexJS        = "01a1b67e-ac49-7970-8edf-65c03ce13fac"
-	copilotA       = "05a1f795-918d-4cfb-aeb2-f17be274e1b8"
-	copilotB       = "5371905e-5625-4681-bcbc-73b28e2669bb"
-	kimiSession    = "session_114df8a5-1263-4744-bd4a-17c39274ffd6"
-	grokParent     = "01a1add0-deb3-7f23-969a-06a73e70b876"
-	grokChild      = "01a1add0-f889-76d3-9b16-1775afd996e6"
-	grokShell      = "01a1add0-8fa6-7132-9db2-85ef40676904"
-	grokMain       = "01a1add1-712e-7e22-a2a9-97ad1e9005b9"
-	agySession     = "4d437c2d-a30c-4479-bc04-0c09ca6ebdc5"
-	agyWakeSession = "ed1e2ecb-6339-4f6c-8851-9d2aad1bbb08"
-	agyWakeProj    = "/tmp/agy-fixture-capture/project"
-	cursorSession  = "<SESSION_OR_TOOL_ID>"
-	proj           = "/workspace/project"
+	claudeSession       = "b9f244d4-4326-45bf-8c3d-1d249f8f21b2"
+	codexSession        = "01a1adf0-8c32-7dd1-915f-250ba6059254"
+	codexJS             = "01a1b67e-ac49-7970-8edf-65c03ce13fac"
+	copilotA            = "05a1f795-918d-4cfb-aeb2-f17be274e1b8"
+	copilotB            = "5371905e-5625-4681-bcbc-73b28e2669bb"
+	kimiSession         = "session_114df8a5-1263-4744-bd4a-17c39274ffd6"
+	grokParent          = "01a1add0-deb3-7f23-969a-06a73e70b876"
+	grokChild           = "01a1add0-f889-76d3-9b16-1775afd996e6"
+	grokShell           = "01a1add0-8fa6-7132-9db2-85ef40676904"
+	grokMain            = "01a1add1-712e-7e22-a2a9-97ad1e9005b9"
+	agySession          = "4d437c2d-a30c-4479-bc04-0c09ca6ebdc5"
+	agyWakeSession      = "ed1e2ecb-6339-4f6c-8851-9d2aad1bbb08"
+	agyWakeProj         = "/tmp/agy-fixture-capture/project"
+	cursorSession       = "<SESSION_OR_TOOL_ID>"
+	cursorPluginSession = "00000000-0000-4000-8000-000000000001"
+	cursorPluginRoot    = "/home/user/tmp/cursor-cap/proj"
+	proj                = "/workspace/project"
 	// Captured from Claude Code 2.1.319 on Windows 11, where the PowerShell tool exists.
 	claudeWindowsSession = "a2a33065-7989-4987-bb5f-8f6866658a25"
 	projWindows          = `C:\workspace\project`
@@ -354,7 +358,10 @@ var fixtureWant = map[string]decoded{
 	"cursor/preToolUse.json":           {kind: KindPreTool, session: cursorSession, cwd: proj, tool: "Write", class: ClassEdit, paths: []string{"/workspace/project/fixtures/deny-target.txt"}, call: cursorSession},
 	"cursor/sessionEnd.json":           {kind: KindSessionEnd, session: cursorSession, cwd: proj},
 	"cursor/sessionStart.json":         {kind: KindSessionStart, session: cursorSession, cwd: proj},
-	"cursor/stop.json":                 {kind: KindStop, session: "c07cffe8-203b-4517-8ece-6dd9f9c8f162", cwd: proj},
+	// cursor-agent 2026.11.22-e9042b2, Iris Claude plugin hook. See claude-plugin-README.md.
+	"cursor/claude-plugin-SessionEnd.json":   {kind: KindSessionEnd, session: cursorPluginSession, cwd: cursorPluginRoot},
+	"cursor/claude-plugin-SessionStart.json": {kind: KindSessionStart, session: cursorPluginSession, cwd: cursorPluginRoot},
+	"cursor/stop.json":                       {kind: KindStop, session: "c07cffe8-203b-4517-8ece-6dd9f9c8f162", cwd: proj},
 
 	"grok/PostToolUse-shell.json":         {kind: KindPostTool, session: grokShell, cwd: proj, tool: "run_terminal_command", class: ClassShell, command: "printf 'shell-ok\\n'", call: "call-cb61fada-d57a-4dba-a5b2-ce48672c998c-1"},
 	"grok/PostToolUse.json":               {kind: KindPostTool, session: grokMain, cwd: proj, tool: "write", class: ClassEdit, paths: []string{"/workspace/project/note.txt"}, call: "call-1117010f-8145-4391-bd2d-ff25f95b0cc1-0"},
