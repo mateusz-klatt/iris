@@ -891,15 +891,10 @@ func (t *transaction) repoEvent(repo, kind, object string) error {
 	}
 	return err
 }
-func (t *transaction) cached(e execution, key, route string, request any) (map[string]any, bool, error) {
+func (t *transaction) cached(e execution, key, route string, request Request) (map[string]any, bool, error) {
 	if key == "" {
 		return nil, false, fail("bad_request", "a retry key is required")
 	}
-	raw, _ := json.Marshal(struct {
-		Route   string
-		Request any
-	}{route, request})
-	hash := sha256.Sum256(raw)
 	var old []byte
 	var result string
 	err := t.row("SELECT request_hash,result_json FROM Operation WHERE principal_agent_id=? AND key=?", e.AgentID, key).Scan(&old, &result)
@@ -909,7 +904,12 @@ func (t *transaction) cached(e execution, key, route string, request any) (map[s
 	if err != nil {
 		return nil, false, err
 	}
-	if hex.EncodeToString(old) != hex.EncodeToString(hash[:]) {
+	// The current fingerprint omits branch and the checkout display path. A
+	// v0.1.13 row hashed the path and had no branch, so that form still matches:
+	// key_reused would take the hook's fail-open path and turn the refusal into
+	// an allow.
+	stored := hex.EncodeToString(old)
+	if stored != hex.EncodeToString(operationHash(route, request)) && stored != hex.EncodeToString(legacyOperationHash(route, request)) {
 		return nil, false, fail("key_reused", "retry key was used for a different request")
 	}
 	var out map[string]any
@@ -918,15 +918,58 @@ func (t *transaction) cached(e execution, key, route string, request any) (map[s
 	err = decoder.Decode(&out)
 	return out, true, err
 }
-func (t *transaction) remember(e execution, key, route string, request any, result any) error {
+func (t *transaction) remember(e execution, key, route string, request Request, result any) error {
+	body, _ := json.Marshal(result) // results are hub-owned JSON maps, never client metadata
+	_, err := t.exec("INSERT INTO Operation(principal_agent_id,key,request_hash,result_json,created_ms) VALUES(?,?,?,?,?)", e.AgentID, key, operationHash(route, request), string(body), t.s.clock.Now().UnixMilli())
+	return err
+}
+
+// operationHash is the idempotency fingerprint stored for a new operation.
+// Branch and the checkout's display path are not part of which request this
+// is: a later delivery can name another branch, or another spelling of the
+// same checkout, and must replay the cached decision instead of key_reused.
+func operationHash(route string, r Request) []byte {
+	return hashRequest(route, stripCheckoutDisplay(r, false))
+}
+
+// legacyOperationHash is the fingerprint v0.1.13 stored. That release hashed
+// the checkout path and had no branch field, so a refusal recorded then still
+// matches a retry that supplies a branch.
+func legacyOperationHash(route string, r Request) []byte {
+	return hashRequest(route, stripCheckoutDisplay(r, true))
+}
+
+func hashRequest(route string, r Request) []byte {
 	raw, _ := json.Marshal(struct {
 		Route   string
-		Request any
-	}{route, request})
-	hash := sha256.Sum256(raw)
-	body, _ := json.Marshal(result) // results are hub-owned JSON maps, never client metadata
-	_, err := t.exec("INSERT INTO Operation(principal_agent_id,key,request_hash,result_json,created_ms) VALUES(?,?,?,?,?)", e.AgentID, key, hash[:], string(body), t.s.clock.Now().UnixMilli())
-	return err
+		Request Request
+	}{route, r})
+	sum := sha256.Sum256(raw)
+	return sum[:]
+}
+
+// stripCheckoutDisplay removes display-only fields from a grouped touch or an
+// explicit checkout. keepPath leaves the worktree path, which v0.1.13 included.
+func stripCheckoutDisplay(r Request, keepPath bool) Request {
+	strip := func(g ClaimGroup) ClaimGroup {
+		g.Branch = ""
+		if !keepPath {
+			g.Worktree = ""
+		}
+		return g
+	}
+	if len(r.Groups) > 0 {
+		groups := make([]ClaimGroup, len(r.Groups))
+		for i, g := range r.Groups {
+			groups[i] = strip(g)
+		}
+		r.Groups = groups
+	}
+	if r.Checkout != nil {
+		c := strip(*r.Checkout)
+		r.Checkout = &c
+	}
+	return r
 }
 
 func createDatabaseFile(filename string) error {
