@@ -235,7 +235,7 @@ func TestSuccessionExecutionProofDamageAndRestoreMismatchStayLocalAndUnchanged(t
 				t.Fatalf("invalid proof recovered: %v", err)
 			}
 			if tc.damaged {
-				assertBindingObservation(t, f.token, hook.DamagedGenerationProof+" at "+path+".execution")
+				assertBindingObservation(t, f.token, hook.DamagedGenerationProof+" at "+path+".execution") // gitleaks:allow (a test observation token and path, not a credential)
 				if len(nonHookSessionRequests(f.hub.sessions())) != 0 {
 					t.Fatalf("damaged execution reached registration: %+v", f.hub.sessions())
 				}

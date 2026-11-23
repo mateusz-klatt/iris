@@ -424,6 +424,9 @@ func refuseRestoreFloor(state *runState, ev Event, m Memory, generation int, not
 	return errRestoreFloor
 }
 
+// registrationProof reads only the ordinary generation file for hook registration. The
+// succession Execution sidecar and end marker have their own binding checks; neither is
+// independently accepted or rejected as hook-registration proof here.
 func registrationProof(state *runState, ev Event, m Memory, retained int) (int, error) {
 	if m == nil {
 		return retained, nil

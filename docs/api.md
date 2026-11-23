@@ -125,10 +125,10 @@ hub omits `highest_generation`, so an upgraded hook keeps its proof and skips th
 Both `prior_generation > 0` and non-empty `prior_execution_id` are required; missing or invalid
 request fields are `bad_request`. The route has no working-directory or git-discovery fields and
 does not resolve a repository or mutate aliases. Its successful response has the registration
-shape, with `generation = prior_generation + 1`, the same Agent and repository (or outside-host
-context), `lease_ms:60000`, and no inherited claims. The new Execution has `hook_seen_ms = 0`,
-initializes its stall-credit baseline at creation, and cannot be succeeded automatically again
-until a real hook reaches it. Requeued deliveries on its preserved mailbox can be fetched and
+shape, with `generation = prior_generation + 1`, the same Agent, repository (or outside-host
+context) and worktree claim scope, `lease_ms:60000`, and no inherited claims. The new Execution
+has `hook_seen_ms = 0` and initializes its stall-credit baseline at creation. A later automatic
+succession requires a real hook on this Execution first. Requeued deliveries on its preserved mailbox can be fetched and
 acknowledged normally.
 
 The hub requires the newest retained Execution for `(host, client, session_id)` to have exactly
@@ -140,8 +140,9 @@ top-level Claude process, a newer hook Execution of another native session on th
 the mailbox also refuses it. These domain refusals return `409 lost` with
 `error.details.highest_generation` and do not change Agent, Execution, Delivery or Claim state.
 The route emits a generation-change diagnostic with source `shim` and proof `shim_succession`.
-An older hub answers `404 not_found`; an upgraded shim treats that, a timeout and every refusal
-as `lost`, keeps local proof, and never falls back to generation zero or `retry_generation`.
+An older hub answers `404 not_found`. Unless a read-only bind confirms a valid concurrent winner,
+the shim reports `lost` and keeps local proof. It never retries with generation zero or
+`retry_generation`.
 
 Only an eligible `iris mcp` shim uses this route: Rung 2 or a Codex id-mode root with exact local
 proof, or a verified single-session Rung-3 process whose identity is rechecked around the local
@@ -149,12 +150,14 @@ read and whose current-session witness still names the same session. A Codex id-
 verified nearest ancestor is that session's single-session client process, such as Linux
 `codex exec`, sends that ancestor's pid and start time from the shim's own walk. Its OS parent must be live.
 `iris watch`, Codex sub-agents and foreign-session lookups, wake helpers, live `IRIS_EXECUTION`
-overrides and explicit handles never succeed. `<hash>.execution` is required beside `<hash>`;
-missing or damaged proof, an `.ended` marker at or above the generation, a `/clear` witness
-mismatch, a changed process, or restore lineage mismatch fails closed. Exact generation and ID
-checks detect counter rollback and equal-generation divergent history. Restore markers and
-`stream_id` rotation grant no authority; identical `(execution_id, generation)` history shared
-by a backup and the live hub remains indistinguishable. These fields are self-declared within
+overrides and calls with explicit handles are excluded. The generation in `<hash>` must have
+a matching Execution ID in `<hash>.execution`. Missing or damaged proof, an `.ended` marker at or
+above the generation, a `/clear` witness mismatch, a changed process, or restore lineage mismatch
+fails closed. The shim rechecks the witness after the HTTP reply. A succession request already in
+flight can commit at the hub before the newer `SessionStart` reaches it, even when the shim rejects
+the reply. Exact generation and ID checks detect counter rollback and equal-generation divergent
+history. Restore markers and `stream_id` rotation grant no authority. A backup and live hub that
+share the identical `(execution_id, generation)` history remain indistinguishable. These fields are self-declared within
 D13's host-token boundary: they provide attribution and accidental-race protection, not
 authentication against a malicious token holder.
 
@@ -176,9 +179,9 @@ the session needs a new generation.
 It returns `{"execution_id":"...","generation":1,"agent":{...},"session_id":"...","hook_seen":true}`,
 `unbound`, `ambiguous`, or `lost` for an explicit Execution that is unusable. The returned
 `session_id` is the native session registered by the hook; an older hub may omit it, in which case
-Kimi's native wake stays disarmed. Binding only looks up a usable Execution; it does not reattach
-one. A lookup by session id excludes recovering Executions, so Codex id mode without a cached
-binding answers `unbound` during recovery. `hook_seen` says whether any hook has reached the hub
+Kimi's native wake stays disarmed. A session-ID lookup covers usable Executions and excludes
+recovering ones. A Codex id-mode root can use a separate reattachment with ordinary generation
+proof. Id-mode sub-agents use lookup only. `hook_seen` says whether any hook has reached the hub
 for that Execution. Codex and Kimi wake require it to be true.
 
 A request with `session_id` and the client process (`client_pid` and `client_pid_start_ms`)
@@ -190,6 +193,13 @@ refuse an answer without that field, because a hub from before it takes such a r
 alone. A `client_pid` or `client_pid_start_ms` that is missing or not positive beside a
 `session_id` is `bad_request`, never a lookup by session alone. A request without both keeps the
 lookups above.
+
+To confirm a concurrent succession winner, the shim adds `prior_generation` and
+`prior_execution_id` to its session-only or process-only lookup. A match requires the exact prior
+Execution to be retained and lost in the matched session's history, with hook evidence and a
+generation lower than the live winner. The response includes `"match":"succession"`, which the
+shim requires before using the answer. It verifies local proof and current-session evidence before
+accepting the winner.
 
 `POST /v1/executions/{id}/heartbeat` takes `{"generation":1,"source":"shim"}`, where `source` is
 `shim`, `watch` or `hook`. It returns `{"lease_ms":60000}`, or `lost`.
@@ -209,8 +219,8 @@ destination until the end is confirmed, renewing live Executions while the hando
 
 Every MCP tool's `lost` error has the same fixed recovery guidance, whether binding failed or
 the hub refused the operation. The MCP shim preserves the error code and details, including
-mutation retry keys; the HTTP API's messages and recovery rules are unchanged. `lost` alone
-does not prove permanent session loss: it can describe a recovering Execution, an unknown,
+mutation retry keys and any `highest_generation` supplied by the typed `lost` cause of a binding
+error. The HTTP API uses its own messages. `lost` can describe a recovering Execution, an unknown,
 ended or expired Execution, a wrong generation, a failed bind after confirmed loss, or a
 replayed claim whose saved fence is no longer live.
 
@@ -224,17 +234,19 @@ accept the remembered generation before the persisted 120 s recovery deadline:
 | A recognized pre-edit hook with paths inside the worktree | Registers before touching the paths. The edit is refused if recovery proof is missing. |
 | A shell reconcile | Can register with proof. A command is not a reliable recovery action: a budget spent before registration reaches the hub leaves the session recovering. Registration may already have succeeded before a later timeout. ADR 018's breaker changes later hooks' scope; it does not register in the background. |
 | A heartbeat from a shim or `iris watch` retaining the binding | Reattaches with its generation on periodic ticks, immediately on an MCP tool-call refresh after `lost`, and immediately on `iris watch` reconnect or `reset`. Codex id-mode sub-agent lookups never renew. |
-| An unbound shim's heartbeat tick (ADR 027) | Looks the session up as a call without a handle would, and if `unbound` may send a reattach-only registration (`source: "shim"`, `generation > 0`) from hook generation memory for a positively identified, hook-registered session. It never registers with `generation = 0`, never binds by a handle and never binds one found lost. Not for Codex, a process in id mode or `iris watch`. |
-| Another MCP call | A bound shim immediately heartbeats on a `lost` refresh and retries `/v1/bind`. An unbound shim (including a Codex id-mode root, excluding sub-agents) may reattach a recovering, hook-registered session using hook generation memory (`generation > 0`), never falling back to `generation = 0` on missing, malformed or mismatched memory. Primary `whoami` also heartbeats after a successful bind. |
-| An eligible MCP shim after the deadline | After exact-generation reattachment answers `lost`, calls `POST /v1/sessions/succeed` once with exact generation and Execution-ID proof and the required process/current-session evidence. It creates a fresh, hook-unseen G+1 with zero inherited claims, never revives the old Execution, and never falls back to generation zero. A concurrent valid winner is adopted by one read-only bind. |
+| An unbound ordinary shim's heartbeat tick (ADR 027) | Looks up the positively identified session without a handle. It may reattach a recovering Execution using hook generation memory or attempt guarded succession after expiry. It never registers with `generation = 0` or binds an Execution found lost. Codex, id-mode shims and `iris watch` use their own binding paths. |
+| Another MCP call | A bound shim immediately heartbeats on a `lost` refresh and retries `/v1/bind`. An unbound ordinary shim or Codex id-mode root may reattach a recovering, hook-registered session using positive hook generation memory. A Rung 3 session known only from the current-session witness uses that evidence for succession. Primary `whoami` also heartbeats after a successful bind. |
+| An eligible MCP shim after the deadline | Calls `POST /v1/sessions/succeed` with exact generation and Execution ID proof and the required process and current-session evidence. It creates a fresh G+1 with no hook evidence or inherited claims. A read-only bind can confirm a concurrent winner in the same retained lineage. |
 | Waiting past the deadline without intact eligible proof, or `SessionEnd` | Loses or ends the old Execution and its reservations. `ended` stays terminal. A generation-zero registration from `mcp`, `shim`, `watch` or a legacy empty source is refused when the newest retained Execution is `ended`, with or without hook history, so neither `iris mcp` nor `iris watch` can revive an expired or ended generation. A later registering hook must obtain a new generation. A second automatic succession also needs a real hook on the current successor first. |
 
 Cursor and Grok prompts do not register, so after their hook-registered Execution is lost, absent
 local proof no longer recovers on a prompt alone: recovery needs a recognized pre-edit,
-`SessionStart` or resume. Intact eligible proof permits the one MCP succession above. Damaged
-`<hash>`, `<hash>.execution` or `.ended` stops succession, fallback and hook registration;
-`iris doctor` reports `damaged generation proof at <path>`. Verify the intended hub and its session
-history, then archive or repair the named proof as ADR 006 directs.
+`SessionStart` or resume. Intact eligible proof permits the one MCP succession above. Damage to
+`<hash>`, `<hash>.execution` or `.ended` blocks shim binding and succession. A readable `.ended`
+marker blocks generations at or below its value and a proofless fallback. The hook registration
+precheck validates the ordinary generation file `<hash>`. `iris doctor` reports
+`damaged generation proof at <path>` when a proof reader detects damage. Verify the intended hub
+and its session history, then archive or repair the named proof as ADR 006 directs.
 
 Resume the session owning the Execution to fire its enabled `SessionStart` hook, or submit a
 prompt on a client whose Iris hook registers it, then retry the tool. Hooks must be working

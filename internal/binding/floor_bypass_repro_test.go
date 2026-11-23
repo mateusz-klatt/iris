@@ -112,7 +112,7 @@ func TestFloorBypassAfterSessionEndBlocksRung2AndWatch(t *testing.T) {
 				if !errors.Is(err, errMalformedGeneration) || len(requests) != 0 {
 					t.Fatalf("damaged marker did not block locally: err=%v requests=%+v", err, requests)
 				}
-				assertBindingObservation(t, token, hook.DamagedGenerationProof+" at "+markerPath)
+				assertBindingObservation(t, token, hook.DamagedGenerationProof+" at "+markerPath) // gitleaks:allow (a test observation token and path, not a credential)
 			default:
 				if !errors.Is(err, errGenerationFloor) || len(requests) != 0 {
 					t.Fatalf("%s did not stop at the local veto: err=%v requests=%+v", tc.mode, err, requests)

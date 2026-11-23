@@ -86,9 +86,9 @@ func callLost(t *testing.T, session *mcp.ClientSession, tool string, args map[st
 }
 
 func TestLostAnswersKeepDetailsWithoutMutatingTheirSource(t *testing.T) {
-	for _, wrap := range []string{"typed", "wrapped", "binding retry"} {
+	for _, wrap := range []string{"typed", "wrapped", "binding retry", "nested binding retries", "non-lost binding retry"} {
 		t.Run(wrap, func(t *testing.T) {
-			source := &hubclient.Error{Code: "lost", Message: "a specific hub diagnosis", Details: map[string]any{"key": "retry", "fence": float64(7)}}
+			source := &hubclient.Error{Code: "lost", Message: "a specific hub diagnosis", Details: map[string]any{"key": "retry", "fence": float64(7), "highest_generation": float64(4)}}
 			var err error = source
 			details := source.Details
 			switch wrap {
@@ -96,7 +96,12 @@ func TestLostAnswersKeepDetailsWithoutMutatingTheirSource(t *testing.T) {
 				err = fmt.Errorf("request failed: %w", source)
 			case "binding retry":
 				err = &binding.LostError{Cause: source}
-				// The stable outer lost answer is public; its cause stays diagnostic.
+			case "nested binding retries":
+				retry := &binding.LostError{Cause: fmt.Errorf("request failed: %w", source)}
+				err = fmt.Errorf("bind failed: %w", &binding.LostError{Cause: retry})
+			case "non-lost binding retry":
+				source.Code = "conflict"
+				err = &binding.LostError{Cause: source}
 				details = nil
 			}
 			before := err.Error()
@@ -104,7 +109,7 @@ func TestLostAnswersKeepDetailsWithoutMutatingTheirSource(t *testing.T) {
 			if source.Message != "a specific hub diagnosis" || err.Error() != before || !errors.Is(err, source) {
 				t.Fatalf("formatting changed the diagnostic source: %+v, %v", source, err)
 			}
-			if !reflect.DeepEqual(source.Details, map[string]any{"key": "retry", "fence": float64(7)}) {
+			if !reflect.DeepEqual(source.Details, map[string]any{"key": "retry", "fence": float64(7), "highest_generation": float64(4)}) {
 				t.Fatalf("formatting changed the source details: %+v", source)
 			}
 		})

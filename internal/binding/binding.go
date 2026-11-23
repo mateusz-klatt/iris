@@ -219,7 +219,15 @@ type LostError struct{ Cause error }
 
 func (e *LostError) Error() string { return errLost.Error() }
 
-func (e *LostError) Unwrap() []error { return []error{errLost, e.Cause} }
+func (e *LostError) Unwrap() []error {
+	var typed *hubclient.Error
+	if errors.As(e.Cause, &typed) && typed.Code == "lost" && typed.Details != nil {
+		lost := *errLost
+		lost.Details = typed.Details
+		return []error{&lost, errLost, e.Cause}
+	}
+	return []error{errLost, e.Cause}
+}
 
 // Resolve refreshes an existing binding from its preserved Execution, making one when
 // there is none. Repository merges can change its repository without changing the

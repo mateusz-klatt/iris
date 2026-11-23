@@ -75,7 +75,7 @@ func TestBindingProofDamageRecordsTheLocalPath(t *testing.T) {
 	if gen, ended, err := s.RecallBindingGeneration("claude", "s"); gen != 0 || ended != 0 || !errors.Is(err, ErrInvalidGeneration) {
 		t.Fatalf("damaged proof: generation %d, ended through %d, %v", gen, ended, err)
 	}
-	assertRecallObservation(t, token, "damaged generation proof at "+path)
+	assertRecallObservation(t, token, "damaged generation proof at "+path) // gitleaks:allow (a test observation token and path, not a credential)
 }
 
 func TestBindingEndMarkerReadErrorRecordsTheLocalPath(t *testing.T) {

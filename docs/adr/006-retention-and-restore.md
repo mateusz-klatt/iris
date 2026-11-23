@@ -212,11 +212,13 @@ binding, including a Codex sub-agent's lookup of its own session. Hook-file proo
 either client's first-bind generation-zero fallback. Eligible exact-generation heartbeats
 and shim reattachment still work during the 120 s recovery window.
 
-The proofless ENDED path is closed on both sides. Once SessionEnd clears the ordinary proof,
-`RecallBindingGeneration` treats its `.ended` marker, readable or damaged, as present proof and
-blocks the generation-zero fallback; damage keeps the existing local doctor observation. On
-registration, `source` must be exactly `hook`, `mcp`, `shim` or `watch`; empty or omitted remains
-valid as a legacy non-hook source. Other values and negative `retry_generation` get `bad_request`.
+The proofless ENDED path is closed on both sides. `RecallBindingGeneration` reads ordinary proof
+and `.ended` independently. The marker vetoes shim or watch binding, reattachment and renewal at
+or below the ended generation, even when a restored backup still carries that Execution in
+recovery. A readable or damaged marker also blocks generation-zero fallback. Damage keeps the
+existing local doctor observation. On registration, `source` must be exactly `hook`, `mcp`, `shim`
+or `watch`. Empty or omitted remains valid as a legacy non-hook source. Other values and negative
+`retry_generation` get `bad_request`.
 A generation-zero registration whose newest Execution is `ended` and whose source is anything
 other than `hook`, empty included, gets `409 lost` with `highest_generation`, regardless of
 `retry_generation`. A registering hook still gets G+1 after SessionEnd and after loss. ADR 035
@@ -278,12 +280,18 @@ advance LOST or ENDED history to G+1. A genuinely hook-less session, such as one
 folder whose hooks never reached the hub, keeps its existing fallback. Retention limits all of
 these guards: once the relevant rows are gone, there is no history left to check.
 
-Hooks persist `<hash>.execution` beside `<hash>` under `Sessions.Lock`, and SessionEnd removes
-both only for the matching generation. Succession also requires the current-session witness and
-an `.ended` generation below the proof. Missing or damaged proof fails closed; a damaged
-`.execution` blocks generation-zero fallback as well and retains the local doctor observation
-`damaged generation proof at <path>`. After a hub commit, `AdvanceGeneration` advances both
-files under the same bounded lock without downgrading a newer hook or recreating forgotten proof.
+The integer in `<hash>` commits an Execution ID keyed by generation in `<hash>.execution`.
+Under `Sessions.Lock`, a writer prepares the new pair in the sidecar, preserving the prior pair,
+and then atomically replaces the integer. An interrupted write leaves the prior pair usable for
+retry. Counter-only writes leave the target generation without an Execution ID. SessionEnd
+records `.ended` before removing the pair for the matching generation. Succession requires the
+matching proof pair, an absent or strictly older `.ended` marker, and the relevant current-session
+witness. An unversioned Execution ID from the pre-release format supplies no exact proof until a
+registering hook refreshes it. Binding and succession refuse damaged `.execution` or `.ended`
+files and keep the local `damaged generation proof at <path>` observation. Hook registration
+prechecks the ordinary generation file `<hash>`. After a hub commit, `AdvanceGeneration`
+compares and advances the pair under the bounded lock without downgrading a newer hook or
+recreating forgotten proof.
 
 The restore guarantees are deliberately narrower than authority over history:
 
@@ -297,7 +305,11 @@ The restore guarantees are deliberately narrower than authority over history:
   identical Execution ID and generation, this mechanism cannot distinguish them. That is the same
   residual counter-based ambiguity described above, now bounded by the exact ID as well.
 
-Every refusal leaves Agent, Execution, Delivery and Claim state unchanged and keeps local proof.
-The new route's 404 on an older hub is fail-closed. Registration `source` and succession proof are
-self-declared inside D13's host-token boundary: they provide attribution and protection against
-accidental races and stale unmodified clients, not authentication against a malicious token holder.
+A read-only bind can confirm a concurrent winner only while the exact lost predecessor remains in
+the session's history. The shim verifies any already-advanced pair before accepting that binding.
+A hub refusal leaves Agent, Execution, Delivery and Claim state unchanged. The shim also rejects
+a reply if the current-session witness changed while the request was in flight. The hub can commit
+before it sees a newer `SessionStart`. Ordering those operations requires ADR 036. The new route's
+404 on an older hub is fail-closed. Registration `source` and succession proof are self-declared
+inside D13's host-token boundary: they provide attribution and protection against accidental races
+and stale unmodified clients, not authentication against a malicious token holder.
