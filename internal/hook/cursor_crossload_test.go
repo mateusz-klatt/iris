@@ -20,6 +20,7 @@ func TestCursorCrossLoadOverridesInheritedClaudeSession(t *testing.T) {
 	}{
 		{name: "cursor ancestor and environment", ancestor: proc.Ancestor{PID: 42, StartMS: 7, Name: "/opt/cursor-agent"}, markers: true},
 		{name: "agent alias and environment", ancestor: proc.Ancestor{PID: 42, StartMS: 7, Name: "/opt/agent"}, markers: true},
+		{name: "agent alias with empty Cursor environment", ancestor: proc.Ancestor{PID: 42, StartMS: 7, Name: "/opt/agent"}},
 		{name: "cursor environment only", markers: true},
 		{name: "cursor ancestor only", ancestor: proc.Ancestor{PID: 42, StartMS: 7, Name: "/opt/cursor-agent"}},
 	} {
@@ -131,8 +132,8 @@ func TestCursorMarkersDoNotRenameAKnownThirdClient(t *testing.T) {
 			return proc.Ancestor{PID: 44, StartMS: 9, Name: "codex"}, nil
 		},
 	}).crossLoad("s1", ClientClaude)
-	if cross && runner == ClientCursor {
-		t.Fatal("Cursor markers renamed known Codex ancestry to Cursor")
+	if cross || runner != "" {
+		t.Fatalf("known Codex ancestry did not keep its existing native outcome: runner %q, cross %v", runner, cross)
 	}
 }
 

@@ -22,6 +22,7 @@ func TestClientMismatchDisablesEveryBindingRoute(t *testing.T) {
 	}{
 		{name: "cursor-agent", ancestor: "/opt/cursor-agent"},
 		{name: "agent alias with Cursor markers", ancestor: "agent", markers: true},
+		{name: "unrelated agent without Cursor markers", ancestor: "/opt/agent"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			requests := 0
@@ -107,6 +108,7 @@ func TestCheckClientCursorEvidenceOutranksInheritedClaudeSession(t *testing.T) {
 	}{
 		{name: "cursor ancestor and environment", ancestor: proc.Ancestor{PID: 42, StartMS: 7, Name: "cursor-agent"}, markers: true},
 		{name: "agent alias and environment before outer claude", markers: true, walk: true},
+		{name: "agent alias with empty Cursor environment before outer claude", walk: true},
 		{name: "cursor environment only", ancestor: proc.Ancestor{PID: 42, StartMS: 7, Name: "helper"}, markers: true},
 		{name: "cursor ancestor only", ancestor: proc.Ancestor{PID: 42, StartMS: 7, Name: "cursor-agent"}},
 	} {
@@ -167,30 +169,6 @@ func TestCheckClientKeepsNativeAndUnknownAncestorsUsable(t *testing.T) {
 		b, err := r.Resolve(context.Background(), "")
 		if err != nil || b.Rung != 2 || len(h.bound) != 1 || h.bound[0]["session_id"] != "native-claude" {
 			t.Fatalf("native Claude binding: %+v, %v, requests %v", b, err, h.bound)
-		}
-	})
-	t.Run("bare agent walks on to native Claude", func(t *testing.T) {
-		h := &scriptedHub{}
-		env := map[string]string{"CLAUDE_CODE_SESSION_ID": "native-claude"}
-		tree := map[int]proc.Snapshot{
-			10: {PID: 10, PPID: 9, Name: "iris"},
-			9:  {PID: 9, PPID: 2, Name: "agent"},
-			2:  {PID: 2, PPID: 1, Name: "claude"},
-		}
-		got, ok := proc.NearestFrom(10, func(pid int) (proc.Snapshot, bool) {
-			s, ok := tree[pid]
-			return s, ok
-		}, func(key string) string { return env[key] })
-		if !ok || got.Name != "claude" {
-			t.Fatalf("bare agent stopped the walk instead of reaching Claude: %+v, %v", got, ok)
-		}
-		r := resolverFor(t, h, "claude", env, proc.Ancestor(got))
-		if r.CheckClient() {
-			t.Fatal("a generic agent name without Cursor markers displaced native Claude")
-		}
-		b, err := r.Resolve(context.Background(), "")
-		if err != nil || b.Rung != 2 || len(h.bound) != 1 || h.bound[0]["session_id"] != "native-claude" {
-			t.Fatalf("native Claude after a bare agent: %+v, %v, requests %v", b, err, h.bound)
 		}
 	})
 	t.Run("unknown helper is not a mismatched client", func(t *testing.T) {

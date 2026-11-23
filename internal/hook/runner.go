@@ -574,7 +574,8 @@ func (r Runner) crossLoad(sessionID string, requested Client) (Client, bool) {
 	if len(found) > 0 {
 		return found[0], true
 	}
-	ancestor, hasAncestor := proc.ClientNameWithEnv(r.ancestor().Name, getenv)
+	process := r.ancestor()
+	ancestor, hasAncestor := proc.ClientNameWithEnv(process.Name, getenv)
 	if hasAncestor && Client(ancestor) == requested {
 		return "", false
 	}
@@ -582,7 +583,7 @@ func (r Runner) crossLoad(sessionID string, requested Client) (Client, bool) {
 		return ClientCursor, true
 	}
 	// Cursor 2026.11.22 omits CURSOR_CONVERSATION_ID from cross-loaded Claude hooks.
-	if requested != ClientCursor && !hasAncestor && proc.CursorEnvironment(getenv) {
+	if requested != ClientCursor && !hasAncestor && (proc.AgentAlias(process.Name) || proc.CursorEnvironment(getenv)) {
 		return ClientCursor, true
 	}
 	return "", false

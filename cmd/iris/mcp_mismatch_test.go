@@ -78,6 +78,7 @@ func TestCrossLoadedMCPStaysUpButOnlyAnswersClientMismatch(t *testing.T) {
 	}{
 		{name: "cursor ancestor", ancestor: "cursor-agent", toolCalls: 2},
 		{name: "cursor environment only", ancestor: "helper", markers: true, toolCalls: 1},
+		{name: "agent with empty Cursor environment", ancestor: "agent", toolCalls: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			token, requests := mcpWakeTrap(t)

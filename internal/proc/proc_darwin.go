@@ -44,7 +44,7 @@ func processName(pid int, comm string) string {
 	if err != nil {
 		return comm
 	}
-	if arg := firstArgument(raw); isClient(arg) {
+	if arg := firstArgument(raw); isClient(arg, nil) {
 		return baseName(arg)
 	}
 	return comm
