@@ -672,7 +672,7 @@ func TestRememberGenerationWriteFailures(t *testing.T) {
 	for _, failAt := range []int{1, 2} {
 		t.Run(fmt.Sprintf("write %d", failAt), func(t *testing.T) {
 			s := successionSessionFiles(t, "claude", "s", 1, "ex_one")
-			failProofWrite(s, failAt)
+			_ = failProofWrite(s, failAt)
 			s.memory.remember("claude", "s", 2, "ex_two")
 			assertSuccessionProof(t, s, 1, "ex_one")
 			s.memory.remember("claude", "s", 2, "ex_two")
