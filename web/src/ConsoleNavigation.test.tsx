@@ -575,6 +575,12 @@ describe("console timestamp locale", () => {
 });
 
 describe("console view URL routing", () => {
+  // The route effect writes the hash after the view commits, and back, forward
+  // and hashchange apply the view after the URL has already changed. Reading
+  // either synchronously can observe the previous commit.
+  const hashIs = (hash: string) => waitFor(() => expect(window.location.hash).toBe(hash));
+  const viewIs = (view: string) => waitFor(() => expect(screen.getByRole("main")).toHaveAttribute("data-view", view));
+
   const allRoutes = [
     { hash: "#/messages", button: /^My messages/, heading: "My messages", view: "messages", navName: /^My messages/ },
     { hash: "#/activity", button: "All activity", heading: "All activity", view: "messages", navName: "All activity" },
@@ -599,8 +605,8 @@ describe("console view URL routing", () => {
 
     const first = render(<App connect={() => () => {}} />);
     await user.click(await screen.findByRole("button", { name: button }));
-    expect(window.location.hash).toBe(hash);
-    expect(screen.getByRole("main")).toHaveAttribute("data-view", view);
+    await hashIs(hash);
+    await viewIs(view);
     expect(await screen.findByRole("heading", { level: 1, name: heading })).toBeVisible();
     first.unmount();
 
@@ -608,8 +614,8 @@ describe("console view URL routing", () => {
     threadAgents.length = 0;
     render(<App connect={() => () => {}} />);
     expect(await screen.findByRole("heading", { level: 1, name: heading })).toBeVisible();
-    expect(screen.getByRole("main")).toHaveAttribute("data-view", view);
-    expect(window.location.hash).toBe(hash);
+    await viewIs(view);
+    await hashIs(hash);
     if (navName !== null) {
       expect(within(screen.getByRole("navigation")).getByRole("button", { name: navName })).toHaveAttribute("aria-current", "page");
     }
@@ -624,8 +630,8 @@ describe("console view URL routing", () => {
     window.location.hash = "#/messages";
     const withUrl = render(<App connect={() => () => {}} />);
     expect(await screen.findByRole("heading", { name: "My messages" })).toBeVisible();
-    expect(screen.getByRole("main")).toHaveAttribute("data-view", "messages");
-    expect(window.location.hash).toBe("#/messages");
+    await viewIs("messages");
+    await hashIs("#/messages");
     withUrl.unmount();
 
     window.history.replaceState(null, "", "/");
@@ -647,8 +653,8 @@ describe("console view URL routing", () => {
     window.location.hash = badHash;
     render(<App connect={() => () => {}} />);
     expect(await screen.findByRole("heading", { name: "My messages" })).toBeVisible();
-    expect(screen.getByRole("main")).toHaveAttribute("data-view", "messages");
-    expect(window.location.hash).toBe("#/messages");
+    await viewIs("messages");
+    await hashIs("#/messages");
     expect(screen.getByText("Choose a conversation")).toBeVisible();
     expect(threadGets).not.toHaveBeenCalled();
     expect(threadReads).not.toHaveBeenCalled();
@@ -673,8 +679,8 @@ describe("console view URL routing", () => {
     window.location.hash = restrictedHash;
     render(<App connect={() => () => {}} />);
     expect(await screen.findByRole("heading", { name: "Messages" })).toBeVisible();
-    expect(screen.getByRole("main")).toHaveAttribute("data-view", "messages");
-    expect(window.location.hash).toBe("#/messages");
+    await viewIs("messages");
+    await hashIs("#/messages");
     expect(screen.queryByRole("combobox", { name: "Agent" })).toBeNull();
     expect(forbiddenDoctor).not.toHaveBeenCalled();
     expect(forbiddenAccounts).not.toHaveBeenCalled();
@@ -714,21 +720,21 @@ describe("console view URL routing", () => {
     expect(await screen.findByRole("heading", { name: "Messages" })).toBeVisible();
     await user.selectOptions(screen.getByRole("combobox", { name: "Repository" }), "rp_iris");
     await user.click(screen.getByRole("button", { name: "+ New message" }));
-    expect(window.location.hash).toBe("#/compose");
+    await hashIs("#/compose");
     first.unmount();
 
     deferOverview = true;
     render(<App connect={() => () => {}} />);
     expect(await screen.findByText("Loading messages…")).toBeVisible();
     await waitFor(() => expect(overviewRequested).toBe(true));
-    expect(window.location.hash).toBe("#/compose");
+    await hashIs("#/compose");
 
     await act(async () => {
       resolveOverview(HttpResponse.json(rwOverview));
     });
     expect(await screen.findByRole("heading", { level: 1, name: "New message" })).toBeVisible();
-    expect(screen.getByRole("main")).toHaveAttribute("data-view", "compose");
-    expect(window.location.hash).toBe("#/compose");
+    await viewIs("compose");
+    await hashIs("#/compose");
     const compose = within(document.getElementById("compose")!);
     expect(compose.getByRole("combobox", { name: "Send from repository" })).toHaveValue("rp_iris");
     expect(compose.getByRole("checkbox", { name: /claude-host/ })).toBeInTheDocument();
@@ -759,14 +765,14 @@ describe("console view URL routing", () => {
     render(<App connect={() => () => {}} />);
     expect(await screen.findByText("Loading messages…")).toBeVisible();
     await waitFor(() => expect(overviewRequested).toBe(true));
-    expect(window.location.hash).toBe("#/compose");
+    await hashIs("#/compose");
 
     await act(async () => {
       resolveOverview(HttpResponse.json({ ...sessionOverview, repositories }));
     });
     expect(await screen.findByRole("heading", { name: "Messages" })).toBeVisible();
-    expect(screen.getByRole("main")).toHaveAttribute("data-view", "messages");
-    expect(window.location.hash).toBe("#/messages");
+    await viewIs("messages");
+    await hashIs("#/messages");
     expect(document.getElementById("compose")).toBeNull();
   });
 
@@ -787,10 +793,10 @@ describe("console view URL routing", () => {
 
     const first = render(<App connect={() => () => {}} />);
     await user.click(await screen.findByRole("button", { name: "All activity" }));
-    expect(window.location.hash).toBe("#/activity");
+    await hashIs("#/activity");
     await user.click(await screen.findByRole("button", { name: /Open thread: Rollout check/ }));
     expect(await screen.findByRole("heading", { name: "Rollout check" })).toBeVisible();
-    expect(window.location.hash).toBe("#/activity");
+    await hashIs("#/activity");
     expect(detailCalls).toBe(1);
     expect(readCalls).toBe(1);
     first.unmount();
@@ -809,17 +815,17 @@ describe("console view URL routing", () => {
     const user = userEvent.setup();
     render(<App connect={() => () => {}} />);
     await screen.findByRole("heading", { name: "My messages" });
-    expect(window.location.hash).toBe("#/messages");
+    await hashIs("#/messages");
 
     await user.click(screen.getByRole("button", { name: "All activity" }));
-    expect(window.location.hash).toBe("#/activity");
+    await hashIs("#/activity");
     await user.click(screen.getByRole("button", { name: /^Fleet/ }));
-    expect(window.location.hash).toBe("#/fleet");
+    await hashIs("#/fleet");
     await user.click(screen.getByRole("link", { name: "Skip to content" }));
     expect(screen.getByRole("main")).toHaveFocus();
-    expect(window.location.hash).toBe("#/fleet");
+    await hashIs("#/fleet");
     await user.click(screen.getByRole("button", { name: /^Claims/ }));
-    expect(window.location.hash).toBe("#/claims");
+    await hashIs("#/claims");
 
     window.history.back();
     await waitFor(() => expect(screen.getByRole("main")).toHaveAttribute("data-view", "fleet"));
@@ -835,22 +841,22 @@ describe("console view URL routing", () => {
       window.location.hash = "#/not-a-view";
       window.dispatchEvent(new HashChangeEvent("hashchange"));
     });
-    expect(window.location.hash).toBe("#/messages");
-    expect(screen.getByRole("main")).toHaveAttribute("data-view", "messages");
+    await hashIs("#/messages");
+    await viewIs("messages");
 
     await user.click(screen.getByRole("button", { name: /^Fleet/ }));
     act(() => {
       window.history.replaceState(null, "", "/");
       window.dispatchEvent(new HashChangeEvent("hashchange"));
     });
-    expect(window.location.hash).toBe("#/messages");
-    expect(screen.getByRole("main")).toHaveAttribute("data-view", "messages");
+    await hashIs("#/messages");
+    await viewIs("messages");
 
     await user.click(screen.getByRole("button", { name: /^Fleet/ }));
-    expect(window.location.hash).toBe("#/fleet");
+    await hashIs("#/fleet");
     await user.click(screen.getByRole("link", { name: "Iris" }));
-    expect(window.location.hash).toBe("#/messages");
-    expect(screen.getByRole("main")).toHaveAttribute("data-view", "messages");
+    await hashIs("#/messages");
+    await viewIs("messages");
   });
 
   it("never triggers a thread read when navigating back to messages after leaving a deferred hidden open", async () => {
@@ -860,10 +866,10 @@ describe("console view URL routing", () => {
     render(<App connect={() => () => {}} />);
     await user.click(await screen.findByRole("button", { name: /Open thread: Rollout check/ }));
     expect(await screen.findByText("All checks passed.")).toBeVisible();
-    expect(window.location.hash).toBe("#/messages");
+    await hashIs("#/messages");
 
     await user.click(screen.getByRole("button", { name: /^Fleet/ }));
-    expect(window.location.hash).toBe("#/fleet");
+    await hashIs("#/fleet");
     changeVisibility("visible");
     window.history.back();
     await waitFor(() => expect(screen.getByRole("main")).toHaveAttribute("data-view", "messages"));
