@@ -211,6 +211,23 @@ binding, including a Codex sub-agent's lookup of its own session. Hook-file proo
 either client's first-bind generation-zero fallback. Eligible exact-generation heartbeats
 and shim reattachment still work during the 120 s recovery window.
 
+The proofless ENDED path is closed on both sides. Once SessionEnd clears the ordinary proof,
+`RecallBindingGeneration` treats its `.ended` marker, readable or damaged, as present proof and
+blocks the generation-zero fallback; damage keeps the existing local doctor observation. On
+registration, `source` must be exactly `hook`, `mcp`, `shim` or `watch`; empty or omitted remains
+valid as a legacy non-hook source. Other values and negative `retry_generation` get `bad_request`.
+A generation-zero registration whose newest Execution is `ended` and whose source is anything
+other than `hook`, empty included, gets `409 lost` with `highest_generation`, regardless of
+`retry_generation`. A registering hook still gets G+1 after SessionEnd. After `lost`, proofless
+non-hook registration still gets G+1 as before; this fix deliberately leaves LOST succession
+unchanged, which belongs to ADR 035.
+
+The hub trusts the host-token holder for that host's sessions, and `source` is self-declared. This
+guard closes the fallback path of unmodified Iris clients and old or foreign clients using non-hook
+sources; it is not an authentication boundary against a malicious host-token holder, who can claim
+`hook` and already register sessions. If the 30-day retention sweep removes the newest ended row,
+the guard has no ended state left to check.
+
 The maximum describes the rows SQLite still holds. Retention can lower it between the original
 conflict and a retry. An equal generation carries no restore provenance, so proof based on
 the counter alone cannot distinguish equal generations from different histories. Local proof

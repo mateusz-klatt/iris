@@ -265,7 +265,7 @@ func TestRepairMovesAQuietFolderProjectIntoItsContext(t *testing.T) {
 		t.Fatalf("the folder's mailbox did not move: agent %s", agentRepo)
 	}
 	// Its directory's next session gets its mailbox back in the context.
-	back := call(t, s, "sessions_outside", Request{Client: "codex", Host: "home", SessionID: "f", Cwd: "/home/u/scripts"})
+	back := call(t, s, "sessions_outside", Request{Client: "codex", Host: "home", SessionID: "f", Cwd: "/home/u/scripts", Source: "hook"})
 	if back["agent"].(map[string]any)["id"] != f["agent"].(map[string]any)["id"] {
 		t.Fatalf("mailbox not returned: %v", back["agent"])
 	}

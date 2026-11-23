@@ -27,8 +27,7 @@ func TestGenerationObserverNamesCommittedReplacementCauses(t *testing.T) {
 		{"lease_expired", "mcp", "mcp", 1},
 		{"recovery_expired", "shim", "shim", 0},
 		{"prior_lost", "watch", "watch", 0},
-		{"ended", "", "legacy", 0},
-		{"ended", "sensitive-source", "other", -1},
+		{"lease_expired", "", "legacy", 0},
 	} {
 		t.Run(tc.reason+"/"+tc.label, func(t *testing.T) {
 			s, clock, file := testStore(t)

@@ -40,6 +40,10 @@ Codes: `unauthorized`, `bad_request`, `not_found`, `conflict`, `key_reused`, `un
  "source":"hook","generation":0}
 ```
 
+Registration `source` is exactly `hook`, `mcp`, `shim` or `watch`. An empty or omitted source stays
+valid as a legacy non-hook source; any other value gets `bad_request`. `retry_generation` must not
+be negative.
+
 Response:
 
 ```json
@@ -98,8 +102,11 @@ This applies to ordinary, outside-git and combined shell registrations.
 A hook with remembered generation G retries once only if that detail is valid and at least G.
 It sends `generation:0` and `retry_generation:G`. A positive retry floor requires both the
 retained history and the resulting binding to be at least G in the registration transaction.
-Resume and reattachment preserve the generation. A new Execution after loss or end advances
-it. An older hub omits the detail, so an upgraded hook keeps its proof and skips the retry.
+Resume and reattachment preserve the generation. A new Execution after loss advances it. After
+SessionEnd, only a generation-zero hook registration can advance it: every non-hook source, legacy
+empty included, gets `409 lost` regardless of `retry_generation`. If retention has removed the
+ended Execution, that state is no longer available to check. An older hub omits the detail, so an
+upgraded hook keeps its proof and skips the retry.
 
 A shim or `iris watch` that retains the binding reattaches by heartbeat: a heartbeat with the
 current generation does the same work during the recovery window and returns the same response.

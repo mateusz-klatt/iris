@@ -103,14 +103,21 @@ func (s *Sessions) RecallGeneration(client, session string) (int, bool, error) {
 	return generation, generation > 0 || err != nil, err
 }
 
-// RecallBindingGeneration is the binding reader. It records a damaged file in the local
-// doctor log even when the client has yet to run a hook.
+// RecallBindingGeneration is the binding reader. Once SessionEnd has cleared the ordinary
+// proof, its .ended marker still blocks a proofless fallback. It records a damaged file in the
+// local doctor log even when the client has yet to run a hook.
 func (s *Sessions) RecallBindingGeneration(client, session string) (int, bool, error) {
 	generation, present, err := s.RecallGeneration(client, session)
+	path := s.memory.name(client, session)
+	if !present && client != "" && session != "" {
+		path += ".ended"
+		generation, err = readGeneration(path)
+		present = generation > 0 || err != nil
+	}
 	if err != nil {
 		env := map[string]string{"IRIS_TOKEN_FILE": s.tokenPath}
 		recorder := Runner{ClientName: client, EventName: "bind", Getenv: func(key string) string { return env[key] }}
-		recorder.record(stageObserved, damagedGenerationObservation(s.memory.name(client, session)), nil)
+		recorder.record(stageObserved, damagedGenerationObservation(path), nil)
 	}
 	return generation, present, err
 }
