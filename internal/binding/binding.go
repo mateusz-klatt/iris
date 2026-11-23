@@ -434,27 +434,27 @@ func (r *Resolver) recallSessionHeld(handle string) (string, int, error) {
 	if r.explicitBindingHeld(handle) {
 		return "", 0, nil
 	}
+	session, rung := "", 0
 	if r.last.HookSeen && r.last.SessionID != "" {
-		return r.last.SessionID, r.last.Rung, nil
+		session, rung = r.last.SessionID, r.last.Rung
+	} else if fromEnv := r.envSession(); fromEnv != "" {
+		session, rung = fromEnv, 2
 	}
-	if session := r.envSession(); session != "" {
-		return session, 2, nil
-	}
-	if r.Succession == nil {
-		return "", 0, nil
+	if r.Succession == nil || session != "" && rung != 3 {
+		return session, rung, nil
 	}
 	anc := r.ancestor()
 	if anc.PID <= 0 || anc.StartMS <= 0 || !proc.SingleSession(anc, r.Client) {
-		return "", 0, nil
+		return session, rung, nil
 	}
-	session, ok, err := r.Succession.CurrentSession(r.Client, anc)
+	current, ok, err := r.Succession.CurrentSession(r.Client, anc)
 	if err != nil {
 		return "", 0, &LostError{Cause: err}
 	}
 	if !ok {
-		return "", 0, nil
+		return session, rung, nil
 	}
-	return session, 3, nil
+	return current, 3, nil
 }
 
 func (r *Resolver) reattachRecalledHeld(ctx context.Context, handle string) (Bound, bool, error) {

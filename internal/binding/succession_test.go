@@ -348,7 +348,7 @@ func TestSuccessionRequiresLiveParentAndExcludesWatch(t *testing.T) {
 	}
 }
 
-func TestSuccessionWitnessClearMismatchRefusesOldSession(t *testing.T) {
+func TestSuccessionPrefersCurrentRung3SessionAfterClear(t *testing.T) {
 	anc := proc.Ancestor{PID: 42, StartMS: 100, Name: "cursor-agent"}
 	f := newSuccessionBindingFixture(t, "cursor", "sessionStart", "S1", anc)
 	r := f.resolver("cursor", "", anc)
@@ -367,11 +367,12 @@ func TestSuccessionWitnessClearMismatchRefusesOldSession(t *testing.T) {
 		t.Fatalf("S2 SessionStart: %v %v, stdout=%s", failures, err, out.Stdout)
 	}
 	f.hub.clock.Advance(16 * time.Minute)
-	if _, err := r.Resolve(t.Context(), ""); !IsCode(err, "lost") {
-		t.Fatalf("superseded S1 recovered after /clear: %v", err)
+	after, err := r.Resolve(t.Context(), "")
+	if err != nil || after.SessionID != "S2" || after.Generation != 2 || after.Rung != 3 {
+		t.Fatalf("resolver did not follow S2 after /clear: %+v %v", after, err)
 	}
-	if len(f.hub.successions()) != 0 {
-		t.Fatalf("local /clear witness allowed a succession request: %+v", f.hub.successions())
+	if requests := f.hub.successions(); len(requests) != 1 || requests[0]["session_id"] != "S2" {
+		t.Fatalf("local /clear witness did not pick only S2: %+v", requests)
 	}
 	assertNoGenerationZeroRegistration(t, f.hub.sessions())
 }

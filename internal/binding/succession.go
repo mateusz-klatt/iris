@@ -43,7 +43,11 @@ func (r *Resolver) succeedAfterLostHeld(ctx context.Context, session string, run
 			return Bound{}, true, errGenerationFloor
 		}
 	}
-	priorGeneration, priorExecution, err := r.Succession.PrepareSuccession(r.Client, session, max(generationFloor, r.processGenerationHeld(session)), r.last.ExecutionID, anc)
+	lastExecution := ""
+	if r.last.SessionID == session {
+		lastExecution = r.last.ExecutionID
+	}
+	priorGeneration, priorExecution, err := r.Succession.PrepareSuccession(r.Client, session, max(generationFloor, r.processGenerationHeld(session)), lastExecution, anc)
 	if err != nil {
 		return Bound{}, true, &LostError{Cause: err}
 	}
@@ -127,7 +131,8 @@ func (r *Resolver) adoptSuccessionWinnerHeld(ctx context.Context, session string
 	err := r.Hub.Do(ctx, "POST", "/v1/bind", req, &reply)
 	b := reply.Bound
 	b.Rung = rung
-	if err != nil || reply.Match != "succession" || r.gone[b.ExecutionID] || b.SessionID != "" && b.SessionID != session || b.Generation <= priorGeneration {
+	if err != nil || reply.Match != "succession" || r.gone[b.ExecutionID] || b.SessionID != "" && b.SessionID != session ||
+		b.Generation < priorGeneration || b.Generation == priorGeneration && b.ExecutionID != priorExecution {
 		return Bound{}, nil
 	}
 	if b.SessionID == "" {

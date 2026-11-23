@@ -268,7 +268,8 @@ func TestSuccessionAdoptsValidWinnersAndRejectsOthers(t *testing.T) {
 		}},
 		{name: "gone winner", bind: validWinner, gone: true},
 		{name: "wrong session", bind: map[string]any{"execution_id": "ex_two", "generation": 2, "session_id": "other", "match": "succession"}},
-		{name: "older winner", bind: map[string]any{"execution_id": "ex_one", "generation": 1, "session_id": "S", "match": "succession"}},
+		{name: "older winner", bind: map[string]any{"execution_id": "ex_old", "generation": 0, "session_id": "S", "match": "succession"}},
+		{name: "same generation different execution", bind: map[string]any{"execution_id": "ex_other", "generation": 1, "session_id": "S", "match": "succession"}},
 		{name: "advance failure", bind: validWinner, advance: func(string, int, string) (int, bool, error) { return 0, false, errors.New("CAS") }},
 		{name: "winner proof failure", bind: validWinner, proofs: []fakeSuccessionProof{{generation: 1, execution: "ex_one"}, {err: errors.New("bad winner proof")}}},
 		{name: "winner proof mismatch", bind: validWinner, proofs: []fakeSuccessionProof{{generation: 1, execution: "ex_one"}, {generation: 3, execution: "ex_two"}}},
@@ -408,6 +409,24 @@ func TestSuccessionProcessWinnerAndAdvanceRace(t *testing.T) {
 			t.Fatalf("adoption CAS failure: attempted=%t err=%v", attempted, err)
 		}
 	})
+}
+
+func TestSuccessionFollowsProofAdvancedDuringReattach(t *testing.T) {
+	h := &tickHub{reply: func(req *http.Request, body map[string]any) (int, any) {
+		if body["prior_generation"] != float64(2) || body["prior_execution_id"] != "ex_hook" {
+			t.Fatalf("request did not follow the advanced hook proof: %+v", body)
+		}
+		if req.URL.Path == "/v1/sessions/succeed" {
+			return refused("lost")
+		}
+		return http.StatusOK, map[string]any{"execution_id": "ex_hook", "generation": 2, "session_id": "S", "match": "succession"}
+	}}
+	memory := &fakeSuccessionMemory{generation: 2, execution: "ex_hook"}
+	r := scriptedSuccessionResolver(h, memory)
+	b, attempted, err := r.succeedAfterLostHeld(t.Context(), "S", 2, 1)
+	if !attempted || err != nil || b.ExecutionID != "ex_hook" || memory.advanceCall != 0 {
+		t.Fatalf("already-proven winner: bound=%+v attempted=%t err=%v writes=%d", b, attempted, err, memory.advanceCall)
+	}
 }
 
 func TestSuccessionRetainedRung3UsesProcessIdentity(t *testing.T) {

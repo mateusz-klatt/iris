@@ -303,6 +303,11 @@ func TestBindSuccessionWinnerRequiresExactRetainedPredecessor(t *testing.T) {
 	if out, err := s.Call(t.Context(), "bind", proof); out != nil || !isCode(err, "unbound") {
 		t.Fatalf("another history confirmed the hook winner: %+v %v", out, err)
 	}
+	proof.PriorGeneration, proof.PriorExecutionID = 2, winner["execution_id"].(string)
+	out = call(t, s, "bind", proof)
+	if out["execution_id"] != winner["execution_id"] || out["match"] != "succession" {
+		t.Fatalf("exact proof advanced during reattach did not confirm the live winner: %+v", out)
+	}
 }
 
 func TestSucceedRestoreLineageAndMarkRestoredRotation(t *testing.T) {

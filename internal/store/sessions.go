@@ -657,10 +657,10 @@ func (t *transaction) bind(r Request) (map[string]any, error) {
 		// This lookup can confirm a winner only in the history that contains the
 		// caller's exact lost predecessor. An older hub ignores the proof and
 		// its answer lacks the succession match marker.
-		query += ` AND e.generation>? AND EXISTS (SELECT 1 FROM Execution p WHERE p.id=?
+		query += ` AND ((e.id=? AND e.generation=?) OR (e.generation>? AND EXISTS (SELECT 1 FROM Execution p WHERE p.id=?
 			AND p.host_id=e.host_id AND p.client=e.client AND p.session_id=e.session_id
-			AND p.generation=? AND p.hook_seen_ms>0 AND p.state='lost')`
-		args = append(args, r.PriorGeneration, r.PriorExecutionID, r.PriorGeneration)
+			AND p.generation=? AND p.hook_seen_ms>0 AND p.state='lost')))`
+		args = append(args, r.PriorExecutionID, r.PriorGeneration, r.PriorGeneration, r.PriorExecutionID, r.PriorGeneration)
 	}
 	if r.Exclude != "" {
 		query += " AND e.id<>?"
