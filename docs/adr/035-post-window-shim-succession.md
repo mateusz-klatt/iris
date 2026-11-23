@@ -1,6 +1,6 @@
 # ADR 035: Automatic post-window session succession by `iris mcp`
 
-Status: proposed, 2026-11-23 (revised against `main` after `#408`). Proposes changes to D6, D8, D9, [ADR 006](006-retention-and-restore.md) decision 7 and its amendments, `internal/hook/runner.go` (`singleSession`), `internal/hook/memory.go`, `internal/hook/sessions.go`, `internal/binding/`, `internal/store/`, and `internal/mcpserver/` recovery guidance; **no implementation starts until this ADR is reviewed and the owner decision below is resolved.**
+Status: accepted, 2026-11-23, with Choice A, which the owner chose on 2026-11-23 (see "Owner decision" below). It was revised against `main` after `#408`. It amends D6, D8, D9, [ADR 006](006-retention-and-restore.md) decision 7 and its amendments, `internal/hook/runner.go` (`singleSession`), `internal/hook/memory.go`, `internal/hook/sessions.go`, `internal/binding/`, `internal/store/`, and `internal/mcpserver/` recovery guidance. Until the implementation merges, `main` keeps today's behaviour.
 
 ## Context
 
@@ -33,7 +33,9 @@ Naive post-window succession is unsafe for four reasons:
 3. **Hook-policy bypass and imprecise `single_session` flags.** Allowing unverified `generation = 0` MCP/`watch` registrations over `lost` hook history—or trusting `single_session = 1` from multi-chat launchers such as Cursor IDE (`internal/hook/runner.go` currently sets `singleSession(ClientCursor) = true` even when `proc.SingleSession` in `internal/proc/proc.go` is `false` for `cursor`)—breaks D6's rule that hooks are the session's registrar.
 4. **Generation-memory and concurrency races.** Unsynchronized writes from a late MCP process could downgrade a newer hook generation `G+2` or recreate `<hash>` files deleted by `SessionEnd`, and concurrent shims or hooks could split Executions or stall a hook's 1.5 s D3 deadline.
 
-## Owner decision required before implementation
+## Owner decision
+
+**Resolved on 2026-11-23: the owner chose Choice A.** The table below records the trade-off as it was presented. The withdrawal of proofless `LOST -> G+1` recovery for Cursor and Grok sessions without local proof is a user-visible change, and the release notes of the implementing release must state it.
 
 Unlike `#408` (which closed `ENDED` succession cleanly without removing normal recovery), **ADR 035 confronts a policy choice on `LOST` sessions** between preserving today's proofless fallback for hook-less/proofless callers versus enforcing strict proof-only succession everywhere:
 
@@ -46,7 +48,7 @@ Unlike `#408` (which closed `ENDED` succession cleanly without removing normal r
 | **User-visible effect on Cursor and Grok users** | Cursor and Grok prompts do not register (`docs/api.md`), and Cursor IDE stays ineligible even with intact proof (see §2 and Limits). If a Cursor or Grok session had a hook-registered Execution that expired to `lost`: with **absent proof** (deleted/pruned `<hash>` or `<hash>.execution`, or a fresh `cursor-agent` MCP shim started after expiry without `<hash>.execution`), sending prompts will **not** recover it automatically—the session waits for an edit (`PreTool`), a `SessionStart`, or a resume; with **damaged proof** (unreadable or malformed `<hash>`, `<hash>.execution`, or `.ended`, including a dangling symlink), hooks will not register until resolved—`iris doctor` names it (`damaged generation proof at <path>`), so verify the hub connection and session history, then archive or repair the named proof per ADR 006. By contrast, eligible `cursor-agent` sessions with intact proof and Grok sessions with intact proof gain automatic one-hop `iris mcp` succession on tool calls or 20 s ticks. | A Cursor or Grok session without local proof (or an unbound `cursor-agent` MCP child) still gets a `generation = 0` fallback over `lost` (or synthetic `mcp-<pid>-<start_ms>`), at the cost of bypassing restore-floor lineage and `/clear` guards whenever proof is omitted. |
 | **Security / restore integrity** | Closes the self-bypass where omitting proof (`generation = 0`) skips restore monotonicity (`highest_generation`, `prior_execution_id`) and `/clear` checks. | Any proofless caller (`generation = 0`) bypasses restore monotonicity and `/clear` guards over `lost` sessions; `ended` remains blocked by `#408`. |
 
-**Recommendation:** Adopt **Choice A** (withdraw proofless `LOST -> G+1` for `mcp`/`shim`/`watch` over hook-registered history, and enable guarded one-hop `POST /v1/sessions/succeed` for `iris mcp` with required proof). Keeping proofless `LOST -> G+1` undermines the ADR's restore and `/clear` invariants whenever local proof is absent or an unupgraded caller uses `generation = 0`, while eligible `cursor-agent` and Grok sessions with intact proof *gain* post-window recovery they lack today. **Implementation must not proceed until the owner explicitly confirms this behavior trade-off.**
+**Recommendation:** Adopt **Choice A** (withdraw proofless `LOST -> G+1` for `mcp`/`shim`/`watch` over hook-registered history, and enable guarded one-hop `POST /v1/sessions/succeed` for `iris mcp` with required proof). Keeping proofless `LOST -> G+1` undermines the ADR's restore and `/clear` invariants whenever local proof is absent or an unupgraded caller uses `generation = 0`, while eligible `cursor-agent` and Grok sessions with intact proof *gain* post-window recovery they lack today. The owner confirmed this trade-off on 2026-11-23.
 
 ## Decision
 
@@ -183,7 +185,7 @@ Implementing this ADR amends or extends the following invariants in `docs/archit
 ## Alternatives considered
 
 1. **Keep today's `main` (`#408`) recovery model (proofless `generation = 0` `mcp` and `watch` `LOST -> G+1` + hook registration for proof-bearing sessions, with `ENDED` refused).**
-   - *Rejected (subject to Owner decision above):* Leaves proof-holding shims (including Cursor and Grok sessions with intact `<hash>`) locked in `lost` after >120 s outages or sleep, while permitting proofless `mcp` and `watch` callers (missing `<hash>`/`<hash>.ended`, or Rung-3 `mcp-<pid>-<start_ms>`) to bypass restore-floor lineage and `/clear` checks after `lost`.
+   - *Rejected (by the owner's Choice A, 2026-11-23):* Leaves proof-holding shims (including Cursor and Grok sessions with intact `<hash>`) locked in `lost` after >120 s outages or sleep, while permitting proofless `mcp` and `watch` callers (missing `<hash>`/`<hash>.ended`, or Rung-3 `mcp-<pid>-<start_ms>`) to bypass restore-floor lineage and `/clear` checks after `lost`.
 2. **Extend `recovery_deadline` when shims/watches call, or revive `'lost'` Executions in place.**
    - *Rejected:* Breaks D9 and ADR 006 invariants that `recovery_deadline` is persisted once per restart, claims expire cleanly after 120 s, and `'lost'` Executions are never revived.
 3. **Send `succeed: true` on `POST /v1/sessions` or make `prior_execution_id` optional.**
