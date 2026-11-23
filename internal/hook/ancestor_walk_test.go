@@ -17,8 +17,10 @@ func TestOnlyAClaudeHookWalksWithCursorMarkers(t *testing.T) {
 	nearestAncestor = func() (proc.Ancestor, error) { return withMarkers, nil }
 	plainAncestor = func() (proc.Ancestor, error) { return withoutMarkers, nil }
 
-	if got := (Runner{ClientName: string(ClientClaude)}).ancestor(); got != withMarkers {
-		t.Fatalf("claude hook walked without markers: %+v", got)
+	for _, name := range []string{"claude", "claude-code"} {
+		if got := (Runner{ClientName: name}).ancestor(); got != withMarkers {
+			t.Fatalf("%s hook walked without markers: %+v", name, got)
+		}
 	}
 	for _, client := range []Client{ClientKimi, ClientGrok, ClientCursor, ClientCodex, ClientAntigravity, ClientCopilot} {
 		if got := (Runner{ClientName: string(client)}).ancestor(); got != withoutMarkers {
@@ -27,5 +29,20 @@ func TestOnlyAClaudeHookWalksWithCursorMarkers(t *testing.T) {
 	}
 	if a, ok := (Runner{ClientName: string(ClientAntigravity)}).antigravityAncestor(); ok || a != (proc.Ancestor{}) {
 		t.Fatalf("antigravity wake used a non-antigravity ancestor: %+v, %v", a, ok)
+	}
+}
+
+// v0.1.13 treated Cursor's marker pair as Cursor for every client other than the requested one,
+// whatever ancestor was recognized. Only a Claude hook now needs unknown ancestry for the pair.
+func TestCursorMarkersKeepTheV0113RuleForOtherClients(t *testing.T) {
+	env := map[string]string{"CURSOR_PROJECT_DIR": "/outer/cursor/project", "CURSOR_VERSION": "2026.11.22-e9042b2"}
+	codex := func() (proc.Ancestor, error) { return proc.Ancestor{PID: 44, StartMS: 9, Name: "codex"}, nil }
+	runner, cross := (Runner{Getenv: func(k string) string { return env[k] }, Ancestor: codex}).crossLoad("s1", ClientKimi)
+	if !cross || runner != ClientCursor {
+		t.Fatalf("kimi hook under codex with markers: runner %q, cross %v; want cursor, true", runner, cross)
+	}
+	runner, cross = (Runner{Getenv: func(k string) string { return env[k] }, Ancestor: codex}).crossLoad("s1", ClientClaude)
+	if cross || runner != "" {
+		t.Fatalf("claude hook under codex with markers: runner %q, cross %v; want native", runner, cross)
 	}
 }

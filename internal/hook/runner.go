@@ -581,8 +581,11 @@ func (r Runner) crossLoad(sessionID string, requested Client) (Client, bool) {
 	if requested != ClientCursor && hasAncestor && Client(ancestor) == ClientCursor {
 		return ClientCursor, true
 	}
-	// Cursor 2026.11.22 omits CURSOR_CONVERSATION_ID from cross-loaded Claude hooks.
-	if requested != ClientCursor && !hasAncestor && proc.CursorEnvironment(getenv) {
+	// Cursor 2026.11.22 omits CURSOR_CONVERSATION_ID from cross-loaded Claude hooks. For a Claude
+	// hook the pair counts only with no recognized client ancestor, so a real Claude nested in
+	// another client keeps its identity. Every other client keeps the v0.1.13 rule: the pair
+	// alone identifies Cursor unless the requested client was recognized above.
+	if requested != ClientCursor && (requested != ClientClaude || !hasAncestor) && proc.CursorEnvironment(getenv) {
 		return ClientCursor, true
 	}
 	return "", false
@@ -658,7 +661,7 @@ func (r Runner) ancestor() proc.Ancestor {
 	fn := r.Ancestor
 	if fn == nil {
 		fn = plainAncestor
-		if r.ClientName == string(ClientClaude) {
+		if Canonical(r.ClientName) == ClientClaude {
 			fn = nearestAncestor
 		}
 	}
