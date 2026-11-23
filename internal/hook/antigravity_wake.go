@@ -656,6 +656,7 @@ func (r Runner) antigravityHook(ev Event, note func(string)) (Output, bool) {
 	var askOut Output
 	askContinue := false
 	superseded := false
+	var persistErr error
 
 	func() {
 		defer unlock()
@@ -751,14 +752,21 @@ func (r Runner) antigravityHook(ev Event, note func(string)) (Output, bool) {
 
 		if procDirty {
 			if err := writeAntigravityJSON(m.dir, antigravityProcFile(m.dir, anc.PID, anc.StartMS), procState); err != nil {
-				// Without a persisted arm_requested marker, Stop must fail open rather than loop.
+				// The current session and an arm marker live in this file. A failed replace
+				// leaves the previous contents in place. Stop must not ask again, and the
+				// hook still allows (D3). The failure is recorded once the lock is released,
+				// which is what doctor reports as a hook that failed open.
 				askContinue = false
+				persistErr = err
 			}
 		}
 		if convDirty {
 			_ = writeAntigravityJSON(m.dir, antigravityConvFile(m.dir, ev.SessionID), convState)
 		}
 	}()
+	if persistErr != nil {
+		r.recordFailure("antigravity", persistErr, nil)
+	}
 
 	if superseded {
 		return Output{}, false

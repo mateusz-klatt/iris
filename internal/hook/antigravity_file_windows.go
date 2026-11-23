@@ -36,9 +36,10 @@ type antigravityRenameInfo struct {
 // FILE_SHARE_DELETE. FileRenameInfoEx with POSIX semantics can, on Windows 10
 // version 1607 and later and on a volume that supports it. Where that call is
 // rejected, the rename falls back to MoveFileEx and retries access-denied and
-// sharing-violation for hookLockBudget. The fallback still cannot replace a
-// file a reader holds open.
-func renameAntigravityStateFile(oldpath, newpath string) error {
+// sharing-violation until hookLockBudget has elapsed or the attempt cap is
+// reached. The fallback still cannot replace a file a reader holds open.
+// Tests set this to the error a replace returns after those retries are finished.
+var renameAntigravityStateFile = func(oldpath, newpath string) error {
 	return replaceAntigravityState(oldpath, newpath, renameAntigravityStatePOSIX, os.Rename, time.Sleep)
 }
 
@@ -103,6 +104,15 @@ func renameAntigravityStatePOSIX(oldpath, newpath string) error {
 }
 
 func retryAntigravityStateRename(rename func() error, pause func(time.Duration)) error {
+	return retryAntigravityStateRenameUntil(rename, pause, time.Now)
+}
+
+// retryAntigravityStateRenameUntil retries access-denied and sharing-violation
+// until hookLockBudget has elapsed or the attempt cap is reached, whichever
+// comes first. now is the clock, so a test can advance it without sleeping.
+// MoveFileEx still cannot replace a file a reader holds open once the budget ends.
+func retryAntigravityStateRenameUntil(rename func() error, pause func(time.Duration), now func() time.Time) error {
+	start := now()
 	for attempt := 0; ; attempt++ {
 		err := rename()
 		if err == nil {
@@ -111,7 +121,7 @@ func retryAntigravityStateRename(rename func() error, pause func(time.Duration))
 		if !errors.Is(err, os.ErrPermission) && !errors.Is(err, windows.ERROR_SHARING_VIOLATION) {
 			return err
 		}
-		if attempt+1 == antigravityRenameAttempts {
+		if !now().Before(start.Add(hookLockBudget)) || attempt+1 == antigravityRenameAttempts {
 			return err
 		}
 		pause(antigravityRenamePause)

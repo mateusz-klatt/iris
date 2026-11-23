@@ -67,6 +67,25 @@ func TestRetryAntigravityStateRename(t *testing.T) {
 	}
 }
 
+func TestRetryAntigravityStateRenameStopsAtTheBudget(t *testing.T) {
+	start := time.Unix(1_000, 0)
+	now := start
+	calls, pauses := 0, 0
+	err := retryAntigravityStateRenameUntil(func() error {
+		calls++
+		return &os.LinkError{Op: "rename", Err: os.ErrPermission}
+	}, func(delay time.Duration) {
+		if delay != antigravityRenamePause {
+			t.Errorf("retry delay = %v", delay)
+		}
+		pauses++
+		now = now.Add(hookLockBudget)
+	}, func() time.Time { return now })
+	if !errors.Is(err, os.ErrPermission) || calls != 2 || pauses != 1 {
+		t.Fatalf("budget stopped the retry = %v after %d calls and %d pauses", err, calls, pauses)
+	}
+}
+
 func TestOpenRegularTranscriptWindows(t *testing.T) {
 	if _, _, _, err := openRegularTranscript("relative.jsonl"); err == nil {
 		t.Fatal("expected relative path rejection")

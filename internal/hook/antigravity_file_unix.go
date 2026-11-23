@@ -10,7 +10,9 @@ import (
 	"syscall"
 )
 
-func renameAntigravityStateFile(oldpath, newpath string) error {
+// renameAntigravityStateFile is the final replace of a state file. Tests set it
+// to the error a replace returns after its own retries are finished.
+var renameAntigravityStateFile = func(oldpath, newpath string) error {
 	return os.Rename(oldpath, newpath)
 }
 
