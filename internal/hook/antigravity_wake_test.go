@@ -193,6 +193,168 @@ func TestAntigravitySessionStartRecordsAFailedStateReplace(t *testing.T) {
 	}
 }
 
+func TestAntigravityConversationWriteFailuresAreRecorded(t *testing.T) {
+	for _, tc := range []struct {
+		event   string
+		payload map[string]any
+	}{
+		{event: "SessionStart", payload: map[string]any{"conversationId": "conv-write", "transcriptPath": "new.jsonl"}},
+		{event: "PreInvocation", payload: map[string]any{"conversationId": "conv-write", "transcriptPath": "new.jsonl"}},
+		{event: "PostInvocation", payload: map[string]any{"conversationId": "conv-write", "transcriptPath": "new.jsonl"}},
+		{event: "Stop", payload: map[string]any{
+			"conversationId": "conv-write", "transcriptPath": "new.jsonl", "fullyIdle": true,
+			"terminationReason": "NO_TOOL_CALL", "executionNum": 1, "continuationActive": false,
+		}},
+	} {
+		t.Run(tc.event, func(t *testing.T) {
+			configDir, tokenPath, getenv := agyTestEnv(t)
+			helperDir := filepath.Join(configDir, antigravityHelperDirName)
+			if err := os.MkdirAll(helperDir, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			target := antigravityConvFile(helperDir, "conv-write")
+			if err := writeAntigravityJSON(helperDir, target, AntigravityConvState{
+				TranscriptPath: "old.jsonl", Idle: true, FileID: "old-file", IdleOffset: 42,
+			}); err != nil {
+				t.Fatal(err)
+			}
+			before, err := os.ReadFile(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			orig := renameAntigravityStateFile
+			t.Cleanup(func() { renameAntigravityStateFile = orig })
+			var calls int
+			var tmp, renamedTo string
+			renameAntigravityStateFile = func(oldpath, newpath string) error {
+				calls++
+				tmp, renamedTo = oldpath, newpath
+				return os.ErrPermission
+			}
+
+			out := Runner{
+				ClientName: "antigravity",
+				EventName:  tc.event,
+				Stdin:      agyJSON(t, tc.payload),
+				Hub:        scriptHub{},
+				Getenv:     getenv,
+				Ancestor:   func() (proc.Ancestor, error) { return proc.Ancestor{}, errors.New("no agy") },
+				Host:       func() string { return "testhost" },
+				after:      never,
+				logAfter:   never,
+			}.Run()
+
+			if out.Exit != 0 || string(out.Stdout) != "{}\n" || len(out.Stderr) != 0 {
+				t.Fatalf("allow output = exit %d stdout %q stderr %q", out.Exit, out.Stdout, out.Stderr)
+			}
+			if calls != 1 || renamedTo != target || !strings.HasPrefix(filepath.Base(tmp), ".tmp-") {
+				t.Fatalf("conversation rename = %d calls, %s -> %s", calls, tmp, renamedTo)
+			}
+			entries, err := ReadRecentFailures(tokenPath, 10)
+			if err != nil || len(entries) != 1 {
+				t.Fatalf("failure log = %+v, %v", entries, err)
+			}
+			got := entries[0]
+			if got.Stage != "antigravity" || got.Client != "antigravity" || got.Event != tc.event || got.Error != failureText(os.ErrPermission) || got.Observed() || got.Skipped() || got.Degraded() {
+				t.Fatalf("recorded failure = %+v", got)
+			}
+			observed, err := ReadRecentObservations(tokenPath, 10)
+			if err != nil || len(observed) != 0 {
+				t.Fatalf("observations = %+v, %v", observed, err)
+			}
+			after, err := os.ReadFile(target)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if !bytes.Equal(after, before) {
+				t.Fatalf("conversation file changed from %q to %q", before, after)
+			}
+			if _, err := os.Lstat(tmp); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("temp file %s remains: %v", tmp, err)
+			}
+			leftover, err := filepath.Glob(filepath.Join(helperDir, ".tmp-*"))
+			if err != nil || len(leftover) != 0 {
+				t.Fatalf("temp files = %v, %v", leftover, err)
+			}
+		})
+	}
+}
+
+func TestAntigravitySessionStartRecordsOneFailureForBothStateWrites(t *testing.T) {
+	configDir, tokenPath, getenv := agyTestEnv(t)
+	const pid, startMS = 8802, int64(88002)
+	helperDir := filepath.Join(configDir, antigravityHelperDirName)
+	if err := os.MkdirAll(helperDir, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	procTarget := antigravityProcFile(helperDir, pid, startMS)
+	convTarget := antigravityConvFile(helperDir, "new-session")
+	if err := writeAntigravityJSON(helperDir, procTarget, antigravityProcState{CurrentSessionID: "old-session"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeAntigravityJSON(helperDir, convTarget, AntigravityConvState{TranscriptPath: "old.jsonl"}); err != nil {
+		t.Fatal(err)
+	}
+	procBefore, err := os.ReadFile(procTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	convBefore, err := os.ReadFile(convTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	orig := renameAntigravityStateFile
+	t.Cleanup(func() { renameAntigravityStateFile = orig })
+	var renamed []string
+	renameAntigravityStateFile = func(oldpath, newpath string) error {
+		renamed = append(renamed, newpath)
+		return os.ErrPermission
+	}
+
+	out := Runner{
+		ClientName: "antigravity",
+		EventName:  "SessionStart",
+		Stdin:      agyJSON(t, map[string]any{"conversationId": "new-session", "transcriptPath": "new.jsonl"}),
+		Hub:        scriptHub{},
+		Getenv:     getenv,
+		Ancestor: func() (proc.Ancestor, error) {
+			return proc.Ancestor{PID: pid, StartMS: startMS, Name: "agy"}, nil
+		},
+		Host:     func() string { return "testhost" },
+		after:    never,
+		logAfter: never,
+	}.Run()
+
+	if out.Exit != 0 || string(out.Stdout) != "{}\n" || len(out.Stderr) != 0 {
+		t.Fatalf("allow output = exit %d stdout %q stderr %q", out.Exit, out.Stdout, out.Stderr)
+	}
+	if len(renamed) != 2 || renamed[0] != procTarget || renamed[1] != convTarget {
+		t.Fatalf("renamed targets = %v", renamed)
+	}
+	entries, err := ReadRecentFailures(tokenPath, 10)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("failure log = %+v, %v", entries, err)
+	}
+	if got := entries[0]; got.Stage != "antigravity" || got.Event != "SessionStart" {
+		t.Fatalf("recorded failure = %+v", got)
+	}
+	for target, before := range map[string][]byte{procTarget: procBefore, convTarget: convBefore} {
+		after, err := os.ReadFile(target)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !bytes.Equal(after, before) {
+			t.Fatalf("state file %s changed from %q to %q", target, before, after)
+		}
+	}
+	leftover, err := filepath.Glob(filepath.Join(helperDir, ".tmp-*"))
+	if err != nil || len(leftover) != 0 {
+		t.Fatalf("temp files = %v, %v", leftover, err)
+	}
+}
+
 func TestAntigravityQuotingAndCommandMatching(t *testing.T) {
 	for _, bad := range []string{"", "/bin/iris\nbad", "/bin/iris\rbad", "/bin/iris\x00bad", "/bin/iris\x7fbad", `/bin/"iris"`} {
 		if got, ok := quoteAntigravityIrisPath(bad, "linux"); ok || got != "" {

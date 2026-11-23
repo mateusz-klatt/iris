@@ -761,7 +761,9 @@ func (r Runner) antigravityHook(ev Event, note func(string)) (Output, bool) {
 			}
 		}
 		if convDirty {
-			_ = writeAntigravityJSON(m.dir, antigravityConvFile(m.dir, ev.SessionID), convState)
+			if err := writeAntigravityJSON(m.dir, antigravityConvFile(m.dir, ev.SessionID), convState); err != nil && persistErr == nil {
+				persistErr = err
+			}
 		}
 	}()
 	if persistErr != nil {
