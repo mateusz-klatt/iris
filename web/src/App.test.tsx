@@ -279,38 +279,6 @@ describe("Iris operator console", () => {
     expect(await screen.findByLabelText("Username")).toBeVisible();
   });
 
-  it("shows a repository's claim scope and updates a claim's checkout when the watch reports a change", async () => {
-    let onFrame: ((frame: WatchFrame) => void) | undefined;
-    let scope = "repository";
-    let worktree = "/wt1";
-    server.use(http.get("*/v1/ui/overview", () => HttpResponse.json({
-      ...sessionOverview,
-      repositories: [{ ...sessionOverview.repositories[0], claim_auto_scope: scope }],
-      claims: [{
-        ...sessionOverview.claims[0],
-        worktree_path: worktree,
-        branch: "main",
-        host: "local",
-        effective_scope: scope,
-      }],
-    })));
-    const user = userEvent.setup();
-    render(<App connect={(frame, status) => { onFrame = frame; status?.("live"); return () => undefined; }} />);
-    await user.click(await screen.findByRole("button", { name: /^Fleet/ }));
-    const projects = screen.getByRole("table", { name: "Repositories" });
-    expect(within(projects).getByText("iris: Repository-wide")).toBeVisible();
-    expect(within(projects).queryByText(/not enforcement/)).toBeNull();
-    await user.click(screen.getByRole("button", { name: /^Claims/ }));
-    const claimsView = () => screen.getByRole("heading", { name: "Claims" }).closest("article")!;
-    expect(within(claimsView()).getByText("docs/api.md").closest("li")).toHaveTextContent("Worktree /wt1 · Branch main · Applies across the repository");
-    scope = "worktree";
-    worktree = "/wt2";
-    onFrame?.({ cursor: 2, kind: "changed" });
-    await waitFor(() => expect(within(claimsView()).getByText("docs/api.md").closest("li")).toHaveTextContent("Worktree /wt2 · Branch main · Applies in this worktree"));
-    expect(within(claimsView()).getByText(/iris: Worktree-scoped/)).toBeVisible();
-    expect(within(claimsView()).getByText(/An advisory is not enforcement/)).toBeVisible();
-  });
-
   it("shows repositories, agents, and claims from the overview", async () => {
     const user = userEvent.setup();
     await showSession();

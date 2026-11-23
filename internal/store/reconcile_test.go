@@ -117,37 +117,6 @@ func TestReconciliationRespectsTheClaimLimit(t *testing.T) {
 	}
 }
 
-// At the claim limit an exempt overlap is still named. The limit note used to
-// replace the message before the advisory was rendered, so the shell warning
-// dropped it.
-func TestReconciliationKeepsTheAdvisoryAtTheClaimLimit(t *testing.T) {
-	s, _, _ := testStore(t)
-	holder, ho := scopeSession(t, s, "", "holder", "/repo/wt1", "dev:1", "held-branch")
-	repo := ho["repository_id"].(string)
-	setScope(t, s, repo, "worktree")
-	shell, _ := scopeSession(t, s, "", "shell", "/repo/wt2", "dev:2", "side")
-	call(t, s, "touch", touchRequest(holder, "held", "overlap.go"))
-	expiry := int64(1800000000000 + 3600000)
-	if _, err := s.db.Exec(`WITH RECURSIVE n(i) AS (SELECT 1 UNION ALL SELECT i+1 FROM n WHERE i < ?)
-INSERT INTO Claim(execution_id,repository_id,kind,path,path_key,origin,boot_epoch,expires_ms)
-SELECT e.id,e.repository_id,'exact','pad/'||n.i||'.go','pad/'||n.i||'.go','auto',e.boot_epoch,? FROM n JOIN Execution e ON e.id=?`, maxClaims, expiry, shell.ExecutionID); err != nil {
-		t.Fatal(err)
-	}
-	shell.Kind, shell.Status = "before", map[string]string{}
-	call(t, s, "reconcile", shell)
-	shell.Kind, shell.Status = "after", map[string]string{"overlap.go": " M"}
-	out := call(t, s, "reconcile", shell)
-	message, _ := out["message"].(string)
-	notes, _ := out["advisories"].([]map[string]any)
-	claimed, _ := out["claimed"].([]string)
-	if len(claimed) != 0 || len(notes) != 1 || notes[0]["path"] != "overlap.go" || notes[0]["branch"] != "held-branch" || !strings.Contains(message, "left 1 unclaimed") || !strings.Contains(message, "also auto-claimed") || !strings.Contains(message, "on branch held-branch.") {
-		t.Fatalf("claimed %v advisories %v message %q", claimed, notes, message)
-	}
-	if !strings.Contains(message, "Shell edit detected.") || !strings.Contains(message, "cannot undo") {
-		t.Fatal(message)
-	}
-}
-
 // A path that left the status was committed, stashed or restored by git in this worktree only.
 // Nothing changed in the holder's worktree, so it is no shell edit to warn about; only paths
 // still changed after the command are checked.

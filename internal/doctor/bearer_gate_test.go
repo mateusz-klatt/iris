@@ -3,7 +3,6 @@ package doctor
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -60,8 +59,7 @@ func runDoctor(t *testing.T, hubURL, dir string, hc *http.Client, getenv func(st
 }
 
 // A non-loopback http URL, and anything else ValidateURL rejects, is reported
-// and never contacted. The claim-scope line stays unknown for a checkout:
-// doctor did not ask, and it does not assume repository or worktree.
+// and never contacted.
 func TestDoctorRefusedHubURLSendsNoRequest(t *testing.T) {
 	repo := gitRepoFolding(t, "false")
 	for _, tc := range []struct {
@@ -99,9 +97,6 @@ func TestDoctorRefusedHubURLSendsNoRequest(t *testing.T) {
 			if !strings.Contains(res.Format(), "hub: unreachable ("+want.Error()+")") {
 				t.Fatal(res.Format())
 			}
-			if res.ClaimScope != claimScopeText("") || !strings.Contains(res.Format(), "claim auto scope: unknown.") {
-				t.Fatalf("scope %q", res.ClaimScope)
-			}
 			if res.Stored || res.StoreError != "" {
 				t.Fatalf("stored=%v %s", res.Stored, res.StoreError)
 			}
@@ -109,19 +104,17 @@ func TestDoctorRefusedHubURLSendsNoRequest(t *testing.T) {
 	}
 }
 
-// https and literal loopback http still reach an authenticated hub, and the
-// scope the hub reports is shown.
-func TestDoctorShowsClaimScopeForHTTPSAndLoopbackHTTP(t *testing.T) {
+// https and literal loopback http still reach an authenticated hub.
+func TestDoctorAcceptsHTTPSAndLoopbackHTTP(t *testing.T) {
 	repo := gitRepoFolding(t, "false")
 	for _, tc := range []struct {
-		name, scope string
-		serve       func(http.Handler) *httptest.Server
+		name  string
+		serve func(http.Handler) *httptest.Server
 	}{
-		{name: "loopback http", scope: "repository", serve: httptest.NewServer},
-		{name: "https", scope: "worktree", serve: httptest.NewTLSServer},
+		{name: "loopback http", serve: httptest.NewServer},
+		{name: "https", serve: httptest.NewTLSServer},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			var guardPosts int
 			srv := tc.serve(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				if r.URL.Path != "/v1/status" && r.Header.Get("Authorization") != "Bearer secret" {
 					t.Error("bearer mismatch")
@@ -134,12 +127,6 @@ func TestDoctorShowsClaimScopeForHTTPSAndLoopbackHTTP(t *testing.T) {
 					w.WriteHeader(http.StatusNoContent)
 				case "/v1/agents":
 					w.WriteHeader(http.StatusNoContent)
-				case "/v1/guard/check":
-					if r.Method != http.MethodPost {
-						t.Errorf("method %s", r.Method)
-					}
-					guardPosts++
-					_, _ = fmt.Fprintf(w, `{"claim_auto_scope":%q}`, tc.scope)
 				case "/v1/hooks/seen":
 					_, _ = w.Write([]byte(`{"clients":{}}`))
 				case "/v1/ui/doctor":
@@ -170,22 +157,12 @@ func TestDoctorShowsClaimScopeForHTTPSAndLoopbackHTTP(t *testing.T) {
 			if !res.HubUp || !res.TokenOK || !res.Stored || res.ExitCode() != 0 {
 				t.Fatalf("up=%v token=%v stored=%v exit=%d detail=%s tokenDetail=%s store=%s", res.HubUp, res.TokenOK, res.Stored, res.ExitCode(), res.HubDetail, res.TokenDetail, res.StoreError)
 			}
-			if !strings.HasPrefix(res.ClaimScope, tc.scope+".") || !strings.Contains(res.Format(), "claim auto scope: "+tc.scope+".") {
-				t.Fatalf("%q\n%s", res.ClaimScope, res.Format())
-			}
-			if tc.scope == "worktree" && !strings.Contains(res.Format(), "not enforcement") {
-				t.Fatal(res.Format())
-			}
-			if guardPosts != 1 {
-				t.Fatalf("claim-scope lookups %d", guardPosts)
-			}
 		})
 	}
 }
 
-// A probe that does not succeed does not look the scope up. The checkout is
-// unknown, and a directory outside git still has no line.
-func TestDoctorSkipsClaimScopeLookupWhenProbeFails(t *testing.T) {
+// A probe that does not succeed stops doctor before later authenticated calls.
+func TestDoctorStopsAfterFailedProbe(t *testing.T) {
 	repo := gitRepoFolding(t, "false")
 	t.Run("hub error", func(t *testing.T) {
 		var paths []string
@@ -201,8 +178,8 @@ func TestDoctorSkipsClaimScopeLookupWhenProbeFails(t *testing.T) {
 		if res.HubUp || res.TokenOK || res.ExitCode() != 1 || !strings.Contains(res.HubDetail, "hub status") {
 			t.Fatalf("up=%v token=%v exit=%d detail=%s", res.HubUp, res.TokenOK, res.ExitCode(), res.HubDetail)
 		}
-		if res.ClaimScope != claimScopeText("") || len(paths) != 1 {
-			t.Fatalf("scope %q paths %v", res.ClaimScope, paths)
+		if len(paths) != 1 {
+			t.Fatalf("paths %v", paths)
 		}
 	})
 	t.Run("rejected token", func(t *testing.T) {
@@ -229,8 +206,8 @@ func TestDoctorSkipsClaimScopeLookupWhenProbeFails(t *testing.T) {
 		if !res.HubUp || res.TokenOK || res.ExitCode() != 1 || !strings.Contains(res.Format(), "token: not valid") {
 			t.Fatalf("up=%v token=%v exit=%d\n%s", res.HubUp, res.TokenOK, res.ExitCode(), res.Format())
 		}
-		if res.ClaimScope != claimScopeText("") || len(paths) != 2 || paths[0] != "/v1/status" || paths[1] != "/v1/agents" {
-			t.Fatalf("scope %q paths %v", res.ClaimScope, paths)
+		if len(paths) != 2 || paths[0] != "/v1/status" || paths[1] != "/v1/agents" {
+			t.Fatalf("paths %v", paths)
 		}
 	})
 	t.Run("unreachable", func(t *testing.T) {
@@ -246,8 +223,8 @@ func TestDoctorSkipsClaimScopeLookupWhenProbeFails(t *testing.T) {
 		if res.HubUp || res.TokenOK || res.ExitCode() != 1 || res.HubDetail != "hub unreachable" {
 			t.Fatalf("up=%v token=%v exit=%d detail=%s", res.HubUp, res.TokenOK, res.ExitCode(), res.HubDetail)
 		}
-		if res.ClaimScope != claimScopeText("") || len(paths) != 1 {
-			t.Fatalf("scope %q paths %v", res.ClaimScope, paths)
+		if len(paths) != 1 {
+			t.Fatalf("paths %v", paths)
 		}
 	})
 	t.Run("outside git", func(t *testing.T) {
@@ -261,8 +238,8 @@ func TestDoctorSkipsClaimScopeLookupWhenProbeFails(t *testing.T) {
 		}))
 		defer srv.Close()
 		res := runDoctor(t, srv.URL, t.TempDir(), srv.Client(), nil)
-		if res.ClaimScope != "" || strings.Contains(res.Format(), "claim auto scope") || len(paths) != 1 {
-			t.Fatalf("scope %q paths %v\n%s", res.ClaimScope, paths, res.Format())
+		if len(paths) != 1 {
+			t.Fatalf("paths %v\n%s", paths, res.Format())
 		}
 	})
 	t.Run("working directory", func(t *testing.T) {
@@ -275,12 +252,12 @@ func TestDoctorSkipsClaimScopeLookupWhenProbeFails(t *testing.T) {
 			w.WriteHeader(http.StatusServiceUnavailable)
 		}))
 		defer srv.Close()
-		res := runDoctor(t, srv.URL, "", srv.Client(), nil)
+		runDoctor(t, srv.URL, "", srv.Client(), nil)
 		if _, err := gitinfo.Find("."); err != nil {
 			t.Fatal(err)
 		}
-		if res.ClaimScope != claimScopeText("") || len(paths) != 1 {
-			t.Fatalf("scope %q paths %v", res.ClaimScope, paths)
+		if len(paths) != 1 {
+			t.Fatalf("paths %v", paths)
 		}
 	})
 }
@@ -292,7 +269,6 @@ func (f roundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) { retu
 // Every doctor call that carries a bearer goes through hubRequest, which
 // refuses a URL the probe refuses before the client is used.
 func TestBearerRequestsRefuseAnUnvalidatedURL(t *testing.T) {
-	repo := gitRepoFolding(t, "false")
 	folding := gitRepoFolding(t, "true")
 	found, err := gitinfo.Find(folding)
 	if err != nil {
@@ -318,12 +294,6 @@ func TestBearerRequestsRefuseAnUnvalidatedURL(t *testing.T) {
 			}
 		})
 	}
-	t.Run("claim scope", func(t *testing.T) {
-		got := claimScopeLine(context.Background(), "http://hub.example", "secret", "h", repo, trapHub(t))
-		if got != claimScopeText("") {
-			t.Fatalf("%q", got)
-		}
-	})
 	t.Run("case warning", func(t *testing.T) {
 		if got := caseLine(context.Background(), "http://hub.example", "secret", "h", folding, trapHub(t)); got != "" {
 			t.Fatalf("%q", got)

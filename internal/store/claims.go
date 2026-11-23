@@ -17,31 +17,10 @@ type claim struct {
 	Origin, Holder                   string
 	Epoch                            int64
 	Expiry                           sql.NullInt64
-	// WorktreeKey is empty when the claim is repository-wide. WorktreePath and Branch
-	// are the checkout that was observed; they are display, not identity (ADR 037).
-	// Host is the holding Execution's host, so two equal display paths can be told apart.
-	WorktreeKey, WorktreePath, Branch, Host string
 }
 
 func (c claim) public() map[string]any {
 	return map[string]any{"fence": c.Fence, "path": c.Path, "kind": c.Kind, "holder": c.Holder, "origin": c.Origin, "expires_at": timestamp(c.Expiry)}
-}
-
-// listed is one claim as the console and GET /v1/claims show it (ADR 037).
-// An empty worktree path is a legacy row: the location is unknown, not the holder's
-// current checkout. effective_scope is worktree only for an automatic claim with a
-// key while the repository has opted in. A null key or an explicit claim stays
-// repository-wide even when a display path is recorded.
-func (c claim) listed(scope string) map[string]any {
-	out := c.public()
-	out["worktree_path"] = c.WorktreePath
-	out["branch"] = c.Branch
-	out["host"] = c.Host
-	out["effective_scope"] = "repository"
-	if scope == "worktree" && c.Origin == "auto" && c.WorktreeKey != "" {
-		out["effective_scope"] = "worktree"
-	}
-	return out
 }
 func (t *transaction) conflict(c claim) (map[string]any, error) {
 	var deadline int64
@@ -63,7 +42,7 @@ func (t *transaction) conflict(c claim) (map[string]any, error) {
 }
 
 func (t *transaction) claimRows(repo string) ([]claim, error) {
-	rows, err := t.rows(`SELECT c.fence,c.execution_id,c.repository_id,c.kind,c.path,c.path_key,c.origin,a.name,c.boot_epoch,c.expires_ms,COALESCE(c.worktree_key,''),COALESCE(c.worktree_path,''),COALESCE(c.branch,''),COALESCE(e.host_id,'') FROM Claim c JOIN Execution e ON e.id=c.execution_id JOIN Agent a ON a.id=e.agent_id WHERE c.repository_id=? AND c.revoked_ms IS NULL AND e.state='active' ORDER BY c.fence`, repo)
+	rows, err := t.rows(`SELECT c.fence,c.execution_id,c.repository_id,c.kind,c.path,c.path_key,c.origin,a.name,c.boot_epoch,c.expires_ms FROM Claim c JOIN Execution e ON e.id=c.execution_id JOIN Agent a ON a.id=e.agent_id WHERE c.repository_id=? AND c.revoked_ms IS NULL AND e.state='active' ORDER BY c.fence`, repo)
 	if err != nil {
 		return nil, err
 	}
@@ -71,7 +50,7 @@ func (t *transaction) claimRows(repo string) ([]claim, error) {
 	out := []claim{}
 	for rows.Next() {
 		var c claim
-		rows.Scan(&c.Fence, &c.Execution, &c.Repo, &c.Kind, &c.Path, &c.Key, &c.Origin, &c.Holder, &c.Epoch, &c.Expiry, &c.WorktreeKey, &c.WorktreePath, &c.Branch, &c.Host)
+		rows.Scan(&c.Fence, &c.Execution, &c.Repo, &c.Kind, &c.Path, &c.Key, &c.Origin, &c.Holder, &c.Epoch, &c.Expiry)
 		out = append(out, c)
 	}
 	return out, rows.Err()
@@ -82,15 +61,8 @@ func (t *transaction) claims(repo string) ([]map[string]any, error) {
 		return nil, err
 	}
 	out := []map[string]any{}
-	if len(cs) == 0 {
-		return out, nil
-	}
-	scope, err := t.claimScope(repo)
-	if err != nil {
-		return nil, err
-	}
 	for _, c := range cs {
-		out = append(out, c.listed(scope))
+		out = append(out, c.public())
 	}
 	return out, nil
 }
@@ -179,24 +151,6 @@ func (s *Store) SetRepositoryPolicy(ctx context.Context, repo, casePolicy, actio
 		return t.rekeyRepository(repo)
 	})
 }
-
-// autoClaimScope is the only writer of Repository.auto_claim_scope (ADR 037).
-// The owner sets it. Other operations ignore the field, and this write does not
-// rekey or rewrite claims.
-func (t *transaction) autoClaimScope(r Request) (map[string]any, error) {
-	if r.ClaimAutoScope != "repository" && r.ClaimAutoScope != "worktree" {
-		return nil, fail("bad_request", "claim auto scope must be repository or worktree")
-	}
-	var repo string
-	if err := t.row("SELECT id FROM Repository WHERE id=?", r.RepositoryID).Scan(&repo); err != nil {
-		return nil, missing(err, "unknown repository")
-	}
-	if _, err := t.exec("UPDATE Repository SET auto_claim_scope=? WHERE id=?", r.ClaimAutoScope, repo); err != nil {
-		return nil, err
-	}
-	return map[string]any{"repository_id": repo, "claim_auto_scope": r.ClaimAutoScope}, t.event("", "", "changed", "")
-}
-
 func (t *transaction) touch(r Request) (map[string]any, error) {
 	e, err := t.live(r.ExecutionID, r.Generation)
 	if err != nil {
@@ -221,18 +175,12 @@ func (t *transaction) touch(r Request) (map[string]any, error) {
 				if err != nil {
 					return nil, err
 				}
-				scope, err := t.claimScope(e.Repo)
-				if err != nil {
-					return nil, err
-				}
 				for _, p := range grants {
 					var n int
 					key := pathKey(p.(string), policy)
 					// Only a claim in e's repository counts: e may hold the same name in another
-					// repository's checkout (ADR 033), which is another file. Under worktree the
-					// live automatic claim must be this checkout's; an explicit claim counts
-					// repository-wide. Under repository the key is ignored (ADR 037).
-					err = t.row("SELECT COUNT(*) FROM Claim WHERE execution_id=? AND repository_id=? AND (path_key=? OR (kind='prefix' AND (path_key='' OR substr(?,1,length(path_key)+1)=path_key||'/'))) AND revoked_ms IS NULL AND boot_epoch=? AND (?<>'worktree' OR origin='explicit' OR COALESCE(worktree_key,'')=?)", e.ID, e.Repo, key, key, t.s.epoch, scope, e.WorktreeKey).Scan(&n)
+					// repository's checkout (ADR 033), which is another file.
+					err = t.row("SELECT COUNT(*) FROM Claim WHERE execution_id=? AND repository_id=? AND (path_key=? OR (kind='prefix' AND (path_key='' OR substr(?,1,length(path_key)+1)=path_key||'/'))) AND revoked_ms IS NULL AND boot_epoch=?", e.ID, e.Repo, key, key, t.s.epoch).Scan(&n)
 					if err != nil {
 						return nil, err
 					}
@@ -248,11 +196,6 @@ func (t *transaction) touch(r Request) (map[string]any, error) {
 	if err != nil {
 		return nil, err
 	}
-	scope, err := t.claimScope(e.Repo)
-	if err != nil {
-		return nil, err
-	}
-	loc := e.location()
 	paths := append([]string{}, r.Paths...)
 	if r.RenameFrom != "" {
 		paths = append(paths, r.RenameFrom)
@@ -290,7 +233,6 @@ func (t *transaction) touch(r Request) (map[string]any, error) {
 		return nil, err
 	}
 	conflicts := []map[string]any{}
-	advisories := []map[string]any{}
 	reuse := map[string]claim{}
 	// Ignored paths take no automatic claim, but another session's explicit claim on one
 	// still applies (D10), so every requested path is checked for conflicts.
@@ -300,26 +242,15 @@ func (t *transaction) touch(r Request) (map[string]any, error) {
 				continue
 			}
 			if c.Execution == e.ID {
-				if reusesOwn(scope, c.Origin, c.WorktreeKey, loc.key) {
-					reuse[p] = c
-					continue
-				}
-				if exemptAutoOverlap(scope, c.Origin, c.WorktreeKey, "auto", loc.key) {
-					advisories = append(advisories, advisoryOf(c, p, e.Repo))
-					continue
-				}
-			} else {
-				family, err := t.related(e.ID, c.Execution)
-				if err != nil {
-					return nil, err
-				}
-				if family {
-					continue
-				}
-				if exemptAutoOverlap(scope, c.Origin, c.WorktreeKey, "auto", loc.key) {
-					advisories = append(advisories, advisoryOf(c, p, e.Repo))
-					continue
-				}
+				reuse[p] = c
+				continue
+			}
+			family, err := t.related(e.ID, c.Execution)
+			if err != nil {
+				return nil, err
+			}
+			if family {
+				continue
 			}
 			v, err := t.conflict(c)
 			if err != nil {
@@ -328,11 +259,8 @@ func (t *transaction) touch(r Request) (map[string]any, error) {
 			v["path"] = p
 			conflicts = append(conflicts, v)
 			// The holder's release of this path is what this session waits for.
-			// A conflict with this Execution's own other claim does not wait on itself.
-			if c.Execution != e.ID {
-				if err = t.wait(e, e.Repo, pathKey(p, policy), "exact", loc.key); err != nil {
-					return nil, err
-				}
+			if err = t.wait(e, e.Repo, pathKey(p, policy), "exact"); err != nil {
+				return nil, err
 			}
 		}
 	}
@@ -352,39 +280,29 @@ func (t *transaction) touch(r Request) (map[string]any, error) {
 			out["message"] = out["message"].(string) + " Ask the human if you need help resolving this conflict."
 		}
 		// No paths are granted on any conflict, even when policy permits proceeding.
-		// An advisory does not weaken that refusal, so it is left out of the response.
 	} else {
 		if err = t.claimLimit(e, len(normalized)-len(reuse)); err != nil {
 			return nil, err
 		}
-		expiry := t.s.clock.Now().Add(10 * time.Minute).UnixMilli()
 		for _, p := range normalized {
 			if c, ok := reuse[p]; ok {
 				if c.Origin == "auto" {
-					if err = t.renewAuto(c.Fence, expiry, loc.path, loc.branch); err != nil {
+					if _, err = t.exec("UPDATE Claim SET expires_ms=? WHERE fence=?", t.s.clock.Now().Add(10*time.Minute).UnixMilli(), c.Fence); err != nil {
 						return nil, err
 					}
 				}
 				continue
 			}
-			if _, err = t.insertClaim(e, e.Repo, "exact", p, pathKey(p, policy), "auto", sql.NullInt64{Int64: expiry, Valid: true}, loc); err != nil {
+			if _, err = t.exec("INSERT INTO Claim(execution_id,repository_id,kind,path,path_key,origin,boot_epoch,expires_ms) VALUES(?,?,'exact',?,?,'auto',?,?)", e.ID, e.Repo, p, pathKey(p, policy), t.s.epoch, t.s.clock.Now().Add(10*time.Minute).UnixMilli()); err != nil {
 				return nil, err
 			}
 		}
 		for _, p := range normalized {
-			if err = t.took(e, e.Repo, pathKey(p, policy), loc.key); err != nil {
+			if err = t.took(e, e.Repo, pathKey(p, policy)); err != nil {
 				return nil, err
 			}
 		}
 		out["granted"] = normalized
-		if len(advisories) > 0 {
-			out["advisories"] = advisories
-			text := advisoryMessage(advisories)
-			if note, _ := out["message"].(string); note != "" {
-				text += " " + note
-			}
-			out["message"] = text
-		}
 	}
 	if out["attention"], err = t.attention(e); err != nil {
 		return nil, err
@@ -456,12 +374,11 @@ func (t *transaction) explicitIn(r Request, route string) (map[string]any, error
 		return nil, fail("bad_request", "ttl_s is outside the supported range")
 	}
 	repo := e.Repo
-	shown := ""
 	if route == "claim_files" {
 		if r.Checkout == nil {
 			return nil, fail("bad_request", "checkout is required")
 		}
-		if repo, shown, err = t.fileRepository(e, *r.Checkout); err != nil {
+		if repo, err = t.fileRepository(e, *r.Checkout); err != nil {
 			return nil, err
 		}
 		if repo == "" {
@@ -471,19 +388,6 @@ func (t *transaction) explicitIn(r Request, route string) (map[string]any, error
 	policy, _, err := t.policy(repo)
 	if err != nil {
 		return nil, err
-	}
-	scope, err := t.claimScope(repo)
-	if err != nil {
-		return nil, err
-	}
-	loc := e.location()
-	if route == "claim_files" {
-		loc.key, err = t.ensureWorktreeKey(e.Host, r.Checkout.WorktreeID)
-		if err != nil {
-			return nil, err
-		}
-		// shown is the alias-folded display path. The raw checkout spelling is not stored.
-		loc.path, loc.branch = shown, r.Checkout.Branch
 	}
 	if err = refuseControl(r.Path); err != nil {
 		return nil, err
@@ -518,10 +422,7 @@ func (t *transaction) explicitIn(r Request, route string) (map[string]any, error
 			continue
 		}
 		if c.Execution == e.ID {
-			// An incoming explicit claim never uses the automatic exemption, including
-			// against this Execution's automatic row in another worktree. That row is
-			// not a conflict with itself; an exact grant selects it only by checkout key.
-			if c.Kind == r.Kind && c.Key == key && explicitSelects(scope, r.Kind, c.Origin, c.WorktreeKey, loc.key) {
+			if c.Kind == r.Kind && c.Key == key {
 				copy := c
 				reuse = &copy
 			}
@@ -538,19 +439,17 @@ func (t *transaction) explicitIn(r Request, route string) (map[string]any, error
 			}
 			v["path"] = p
 			conflicts = append(conflicts, v)
-			// An explicit wait is repository-wide, so it stores no worktree key.
-			if err = t.wait(e, repo, key, r.Kind, ""); err != nil {
+			if err = t.wait(e, repo, key, r.Kind); err != nil {
 				return nil, err
 			}
 		}
 	}
 	if len(conflicts) > 0 {
 		// The refusal is returned after the commit, so the waiter it leaves is kept.
-		// The original automatic claim is unchanged: nothing was revoked.
 		t.refused = &Error{"conflict", "claim overlaps another Execution", map[string]any{"conflicts": conflicts}}
 		return nil, nil
 	}
-	if err = t.took(e, repo, key, ""); err != nil {
+	if err = t.took(e, repo, key); err != nil {
 		return nil, err
 	}
 	expiry := sql.NullInt64{}
@@ -562,35 +461,19 @@ func (t *transaction) explicitIn(r Request, route string) (map[string]any, error
 		c = *reuse
 		c.Origin = "explicit"
 		c.Expiry = expiry
-		c.WorktreeKey = ""
-		// The row becomes explicit and drops its key. Its display location stays.
-		if _, err = t.exec("UPDATE Claim SET origin='explicit',expires_ms=?,worktree_key=NULL WHERE fence=?", expiry, c.Fence); err != nil {
+		if _, err = t.exec("UPDATE Claim SET origin='explicit',expires_ms=? WHERE fence=?", expiry, c.Fence); err != nil {
 			return nil, err
 		}
 	} else {
 		if err = t.claimLimit(e, 1); err != nil {
 			return nil, err
 		}
-		// An explicit claim has a null key and keeps the checkout it was made from.
-		loc.key = ""
-		f, err := t.insertClaim(e, repo, r.Kind, p, key, "explicit", expiry, loc)
+		res, err := t.exec("INSERT INTO Claim(execution_id,repository_id,kind,path,path_key,origin,boot_epoch,expires_ms) VALUES(?,?,?,?,?,'explicit',?,?)", e.ID, repo, r.Kind, p, key, t.s.epoch, expiry)
 		if err != nil {
 			return nil, err
 		}
+		f, _ := res.LastInsertId() // modernc SQLite always provides the last inserted rowid
 		c = claim{Fence: f, Execution: e.ID, Repo: repo, Kind: r.Kind, Path: p, Origin: "explicit", Epoch: t.s.epoch, Expiry: expiry}
-	}
-	if r.Kind == "exact" {
-		n, err := t.revokeAutoSiblings(e.ID, repo, key, c.Fence)
-		if err != nil {
-			return nil, err
-		}
-		// The revoked siblings run a normal release. The new repository-wide explicit
-		// row still blocks overlapping waiters, so a sibling's waiter does not wake.
-		if n > 0 {
-			if err = t.released(repo, e.ID); err != nil {
-				return nil, err
-			}
-		}
 	}
 	out = map[string]any{"fence": c.Fence, "token": t.fenceToken(c), "expires_at": timestamp(c.Expiry)}
 	if err = t.remember(e, r.Key, route, r, out); err != nil {

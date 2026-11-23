@@ -1,10 +1,7 @@
 import { useEffect, useState } from "react";
 import { useTranslation } from "react-i18next";
 
-import type { TFunction } from "i18next";
-
 import type { Claim, Repository } from "./api";
-import { claimAutoScopeText, claimEffectiveText, claimLocation } from "./claimScope";
 import { second, timeLeft } from "./timeLeft";
 
 // The claims panel: every live claim, narrowed by repository, holder and path, each with the
@@ -32,27 +29,6 @@ function options(values: string[], chosen: string, label: (value: string) => str
     set.add(chosen);
   }
   return [...set].sort((a, b) => label(a).localeCompare(label(b)));
-}
-
-// ClaimScopeLine names one repository's claim.auto_scope. The worktree value says
-// what that opt-in cannot do. There is no control here: only the owner token sets it.
-export function ClaimScopeLine({ name, scope }: { name: string; scope?: string }) {
-  const { t } = useTranslation();
-  const label = claimAutoScopeText(scope, t);
-  return (
-    <p className="claim-scope">
-      {name === "" ? label : `${name}: ${label}`}
-      {scope === "worktree" ? <small>{` ${t("operator.claimAutoScopeWorktreeLimit")}`}</small> : null}
-    </p>
-  );
-}
-
-function projectScope(repository: Repository): boolean {
-  return repository.kind !== "outside";
-}
-
-function claimDetail(claim: Claim, claims: Claim[], nameOf: (id: string) => string, t: TFunction): string {
-  return `${nameOf(claim.repository_id)} · ${claim.holder} · ${claim.kind} · ${claimLocation(claim, claims, t)} · ${claimEffectiveText(claim.effective_scope, t)}`;
 }
 
 export function ClaimsPanel({
@@ -84,7 +60,6 @@ export function ClaimsPanel({
   }, [counting]);
 
   const nameOf = (id: string) => repositories.find((item) => item.id === id)?.name ?? id;
-  const projects = repositories.filter(projectScope);
   const needle = path.trim().toLowerCase();
   const shown = claims.filter(
     (claim) =>
@@ -98,13 +73,6 @@ export function ClaimsPanel({
       <div className="panel-heading">
         <h2>{t("operator.claims")}</h2>
       </div>
-      {projects.length === 0 ? null : (
-        <div className="claim-scopes" role="region" aria-label={t("operator.claimAutoScope")}>
-          {projects.map((repository) => (
-            <ClaimScopeLine key={repository.id} name={repository.name === "" ? repository.id : repository.name} scope={repository.claim_auto_scope} />
-          ))}
-        </div>
-      )}
       {claims.length === 0 ? (
         <p>{t("operator.none")}</p>
       ) : (
@@ -153,7 +121,7 @@ export function ClaimsPanel({
                   <div>
                     <strong>{claim.path}</strong>
                     <small>
-                      {claimDetail(claim, claims, nameOf, t)}
+                      {nameOf(claim.repository_id)} · {claim.holder} · {claim.kind}
                     </small>
                   </div>
                   {claim.expires_at === null ? (

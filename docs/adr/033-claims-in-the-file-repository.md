@@ -3,11 +3,6 @@
 Status: accepted, 2026-11-21. Amends D10, D11 and D12. Decision 5 replaces ADR 032's limit on
 shell attribution. Decision 6, for explicit claims, shipped in the change after the first.
 
-Later amendment: [ADR 037](037-worktree-scoped-auto-claims.md) lifts the own-session submodule
-guard refusal described in Consequences only when the owning repository has
-`claim.auto_scope = worktree` and the claim and commit are in the same submodule checkout. The
-default `repository` behaviour is unchanged.
-
 ## Context
 
 The hook places an edit's paths in one checkout: the one it finds from the event's working
@@ -204,12 +199,10 @@ walk on a slow filesystem.
 - A checkout the hub finds ambiguous takes no claim until the owner repairs the split (ADR 032).
 - A submodule that is not checked out has no `.git` entry, so its paths belong to the superproject.
 - Claims made before this change stay where they were taken until they expire or are released.
-- A `claim_available` event records the freed path, the waiter's worktree key, and the repository
-  that owned the wait. When a monitor reconnects, the path is compared with live claims and the
-  policy of that repository, so a superproject Execution waiting on a submodule path is not judged
-  by the superproject. An event written before the repository was recorded, or one whose repository
-  is gone, is not replayed. The Execution's own repository is not a substitute: a wake could let an
-  edit meet a claim the replay did not see. A missed replay is the conservative failure. The live
+- An availability event records the freed path, not its repository. When a monitor reconnects and
+  catches up, the path is compared with live claims in the session's own repository only. A path
+  freed in another repository can therefore be woken for once more after it was taken again, or
+  not be replayed when the session's own repository has a live claim of the same name. The live
   event, sent when the path is freed, is not affected.
 - One Execution keeps one wait per path key and kind, so a wait on the same key in a second
   repository replaces the first.

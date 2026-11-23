@@ -6,6 +6,8 @@ workflow [43117855817](https://github.com/mateusz-klatt/iris/actions/runs/431178
 The configuration below includes changes made after that commit, including ADR 022's image
 job; that earlier release does not validate the later job.
 
+Worktree-scoped automatic claims (ADR 037) are not in this release; claims stay repository-wide as in v0.1.13.
+
 A pushed `v*` tag runs `.github/workflows/release.yml`, which makes a **draft**
 GitHub release (`release: draft: true`) for the owner to publish. After the release and
 Windows verification jobs succeed, a separate job publishes a signed, attested

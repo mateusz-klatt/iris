@@ -22,13 +22,11 @@ func superproject(t *testing.T) string {
 		}
 	}
 	for path, body := range map[string]string{
-		filepath.Join(root, ".git", "HEAD"):                  "ref: refs/heads/main\n",
-		filepath.Join(root, ".git", "refs", "heads", "main"): "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\n",
-		filepath.Join(modules, "HEAD"):                       "ref: refs/heads/feature\n",
-		filepath.Join(modules, "refs", "heads", "feature"):   "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
-		filepath.Join(modules, "config"):                     "[remote \"origin\"]\n\turl = https://example.com/frontend.git\n",
-		filepath.Join(root, "frontend", ".git"):              "gitdir: ../.git/modules/frontend\n",
-		filepath.Join(root, "frontend", "src", "x.ts"):       "x\n",
+		filepath.Join(root, ".git", "HEAD"):            "ref: refs/heads/main\n",
+		filepath.Join(modules, "HEAD"):                 "ref: refs/heads/main\n",
+		filepath.Join(modules, "config"):               "[remote \"origin\"]\n\turl = https://example.com/frontend.git\n",
+		filepath.Join(root, "frontend", ".git"):        "gitdir: ../.git/modules/frontend\n",
+		filepath.Join(root, "frontend", "src", "x.ts"): "x\n",
 	} {
 		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 			t.Fatal(err)
@@ -46,7 +44,7 @@ func TestAnExplicitClaimIsPlacedInTheCheckoutThatHoldsIt(t *testing.T) {
 	capable := binding.Bound{Worktree: root, Capabilities: binding.Capabilities("shell_scope\nfile_claims")}
 	for _, path := range []string{"frontend/src/x.ts", "./frontend/src/x.ts", "frontend//src/x.ts", "frontend/src/"} {
 		checkout, ok, err := fileClaim(capable, path)
-		if err != nil || !ok || checkout["prefix"] != "frontend" || checkout["branch"] != "feature" || checkout["worktree"] != filepath.Join(root, "frontend") || checkout["remote_url"] != "https://example.com/frontend.git" || checkout["common_dir"] != filepath.Join(root, ".git", "modules", "frontend") {
+		if err != nil || !ok || checkout["prefix"] != "frontend" || checkout["worktree"] != filepath.Join(root, "frontend") || checkout["remote_url"] != "https://example.com/frontend.git" || checkout["common_dir"] != filepath.Join(root, ".git", "modules", "frontend") {
 			t.Fatalf("%q: %v %v %v", path, checkout, ok, err)
 		}
 	}
@@ -89,7 +87,7 @@ func TestTheClaimToolSendsASubmodulePathWithItsCheckout(t *testing.T) {
 	}
 	got := f.last(t)
 	checkout, _ := got.body["checkout"].(map[string]any)
-	if got.path != "/v1/claims/files" || got.body["path"] != "frontend/src" || checkout["prefix"] != "frontend" || checkout["branch"] != "feature" || checkout["worktree"] != filepath.Join(root, "frontend") {
+	if got.path != "/v1/claims/files" || got.body["path"] != "frontend/src" || checkout["prefix"] != "frontend" || checkout["worktree"] != filepath.Join(root, "frontend") {
 		t.Fatalf("%s %v", got.path, got.body)
 	}
 	if out, failed := use(t, session, "claim", map[string]any{"kind": "exact", "path": "README.md", "key": "k2"}); failed {

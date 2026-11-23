@@ -26,7 +26,7 @@ import {
   type WatchStatus,
 } from "./api";
 import { DeliveryProblems } from "./DeliveryProblems";
-import { ClaimScopeLine, ClaimsPanel } from "./ClaimsPanel";
+import { ClaimsPanel } from "./ClaimsPanel";
 import { DraftBody, DraftReview } from "./DraftReview";
 import { RecipientPicker } from "./RecipientPicker";
 import { useReview } from "./review";
@@ -1305,10 +1305,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
                       {projects.map((repository) => (
                         <tr key={repository.id}>
                           <th scope="row">{repository.name}</th>
-                          <td>
-                            <ClaimScopeLine name={repository.name} scope={repository.claim_auto_scope} />
-                            <details className="repository-details"><summary>{t("console.aliases")}</summary><code>{repository.id}</code><ul>{repository.aliases.map((alias) => <li key={alias}>{alias}</li>)}</ul></details>
-                          </td>
+                          <td><details className="repository-details"><summary>{t("console.aliases")}</summary><code>{repository.id}</code><ul>{repository.aliases.map((alias) => <li key={alias}>{alias}</li>)}</ul></details></td>
                         </tr>
                       ))}
                     </tbody>

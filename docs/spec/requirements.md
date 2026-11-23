@@ -53,10 +53,7 @@ never silently lost and never processed twice as two different messages.
 An agent can claim files or other resources before working on them. A claim is decided
 atomically by the server. When a session tries to edit something held by another session,
 it finds out before the edit wherever the client allows that, and at commit time at the
-latest. A claim held by a dead session must not block others for long. Under ADR 037's worktree
-opt-in, every real conflict outside the exempted automatic pair still turns Codex `ask` into `deny`.
-An older guard ignores the new advisory field and allows silently when `message` is empty, so an
-exempt automatic overlap can have no commit-time notice.
+latest. A claim held by a dead session must not block others for long.
 
 ### R6. Immediate attention
 

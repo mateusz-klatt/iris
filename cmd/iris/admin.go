@@ -17,7 +17,7 @@ import (
 	"github.com/mateusz-klatt/iris/internal/store"
 )
 
-const adminUsage = "usage: iris admin forget (--repository <id> | --agent <name>) [--dry-run]\n       iris admin merge [--outside] --from <id> --into <id> [--dry-run]\n       iris admin unalias --repository <id> [--dry-run] (<alias>... | - < alias-file)\n       iris admin contact --repository <id> (<agent> | --clear)\n       iris admin policy --repository <id> --claim-auto-scope repository|worktree\n       iris admin backup <hub database> <new backup file>\n       iris admin restore-check <backup file> <empty scratch directory>\n       iris admin mark-restored <restored hub database>\n       iris admin console (create | reset | activate) <username> < password-file"
+const adminUsage = "usage: iris admin forget (--repository <id> | --agent <name>) [--dry-run]\n       iris admin merge [--outside] --from <id> --into <id> [--dry-run]\n       iris admin unalias --repository <id> [--dry-run] (<alias>... | - < alias-file)\n       iris admin contact --repository <id> (<agent> | --clear)\n       iris admin backup <hub database> <new backup file>\n       iris admin restore-check <backup file> <empty scratch directory>\n       iris admin mark-restored <restored hub database>\n       iris admin console (create | reset | activate) <username> < password-file"
 
 // adminStdin is what "iris admin unalias --repository <id> -" reads its aliases from.
 var adminStdin io.Reader = os.Stdin
@@ -128,16 +128,6 @@ func adminCommand(ctx context.Context, client *hubclient.Client, args []string, 
 			return errors.New(adminUsage)
 		}
 		route, body = "/v1/admin/contact", map[string]any{"repository_id": *repository, "agent": fs.Arg(0)}
-	case "policy":
-		// The owner's claim.auto_scope. No hook payload or committed file sets it (ADR 037).
-		fs := flag.NewFlagSet("admin policy", flag.ContinueOnError)
-		fs.SetOutput(io.Discard)
-		repository := fs.String("repository", "", "repository id")
-		scope := fs.String("claim-auto-scope", "", "automatic claim scope: repository or worktree")
-		if err := fs.Parse(args[1:]); err != nil || fs.NArg() != 0 || *repository == "" || (*scope != "repository" && *scope != "worktree") {
-			return errors.New(adminUsage)
-		}
-		route, body = "/v1/admin/policy", map[string]any{"repository_id": *repository, "claim_auto_scope": *scope}
 	default:
 		return errors.New(adminUsage)
 	}
