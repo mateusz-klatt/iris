@@ -258,18 +258,22 @@ a confirmed ended generation keeps its existing pre-tool refusal. A dangling sym
 a path that is not there at all, link and all, allows a hook to start registration without proof
 or allows `Forget` to record an end. Local `iris doctor` output reports
 `damaged generation proof at <path>` and re-reads every named `.ended` marker. Independently of
-observation age and the bounded log, doctor also makes one non-recursive listing of the sessions
-directory beside the resolved token and reads every `*.ended` entry with the hook's rule. A marker
-still damaged is current and makes doctor exit 1 even when its observation is old or evicted; one
-repaired with a positive generation or archived since an observation remains history and does not
-fail doctor. Current damage uses the client from a matching retained observation, or a clearly
-labelled local-only line without a client when no observation remains. A healthy or missing
-directory adds nothing, and an unreadable directory produces a doctor note rather than a crash.
-The local detail explains that current damage prevents registration, binding, mail delivery and
-claims while hooks still allow work. Stop that session's client, hooks, MCP shim and watch, verify
-the configured hub and that session's history, then repair the marker with the verified ended
-generation as a single decimal or archive it before restarting the client. Paths stay only in the
-local report; uploads and bundles carry the aggregate current-damage count alone.
+observation age and the bounded log, doctor also scans the sessions directories beside the resolved
+and fallback token paths, deduplicated by cleaned absolute path. Incremental, non-recursive reads
+across every directory share a 4096-entry budget, a one-second wall-clock budget and doctor's parent
+context. Every examined entry uses the hook's rule. A marker still damaged is current and makes
+doctor exit 1 even when its observation is old or evicted; one repaired with a positive generation
+or archived since an observation remains history and does not fail doctor. Exhausting either budget
+or cancellation makes the scan incomplete and doctor exit 1 even without a finding. A local-only
+note gives the reason and the number found so far as a lower bound. Current damage uses the client
+from a matching retained observation, or a clearly labelled local-only line without a client when
+no observation remains. A healthy or missing directory adds nothing, and an unreadable directory
+produces a doctor note rather than a crash. The local detail explains that current damage prevents
+registration, binding, mail delivery and claims while hooks still allow work. Stop that session's
+client, hooks, MCP shim and watch, verify the configured hub and that session's history, then repair
+the marker with the verified ended generation as a single decimal or archive it before restarting
+the client. Paths and the incomplete reason stay only in the local report; uploads and bundles carry
+the aggregate current-damage lower bound and an `end_marker_scan_incomplete` boolean alone.
 The same observation names the `.ended` path when `Forget` cannot write that marker or cannot take
 the sessions lock, and the proof stays.
 

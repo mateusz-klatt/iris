@@ -26,6 +26,7 @@ type Bundle struct {
 	Failures                 []BundleCount  `json:"failures"`
 	Observations             []BundleCount  `json:"observations"`
 	CurrentDamagedEndMarkers int            `json:"current_damaged_end_markers,omitempty"`
+	EndMarkerScanIncomplete  bool           `json:"end_marker_scan_incomplete,omitempty"`
 	Guard                    string         `json:"guard"`
 	CaseWarning              bool           `json:"case_warning"`
 	// LineEndingsWarning says doctor printed a line endings warning, without its counts.
@@ -82,6 +83,7 @@ func NewBundle(res Result, version string, now time.Time) Bundle {
 		Failures:                 []BundleCount{},
 		Observations:             []BundleCount{},
 		CurrentDamagedEndMarkers: res.Report.CurrentDamagedEndMarkers,
+		EndMarkerScanIncomplete:  res.Report.EndMarkerScanIncomplete,
 	}
 	for _, c := range res.Report.Clients {
 		client := integrate.Canonical(c.Client)

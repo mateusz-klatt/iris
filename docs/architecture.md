@@ -758,17 +758,22 @@ Changes from the reference schema:
    a hook failure. It also names an `.ended` marker that contributed a generation or is damaged,
    and the `.ended` path when SessionEnd could not write that marker or take the sessions lock.
    Doctor re-reads every named damaged marker and, independently of the rolling observation log,
-   scans the sessions directory beside the resolved token with one non-recursive listing. Every
+   scans the sessions directories beside the resolved and fallback token paths, deduplicated by
+   cleaned absolute path. Incremental, non-recursive directory reads across all of them share a
+   4096-entry budget, a one-second wall-clock budget and doctor's parent context. Every examined
    `*.ended` entry uses the hook's read rule: a positive generation is healthy; malformed content,
    a directory, an unreadable file or a dangling link is damaged. Current damage makes doctor exit
-   1 however old or evicted its observation is. A matching retained observation supplies the client;
-   otherwise doctor prints a clearly labelled local-only line without one. Repaired or archived
-   files named by an observation remain history and do not fail doctor. A healthy or missing
-   sessions directory adds nothing; an unreadable one adds a local note rather than stopping the
-   run. The local detail states the blocked registration, absent binding, mail and claims, the
-   continuing allow behavior, and the stop, verify, repair-or-archive and restart steps. Paths stay
-   only in the local report; uploads and bundles carry the aggregate `current_damaged_end_markers`
-   count. Registration reads the marker before refreshing live
+   1 however old or evicted its observation is. Exhausting either budget or cancellation marks the
+   scan incomplete and also makes doctor exit 1, even when no damage was found; a local-only note
+   states why and gives the number found so far as a lower bound. A matching retained observation
+   supplies the client; otherwise doctor prints a clearly labelled local-only line without one.
+   Repaired or archived files named by an observation remain history and do not fail doctor. A
+   healthy or missing sessions directory adds nothing; an unreadable one adds a local note rather
+   than stopping the run. The local detail states the blocked registration, absent binding, mail
+   and claims, the continuing allow behavior, and the stop, verify, repair-or-archive and restart
+   steps. Paths and the incomplete reason stay only in the local report; uploads and bundles carry
+   the aggregate `current_damaged_end_markers` lower bound and an `end_marker_scan_incomplete`
+   boolean. Registration reads the marker before refreshing live
    proof under the bounded session lock. Absent proof takes no lock, so unrelated attention or
    cleanup cannot suppress a fresh SessionStart. The reads are not atomic and the lock is released
    before dispatch: SessionEnd can leave a request with an older floor, a known B1-min limit. A readable

@@ -47,7 +47,9 @@ type Report struct {
 	CheckedAt time.Time      `json:"checked_at"`
 	Clients   []ClientReport `json:"clients"`
 	// CurrentDamagedEndMarkers counts the local scan's findings without their paths or clients.
-	CurrentDamagedEndMarkers int `json:"current_damaged_end_markers,omitempty"`
+	// It is a lower bound when EndMarkerScanIncomplete is true.
+	CurrentDamagedEndMarkers int  `json:"current_damaged_end_markers,omitempty"`
+	EndMarkerScanIncomplete  bool `json:"end_marker_scan_incomplete,omitempty"`
 }
 
 // ClientReport is one client's doctor row.
@@ -109,7 +111,7 @@ type Result struct {
 	// fallbackTokenFile is the default token path when client.json relocated token_file to
 	// another directory, so a Bundle also reads entries logged during slow client.json reads.
 	fallbackTokenFile string
-	// Current marker paths and scan errors are local only. The report carries just their count.
+	// Current marker paths and scan errors are local only. The report carries counts and completion.
 	localMarkerDamage   string
 	currentMarkerDamage bool
 	markerScanNote      string
@@ -130,6 +132,9 @@ type Options struct {
 	Self string
 	// Host is this machine's name as its hooks give it to the hub. Empty means os.Hostname.
 	Host string
+	// Package-private seams let doctor tests exercise the scan budgets deterministically.
+	markerScanEntryLimit int
+	markerScanClock      func() time.Time
 }
 
 func (o Options) self() string {
@@ -153,6 +158,17 @@ func (o Options) host() string {
 	}
 	host, _ := os.Hostname() // what iris hook sends; an error leaves "", and the hub then says nothing
 	return host
+}
+
+func (o Options) endMarkerScanConfig() endMarkerScanConfig {
+	config := defaultEndMarkerScanConfig()
+	if o.markerScanEntryLimit != 0 {
+		config.entryLimit = o.markerScanEntryLimit
+	}
+	if o.markerScanClock != nil {
+		config.now = o.markerScanClock
+	}
+	return config
 }
 
 // versionTimeout is long enough for a normal client and short enough to keep doctor usable.
@@ -196,7 +212,7 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 	for _, c := range integrate.All() {
 		res.Report.Clients = append(res.Report.Clients, checkClient(ctx, opt, c))
 	}
-	if err := applyFailuresFrom(&res, tokenFile, fallbackTokenFile, opt.Now()); err != nil {
+	if err := applyFailuresFrom(ctx, &res, tokenFile, fallbackTokenFile, opt.Now(), opt.endMarkerScanConfig()); err != nil {
 		res.HubDetail = joinDetail(res.HubDetail, "failure log: "+err.Error())
 	}
 	for i := range res.Report.Clients {
@@ -246,10 +262,10 @@ func guardLine(ctx context.Context, dir string) string {
 	return state + " (" + path + "); run `iris guard install`"
 }
 
-// ExitCode is 1 when the hub or token is unusable, any client is silent or slow, or a damaged
-// end marker still blocks registration.
+// ExitCode is 1 when the hub or token is unusable, any client is silent or slow, a damaged
+// end marker still blocks registration, or the current marker scan is incomplete.
 func (r Result) ExitCode() int {
-	if !r.HubUp || !r.TokenOK || r.currentMarkerDamage {
+	if !r.HubUp || !r.TokenOK || r.currentMarkerDamage || r.Report.EndMarkerScanIncomplete {
 		return 1
 	}
 	for _, c := range r.Report.Clients {
@@ -460,12 +476,27 @@ const slowLimit = 10
 // row keeps its status and says how many were skipped and what that may delay (ADR 017). An entry
 // proves that a hook ran, so it counts even when doctor found no configuration.
 func applyFailures(res *Result, tokenFile string, now time.Time) error {
-	return applyFailuresFrom(res, tokenFile, "", now)
+	return applyFailuresFrom(context.Background(), res, tokenFile, "", now, defaultEndMarkerScanConfig())
 }
 
 const currentEndMarkerDiagnostic = "this damaged end marker prevents this session from registering, so it has no hub binding, no mail delivery and no claims, while hooks still allow edits and commands. Stop that session's client, hooks, MCP shim and watch. Verify the configured hub and that session's history. Repair the marker with the verified ended generation (a single decimal), or archive it (move it aside), then restart the client"
 
-func applyFailuresFrom(res *Result, tokenFile, fallbackTokenFile string, now time.Time) error {
+const (
+	endMarkerScanEntryBudget  = 4096
+	endMarkerScanTimeBudget   = time.Second
+	endMarkerScanReadDirChunk = 64
+)
+
+type endMarkerScanConfig struct {
+	entryLimit int
+	now        func() time.Time
+}
+
+func defaultEndMarkerScanConfig() endMarkerScanConfig {
+	return endMarkerScanConfig{entryLimit: endMarkerScanEntryBudget, now: time.Now}
+}
+
+func applyFailuresFrom(ctx context.Context, res *Result, tokenFile, fallbackTokenFile string, now time.Time, scanConfig endMarkerScanConfig) error {
 	if strings.TrimSpace(tokenFile) == "" {
 		return nil
 	}
@@ -528,9 +559,10 @@ func applyFailuresFrom(res *Result, tokenFile, fallbackTokenFile string, now tim
 		broken[name] = append(broken[name], entry)
 	}
 
-	damagedMarkers, note := scanDamagedEndMarkers(tokenFile)
+	damagedMarkers, incomplete, note := scanDamagedEndMarkers(ctx, tokenFile, fallbackTokenFile, scanConfig)
 	res.markerScanNote = note
 	res.Report.CurrentDamagedEndMarkers = len(damagedMarkers)
+	res.Report.EndMarkerScanIncomplete = incomplete
 	currentMarkers := make(map[string]bool, len(damagedMarkers))
 	localDamage := map[string]int{}
 	for _, path := range damagedMarkers {
@@ -610,26 +642,115 @@ func applyFailuresFrom(res *Result, tokenFile, fallbackTokenFile string, now tim
 	return errors.Join(failErr, obsErr)
 }
 
-// scanDamagedEndMarkers checks the current directory independently of observation retention.
-func scanDamagedEndMarkers(tokenFile string) (damaged []string, note string) {
-	dir := hook.NewSessions(tokenFile).Dir()
-	entries, err := os.ReadDir(dir)
+type endMarkerScanner struct {
+	ctx         context.Context
+	now         func() time.Time
+	deadline    time.Time
+	entryLimit  int
+	entriesLeft int
+	damaged     []string
+	incomplete  string
+}
+
+func (s *endMarkerScanner) stopReason() string {
+	if s.ctx.Err() != nil {
+		return "context cancelled"
+	}
+	if !s.now().Before(s.deadline) {
+		return "time budget exceeded"
+	}
+	return ""
+}
+
+func (s *endMarkerScanner) readDirectory(dir string) string {
+	f, err := os.Open(dir)
 	if errors.Is(err, os.ErrNotExist) {
-		return nil, ""
+		return ""
 	}
 	if err != nil {
-		return nil, "could not scan for damaged end markers: " + err.Error()
+		return "could not scan for damaged end markers: " + err.Error()
 	}
-	for _, entry := range entries {
-		if !strings.HasSuffix(entry.Name(), ".ended") {
+	defer func() { _ = f.Close() }()
+	for {
+		if reason := s.stopReason(); reason != "" {
+			s.incomplete = reason
+			return ""
+		}
+		entries, readErr := f.ReadDir(min(endMarkerScanReadDirChunk, s.entriesLeft+1))
+		if len(entries) > s.entriesLeft {
+			s.incomplete = fmt.Sprintf("entry budget of %d exceeded", s.entryLimit)
+			return ""
+		}
+		for _, entry := range entries {
+			if reason := s.stopReason(); reason != "" {
+				s.incomplete = reason
+				return ""
+			}
+			s.entriesLeft--
+			if !strings.HasSuffix(entry.Name(), ".ended") {
+				continue
+			}
+			path := filepath.Join(dir, entry.Name())
+			if _, err := hook.ReadGeneration(path); err != nil {
+				s.damaged = append(s.damaged, path)
+			}
+		}
+		if reason := s.stopReason(); reason != "" {
+			s.incomplete = reason
+			return ""
+		}
+		if errors.Is(readErr, io.EOF) {
+			return ""
+		}
+		if readErr != nil {
+			return "could not scan for damaged end markers: " + readErr.Error()
+		}
+	}
+}
+
+// scanDamagedEndMarkers checks every distinct token-derived directory under one shared budget.
+func scanDamagedEndMarkers(ctx context.Context, tokenFile, fallbackTokenFile string, config endMarkerScanConfig) (damaged []string, incomplete bool, note string) {
+	scanner := endMarkerScanner{
+		ctx: ctx, now: config.now, deadline: config.now().Add(endMarkerScanTimeBudget),
+		entryLimit: config.entryLimit, entriesLeft: config.entryLimit,
+	}
+	var notes []string
+	for _, dir := range endMarkerSessionDirs(tokenFile, fallbackTokenFile) {
+		if reason := scanner.stopReason(); reason != "" {
+			scanner.incomplete = reason
+			break
+		}
+		if note := scanner.readDirectory(dir); note != "" {
+			notes = append(notes, note)
+		}
+		if scanner.incomplete != "" {
+			break
+		}
+	}
+	if scanner.incomplete != "" {
+		examined := scanner.entryLimit - scanner.entriesLeft
+		notes = append(notes, fmt.Sprintf("end-marker scan incomplete (%s) after examining %d entries; at least %d damaged end marker(s) found so far", scanner.incomplete, examined, len(scanner.damaged)))
+	}
+	return scanner.damaged, scanner.incomplete != "", strings.Join(notes, "; ")
+}
+
+func endMarkerSessionDirs(tokenFile, fallbackTokenFile string) []string {
+	var dirs []string
+	seen := map[string]struct{}{}
+	for _, token := range []string{tokenFile, fallbackTokenFile} {
+		if strings.TrimSpace(token) == "" {
 			continue
 		}
-		path := filepath.Join(dir, entry.Name())
-		if _, err := hook.ReadGeneration(path); err != nil {
-			damaged = append(damaged, path)
+		dir := hook.NewSessions(token).Dir()
+		absolute, _ := filepath.Abs(dir) // Abs fails only when the working directory is gone.
+		key := filepath.Clean(absolute)
+		if _, exists := seen[key]; exists {
+			continue
 		}
+		seen[key] = struct{}{}
+		dirs = append(dirs, dir)
 	}
-	return damaged, ""
+	return dirs
 }
 
 func localObservationDisplay(kind, path string) string {
