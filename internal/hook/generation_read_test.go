@@ -34,7 +34,7 @@ func TestReadGenerationBytesBoundsAndReadFailures(t *testing.T) {
 			t.Fatalf("open failure = %v", err)
 		}
 	})
-	t.Run("read failure", func(t *testing.T) {
+	t.Run("stat failure", func(t *testing.T) {
 		original := generationFileOpen
 		t.Cleanup(func() { generationFileOpen = original })
 		generationFileOpen = func(string) (*os.File, error) {
@@ -45,7 +45,33 @@ func TestReadGenerationBytesBoundsAndReadFailures(t *testing.T) {
 			return f, f.Close()
 		}
 		if _, err := readGenerationBytes(valid, GenerationReadLimit); err == nil {
-			t.Fatal("closed-file read succeeded")
+			t.Fatal("closed-file stat succeeded")
+		}
+	})
+	t.Run("non-regular file", func(t *testing.T) {
+		original := generationFileOpen
+		t.Cleanup(func() { generationFileOpen = original })
+		reader, writer, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = writer.Close() }()
+		generationFileOpen = func(string) (*os.File, error) { return reader, nil }
+		if _, err := readGenerationBytes(valid, GenerationReadLimit); !errors.Is(err, ErrInvalidGeneration) {
+			t.Fatalf("pipe was not damaged generation input: %v", err)
+		}
+		if err := reader.Close(); !errors.Is(err, os.ErrClosed) {
+			t.Fatalf("non-regular descriptor was not closed: %v", err)
+		}
+	})
+	t.Run("read failure", func(t *testing.T) {
+		original := generationFileOpen
+		t.Cleanup(func() { generationFileOpen = original })
+		generationFileOpen = func(string) (*os.File, error) {
+			return os.OpenFile(valid, os.O_WRONLY, 0)
+		}
+		if _, err := readGenerationBytes(valid, GenerationReadLimit); err == nil {
+			t.Fatal("write-only file read succeeded")
 		}
 	})
 }
