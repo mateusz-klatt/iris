@@ -66,11 +66,12 @@ func TestDoctorFIFOEndMarkerIsDamagedWithoutBlocking(t *testing.T) {
 		err := applyFailures(&res, token, time.Now())
 		done <- outcome{result: res, err: err, elapsed: time.Since(start)}
 	}()
+	const scanLimit = 200 * time.Millisecond
 	select {
-	case <-time.After(500 * time.Millisecond):
+	case <-time.After(scanLimit):
 		t.Fatal("doctor scan blocked on a FIFO end marker")
 	case got := <-done:
-		if got.elapsed >= 500*time.Millisecond {
+		if got.elapsed >= scanLimit {
 			t.Fatalf("FIFO scan took %s", got.elapsed)
 		}
 		if got.err != nil || got.result.ExitCode() != 1 || got.result.Report.CurrentDamagedEndMarkers != 1 || got.result.Report.EndMarkerScanIncomplete {
