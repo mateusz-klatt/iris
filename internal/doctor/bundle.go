@@ -20,15 +20,13 @@ import (
 // copied in, because those are where secrets and private data sit, and a bundle is made to be
 // pasted into an issue or a chat.
 type Bundle struct {
-	Iris                     BundleIris     `json:"iris"`
-	Hub                      BundleHub      `json:"hub"`
-	Clients                  []BundleClient `json:"clients"`
-	Failures                 []BundleCount  `json:"failures"`
-	Observations             []BundleCount  `json:"observations"`
-	CurrentDamagedEndMarkers int            `json:"current_damaged_end_markers,omitempty"`
-	EndMarkerScanIncomplete  bool           `json:"end_marker_scan_incomplete,omitempty"`
-	Guard                    string         `json:"guard"`
-	CaseWarning              bool           `json:"case_warning"`
+	Iris         BundleIris     `json:"iris"`
+	Hub          BundleHub      `json:"hub"`
+	Clients      []BundleClient `json:"clients"`
+	Failures     []BundleCount  `json:"failures"`
+	Observations []BundleCount  `json:"observations"`
+	Guard        string         `json:"guard"`
+	CaseWarning  bool           `json:"case_warning"`
 	// LineEndingsWarning says doctor printed a line endings warning, without its counts.
 	LineEndingsWarning bool `json:"line_endings_warning"`
 	// PartialLogs is true when reading a failure or observation log failed, so counts may be incomplete.
@@ -74,16 +72,14 @@ type BundleCount struct {
 // NewBundle reduces a doctor run, and the hook logs beside its token, to a Bundle.
 func NewBundle(res Result, version string, now time.Time) Bundle {
 	b := Bundle{
-		Iris:                     BundleIris{Version: version, OS: runtime.GOOS, Arch: runtime.GOARCH, Go: runtime.Version()},
-		Hub:                      BundleHub{Source: oneOf(word(res.HubSource), "command line", "default", "file", "environment"), Up: res.HubUp, TokenOK: res.TokenOK, TokenUnchecked: res.TokenUnchecked, TokenUnavailable: res.TokenUnavailable, Stored: res.Stored, DatabaseBytes: res.DatabaseBytes},
-		Clients:                  []BundleClient{},
-		Guard:                    oneOf(word(res.Guard), guard.StateInstalled, guard.StateMissing, guard.StateOther, "not in a git repository", "unknown"),
-		CaseWarning:              res.Case != "",
-		LineEndingsWarning:       res.LineEndings != "",
-		Failures:                 []BundleCount{},
-		Observations:             []BundleCount{},
-		CurrentDamagedEndMarkers: res.Report.CurrentDamagedEndMarkers,
-		EndMarkerScanIncomplete:  res.Report.EndMarkerScanIncomplete,
+		Iris:               BundleIris{Version: version, OS: runtime.GOOS, Arch: runtime.GOARCH, Go: runtime.Version()},
+		Hub:                BundleHub{Source: oneOf(word(res.HubSource), "command line", "default", "file", "environment"), Up: res.HubUp, TokenOK: res.TokenOK, TokenUnchecked: res.TokenUnchecked, TokenUnavailable: res.TokenUnavailable, Stored: res.Stored, DatabaseBytes: res.DatabaseBytes},
+		Clients:            []BundleClient{},
+		Guard:              oneOf(word(res.Guard), guard.StateInstalled, guard.StateMissing, guard.StateOther, "not in a git repository", "unknown"),
+		CaseWarning:        res.Case != "",
+		LineEndingsWarning: res.LineEndings != "",
+		Failures:           []BundleCount{},
+		Observations:       []BundleCount{},
 	}
 	for _, c := range res.Report.Clients {
 		client := integrate.Canonical(c.Client)
