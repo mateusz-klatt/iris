@@ -17,6 +17,11 @@ import (
 
 type fakeMarkerInfo struct{ mode fs.FileMode }
 
+type failingEndMarkerDirectory struct{ err error }
+
+func (f failingEndMarkerDirectory) ReadDir(int) ([]os.DirEntry, error) { return nil, f.err }
+func (f failingEndMarkerDirectory) Close() error                       { return nil }
+
 func (f fakeMarkerInfo) Name() string       { return "marker" }
 func (f fakeMarkerInfo) Size() int64        { return 0 }
 func (f fakeMarkerInfo) Mode() fs.FileMode  { return f.mode }
@@ -360,11 +365,13 @@ func TestDoctorMarkerScanCancellationAfterStart(t *testing.T) {
 	}
 }
 
-func TestEndMarkerDirectoryOpenErrorIsOnlyANote(t *testing.T) {
+func TestEndMarkerDirectoryOpenErrorIsIncomplete(t *testing.T) {
 	token := filepath.Join(t.TempDir(), "hub.token")
 	original := endMarkerOpen
 	t.Cleanup(func() { endMarkerOpen = original })
-	endMarkerOpen = func(string) (*os.File, error) { return nil, errors.New("injected open failure") }
+	endMarkerOpen = func(string) (endMarkerDirectory, error) {
+		return nil, errors.New("injected open failure")
+	}
 	res := Result{
 		HubUp: true, TokenOK: true,
 		Report: Report{Clients: []ClientReport{{Client: integrate.Claude, Status: StatusOK}}},
@@ -372,12 +379,24 @@ func TestEndMarkerDirectoryOpenErrorIsOnlyANote(t *testing.T) {
 	if err := applyFailures(&res, token, time.Now()); err != nil {
 		t.Fatal(err)
 	}
-	if res.ExitCode() != 0 || res.Report.EndMarkerScanIncomplete {
-		t.Fatalf("open-error result = %+v", res)
+	assertIncompleteMarkerScan(t, res, "could not scan for damaged end markers: injected open failure", 0, 0)
+}
+
+func TestEndMarkerDirectoryIterationErrorIsIncomplete(t *testing.T) {
+	token := filepath.Join(t.TempDir(), "hub.token")
+	original := endMarkerOpen
+	t.Cleanup(func() { endMarkerOpen = original })
+	endMarkerOpen = func(string) (endMarkerDirectory, error) {
+		return failingEndMarkerDirectory{err: errors.New("injected iteration failure")}, nil
 	}
-	if report := res.Format(); !strings.Contains(report, "could not scan for damaged end markers: injected open failure") {
-		t.Fatalf("open-error note missing:\n%s", report)
+	res := Result{
+		HubUp: true, TokenOK: true,
+		Report: Report{Clients: []ClientReport{{Client: integrate.Claude, Status: StatusOK}}},
 	}
+	if err := applyFailures(&res, token, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	assertIncompleteMarkerScan(t, res, "could not scan for damaged end markers: injected iteration failure", 0, 0)
 }
 
 func TestEndMarkerObservedCurrentDamageUsesScanVerdict(t *testing.T) {

@@ -374,19 +374,45 @@ func TestDoctorCurrentMarkerScanRejectsNonRegularMarkers(t *testing.T) {
 	}
 }
 
-func TestDoctorNotesAnUnreadableSessionsDirectory(t *testing.T) {
+func TestDoctorFailsAnUnreadableSessionsDirectory(t *testing.T) {
 	res, upload := runEndedMarkerDoctor(t, func(sessions *hook.Sessions, _ time.Time) {
 		if err := os.WriteFile(sessions.Dir(), []byte("not a directory"), 0o600); err != nil {
 			t.Fatal(err)
 		}
 	})
-	if res.ExitCode() != 0 || res.Report.CurrentDamagedEndMarkers != 0 {
-		t.Fatalf("exit = %d, current count = %d", res.ExitCode(), res.Report.CurrentDamagedEndMarkers)
+	if res.ExitCode() != 1 || !res.Report.EndMarkerScanIncomplete || res.Report.CurrentDamagedEndMarkers != 0 {
+		t.Fatalf("exit = %d, incomplete = %v, current count = %d", res.ExitCode(), res.Report.EndMarkerScanIncomplete, res.Report.CurrentDamagedEndMarkers)
 	}
-	if report := res.Format(); !strings.Contains(report, "local sessions: could not scan for damaged end markers") || strings.Contains(report, "still damaged") {
+	if report := res.Format(); !strings.Contains(report, "end-marker scan incomplete (could not scan for damaged end markers:") || strings.Contains(report, "still damaged") {
 		t.Fatalf("unreadable sessions directory note:\n%s", report)
 	}
 	assertRedactedMarkerCount(t, res, upload, "", 0)
+}
+
+func TestDoctorContinuesMarkerScanAfterDirectoryError(t *testing.T) {
+	var marker string
+	res, upload := runRelocatedEndedMarkerDoctor(t, false, Options{}, func(primary, fallback *hook.Sessions, _ time.Time) {
+		if err := os.MkdirAll(filepath.Dir(primary.Dir()), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(primary.Dir(), []byte("not a directory"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.MkdirAll(fallback.Dir(), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		marker = filepath.Join(fallback.Dir(), "still-scanned.ended")
+		if err := os.WriteFile(marker, []byte("broken\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	})
+	if res.ExitCode() != 1 || !res.Report.EndMarkerScanIncomplete || res.Report.CurrentDamagedEndMarkers != 1 {
+		t.Fatalf("exit = %d, incomplete = %v, damaged = %d", res.ExitCode(), res.Report.EndMarkerScanIncomplete, res.Report.CurrentDamagedEndMarkers)
+	}
+	if report := res.Format(); !strings.Contains(report, "end-marker scan incomplete") || !strings.Contains(report, marker+" (still damaged)") {
+		t.Fatalf("the healthy directory was not scanned after an open error:\n%s", report)
+	}
+	assertRedactedMarkerCount(t, res, upload, marker, 1)
 }
 
 func assertIncompleteMarkerScan(t *testing.T, res Result, reason string, examined, damaged int) {

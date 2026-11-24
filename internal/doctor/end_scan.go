@@ -33,25 +33,32 @@ func defaultEndMarkerScanConfig() endMarkerScanConfig {
 var (
 	endMarkerLstat          = os.Lstat
 	endMarkerStat           = os.Stat
-	endMarkerOpen           = os.Open
+	endMarkerOpen           = openEndMarkerDirectory
 	endMarkerReadGeneration = hook.ReadGeneration
 	endMarkerScanFlight     = make(chan struct{}, 1)
 )
 
+type endMarkerDirectory interface {
+	ReadDir(int) ([]os.DirEntry, error)
+	Close() error
+}
+
+func openEndMarkerDirectory(path string) (endMarkerDirectory, error) {
+	return os.Open(path)
+}
+
 type endMarkerScanSnapshot struct {
 	damaged    []string
 	states     map[string]string
-	notes      []string
 	examined   int
 	incomplete string
 }
 
 func (s endMarkerScanSnapshot) note() string {
-	notes := append([]string(nil), s.notes...)
-	if s.incomplete != "" {
-		notes = append(notes, fmt.Sprintf("end-marker scan incomplete (%s): examined %d entries; found %d damaged end marker(s) so far, and more may be damaged", s.incomplete, s.examined, len(s.damaged)))
+	if s.incomplete == "" {
+		return ""
 	}
-	return strings.Join(notes, "; ")
+	return fmt.Sprintf("end-marker scan incomplete (%s): examined %d entries; found %d damaged end marker(s) so far, and more may be damaged", s.incomplete, s.examined, len(s.damaged))
 }
 
 type endMarkerScanProgress struct {
@@ -68,7 +75,6 @@ func (p *endMarkerScanProgress) snapshot(reason string) endMarkerScanSnapshot {
 	defer p.mu.Unlock()
 	out := p.data
 	out.damaged = append([]string(nil), p.data.damaged...)
-	out.notes = append([]string(nil), p.data.notes...)
 	out.states = make(map[string]string, len(p.data.states))
 	for path, state := range p.data.states {
 		out.states[path] = state
@@ -95,12 +101,6 @@ func (p *endMarkerScanProgress) damage(path string) {
 func (p *endMarkerScanProgress) state(path, state string) {
 	p.mu.Lock()
 	p.data.states[path] = state
-	p.mu.Unlock()
-}
-
-func (p *endMarkerScanProgress) note(note string) {
-	p.mu.Lock()
-	p.data.notes = append(p.data.notes, note)
 	p.mu.Unlock()
 }
 
@@ -170,8 +170,8 @@ func scanDamagedEndMarkers(ctx context.Context, tokenFile, fallbackTokenFile str
 func runEndMarkerScan(tokenFile, fallbackTokenFile string, observed []string, entryLimit int, progress *endMarkerScanProgress) {
 	scanner := endMarkerScanner{entryLimit: entryLimit, entriesLeft: entryLimit, progress: progress}
 	for _, dir := range endMarkerSessionDirs(tokenFile, fallbackTokenFile) {
-		if note := scanner.readDirectory(dir); note != "" {
-			progress.note(note)
+		if reason := scanner.readDirectory(dir); reason != "" {
+			progress.stop(reason)
 		}
 		if scanner.incomplete != "" {
 			progress.stop(scanner.incomplete)
