@@ -7,32 +7,31 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"unsafe"
 
 	"github.com/mateusz-klatt/iris/internal/gitinfo"
 	"github.com/mateusz-klatt/iris/internal/proc"
+	"golang.org/x/sys/windows"
 )
 
 func TestExtendedWindowsPath(t *testing.T) {
-	cwd, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
 	long := `C:\` + strings.Repeat("long", 70)
 	for _, tc := range []struct {
 		name, path, want string
 	}{
-		{name: "short absolute is cleaned", path: `C:/short/marker.ended`, want: `\\?\C:\short\marker.ended`},
+		{name: "short absolute is cleaned", path: `C:/short/marker.ended`, want: `C:\short\marker.ended`},
 		{name: "long absolute", path: long, want: `\\?\` + long},
-		{name: "UNC", path: `\\server\share\dir\marker.ended`, want: `\\?\UNC\server\share\dir\marker.ended`},
+		{name: "UNC", path: `\\server\share\dir\marker.ended`, want: `\\server\share\dir\marker.ended`},
 		{name: "already extended", path: `\\?\C:\already\marker.ended`, want: `\\?\C:\already\marker.ended`},
 		{name: "device", path: `\\.\C:\device\marker.ended`, want: `\\.\C:\device\marker.ended`},
 		{name: "device with alternate separators", path: `//./C:/dir/x.ended`, want: `\\.\C:\dir\x.ended`},
 		{name: "extended with alternate separators", path: `//?/C:/dir/x.ended`, want: `\\?\C:\dir\x.ended`},
 		{name: "device with mixed separators", path: `\\.\C:/dir/x.ended`, want: `\\.\C:\dir\x.ended`},
-		{name: "UNC with alternate separators", path: `//server/share/dir/x.ended`, want: `\\?\UNC\server\share\dir\x.ended`},
+		{name: "UNC with alternate separators", path: `//server/share/dir/x.ended`, want: `\\server\share\dir\x.ended`},
 		{name: "NT extended", path: `\??\C:\already\marker.ended`, want: `\??\C:\already\marker.ended`},
 		{name: "embedded NUL is preserved", path: "bad\x00path", want: "bad\x00path"},
-		{name: "relative", path: `relative\marker.ended`, want: `\\?\` + filepath.Join(cwd, `relative\marker.ended`)},
+		{name: "long embedded NUL is preserved", path: long + "\x00", want: long + "\x00"},
+		{name: "relative", path: `relative\marker.ended`, want: `relative\marker.ended`},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := extendedWindowsPath(tc.path); got != tc.want {
@@ -42,11 +41,36 @@ func TestExtendedWindowsPath(t *testing.T) {
 	}
 }
 
+func TestExtendedWindowsPathLongUNCAndBufferGrowth(t *testing.T) {
+	input := `\\server\share\` + strings.Repeat("u", 248)
+	encoded, err := windows.UTF16FromString(input)
+	if err != nil {
+		t.Fatal(err)
+	}
+	original := windowsFullPathName
+	t.Cleanup(func() { windowsFullPathName = original })
+	calls := 0
+	windowsFullPathName = func(_ *uint16, n uint32, buf *uint16, _ **uint16) (uint32, error) {
+		calls++
+		if calls == 1 {
+			return n + 100, nil
+		}
+		copy(unsafe.Slice(buf, len(encoded)), encoded)
+		return uint32(len(encoded) - 1), nil
+	}
+	want := `\\?\UNC\server\share\` + strings.Repeat("u", 248)
+	if got := extendedWindowsPath(input); got != want || calls != 2 {
+		t.Fatalf("long UNC conversion = %q after %d calls, want %q after 2", got, calls, want)
+	}
+}
+
 func TestExtendedWindowsPathPreservesInputWhenResolutionFails(t *testing.T) {
-	original := windowsPathAbs
-	t.Cleanup(func() { windowsPathAbs = original })
-	windowsPathAbs = func(string) (string, error) { return "", errors.New("resolution failed") }
-	const input = "relative/marker.ended"
+	original := windowsFullPathName
+	t.Cleanup(func() { windowsFullPathName = original })
+	windowsFullPathName = func(*uint16, uint32, *uint16, **uint16) (uint32, error) {
+		return 0, errors.New("resolution failed")
+	}
+	input := strings.Repeat("r", 248) + "/marker.ended"
 	if got := extendedWindowsPath(input); got != input {
 		t.Fatalf("extendedWindowsPath(%q) = %q, want original input", input, got)
 	}
