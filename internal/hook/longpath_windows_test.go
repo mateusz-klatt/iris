@@ -26,6 +26,10 @@ func TestExtendedWindowsPath(t *testing.T) {
 		{name: "UNC", path: `\\server\share\dir\marker.ended`, want: `\\?\UNC\server\share\dir\marker.ended`},
 		{name: "already extended", path: `\\?\C:\already\marker.ended`, want: `\\?\C:\already\marker.ended`},
 		{name: "device", path: `\\.\C:\device\marker.ended`, want: `\\.\C:\device\marker.ended`},
+		{name: "device with alternate separators", path: `//./C:/dir/x.ended`, want: `\\.\C:\dir\x.ended`},
+		{name: "extended with alternate separators", path: `//?/C:/dir/x.ended`, want: `\\?\C:\dir\x.ended`},
+		{name: "device with mixed separators", path: `\\.\C:/dir/x.ended`, want: `\\.\C:\dir\x.ended`},
+		{name: "UNC with alternate separators", path: `//server/share/dir/x.ended`, want: `\\?\UNC\server\share\dir\x.ended`},
 		{name: "NT extended", path: `\??\C:\already\marker.ended`, want: `\??\C:\already\marker.ended`},
 		{name: "embedded NUL is preserved", path: "bad\x00path", want: "bad\x00path"},
 		{name: "relative", path: `relative\marker.ended`, want: `\\?\` + filepath.Join(cwd, `relative\marker.ended`)},
@@ -35,6 +39,16 @@ func TestExtendedWindowsPath(t *testing.T) {
 				t.Fatalf("extendedWindowsPath(%q) = %q, want %q", tc.path, got, tc.want)
 			}
 		})
+	}
+}
+
+func TestExtendedWindowsPathPreservesInputWhenResolutionFails(t *testing.T) {
+	original := windowsPathAbs
+	t.Cleanup(func() { windowsPathAbs = original })
+	windowsPathAbs = func(string) (string, error) { return "", errors.New("resolution failed") }
+	const input = "relative/marker.ended"
+	if got := extendedWindowsPath(input); got != input {
+		t.Fatalf("extendedWindowsPath(%q) = %q, want original input", input, got)
 	}
 }
 
