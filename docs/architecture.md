@@ -774,10 +774,11 @@ Changes from the reference schema:
    regular files, so a directory, FIFO, socket, device or other non-regular entry is never a valid
    marker and is damaged without being opened. A dangling link or a link to a non-regular target is
    damaged too. An entry or link that disappears between enumeration and metadata collection is
-   absent, matching the hook, rather than damaged. Doctor opens a regular marker with
-   FILE_SHARE_READ, FILE_SHARE_WRITE and FILE_SHARE_DELETE on Windows and portable `os.Open`
-   elsewhere, reads at most 64 bytes, and closes the handle before parsing. A read that fills the
-   bound is damaged. Otherwise the hook's read rule applies: a positive generation is healthy;
+   absent, matching the hook, rather than damaged. Hook and doctor use one bounded generation-file
+   reader for live proof and end markers. It opens with FILE_SHARE_READ, FILE_SHARE_WRITE and
+   FILE_SHARE_DELETE on Windows and portable `os.Open` elsewhere, reads at most 64 bytes, and closes
+   the handle before parsing. A read that fills the bound is damaged. Otherwise the hook's read rule
+   applies: a positive generation is healthy;
    malformed or unreadable content is damaged. Current damage makes
    doctor exit 1 however old or evicted its observation is. Exhausting the entry cap, the outer
    deadline, cancellation, or a directory open or iteration error other than ENOENT marks the scan
@@ -801,14 +802,17 @@ Changes from the reference schema:
    late completion cannot change the returned report.
 
    On Windows, the shared session-file replacement used by Antigravity state and session memory
-   calls FileRenameInfoEx with REPLACE_IF_EXISTS and POSIX_SEMANTICS. A reader holding the old file
-   open keeps its contents while later opens see the replacement. On Windows versions or volumes
-   without POSIX rename, the helper falls back to MoveFileEx and retries access-denied and
-   sharing-violation only within the existing 50 ms session-lock budget and attempt cap. That
-   fallback still cannot replace a file whose handle is held open. A failure after the bounded
-   retries is recorded through the existing hook failure or damaged-marker observation, SessionEnd
-   preserves live proof as before, and the hook still returns valid output. Other systems keep
-   `os.Rename`. Registration reads the marker before refreshing live
+   calls FileRenameInfoEx with REPLACE_IF_EXISTS and POSIX_SEMANTICS. An Iris reader holding the old
+   file open keeps its contents while later opens see the replacement. Readers outside Iris,
+   including antivirus, indexers and editors, need not grant FILE_SHARE_DELETE and can still make
+   that replacement fail. On Windows versions or volumes without POSIX rename, the helper falls back
+   to MoveFileEx, where any held handle can still block replacement. Access-denied and
+   sharing-violation retries stay within the existing 50 ms session-lock budget and attempt cap;
+   the deadline is checked before every attempt, the MoveFileEx fallback included. On SessionEnd's
+   marker-write path, a failure after the bounded retries records the existing damaged-marker
+   observation, preserves live proof and still returns valid hook output. Ordinary proof publication
+   still discards write errors and adds no observation. Other systems keep `os.Rename`. Registration
+   reads the marker before refreshing live
    proof under the bounded session lock. Absent proof takes no lock, so unrelated attention or
    cleanup cannot suppress a fresh SessionStart. The reads are not atomic and the lock is released
    before dispatch: SessionEnd can leave a request with an older floor, a known B1-min limit. A readable

@@ -43,7 +43,7 @@ func TestSessionEndReplacesMarkerWithReaderOpen(t *testing.T) {
 	if err := m.replace(marker, "1"); err != nil {
 		t.Fatal(err)
 	}
-	held, err := openAntigravityStateFile(marker)
+	held, err := OpenGenerationFile(marker)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -85,5 +85,54 @@ func TestSessionEndReplacesMarkerWithReaderOpen(t *testing.T) {
 	}
 	if strings.Contains(string(observed), DamagedGenerationProof) {
 		t.Fatalf("SessionEnd recorded damaged proof after a successful replacement: %s", observed)
+	}
+}
+
+func TestSessionEndWithOutsideReaderFailsAndRecordsMarker(t *testing.T) {
+	m := newFileMemory(t)
+	m.Remember("claude", "s", 2)
+	proof := m.name("claude", "s")
+	marker := proof + ".ended"
+	if err := m.replace(marker, "1"); err != nil {
+		t.Fatal(err)
+	}
+	held, err := os.Open(marker)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = held.Close() }()
+
+	root := filepath.Dir(m.dir)
+	token := filepath.Join(root, "hub.token")
+	if err := os.WriteFile(token, []byte("test-only-credential\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	getenv := func(key string) string {
+		if key == "IRIS_TOKEN_FILE" {
+			return token
+		}
+		return ""
+	}
+	hub := &sessionEndReplaceHub{}
+	payload := `{"session_id":"s","cwd":` + quote(root) + `}`
+	out := (Runner{
+		ClientName: "claude", EventName: "SessionEnd", Stdin: strings.NewReader(payload), Getenv: getenv,
+		Find: func(string) (gitinfo.Repo, error) { return gitinfo.Repo{Worktree: root}, nil },
+		Host: func() string { return "host" }, Ancestor: func() (proc.Ancestor, error) { return proc.Ancestor{}, nil },
+		Hub: hub, Memory: m, after: never, logAfter: never,
+	}).Run()
+	assertAllow(t, ClientClaude, out)
+	if generation, err := readGeneration(marker); generation != 1 || err != nil {
+		t.Fatalf("outside reader allowed marker replacement: G%d, %v", generation, err)
+	}
+	if generation, err := readGeneration(proof); generation != 2 || err != nil {
+		t.Fatalf("failed marker replacement did not preserve proof: G%d, %v", generation, err)
+	}
+	observed, err := os.ReadFile(filepath.Join(root, "hook-observed.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(observed), DamagedGenerationProof) || !strings.Contains(string(observed), filepath.Base(marker)) {
+		t.Fatalf("outside-reader failure was not recorded: %s", observed)
 	}
 }

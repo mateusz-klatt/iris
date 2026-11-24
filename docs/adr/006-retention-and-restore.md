@@ -275,9 +275,10 @@ file or a symlink to a regular target. Hooks only ever write regular files, so a
 socket, device or other non-regular entry is never valid and is damaged without being opened.
 Dangling links and links to non-regular targets are damaged too. An entry or link that disappears
 between enumeration and metadata collection is absent, matching the hook, rather than damaged.
-Doctor opens regular markers with FILE_SHARE_READ, FILE_SHARE_WRITE and FILE_SHARE_DELETE on
-Windows and portable `os.Open` elsewhere, reads at most 64 bytes, and closes the handle before
-parsing. A read that fills the bound is damaged. Otherwise regular files use the hook's rule. A
+Hook and doctor use one bounded generation-file reader for live proof and end markers. It opens
+with FILE_SHARE_READ, FILE_SHARE_WRITE and FILE_SHARE_DELETE on Windows and portable `os.Open`
+elsewhere, reads at most 64 bytes, and closes the handle before parsing. A read that fills the
+bound is damaged. Otherwise regular files use the hook's rule. A
 marker still damaged is current and makes doctor exit 1
 even when its observation is old or evicted; one repaired with a positive generation or archived
 since an observation remains history and does not fail doctor. Exhausting the cap, the outer
@@ -350,13 +351,15 @@ token in place. `iris admin forget` deletes hub records and mail and is unsuitab
 local recovery.
 
 On Windows, the shared session-file replacement used by Antigravity state and session memory calls
-FileRenameInfoEx with REPLACE_IF_EXISTS and POSIX_SEMANTICS. A reader holding the old file open
-keeps its contents while later opens see the replacement. Windows versions and volumes without
-POSIX rename use MoveFileEx instead, with access-denied and sharing-violation retries bounded by the
-existing 50 ms session-lock budget and attempt cap. On those versions and volumes a held handle can
-still make the replacement fail. The failure after these retries is recorded through the existing
-hook failure or damaged-marker observation, and hook output remains valid. Other systems keep
-`os.Rename`.
+FileRenameInfoEx with REPLACE_IF_EXISTS and POSIX_SEMANTICS. An Iris reader holding the old file
+open keeps its contents while later opens see the replacement. Readers outside Iris, including
+antivirus, indexers and editors, need not grant FILE_SHARE_DELETE and can still make that
+replacement fail. Windows versions and volumes without POSIX rename use MoveFileEx instead, where
+any held handle can block replacement. Access-denied and sharing-violation retries stay within the
+existing 50 ms session-lock budget and attempt cap, with the deadline checked before every attempt,
+the MoveFileEx fallback included. On SessionEnd's marker-write path, failure after these retries
+records the existing damaged-marker observation and hook output remains valid. Ordinary proof
+publication still discards write errors and adds no observation. Other systems keep `os.Rename`.
 
 When `Forget` cannot record its `.ended` marker on `SessionEnd` (the marker is damaged, the write
 fails, or the sessions lock is missed), it keeps the local generation proof rather than deleting

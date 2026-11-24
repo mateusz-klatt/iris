@@ -32,17 +32,25 @@ func replaceSessionFile(oldpath, newpath string) error {
 }
 
 func replaceSessionFileWithRetry(oldpath, newpath string, posix, classic func(string, string) error, pause func(time.Duration)) error {
+	return replaceSessionFileWithRetryUntil(oldpath, newpath, posix, classic, pause, time.Now)
+}
+
+func replaceSessionFileWithRetryUntil(oldpath, newpath string, posix, classic func(string, string) error, pause func(time.Duration), now func() time.Time) error {
+	start := now()
 	unsupported := false
-	return retrySessionFileRename(func() error {
+	return retrySessionFileRenameAt(func() error {
 		if !unsupported {
 			err := posix(oldpath, newpath)
 			if err == nil || !sessionPOSIXRenameUnsupported(err) {
 				return err
 			}
 			unsupported = true
+			if !now().Before(start.Add(hookLockBudget)) {
+				return err
+			}
 		}
 		return classic(oldpath, newpath)
-	}, pause)
+	}, pause, now, start)
 }
 
 func sessionPOSIXRenameUnsupported(err error) bool {
@@ -90,16 +98,23 @@ func retrySessionFileRename(rename func() error, pause func(time.Duration)) erro
 }
 
 func retrySessionFileRenameUntil(rename func() error, pause func(time.Duration), now func() time.Time) error {
-	start := now()
+	return retrySessionFileRenameAt(rename, pause, now, now())
+}
+
+func retrySessionFileRenameAt(rename func() error, pause func(time.Duration), now func() time.Time, start time.Time) error {
+	err := os.ErrDeadlineExceeded
 	for attempt := 0; ; attempt++ {
-		err := rename()
+		if !now().Before(start.Add(hookLockBudget)) {
+			return err
+		}
+		err = rename()
 		if err == nil {
 			return nil
 		}
 		if !errors.Is(err, os.ErrPermission) && !errors.Is(err, windows.ERROR_SHARING_VIOLATION) {
 			return err
 		}
-		if !now().Before(start.Add(hookLockBudget)) || attempt+1 == sessionFileRenameAttempts {
+		if attempt+1 == sessionFileRenameAttempts || !now().Before(start.Add(hookLockBudget)) {
 			return err
 		}
 		pause(sessionFileRenamePause)

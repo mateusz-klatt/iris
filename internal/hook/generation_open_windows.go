@@ -1,4 +1,4 @@
-package doctor
+package hook
 
 import (
 	"os"
@@ -6,7 +6,8 @@ import (
 	"golang.org/x/sys/windows"
 )
 
-func openEndMarkerFile(path string) (*os.File, error) {
+// OpenGenerationFile opens a generation or end-marker file without blocking its replacement.
+func OpenGenerationFile(path string) (*os.File, error) {
 	pathp, err := windows.UTF16PtrFromString(path)
 	if err != nil {
 		return nil, err

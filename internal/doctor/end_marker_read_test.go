@@ -31,7 +31,7 @@ func TestReadEndMarkerGenerationIsBoundedAndMatchesAbsence(t *testing.T) {
 		t.Fatalf("absent marker = G%d, %v", generation, err)
 	}
 	belowLimit := filepath.Join(dir, "below-limit.ended")
-	body := strings.Repeat(" ", endMarkerReadLimit-3) + "4\n"
+	body := strings.Repeat(" ", hook.GenerationReadLimit-3) + "4\n"
 	if err := os.WriteFile(belowLimit, []byte(body), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -52,38 +52,6 @@ func TestReadEndMarkerGenerationIsBoundedAndMatchesAbsence(t *testing.T) {
 	if generation, err := readEndMarkerGeneration(malformed); generation != 0 || !errors.Is(err, hook.ErrInvalidGeneration) {
 		t.Fatalf("malformed marker = G%d, %v", generation, err)
 	}
-
-	t.Run("dangling marker is not absent", func(t *testing.T) {
-		originalOpen, originalLstat := endMarkerOpenFile, endMarkerLstat
-		t.Cleanup(func() { endMarkerOpenFile, endMarkerLstat = originalOpen, originalLstat })
-		endMarkerOpenFile = func(string) (*os.File, error) { return nil, os.ErrNotExist }
-		endMarkerLstat = func(string) (os.FileInfo, error) { return fakeMarkerInfo{}, nil }
-		if generation, err := readEndMarkerGeneration("dangling.ended"); generation != 0 || !errors.Is(err, hook.ErrInvalidGeneration) {
-			t.Fatalf("dangling marker = G%d, %v", generation, err)
-		}
-	})
-	t.Run("open failure", func(t *testing.T) {
-		original := endMarkerOpenFile
-		t.Cleanup(func() { endMarkerOpenFile = original })
-		endMarkerOpenFile = func(string) (*os.File, error) { return nil, errors.New("open failure") }
-		if generation, err := readEndMarkerGeneration(valid); generation != 0 || !errors.Is(err, hook.ErrInvalidGeneration) {
-			t.Fatalf("open failure = G%d, %v", generation, err)
-		}
-	})
-	t.Run("read failure", func(t *testing.T) {
-		original := endMarkerOpenFile
-		t.Cleanup(func() { endMarkerOpenFile = original })
-		endMarkerOpenFile = func(string) (*os.File, error) {
-			f, err := os.Open(valid)
-			if err != nil {
-				return nil, err
-			}
-			return f, f.Close()
-		}
-		if generation, err := readEndMarkerGeneration(valid); generation != 0 || !errors.Is(err, hook.ErrInvalidGeneration) {
-			t.Fatalf("read failure = G%d, %v", generation, err)
-		}
-	})
 }
 
 type markerReplacementHub struct {
@@ -143,18 +111,14 @@ func TestDoctorMarkerReadAllowsHookSessionEndReplacement(t *testing.T) {
 		Hub: hub,
 	}
 
-	originalOpen := endMarkerOpenFile
-	t.Cleanup(func() { endMarkerOpenFile = originalOpen })
-	var out hook.Output
-	endMarkerOpenFile = func(path string) (*os.File, error) {
-		f, err := originalOpen(path)
-		if path == marker && err == nil {
-			out = runner.Run()
-		}
-		return f, err
+	held, err := hook.OpenGenerationFile(marker)
+	if err != nil {
+		t.Fatal(err)
 	}
-	if _, err := readEndMarkerGeneration(marker); err != nil {
-		t.Fatalf("doctor read after replacement: %v", err)
+	defer func() { _ = held.Close() }()
+	out := runner.Run()
+	if generation, err := readEndMarkerGeneration(marker); generation != 2 || err != nil {
+		t.Fatalf("doctor read after replacement = G%d, %v", generation, err)
 	}
 	if out.Exit != 0 || !json.Valid(out.Stdout) || hub.registration.Generation != 2 || hub.endedID != "ex_marker" || hub.endedGeneration != 2 {
 		t.Fatalf("SessionEnd output = %+v, registration = %+v, ended = %q G%d", out, hub.registration, hub.endedID, hub.endedGeneration)
