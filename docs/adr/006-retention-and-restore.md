@@ -257,8 +257,9 @@ a local doctor observation and returns the client's allow output, including for 
 a confirmed ended generation keeps its existing pre-tool refusal. A dangling symlink is unreadable, not absent: only
 a path that is not there at all, link and all, allows a hook to start registration without proof
 or allows `Forget` to record an end. Local `iris doctor` output reports
-`damaged generation proof at <path>` and re-reads every named `.ended` marker. Independently of
-observation age and the bounded log, doctor also scans the sessions directories beside the resolved
+`damaged generation proof at <path>` and re-reads every `.ended` marker named by an observation from
+the last 24 hours. Independently of observation age and the bounded log, doctor also scans the
+sessions directories beside the resolved
 and fallback token paths. Cleaned absolute paths and `os.SameFile` on directory Stat results deduplicate
 lexical, symlink and case aliases. One read-only worker performs all directory and observation-marker
 I/O and publishes progressive snapshots under a mutex. Non-recursive reads across both directories
@@ -267,20 +268,23 @@ the latest snapshot; per-read deadlines are removed. A process-wide single-fligh
 concurrent call return incomplete immediately with "previous end-marker scan still running", so
 abandoned workers and descriptors cannot accumulate.
 
-Before opening an examined entry, the worker requires a regular file or a symlink to a regular
-target. Hooks only ever write regular files, so a directory, FIFO, socket, device or other
-non-regular entry is never valid and is damaged without being opened. Dangling links and links to
-non-regular targets are damaged too. An entry or link that disappears between enumeration and
-metadata collection is absent, matching the hook, rather than damaged. Regular files then use the
-hook's rule. A marker still damaged is current and makes doctor exit 1 even when its observation is
-old or evicted; one repaired with a positive generation or archived since an observation remains
-history and does not fail doctor. Exhausting the cap, the outer deadline or cancellation makes the
-scan incomplete and doctor exit 1 even without a finding. A local-only note gives the reason and
-the number found so far as a lower bound, and says plainly that more may be damaged. An observation
-not yet re-checked is unknown, not repaired. Current damage uses the client from a matching
-retained observation, or a clearly labelled local-only line without a client when no observation
-remains. A healthy or missing directory adds nothing, and an unreadable directory produces a doctor
-note rather than a crash. The local detail explains that current damage prevents registration,
+Suffix matching is case-insensitive. A mixed-case candidate is graded at its lowercase canonical
+hook path only when Stat and `os.SameFile` prove that both paths resolve to the same file; a case
+variant of another file is ignored. Before opening an examined entry, the worker requires a regular
+file or a symlink to a regular target. Hooks only ever write regular files, so a directory, FIFO,
+socket, device or other non-regular entry is never valid and is damaged without being opened.
+Dangling links and links to non-regular targets are damaged too. An entry or link that disappears
+between enumeration and metadata collection is absent, matching the hook, rather than damaged.
+Regular files then use the hook's rule. A marker still damaged is current and makes doctor exit 1
+even when its observation is old or evicted; one repaired with a positive generation or archived
+since an observation remains history and does not fail doctor. Exhausting the cap, the outer
+deadline, cancellation, or a directory open or iteration error other than ENOENT makes the scan
+incomplete and doctor exit 1 even without a finding. A directory failure does not stop the other
+directory's scan. A local-only note gives the reason and the number found so far as a lower bound,
+and says plainly that more may be damaged. An observation not yet re-checked is unknown, not
+repaired. Current damage uses the client from a matching retained observation, or a clearly
+labelled local-only line without a client when no observation remains. A healthy or missing
+directory adds nothing. The local detail explains that current damage prevents registration,
 binding, mail delivery and claims while hooks still allow work. Stop that session's client, hooks,
 MCP shim and watch, verify the configured hub and that session's history, then repair the marker
 with the verified ended generation as a single decimal or archive it before restarting the client.
