@@ -7,10 +7,11 @@ import (
 	"testing"
 )
 
-// The built-in tools iris hook logged as unknown on a real host are known now. Codex's names were
-// logged on home-wsl on 2026-11-08 and are exactly as logged. Codex joins a tool's namespace and
-// name: its rollouts record {"namespace":"collaboration","name":"spawn_agent"}, which the hook sees
-// as "collaborationspawn_agent". Claude Code's names are backed by captures in testdata/claude from
+// The built-in tools covered by this test were once logged as unknown on a real host and are
+// known now. Codex's names were logged on home-wsl on 2026-11-08 and are exactly as logged. Codex
+// joins a tool's namespace and name: its rollouts record
+// {"namespace":"collaboration","name":"spawn_agent"}, which the hook sees as
+// "collaborationspawn_agent". Claude Code's names are backed by captures in testdata/claude from
 // 2.1.319 on Windows and 2.1.331 on Linux/WSL, which the golden test decodes. No Codex payload
 // captures exist yet: Codex runs a new hook only after a person has trusted it.
 func TestBuiltinToolsAreKnown(t *testing.T) {
@@ -28,8 +29,6 @@ func TestBuiltinToolsAreKnown(t *testing.T) {
 		"Agent":            ClassOther,
 		"PushNotification": ClassOther,
 		"SendUserFile":     ClassOther,
-		"CronCreate":       ClassOther,
-		"CronDelete":       ClassOther,
 		"TaskStop":         ClassOther,
 		"ScheduleWakeup":   ClassOther,
 		"Monitor":          ClassShell,
@@ -41,11 +40,11 @@ func TestBuiltinToolsAreKnown(t *testing.T) {
 	}
 }
 
-// Every captured non-writing built-in allows the event, touches no hub and adds nothing to the
+// The captured non-writing built-ins allow the event, touch no hub and add nothing to the
 // observation log doctor reads. The golden expectations also require no extracted paths, including
 // SendUserFile's files array.
 func TestClaudeBuiltinsAllowWithoutObservation(t *testing.T) {
-	for _, tool := range []string{"agent", "pushnotification", "senduserfile", "croncreate", "crondelete"} {
+	for _, tool := range []string{"agent", "pushnotification", "senduserfile"} {
 		for _, event := range []string{"PreToolUse", "PostToolUse"} {
 			name := event + "-" + tool
 			t.Run(name, func(t *testing.T) {
@@ -71,6 +70,48 @@ func TestClaudeBuiltinsAllowWithoutObservation(t *testing.T) {
 				observations, err := ReadRecentObservations(env("IRIS_TOKEN_FILE"), 10)
 				if err != nil || len(observations) != 0 {
 					t.Fatalf("observations %v: %v", observations, err)
+				}
+			})
+		}
+	}
+}
+
+// The cron captures cover session-only jobs. Durable jobs write .claude/scheduled_tasks.json, so
+// both tools stay unknown and observed while the hook still allows.
+func TestClaudeCronToolsStayUnknownAndAllow(t *testing.T) {
+	for _, tc := range []struct {
+		file string
+		tool string
+	}{
+		{"croncreate", "CronCreate"},
+		{"crondelete", "CronDelete"},
+	} {
+		for _, event := range []string{"PreToolUse", "PostToolUse"} {
+			name := event + "-" + tc.file
+			t.Run(name, func(t *testing.T) {
+				payload, err := os.ReadFile("testdata/claude/" + name + ".json")
+				if err != nil {
+					t.Fatal(err)
+				}
+				env := failureEnv(t)
+				calls := 0
+				out := Runner{
+					ClientName: "claude",
+					EventName:  event,
+					Stdin:      strings.NewReader(string(payload)),
+					Getenv:     env,
+					Hub:        &countingHub{fn: func() { calls++ }},
+					after:      never,
+					logAfter:   never,
+				}.Run()
+				assertAllow(t, ClientClaude, out)
+				wantStderr := "iris: unknown tool " + tc.tool + "\n"
+				if string(out.Stderr) != wantStderr || calls != 0 {
+					t.Fatalf("stderr %q, hub calls %d; want stderr %q", out.Stderr, calls, wantStderr)
+				}
+				got := observedOnly(t, env("IRIS_TOKEN_FILE"))
+				if !got.Observed() || got.Degraded() || got.Error != "unknown tool "+tc.tool || got.Client != "claude" {
+					t.Fatalf("%+v", got)
 				}
 			})
 		}

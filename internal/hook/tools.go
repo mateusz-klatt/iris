@@ -37,6 +37,8 @@ func classifyTool(name string, mcp bool) (ToolClass, bool) {
 		return ClassRead, false
 	case "toolsearch", "spawn_subagent", "task", "agent", "todowrite", "webfetch", "websearch", "skill":
 		return ClassOther, false
+	// CronCreate and CronDelete deliberately remain unknown: durable jobs write
+	// .claude/scheduled_tasks.json.
 	// Built-in tools that write no file. Codex names a namespaced tool by its namespace and name
 	// run together: its rollouts record {"namespace":"clock","name":"sleep"}, and the hook sees
 	// "clocksleep". The names are those iris hook logged as unknown on a real host
@@ -46,7 +48,7 @@ func classifyTool(name string, mcp bool) (ToolClass, bool) {
 	// through its own hooks.
 	case "clockcurr_time", "clocksleep", "webrun", "collaborationspawn_agent", "collaborationsend_message",
 		"collaborationfollowup_task", "collaborationlist_agents", "collaborationwait_agent",
-		"taskstop", "schedulewakeup", "pushnotification", "senduserfile", "croncreate", "crondelete":
+		"taskstop", "schedulewakeup", "pushnotification", "senduserfile":
 		return ClassOther, false
 	case "":
 		return "", false

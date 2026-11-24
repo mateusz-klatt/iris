@@ -1515,8 +1515,9 @@ was measured, the tool was unknown to Iris, so its writes went unreconciled and 
   logged as unknown on a real host. No payload capture backs those names yet. Codex runs a new
   hook only after a person trusts it in `/hooks`, so the capture waits for one. Claude Code's
   Monitor, TaskStop and ScheduleWakeup are backed by captures from 2.1.319 on Windows; Agent,
-  PushNotification, SendUserFile, CronCreate and CronDelete are backed by captures from 2.1.331
-  on Linux/WSL.
+  PushNotification and SendUserFile are backed by captures from 2.1.331 on Linux/WSL. CronCreate
+  and CronDelete also have 2.1.331 captures, but they remain unknown because durable jobs write
+  `.claude/scheduled_tasks.json`; the captures cover only session-only jobs.
 - Claude Code's Monitor is reconciled like a shell, but its PostToolUse arrives at launch:
   measured on 2.1.319, 590 ms after the call, carrying only the task id, while the command ran
   on. A file its command writes later is not reconciled or claimed, and the same holds for Bash
