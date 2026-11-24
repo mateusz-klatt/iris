@@ -8,6 +8,8 @@ configure({ asyncUtilTimeout: 5000 });
 import { resetFixtures, server } from "./server";
 import { clearAccountSession } from "../accountApi";
 
+const realSetTimeout = globalThis.setTimeout.bind(globalThis);
+const monotonicNow = performance.now.bind(performance);
 const inFlightRequests = new Map<string, Request>();
 
 server.events.on("request:start", ({ requestId, request }) => {
@@ -20,32 +22,36 @@ server.events.on("request:start", ({ requestId, request }) => {
 server.events.on("request:end", ({ requestId }) => {
   inFlightRequests.delete(requestId);
 });
+server.events.on("request:unhandled", ({ requestId }) => {
+  inFlightRequests.delete(requestId);
+});
 server.events.on("unhandledException", ({ requestId }) => {
   inFlightRequests.delete(requestId);
 });
 
 export async function drainRequests(timeoutMs = 2000): Promise<void> {
-  const deadline = Date.now() + timeoutMs;
-  await new Promise((resolve) => setTimeout(resolve, 0));
+  const deadline = monotonicNow() + timeoutMs;
+  await new Promise((resolve) => realSetTimeout(resolve, 0));
   while (inFlightRequests.size > 0) {
-    const remaining = deadline - Date.now();
+    const remaining = deadline - monotonicNow();
     if (remaining <= 0) {
       const pending = [...inFlightRequests.values()]
         .map((request) => `${request.method} ${request.url}`)
         .join("\n");
       throw new Error(`MSW request drain timed out after ${timeoutMs} ms:\n${pending}`);
     }
-    await new Promise((resolve) => setTimeout(resolve, Math.min(5, remaining)));
+    await new Promise((resolve) => realSetTimeout(resolve, Math.min(5, remaining)));
   }
 }
 
 beforeAll(() => server.listen({ onUnhandledFrame: "error" }));
 
-afterEach(async () => {
+export async function teardownTest(timeoutMs = 2000): Promise<void> {
   cleanup();
   try {
-    await drainRequests();
+    await drainRequests(timeoutMs);
   } finally {
+    inFlightRequests.clear();
     clearAccountSession();
     resetFixtures();
     server.resetHandlers();
@@ -53,6 +59,8 @@ afterEach(async () => {
       window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
     }
   }
-});
+}
+
+afterEach(() => teardownTest());
 
 afterAll(() => server.close());
