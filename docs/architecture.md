@@ -774,8 +774,11 @@ Changes from the reference schema:
    regular files, so a directory, FIFO, socket, device or other non-regular entry is never a valid
    marker and is damaged without being opened. A dangling link or a link to a non-regular target is
    damaged too. An entry or link that disappears between enumeration and metadata collection is
-   absent, matching the hook, rather than damaged. A regular file then uses the hook's read rule: a
-   positive generation is healthy; malformed or unreadable content is damaged. Current damage makes
+   absent, matching the hook, rather than damaged. Doctor opens a regular marker with
+   FILE_SHARE_READ, FILE_SHARE_WRITE and FILE_SHARE_DELETE on Windows and portable `os.Open`
+   elsewhere, reads at most 64 bytes, and closes the handle before parsing. A read that fills the
+   bound is damaged. Otherwise the hook's read rule applies: a positive generation is healthy;
+   malformed or unreadable content is damaged. Current damage makes
    doctor exit 1 however old or evicted its observation is. Exhausting the entry cap, the outer
    deadline, cancellation, or a directory open or iteration error other than ENOENT marks the scan
    incomplete and also makes doctor exit 1, even when no damage was found. A directory failure does

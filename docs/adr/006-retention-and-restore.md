@@ -275,7 +275,10 @@ file or a symlink to a regular target. Hooks only ever write regular files, so a
 socket, device or other non-regular entry is never valid and is damaged without being opened.
 Dangling links and links to non-regular targets are damaged too. An entry or link that disappears
 between enumeration and metadata collection is absent, matching the hook, rather than damaged.
-Regular files then use the hook's rule. A marker still damaged is current and makes doctor exit 1
+Doctor opens regular markers with FILE_SHARE_READ, FILE_SHARE_WRITE and FILE_SHARE_DELETE on
+Windows and portable `os.Open` elsewhere, reads at most 64 bytes, and closes the handle before
+parsing. A read that fills the bound is damaged. Otherwise regular files use the hook's rule. A
+marker still damaged is current and makes doctor exit 1
 even when its observation is old or evicted; one repaired with a positive generation or archived
 since an observation remains history and does not fail doctor. Exhausting the cap, the outer
 deadline, cancellation, or a directory open or iteration error other than ENOENT makes the scan

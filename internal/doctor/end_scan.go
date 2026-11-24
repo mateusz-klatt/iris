@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -19,6 +20,7 @@ const (
 	endMarkerScanEntryBudget  = 4096
 	endMarkerScanTimeBudget   = time.Second
 	endMarkerScanReadDirChunk = 64
+	endMarkerReadLimit        = 64
 )
 
 type endMarkerScanConfig struct {
@@ -34,7 +36,8 @@ var (
 	endMarkerLstat          = os.Lstat
 	endMarkerStat           = os.Stat
 	endMarkerOpen           = openEndMarkerDirectory
-	endMarkerReadGeneration = hook.ReadGeneration
+	endMarkerOpenFile       = openEndMarkerFile
+	endMarkerReadGeneration = readEndMarkerGeneration
 	endMarkerScanFlight     = make(chan struct{}, 1)
 )
 
@@ -238,6 +241,28 @@ func (s *endMarkerScanner) readDirectory(dir string) string {
 			return "could not scan for damaged end markers: " + readErr.Error()
 		}
 	}
+}
+
+func readEndMarkerGeneration(path string) (int, error) {
+	f, err := endMarkerOpenFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		if _, lstatErr := endMarkerLstat(path); errors.Is(lstatErr, os.ErrNotExist) {
+			return 0, nil
+		}
+	}
+	if err != nil {
+		return 0, hook.ErrInvalidGeneration
+	}
+	raw, readErr := io.ReadAll(io.LimitReader(f, endMarkerReadLimit))
+	_ = f.Close()
+	if readErr != nil || len(raw) == endMarkerReadLimit {
+		return 0, hook.ErrInvalidGeneration
+	}
+	generation, err := strconv.Atoi(strings.TrimSpace(string(raw)))
+	if err != nil || generation <= 0 {
+		return 0, hook.ErrInvalidGeneration
+	}
+	return generation, nil
 }
 
 func canonicalEndMarkerPath(dir, name string) (string, bool) {
