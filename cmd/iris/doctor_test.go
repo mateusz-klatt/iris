@@ -282,8 +282,8 @@ func TestDoctorShowsLocalGenerationRecoveryAndKeepsBundlePathsPrivate(t *testing
 	}
 	var out, errOut bytes.Buffer
 	args := []string{"--hub-url", hub.URL}
-	if code := runDoctorIO(t.Context(), args, strings.NewReader(""), &out, &errOut, never); code != 0 {
-		t.Fatalf("local observations should not fail doctor: exit %d\n%s\n%s", code, out.String(), errOut.String())
+	if code := runDoctorIO(t.Context(), args, strings.NewReader(""), &out, &errOut, never); code != 1 {
+		t.Fatalf("still-damaged marker should fail doctor: exit %d\n%s\n%s", code, out.String(), errOut.String())
 	}
 	report := out.String()
 	for category, path := range paths {
@@ -299,8 +299,8 @@ func TestDoctorShowsLocalGenerationRecoveryAndKeepsBundlePathsPrivate(t *testing
 	}
 
 	out.Reset()
-	if code := runDoctorIO(t.Context(), append(args, "--bundle"), strings.NewReader(""), &out, &errOut, never); code != 0 {
-		t.Fatalf("bundle exit %d\n%s\n%s", code, out.String(), errOut.String())
+	if code := runDoctorIO(t.Context(), append(args, "--bundle"), strings.NewReader(""), &out, &errOut, never); code != 1 {
+		t.Fatalf("bundle with still-damaged marker exit %d, want 1\n%s\n%s", code, out.String(), errOut.String())
 	}
 	var bundle doctor.Bundle
 	if err := json.Unmarshal(out.Bytes(), &bundle); err != nil {

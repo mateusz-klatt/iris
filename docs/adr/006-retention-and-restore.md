@@ -256,11 +256,15 @@ a local doctor observation and returns the client's allow output, including for 
 a confirmed ended generation keeps its existing pre-tool refusal. A dangling symlink is unreadable, not absent: only
 a path that is not there at all, link and all, allows a hook to start registration without proof
 or allows `Forget` to record an end. Local `iris doctor` output reports
-`damaged generation proof at <path>`. The same observation names the `.ended` path when `Forget`
-cannot write that marker or cannot take the sessions lock, and the proof stays. Before archiving
-the named file, verify you are connected to the intended hub and check the session's generation
-history there. Archive the file only once you have confirmed the session can safely register
-without that proof.
+`damaged generation proof at <path>` and re-reads every named `.ended` marker. A marker still
+damaged is current and makes doctor exit 1; one repaired with a positive generation or archived
+since the observation is history and does not fail doctor. The local detail explains that current
+damage prevents registration, binding, mail delivery and claims while hooks still allow work. Stop
+that session's client, hooks, MCP shim and watch, verify the configured hub and that session's
+history, then repair the marker with the verified ended generation as a single decimal or archive
+it before restarting the client. Paths stay only in the local report; uploads carry counts alone.
+The same observation names the `.ended` path when `Forget` cannot write that marker or cannot take
+the sessions lock, and the proof stays.
 
 The MCP shim, plain watch and Antigravity wake helper use retained process proof and live
 hook-file proof to reject a lower generation for the same session. They read the `.ended`

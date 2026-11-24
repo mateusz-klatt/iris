@@ -153,11 +153,14 @@ func TestDoctorReportsDamagedEndMarkerLocallyWithoutLeakingPath(t *testing.T) {
 		name       string
 		event      string
 		unreadable bool
+		resolution string
 	}{
-		{"SessionEnd with malformed marker", "SessionEnd", false},
-		{"SessionEnd with directory marker", "SessionEnd", true},
-		{"PreToolUse with malformed marker", "PreToolUse", false},
-		{"PreToolUse with directory marker", "PreToolUse", true},
+		{"SessionEnd with malformed marker", "SessionEnd", false, ""},
+		{"SessionEnd with directory marker", "SessionEnd", true, ""},
+		{"PreToolUse with malformed marker", "PreToolUse", false, ""},
+		{"PreToolUse with directory marker", "PreToolUse", true, ""},
+		{"PreToolUse with repaired marker", "PreToolUse", false, "repaired"},
+		{"PreToolUse with archived marker", "PreToolUse", false, "archived"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			layout := doctorLayout(t)
@@ -228,17 +231,52 @@ func TestDoctorReportsDamagedEndMarkerLocallyWithoutLeakingPath(t *testing.T) {
 			if raw, err := os.ReadFile(proof); err != nil || strings.TrimSpace(string(raw)) != "3" {
 				t.Fatalf("damaged marker changed retained proof: %q, %v", raw, err)
 			}
+			switch tc.resolution {
+			case "repaired":
+				if err := os.WriteFile(marker, []byte("2\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			case "archived":
+				if err := os.Remove(marker); err != nil {
+					t.Fatal(err)
+				}
+			}
 
 			result, err := Run(context.Background(), Options{Layout: layout, HubURL: srv.URL, TokenFile: token, HTTP: srv.Client(), Host: "local", Dir: layout.Home})
 			if err != nil {
 				t.Fatal(err)
 			}
-			if result.ExitCode() != 0 {
-				t.Fatalf("doctor exit code = %d, want 0 for a local observation:\n%s", result.ExitCode(), result.Format())
+			wantExit, wantState := 1, "still damaged"
+			if tc.resolution != "" {
+				wantExit, wantState = 0, tc.resolution+" since"
+			}
+			if result.ExitCode() != wantExit {
+				t.Fatalf("doctor exit code = %d, want %d for %s:\n%s", result.ExitCode(), wantExit, wantState, result.Format())
 			}
 			report := result.Format()
-			if !strings.Contains(report, "damaged generation proof at "+marker) {
-				t.Fatalf("local diagnostic omitted damaged marker path:\n%s", report)
+			if !strings.Contains(report, "damaged generation proof at "+marker+" ("+wantState+")") { // gitleaks:allow (a test observation token and path, not a credential)
+				t.Fatalf("local diagnostic omitted damaged marker path and current state:\n%s", report)
+			}
+			if tc.resolution == "" {
+				for _, want := range []string{
+					"damaged end marker prevents this session from registering",
+					"no hub binding, no mail delivery and no claims",
+					"hooks still allow edits and commands",
+					"Stop that session's client, hooks, MCP shim and watch",
+					"Verify the configured hub and that session's history",
+					"verified ended generation (a single decimal)",
+					"archive it (move it aside)",
+					"restart the client",
+				} {
+					if !strings.Contains(report, want) {
+						t.Errorf("current damaged-marker diagnostic omitted %q:\n%s", want, report)
+					}
+				}
+				if strings.Contains(report, "start a new client session") {
+					t.Errorf("damaged marker retained generic refusal advice:\n%s", report)
+				}
+			} else if !strings.Contains(report, "no longer blocks registration") {
+				t.Errorf("resolved marker was not reported as history:\n%s", report)
 			}
 			if strings.Contains(report, "restore_floor_refused") {
 				t.Fatalf("local refusal without a hub call reported restore_floor_refused:\n%s", report)

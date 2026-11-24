@@ -757,7 +757,11 @@ Changes from the reference schema:
    the client's allow output. Local doctor output names the damaged file as an observation, not
    a hook failure. It also names an `.ended` marker that contributed a generation or is damaged,
    and the `.ended` path when SessionEnd could not write that marker or take the sessions lock.
-   Those paths stay in the local report. Registration reads the marker before refreshing live
+   Doctor re-reads every named damaged marker: still-damaged files are current and make it exit 1;
+   repaired or archived files are history and do not fail it. The local detail states the blocked
+   registration, absent binding, mail and claims, the continuing allow behavior, and the stop,
+   verify, repair-or-archive and restart steps. Paths stay only in the local report; uploads carry
+   counts. Registration reads the marker before refreshing live
    proof under the bounded session lock. Absent proof takes no lock, so unrelated attention or
    cleanup cannot suppress a fresh SessionStart. The reads are not atomic and the lock is released
    before dispatch: SessionEnd can leave a request with an older floor, a known B1-min limit. A readable
