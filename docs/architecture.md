@@ -757,11 +757,18 @@ Changes from the reference schema:
    the client's allow output. Local doctor output names the damaged file as an observation, not
    a hook failure. It also names an `.ended` marker that contributed a generation or is damaged,
    and the `.ended` path when SessionEnd could not write that marker or take the sessions lock.
-   Doctor re-reads every named damaged marker: still-damaged files are current and make it exit 1;
-   repaired or archived files are history and do not fail it. The local detail states the blocked
-   registration, absent binding, mail and claims, the continuing allow behavior, and the stop,
-   verify, repair-or-archive and restart steps. Paths stay only in the local report; uploads carry
-   counts. Registration reads the marker before refreshing live
+   Doctor re-reads every named damaged marker and, independently of the rolling observation log,
+   scans the sessions directory beside the resolved token with one non-recursive listing. Every
+   `*.ended` entry uses the hook's read rule: a positive generation is healthy; malformed content,
+   a directory, an unreadable file or a dangling link is damaged. Current damage makes doctor exit
+   1 however old or evicted its observation is. A matching retained observation supplies the client;
+   otherwise doctor prints a clearly labelled local-only line without one. Repaired or archived
+   files named by an observation remain history and do not fail doctor. A healthy or missing
+   sessions directory adds nothing; an unreadable one adds a local note rather than stopping the
+   run. The local detail states the blocked registration, absent binding, mail and claims, the
+   continuing allow behavior, and the stop, verify, repair-or-archive and restart steps. Paths stay
+   only in the local report; uploads and bundles carry the aggregate `current_damaged_end_markers`
+   count. Registration reads the marker before refreshing live
    proof under the bounded session lock. Absent proof takes no lock, so unrelated attention or
    cleanup cannot suppress a fresh SessionStart. The reads are not atomic and the lock is released
    before dispatch: SessionEnd can leave a request with an older floor, a known B1-min limit. A readable

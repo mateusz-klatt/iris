@@ -4,7 +4,8 @@ Status: accepted. The decisions below were made by `claude-holzera-iris` under t
 delegation, from a proposal by `claude-home-iris` (gap review D3). Implementation is planned, not
 done. Decision 7 is amended below, on 2026-11-13 (a restored copy runs on a new stream), on
 2026-11-22 (in-window reattachment by `iris mcp` and `iris watch`, and the restore generation floor),
-and on 2026-11-24 (a strict `ended_through` floor on every hook registration).
+and on 2026-11-24 (a strict `ended_through` floor on every hook registration, and doctor's current
+end-marker scan).
 
 ## Problem
 
@@ -256,13 +257,19 @@ a local doctor observation and returns the client's allow output, including for 
 a confirmed ended generation keeps its existing pre-tool refusal. A dangling symlink is unreadable, not absent: only
 a path that is not there at all, link and all, allows a hook to start registration without proof
 or allows `Forget` to record an end. Local `iris doctor` output reports
-`damaged generation proof at <path>` and re-reads every named `.ended` marker. A marker still
-damaged is current and makes doctor exit 1; one repaired with a positive generation or archived
-since the observation is history and does not fail doctor. The local detail explains that current
-damage prevents registration, binding, mail delivery and claims while hooks still allow work. Stop
-that session's client, hooks, MCP shim and watch, verify the configured hub and that session's
-history, then repair the marker with the verified ended generation as a single decimal or archive
-it before restarting the client. Paths stay only in the local report; uploads carry counts alone.
+`damaged generation proof at <path>` and re-reads every named `.ended` marker. Independently of
+observation age and the bounded log, doctor also makes one non-recursive listing of the sessions
+directory beside the resolved token and reads every `*.ended` entry with the hook's rule. A marker
+still damaged is current and makes doctor exit 1 even when its observation is old or evicted; one
+repaired with a positive generation or archived since an observation remains history and does not
+fail doctor. Current damage uses the client from a matching retained observation, or a clearly
+labelled local-only line without a client when no observation remains. A healthy or missing
+directory adds nothing, and an unreadable directory produces a doctor note rather than a crash.
+The local detail explains that current damage prevents registration, binding, mail delivery and
+claims while hooks still allow work. Stop that session's client, hooks, MCP shim and watch, verify
+the configured hub and that session's history, then repair the marker with the verified ended
+generation as a single decimal or archive it before restarting the client. Paths stay only in the
+local report; uploads and bundles carry the aggregate current-damage count alone.
 The same observation names the `.ended` path when `Forget` cannot write that marker or cannot take
 the sessions lock, and the proof stays.
 

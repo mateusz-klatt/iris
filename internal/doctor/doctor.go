@@ -46,6 +46,8 @@ type Report struct {
 	Host      string         `json:"host"`
 	CheckedAt time.Time      `json:"checked_at"`
 	Clients   []ClientReport `json:"clients"`
+	// CurrentDamagedEndMarkers counts the local scan's findings without their paths or clients.
+	CurrentDamagedEndMarkers int `json:"current_damaged_end_markers,omitempty"`
 }
 
 // ClientReport is one client's doctor row.
@@ -107,6 +109,10 @@ type Result struct {
 	// fallbackTokenFile is the default token path when client.json relocated token_file to
 	// another directory, so a Bundle also reads entries logged during slow client.json reads.
 	fallbackTokenFile string
+	// Current marker paths and scan errors are local only. The report carries just their count.
+	localMarkerDamage   string
+	currentMarkerDamage bool
+	markerScanNote      string
 }
 
 // Options configures one offline doctor run. RunLive is separate because it calls a model.
@@ -243,7 +249,7 @@ func guardLine(ctx context.Context, dir string) string {
 // ExitCode is 1 when the hub or token is unusable, any client is silent or slow, or a damaged
 // end marker still blocks registration.
 func (r Result) ExitCode() int {
-	if !r.HubUp || !r.TokenOK {
+	if !r.HubUp || !r.TokenOK || r.currentMarkerDamage {
 		return 1
 	}
 	for _, c := range r.Report.Clients {
@@ -298,6 +304,12 @@ func (r Result) Format() string {
 			fmt.Fprintf(&b, "\tlast hook %s", c.LastHookAt)
 		}
 		b.WriteByte('\n')
+	}
+	if r.localMarkerDamage != "" {
+		fmt.Fprintf(&b, "local sessions without a client observation\t%s\t%s\n", r.localMarkerDamage, currentEndMarkerDiagnostic)
+	}
+	if r.markerScanNote != "" {
+		fmt.Fprintf(&b, "local sessions: %s\n", r.markerScanNote)
 	}
 	if r.Case != "" {
 		fmt.Fprintf(&b, "case policy: %s\n", r.Case)
@@ -451,6 +463,8 @@ func applyFailures(res *Result, tokenFile string, now time.Time) error {
 	return applyFailuresFrom(res, tokenFile, "", now)
 }
 
+const currentEndMarkerDiagnostic = "this damaged end marker prevents this session from registering, so it has no hub binding, no mail delivery and no claims, while hooks still allow edits and commands. Stop that session's client, hooks, MCP shim and watch. Verify the configured hub and that session's history. Repair the marker with the verified ended generation (a single decimal), or archive it (move it aside), then restart the client"
+
 func applyFailuresFrom(res *Result, tokenFile, fallbackTokenFile string, now time.Time) error {
 	if strings.TrimSpace(tokenFile) == "" {
 		return nil
@@ -464,9 +478,15 @@ func applyFailuresFrom(res *Result, tokenFile, fallbackTokenFile string, now tim
 	observed := map[string]map[string]int{}
 	proofDamage := map[string]map[string]int{}
 	markerDamage := map[string]map[string]string{}
+	markerClients := map[string]string{}
 	otherDamage := map[string]bool{}
 	for _, entry := range entries {
 		name := integrate.Canonical(entry.Client)
+		if name != "" && entry.Observed() {
+			if kind, path, ok := observedLocalPath(entry.Error); ok && kind == hook.DamagedGenerationProof && strings.HasSuffix(path, ".ended") {
+				markerClients[path] = name
+			}
+		}
 		if name == "" || now.Sub(entry.Time) > failureWindow {
 			continue
 		}
@@ -486,11 +506,7 @@ func applyFailuresFrom(res *Result, tokenFile, fallbackTokenFile string, now tim
 			note := entry.Error
 			if kind, path, ok := observedLocalPath(note); ok {
 				note = kind
-				displayPath := path
-				if strings.IndexFunc(path, func(r rune) bool { return !unicode.IsPrint(r) }) >= 0 {
-					displayPath = strconv.Quote(path)
-				}
-				display := kind + " at " + displayPath
+				display := localObservationDisplay(kind, path)
 				if proofDamage[name] == nil {
 					proofDamage[name] = map[string]int{}
 				}
@@ -511,6 +527,34 @@ func applyFailuresFrom(res *Result, tokenFile, fallbackTokenFile string, now tim
 		}
 		broken[name] = append(broken[name], entry)
 	}
+
+	damagedMarkers, note := scanDamagedEndMarkers(tokenFile)
+	res.markerScanNote = note
+	res.Report.CurrentDamagedEndMarkers = len(damagedMarkers)
+	currentMarkers := make(map[string]bool, len(damagedMarkers))
+	localDamage := map[string]int{}
+	for _, path := range damagedMarkers {
+		currentMarkers[path] = true
+		display := localObservationDisplay(hook.DamagedGenerationProof, path)
+		name := markerClients[path]
+		if name == "" {
+			localDamage[display+" (still damaged)"]++
+			continue
+		}
+		if proofDamage[name] == nil {
+			proofDamage[name] = map[string]int{}
+		}
+		if proofDamage[name][display] == 0 {
+			proofDamage[name][display] = 1
+		}
+		if markerDamage[name] == nil {
+			markerDamage[name] = map[string]string{}
+		}
+		markerDamage[name][display] = path
+	}
+	res.currentMarkerDamage = len(localDamage) > 0
+	res.localMarkerDamage = observedText(localDamage)
+
 	for i := range res.Report.Clients {
 		row := &res.Report.Clients[i]
 		if row.readinessStatus == "" {
@@ -538,21 +582,24 @@ func applyFailuresFrom(res *Result, tokenFile, fallbackTokenFile string, now tim
 			if seen[hook.EndedGenerationRefused]+seen[hook.BindingGenerationRefused] > 0 || otherDamage[row.Client] {
 				row.Detail = joinDetail(row.Detail, "start a new client session to obtain fresh proof. To resume this session, verify the configured hub and its session history before archiving any named file. Keep the end marker while it protects against a backup of the ended session")
 			}
-			if markers := markerDamage[row.Client]; len(markers) > 0 {
-				for display, path := range markers {
-					state := markerDamageStatus(path)
-					row.currentProofDamage = row.currentProofDamage || state == "still damaged"
-					proofDamage[row.Client][display+" ("+state+")"] = proofDamage[row.Client][display]
-					delete(proofDamage[row.Client], display)
-				}
-				if row.currentProofDamage {
-					row.Detail = joinDetail(row.Detail, "this damaged end marker prevents this session from registering, so it has no hub binding, no mail delivery and no claims, while hooks still allow edits and commands. Stop that session's client, hooks, MCP shim and watch. Verify the configured hub and that session's history. Repair the marker with the verified ended generation (a single decimal), or archive it (move it aside), then restart the client")
-				} else {
-					row.Detail = joinDetail(row.Detail, "the damaged end marker has been repaired or archived since the observation and no longer blocks registration")
-				}
-			}
 			if row.Client == integrate.Claude && (seen[binding.ClientMismatchObservation(integrate.Claude, integrate.Cursor)] > 0 || seen["cross-load: ran in a session of cursor"] > 0) {
 				row.Detail = joinDetail(row.Detail, cursorClaudeCrossLoadWarning)
+			}
+		}
+		if markers := markerDamage[row.Client]; len(markers) > 0 {
+			for display, path := range markers {
+				state := "still damaged"
+				if !currentMarkers[path] {
+					state = markerDamageStatus(path)
+				}
+				row.currentProofDamage = row.currentProofDamage || state == "still damaged"
+				proofDamage[row.Client][display+" ("+state+")"] = proofDamage[row.Client][display]
+				delete(proofDamage[row.Client], display)
+			}
+			if row.currentProofDamage {
+				row.Detail = joinDetail(row.Detail, currentEndMarkerDiagnostic)
+			} else {
+				row.Detail = joinDetail(row.Detail, "the damaged end marker has been repaired or archived since the observation and no longer blocks registration")
 			}
 		}
 		if paths := proofDamage[row.Client]; len(paths) > 0 {
@@ -563,21 +610,46 @@ func applyFailuresFrom(res *Result, tokenFile, fallbackTokenFile string, now tim
 	return errors.Join(failErr, obsErr)
 }
 
+// scanDamagedEndMarkers checks the current directory independently of observation retention.
+func scanDamagedEndMarkers(tokenFile string) (damaged []string, note string) {
+	dir := hook.NewSessions(tokenFile).Dir()
+	entries, err := os.ReadDir(dir)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, ""
+	}
+	if err != nil {
+		return nil, "could not scan for damaged end markers: " + err.Error()
+	}
+	for _, entry := range entries {
+		if !strings.HasSuffix(entry.Name(), ".ended") {
+			continue
+		}
+		path := filepath.Join(dir, entry.Name())
+		if _, err := hook.ReadGeneration(path); err != nil {
+			damaged = append(damaged, path)
+		}
+	}
+	return damaged, ""
+}
+
+func localObservationDisplay(kind, path string) string {
+	displayPath := path
+	if strings.IndexFunc(path, func(r rune) bool { return !unicode.IsPrint(r) }) >= 0 {
+		displayPath = strconv.Quote(path)
+	}
+	return kind + " at " + displayPath
+}
+
 // markerDamageStatus rechecks a named marker without publishing its path or contents.
 func markerDamageStatus(path string) string {
-	raw, err := os.ReadFile(path)
-	if errors.Is(err, os.ErrNotExist) {
-		if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
-			return "archived since"
-		}
+	generation, err := hook.ReadGeneration(path)
+	if err != nil {
+		return "still damaged"
 	}
-	if err == nil {
-		generation, parseErr := strconv.Atoi(strings.TrimSpace(string(raw)))
-		if parseErr == nil && generation > 0 {
-			return "repaired since"
-		}
+	if generation > 0 {
+		return "repaired since"
 	}
-	return "still damaged"
+	return "archived since"
 }
 
 // unusableHint says what doctor's own evidence makes of calls that named a session without a

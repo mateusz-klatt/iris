@@ -39,6 +39,43 @@ func TestSessionsUsesTheHooksPathsWithoutReadingTheToken(t *testing.T) {
 	}
 }
 
+func TestReadGenerationForDoctorUsesTheHookMarkerRules(t *testing.T) {
+	dir := t.TempDir()
+	valid := filepath.Join(dir, "valid.ended")
+	if err := os.WriteFile(valid, []byte("4\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	malformed := filepath.Join(dir, "malformed.ended")
+	if err := os.WriteFile(malformed, []byte("0\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	directory := filepath.Join(dir, "directory.ended")
+	if err := os.Mkdir(directory, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	dangling := filepath.Join(dir, "dangling.ended")
+	symlinkToMissing(t, dangling)
+	for _, tc := range []struct {
+		name       string
+		path       string
+		generation int
+		damaged    bool
+	}{
+		{name: "positive generation", path: valid, generation: 4},
+		{name: "absent", path: filepath.Join(dir, "absent.ended")},
+		{name: "malformed", path: malformed, damaged: true},
+		{name: "directory", path: directory, damaged: true},
+		{name: "dangling link", path: dangling, damaged: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			generation, err := ReadGeneration(tc.path)
+			if generation != tc.generation || errors.Is(err, ErrInvalidGeneration) != tc.damaged {
+				t.Fatalf("ReadGeneration() = %d, %v; want %d, damaged=%v", generation, err, tc.generation, tc.damaged)
+			}
+		})
+	}
+}
+
 func newSessions(t *testing.T) *Sessions {
 	t.Helper()
 	s := NewSessions(filepath.Join(t.TempDir(), "hub.token"))

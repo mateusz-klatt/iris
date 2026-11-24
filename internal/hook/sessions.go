@@ -24,6 +24,10 @@ var ErrSessionsLocked = failSessionsLock
 // or did not hold a positive integer generation.
 var ErrInvalidGeneration = errors.New("invalid remembered generation")
 
+// ReadGeneration applies the hooks' generation-file read rules without creating or changing
+// anything. A missing file returns zero and nil; damage returns ErrInvalidGeneration.
+func ReadGeneration(path string) (int, error) { return readGeneration(path) }
+
 // DamagedGenerationProof is the fixed kind for observations about unreadable generation files.
 const DamagedGenerationProof = "damaged generation proof"
 
