@@ -12,6 +12,15 @@ func readGenerationBytes(path string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	info, statErr := f.Stat()
+	if statErr != nil {
+		_ = f.Close()
+		return nil, statErr
+	}
+	if !info.Mode().IsRegular() {
+		_ = f.Close()
+		return nil, ErrInvalidGeneration
+	}
 	raw, readErr := io.ReadAll(io.LimitReader(f, GenerationReadLimit))
 	_ = f.Close()
 	if readErr != nil {
