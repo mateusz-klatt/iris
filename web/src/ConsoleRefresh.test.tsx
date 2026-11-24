@@ -666,17 +666,32 @@ describe("console refresh scheduling", () => {
     const resume = deferred<Response>();
     const counts = { overviews: 0, details: 0 };
     const reads: DocumentVisibilityState[] = [];
+    const readIds: string[] = [];
+    const events: string[] = [];
+    const otherDetail = {
+      ...threadDetail,
+      id: "ms_other",
+      high_water_message_id: "ms_other",
+      messages: [{ ...threadDetail.messages[0]!, id: "ms_other", subject: "Other thread" }],
+    };
     server.use(
       http.get("*/v1/ui/overview", () => {
         counts.overviews++;
         return counts.overviews === 2 ? resume.promise : HttpResponse.json(sessionOverview);
       }),
-      http.get("*/v1/ui/threads/:id", () => {
+      http.get("*/v1/ui/threads", () => HttpResponse.json({ threads: [
+        ...threadsPage.threads,
+        { ...threadsPage.threads[0]!, id: "ms_other", subject: "Other thread" },
+      ] })),
+      http.get("*/v1/ui/threads/:id", ({ params }) => {
         counts.details++;
-        return counts.details === 1 ? opening.promise : HttpResponse.json(threadDetail);
+        const detail = params.id === "ms_other" ? otherDetail : threadDetail;
+        return counts.details === 1 ? opening.promise : HttpResponse.json(detail);
       }),
-      http.post("*/v1/ui/threads/:id/read/:message", () => {
+      http.post("*/v1/ui/threads/:id/read/:message", ({ params }) => {
         reads.push(document.visibilityState);
+        readIds.push(String(params.id));
+        events.push("read");
         return HttpResponse.json({ read: 1 });
       }),
     );
@@ -702,6 +717,8 @@ describe("console refresh scheduling", () => {
     return {
       counts,
       reads,
+      readIds,
+      events,
       visibility,
       settleResume: async () => {
         await act(async () => {
@@ -755,6 +772,41 @@ describe("console refresh scheduling", () => {
     }
   });
 
+  it("flushes the outgoing thread's deferred read before switching openings after a bounce", async () => {
+    const view = await bouncedResumeWithDeferredRead();
+    try {
+      fireEvent.click(screen.getByRole("button", { name: /Open thread: Other thread/ }));
+      await flushFakeNetwork();
+      expect(view.readIds).toEqual(["ms_root", "ms_other"]);
+      expect(view.reads).toEqual(["visible", "visible"]);
+
+      await view.settleResume();
+      expect(view.readIds).toEqual(["ms_root", "ms_other"]);
+    } finally {
+      await view.finish();
+    }
+  });
+
+  it("flushes a bounced deferred read before explicit sign-out revokes the session", async () => {
+    const view = await bouncedResumeWithDeferredRead();
+    try {
+      server.use(http.post("*/v1/ui/logout", () => {
+        view.events.push("logout");
+        return new HttpResponse(null, { status: 204 });
+      }));
+      fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+      await flushFakeNetwork();
+
+      expect(view.events).toEqual(["read", "logout"]);
+      expect(view.reads).toEqual(["visible"]);
+      expect(screen.getByLabelText("Username")).toBeVisible();
+      await view.settleResume();
+      expect(view.events).toEqual(["read", "logout"]);
+    } finally {
+      await view.finish();
+    }
+  });
+
   it("does not flush a bounced resume's deferred read while hidden at settle", async () => {
     const view = await bouncedResumeWithDeferredRead();
     try {
@@ -788,6 +840,82 @@ describe("console refresh scheduling", () => {
       expect(view.counts.overviews).toBe(2);
     } finally {
       await view.finish();
+    }
+  });
+
+  it("flushes a bounced read when its resume shares an already-running watch refresh", async () => {
+    vi.useFakeTimers();
+    const visibility = mockVisibility("visible");
+    const firstRead = deferred<Response>();
+    const watchRefresh = deferred<Response>();
+    const readIds: string[] = [];
+    const readVisibilities: DocumentVisibilityState[] = [];
+    let onFrame: ((frame: WatchFrame) => void) | undefined;
+    let overviews = 0;
+    const otherDetail = {
+      ...threadDetail,
+      id: "ms_other",
+      high_water_message_id: "ms_other",
+      messages: [{ ...threadDetail.messages[0]!, id: "ms_other", subject: "Other thread" }],
+    };
+    try {
+      server.use(
+        http.get("*/v1/ui/overview", () => {
+          overviews++;
+          return overviews === 2 ? watchRefresh.promise : HttpResponse.json(sessionOverview);
+        }),
+        http.get("*/v1/ui/threads", () => HttpResponse.json({ threads: [
+          ...threadsPage.threads,
+          { ...threadsPage.threads[0]!, id: "ms_other", subject: "Other thread" },
+        ] })),
+        http.get("*/v1/ui/threads/:id", ({ params }) => HttpResponse.json(
+          params.id === "ms_other" ? otherDetail : threadDetail,
+        )),
+        http.post("*/v1/ui/threads/:id/read/:message", ({ params }) => {
+          readIds.push(String(params.id));
+          readVisibilities.push(document.visibilityState);
+          return readIds.length === 1 ? firstRead.promise : HttpResponse.json({ read: 1 });
+        }),
+      );
+      render(<App connect={(frame) => { onFrame = frame; return () => {}; }} />);
+      await flushFakeNetwork();
+
+      act(() => onFrame?.({ cursor: 1, kind: "changed" }));
+      await flushFakeNetwork(2);
+      expect(overviews).toBe(2);
+      visibility.set("hidden");
+      fireEvent.click(screen.getByRole("button", { name: /Open thread: Rollout check/ }));
+      await flushFakeNetwork();
+      expect(readIds).toEqual([]);
+
+      visibility.set("visible");
+      await flushFakeNetwork(2);
+      expect(readIds).toEqual(["ms_root"]);
+      visibility.set("hidden");
+      fireEvent.click(screen.getByRole("button", { name: /Open thread: Other thread/ }));
+      await flushFakeNetwork();
+      expect(readIds).toEqual(["ms_root"]);
+      visibility.set("visible");
+
+      await act(async () => {
+        firstRead.resolve(HttpResponse.json({ read: 1 }));
+      });
+      await flushFakeNetwork(2);
+      expect(overviews).toBe(2);
+      expect(readIds).toEqual(["ms_root"]);
+
+      await act(async () => {
+        watchRefresh.resolve(HttpResponse.json(sessionOverview));
+      });
+      await flushFakeNetwork();
+      expect(readIds).toEqual(["ms_root", "ms_other"]);
+      expect(readVisibilities).toEqual(["visible", "visible"]);
+      expect(overviews).toBe(2);
+    } finally {
+      firstRead.resolve(HttpResponse.json({ read: 1 }));
+      watchRefresh.resolve(HttpResponse.json(sessionOverview));
+      await flushFakeNetwork();
+      visibility.restore();
     }
   });
 

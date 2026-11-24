@@ -704,8 +704,8 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       if (bumpThreads) {
         setThreadRevision((value) => value + 1);
       }
-      const ownedResume = resumeRefresh;
       void reload().finally(() => {
+        const ownedResume = resumeRefresh;
         running = false;
         if (ownedResume) {
           resumeRefresh = false;
@@ -741,7 +741,9 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       pending = false;
       if (running) {
         pending = true;
-        resuming = false;
+        // The refresh already running is this resume's one refresh. Keep ownership until
+        // it settles so a read deferred by a bounce retains its flush.
+        resumeRefresh = true;
         return;
       }
       resumeRefresh = true;
@@ -960,6 +962,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const signOut = async () => {
     setSigningOut(true);
     try {
+      await flushRead(true);
       await logout();
       onSignedOut();
     } catch (error) {
@@ -1079,6 +1082,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const openThread = (id: string, trigger: HTMLButtonElement) => {
     lastThreadButton.current = trigger;
     chooseView("messages");
+    cancelThreadRead();
     // Each click requests fresh detail, even when the selected ID stays the same.
     const opened = { id, generation: ++openingGeneration.current };
     activeOpening.current = opened;
