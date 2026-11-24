@@ -11,7 +11,9 @@ import (
 var windowsFullPathName = windows.GetFullPathName
 
 // extendedWindowsPath mirrors Go 1.27.4 src/os/path_windows.go:107-201. Short paths keep Win32's
-// own normalization; longer paths use GetFullPathName before the extended prefix is added.
+// own normalization; longer paths use GetFullPathName before the extended prefix is added. Unlike
+// addExtendedPrefix, namespace selection uses the resolved name so relative paths under UNC working
+// directories stay valid.
 func extendedWindowsPath(path string) string {
 	original := path
 	path = strings.ReplaceAll(path, "/", `\`)
@@ -28,11 +30,6 @@ func extendedWindowsPath(path string) string {
 		return path
 	}
 
-	isUNC := strings.HasPrefix(path, `\\`)
-	prefix := []uint16{'\\', '\\', '?', '\\'}
-	if isUNC {
-		prefix = []uint16{'\\', '\\', '?', '\\', 'U', 'N', 'C', '\\'}
-	}
 	p, err := windows.UTF16FromString(path)
 	if err != nil {
 		return original
@@ -40,19 +37,19 @@ func extendedWindowsPath(path string) string {
 	n := uint32(pathLength) + 1
 	var buf []uint16
 	for {
-		buf = make([]uint16, n+uint32(len(prefix)))
-		n, err = windowsFullPathName(&p[0], n, &buf[len(prefix)], nil)
+		buf = make([]uint16, n)
+		n, err = windowsFullPathName(&p[0], n, &buf[0], nil)
 		if err != nil {
 			return original
 		}
-		if n <= uint32(len(buf)-len(prefix)) {
-			buf = buf[:n+uint32(len(prefix))]
+		if n <= uint32(len(buf)) {
+			buf = buf[:n]
 			break
 		}
 	}
-	if isUNC {
-		buf = buf[2:]
+	resolved := windows.UTF16ToString(buf)
+	if strings.HasPrefix(resolved, `\\`) && !strings.HasPrefix(resolved, `\\?\`) && !strings.HasPrefix(resolved, `\\.\`) {
+		return `\\?\UNC\` + strings.TrimPrefix(resolved, `\\`)
 	}
-	copy(buf, prefix)
-	return windows.UTF16ToString(buf)
+	return `\\?\` + resolved
 }

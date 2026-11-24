@@ -64,6 +64,35 @@ func TestExtendedWindowsPathLongUNCAndBufferGrowth(t *testing.T) {
 	}
 }
 
+func TestExtendedWindowsPathUsesResolvedNamespace(t *testing.T) {
+	for _, tc := range []struct {
+		name, resolved string
+	}{
+		{name: "relative to UNC", resolved: `\\server\share\` + strings.Repeat("u", 248)},
+		{name: "relative to drive", resolved: `C:\` + strings.Repeat("d", 248)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			encoded, err := windows.UTF16FromString(tc.resolved)
+			if err != nil {
+				t.Fatal(err)
+			}
+			original := windowsFullPathName
+			t.Cleanup(func() { windowsFullPathName = original })
+			windowsFullPathName = func(_ *uint16, _ uint32, buf *uint16, _ **uint16) (uint32, error) {
+				copy(unsafe.Slice(buf, len(encoded)), encoded)
+				return uint32(len(encoded) - 1), nil
+			}
+			want := `\\?\` + tc.resolved
+			if strings.HasPrefix(tc.resolved, `\\`) {
+				want = `\\?\UNC\` + strings.TrimPrefix(tc.resolved, `\\`)
+			}
+			if got := extendedWindowsPath(strings.Repeat("r", 248)); got != want {
+				t.Fatalf("resolved conversion = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestExtendedWindowsPathPreservesInputWhenResolutionFails(t *testing.T) {
 	original := windowsFullPathName
 	t.Cleanup(func() { windowsFullPathName = original })
