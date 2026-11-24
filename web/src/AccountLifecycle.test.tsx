@@ -36,15 +36,34 @@ beforeEach(async () => {
   await loadLocale("en");
 });
 
-afterEach(() => { vi.restoreAllMocks(); vi.unstubAllGlobals(); server.events.removeAllListeners(); });
+type ResponseListener = ({ request }: { request: Request }) => void;
+
+const responseListeners = new Set<ResponseListener>();
+
+function responseFinishedMatching(match: (request: Request) => boolean): Promise<void> {
+  return new Promise<void>((resolve) => {
+    const listener: ResponseListener = ({ request }) => {
+      if (match(request)) resolve();
+    };
+    responseListeners.add(listener);
+    server.events.on("response:mocked", listener);
+  });
+}
+
+afterEach(() => {
+  vi.restoreAllMocks();
+  vi.unstubAllGlobals();
+  for (const listener of responseListeners) {
+    server.events.removeListener("response:mocked", listener);
+  }
+  responseListeners.clear();
+});
 
 describe("named account lifecycle in the console", () => {
   it("keeps login visible when a revoked initial session lookup finishes late", async () => {
     let finish: () => void = () => {};
     const requested = vi.fn();
-    const responseFinished = new Promise<void>((resolve) => {
-      server.events.on("response:mocked", ({ request }) => { if (new URL(request.url).pathname === "/v1/ui/session") resolve(); });
-    });
+    const responseFinished = responseFinishedMatching((request) => new URL(request.url).pathname === "/v1/ui/session");
     server.use(http.get("*/v1/ui/session", async () => {
       requested();
       await new Promise<void>((resolve) => { finish = resolve; });
@@ -189,11 +208,8 @@ describe("named account lifecycle in the console", () => {
     const current = installSession();
     let finish: () => void = () => {};
     const requested = vi.fn();
-    const responseFinished = new Promise<void>((resolve) => {
-      server.events.on("response:mocked", ({ request }) => {
-        if ((operation === "profile" && request.method === "PATCH") || (operation === "logout" && new URL(request.url).pathname === "/v1/ui/logout")) resolve();
-      });
-    });
+    const responseFinished = responseFinishedMatching((request) =>
+      (operation === "profile" && request.method === "PATCH") || (operation === "logout" && new URL(request.url).pathname === "/v1/ui/logout"));
     const refuseLate = async () => {
       requested();
       await new Promise<void>((resolve) => { finish = resolve; });

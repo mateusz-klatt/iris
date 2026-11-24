@@ -518,11 +518,12 @@ describe("Iris operator console", () => {
   it("does not acknowledge a snapshot from an old hub", async () => {
     const user = userEvent.setup({ delay: null });
     const reads: string[] = [];
-    server.events.on("request:start", ({ request }) => {
+    const onRequest = ({ request }: { request: Request }) => {
       if (request.method === "POST" && new URL(request.url).pathname.includes("/read")) {
         reads.push(new URL(request.url).pathname);
       }
-    });
+    };
+    server.events.on("request:start", onRequest);
     server.use(http.get("*/v1/ui/threads/:id", () => HttpResponse.json({
       ...threadDetail,
       high_water_message_id: undefined,
@@ -533,7 +534,7 @@ describe("Iris operator console", () => {
     expect(await screen.findByRole("alert")).toHaveTextContent("Reload the console to mark this thread read.");
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(reads).toEqual([]);
-    server.events.removeAllListeners();
+    server.events.removeListener("request:start", onRequest);
   }, 40000);
 
   it("shows a reload hint when the acknowledgement reaches an old hub", async () => {
@@ -569,16 +570,18 @@ describe("Iris operator console", () => {
     let details = 0;
     const other = { ...threadsPage.threads[0]!, id: "ms_other", subject: "Other thread", unread: 1 };
     const otherReadEnded = deferred<void>();
-    server.events.on("request:start", ({ request }) => {
+    const onRequest = ({ request }: { request: Request }) => {
       if (request.method === "GET" && new URL(request.url).pathname === "/v1/ui/threads/ms_root") {
         details++;
       }
-    });
-    server.events.on("request:end", ({ request }) => {
+    };
+    const onRequestEnd = ({ request }: { request: Request }) => {
       if (request.method === "POST" && new URL(request.url).pathname === "/v1/ui/threads/ms_other/read/ms_other") {
         otherReadEnded.resolve();
       }
-    });
+    };
+    server.events.on("request:start", onRequest);
+    server.events.on("request:end", onRequestEnd);
     server.use(
       http.get("*/v1/ui/threads", ({ request }) => {
         const url = new URL(request.url);
@@ -626,7 +629,8 @@ describe("Iris operator console", () => {
     expect(screen.queryByRole("alert")).toBeNull();
     await act(async () => { await otherReadEnded.promise; });
     expect(reads).toBe(readsAfterOpen + 1);
-    server.events.removeAllListeners();
+    server.events.removeListener("request:start", onRequest);
+    server.events.removeListener("request:end", onRequestEnd);
   }, 40000);
 
   it("ignores a late acknowledgement for a different opening", async () => {
@@ -754,11 +758,12 @@ describe("Iris operator console", () => {
     let connects = 0;
     let stops = 0;
     let overviews = 0;
-    server.events.on("request:start", ({ request }) => {
+    const onRequest = ({ request }: { request: Request }) => {
       if (new URL(request.url).pathname === "/v1/ui/overview") {
         overviews++;
       }
-    });
+    };
+    server.events.on("request:start", onRequest);
     const connect = (_frame: (value: WatchFrame) => void, status?: (value: WatchStatus) => void) => {
       connects++;
       status?.("live");
@@ -786,7 +791,7 @@ describe("Iris operator console", () => {
     await user.click(screen.getByRole("button", { name: "Diagnostics" }));
     await user.click(screen.getByRole("button", { name: "Reload the last doctor report" }));
     await reloaded(before);
-    server.events.removeAllListeners();
+    server.events.removeListener("request:start", onRequest);
     expect(connects).toBe(1);
     expect(stops).toBe(0);
   }, 40000);
@@ -825,11 +830,12 @@ describe("Iris operator console", () => {
     let overviews = 0;
     let read = 0;
     let state = "acked";
-    server.events.on("request:start", ({ request }) => {
+    const onRequest = ({ request }: { request: Request }) => {
       if (new URL(request.url).pathname === "/v1/ui/overview") {
         overviews++;
       }
-    });
+    };
+    server.events.on("request:start", onRequest);
     server.use(
       http.get("*/v1/ui/threads/:id", () =>
         HttpResponse.json({ ...threadDetail, messages: threadDetail.messages.map((message) => ({ ...message, recipients: [{ name: "human", state }] })) }),
@@ -877,7 +883,7 @@ describe("Iris operator console", () => {
     await user.click(await screen.findByRole("button", { name: /Rollout check/ }));
     await waitFor(() => expect(reads).toBe(2));
     await waitFor(() => expect(overviews).toBe(settled + 3));
-    server.events.removeAllListeners();
+    server.events.removeListener("request:start", onRequest);
   }, 40000);
 
   it("renders the hub's real empty report and claims with no expiry", async () => {

@@ -172,6 +172,9 @@ describe("delivery problems across revisions", () => {
     // With no read running, a move reads at once.
     view.rerender(<DeliveryProblemsPanel repositoryId="rp_iris" revision={3} onOpenThread={() => {}} />);
     await waitFor(() => expect(reads).toHaveLength(3));
+    await act(async () => {
+      reads[2]!.answer(HttpResponse.json(problems));
+    });
   });
 
   it("aborts the read for a repository it no longer shows, without saying it failed", async () => {
@@ -183,6 +186,7 @@ describe("delivery problems across revisions", () => {
     expect(reads[0]!.aborted()).toBe(true);
     expect(reads[1]!.search).toContain("rp_other");
     await act(async () => {
+      reads[0]!.answer(HttpResponse.json(problems));
       reads[1]!.answer(HttpResponse.json({ ...problems, messages: [] }));
     });
     await new Promise((resolve) => setTimeout(resolve, 50));
