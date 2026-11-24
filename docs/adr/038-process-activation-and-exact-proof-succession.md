@@ -1,9 +1,10 @@
 # ADR 038: Process activation and exact-proof succession
 
-Status: proposed, 2026-11-24. It amends [ADR 035](035-post-window-shim-succession.md) (Choice A)
-and is sequenced with [ADR 036](036-single-session-clear-supersession.md). It needs the owner's
-sign-off before any implementation. Until then, `main` keeps today's behaviour, and the
-ADR 035 implementation (#411) stays paused.
+Status: accepted by the owner on 2026-11-24, with the staged plan. It amends
+[ADR 035](035-post-window-shim-succession.md) (Choice A) and is sequenced with
+[ADR 036](036-single-session-clear-supersession.md). Until the implementation merges, `main` keeps
+today's behaviour. The ADR 035 implementation (#411) is reworked to follow this ADR, starting with
+the session-ID path.
 
 ## Context
 
