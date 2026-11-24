@@ -129,7 +129,7 @@ must be strictly above it, and this refusal carries `error.details.reason:"ended
 route has no working-directory or git-discovery fields and
 does not resolve a repository or mutate aliases. Its successful response has the registration
 shape, with `generation = prior_generation + 1`, the same Agent, repository (or outside-host
-context) and worktree claim scope, `lease_ms:60000`, and no inherited claims. The new Execution
+context), worktree and repository-wide claim scope, `lease_ms:60000`, and no inherited claims. The new Execution
 has `hook_seen_ms = 0` and initializes its stall-credit baseline at creation. A later automatic
 succession requires a real hook on this Execution first. Requeued deliveries on its preserved mailbox can be fetched and
 acknowledged normally.
@@ -156,7 +156,8 @@ verified nearest ancestor is that session's single-session client process, such 
 overrides and calls with explicit handles are excluded. The generation in `<hash>` must have
 a matching Execution ID in `<hash>.execution`. Missing or damaged proof, an `.ended` marker at or
 above the generation, a `/clear` witness mismatch, a changed process, or restore lineage mismatch
-fails closed. The shim rechecks the witness after the HTTP reply. A succession request already in
+fails closed. The shim rechecks the witness after the HTTP reply. Ordinary process-bound lookup,
+refresh and heartbeat renewal apply the same current-session witness check. A succession request already in
 flight can commit at the hub before the newer `SessionStart` reaches it, even when the shim rejects
 the reply. Exact generation and ID checks detect counter rollback and equal-generation divergent
 history. Restore markers and `stream_id` rotation grant no authority. A backup and live hub that
@@ -259,8 +260,9 @@ local proof no longer recovers on a prompt alone: recovery needs a recognized pr
 `SessionStart` or resume. Intact eligible proof permits the one MCP succession above. Damage to
 `<hash>`, `<hash>.execution` or `.ended` blocks shim binding and succession. A readable `.ended`
 marker blocks generations at or below its value and a proofless fallback. The hook registration
-precheck validates the ordinary generation file `<hash>`. `iris doctor` reports
-`damaged generation proof at <path>` when a proof reader detects damage. Verify the intended hub
+precheck validates the ordinary generation file `<hash>`. Proof readers accept only regular files;
+on POSIX they open without waiting for a FIFO writer and reject the opened non-regular descriptor
+as damaged. `iris doctor` reports `damaged generation proof at <path>` when a proof reader detects damage. Verify the intended hub
 and its session history, then archive or repair the named proof as ADR 006 directs.
 
 Resume the session owning the Execution to fire its enabled `SessionStart` hook, or submit a

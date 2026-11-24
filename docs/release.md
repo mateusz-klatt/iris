@@ -28,6 +28,10 @@ Reload every console tab after the upgrade. An old tab silently stops marking th
 
 Reload console tabs after a rollback to an older hub as well. A tab left open from this console does not mark a thread read against that hub.
 
+After a Cursor or Grok session is lost with no local generation proof, recovery needs a registering
+edit, `SessionStart` or resume. A prompt alone does not register on these clients. Intact eligible
+proof still permits one guarded MCP succession.
+
 The GoReleaser dependency is not part of the application module.
 
 The web tooling pins Vitest and its coverage provider together. The `minimatch` override

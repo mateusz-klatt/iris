@@ -795,8 +795,10 @@ Changes from the reference schema:
    damaged too. An entry or link that disappears between enumeration and metadata collection is
    absent, matching the hook, rather than damaged. Hook and doctor use one bounded generation-file
    reader for live proof, execution proof and end markers. It opens with FILE_SHARE_READ,
-   FILE_SHARE_WRITE and FILE_SHARE_DELETE on Windows and portable `os.Open` elsewhere, and closes
-   the handle before parsing. Generation and marker reads are bounded at 64 bytes; the two-pair
+   FILE_SHARE_WRITE and FILE_SHARE_DELETE on Windows and O_NONBLOCK elsewhere, then checks the
+   opened descriptor and rejects anything but a regular file as damaged before reading. A FIFO,
+   including one reached through a symlink, therefore cannot wait for a writer while holding the
+   sessions lock. The handle is closed before parsing. Generation and marker reads are bounded at 64 bytes; the two-pair
    execution sidecar has its own 128-byte bound. A read that fills its bound is damaged. The shared
    reader and native replacement preserve long paths with extended-length normalization, and the
    `os.Rename` fallback retains Go's own normalization. Otherwise the hook's read rule applies: a
@@ -944,12 +946,16 @@ Changes from the reference schema:
    `damaged generation proof at <path>`. Hook registration prechecks the ordinary generation file
    and execution sidecar. Binding and succession also read the sidecar and end marker.
 
-   Single-session launchers publish `sessions/proc-<pid>-<start_ms>` before SessionStart
-   registration, except Antigravity, which uses its helper record beside the configured token.
-   Kimi's wake map retains its separate rule that the hub must accept the session first. For a
+   Single-session launchers publish `sessions/proc-<pid>-<start_ms>` before SessionStart repository
+   discovery and hub registration, except Antigravity, which uses its helper record beside the configured token.
+   If Antigravity cannot protect or lock that record's directory or replace the record, SessionStart
+   removes the old succession witness, records the failure and still fails open. Kimi's wake map
+   retains its separate rule that the hub must accept the session first. For a
    single-session process, current witness evidence takes precedence over the shim's last session,
    and the last Execution ID applies only to its own session. The shim requires the witness to
-   match the requested native session and rechecks it after the HTTP reply. It can reject a stale
+   match the requested native session and rechecks it after the HTTP reply. Ordinary process-bound
+   lookup, refresh and heartbeat renewal apply the same check; only an MCP-owned untrusted-folder
+   fallback has no hook witness. The shim can reject a stale
    reply even if the hub committed the successor before the new SessionStart reached it. Closing
    that hub window requires ADR 036. No sessions lock spans network I/O.
 
@@ -1656,8 +1662,8 @@ On `modernc.org/sqlite`, with real concurrency:
   host-token holder who can claim `hook` and already register sessions. If the 30-day retention
   sweep removes all relevant rows, these guards have nothing left to check.
 - Post-window succession creates exactly one G+1 Execution only from the newest retained, lost,
-  hook-registered Execution named by exact generation and ID proof, with its mailbox and worktree
-  claim scope and with zero inherited claims. The transaction checks process identity, retained
+  hook-registered Execution named by exact generation and ID proof, with its mailbox and
+  repository-wide claim scope and with zero inherited claims. The transaction checks process identity, retained
   `/clear` history, mailbox occupancy and the strict local-end floor; proof at or below that floor
   is vetoed. The shim requires current-session evidence for a single-session process and rechecks
   it after the hub replies. A hub commit can precede the newer SessionStart reaching the hub. The
