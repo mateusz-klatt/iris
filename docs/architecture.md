@@ -82,11 +82,7 @@ Hard rules for `iris hook`, because failure semantics differ between clients:
 
 1. Everything is caught. A failure of any kind produces that client's valid allow output. A damaged
    local generation file or `.ended` marker closes registration but also returns allow; a confirmed
-   ended generation keeps D9's deliberate pre-tool refusal. An authoritative HTTP 409 retry refusal
-   from claim touch (`key_reused` when the same tool call ID carries a different request, or `lost`
-   when the Execution or cached grant is no longer current) also denies the edit with a fixed reason
-   and records an observation rather than failing open; network errors, deadlines, 5xx responses,
-   bare or malformed 409s, 409 `conflict`, and 401 `unauthorized` keep fail-open.
+   ended generation keeps D9's deliberate pre-tool refusal.
 2. The exit code is non-zero only for a deliberate deny on a client whose contract requires it.
 3. A 1.5 s internal deadline ends the hook's work, followed by up to 50 ms for best-effort failure
    logging before the allow output is written (about 1.55 s total); the client-side timeout is set
