@@ -561,3 +561,13 @@ func IsCode(err error, code string) bool {
 	var e *Error
 	return errors.As(err, &e) && e.Code == code
 }
+
+// ConflictCode returns the hub error code when err is an HTTP 409 Conflict hub Error, and ""
+// otherwise.
+func ConflictCode(err error) string {
+	var e *Error
+	if errors.As(err, &e) && e != nil && e.status == http.StatusConflict {
+		return e.Code
+	}
+	return ""
+}
