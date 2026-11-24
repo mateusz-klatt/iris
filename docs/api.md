@@ -254,6 +254,11 @@ conflict in any group grants nothing. `granted`, `ignored` and each conflict nam
 
 The action is the strictest policy among the repositories that had a conflict. A retry with the
 same `tool_call_id` returns the first answer while its grants are still held, as for a plain touch.
+When `POST /v1/claims/touch` or `POST /v1/claims/touch/files` answers HTTP 409 with `error.code`
+`key_reused` (same `tool_call_id`, different request) or `lost` (Execution liveness or generation
+invalid, or cached grant expired or released), `iris hook` denies the edit with a fixed reason and
+records an observation; other errors (including 5xx responses, bare or malformed 409s, 409
+`conflict`, and 401 `unauthorized`) still fail open.
 
 A shell reconcile names the checkout its status was taken in, with `worktree`, `worktree_id`,
 `remote_url` and `root_commit`. A status from a checkout other than the Execution's is not
