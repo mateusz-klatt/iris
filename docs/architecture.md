@@ -80,7 +80,9 @@ Hard rules for `iris hook`, because failure semantics differ between clients:
 | Grok | allowed unless `failClosed` | allowed | JSON with exit 2 |
 | Kimi | allowed | allowed | exit 2 with stderr |
 
-1. Everything is caught. A failure of any kind produces that client's valid allow output.
+1. Everything is caught. A failure of any kind produces that client's valid allow output. A damaged
+   local generation file or `.ended` marker closes registration but also returns allow; a confirmed
+   ended generation keeps D9's deliberate pre-tool refusal.
 2. The exit code is non-zero only for a deliberate deny on a client whose contract requires it.
 3. A 1.5 s internal deadline ends the hook's work, followed by up to 50 ms for best-effort failure
    logging before the allow output is written (about 1.55 s total); the client-side timeout is set
@@ -749,24 +751,51 @@ Changes from the reference schema:
    combined shell registration. If the retry is unsafe, the hook keeps G, records
    `restore_floor_refused` for doctor, and fails open without claiming or reconciling the edit.
    The proofless-edit denial during recovery still applies. An unreadable or malformed
-   generation file, including a dangling symlink, also fails open before registration. Local
-   doctor output names the damaged file. It also names an `.ended` marker that contributed a
-   generation or is damaged, and the `.ended` path when SessionEnd could not write that marker
-   or take the sessions lock. Those paths stay in the local report. The hook refreshes readable
-   proof under the bounded session lock before sending it. A readable marker vetoes hook
-   proof and delayed generation writes at or below its value. A refusal can restore proof to
-   a missing file only above the recorded end. Generation writes keep the highest proof and
-   SessionEnd clears proof at or below the generation it ended. When a SessionStart finds proof
-   vetoed by the marker, it registers without live proof. A SessionStart without live proof
-   sends any unexpired marker as its `retry_generation` floor and accepts only a reply above
-   that floor. A recovering Execution still requires exact live proof. An ordinary hook with
-   stale proof makes no registration request and records the marker path for `iris doctor`.
-   With only an unexpired marker, an ordinary hook can still register without proof. A hub
-   restored to older terminal history can give that hook a generation the marker vetoes for
-   local proof and binding. After a successful registration, the hook can discard vetoed proof
-   and remove the expired marker before publishing replacement proof, under the same lock and
-   independent of the general sweep. The hook reads and refreshes any
-   still-usable idle proof before successful SessionStart pruning can remove old files.
+   generation file, including a dangling symlink, also fails open before registration. An
+   unreadable or malformed `.ended` marker likewise stops every ordinary, combined shell or
+   SessionStart registration, including a retry that could use retained live proof, and returns
+   the client's allow output. Local doctor output names the damaged file as an observation, not
+   a hook failure. It also names an `.ended` marker that contributed a generation or is damaged,
+   and the `.ended` path when SessionEnd could not write that marker or take the sessions lock.
+   Doctor re-reads every named damaged marker: still-damaged files are current and make it exit 1;
+   repaired or archived files are history and do not fail it. The local detail states the blocked
+   registration, absent binding, mail and claims, the continuing allow behavior, and the stop,
+   verify, repair-or-archive and restart steps. Paths stay only in the local report; uploads carry
+   counts. Registration reads the marker before refreshing live
+   proof under the bounded session lock. Absent proof takes no lock, so unrelated attention or
+   cleanup cannot suppress a fresh SessionStart. The reads are not atomic and the lock is released
+   before dispatch: SessionEnd can leave a request with an older floor, a known B1-min limit. A readable
+   marker vetoes hook proof and delayed generation writes at or below its value. A refusal can
+   restore proof to a missing file only above the recorded end. Generation writes keep the highest
+   proof and SessionEnd clears proof at or below the generation it ended. Every ordinary,
+   outside-git, combined shell and SessionStart registration carries an unexpired marker as
+   `ended_through`, including when live proof above it remains usable. A hook with absent proof,
+   or a SessionStart whose proof the marker vetoes, sends `generation:0`; other hooks with vetoed
+   proof refuse locally. A generation-zero request also sends the marker as the inclusive
+   `retry_generation`, so an older hub that ignores `ended_through` retains #417's safeguard. A
+   retry carries the newest observed marker in both fields. Unlike `retry_generation`,
+   `ended_through` is strict: the hub requires retained history at least at the marker and a
+   resulting binding strictly above it. It refuses an active Execution at or below the marker
+   before renewal, and refuses a restored lower history or a candidate at or below the marker
+   before insertion. Such a refusal carries `error.details.reason:"ended_through"`. Without that
+   reason, a valid `highest_generation` strictly below the sent marker identifies an older hub's
+   inclusive-floor refusal. Equal or higher generations keep D9's ordinary recovery handling.
+   Retained terminal history at the marker
+   still lets a normal SessionStart allocate its successor. A recovering Execution still requires
+   exact live proof. An ordinary hook with stale proof makes no registration request and records
+   the marker path for `iris doctor`. A registration response is checked against the marker again
+   before its generation is remembered. A split shell path makes a lock-free check immediately
+   before its separate reconcile, but SessionEnd can advance the marker after that check and before
+   the hub commits. An ordinary grouped edit has no marker check after checkout discovery and can
+   still send `TouchFiles` for an ended generation. Proof publication is best-effort and discards
+   marker read errors, adding no observation for that write failure. A combined shell reconcile has
+   already run on the hub before its reply, and an older hub can commit it at or below the marker
+   before the client discards the reply. B1-min does not close these remaining client races. An old
+   hook that reports no floor cannot be protected server-side.
+   After a successful registration, the hook can discard vetoed proof and remove the expired marker
+   before publishing replacement proof, under the same lock and independent of the general sweep.
+   The hook reads and refreshes any still-usable idle proof before successful SessionStart pruning
+   can remove old files.
 
    The shim, plain watch and Antigravity wake helper check same-session bindings against
    retained process proof and live hook-file proof. They also read the local `.ended` marker
@@ -1464,6 +1493,11 @@ On `modernc.org/sqlite`, with real concurrency:
 - The shim, plain watch, Antigravity wake and Kimi one-shot watch refuse bindings and heartbeats
   at or below the locally recorded `.ended` generation. The marker alone cannot reattach a
   restored Execution or authorize a first-bind generation-zero fallback.
+- Ordinary, outside-git, combined shell and SessionStart hooks report an unexpired marker as
+  `ended_through`; generation-zero requests also carry it as `retry_generation`, and the hub
+  neither renews nor creates an Execution at or below the strict floor. A damaged marker closes
+  every hook registration locally while returning the client's allow output. An old hook that
+  omits the floor cannot receive this server-side protection.
 - While the newest retained Execution is ended, no generation-zero registration from a non-hook
   source, empty legacy source included, succeeds regardless of its retry floor. The hub trusts the
   host-token holder for that host's sessions and `source` is self-declared: this closes the fallback

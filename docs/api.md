@@ -41,8 +41,8 @@ Codes: `unauthorized`, `bad_request`, `not_found`, `conflict`, `key_reused`, `un
 ```
 
 Registration `source` is exactly `hook`, `mcp`, `shim` or `watch`. An empty or omitted source stays
-valid as a legacy non-hook source; any other value gets `bad_request`. `retry_generation` must not
-be negative.
+valid as a legacy non-hook source; any other value gets `bad_request`. `retry_generation` and
+`ended_through` must not be negative.
 
 Response:
 
@@ -107,6 +107,18 @@ SessionEnd, only a generation-zero hook registration can advance it: every non-h
 empty included, gets `409 lost` regardless of `retry_generation`. If retention has removed the
 ended Execution, that state is no longer available to check. An older hub omits the detail, so an
 upgraded hook keeps its proof and skips the retry.
+
+An unexpired local `.ended` marker for generation G is sent as `ended_through:G` on ordinary,
+outside-git and combined shell registration, including SessionStart. A generation-zero request
+also sends `retry_generation:G`, so an older hub that ignores `ended_through` keeps the inclusive
+safeguard. The strict floor requires retained history of at least G and an active or newly created
+Execution above G. The hub refuses an equal active generation before renewing it and a candidate
+at or below G before creating it. A terminal G still permits a normal G+1 successor. A strict-floor
+`lost` includes `error.details.reason:"ended_through"`; recovery refusals for later generations
+do not carry that reason. The hook re-checks the marker before remembering the response or making
+a separate follow-up call. A combined shell reconcile runs on the hub before the response, which
+an older hub can commit before the client discards a vetoed reply. An old hook that omits the floor
+cannot be protected server-side.
 
 A shim or `iris watch` that retains the binding reattaches by heartbeat: a heartbeat with the
 current generation does the same work during the recovery window and returns the same response.

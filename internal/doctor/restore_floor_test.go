@@ -152,13 +152,15 @@ func TestDoctorReportsDamagedEndMarkerLocallyWithoutLeakingPath(t *testing.T) {
 	for _, tc := range []struct {
 		name       string
 		event      string
-		pruneProof bool
 		unreadable bool
+		resolution string
 	}{
-		{"SessionEnd with malformed marker", "SessionEnd", false, false},
-		{"SessionEnd with directory marker", "SessionEnd", false, true},
-		{"refused edit with pruned proof and malformed marker", "PreToolUse", true, false},
-		{"refused edit with pruned proof and directory marker", "PreToolUse", true, true},
+		{"SessionEnd with malformed marker", "SessionEnd", false, ""},
+		{"SessionEnd with directory marker", "SessionEnd", true, ""},
+		{"PreToolUse with malformed marker", "PreToolUse", false, ""},
+		{"PreToolUse with directory marker", "PreToolUse", true, ""},
+		{"PreToolUse with repaired marker", "PreToolUse", false, "repaired"},
+		{"PreToolUse with archived marker", "PreToolUse", false, "archived"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			layout := doctorLayout(t)
@@ -184,18 +186,12 @@ func TestDoctorReportsDamagedEndMarkerLocallyWithoutLeakingPath(t *testing.T) {
 				t.Fatal(err)
 			}
 
+			var registrations atomic.Int32
 			uploaded := make(chan string, 1)
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 				switch r.URL.Path {
 				case "/v1/sessions":
-					if tc.pruneProof {
-						if err := os.Remove(proof); err != nil {
-							t.Errorf("remove proof during request: %v", err)
-						}
-						w.WriteHeader(http.StatusConflict)
-						_, _ = fmt.Fprint(w, `{"error":{"code":"lost","details":{"highest_generation":1}}}`)
-						return
-					}
+					registrations.Add(1)
 					_, _ = fmt.Fprint(w, `{"execution_id":"ex_end","generation":3,"agent":{"id":"ag_1","name":"claude-local-iris"}}`)
 				case "/v1/executions/ex_end/end":
 					_, _ = fmt.Fprint(w, `{}`)
@@ -229,31 +225,61 @@ func TestDoctorReportsDamagedEndMarkerLocallyWithoutLeakingPath(t *testing.T) {
 			if out.Exit != 0 || !json.Valid(out.Stdout) || strings.Contains(string(out.Stdout), "deny") {
 				t.Fatalf("hook output = %+v", out)
 			}
-			if tc.pruneProof {
-				if _, err := os.Stat(proof); !os.IsNotExist(err) {
-					t.Fatalf("retainGeneration restored proof over damaged marker: %v", err)
+			if registrations.Load() != 0 {
+				t.Fatalf("damaged marker allowed %d registrations", registrations.Load())
+			}
+			if raw, err := os.ReadFile(proof); err != nil || strings.TrimSpace(string(raw)) != "3" {
+				t.Fatalf("damaged marker changed retained proof: %q, %v", raw, err)
+			}
+			switch tc.resolution {
+			case "repaired":
+				if err := os.WriteFile(marker, []byte("2\n"), 0o600); err != nil {
+					t.Fatal(err)
 				}
-			} else if raw, err := os.ReadFile(proof); err != nil || strings.TrimSpace(string(raw)) != "3" {
-				t.Fatalf("Forget discarded proof over damaged marker: %q, %v", raw, err)
+			case "archived":
+				if err := os.Remove(marker); err != nil {
+					t.Fatal(err)
+				}
 			}
 
 			result, err := Run(context.Background(), Options{Layout: layout, HubURL: srv.URL, TokenFile: token, HTTP: srv.Client(), Host: "local", Dir: layout.Home})
 			if err != nil {
 				t.Fatal(err)
 			}
-			wantExit := 0
-			if tc.pruneProof {
-				wantExit = 1
+			wantExit, wantState := 1, "still damaged"
+			if tc.resolution != "" {
+				wantExit, wantState = 0, tc.resolution+" since"
 			}
 			if result.ExitCode() != wantExit {
-				t.Fatalf("doctor exit code = %d, want %d:\n%s", result.ExitCode(), wantExit, result.Format())
+				t.Fatalf("doctor exit code = %d, want %d for %s:\n%s", result.ExitCode(), wantExit, wantState, result.Format())
 			}
 			report := result.Format()
-			if !strings.Contains(report, "damaged generation proof at "+marker) {
-				t.Fatalf("local diagnostic omitted damaged marker path:\n%s", report)
+			if !strings.Contains(report, "damaged generation proof at "+marker+" ("+wantState+")") { // gitleaks:allow (a test observation token and path, not a credential)
+				t.Fatalf("local diagnostic omitted damaged marker path and current state:\n%s", report)
 			}
-			if tc.pruneProof && !strings.Contains(report, "restore_floor_refused") {
-				t.Fatalf("local diagnostic omitted restore_floor_refused:\n%s", report)
+			if tc.resolution == "" {
+				for _, want := range []string{
+					"damaged end marker prevents this session from registering",
+					"no hub binding, no mail delivery and no claims",
+					"hooks still allow edits and commands",
+					"Stop that session's client, hooks, MCP shim and watch",
+					"Verify the configured hub and that session's history",
+					"verified ended generation (a single decimal)",
+					"archive it (move it aside)",
+					"restart the client",
+				} {
+					if !strings.Contains(report, want) {
+						t.Errorf("current damaged-marker diagnostic omitted %q:\n%s", want, report)
+					}
+				}
+				if strings.Contains(report, "start a new client session") {
+					t.Errorf("damaged marker retained generic refusal advice:\n%s", report)
+				}
+			} else if !strings.Contains(report, "no longer blocks registration") {
+				t.Errorf("resolved marker was not reported as history:\n%s", report)
+			}
+			if strings.Contains(report, "restore_floor_refused") {
+				t.Fatalf("local refusal without a hub call reported restore_floor_refused:\n%s", report)
 			}
 			if !result.Stored {
 				t.Fatalf("doctor report was not stored: %s", result.StoreError)
@@ -262,13 +288,10 @@ func TestDoctorReportsDamagedEndMarkerLocallyWithoutLeakingPath(t *testing.T) {
 			if !strings.Contains(body, "damaged generation proof (1)") || strings.Contains(body, filepath.Base(marker)) || strings.Contains(body, filepath.Base(proof)) {
 				t.Fatalf("upload did not count or redact marker path: %s", body)
 			}
-			if tc.pruneProof && !strings.Contains(body, "restore_floor_refused (1)") {
-				t.Fatalf("upload missed restore_floor_refused: %s", body)
+			if strings.Contains(body, "restore_floor_refused") {
+				t.Fatalf("upload counted a hub refusal that never happened: %s", body)
 			}
 			wantObs := []BundleCount{{Client: "claude", Stage: "observed", Category: "damaged generation proof", Count: 1}}
-			if tc.pruneProof {
-				wantObs = append(wantObs, BundleCount{Client: "claude", Stage: "observed", Category: "restore_floor_refused", Count: 1})
-			}
 			bundle := NewBundle(result, "test", time.Now())
 			if fmt.Sprintf("%+v", bundle.Observations) != fmt.Sprintf("%+v", wantObs) {
 				t.Fatalf("bundle observations = %+v, want %+v", bundle.Observations, wantObs)

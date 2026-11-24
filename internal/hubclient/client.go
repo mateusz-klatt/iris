@@ -17,8 +17,10 @@ import (
 type SessionRequest struct {
 	CommonDir  string `json:"common_dir"`
 	Generation int    `json:"generation"`
-	// RetryGeneration is the remembered floor for a generation-zero retry.
-	RetryGeneration  int    `json:"retry_generation,omitempty"`
+	// RetryGeneration is the remembered inclusive floor for a generation-zero retry.
+	RetryGeneration int `json:"retry_generation,omitempty"`
+	// EndedThrough is the strict floor imposed by the local SessionEnd marker.
+	EndedThrough     int    `json:"ended_through,omitempty"`
 	Client           string `json:"client"`
 	SessionID        string `json:"session_id"`
 	Host             string `json:"host"`
@@ -277,6 +279,26 @@ func (e *Error) HighestGeneration() (generation int, valid, present bool) {
 		return 0, false, true
 	}
 	return *value, true, true
+}
+
+// EndedThroughReason identifies a strict local-end floor refusal in error details.
+const EndedThroughReason = "ended_through"
+
+func (e *Error) HasEndedThroughReason() bool {
+	raw, _ := e.Details.(json.RawMessage)
+	var details struct {
+		Reason string `json:"reason"`
+	}
+	return json.Unmarshal(raw, &details) == nil && details.Reason == EndedThroughReason
+}
+
+// IsEndedThroughRefusal also recognizes an older hub's inclusive refusal below the sent end floor.
+func (e *Error) IsEndedThroughRefusal(floor int) bool {
+	if e.HasEndedThroughReason() {
+		return true
+	}
+	highest, valid, _ := e.HighestGeneration()
+	return valid && highest < floor
 }
 
 // Do issues an authenticated JSON request. Callers keep retry keys stable across retries.

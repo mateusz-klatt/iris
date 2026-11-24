@@ -17,12 +17,18 @@ const highestGenerationSQL = "SELECT COALESCE(MAX(generation),0) FROM Execution 
 // registrationLost reports the highest retained generation in this transaction,
 // including terminal generations. An Execution inserted by the refused transaction
 // will roll back, so it cannot count as retained history.
-func (t *transaction) registrationLost(r Request, message string) error {
+func (t *transaction) registrationLost(r Request, lost *Error) error {
 	var highest int64
 	if err := t.row(highestGenerationSQL, r.Host, r.Client, r.SessionID, t.insertedExecution).Scan(&highest); err != nil {
 		return err
 	}
-	return &Error{Code: "lost", Message: message, Details: map[string]any{"highest_generation": highest}}
+	details := map[string]any{"highest_generation": highest}
+	if refusal, ok := lost.Details.(map[string]any); ok {
+		if reason, ok := refusal["reason"].(string); ok {
+			details["reason"] = reason
+		}
+	}
+	return &Error{Code: "lost", Message: lost.Message, Details: details}
 }
 
 // WithGenerationObserver observes replacement generations only after their

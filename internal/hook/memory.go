@@ -34,6 +34,10 @@ type endedProof string
 
 func (p endedProof) Error() string { return EndedGenerationRefused + " at " + string(p) }
 
+type damagedEndMarker string
+
+func (p damagedEndMarker) Error() string { return damagedGenerationObservation(string(p)) }
+
 // fileMemory stores one small file per session beside the token, protected as the token is:
 // mode 0600 in a 0700 directory, and on Windows the token's owner-only DACL. So anyone who
 // can read it can read the token, which already grants everything the generation would.
@@ -76,7 +80,8 @@ func readGeneration(path string) (int, error) {
 	return generation, nil
 }
 
-// RecallGeneration keeps known proof fresh before a request can race idle pruning.
+// RecallGeneration keeps known proof fresh before a request can race idle pruning. Absent proof
+// needs no lock, so unrelated session-file work cannot suppress a fresh SessionStart.
 func (m fileMemory) RecallGeneration(client, session string) (int, error) {
 	path := m.name(client, session)
 	generation, readErr := readGeneration(path)
@@ -92,7 +97,12 @@ func (m fileMemory) RecallGeneration(client, session string) (int, error) {
 		// Another hook can write newer proof before we take the lock. A prune can also
 		// win the lock, in which case the proof we already read still belongs in the request.
 		generation = max(generation, current)
-		if ended, _ := readGeneration(path + ".ended"); generation <= ended {
+		ended, err := readGeneration(path + ".ended")
+		if err != nil {
+			readErr = damagedEndMarker(path + ".ended")
+			return
+		}
+		if generation <= ended {
 			readErr = endedProof(path + ".ended")
 			return
 		}

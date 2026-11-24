@@ -143,7 +143,7 @@ func TestSessionStartRecoversFromStaleEndedProof(t *testing.T) {
 	if h.registered.Generation != 3 || h.registered.ExecutionID == second.ExecutionID {
 		t.Fatalf("SessionStart with stale proof failed to obtain G3: %+v", h.registered)
 	}
-	if want := []floorRequest{{route: "/v1/sessions", floor: 2}}; !slices.Equal(requests, want) {
+	if want := []floorRequest{{route: "/v1/sessions", floor: 2, endedThrough: 2}}; !slices.Equal(requests, want) {
 		t.Fatalf("SessionStart requests = %+v, want %+v", requests, want)
 	}
 	if generation, err := readGeneration(proof); generation != 3 || err != nil {
@@ -250,7 +250,7 @@ func TestSessionStartEndFloorStopsRestoredHistory(t *testing.T) {
 			})
 			out := h.run("SessionStart", payload)
 			assertReviewRefusal(t, h, out, "ended generation refused at "+marker)
-			if want := []floorRequest{{route: "/v1/sessions", floor: 2}}; !slices.Equal(requests, want) {
+			if want := []floorRequest{{route: "/v1/sessions", floor: 2, endedThrough: 2}}; !slices.Equal(requests, want) {
 				t.Fatalf("SessionStart requests = %+v, want %+v", requests, want)
 			}
 		})
@@ -319,4 +319,172 @@ func TestRememberedGenerationRefusesDamageWhileWaitingForTheLock(t *testing.T) {
 			t.Fatalf("a read started at G1 accepted damaged proof: %v", err)
 		}
 	})
+}
+
+func TestRegistrationProofRefusesMarkerDamagedWhileWaitingForLock(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		m := newFileMemory(t)
+		m.Remember("claude", "s1", 2)
+		unlock, err := m.lock(hookLockBudget)
+		if err != nil {
+			t.Fatal(err)
+		}
+		type result struct {
+			generation, endedThrough int
+			err                      error
+			observations             []string
+		}
+		finished := make(chan result, 1)
+		state := &runState{}
+		go func() {
+			generation, endedThrough, err := registrationProof(state, Event{Client: ClientClaude, SessionID: "s1", Kind: KindPrompt}, m, 0)
+			finished <- result{generation, endedThrough, err, state.observations()}
+		}()
+		synctest.Wait()
+		marker := m.name("claude", "s1") + ".ended"
+		if err := os.WriteFile(marker, []byte("damaged\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		unlock()
+		got := <-finished
+		wantObservation := "damaged generation proof at " + marker // gitleaks:allow (a test observation token and path, not a credential)
+		if got.generation != 0 || got.endedThrough != 0 || got.err != errDamagedEndMarker || !slices.Equal(got.observations, []string{wantObservation}) {
+			t.Fatalf("registration with newly damaged marker = %+v, want local refusal naming the marker", got)
+		}
+	})
+}
+
+func TestOlderHubUsesRetryFloorAndReportsEndedRefusal(t *testing.T) {
+	for _, preTool := range []bool{false, true} {
+		name := "SessionStart"
+		if preTool {
+			name = "PreToolUse"
+		}
+		t.Run(name, func(t *testing.T) {
+			h, _, _ := endedFloorMatrixFixture(t, "restored history at G1", false, false)
+			var requests []floorRequest
+			observeReviewRequests(h, func(req floorRequest) error {
+				requests = append(requests, req)
+				return nil
+			})
+			client := &hubclient.Client{Config: hubclient.EnvConfig{Getenv: h.getenv}, HTTP: h.http}
+			olderHub := interceptedRegistration{Client: client, register: func(ctx context.Context, req hubclient.SessionRequest) (hubclient.SessionResponse, error) {
+				if req.Generation != 0 || req.RetryGeneration != 2 || req.EndedThrough != 2 {
+					t.Errorf("mixed-version registration = %+v, want G0 with both floors at G2", req)
+				}
+				req.EndedThrough = 0
+				return client.RegisterSession(ctx, req)
+			}}
+			before := endedFloorExecutionStates(t, h)
+			payload := `{"session_id":"s1","cwd":` + quote(h.root) + `}`
+			if preTool {
+				payload = writePayload(h.root, "s1", "review.go")
+			}
+			out := h.runner(name, payload, olderHub).Run()
+			if preTool {
+				if !strings.Contains(string(out.Stdout), endedSessionRefused) || strings.Contains(string(out.Stdout), "hub restarted") {
+					t.Errorf("older-hub pre-tool output %q, want ended-floor rather than recovery guidance", out.Stdout)
+				}
+			} else {
+				assertAllow(t, ClientClaude, out)
+			}
+			if after := endedFloorExecutionStates(t, h); !slices.Equal(after, before) {
+				t.Fatalf("older hub created an ended generation: before %+v, after %+v", before, after)
+			}
+			want := []floorRequest{{route: "/v1/sessions", floor: 2}}
+			if !slices.Equal(requests, want) {
+				t.Fatalf("request forwarded to the older hub = %+v, want only the inclusive floor", requests)
+			}
+			marker := sessionsFor(h.getenv).name("claude", "s1") + ".ended"
+			assertReviewObservation(t, h, "ended generation refused at "+marker) // gitleaks:allow (a test observation token and path, not a credential)
+			if failures, err := ReadRecentFailures(h.getenv("IRIS_TOKEN_FILE"), 10); err != nil || len(failures) != 0 {
+				t.Fatalf("older-hub end refusal became a generic failure: %+v, %v", failures, err)
+			}
+		})
+	}
+}
+
+func TestRecoveryAboveEndMarkerKeepsRecoveryGuidance(t *testing.T) {
+	h, live := newRestoredHook(t, &hookClock{wall: time.Unix(1800000000, 0)})
+	payload := `{"session_id":"s1","cwd":` + quote(h.root) + `}`
+	for generation := 1; generation <= 3; generation++ {
+		h.prompt()
+		if h.registered.Generation != generation {
+			t.Fatalf("fixture registration = %+v, want G%d", h.registered, generation)
+		}
+		if generation < 3 {
+			h.run("SessionEnd", payload)
+		}
+	}
+	saved := filepath.Join(t.TempDir(), "active-g3.db")
+	if err := backup.Run(t.Context(), h.livePath, saved, io.Discard); err != nil {
+		t.Fatal(err)
+	}
+	h.restore(live, saved, true)
+	m := sessionsFor(h.getenv)
+	if err := os.Remove(m.name("claude", "s1")); err != nil {
+		t.Fatal(err)
+	}
+	var requests []floorRequest
+	observeReviewRequests(h, func(req floorRequest) error {
+		requests = append(requests, req)
+		return nil
+	})
+	before := endedFloorExecutionStates(t, h)
+	out := h.run("PreToolUse", writePayload(h.root, "s1", "recovering.go"))
+	if !strings.Contains(out, `"permissionDecision":"deny"`) || !strings.Contains(out, "hub restarted") {
+		t.Fatalf("proofless recovery output %q, want D9 recovery denial", out)
+	}
+	if after := endedFloorExecutionStates(t, h); !slices.Equal(after, before) {
+		t.Fatalf("proofless recovery changed the Execution: before %+v, after %+v", before, after)
+	}
+	want := []floorRequest{{route: "/v1/sessions", floor: 2, endedThrough: 2}}
+	if !slices.Equal(requests, want) {
+		t.Fatalf("recovery requests = %+v, want %+v", requests, want)
+	}
+	observations, err := ReadRecentObservations(h.getenv("IRIS_TOKEN_FILE"), 10) // gitleaks:allow (a test observation token and path, not a credential)
+	if err != nil || len(observations) != 0 {
+		t.Fatalf("ordinary recovery recorded an end-marker observation: %+v, %v", observations, err)
+	}
+}
+
+func TestRegistrationRetryCarriesLatestEndFloor(t *testing.T) {
+	h, _ := newRestoredHook(t, &hookClock{wall: time.Unix(1800000000, 0)})
+	h.prompt()
+	m := sessionsFor(h.getenv)
+	client := &hubclient.Client{Config: hubclient.EnvConfig{Getenv: h.getenv}}
+	if err := client.EndExecution(t.Context(), h.registered.ExecutionID, 1); err != nil {
+		t.Fatal(err)
+	}
+	var requests []floorRequest
+	observeReviewRequests(h, func(req floorRequest) error {
+		requests = append(requests, req)
+		return nil
+	})
+	client.HTTP = h.http
+	wrapped := interceptedRegistration{Client: client, register: func(ctx context.Context, req hubclient.SessionRequest) (hubclient.SessionResponse, error) {
+		sess, err := client.RegisterSession(ctx, req)
+		if req.Generation == 1 {
+			if !hubclient.IsCode(err, "lost") {
+				t.Errorf("initial exact-proof registration = %+v, %v, want lost", sess, err)
+			}
+			if damaged := m.forget("claude", "s1", 2); damaged != "" {
+				t.Errorf("SessionEnd damaged the marker: %s", damaged)
+			}
+		}
+		return sess, err
+	}}
+	runner := h.runner("UserPromptSubmit", `{"session_id":"s1","cwd":`+quote(h.root)+`,"prompt":"go"}`, wrapped)
+	runner.Memory = m
+	out := runner.Run()
+	assertAllow(t, ClientClaude, out)
+	want := []floorRequest{{route: "/v1/sessions", generation: 1}, {route: "/v1/sessions", floor: 2, endedThrough: 2}}
+	if !slices.Equal(requests, want) {
+		t.Fatalf("retry after a newer SessionEnd = %+v, want both floors raised to G2", requests)
+	}
+	marker := m.name("claude", "s1") + ".ended"
+	assertReviewObservation(t, h, "ended generation refused at "+marker) // gitleaks:allow (a test observation token and path, not a credential)
+	if states := endedFloorExecutionStates(t, h); len(states) != 1 || states[0].generation != 1 || states[0].state != "ended" {
+		t.Fatalf("retry created an ended generation: %+v", states)
+	}
 }
