@@ -98,6 +98,84 @@ func TestEndMarkerPathClassHandlesMetadataAndRacesPortably(t *testing.T) {
 	}
 }
 
+func TestCanonicalEndMarkerPathRequiresTheSameHookFile(t *testing.T) {
+	dir := t.TempDir()
+	name := "ABCDEF0123456789ABCDEF0123456789.ENDED"
+	path := filepath.Join(dir, name)
+	canonicalPath := filepath.Join(dir, strings.ToLower(name))
+	if err := os.WriteFile(path, []byte("broken\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	pathInfo, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	other := filepath.Join(t.TempDir(), "other.ended")
+	if err := os.WriteFile(other, []byte("7\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	otherInfo, err := os.Stat(other)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	t.Run("already canonical", func(t *testing.T) {
+		original := endMarkerStat
+		t.Cleanup(func() { endMarkerStat = original })
+		endMarkerStat = func(string) (fs.FileInfo, error) {
+			t.Fatal("canonical name required no identity check")
+			return nil, nil
+		}
+		got, ok := canonicalEndMarkerPath(dir, strings.ToLower(name))
+		if !ok || got != canonicalPath {
+			t.Fatalf("canonicalEndMarkerPath() = %q, %v; want %q, true", got, ok, canonicalPath)
+		}
+	})
+	t.Run("same file through canonical path", func(t *testing.T) {
+		original := endMarkerStat
+		t.Cleanup(func() { endMarkerStat = original })
+		endMarkerStat = func(string) (fs.FileInfo, error) { return pathInfo, nil }
+		got, ok := canonicalEndMarkerPath(dir, name)
+		if !ok || got != canonicalPath {
+			t.Fatalf("canonicalEndMarkerPath() = %q, %v; want %q, true", got, ok, canonicalPath)
+		}
+	})
+	t.Run("different canonical file", func(t *testing.T) {
+		original := endMarkerStat
+		t.Cleanup(func() { endMarkerStat = original })
+		endMarkerStat = func(path string) (fs.FileInfo, error) {
+			if path == canonicalPath {
+				return otherInfo, nil
+			}
+			return pathInfo, nil
+		}
+		if got, ok := canonicalEndMarkerPath(dir, name); ok || got != "" {
+			t.Fatalf("distinct file resolved as %q, %v", got, ok)
+		}
+	})
+	t.Run("candidate metadata error", func(t *testing.T) {
+		original := endMarkerStat
+		t.Cleanup(func() { endMarkerStat = original })
+		endMarkerStat = func(string) (fs.FileInfo, error) { return nil, errors.New("candidate stat") }
+		if got, ok := canonicalEndMarkerPath(dir, name); ok || got != "" {
+			t.Fatalf("unresolved candidate resolved as %q, %v", got, ok)
+		}
+	})
+	t.Run("canonical metadata error", func(t *testing.T) {
+		original := endMarkerStat
+		t.Cleanup(func() { endMarkerStat = original })
+		endMarkerStat = func(path string) (fs.FileInfo, error) {
+			if path == canonicalPath {
+				return nil, errors.New("canonical stat")
+			}
+			return pathInfo, nil
+		}
+		if got, ok := canonicalEndMarkerPath(dir, name); ok || got != "" {
+			t.Fatalf("unresolved canonical path resolved as %q, %v", got, ok)
+		}
+	})
+}
+
 func TestDoctorTreatsAnEntryPrunedBeforeMetadataAsAbsent(t *testing.T) {
 	token := filepath.Join(t.TempDir(), "hub.token")
 	dir := hook.NewSessions(token).Dir()

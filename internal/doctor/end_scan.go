@@ -213,10 +213,13 @@ func (s *endMarkerScanner) readDirectory(dir string) string {
 		for _, entry := range entries {
 			s.entriesLeft--
 			s.progress.examine()
-			if !strings.HasSuffix(entry.Name(), ".ended") {
+			if !strings.HasSuffix(strings.ToLower(entry.Name()), ".ended") {
 				continue
 			}
-			path := filepath.Join(dir, entry.Name())
+			path, canonical := canonicalEndMarkerPath(dir, entry.Name())
+			if !canonical {
+				continue
+			}
 			switch endMarkerPathClass(path) {
 			case endMarkerFileAbsent:
 				continue
@@ -235,6 +238,24 @@ func (s *endMarkerScanner) readDirectory(dir string) string {
 			return "could not scan for damaged end markers: " + readErr.Error()
 		}
 	}
+}
+
+func canonicalEndMarkerPath(dir, name string) (string, bool) {
+	canonicalName := strings.ToLower(name)
+	if name == canonicalName {
+		return filepath.Join(dir, name), true
+	}
+	path := filepath.Join(dir, name)
+	canonicalPath := filepath.Join(dir, canonicalName)
+	pathInfo, err := endMarkerStat(path)
+	if err != nil {
+		return "", false
+	}
+	canonicalInfo, err := endMarkerStat(canonicalPath)
+	if err != nil || !os.SameFile(pathInfo, canonicalInfo) {
+		return "", false
+	}
+	return canonicalPath, true
 }
 
 type endMarkerFileClass uint8

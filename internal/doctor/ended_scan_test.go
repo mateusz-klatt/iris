@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -238,6 +239,92 @@ func TestDoctorFindsCurrentDamageWithoutAnObservation(t *testing.T) {
 	if len(bundle.Observations) != 0 {
 		t.Fatalf("scan invented a rolling-log observation: %+v", bundle.Observations)
 	}
+}
+
+func TestDoctorGradesCaseVariantThroughCanonicalHookPath(t *testing.T) {
+	var canonical string
+	res, upload := runEndedMarkerDoctor(t, func(sessions *hook.Sessions, _ time.Time) {
+		if err := os.Mkdir(sessions.Dir(), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		name := "ABCDEF0123456789ABCDEF0123456789.ENDED"
+		marker := filepath.Join(sessions.Dir(), name)
+		canonical = filepath.Join(sessions.Dir(), strings.ToLower(name))
+		if err := os.WriteFile(marker, []byte("broken\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		originalStat, originalLstat, originalRead := endMarkerStat, endMarkerLstat, endMarkerReadGeneration
+		t.Cleanup(func() {
+			endMarkerStat, endMarkerLstat, endMarkerReadGeneration = originalStat, originalLstat, originalRead
+		})
+		endMarkerStat = func(path string) (fs.FileInfo, error) {
+			if path == canonical {
+				return originalStat(marker)
+			}
+			return originalStat(path)
+		}
+		endMarkerLstat = func(path string) (fs.FileInfo, error) {
+			if path == canonical {
+				return originalLstat(marker)
+			}
+			return originalLstat(path)
+		}
+		endMarkerReadGeneration = func(path string) (int, error) {
+			if path == canonical {
+				path = marker
+			}
+			return originalRead(path)
+		}
+	})
+	if res.ExitCode() != 1 || res.Report.CurrentDamagedEndMarkers != 1 || res.Report.EndMarkerScanIncomplete {
+		t.Fatalf("exit = %d, damaged = %d, incomplete = %v", res.ExitCode(), res.Report.CurrentDamagedEndMarkers, res.Report.EndMarkerScanIncomplete)
+	}
+	if report := res.Format(); !strings.Contains(report, canonical+" (still damaged)") {
+		t.Fatalf("case variant was not graded through its canonical path:\n%s", report)
+	}
+	assertRedactedMarkerCount(t, res, upload, canonical, 1)
+}
+
+func TestDoctorIgnoresCaseVariantOfDifferentFile(t *testing.T) {
+	var marker string
+	res, upload := runEndedMarkerDoctor(t, func(sessions *hook.Sessions, _ time.Time) {
+		if err := os.Mkdir(sessions.Dir(), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		name := "ABCDEF0123456789ABCDEF0123456789.ENDED"
+		marker = filepath.Join(sessions.Dir(), name)
+		canonical := filepath.Join(sessions.Dir(), strings.ToLower(name))
+		if err := os.WriteFile(marker, []byte("broken\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		other := filepath.Join(t.TempDir(), "other.ended")
+		if err := os.WriteFile(other, []byte("7\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		otherInfo, err := os.Stat(other)
+		if err != nil {
+			t.Fatal(err)
+		}
+		originalStat, originalRead := endMarkerStat, endMarkerReadGeneration
+		t.Cleanup(func() { endMarkerStat, endMarkerReadGeneration = originalStat, originalRead })
+		endMarkerStat = func(path string) (fs.FileInfo, error) {
+			if path == canonical {
+				return otherInfo, nil
+			}
+			return originalStat(path)
+		}
+		endMarkerReadGeneration = func(string) (int, error) {
+			t.Fatal("a case variant of another file must not be graded")
+			return 0, nil
+		}
+	})
+	if res.ExitCode() != 0 || res.Report.CurrentDamagedEndMarkers != 0 || res.Report.EndMarkerScanIncomplete {
+		t.Fatalf("exit = %d, damaged = %d, incomplete = %v", res.ExitCode(), res.Report.CurrentDamagedEndMarkers, res.Report.EndMarkerScanIncomplete)
+	}
+	if report := res.Format(); strings.Contains(report, marker) {
+		t.Fatalf("unrelated case variant was reported:\n%s", report)
+	}
+	assertRedactedMarkerCount(t, res, upload, marker, 0)
 }
 
 func TestDoctorCurrentMarkerScanHealthyCases(t *testing.T) {
