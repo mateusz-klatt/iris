@@ -777,7 +777,9 @@ Changes from the reference schema:
    absent, matching the hook, rather than damaged. Hook and doctor use one bounded generation-file
    reader for live proof and end markers. It opens with FILE_SHARE_READ, FILE_SHARE_WRITE and
    FILE_SHARE_DELETE on Windows and portable `os.Open` elsewhere, reads at most 64 bytes, and closes
-   the handle before parsing. A read that fills the bound is damaged. Otherwise the hook's read rule
+   the handle before parsing. The shared reader and native replacement preserve long paths with
+   extended-length normalization, and the `os.Rename` fallback retains Go's own normalization. A
+   read that fills the bound is damaged. Otherwise the hook's read rule
    applies: a positive generation is healthy;
    malformed or unreadable content is damaged. Current damage makes
    doctor exit 1 however old or evicted its observation is. Exhausting the entry cap, the outer

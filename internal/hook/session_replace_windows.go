@@ -60,11 +60,11 @@ func sessionPOSIXRenameUnsupported(err error) bool {
 }
 
 func renameSessionFilePOSIX(oldpath, newpath string) error {
-	from, err := windows.UTF16PtrFromString(oldpath)
+	from, err := windows.UTF16PtrFromString(extendedWindowsPath(oldpath))
 	if err != nil {
 		return err
 	}
-	to, err := windows.UTF16FromString(newpath)
+	to, err := windows.UTF16FromString(extendedWindowsPath(newpath))
 	if err != nil {
 		return err
 	}

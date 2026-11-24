@@ -8,7 +8,7 @@ import (
 
 // OpenGenerationFile opens a generation or end-marker file without blocking its replacement.
 func OpenGenerationFile(path string) (*os.File, error) {
-	pathp, err := windows.UTF16PtrFromString(path)
+	pathp, err := windows.UTF16PtrFromString(extendedWindowsPath(path))
 	if err != nil {
 		return nil, err
 	}
