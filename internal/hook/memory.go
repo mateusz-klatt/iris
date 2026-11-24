@@ -570,7 +570,7 @@ func (m fileMemory) replace(path, body string) error {
 		err = m.restrict(f.Name())
 	}
 	if err == nil {
-		err = os.Rename(f.Name(), path)
+		err = replaceSessionFile(f.Name(), path)
 	}
 	if err != nil {
 		_ = os.Remove(f.Name())

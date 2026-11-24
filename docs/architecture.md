@@ -795,8 +795,17 @@ Changes from the reference schema:
    upload sends only the resulting redacted report. No MCP tool runs doctor, `iris watch` only
    recommends it, and hub doctor routes store or retrieve reports without scanning the host. An
    abandoned worker is read-only: it mutates no caller result, hub state or session files, and its
-   late completion cannot change the returned report. Registration reads the marker before
-   refreshing live
+   late completion cannot change the returned report.
+
+   On Windows, the shared session-file replacement used by Antigravity state and session memory
+   calls FileRenameInfoEx with REPLACE_IF_EXISTS and POSIX_SEMANTICS. A reader holding the old file
+   open keeps its contents while later opens see the replacement. On Windows versions or volumes
+   without POSIX rename, the helper falls back to MoveFileEx and retries access-denied and
+   sharing-violation only within the existing 50 ms session-lock budget and attempt cap. That
+   fallback still cannot replace a file whose handle is held open. A failure after the bounded
+   retries is recorded through the existing hook failure or damaged-marker observation, SessionEnd
+   preserves live proof as before, and the hook still returns valid output. Other systems keep
+   `os.Rename`. Registration reads the marker before refreshing live
    proof under the bounded session lock. Absent proof takes no lock, so unrelated attention or
    cleanup cannot suppress a fresh SessionStart. The reads are not atomic and the lock is released
    before dispatch: SessionEnd can leave a request with an older floor, a known B1-min limit. A readable

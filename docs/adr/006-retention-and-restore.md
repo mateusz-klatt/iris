@@ -346,6 +346,15 @@ archiving its local generation file, then relaunch the session. Archive only the
 token in place. `iris admin forget` deletes hub records and mail and is unsuitable for this
 local recovery.
 
+On Windows, the shared session-file replacement used by Antigravity state and session memory calls
+FileRenameInfoEx with REPLACE_IF_EXISTS and POSIX_SEMANTICS. A reader holding the old file open
+keeps its contents while later opens see the replacement. Windows versions and volumes without
+POSIX rename use MoveFileEx instead, with access-denied and sharing-violation retries bounded by the
+existing 50 ms session-lock budget and attempt cap. On those versions and volumes a held handle can
+still make the replacement fail. The failure after these retries is recorded through the existing
+hook failure or damaged-marker observation, and hook output remains valid. Other systems keep
+`os.Rename`.
+
 When `Forget` cannot record its `.ended` marker on `SessionEnd` (the marker is damaged, the write
 fails, or the sessions lock is missed), it keeps the local generation proof rather than deleting
 it without a record, and local `iris doctor` output names that `.ended` path. While that kept
