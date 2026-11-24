@@ -63,7 +63,7 @@ func (m fileMemory) read(path string) string {
 }
 
 func readGeneration(path string) (int, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := readGenerationBytes(path)
 	if errors.Is(err, os.ErrNotExist) {
 		// A dangling link occupies the generation path even if its target is missing.
 		if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
@@ -570,7 +570,7 @@ func (m fileMemory) replace(path, body string) error {
 		err = m.restrict(f.Name())
 	}
 	if err == nil {
-		err = os.Rename(f.Name(), path)
+		err = replaceSessionFile(f.Name(), path)
 	}
 	if err != nil {
 		_ = os.Remove(f.Name())

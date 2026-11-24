@@ -757,11 +757,64 @@ Changes from the reference schema:
    the client's allow output. Local doctor output names the damaged file as an observation, not
    a hook failure. It also names an `.ended` marker that contributed a generation or is damaged,
    and the `.ended` path when SessionEnd could not write that marker or take the sessions lock.
-   Doctor re-reads every named damaged marker: still-damaged files are current and make it exit 1;
-   repaired or archived files are history and do not fail it. The local detail states the blocked
-   registration, absent binding, mail and claims, the continuing allow behavior, and the stop,
-   verify, repair-or-archive and restart steps. Paths stay only in the local report; uploads carry
-   counts. Registration reads the marker before refreshing live
+   Doctor re-reads every damaged marker named by an observation from the last 24 hours and,
+   independently of observation age and the rolling log, scans the sessions directories beside the
+   resolved and fallback token paths. A cleaned-absolute
+   fast path and `os.SameFile` on directory Stat results deduplicate lexical, symlink and case
+   aliases. One read-only worker performs every directory and observation-marker I/O, with
+   incremental non-recursive reads across both directories sharing a 4096-entry cap. It publishes
+   progressive snapshots under a mutex. The caller waits at most one second or the earlier parent
+   deadline, then renders the latest snapshot; there are no per-read deadlines. At most one scan is
+   in flight per process. A concurrent call returns incomplete immediately with "previous
+   end-marker scan still running", so abandoned workers and open descriptors cannot accumulate.
+   Suffix matching is case-insensitive. A candidate whose name differs from its lowercase canonical
+   name is graded at that canonical hook path only when Stat and `os.SameFile` prove that both paths
+   resolve to the same file; a case variant of another file is ignored. Before opening an examined
+   entry, the worker requires a regular file or a symlink to a regular target. Hooks only ever write
+   regular files, so a directory, FIFO, socket, device or other non-regular entry is never a valid
+   marker and is damaged without being opened. A dangling link or a link to a non-regular target is
+   damaged too. An entry or link that disappears between enumeration and metadata collection is
+   absent, matching the hook, rather than damaged. Hook and doctor use one bounded generation-file
+   reader for live proof and end markers. It opens with FILE_SHARE_READ, FILE_SHARE_WRITE and
+   FILE_SHARE_DELETE on Windows and portable `os.Open` elsewhere, reads at most 64 bytes, and closes
+   the handle before parsing. The shared reader and native replacement preserve long paths with
+   extended-length normalization, and the `os.Rename` fallback retains Go's own normalization. A
+   read that fills the bound is damaged. Otherwise the hook's read rule
+   applies: a positive generation is healthy;
+   malformed or unreadable content is damaged. Current damage makes
+   doctor exit 1 however old or evicted its observation is. Exhausting the entry cap, the outer
+   deadline, cancellation, or a directory open or iteration error other than ENOENT marks the scan
+   incomplete and also makes doctor exit 1, even when no damage was found. A directory failure does
+   not stop the other directory's scan. A local-only note states why, gives the number found so far
+   as a lower bound, and says plainly that more may be damaged. An observation not yet re-checked is
+   unknown, not repaired. A matching retained observation supplies the client; otherwise doctor
+   prints a clearly labelled local-only line without one. Repaired or archived files named by an
+   observation remain history and do not fail doctor. A healthy or missing sessions directory adds
+   nothing. The local detail states the blocked registration, absent binding, mail
+   and claims, the continuing allow behavior, and the stop, verify, repair-or-archive and restart
+   steps. Paths and the incomplete reason stay only in the local report; uploads and bundles carry
+   the aggregate `current_damaged_end_markers` lower bound and an `end_marker_scan_incomplete`
+   boolean.
+
+   Only `iris doctor` (plain, `--bundle`, and the offline phase of `--live`) and `iris setup` call
+   `doctor.Run` and reach this scan. Bundle formatting happens after that call. The diagnostic
+   upload sends only the resulting redacted report. No MCP tool runs doctor, `iris watch` only
+   recommends it, and hub doctor routes store or retrieve reports without scanning the host. An
+   abandoned worker is read-only: it mutates no caller result, hub state or session files, and its
+   late completion cannot change the returned report.
+
+   On Windows, the shared session-file replacement used by Antigravity state and session memory
+   calls FileRenameInfoEx with REPLACE_IF_EXISTS and POSIX_SEMANTICS. An Iris reader holding the old
+   file open keeps its contents while later opens see the replacement. Readers outside Iris,
+   including antivirus, indexers and editors, need not grant FILE_SHARE_DELETE and can still make
+   that replacement fail. On Windows versions or volumes without POSIX rename, the helper falls back
+   to MoveFileEx, where any held handle can still block replacement. Access-denied and
+   sharing-violation retries stay within the existing 50 ms session-lock budget and attempt cap;
+   the deadline is checked before every attempt, the MoveFileEx fallback included. On SessionEnd's
+   marker-write path, a failure after the bounded retries records the existing damaged-marker
+   observation, preserves live proof and still returns valid hook output. Ordinary proof publication
+   still discards write errors and adds no observation. Other systems keep `os.Rename`. Registration
+   reads the marker before refreshing live
    proof under the bounded session lock. Absent proof takes no lock, so unrelated attention or
    cleanup cannot suppress a fresh SessionStart. The reads are not atomic and the lock is released
    before dispatch: SessionEnd can leave a request with an older floor, a known B1-min limit. A readable
@@ -1216,11 +1269,12 @@ not a bypass of trust in the user's own workspaces. Output is per client binary,
 `cursor-agent` differ.
 
 The offline grades remain visible with `--live`, but its exit status reflects the selected
-live runs and the configured hub and token checks. It exits 0 only when at least one client
-runs, every live result passes and the hub and token are usable. A failed live result, no
-eligible client or a declined run exits 1. Other clients' offline grades do not fail a live
-run. Plain `iris doctor` still exits 1 when the hub or token is unusable or any client is
-`silent` or `slow`.
+live runs and the configured hub, token and current end-marker health. It exits 0 only when at
+least one client runs, every live result passes, the hub and token are usable, and the host scan
+found neither current damage nor an incomplete result. A failed live result, no eligible client,
+a declined run, current damage or an incomplete scan exits 1. Other clients' offline grades do not
+fail a live run. Plain `iris doctor` still exits 1 when the hub or token is unusable or any client
+is `silent` or `slow`.
 
 Each live run happens in a scratch repository under the temporary directory, with no commit and
 an origin of `https://example.invalid/iris-doctor-live/<random>.git`, never in one of the user's

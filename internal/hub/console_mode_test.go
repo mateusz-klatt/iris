@@ -93,6 +93,43 @@ func TestClosedConsoleAcceptsAndPersistsMachineDoctorUpload(t *testing.T) {
 	}
 }
 
+func TestDoctorMarkerHealthRoundTripThroughHub(t *testing.T) {
+	h, server, _ := consoleSetup(t)
+	consoleAccount(t, h, "Synthetic", "operator")
+	put := func(body string) {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodPut, server.URL+"/v1/ui/doctor", strings.NewReader(body))
+		r.Header.Set("Authorization", "Bearer test-secret")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != http.StatusOK {
+			t.Fatalf("doctor upload status %d: %s", w.Code, w.Body.String())
+		}
+	}
+	put(`{"host":"current","checked_at":"2026-11-24T00:00:00Z","clients":[{"client":"claude","status":"ok"}],"current_damaged_end_markers":2,"end_marker_scan_incomplete":true}`)
+	put(`{"host":"legacy","checked_at":"2026-11-24T00:00:00Z","clients":[{"client":"claude","status":"ok"}]}`)
+
+	browser := consoleSignIn(t, h, server.URL, "Synthetic")
+	w := consoleDo(t, h, server.URL, http.MethodGet, "/v1/ui/doctor", nil, browser, http.StatusOK)
+	hosts := consoleJSON(t, w)["hosts"].([]any)
+	byHost := make(map[string]map[string]any, len(hosts))
+	for _, item := range hosts {
+		report := item.(map[string]any)
+		byHost[report["host"].(string)] = report
+	}
+	if got := byHost["current"]["current_damaged_end_markers"]; got != float64(2) {
+		t.Fatalf("round-trip damaged count = %v, want 2", got)
+	}
+	if got := byHost["current"]["end_marker_scan_incomplete"]; got != true {
+		t.Fatalf("round-trip incomplete state = %v, want true", got)
+	}
+	for _, field := range []string{"current_damaged_end_markers", "end_marker_scan_incomplete"} {
+		if value, ok := byHost["legacy"][field]; ok {
+			t.Fatalf("legacy round trip gained %s = %v", field, value)
+		}
+	}
+}
+
 func TestAnOpenConsoleTransportRefusalDoesNotReportClosedActivation(t *testing.T) {
 	h, server, _ := consoleSetup(t)
 	r := httptest.NewRequest(http.MethodGet, server.URL+"/v1/ui/session", nil)

@@ -174,7 +174,14 @@ func (t *transaction) operator(op string, r Request) (map[string]any, error) {
 				return nil, fail("bad_request", "invalid doctor status")
 			}
 		}
-		raw, err := json.Marshal(map[string]any{"checked_at": r.CheckedAt, "clients": r.Clients})
+		report := map[string]any{"checked_at": r.CheckedAt, "clients": r.Clients}
+		if r.CurrentDamagedEndMarkers != nil {
+			report["current_damaged_end_markers"] = *r.CurrentDamagedEndMarkers
+		}
+		if r.EndMarkerScanIncomplete != nil {
+			report["end_marker_scan_incomplete"] = *r.EndMarkerScanIncomplete
+		}
+		raw, err := json.Marshal(report)
 		if err != nil {
 			return nil, err
 		}

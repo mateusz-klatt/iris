@@ -14,21 +14,23 @@ import (
 
 // Request contains the version-one wire fields. Unknown client metadata is ignored.
 type Request struct {
-	CommonDir string            `json:"common_dir"`
-	Status    map[string]string `json:"status"`
-	Scope     *ShellScope       `json:"scope,omitempty"`
-	ReplyTo   string            `json:"reply_to"`
-	Q         string            `json:"q"`
-	Agent     string            `json:"agent"`
-	DryRun    bool              `json:"dry_run"`
-	Before    string            `json:"before"`
-	CheckedAt string            `json:"checked_at"`
-	Clients   []map[string]any  `json:"clients"`
-	Client    string            `json:"client"`
-	SessionID string            `json:"session_id"`
-	Host      string            `json:"host"`
-	Cwd       string            `json:"cwd"`
-	Worktree  string            `json:"worktree"`
+	CommonDir                string            `json:"common_dir"`
+	Status                   map[string]string `json:"status"`
+	Scope                    *ShellScope       `json:"scope,omitempty"`
+	ReplyTo                  string            `json:"reply_to"`
+	Q                        string            `json:"q"`
+	Agent                    string            `json:"agent"`
+	DryRun                   bool              `json:"dry_run"`
+	Before                   string            `json:"before"`
+	CheckedAt                string            `json:"checked_at"`
+	Clients                  []map[string]any  `json:"clients"`
+	CurrentDamagedEndMarkers *int              `json:"current_damaged_end_markers,omitempty"`
+	EndMarkerScanIncomplete  *bool             `json:"end_marker_scan_incomplete,omitempty"`
+	Client                   string            `json:"client"`
+	SessionID                string            `json:"session_id"`
+	Host                     string            `json:"host"`
+	Cwd                      string            `json:"cwd"`
+	Worktree                 string            `json:"worktree"`
 	// WorktreeID names the worktree root by device and inode; another path to the same
 	// directory is made the first path this host named for it (D6).
 	WorktreeID string `json:"worktree_id"`
