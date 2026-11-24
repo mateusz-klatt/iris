@@ -219,6 +219,10 @@ func TestEndedThroughFloorAcrossRegistrationAndBinding(t *testing.T) {
 					} else if bound != (binding.Bound{}) || !binding.IsCode(err, "lost") {
 						t.Errorf("refused binding = %+v, %v", bound, err)
 					}
+				} else if scenario.damaged {
+					if out != string(FallbackAllow(ClientClaude).Stdout) {
+						t.Errorf("damaged marker output %q, want allow", out)
+					}
 				} else if scenario.fresh {
 					if strings.Contains(out, `"permissionDecision":"deny"`) {
 						t.Errorf("fresh hook was denied: %s", out)
@@ -238,7 +242,7 @@ func TestEndedThroughFloorAcrossRegistrationAndBinding(t *testing.T) {
 							registrations = append(registrations, req)
 						}
 					}
-					want := []floorRequest{{route: operation.route, endedThrough: 2}}
+					want := []floorRequest{{route: operation.route, floor: 2, endedThrough: 2}}
 					if scenario.damaged {
 						want = nil
 					}

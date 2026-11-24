@@ -39,6 +39,7 @@ const RestoreFloorHubTooOld = RestoreFloorRefused + ": hub predates restore floo
 const errRestoreFloor hookFailure = RestoreFloorRefused
 
 var errEndedGeneration = errors.New("remembered session generation has ended")
+var errDamagedEndMarker = errors.New("session end marker is damaged")
 
 const endedSessionRefused = "Iris: local session proof belongs to an ended session. Start a new client session or run `iris doctor` for recovery details."
 
@@ -428,17 +429,14 @@ func registrationProof(state *runState, ev Event, m Memory, retained int) (gener
 		return retained, 0, nil
 	}
 	if files, ok := m.(fileMemory); ok {
-		var err error
-		endedThrough, err = sessionEndFloor(state, ev, files)
-		if err != nil {
-			return 0, 0, err
-		}
+		generation, endedThrough, err = files.recallRegistration(string(ev.Client), ev.SessionID)
+	} else {
+		generation, err = m.RecallGeneration(string(ev.Client), ev.SessionID)
 	}
-	generation, err = m.RecallGeneration(string(ev.Client), ev.SessionID)
 	var damaged damagedEndMarker
 	if errors.As(err, &damaged) {
 		state.observe(damaged.Error())
-		return 0, 0, errEndedGeneration
+		return 0, 0, errDamagedEndMarker
 	}
 	var ended endedProof
 	if errors.As(err, &ended) {
@@ -468,7 +466,7 @@ func sessionEndFloor(state *runState, ev Event, files fileMemory) (int, error) {
 	ended, expired, err := files.readEndMarker(marker)
 	if err != nil {
 		state.observe(damagedGenerationObservation(marker))
-		return 0, errEndedGeneration
+		return 0, errDamagedEndMarker
 	}
 	if expired {
 		return 0, nil
@@ -486,7 +484,9 @@ func checkEndedRegistration(state *runState, ev Event, m Memory, sentEndedThroug
 		return proofErr
 	}
 	ended = max(ended, sentEndedThrough)
-	if ended > 0 && (err == nil && generation <= ended || proofless && sentEndedThrough > 0 && hubclient.IsCode(err, "lost")) {
+	var hubErr *hubclient.Error
+	strictFloorRefusal := proofless && sentEndedThrough > 0 && errors.As(err, &hubErr) && hubErr.Code == "lost" && hubErr.HasEndedThroughReason()
+	if ended > 0 && (err == nil && generation <= ended || strictFloorRefusal) {
 		state.observe(endedProof(files.name(string(ev.Client), ev.SessionID) + ".ended").Error())
 		return errEndedGeneration
 	}
@@ -507,6 +507,9 @@ func (r Runner) register(ctx context.Context, state *runState, ev Event, repo gi
 	req.EndedThrough = sentEndedThrough
 	if req.Generation <= sentEndedThrough {
 		req.Generation = 0
+	}
+	if req.Generation == 0 {
+		req.RetryGeneration = max(req.RetryGeneration, sentEndedThrough)
 	}
 	send := r.Hub.RegisterSession
 	if repo.Worktree == "" {
@@ -529,6 +532,7 @@ func (r Runner) register(ctx context.Context, state *runState, ev Event, repo gi
 			req.RetryGeneration = floor
 			req.Generation = 0
 			req.EndedThrough = max(req.EndedThrough, endedThrough)
+			req.RetryGeneration = max(req.RetryGeneration, req.EndedThrough)
 			sentEndedThrough = req.EndedThrough
 			sess, err = send(ctx, req)
 			floor, _, proofErr = registrationProof(state, ev, m, floor)

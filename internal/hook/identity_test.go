@@ -462,7 +462,7 @@ func TestALockHeldPastItsBudgetWritesNothing(t *testing.T) {
 	defer release()
 	calls := 0
 	event, payload := promptPayload(ClientClaude, root)
-	out := Runner{ClientName: "claude", EventName: event, Stdin: strings.NewReader(payload), Hub: attentionHub{now: ptr(pending(100, 1, 0)), calls: &calls}, Getenv: env, after: never, logAfter: never}.Run()
+	out := Runner{ClientName: "claude", EventName: event, Stdin: strings.NewReader(payload), Hub: attentionHub{now: ptr(pending(100, 1, 0)), calls: &calls}, Memory: unlockedRegistrationMemory{m}, Getenv: env, after: never, logAfter: never}.Run()
 	if out.Exit != 0 || strings.Contains(string(out.Stdout), "Iris:") || calls != 1 {
 		t.Fatalf("exit %d, %d calls: %s", out.Exit, calls, out.Stdout)
 	}
@@ -477,6 +477,10 @@ func TestALockHeldPastItsBudgetWritesNothing(t *testing.T) {
 		t.Fatal("a failure at another stage was graded as skipped")
 	}
 }
+
+type unlockedRegistrationMemory struct{ fileMemory }
+
+func (m unlockedRegistrationMemory) RecallGeneration(string, string) (int, error) { return 0, nil }
 
 func ptr[T any](v T) *T { return &v }
 
@@ -1004,7 +1008,7 @@ func TestSessionEndForgetsTheToldStateAndKeepsTheWake(t *testing.T) {
 			defer release()
 		}
 		end := `{"session_id":"s","cwd":` + quote(root) + `,"hook_event_name":"SessionEnd"}`
-		Runner{ClientName: "claude", EventName: "SessionEnd", Stdin: strings.NewReader(end), Hub: scriptHub{}, Getenv: env, after: never, logAfter: never}.Run()
+		Runner{ClientName: "claude", EventName: "SessionEnd", Stdin: strings.NewReader(end), Hub: scriptHub{}, Memory: unlockedRegistrationMemory{m}, Getenv: env, after: never, logAfter: never}.Run()
 		_, err := os.Stat(m.counts("claude", "s"))
 		if held == errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("held %v: the told state %v", held, err)
@@ -1020,8 +1024,8 @@ func TestSessionEndForgetsTheToldStateAndKeepsTheWake(t *testing.T) {
 	}
 }
 
-// A SessionStart that finds the lock held still starts the session. Its revision read, its
-// pruning and its told state are each recorded as not done.
+// A SessionStart whose registration memory does not need the content lock still starts the session.
+// Its revision read and told state are recorded as not done, and pruning separately refuses the lock.
 func TestASessionStartWithTheLockHeldStillStarts(t *testing.T) {
 	root := gitRepo(t)
 	env := failureEnv(t)
@@ -1041,13 +1045,16 @@ func TestASessionStartWithTheLockHeldStillStarts(t *testing.T) {
 	}
 	start := `{"session_id":"s","cwd":` + quote(root) + `,"hook_event_name":"SessionStart"}`
 	calls := 0
-	out := Runner{ClientName: "claude", EventName: "SessionStart", Stdin: strings.NewReader(start), Hub: attentionHub{now: ptr(pending(1, 1, 0)), calls: &calls}, Getenv: env, after: never, logAfter: never}.Run()
+	out := Runner{ClientName: "claude", EventName: "SessionStart", Stdin: strings.NewReader(start), Hub: attentionHub{now: ptr(pending(1, 1, 0)), calls: &calls}, Memory: unlockedRegistrationMemory{m}, Getenv: env, after: never, logAfter: never}.Run()
 	if out.Exit != 0 || !strings.Contains(string(out.Stdout), "Iris handle") {
 		t.Fatalf("exit %d: %s", out.Exit, out.Stdout)
 	}
+	if err := m.prune(); !errors.Is(err, failSessionsLock) {
+		t.Fatalf("pruning acquired the held lock: %v", err)
+	}
 	entries, err := ReadRecentFailures(env("IRIS_TOKEN_FILE"), 10)
-	if err != nil || len(entries) != 3 {
-		t.Fatalf("the revision, the pruning and the told state were not all recorded: %+v %v", entries, err)
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("the revision and told state were not both recorded: %+v %v", entries, err)
 	}
 	for _, e := range entries {
 		if e.Stage != stageSessionFiles || e.Error != string(failSessionsLock) {

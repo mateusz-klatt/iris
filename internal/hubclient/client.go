@@ -281,6 +281,17 @@ func (e *Error) HighestGeneration() (generation int, valid, present bool) {
 	return *value, true, true
 }
 
+// EndedThroughReason identifies a strict local-end floor refusal in error details.
+const EndedThroughReason = "ended_through"
+
+func (e *Error) HasEndedThroughReason() bool {
+	raw, _ := e.Details.(json.RawMessage)
+	var details struct {
+		Reason string `json:"reason"`
+	}
+	return json.Unmarshal(raw, &details) == nil && details.Reason == EndedThroughReason
+}
+
 // Do issues an authenticated JSON request. Callers keep retry keys stable across retries.
 func (c *Client) Do(ctx context.Context, method, path string, body, dest any) error {
 	if c == nil || c.Config == nil {

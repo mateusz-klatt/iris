@@ -221,6 +221,14 @@ func TestEndedThroughRegistrationFloor(t *testing.T) {
 			}
 			if tc.want == 0 {
 				assertRegistrationLost(t, err, int64(tc.generations))
+				var lost *Error
+				if !errors.As(err, &lost) {
+					t.Fatal("strict refusal lost its typed error")
+				}
+				details, _ := lost.Details.(map[string]any)
+				if details["reason"] != "ended_through" {
+					t.Fatalf("strict refusal reason = %v, want ended_through", details)
+				}
 				if out != nil || databaseState(t, s) != before {
 					t.Fatalf("strict-floor refusal returned authority or changed state: %v, %v", out, err)
 				}

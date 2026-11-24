@@ -209,8 +209,8 @@ func TestEndedThroughFloorIsStrictOnRegistrationRoutes(t *testing.T) {
 				out := call(r, http.StatusConflict)
 				failure := out["error"].(map[string]any)
 				details := failure["details"].(map[string]any)
-				if failure["code"] != "lost" || details["highest_generation"] != highest {
-					t.Fatalf("strict-floor refusal = %v, want lost with highest_generation %v", out, highest)
+				if failure["code"] != "lost" || details["highest_generation"] != highest || details["reason"] != "ended_through" {
+					t.Fatalf("strict-floor refusal = %v, want lost with highest_generation %v and ended_through reason", out, highest)
 				}
 			}
 

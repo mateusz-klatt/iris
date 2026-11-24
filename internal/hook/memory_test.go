@@ -451,45 +451,50 @@ func TestRepeatedRefusalObservationNamesTheEndMarker(t *testing.T) {
 	}
 }
 
-func TestDamagedEndMarkerRefusesRetainedProofBeforeRegistration(t *testing.T) {
-	root := gitRepo(t)
-	getenv := failureEnv(t)
-	m := sessionsFor(getenv)
-	m.Remember("claude", "s", 4)
-	proof := m.name("claude", "s")
-	marker := proof + ".ended"
-	if err := os.WriteFile(marker, []byte("also damaged\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	h := &recoveryHub{generation: 1}
-	wrapped := interceptedRegistration{Client: &hubclient.Client{}, register: func(context.Context, hubclient.SessionRequest) (hubclient.SessionResponse, error) {
-		t.Error("a hook with a damaged end marker tried to register")
-		return hubclient.SessionResponse{}, errors.New("unexpected registration")
-	}}
-	out := Runner{
-		ClientName: "claude", EventName: "PreToolUse", Stdin: strings.NewReader(writePayload(root, "s", "a.go")),
-		Hub: wrapped, Getenv: getenv, after: never, logAfter: never,
-	}.Run()
-	if !strings.Contains(string(out.Stdout), `"permissionDecision":"deny"`) || h.touched != 0 || len(h.sent) != 0 {
-		t.Fatalf("damaged marker output %q, requests %v, touches %d", out.Stdout, h.sent, h.touched)
-	}
-	if raw, err := os.ReadFile(proof); err != nil || string(raw) != "4\n" {
-		t.Fatalf("proof = %q, %v", raw, err)
-	}
-	if raw, err := os.ReadFile(marker); err != nil || string(raw) != "also damaged\n" {
-		t.Fatalf("marker = %q, %v", raw, err)
-	}
-	notes, err := ReadRecentObservations(getenv("IRIS_TOKEN_FILE"), 10)
-	if err != nil {
-		t.Fatal(err)
-	}
-	var got []string
-	for _, note := range notes {
-		got = append(got, note.Error)
-	}
-	want := []string{"damaged generation proof at " + marker} // gitleaks:allow (a test observation token and path, not a credential)
-	if !slices.Equal(got, want) {
-		t.Fatalf("observations = %v, want %v", got, want)
+func TestDamagedEndMarkerAllowsPreToolForEveryClient(t *testing.T) {
+	for _, client := range []Client{ClientClaude, ClientCodex, ClientCopilot, ClientCursor, ClientAntigravity, ClientGrok, ClientKimi} {
+		t.Run(string(client), func(t *testing.T) {
+			root := gitRepo(t)
+			getenv := failureEnv(t)
+			m := sessionsFor(getenv)
+			m.Remember(string(client), "s1", 4)
+			proof := m.name(string(client), "s1")
+			marker := proof + ".ended"
+			if err := os.WriteFile(marker, []byte("also damaged\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			h := &recoveryHub{generation: 1}
+			out := Runner{
+				ClientName: string(client), EventName: "PreToolUse", Stdin: strings.NewReader(editPayload(client, root)),
+				Hub: h, Memory: m, Getenv: getenv, after: never, logAfter: never,
+			}.Run()
+			assertAllow(t, client, out)
+			if h.touched != 0 || len(h.sent) != 0 {
+				t.Fatalf("damaged marker allowed registration or touch: requests %v, touches %d", h.sent, h.touched)
+			}
+			if raw, err := os.ReadFile(proof); err != nil || string(raw) != "4\n" {
+				t.Fatalf("proof = %q, %v", raw, err)
+			}
+			if raw, err := os.ReadFile(marker); err != nil || string(raw) != "also damaged\n" {
+				t.Fatalf("marker = %q, %v", raw, err)
+			}
+			notes, err := ReadRecentObservations(getenv("IRIS_TOKEN_FILE"), 10) // gitleaks:allow (a test observation token and path, not a credential)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got []string
+			for _, note := range notes {
+				got = append(got, note.Error)
+			}
+			want := []string{"damaged generation proof at " + marker} // gitleaks:allow (a test observation token and path, not a credential)
+			if !slices.Equal(got, want) {
+				t.Fatalf("observations = %v, want %v", got, want)
+			}
+			failures, err := ReadRecentFailures(getenv("IRIS_TOKEN_FILE"), 10)
+			if err != nil || len(failures) != 0 {
+				t.Fatalf("damaged marker became a hook failure: %+v, %v", failures, err)
+			}
+		})
 	}
 }
 

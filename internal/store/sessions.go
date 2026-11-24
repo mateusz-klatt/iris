@@ -400,6 +400,10 @@ func (t *transaction) session(r Request) (map[string]any, error) {
 // register registers a session in its checkout's repository, or with outside in its host's
 // context. An active Execution keeps its record either way: mail and claims never move silently,
 // and nothing is learned across the two kinds (ADR 034, decisions 2 and 4).
+func endedThroughRefusal(message string) error {
+	return &Error{Code: "lost", Message: message, Details: map[string]any{"reason": "ended_through"}}
+}
+
 func (t *transaction) register(r Request, outside bool) (map[string]any, error) {
 	if r.Client == "" || r.SessionID == "" || r.Host == "" || r.Cwd == "" {
 		return nil, fail("bad_request", "client, session_id, host and cwd are required")
@@ -427,7 +431,7 @@ func (t *transaction) register(r Request, outside bool) (map[string]any, error) 
 			return nil, fail("lost", "session generation no longer exists")
 		}
 		if r.EndedThrough > 0 && e.Generation <= r.EndedThrough {
-			return nil, fail("lost", "active session is at or below the ended generation")
+			return nil, endedThroughRefusal("active session is at or below the ended generation")
 		}
 		// The active row itself provides retained history at or above the floor.
 		if r.Generation == 0 && e.Generation < r.RetryGeneration {
@@ -491,11 +495,11 @@ func (t *transaction) register(r Request, outside bool) (map[string]any, error) 
 	if previous.State == "ended" && r.Source != "hook" {
 		return nil, fail("lost", "non-hook generation-zero registration cannot succeed an ended session")
 	}
+	if r.EndedThrough > 0 && (previous.Generation < r.EndedThrough || generation <= r.EndedThrough) {
+		return nil, endedThroughRefusal("session history cannot advance beyond the ended generation")
+	}
 	if r.RetryGeneration > 0 && (previous.Generation < r.RetryGeneration || generation < r.RetryGeneration) {
 		return nil, fail("lost", "session history is below the retry generation floor")
-	}
-	if r.EndedThrough > 0 && (previous.Generation < r.EndedThrough || generation <= r.EndedThrough) {
-		return nil, fail("lost", "session history cannot advance beyond the ended generation")
 	}
 	var repo string
 	if outside {

@@ -309,6 +309,9 @@ func (r Runner) shellReduced(ctx context.Context, hub scopedShellHub, plain shel
 			}
 			r.fullSucceeded(state, repo)
 			state.at("shell reconcile")
+			if err = checkEndedRegistration(state, ev, r.memory(), 0, s.Generation, false, nil); err != nil {
+				return out, false, err
+			}
 			out, err = plain.Reconcile(ctx, reconcileRequest(s.ExecutionID, s.Generation, phase, taken, repo))
 			return out, false, err
 		}
@@ -338,6 +341,9 @@ func (r Runner) shellReduced(ctx context.Context, hub scopedShellHub, plain shel
 	scope := hubclient.Scope{Mode: "dirty", Submodules: set}
 	if sess != nil {
 		state.at("shell reconcile")
+		if err = checkEndedRegistration(state, ev, r.memory(), 0, sess.Generation, false, nil); err != nil {
+			return out, false, err
+		}
 		out, err = hub.ReconcileScoped(ctx, hubclient.ScopedRequest{ReconcileRequest: reconcileRequest(sess.ExecutionID, sess.Generation, phase, taken, repo), Scope: scope})
 	} else {
 		state.at("shell session")
@@ -372,6 +378,9 @@ func (r Runner) reconcileScopedSession(ctx context.Context, state *runState, hub
 	}
 	req.Generation = generation
 	req.EndedThrough = endedThrough
+	if req.Generation == 0 {
+		req.RetryGeneration = endedThrough
+	}
 	res, err := hub.ReconcileScopedSession(ctx, req)
 	err = checkEndedRegistration(state, ev, m, endedThrough, res.Session.Generation, req.Generation == 0, err)
 	r.answered(m, ev, res, err)

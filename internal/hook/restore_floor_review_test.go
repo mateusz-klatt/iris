@@ -662,8 +662,8 @@ func TestDamagedEndMarkerDuringRegistrationKeepsPrunedProofAbsent(t *testing.T) 
 			if len(requests) != 1 || requests[0].generation != 3 {
 				t.Fatalf("damaged marker allowed another registration: %+v", requests)
 			}
-			if !strings.Contains(out, `"permissionDecision":"deny"`) {
-				t.Fatalf("refused hook output %q", out)
+			if out != string(FallbackAllow(ClientClaude).Stdout) {
+				t.Fatalf("damaged marker output %q, want allow", out)
 			}
 			assertReviewObservation(t, h, "damaged generation proof at "+marker) // gitleaks:allow (a test observation token and path, not a credential)
 		})

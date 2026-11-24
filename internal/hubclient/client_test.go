@@ -208,3 +208,25 @@ func TestAnOutsideRegistrationWithoutAnExecutionFails(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestEndedThroughReason(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		details any
+		want    bool
+	}{
+		{name: "strict floor", details: json.RawMessage(`{"reason":"ended_through","highest_generation":2}`), want: true},
+		{name: "ordinary recovery", details: json.RawMessage(`{"highest_generation":3}`)},
+		{name: "other reason", details: json.RawMessage(`{"reason":"retry_generation"}`)},
+		{name: "malformed details", details: json.RawMessage(`{`)},
+		{name: "programmatic error", details: map[string]any{"reason": EndedThroughReason}},
+		{name: "missing details"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := &Error{Code: "lost", Details: tc.details}
+			if got := err.HasEndedThroughReason(); got != tc.want {
+				t.Fatalf("HasEndedThroughReason() = %t, want %t", got, tc.want)
+			}
+		})
+	}
+}

@@ -182,7 +182,7 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 		}
 		var lost *Error
 		if (registers || registersShell) && errors.As(err, &lost) && lost.Code == "lost" {
-			return t.registrationLost(r, lost.Message)
+			return t.registrationLost(r, lost)
 		}
 		if err == nil && (registers || operation == "heartbeat") {
 			ex := r.ExecutionID
