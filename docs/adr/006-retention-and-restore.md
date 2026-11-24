@@ -203,9 +203,11 @@ including proof that has been idle for more than 30 days.
 
 A SessionStart whose live proof the marker vetoes registers with `generation:0`; an ordinary hook
 with vetoed proof instead refuses locally. Any hook with absent proof also registers with
-`generation:0`. Proof and marker are read together under the bounded session lock, including when
-proof is absent, so a concurrent SessionEnd cannot leave a request with old proof and an older
-floor. Every ordinary, outside-git, combined shell and SessionStart registration that is sent
+`generation:0`. Registration reads the marker before refreshing live proof under the bounded
+session lock. With no live proof it takes no lock, so unrelated attention or cleanup work cannot
+suppress a fresh SessionStart. These reads are not atomic, and the lock is released before dispatch:
+a concurrent SessionEnd can leave a request with an older floor, which is a known B1-min limit.
+Every ordinary, outside-git, combined shell and SessionStart registration that is sent
 carries an unexpired marker as `ended_through`, including when usable live proof is above it. A
 generation-zero request also carries the marker as `retry_generation`, preserving #417's
 safeguard on an older hub that ignores the new field. A retry raises both fields to the newest
@@ -214,9 +216,10 @@ active Execution, while a local SessionEnd makes an equal generation unusable. F
 `ended_through:G`, the hub requires retained history of at least G and a resulting binding
 strictly above G. It refuses an active Execution at or below G before renewing it, and refuses
 restored lower history or a candidate at or below G before inserting it. That refusal includes
-`error.details.reason:"ended_through"`; only this machine-readable reason records an
-ended-generation observation for a failed request. Proofless recovery of a later generation keeps
-ordinary D9 recovery handling. Retained terminal history at G lets a normal SessionStart allocate
+`error.details.reason:"ended_through"`. Without that reason, an older hub's refusal is treated as
+the end-floor case only when a valid `highest_generation` is strictly below the sent marker. Equal
+or higher retained generations keep ordinary D9 recovery handling. Retained terminal history at G
+lets a normal SessionStart allocate
 G+1. The hook accepts only a reply strictly above the marker and rechecks the marker after every
 registration response.
 
@@ -235,8 +238,16 @@ already-active G2 is refused before renewal as well. With retained terminal G2, 
 register G3 and publish proof that MCP and watch can bind. A recovering Execution still refuses a
 generation-zero request. An older hub can ignore `ended_through` and answer at or below the marker;
 the inclusive `retry_generation` still blocks the restored-history case. The client discards a
-vetoed answer without publishing proof or making a later separate call, but an older hub can already
-have created or renewed the Execution and committed a combined shell reconcile before its reply.
+vetoed answer without publishing its proof, but that cannot undo the hub's commit. An older hub can
+already have created or renewed the Execution and committed a combined shell reconcile before its
+reply.
+
+B1-min leaves later client races open. An ordinary grouped edit discovers checkouts after
+registration and can send `TouchFiles` for an ended generation if SessionEnd publishes its marker
+meanwhile. Proof publication is best-effort: its marker read errors are discarded, so that failure
+itself adds no doctor observation. Split shell paths make a lock-free marker check before their
+separate reconcile, but SessionEnd can advance the marker after that check and before the hub commits.
+None of these local checks is atomic with hub dispatch.
 
 An unreadable or malformed generation file stops registration and binding. An unreadable or
 malformed `.ended` marker stops `Forget`, proof restoration, and every ordinary, combined shell or

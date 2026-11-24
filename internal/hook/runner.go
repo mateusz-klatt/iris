@@ -429,10 +429,12 @@ func registrationProof(state *runState, ev Event, m Memory, retained int) (gener
 		return retained, 0, nil
 	}
 	if files, ok := m.(fileMemory); ok {
-		generation, endedThrough, err = files.recallRegistration(string(ev.Client), ev.SessionID)
-	} else {
-		generation, err = m.RecallGeneration(string(ev.Client), ev.SessionID)
+		endedThrough, err = sessionEndFloor(state, ev, files)
+		if err != nil {
+			return 0, 0, err
+		}
 	}
+	generation, err = m.RecallGeneration(string(ev.Client), ev.SessionID)
 	var damaged damagedEndMarker
 	if errors.As(err, &damaged) {
 		state.observe(damaged.Error())
@@ -485,7 +487,7 @@ func checkEndedRegistration(state *runState, ev Event, m Memory, sentEndedThroug
 	}
 	ended = max(ended, sentEndedThrough)
 	var hubErr *hubclient.Error
-	strictFloorRefusal := proofless && sentEndedThrough > 0 && errors.As(err, &hubErr) && hubErr.Code == "lost" && hubErr.HasEndedThroughReason()
+	strictFloorRefusal := proofless && sentEndedThrough > 0 && errors.As(err, &hubErr) && hubErr.Code == "lost" && hubErr.IsEndedThroughRefusal(sentEndedThrough)
 	if ended > 0 && (err == nil && generation <= ended || strictFloorRefusal) {
 		state.observe(endedProof(files.name(string(ev.Client), ev.SessionID) + ".ended").Error())
 		return errEndedGeneration

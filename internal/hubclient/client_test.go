@@ -230,3 +230,25 @@ func TestEndedThroughReason(t *testing.T) {
 		})
 	}
 }
+
+func TestEndedThroughRefusalEvidence(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		details json.RawMessage
+		want    bool
+	}{
+		{name: "new hub reason", details: json.RawMessage(`{"reason":"ended_through","highest_generation":3}`), want: true},
+		{name: "older hub below floor", details: json.RawMessage(`{"highest_generation":1}`), want: true},
+		{name: "equal generation is not strict evidence", details: json.RawMessage(`{"highest_generation":2}`)},
+		{name: "higher generation keeps recovery handling", details: json.RawMessage(`{"highest_generation":3}`)},
+		{name: "missing history"},
+		{name: "malformed history", details: json.RawMessage(`{"highest_generation":"low"}`)},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := &Error{Code: "lost", Details: tc.details}
+			if got := err.IsEndedThroughRefusal(2); got != tc.want {
+				t.Fatalf("IsEndedThroughRefusal(2) = %t, want %t", got, tc.want)
+			}
+		})
+	}
+}

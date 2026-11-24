@@ -292,6 +292,15 @@ func (e *Error) HasEndedThroughReason() bool {
 	return json.Unmarshal(raw, &details) == nil && details.Reason == EndedThroughReason
 }
 
+// IsEndedThroughRefusal also recognizes an older hub's inclusive refusal below the sent end floor.
+func (e *Error) IsEndedThroughRefusal(floor int) bool {
+	if e.HasEndedThroughReason() {
+		return true
+	}
+	highest, valid, _ := e.HighestGeneration()
+	return valid && highest < floor
+}
+
 // Do issues an authenticated JSON request. Callers keep retry keys stable across retries.
 func (c *Client) Do(ctx context.Context, method, path string, body, dest any) error {
 	if c == nil || c.Config == nil {

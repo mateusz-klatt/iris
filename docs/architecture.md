@@ -757,9 +757,10 @@ Changes from the reference schema:
    the client's allow output. Local doctor output names the damaged file as an observation, not
    a hook failure. It also names an `.ended` marker that contributed a generation or is damaged,
    and the `.ended` path when SessionEnd could not write that marker or take the sessions lock.
-   Those paths stay in the local report. The hook reads proof and marker together under the
-   bounded session lock before sending, including when proof is absent; proof read before a prune
-   won that lock remains usable, but the locked marker is never older than that proof. A readable
+   Those paths stay in the local report. Registration reads the marker before refreshing live
+   proof under the bounded session lock. Absent proof takes no lock, so unrelated attention or
+   cleanup cannot suppress a fresh SessionStart. The reads are not atomic and the lock is released
+   before dispatch: SessionEnd can leave a request with an older floor, a known B1-min limit. A readable
    marker vetoes hook proof and delayed generation writes at or below its value. A refusal can
    restore proof to a missing file only above the recorded end. Generation writes keep the highest
    proof and SessionEnd clears proof at or below the generation it ended. Every ordinary,
@@ -772,16 +773,21 @@ Changes from the reference schema:
    `ended_through` is strict: the hub requires retained history at least at the marker and a
    resulting binding strictly above it. It refuses an active Execution at or below the marker
    before renewal, and refuses a restored lower history or a candidate at or below the marker
-   before insertion. Such a refusal carries `error.details.reason:"ended_through"`; only that
-   reason records an ended-generation observation for a failed request, so proofless recovery
-   above the marker keeps D9's ordinary recovery handling. Retained terminal history at the marker
+   before insertion. Such a refusal carries `error.details.reason:"ended_through"`. Without that
+   reason, a valid `highest_generation` strictly below the sent marker identifies an older hub's
+   inclusive-floor refusal. Equal or higher generations keep D9's ordinary recovery handling.
+   Retained terminal history at the marker
    still lets a normal SessionStart allocate its successor. A recovering Execution still requires
    exact live proof. An ordinary hook with stale proof makes no registration request and records
    the marker path for `iris doctor`. A registration response is checked against the marker again
-   before its generation is remembered or a later separate claim or reconcile call; a split shell
-   reconcile rechecks immediately before that separate call. A combined shell reconcile has already
-   run on the hub before its reply, and an older hub can commit it at or below the marker before
-   the client discards the reply. An old hook that reports no floor cannot be protected server-side.
+   before its generation is remembered. A split shell path makes a lock-free check immediately
+   before its separate reconcile, but SessionEnd can advance the marker after that check and before
+   the hub commits. An ordinary grouped edit has no marker check after checkout discovery and can
+   still send `TouchFiles` for an ended generation. Proof publication is best-effort and discards
+   marker read errors, adding no observation for that write failure. A combined shell reconcile has
+   already run on the hub before its reply, and an older hub can commit it at or below the marker
+   before the client discards the reply. B1-min does not close these remaining client races. An old
+   hook that reports no floor cannot be protected server-side.
    After a successful registration, the hook can discard vetoed proof and remove the expired marker
    before publishing replacement proof, under the same lock and independent of the general sweep.
    The hook reads and refreshes any still-usable idle proof before successful SessionStart pruning

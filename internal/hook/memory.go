@@ -80,52 +80,39 @@ func readGeneration(path string) (int, error) {
 	return generation, nil
 }
 
-// RecallGeneration keeps known proof fresh before a request can race idle pruning.
+// RecallGeneration keeps known proof fresh before a request can race idle pruning. Absent proof
+// needs no lock, so unrelated session-file work cannot suppress a fresh SessionStart.
 func (m fileMemory) RecallGeneration(client, session string) (int, error) {
-	generation, _, err := m.recallRegistration(client, session)
-	return generation, err
-}
-
-// recallRegistration reads proof and its end marker under one lock, including when proof is absent.
-func (m fileMemory) recallRegistration(client, session string) (generation, endedThrough int, err error) {
-	now := m.now()
 	path := m.name(client, session)
-	generation, err = readGeneration(path)
-	if err != nil {
-		return 0, 0, err
+	generation, readErr := readGeneration(path)
+	if generation == 0 {
+		return 0, readErr
 	}
-	if lockErr := m.underLock(func() {
-		current, currentErr := readGeneration(path)
-		if currentErr != nil {
-			err = currentErr
+	if err := m.underLock(func() {
+		var current int
+		current, readErr = readGeneration(path)
+		if readErr != nil {
 			return
 		}
-		// A prune can win the lock, in which case the proof already read still belongs in the request.
+		// Another hook can write newer proof before we take the lock. A prune can also
+		// win the lock, in which case the proof we already read still belongs in the request.
 		generation = max(generation, current)
-		ended, markerErr := readGeneration(path + ".ended")
-		if markerErr != nil {
-			err = damagedEndMarker(path + ".ended")
+		ended, err := readGeneration(path + ".ended")
+		if err != nil {
+			readErr = damagedEndMarker(path + ".ended")
 			return
 		}
-		if !endMarkerExpired(path+".ended", now) {
-			endedThrough = ended
-		}
-		if generation > 0 && generation <= ended {
-			err = endedProof(path + ".ended")
+		if generation <= ended {
+			readErr = endedProof(path + ".ended")
 			return
 		}
-		if current == generation && generation > 0 {
+		if current == generation {
 			m.touchGeneration(path)
 		}
-	}); lockErr != nil {
-		return 0, 0, lockErr
+	}); err != nil {
+		return 0, err
 	}
-	return generation, endedThrough, err
-}
-
-func endMarkerExpired(marker string, now time.Time) bool {
-	info, err := os.Lstat(marker)
-	return err == nil && info.ModTime().Before(now.Add(-memoryAge))
+	return generation, readErr
 }
 
 // readEndMarker reads the marker and reports whether it has aged past local retention.
@@ -134,7 +121,8 @@ func (m fileMemory) readEndMarker(marker string) (generation int, expired bool, 
 	if generation == 0 {
 		return 0, false, err
 	}
-	return generation, endMarkerExpired(marker, m.now()), nil
+	info, statErr := os.Lstat(marker)
+	return generation, statErr == nil && info.ModTime().Before(m.now().Add(-memoryAge)), nil
 }
 
 // Remember keeps newer live proof and ignores replies for a generation another hook ended.
