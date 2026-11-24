@@ -691,6 +691,10 @@ func (s *endMarkerScanner) readDirectory(dir string) string {
 				continue
 			}
 			path := filepath.Join(dir, entry.Name())
+			if !endMarkerRegularFile(entry, path) {
+				s.damaged = append(s.damaged, path)
+				continue
+			}
 			if _, err := hook.ReadGeneration(path); err != nil {
 				s.damaged = append(s.damaged, path)
 			}
@@ -706,6 +710,17 @@ func (s *endMarkerScanner) readDirectory(dir string) string {
 			return "could not scan for damaged end markers: " + readErr.Error()
 		}
 	}
+}
+
+// endMarkerRegularFile prevents a special file from blocking a generation read.
+func endMarkerRegularFile(entry os.DirEntry, path string) bool {
+	info, err := entry.Info()
+	regular := err == nil && info.Mode().IsRegular()
+	if entry.Type()&os.ModeSymlink != 0 {
+		target, statErr := os.Stat(path)
+		regular = statErr == nil && target.Mode().IsRegular()
+	}
+	return regular
 }
 
 // scanDamagedEndMarkers checks every distinct token-derived directory under one shared budget.
@@ -729,7 +744,7 @@ func scanDamagedEndMarkers(ctx context.Context, tokenFile, fallbackTokenFile str
 	}
 	if scanner.incomplete != "" {
 		examined := scanner.entryLimit - scanner.entriesLeft
-		notes = append(notes, fmt.Sprintf("end-marker scan incomplete (%s) after examining %d entries; at least %d damaged end marker(s) found so far", scanner.incomplete, examined, len(scanner.damaged)))
+		notes = append(notes, fmt.Sprintf("end-marker scan incomplete (%s): examined %d entries; found %d damaged end marker(s) so far, and more may be damaged", scanner.incomplete, examined, len(scanner.damaged)))
 	}
 	return scanner.damaged, scanner.incomplete != "", strings.Join(notes, "; ")
 }

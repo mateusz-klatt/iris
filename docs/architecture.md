@@ -760,12 +760,16 @@ Changes from the reference schema:
    Doctor re-reads every named damaged marker and, independently of the rolling observation log,
    scans the sessions directories beside the resolved and fallback token paths, deduplicated by
    cleaned absolute path. Incremental, non-recursive directory reads across all of them share a
-   4096-entry budget, a one-second wall-clock budget and doctor's parent context. Every examined
-   `*.ended` entry uses the hook's read rule: a positive generation is healthy; malformed content,
-   a directory, an unreadable file or a dangling link is damaged. Current damage makes doctor exit
-   1 however old or evicted its observation is. Exhausting either budget or cancellation marks the
-   scan incomplete and also makes doctor exit 1, even when no damage was found; a local-only note
-   states why and gives the number found so far as a lower bound. A matching retained observation
+   4096-entry budget, a one-second wall-clock budget and doctor's parent context. Before opening an
+   examined `*.ended` entry, doctor requires a regular file or a symlink to a regular target. A
+   directory, FIFO, socket, device or other non-regular entry, a dangling link, or a link to a
+   non-regular target is damaged without opening it, so a special file cannot stall the scan. A
+   regular file then uses the hook's read rule: a positive generation is healthy; malformed or
+   unreadable content is damaged. Current damage makes doctor exit 1 however old or evicted its
+   observation is. Exhausting either budget or cancellation marks the scan incomplete and also
+   makes doctor exit 1, even when no damage was found; a local-only note states why, gives the
+   number found so far as a lower bound, and says plainly that more may be damaged. A matching
+   retained observation
    supplies the client; otherwise doctor prints a clearly labelled local-only line without one.
    Repaired or archived files named by an observation remain history and do not fail doctor. A
    healthy or missing sessions directory adds nothing; an unreadable one adds a local note rather

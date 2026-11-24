@@ -263,6 +263,23 @@ func TestDoctorCurrentMarkerScanHealthyCases(t *testing.T) {
 			unexpected: []string{"still damaged", "local sessions without a client observation"},
 		},
 		{
+			name: "valid symlink to a regular marker",
+			setup: func(t *testing.T, sessions *hook.Sessions, _ time.Time) string {
+				t.Helper()
+				if err := os.Mkdir(sessions.Dir(), 0o700); err != nil {
+					t.Fatal(err)
+				}
+				target := filepath.Join(t.TempDir(), "generation")
+				if err := os.WriteFile(target, []byte("5\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				marker := filepath.Join(sessions.Dir(), "valid-link.ended")
+				symlinkTo(t, target, marker)
+				return marker
+			},
+			unexpected: []string{"damaged generation proof", "local sessions"},
+		},
+		{
 			name: "valid marker and ignored entries",
 			setup: func(t *testing.T, sessions *hook.Sessions, _ time.Time) string {
 				t.Helper()
@@ -314,7 +331,7 @@ func TestDoctorCurrentMarkerScanHealthyCases(t *testing.T) {
 	}
 }
 
-func TestDoctorCurrentMarkerScanRejectsDirectoriesAndDanglingLinks(t *testing.T) {
+func TestDoctorCurrentMarkerScanRejectsNonRegularMarkers(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
 		setup func(*testing.T, string)
@@ -326,6 +343,14 @@ func TestDoctorCurrentMarkerScanRejectsDirectoriesAndDanglingLinks(t *testing.T)
 			}
 		}},
 		{name: "dangling link", setup: symlinkToMissing},
+		{name: "link to directory", setup: func(t *testing.T, marker string) {
+			t.Helper()
+			target := filepath.Join(t.TempDir(), "target")
+			if err := os.Mkdir(target, 0o700); err != nil {
+				t.Fatal(err)
+			}
+			symlinkTo(t, target, marker)
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			var marker string
@@ -364,20 +389,14 @@ func TestDoctorNotesAnUnreadableSessionsDirectory(t *testing.T) {
 	assertRedactedMarkerCount(t, res, upload, "", 0)
 }
 
-func assertIncompleteMarkerScan(t *testing.T, res Result, reason string, damaged int) {
+func assertIncompleteMarkerScan(t *testing.T, res Result, reason string, examined, damaged int) {
 	t.Helper()
 	if res.ExitCode() != 1 || !res.Report.EndMarkerScanIncomplete || res.Report.CurrentDamagedEndMarkers != damaged {
 		t.Fatalf("exit = %d, incomplete = %v, damaged = %d; want 1, true, %d", res.ExitCode(), res.Report.EndMarkerScanIncomplete, res.Report.CurrentDamagedEndMarkers, damaged)
 	}
-	report := res.Format()
-	for _, want := range []string{
-		"end-marker scan incomplete",
-		reason,
-		fmt.Sprintf("at least %d damaged end marker(s) found so far", damaged),
-	} {
-		if !strings.Contains(report, want) {
-			t.Errorf("incomplete scan note omitted %q:\n%s", want, report)
-		}
+	want := fmt.Sprintf("end-marker scan incomplete (%s): examined %d entries; found %d damaged end marker(s) so far, and more may be damaged", reason, examined, damaged)
+	if report := res.Format(); !strings.Contains(report, want) {
+		t.Errorf("incomplete scan note omitted %q:\n%s", want, report)
 	}
 }
 
@@ -444,7 +463,7 @@ func TestDoctorSharesTheEntryBudgetAcrossSessionsDirectories(t *testing.T) {
 			t.Fatal(err)
 		}
 	})
-	assertIncompleteMarkerScan(t, res, "entry budget of 1 exceeded", 1)
+	assertIncompleteMarkerScan(t, res, "entry budget of 1 exceeded", 1, 1)
 	if report := res.Format(); !strings.Contains(report, primaryMarker+" (still damaged)") || strings.Contains(report, fallbackMarker) {
 		t.Fatalf("entry-budget lower bound is not the examined prefix:\n%s", report)
 	}
@@ -455,12 +474,13 @@ func TestDoctorFailsAnIncompleteTimeBudgetScan(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
 		expireCall   int
+		examined     int
 		damaged      int
 		expectMarker bool
 	}{
 		{name: "before directory read", expireCall: 3},
 		{name: "before marker read", expireCall: 4},
-		{name: "after marker read", expireCall: 5, damaged: 1, expectMarker: true},
+		{name: "after marker read", expireCall: 5, examined: 1, damaged: 1, expectMarker: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			layout := emptyLayout(t)
@@ -485,7 +505,7 @@ func TestDoctorFailsAnIncompleteTimeBudgetScan(t *testing.T) {
 				return start.Add(2 * endMarkerScanTimeBudget)
 			}
 			res, upload := runEndedMarkerDoctorWithOptions(t, layout, Options{TokenFile: token, markerScanClock: clock}, start)
-			assertIncompleteMarkerScan(t, res, "time budget exceeded", tc.damaged)
+			assertIncompleteMarkerScan(t, res, "time budget exceeded", tc.examined, tc.damaged)
 			if report := res.Format(); strings.Contains(report, marker) != tc.expectMarker {
 				t.Fatalf("time-expired scan marker presence = %v, want %v:\n%s", !tc.expectMarker, tc.expectMarker, report)
 			}
@@ -505,7 +525,7 @@ func TestDoctorFailsACancelledMarkerScan(t *testing.T) {
 	if err := applyFailuresFrom(ctx, &res, token, "", time.Now(), defaultEndMarkerScanConfig()); err != nil {
 		t.Fatal(err)
 	}
-	assertIncompleteMarkerScan(t, res, "context cancelled", 0)
+	assertIncompleteMarkerScan(t, res, "context cancelled", 0, 0)
 	bundle := NewBundle(res, "test", time.Now())
 	if !bundle.EndMarkerScanIncomplete || bundle.CurrentDamagedEndMarkers != 0 {
 		t.Fatalf("cancelled scan bundle = %+v", bundle)

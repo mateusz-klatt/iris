@@ -261,11 +261,15 @@ or allows `Forget` to record an end. Local `iris doctor` output reports
 observation age and the bounded log, doctor also scans the sessions directories beside the resolved
 and fallback token paths, deduplicated by cleaned absolute path. Incremental, non-recursive reads
 across every directory share a 4096-entry budget, a one-second wall-clock budget and doctor's parent
-context. Every examined entry uses the hook's rule. A marker still damaged is current and makes
-doctor exit 1 even when its observation is old or evicted; one repaired with a positive generation
-or archived since an observation remains history and does not fail doctor. Exhausting either budget
-or cancellation makes the scan incomplete and doctor exit 1 even without a finding. A local-only
-note gives the reason and the number found so far as a lower bound. Current damage uses the client
+context. Before opening an examined entry, doctor requires a regular file or a symlink to a regular
+target. Directories, FIFOs, sockets, devices and other non-regular entries, dangling links, and links
+to non-regular targets are damaged without being opened, so a special file cannot stall the scan.
+Regular files then use the hook's rule. A marker still damaged is current and makes doctor exit 1
+even when its observation is old or evicted; one repaired with a positive generation or archived
+since an observation remains history and does not fail doctor. Exhausting either budget or
+cancellation makes the scan incomplete and doctor exit 1 even without a finding. A local-only note
+gives the reason and the number found so far as a lower bound, and says plainly that more may be
+damaged. Current damage uses the client
 from a matching retained observation, or a clearly labelled local-only line without a client when
 no observation remains. A healthy or missing directory adds nothing, and an unreadable directory
 produces a doctor note rather than a crash. The local detail explains that current damage prevents
