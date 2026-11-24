@@ -499,9 +499,52 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     document.body.dataset.humanUnread = String(overview.human_unread);
   }, [overview]);
 
-  const cancelThreadRead = useCallback(() => {
+  const flushRead = useCallback((deferReload = false) => {
+    const rendered = renderedThread.current;
+    if (rendered === null || document.visibilityState === "hidden" || readRequestedFor.current !== rendered.opening) {
+      return null;
+    }
+    const highWater = rendered.detail.high_water_message_id ?? "";
+    if (highWater === "") {
+      return null;
+    }
+    // Only a committed, visible snapshot consumes this opening's authorization.
+    // Refresh responses received while hidden may replace it before the tab resumes.
     readRequestedFor.current = null;
-  }, []);
+    if (member || !unreadForOperator(rendered.detail)) {
+      return null;
+    }
+    // A response belongs to the opening that sent it. A later opening, including another
+    // visit to the same thread, keeps its own reload hint.
+    const applyRead = (refused: boolean) => {
+      const current = openedThreadRef.current;
+      const currentKey = current === null ? "" : openingKey(current);
+      if (currentKey !== openingKey(rendered.opening)) {
+        return;
+      }
+      setReadReloadKey(refused ? currentKey : null);
+    };
+    return readThread(rendered.opening.id, rendered.repositoryId, highWater)
+      .then((read) => {
+        applyRead(false);
+        if (!deferReload && read > 0) {
+          postReadRefresh.current?.();
+        }
+      })
+      .catch((error: unknown) => {
+        // 400 is this hub refusing a watermark. 404 is a v0.1.13 hub, which has no path-watermark route.
+        if (error instanceof ApiError && (error.status === 400 || error.status === 404)) {
+          applyRead(true);
+        }
+      });
+  }, [member]);
+
+  const cancelThreadRead = useCallback(() => {
+    // A rendered, visible read still counts when its detail closes. Hidden and unrendered
+    // openings have no visible snapshot to acknowledge and are only cancelled.
+    void flushRead(true);
+    readRequestedFor.current = null;
+  }, [flushRead]);
 
   const transientState = {
     activeView,
@@ -593,46 +636,6 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     }
   }, [member]);
 
-  const flushRead = useCallback((deferReload = false) => {
-    const rendered = renderedThread.current;
-    if (rendered === null || document.visibilityState === "hidden" || readRequestedFor.current !== rendered.opening) {
-      return null;
-    }
-    const highWater = rendered.detail.high_water_message_id ?? "";
-    if (highWater === "") {
-      return null;
-    }
-    // Only a committed, visible snapshot consumes this opening's authorization.
-    // Refresh responses received while hidden may replace it before the tab resumes.
-    readRequestedFor.current = null;
-    if (member || !unreadForOperator(rendered.detail)) {
-      return null;
-    }
-    // A response belongs to the opening that sent it. A later opening, including another
-    // visit to the same thread, keeps its own reload hint.
-    const applyRead = (refused: boolean) => {
-      const current = openedThreadRef.current;
-      const currentKey = current === null ? "" : openingKey(current);
-      if (currentKey !== openingKey(rendered.opening)) {
-        return;
-      }
-      setReadReloadKey(refused ? currentKey : null);
-    };
-    return readThread(rendered.opening.id, rendered.repositoryId, highWater)
-      .then((read) => {
-        applyRead(false);
-        if (!deferReload && read > 0) {
-          postReadRefresh.current?.();
-        }
-      })
-      .catch((error: unknown) => {
-        // 400 is this hub refusing a watermark. 404 is a v0.1.13 hub, which has no path-watermark route.
-        if (error instanceof ApiError && (error.status === 400 || error.status === 404)) {
-          applyRead(true);
-        }
-      });
-  }, [member]);
-
   useLayoutEffect(() => {
     // Publish the reader only after React commits its DOM. Promise callbacks may
     // enqueue several snapshots together; none can acknowledge an unrendered one.
@@ -642,7 +645,11 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     void flushRead();
   }, [activeView, flushRead, loadedThread, openedThread, phase, repositoryId]);
 
-  useEffect(() => () => cancelThreadRead(), [cancelThreadRead]);
+  useEffect(() => () => {
+    // Unmount ends the console session (sign-out or 401); cancel without flushing
+    // so a deferred read is never sent after logout revokes the session.
+    readRequestedFor.current = null;
+  }, []);
 
   // revision changes only to retry after an error, which reconnects too.
   useEffect(() => {
@@ -654,6 +661,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     // either is in flight must not start a second read or a second refresh.
     let resuming = false;
     let resumeRefresh = false;
+    let resumeReadPending = false;
     let lastScheduledStarted = 0;
     let currentStarted = 0;
     let cooldownTimer: ReturnType<typeof setTimeout> | undefined;
@@ -700,8 +708,8 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       if (bumpThreads) {
         setThreadRevision((value) => value + 1);
       }
-      const ownedResume = resumeRefresh;
       void reload().finally(() => {
+        const ownedResume = resumeRefresh;
         running = false;
         if (ownedResume) {
           resumeRefresh = false;
@@ -709,6 +717,10 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
         }
         if (closed || hidden) {
           return;
+        }
+        if (ownedResume && resumeReadPending) {
+          resumeReadPending = false;
+          void flushRead(true);
         }
         if (pending) {
           scheduleCooldown();
@@ -733,7 +745,9 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       pending = false;
       if (running) {
         pending = true;
-        resuming = false;
+        // The refresh already running is this resume's one refresh. Keep ownership until
+        // it settles so a read deferred by a bounce retains its flush.
+        resumeRefresh = true;
         return;
       }
       resumeRefresh = true;
@@ -756,9 +770,13 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       // the tab as visible when its read settles, and must not start a second read or refresh.
       hidden = false;
       if (resuming) {
+        // A read deferred by this bounce belongs to the resume already in flight. Flush it
+        // when that resume settles instead of starting another read or refresh here.
+        resumeReadPending = true;
         return;
       }
       resuming = true;
+      resumeReadPending = false;
       // Flush a deferred read before the one resume refresh. A positive acknowledgement
       // shares that refresh. If the tab is hidden again when the read settles, skip it.
       const pendingFlush = flushRead(true);
@@ -1067,6 +1085,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const openThread = (id: string, trigger: HTMLButtonElement) => {
     lastThreadButton.current = trigger;
     chooseView("messages");
+    cancelThreadRead();
     // Each click requests fresh detail, even when the selected ID stays the same.
     const opened = { id, generation: ++openingGeneration.current };
     activeOpening.current = opened;

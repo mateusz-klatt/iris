@@ -658,6 +658,281 @@ describe("console refresh scheduling", () => {
     }
   });
 
+  async function bouncedResumeWithDeferredRead() {
+    vi.useFakeTimers();
+    const visibility = mockVisibility("visible");
+    const tracker = trackRequests();
+    const opening = deferred<Response>();
+    const resume = deferred<Response>();
+    const counts = { overviews: 0, details: 0 };
+    const reads: DocumentVisibilityState[] = [];
+    const readIds: string[] = [];
+    const events: string[] = [];
+    const otherDetail = {
+      ...threadDetail,
+      id: "ms_other",
+      high_water_message_id: "ms_other",
+      messages: [{ ...threadDetail.messages[0]!, id: "ms_other", subject: "Other thread" }],
+    };
+    server.use(
+      http.get("*/v1/ui/overview", () => {
+        counts.overviews++;
+        return counts.overviews === 2 ? resume.promise : HttpResponse.json(sessionOverview);
+      }),
+      http.get("*/v1/ui/threads", () => HttpResponse.json({ threads: [
+        ...threadsPage.threads,
+        { ...threadsPage.threads[0]!, id: "ms_other", subject: "Other thread" },
+      ] })),
+      http.get("*/v1/ui/threads/:id", ({ params }) => {
+        counts.details++;
+        const detail = params.id === "ms_other" ? otherDetail : threadDetail;
+        return counts.details === 1 ? opening.promise : HttpResponse.json(detail);
+      }),
+      http.post("*/v1/ui/threads/:id/read/:message", ({ params }) => {
+        reads.push(document.visibilityState);
+        readIds.push(String(params.id));
+        events.push("read");
+        return HttpResponse.json({ read: 1 });
+      }),
+    );
+    render(<App connect={() => () => {}} />);
+    await flushFakeNetwork();
+
+    // The first show starts a resume while the opening has no rendered detail to read.
+    visibility.set("hidden");
+    fireEvent.click(screen.getByRole("button", { name: /Open thread: Rollout check/ }));
+    await flushFakeNetwork(2);
+    visibility.set("visible");
+    visibility.set("hidden");
+    await flushFakeNetwork(2);
+
+    // Detail commits during the second hidden interval, so its read remains deferred.
+    await act(async () => {
+      opening.resolve(HttpResponse.json(threadDetail));
+    });
+    await flushFakeNetwork();
+    visibility.set("visible");
+    tracker.reset();
+
+    return {
+      counts,
+      reads,
+      readIds,
+      events,
+      visibility,
+      settleResume: async () => {
+        await act(async () => {
+          resume.resolve(HttpResponse.json(sessionOverview));
+        });
+        await flushFakeNetwork();
+      },
+      finish: async () => {
+        opening.resolve(HttpResponse.json(threadDetail));
+        resume.resolve(HttpResponse.json(sessionOverview));
+        await flushFakeNetwork();
+        visibility.restore();
+        tracker.stop();
+      },
+    };
+  }
+
+  it("flushes a read deferred by a visibility bounce when the resume settles, before the fallback", async () => {
+    const view = await bouncedResumeWithDeferredRead();
+    try {
+      expect(view.counts).toEqual({ overviews: 2, details: 2 });
+      expect(view.reads).toEqual([]);
+
+      await view.settleResume();
+      expect(view.reads).toEqual(["visible"]);
+      expect(view.counts.overviews).toBe(2);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(29_000);
+      });
+      await flushFakeNetwork();
+      expect(view.reads).toEqual(["visible"]);
+      expect(view.counts.overviews).toBe(2);
+    } finally {
+      await view.finish();
+    }
+  });
+
+  it("flushes a bounced resume's deferred read once when the detail closes first", async () => {
+    const view = await bouncedResumeWithDeferredRead();
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "Back to threads" }));
+      await flushFakeNetwork();
+      expect(view.reads).toEqual(["visible"]);
+
+      await view.settleResume();
+      expect(view.reads).toEqual(["visible"]);
+      expect(view.counts.overviews).toBe(2);
+    } finally {
+      await view.finish();
+    }
+  });
+
+  it("flushes the outgoing thread's deferred read before switching openings after a bounce", async () => {
+    const view = await bouncedResumeWithDeferredRead();
+    try {
+      fireEvent.click(screen.getByRole("button", { name: /Open thread: Other thread/ }));
+      await flushFakeNetwork();
+      expect(view.readIds).toEqual(["ms_root", "ms_other"]);
+      expect(view.reads).toEqual(["visible", "visible"]);
+
+      await view.settleResume();
+      expect(view.readIds).toEqual(["ms_root", "ms_other"]);
+    } finally {
+      await view.finish();
+    }
+  });
+
+  it("signs out immediately without flushing a bounced deferred read before or after logout", async () => {
+    const view = await bouncedResumeWithDeferredRead();
+    const logoutGate = deferred<Response>();
+    try {
+      server.use(http.post("*/v1/ui/logout", () => {
+        view.events.push("logout");
+        return logoutGate.promise;
+      }));
+      fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+      await flushFakeNetwork(2);
+
+      // Logout starts immediately without waiting on or dispatching the deferred read.
+      expect(view.events).toEqual(["logout"]);
+      expect(view.reads).toEqual([]);
+      expect(screen.getByRole("button", { name: "Signing out…" })).toBeDisabled();
+
+      await act(async () => {
+        logoutGate.resolve(new HttpResponse(null, { status: 204 }));
+      });
+      await flushFakeNetwork();
+
+      expect(screen.getByLabelText("Username")).toBeVisible();
+      expect(view.events).toEqual(["logout"]);
+      expect(view.reads).toEqual([]);
+
+      await view.settleResume();
+      expect(view.events).toEqual(["logout"]);
+      expect(view.reads).toEqual([]);
+    } finally {
+      logoutGate.resolve(new HttpResponse(null, { status: 204 }));
+      await view.finish();
+    }
+  });
+
+  it("does not flush a bounced resume's deferred read while hidden at settle", async () => {
+    const view = await bouncedResumeWithDeferredRead();
+    try {
+      view.visibility.set("hidden");
+      await view.settleResume();
+      expect(view.reads).toEqual([]);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      await flushFakeNetwork();
+      expect(view.reads).toEqual([]);
+      expect(view.counts.overviews).toBe(2);
+    } finally {
+      await view.finish();
+    }
+  });
+
+  it("does not start a second resume refresh when a bounce defers a read", async () => {
+    const view = await bouncedResumeWithDeferredRead();
+    try {
+      expect(view.counts.overviews).toBe(2);
+      await view.settleResume();
+      expect(view.counts.overviews).toBe(2);
+      expect(view.reads).toEqual(["visible"]);
+
+      act(() => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await flushFakeNetwork();
+      expect(view.counts.overviews).toBe(2);
+    } finally {
+      await view.finish();
+    }
+  });
+
+  it("flushes a bounced read when its resume shares an already-running watch refresh", async () => {
+    vi.useFakeTimers();
+    const visibility = mockVisibility("visible");
+    const firstRead = deferred<Response>();
+    const watchRefresh = deferred<Response>();
+    const readIds: string[] = [];
+    const readVisibilities: DocumentVisibilityState[] = [];
+    let onFrame: ((frame: WatchFrame) => void) | undefined;
+    let overviews = 0;
+    const otherDetail = {
+      ...threadDetail,
+      id: "ms_other",
+      high_water_message_id: "ms_other",
+      messages: [{ ...threadDetail.messages[0]!, id: "ms_other", subject: "Other thread" }],
+    };
+    try {
+      server.use(
+        http.get("*/v1/ui/overview", () => {
+          overviews++;
+          return overviews === 2 ? watchRefresh.promise : HttpResponse.json(sessionOverview);
+        }),
+        http.get("*/v1/ui/threads", () => HttpResponse.json({ threads: [
+          ...threadsPage.threads,
+          { ...threadsPage.threads[0]!, id: "ms_other", subject: "Other thread" },
+        ] })),
+        http.get("*/v1/ui/threads/:id", ({ params }) => HttpResponse.json(
+          params.id === "ms_other" ? otherDetail : threadDetail,
+        )),
+        http.post("*/v1/ui/threads/:id/read/:message", ({ params }) => {
+          readIds.push(String(params.id));
+          readVisibilities.push(document.visibilityState);
+          return readIds.length === 1 ? firstRead.promise : HttpResponse.json({ read: 1 });
+        }),
+      );
+      render(<App connect={(frame) => { onFrame = frame; return () => {}; }} />);
+      await flushFakeNetwork();
+
+      act(() => onFrame?.({ cursor: 1, kind: "changed" }));
+      await flushFakeNetwork(2);
+      expect(overviews).toBe(2);
+      visibility.set("hidden");
+      fireEvent.click(screen.getByRole("button", { name: /Open thread: Rollout check/ }));
+      await flushFakeNetwork();
+      expect(readIds).toEqual([]);
+
+      visibility.set("visible");
+      await flushFakeNetwork(2);
+      expect(readIds).toEqual(["ms_root"]);
+      visibility.set("hidden");
+      fireEvent.click(screen.getByRole("button", { name: /Open thread: Other thread/ }));
+      await flushFakeNetwork();
+      expect(readIds).toEqual(["ms_root"]);
+      visibility.set("visible");
+
+      await act(async () => {
+        firstRead.resolve(HttpResponse.json({ read: 1 }));
+      });
+      await flushFakeNetwork(2);
+      expect(overviews).toBe(2);
+      expect(readIds).toEqual(["ms_root"]);
+
+      await act(async () => {
+        watchRefresh.resolve(HttpResponse.json(sessionOverview));
+      });
+      await flushFakeNetwork();
+      expect(readIds).toEqual(["ms_root", "ms_other"]);
+      expect(readVisibilities).toEqual(["visible", "visible"]);
+      expect(overviews).toBe(2);
+    } finally {
+      firstRead.resolve(HttpResponse.json({ read: 1 }));
+      watchRefresh.resolve(HttpResponse.json(sessionOverview));
+      await flushFakeNetwork();
+      visibility.restore();
+    }
+  });
+
   it("drops a post-read follow-up reload if the tab hides before acknowledgement settles", async () => {
     vi.useFakeTimers();
     const visibility = mockVisibility("visible");
