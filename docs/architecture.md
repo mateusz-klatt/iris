@@ -758,18 +758,25 @@ Changes from the reference schema:
    a hook failure. It also names an `.ended` marker that contributed a generation or is damaged,
    and the `.ended` path when SessionEnd could not write that marker or take the sessions lock.
    Doctor re-reads every named damaged marker and, independently of the rolling observation log,
-   scans the sessions directories beside the resolved and fallback token paths, deduplicated by
-   cleaned absolute path. Incremental, non-recursive directory reads across all of them share a
-   4096-entry budget, a one-second wall-clock budget and doctor's parent context. Before opening an
-   examined `*.ended` entry, doctor requires a regular file or a symlink to a regular target. A
-   directory, FIFO, socket, device or other non-regular entry, a dangling link, or a link to a
-   non-regular target is damaged without opening it, so a special file cannot stall the scan. A
-   regular file then uses the hook's read rule: a positive generation is healthy; malformed or
-   unreadable content is damaged. Current damage makes doctor exit 1 however old or evicted its
-   observation is. Exhausting either budget or cancellation marks the scan incomplete and also
-   makes doctor exit 1, even when no damage was found; a local-only note states why, gives the
-   number found so far as a lower bound, and says plainly that more may be damaged. A matching
-   retained observation
+   scans the sessions directories beside the resolved and fallback token paths. A cleaned-absolute
+   fast path and `os.SameFile` on directory Stat results deduplicate lexical, symlink and case
+   aliases. One read-only worker performs every directory and observation-marker I/O, with
+   incremental non-recursive reads across both directories sharing a 4096-entry cap. It publishes
+   progressive snapshots under a mutex. The caller waits at most one second or the earlier parent
+   deadline, then renders the latest snapshot; there are no per-read deadlines. At most one scan is
+   in flight per process. A concurrent call returns incomplete immediately with "previous
+   end-marker scan still running", so abandoned workers and open descriptors cannot accumulate.
+   Before opening an examined `*.ended` entry, the worker requires a regular file or a symlink to a
+   regular target. Hooks only ever write regular files, so a directory, FIFO, socket, device or
+   other non-regular entry is never a valid marker and is damaged without being opened. A dangling
+   link or a link to a non-regular target is damaged too. An entry or link that disappears between
+   enumeration and metadata collection is absent, matching the hook, rather than damaged. A regular
+   file then uses the hook's read rule: a positive generation is healthy; malformed or unreadable
+   content is damaged. Current damage makes doctor exit 1 however old or evicted its observation
+   is. Exhausting the entry cap, the outer deadline or cancellation marks the scan incomplete and
+   also makes doctor exit 1, even when no damage was found; a local-only note states why, gives
+   the number found so far as a lower bound, and says plainly that more may be damaged. An
+   observation not yet re-checked is unknown, not repaired. A matching retained observation
    supplies the client; otherwise doctor prints a clearly labelled local-only line without one.
    Repaired or archived files named by an observation remain history and do not fail doctor. A
    healthy or missing sessions directory adds nothing; an unreadable one adds a local note rather
@@ -777,7 +784,15 @@ Changes from the reference schema:
    and claims, the continuing allow behavior, and the stop, verify, repair-or-archive and restart
    steps. Paths and the incomplete reason stay only in the local report; uploads and bundles carry
    the aggregate `current_damaged_end_markers` lower bound and an `end_marker_scan_incomplete`
-   boolean. Registration reads the marker before refreshing live
+   boolean.
+
+   Only `iris doctor` (plain, `--bundle`, and the offline phase of `--live`) and `iris setup` call
+   `doctor.Run` and reach this scan. Bundle formatting happens after that call. The diagnostic
+   upload sends only the resulting redacted report. No MCP tool runs doctor, `iris watch` only
+   recommends it, and hub doctor routes store or retrieve reports without scanning the host. An
+   abandoned worker is read-only: it mutates no caller result, hub state or session files, and its
+   late completion cannot change the returned report. Registration reads the marker before
+   refreshing live
    proof under the bounded session lock. Absent proof takes no lock, so unrelated attention or
    cleanup cannot suppress a fresh SessionStart. The reads are not atomic and the lock is released
    before dispatch: SessionEnd can leave a request with an older floor, a known B1-min limit. A readable

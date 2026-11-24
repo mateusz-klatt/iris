@@ -134,7 +134,7 @@ type Options struct {
 	Host string
 	// Package-private seams let doctor tests exercise the scan budgets deterministically.
 	markerScanEntryLimit int
-	markerScanClock      func() time.Time
+	markerScanTimeout    time.Duration
 }
 
 func (o Options) self() string {
@@ -165,8 +165,8 @@ func (o Options) endMarkerScanConfig() endMarkerScanConfig {
 	if o.markerScanEntryLimit != 0 {
 		config.entryLimit = o.markerScanEntryLimit
 	}
-	if o.markerScanClock != nil {
-		config.now = o.markerScanClock
+	if o.markerScanTimeout != 0 {
+		config.timeout = o.markerScanTimeout
 	}
 	return config
 }
@@ -481,21 +481,6 @@ func applyFailures(res *Result, tokenFile string, now time.Time) error {
 
 const currentEndMarkerDiagnostic = "this damaged end marker prevents this session from registering, so it has no hub binding, no mail delivery and no claims, while hooks still allow edits and commands. Stop that session's client, hooks, MCP shim and watch. Verify the configured hub and that session's history. Repair the marker with the verified ended generation (a single decimal), or archive it (move it aside), then restart the client"
 
-const (
-	endMarkerScanEntryBudget  = 4096
-	endMarkerScanTimeBudget   = time.Second
-	endMarkerScanReadDirChunk = 64
-)
-
-type endMarkerScanConfig struct {
-	entryLimit int
-	now        func() time.Time
-}
-
-func defaultEndMarkerScanConfig() endMarkerScanConfig {
-	return endMarkerScanConfig{entryLimit: endMarkerScanEntryBudget, now: time.Now}
-}
-
 func applyFailuresFrom(ctx context.Context, res *Result, tokenFile, fallbackTokenFile string, now time.Time, scanConfig endMarkerScanConfig) error {
 	if strings.TrimSpace(tokenFile) == "" {
 		return nil
@@ -559,14 +544,23 @@ func applyFailuresFrom(ctx context.Context, res *Result, tokenFile, fallbackToke
 		broken[name] = append(broken[name], entry)
 	}
 
-	damagedMarkers, incomplete, note := scanDamagedEndMarkers(ctx, tokenFile, fallbackTokenFile, scanConfig)
-	res.markerScanNote = note
-	res.Report.CurrentDamagedEndMarkers = len(damagedMarkers)
-	res.Report.EndMarkerScanIncomplete = incomplete
-	currentMarkers := make(map[string]bool, len(damagedMarkers))
+	observedSet := map[string]bool{}
+	for _, markers := range markerDamage {
+		for _, path := range markers {
+			observedSet[path] = true
+		}
+	}
+	observedPaths := make([]string, 0, len(observedSet))
+	for path := range observedSet {
+		observedPaths = append(observedPaths, path)
+	}
+	sort.Strings(observedPaths)
+	scan := scanDamagedEndMarkers(ctx, tokenFile, fallbackTokenFile, observedPaths, scanConfig)
+	res.markerScanNote = scan.note()
+	res.Report.CurrentDamagedEndMarkers = len(scan.damaged)
+	res.Report.EndMarkerScanIncomplete = scan.incomplete != ""
 	localDamage := map[string]int{}
-	for _, path := range damagedMarkers {
-		currentMarkers[path] = true
+	for _, path := range scan.damaged {
 		display := localObservationDisplay(hook.DamagedGenerationProof, path)
 		name := markerClients[path]
 		if name == "" {
@@ -619,18 +613,23 @@ func applyFailuresFrom(ctx context.Context, res *Result, tokenFile, fallbackToke
 			}
 		}
 		if markers := markerDamage[row.Client]; len(markers) > 0 {
+			unknown := false
 			for display, path := range markers {
-				state := "still damaged"
-				if !currentMarkers[path] {
-					state = markerDamageStatus(path)
+				state, ok := scan.states[path]
+				if !ok {
+					state = "not rechecked"
+					unknown = true
 				}
 				row.currentProofDamage = row.currentProofDamage || state == "still damaged"
 				proofDamage[row.Client][display+" ("+state+")"] = proofDamage[row.Client][display]
 				delete(proofDamage[row.Client], display)
 			}
-			if row.currentProofDamage {
+			switch {
+			case row.currentProofDamage:
 				row.Detail = joinDetail(row.Detail, currentEndMarkerDiagnostic)
-			} else {
+			case unknown:
+				row.Detail = joinDetail(row.Detail, "the current state of an observed damaged end marker is unknown because the scan is incomplete")
+			default:
 				row.Detail = joinDetail(row.Detail, "the damaged end marker has been repaired or archived since the observation and no longer blocks registration")
 			}
 		}
@@ -642,150 +641,12 @@ func applyFailuresFrom(ctx context.Context, res *Result, tokenFile, fallbackToke
 	return errors.Join(failErr, obsErr)
 }
 
-type endMarkerScanner struct {
-	ctx         context.Context
-	now         func() time.Time
-	deadline    time.Time
-	entryLimit  int
-	entriesLeft int
-	damaged     []string
-	incomplete  string
-}
-
-func (s *endMarkerScanner) stopReason() string {
-	if s.ctx.Err() != nil {
-		return "context cancelled"
-	}
-	if !s.now().Before(s.deadline) {
-		return "time budget exceeded"
-	}
-	return ""
-}
-
-func (s *endMarkerScanner) readDirectory(dir string) string {
-	f, err := os.Open(dir)
-	if errors.Is(err, os.ErrNotExist) {
-		return ""
-	}
-	if err != nil {
-		return "could not scan for damaged end markers: " + err.Error()
-	}
-	defer func() { _ = f.Close() }()
-	for {
-		if reason := s.stopReason(); reason != "" {
-			s.incomplete = reason
-			return ""
-		}
-		entries, readErr := f.ReadDir(min(endMarkerScanReadDirChunk, s.entriesLeft+1))
-		if len(entries) > s.entriesLeft {
-			s.incomplete = fmt.Sprintf("entry budget of %d exceeded", s.entryLimit)
-			return ""
-		}
-		for _, entry := range entries {
-			if reason := s.stopReason(); reason != "" {
-				s.incomplete = reason
-				return ""
-			}
-			s.entriesLeft--
-			if !strings.HasSuffix(entry.Name(), ".ended") {
-				continue
-			}
-			path := filepath.Join(dir, entry.Name())
-			if !endMarkerRegularFile(entry, path) {
-				s.damaged = append(s.damaged, path)
-				continue
-			}
-			if _, err := hook.ReadGeneration(path); err != nil {
-				s.damaged = append(s.damaged, path)
-			}
-		}
-		if reason := s.stopReason(); reason != "" {
-			s.incomplete = reason
-			return ""
-		}
-		if errors.Is(readErr, io.EOF) {
-			return ""
-		}
-		if readErr != nil {
-			return "could not scan for damaged end markers: " + readErr.Error()
-		}
-	}
-}
-
-// endMarkerRegularFile prevents a special file from blocking a generation read.
-func endMarkerRegularFile(entry os.DirEntry, path string) bool {
-	info, err := entry.Info()
-	regular := err == nil && info.Mode().IsRegular()
-	if entry.Type()&os.ModeSymlink != 0 {
-		target, statErr := os.Stat(path)
-		regular = statErr == nil && target.Mode().IsRegular()
-	}
-	return regular
-}
-
-// scanDamagedEndMarkers checks every distinct token-derived directory under one shared budget.
-func scanDamagedEndMarkers(ctx context.Context, tokenFile, fallbackTokenFile string, config endMarkerScanConfig) (damaged []string, incomplete bool, note string) {
-	scanner := endMarkerScanner{
-		ctx: ctx, now: config.now, deadline: config.now().Add(endMarkerScanTimeBudget),
-		entryLimit: config.entryLimit, entriesLeft: config.entryLimit,
-	}
-	var notes []string
-	for _, dir := range endMarkerSessionDirs(tokenFile, fallbackTokenFile) {
-		if reason := scanner.stopReason(); reason != "" {
-			scanner.incomplete = reason
-			break
-		}
-		if note := scanner.readDirectory(dir); note != "" {
-			notes = append(notes, note)
-		}
-		if scanner.incomplete != "" {
-			break
-		}
-	}
-	if scanner.incomplete != "" {
-		examined := scanner.entryLimit - scanner.entriesLeft
-		notes = append(notes, fmt.Sprintf("end-marker scan incomplete (%s): examined %d entries; found %d damaged end marker(s) so far, and more may be damaged", scanner.incomplete, examined, len(scanner.damaged)))
-	}
-	return scanner.damaged, scanner.incomplete != "", strings.Join(notes, "; ")
-}
-
-func endMarkerSessionDirs(tokenFile, fallbackTokenFile string) []string {
-	var dirs []string
-	seen := map[string]struct{}{}
-	for _, token := range []string{tokenFile, fallbackTokenFile} {
-		if strings.TrimSpace(token) == "" {
-			continue
-		}
-		dir := hook.NewSessions(token).Dir()
-		absolute, _ := filepath.Abs(dir) // Abs fails only when the working directory is gone.
-		key := filepath.Clean(absolute)
-		if _, exists := seen[key]; exists {
-			continue
-		}
-		seen[key] = struct{}{}
-		dirs = append(dirs, dir)
-	}
-	return dirs
-}
-
 func localObservationDisplay(kind, path string) string {
 	displayPath := path
 	if strings.IndexFunc(path, func(r rune) bool { return !unicode.IsPrint(r) }) >= 0 {
 		displayPath = strconv.Quote(path)
 	}
 	return kind + " at " + displayPath
-}
-
-// markerDamageStatus rechecks a named marker without publishing its path or contents.
-func markerDamageStatus(path string) string {
-	generation, err := hook.ReadGeneration(path)
-	if err != nil {
-		return "still damaged"
-	}
-	if generation > 0 {
-		return "repaired since"
-	}
-	return "archived since"
 }
 
 // unusableHint says what doctor's own evidence makes of calls that named a session without a

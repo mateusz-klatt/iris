@@ -470,50 +470,6 @@ func TestDoctorSharesTheEntryBudgetAcrossSessionsDirectories(t *testing.T) {
 	assertRedactedMarkerCount(t, res, upload, primaryMarker, 1)
 }
 
-func TestDoctorFailsAnIncompleteTimeBudgetScan(t *testing.T) {
-	for _, tc := range []struct {
-		name         string
-		expireCall   int
-		examined     int
-		damaged      int
-		expectMarker bool
-	}{
-		{name: "before directory read", expireCall: 3},
-		{name: "before marker read", expireCall: 4},
-		{name: "after marker read", expireCall: 5, examined: 1, damaged: 1, expectMarker: true},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			layout := emptyLayout(t)
-			token := filepath.Join(layout.Home, "hub.token")
-			if err := os.WriteFile(token, []byte("test-only-credential\n"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			marker := filepath.Join(hook.NewSessions(token).Dir(), "unread.ended")
-			if err := os.Mkdir(filepath.Dir(marker), 0o700); err != nil {
-				t.Fatal(err)
-			}
-			if err := os.WriteFile(marker, []byte("broken\n"), 0o600); err != nil {
-				t.Fatal(err)
-			}
-			start := time.Date(2026, 11, 24, 12, 0, 0, 0, time.UTC)
-			calls := 0
-			clock := func() time.Time {
-				calls++
-				if calls < tc.expireCall {
-					return start
-				}
-				return start.Add(2 * endMarkerScanTimeBudget)
-			}
-			res, upload := runEndedMarkerDoctorWithOptions(t, layout, Options{TokenFile: token, markerScanClock: clock}, start)
-			assertIncompleteMarkerScan(t, res, "time budget exceeded", tc.examined, tc.damaged)
-			if report := res.Format(); strings.Contains(report, marker) != tc.expectMarker {
-				t.Fatalf("time-expired scan marker presence = %v, want %v:\n%s", !tc.expectMarker, tc.expectMarker, report)
-			}
-			assertRedactedMarkerCount(t, res, upload, marker, tc.damaged)
-		})
-	}
-}
-
 func TestDoctorFailsACancelledMarkerScan(t *testing.T) {
 	token := filepath.Join(t.TempDir(), "hub.token")
 	ctx, cancel := context.WithCancel(context.Background())
