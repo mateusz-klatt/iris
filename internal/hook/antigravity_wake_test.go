@@ -119,7 +119,17 @@ func TestAntigravityStateCanBeReplacedWhileReadOpen(t *testing.T) {
 	}
 }
 
-func TestAntigravitySessionStartRecordsAFailedStateReplace(t *testing.T) {
+func TestAntigravitySessionStartFailurePreservesCauses(t *testing.T) {
+	if got := antigravitySessionStartFailure(os.ErrPermission, nil); got != os.ErrPermission {
+		t.Fatalf("successful invalidation changed the original failure: %T %v", got, got)
+	}
+	joined := antigravitySessionStartFailure(os.ErrPermission, os.ErrInvalid)
+	if !errors.Is(joined, os.ErrPermission) || !errors.Is(joined, os.ErrInvalid) {
+		t.Fatalf("failed invalidation lost a cause: %v", joined)
+	}
+}
+
+func TestAntigravitySessionStartFailedStateReplaceInvalidatesOldWitness(t *testing.T) {
 	configDir, tokenPath, getenv := agyTestEnv(t)
 	const pid, startMS = 8801, int64(88001)
 	helperDir := filepath.Join(configDir, antigravityHelperDirName)
@@ -130,10 +140,7 @@ func TestAntigravitySessionStartRecordsAFailedStateReplace(t *testing.T) {
 	if err := writeAntigravityJSON(helperDir, target, antigravityProcState{CurrentSessionID: "old-session"}); err != nil {
 		t.Fatal(err)
 	}
-	before, err := os.ReadFile(target)
-	if err != nil {
-		t.Fatal(err)
-	}
+	ancestor := proc.Ancestor{PID: pid, StartMS: startMS, Name: "agy"}
 
 	orig := renameAntigravityStateFile
 	t.Cleanup(func() { renameAntigravityStateFile = orig })
@@ -152,7 +159,7 @@ func TestAntigravitySessionStartRecordsAFailedStateReplace(t *testing.T) {
 		Hub:        scriptHub{},
 		Getenv:     getenv,
 		Ancestor: func() (proc.Ancestor, error) {
-			return proc.Ancestor{PID: pid, StartMS: startMS, Name: "agy"}, nil
+			return ancestor, nil
 		},
 		Host:     func() string { return "testhost" },
 		after:    never,
@@ -177,12 +184,11 @@ func TestAntigravitySessionStartRecordsAFailedStateReplace(t *testing.T) {
 	if err != nil || len(observed) != 0 {
 		t.Fatalf("observations = %+v, %v", observed, err)
 	}
-	after, err := os.ReadFile(target)
-	if err != nil {
-		t.Fatal(err)
+	if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed replacement left the old succession witness: %v", err)
 	}
-	if !bytes.Equal(after, before) {
-		t.Fatalf("state file changed from %q to %q", before, after)
+	if current, ok, err := NewSessions(tokenPath).CurrentSession("antigravity", ancestor); current != "" || ok || err != nil {
+		t.Fatalf("old session remained eligible: current=%q present=%t err=%v", current, ok, err)
 	}
 	if _, err := os.Lstat(tmp); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("temp file %s remains: %v", tmp, err)
@@ -190,6 +196,61 @@ func TestAntigravitySessionStartRecordsAFailedStateReplace(t *testing.T) {
 	leftover, err := filepath.Glob(filepath.Join(helperDir, ".tmp-*"))
 	if err != nil || len(leftover) != 0 {
 		t.Fatalf("temp files = %v, %v", leftover, err)
+	}
+}
+
+func TestAntigravitySessionStartLockAndDirectoryFailuresInvalidateOldWitness(t *testing.T) {
+	configDir, tokenPath, getenv := agyTestEnv(t)
+	const pid, startMS = 8802, int64(88002)
+	ancestor := proc.Ancestor{PID: pid, StartMS: startMS, Name: "agy"}
+	m := antigravityHelpersMemory(configDir)
+	if err := m.directory(); err != nil {
+		t.Fatal(err)
+	}
+	target := antigravityProcFile(m.dir, pid, startMS)
+	if err := writeAntigravityJSON(m.dir, target, antigravityProcState{CurrentSessionID: "old-session"}); err != nil {
+		t.Fatal(err)
+	}
+	unlock, err := m.lock(time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	out := (Runner{
+		ClientName: "antigravity", EventName: "SessionStart",
+		Stdin: agyJSON(t, map[string]any{"conversationId": "new-session"}),
+		Hub:   scriptHub{}, Getenv: getenv, Host: func() string { return "testhost" },
+		Ancestor: func() (proc.Ancestor, error) { return ancestor, nil },
+		after:    never, logAfter: never,
+	}).Run()
+	unlock()
+	if out.Exit != 0 || string(out.Stdout) != "{}\n" {
+		t.Fatalf("lock failure blocked SessionStart: %+v", out)
+	}
+	if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("lock failure left the old succession witness: %v", err)
+	}
+	if current, ok, err := NewSessions(tokenPath).CurrentSession("antigravity", ancestor); current != "" || ok || err != nil {
+		t.Fatalf("old session remained eligible after lock failure: current=%q present=%t err=%v", current, ok, err)
+	}
+	failures, err := ReadRecentFailures(tokenPath, 10)
+	if err != nil || len(failures) != 1 || failures[0].Stage != "antigravity" {
+		t.Fatalf("lock failure was not recorded: %+v %v", failures, err)
+	}
+	originalProtect := protectPath
+	t.Cleanup(func() { protectPath = originalProtect })
+	protectPath = func(string) error { return os.ErrPermission }
+	out = (Runner{
+		ClientName: "antigravity", EventName: "SessionStart",
+		Stdin: agyJSON(t, map[string]any{"conversationId": "new-session"}),
+		Hub:   scriptHub{}, Getenv: getenv, Host: func() string { return "testhost" },
+		Ancestor: func() (proc.Ancestor, error) { return ancestor, nil },
+		after:    never, logAfter: never,
+	}).Run()
+	if out.Exit != 0 || string(out.Stdout) != "{}\n" {
+		t.Fatalf("directory failure blocked SessionStart: %+v", out)
+	}
+	if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("directory failure recreated the old succession witness: %v", err)
 	}
 }
 
@@ -296,10 +357,6 @@ func TestAntigravitySessionStartRecordsOneFailureForBothStateWrites(t *testing.T
 	if err := writeAntigravityJSON(helperDir, convTarget, AntigravityConvState{TranscriptPath: "old.jsonl"}); err != nil {
 		t.Fatal(err)
 	}
-	procBefore, err := os.ReadFile(procTarget)
-	if err != nil {
-		t.Fatal(err)
-	}
 	convBefore, err := os.ReadFile(convTarget)
 	if err != nil {
 		t.Fatal(err)
@@ -340,14 +397,15 @@ func TestAntigravitySessionStartRecordsOneFailureForBothStateWrites(t *testing.T
 	if got := entries[0]; got.Stage != "antigravity" || got.Event != "SessionStart" {
 		t.Fatalf("recorded failure = %+v", got)
 	}
-	for target, before := range map[string][]byte{procTarget: procBefore, convTarget: convBefore} {
-		after, err := os.ReadFile(target)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if !bytes.Equal(after, before) {
-			t.Fatalf("state file %s changed from %q to %q", target, before, after)
-		}
+	if _, err := os.Lstat(procTarget); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("failed process replacement left the old witness: %v", err)
+	}
+	after, err := os.ReadFile(convTarget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(after, convBefore) {
+		t.Fatalf("conversation state changed from %q to %q", convBefore, after)
 	}
 	leftover, err := filepath.Glob(filepath.Join(helperDir, ".tmp-*"))
 	if err != nil || len(leftover) != 0 {

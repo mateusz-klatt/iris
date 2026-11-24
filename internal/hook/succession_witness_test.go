@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/mateusz-klatt/iris/internal/config"
+	"github.com/mateusz-klatt/iris/internal/gitinfo"
 	"github.com/mateusz-klatt/iris/internal/proc"
 )
 
@@ -38,6 +39,38 @@ func TestKimiClearDuringHubOutageWithdrawsOldSuccessionWitness(t *testing.T) {
 	}
 	if got := h.mapped(); got != kimiSession {
 		t.Fatalf("Kimi's wake map advanced without hub acceptance: %q", got)
+	}
+}
+
+func TestCursorRepositoryFailurePublishesNewProcessWitness(t *testing.T) {
+	m := newFileMemory(t)
+	anc := proc.Ancestor{PID: 42, StartMS: 100, Name: "cursor-agent"}
+	if err := m.rememberProcessSession("cursor", "S1", anc); err != nil {
+		t.Fatal(err)
+	}
+	path := m.name("cursor", "S1")
+	if err := m.write(path, "1"); err != nil {
+		t.Fatal(err)
+	}
+	if err := m.write(path+".execution", "1 ex_one"); err != nil {
+		t.Fatal(err)
+	}
+	out := (Runner{
+		ClientName: "cursor", EventName: "sessionStart", Stdin: strings.NewReader(`{"session_id":"S2","cwd":"/repo"}`),
+		Hub: scriptHub{}, Memory: m, Host: func() string { return "host" },
+		Ancestor: func() (proc.Ancestor, error) { return anc, nil },
+		Find:     func(string) (gitinfo.Repo, error) { return gitinfo.Repo{}, errors.New("unreadable git metadata") },
+		after:    never, logAfter: never,
+	}).Run()
+	if out.Exit != 0 {
+		t.Fatalf("repository failure blocked SessionStart: %+v", out)
+	}
+	sessions := &Sessions{memory: m}
+	if current, ok, err := sessions.CurrentSession("cursor", anc); current != "S2" || !ok || err != nil {
+		t.Fatalf("new witness was not published before repository discovery: current=%q present=%t err=%v", current, ok, err)
+	}
+	if _, _, err := sessions.PrepareSuccession("cursor", "S1", 1, "ex_one", anc); !errors.Is(err, ErrSuccessionProof) {
+		t.Fatalf("old session remained eligible after repository discovery failed: %v", err)
 	}
 }
 

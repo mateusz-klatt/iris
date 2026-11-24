@@ -23,6 +23,14 @@ func processWitnessPath(dir string, anc proc.Ancestor) string {
 	return filepath.Join(dir, fmt.Sprintf("proc-%d-%d", anc.PID, anc.StartMS))
 }
 
+func invalidateProcessWitness(path string) error {
+	err := os.Remove(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	}
+	return err
+}
+
 // rememberProcessSession records a single-session launcher's current native session before its
 // SessionStart registration. Antigravity publishes its established process state separately.
 func (m fileMemory) rememberProcessSession(client, session string, anc proc.Ancestor) (err error) {
@@ -33,7 +41,7 @@ func (m fileMemory) rememberProcessSession(client, session string, anc proc.Ance
 	defer func() {
 		if err != nil {
 			// A missed lock or failed replace withdraws the old witness without another lock wait.
-			if removeErr := os.Remove(path); removeErr != nil && !errors.Is(removeErr, os.ErrNotExist) {
+			if removeErr := invalidateProcessWitness(path); removeErr != nil {
 				err = errors.Join(err, removeErr)
 			}
 		}
