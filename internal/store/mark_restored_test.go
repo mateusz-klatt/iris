@@ -168,7 +168,18 @@ func TestMarkRestoredRefusesADatabaseAHubHasOpen(t *testing.T) {
 	} else {
 		t.Log("this system makes no symbolic links here, so only the other aliases are tried")
 	}
-	t.Chdir(dir)
+	previous, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(previous); err != nil {
+			t.Errorf("restore working directory: %v", err)
+		}
+	})
 	for _, alias := range aliases {
 		err := MarkRestored(context.Background(), alias, time.Now())
 		if err == nil || !strings.Contains(err.Error(), "database already owned by another hub") {

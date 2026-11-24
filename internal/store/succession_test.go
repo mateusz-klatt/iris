@@ -369,6 +369,7 @@ func TestSucceedRestoreLineageAndMarkRestoredRotation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		t.Cleanup(func() { _ = s.Close() })
 		clock.advance(121 * time.Second)
 		live := call(t, s, "sessions", registration)
 		if live["generation"] != int64(2) {
@@ -404,6 +405,7 @@ func TestSucceedRestoreLineageAndMarkRestoredRotation(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
+		t.Cleanup(func() { _ = s.Close() })
 		if s.stream == oldStream || !s.Restored() {
 			t.Fatalf("restore marker did not rotate the stream: old=%s new=%s restored=%t", oldStream, s.stream, s.Restored())
 		}
