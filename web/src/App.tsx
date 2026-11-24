@@ -645,7 +645,11 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     void flushRead();
   }, [activeView, flushRead, loadedThread, openedThread, phase, repositoryId]);
 
-  useEffect(() => () => cancelThreadRead(), [cancelThreadRead]);
+  useEffect(() => () => {
+    // Unmount ends the console session (sign-out or 401); cancel without flushing
+    // so a deferred read is never sent after logout revokes the session.
+    readRequestedFor.current = null;
+  }, []);
 
   // revision changes only to retry after an error, which reconnects too.
   useEffect(() => {
@@ -962,7 +966,6 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const signOut = async () => {
     setSigningOut(true);
     try {
-      await flushRead(true);
       await logout();
       onSignedOut();
     } catch (error) {

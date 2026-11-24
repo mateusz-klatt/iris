@@ -787,22 +787,36 @@ describe("console refresh scheduling", () => {
     }
   });
 
-  it("flushes a bounced deferred read before explicit sign-out revokes the session", async () => {
+  it("signs out immediately without flushing a bounced deferred read before or after logout", async () => {
     const view = await bouncedResumeWithDeferredRead();
+    const logoutGate = deferred<Response>();
     try {
       server.use(http.post("*/v1/ui/logout", () => {
         view.events.push("logout");
-        return new HttpResponse(null, { status: 204 });
+        return logoutGate.promise;
       }));
       fireEvent.click(screen.getByRole("button", { name: "Sign out" }));
+      await flushFakeNetwork(2);
+
+      // Logout starts immediately without waiting on or dispatching the deferred read.
+      expect(view.events).toEqual(["logout"]);
+      expect(view.reads).toEqual([]);
+      expect(screen.getByRole("button", { name: "Signing out…" })).toBeDisabled();
+
+      await act(async () => {
+        logoutGate.resolve(new HttpResponse(null, { status: 204 }));
+      });
       await flushFakeNetwork();
 
-      expect(view.events).toEqual(["read", "logout"]);
-      expect(view.reads).toEqual(["visible"]);
       expect(screen.getByLabelText("Username")).toBeVisible();
+      expect(view.events).toEqual(["logout"]);
+      expect(view.reads).toEqual([]);
+
       await view.settleResume();
-      expect(view.events).toEqual(["read", "logout"]);
+      expect(view.events).toEqual(["logout"]);
+      expect(view.reads).toEqual([]);
     } finally {
+      logoutGate.resolve(new HttpResponse(null, { status: 204 }));
       await view.finish();
     }
   });
