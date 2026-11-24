@@ -121,20 +121,6 @@ func antigravityProcFile(dir string, pid int, startMS int64) string {
 	return filepath.Join(dir, fmt.Sprintf("%d-%d.json", pid, startMS))
 }
 
-func invalidateAntigravitySessionStart(ev Event, m fileMemory, anc proc.Ancestor, hasAnc bool) error {
-	if ev.Kind != KindSessionStart || !hasAnc {
-		return nil
-	}
-	return invalidateProcessWitness(antigravityProcFile(m.dir, anc.PID, anc.StartMS))
-}
-
-func antigravitySessionStartFailure(cause, invalidation error) error {
-	if invalidation != nil {
-		return errors.Join(cause, invalidation)
-	}
-	return cause
-}
-
 func antigravityConvFile(dir, sessionID string) string {
 	sum := sha256.Sum256([]byte("antigravity\x00" + sessionID))
 	return filepath.Join(dir, "conv-"+hex.EncodeToString(sum[:16])+".json")
@@ -656,17 +642,22 @@ func (r Runner) antigravityHook(ev Event, note func(string)) (Output, bool) {
 		}
 	}
 
+	if ev.Kind == KindSessionStart && hasAnc {
+		if err := NewSessions(tokenPath).memory.rememberProcessSession(string(ev.Client), ev.SessionID, anc); err != nil {
+			r.recordFailure(stageSessionFiles, err, nil)
+		}
+	}
 	m := antigravityHelpersMemory(configDir)
 	if err := m.directory(); err != nil {
 		if ev.Kind == KindSessionStart {
-			r.recordFailure("antigravity", antigravitySessionStartFailure(err, invalidateAntigravitySessionStart(ev, m, anc, hasAnc)), nil)
+			r.recordFailure("antigravity", err, nil)
 		}
 		return Output{}, false
 	}
 	unlock, err := m.lock(hookLockBudget)
 	if err != nil {
 		if ev.Kind == KindSessionStart {
-			r.recordFailure("antigravity", antigravitySessionStartFailure(err, invalidateAntigravitySessionStart(ev, m, anc, hasAnc)), nil)
+			r.recordFailure("antigravity", err, nil)
 		}
 		return Output{}, false
 	}
@@ -787,9 +778,6 @@ func (r Runner) antigravityHook(ev Event, note func(string)) (Output, bool) {
 		}
 	}()
 	if persistErr != nil {
-		if ev.Kind == KindSessionStart {
-			persistErr = antigravitySessionStartFailure(persistErr, invalidateAntigravitySessionStart(ev, m, anc, hasAnc))
-		}
 		r.recordFailure("antigravity", persistErr, nil)
 	}
 

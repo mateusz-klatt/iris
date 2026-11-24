@@ -2,7 +2,6 @@ package hook
 
 import (
 	"errors"
-	"os"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -89,18 +88,19 @@ func TestFailedWitnessReplaceWithdrawsOldProofBeforeRegistration(t *testing.T) {
 		}
 		return protect(path)
 	}
+	var current string
 	var witnessPresent bool
 	var witnessErr error
 	h.hub = countingHub{fn: func() {
-		_, witnessPresent, witnessErr = sessions.CurrentSession("kimi", h.anc)
+		current, witnessPresent, witnessErr = sessions.CurrentSession("kimi", h.anc)
 	}}
 	r := h.runner("SessionStart", kimiCleared, "")
 	r.Memory = memory
 	if out := r.Run(); out.Exit != 0 || !failed {
 		t.Fatalf("publication failure did not allow the hook: %+v", out)
 	}
-	if witnessPresent || witnessErr != nil {
-		t.Fatalf("registration still saw stale state: present=%t err=%v", witnessPresent, witnessErr)
+	if current != processWitnessWithdrawn || !witnessPresent || witnessErr != nil {
+		t.Fatalf("registration did not see the withdrawal marker: current=%q present=%t err=%v", current, witnessPresent, witnessErr)
 	}
 	failures, err := ReadRecentFailures(h.env("IRIS_TOKEN_FILE"), 10)
 	if err != nil || !slices.ContainsFunc(failures, func(f Failure) bool { return f.Stage == stageSessionFiles }) {
@@ -122,7 +122,7 @@ func TestHeldSessionsLockWithdrawsOldProcessWitness(t *testing.T) {
 	if err := sessions.memory.rememberProcessSession("cursor", "S2", ancestor); !errors.Is(err, ErrSessionsLocked) {
 		t.Fatalf("the publication did not observe the held lock: %v", err)
 	}
-	if _, err := os.Lstat(processWitnessPath(sessions.Dir(), ancestor)); !errors.Is(err, os.ErrNotExist) {
-		t.Fatalf("the publication left the old session eligible: %v", err)
+	if current, ok, err := sessions.CurrentSession("cursor", ancestor); current != processWitnessWithdrawn || !ok || err != nil {
+		t.Fatalf("the publication did not leave a withdrawal marker: current=%q present=%t err=%v", current, ok, err)
 	}
 }

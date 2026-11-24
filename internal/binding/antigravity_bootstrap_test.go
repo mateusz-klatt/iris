@@ -23,4 +23,12 @@ func TestAntigravityHooklessProcessBootstrapsWithAnExistingHelpersDirectory(t *t
 	if err != nil || b.SessionID != "mcp-42-100" || b.Generation != 1 || b.Rung != 3 || !r.own {
 		t.Fatalf("hookless Antigravity process did not bootstrap: %+v %v", b, err)
 	}
+	restarted := f.resolver("antigravity", "", proc.Ancestor{PID: 42, StartMS: 100, Name: "agy"})
+	again, err := restarted.Resolve(t.Context(), "")
+	if err != nil || again.ExecutionID != b.ExecutionID || again.Generation != 1 {
+		t.Fatalf("restarted shim lost the durable hookless fallback: bound=%+v err=%v", again, err)
+	}
+	if err := restarted.Heartbeat(t.Context(), "shim"); err != nil {
+		t.Fatalf("restarted shim could not renew the hookless fallback: %v", err)
+	}
 }

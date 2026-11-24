@@ -23,25 +23,23 @@ func processWitnessPath(dir string, anc proc.Ancestor) string {
 	return filepath.Join(dir, fmt.Sprintf("proc-%d-%d", anc.PID, anc.StartMS))
 }
 
-func invalidateProcessWitness(path string) error {
-	err := os.Remove(path)
-	if errors.Is(err, os.ErrNotExist) {
-		return nil
-	}
-	return err
+const processWitnessWithdrawn = "-"
+
+func invalidateProcessWitness(m fileMemory, path string) error {
+	return m.replace(path, processWitnessWithdrawn)
 }
 
 // rememberProcessSession records a single-session launcher's current native session before its
-// SessionStart registration. Antigravity publishes its established process state separately.
+// SessionStart registration.
 func (m fileMemory) rememberProcessSession(client, session string, anc proc.Ancestor) (err error) {
-	if anc.PID <= 0 || anc.StartMS <= 0 || !proc.SingleSession(anc, client) || client == string(ClientAntigravity) {
+	if anc.PID <= 0 || anc.StartMS <= 0 || !proc.SingleSession(anc, client) {
 		return nil
 	}
 	path := processWitnessPath(m.dir, anc)
 	defer func() {
 		if err != nil {
 			// A missed lock or failed replace withdraws the old witness without another lock wait.
-			if removeErr := invalidateProcessWitness(path); removeErr != nil {
+			if removeErr := invalidateProcessWitness(m, path); removeErr != nil {
 				err = errors.Join(err, removeErr)
 			}
 		}
@@ -78,7 +76,7 @@ func (proofs executionProofs) at(generation int) string {
 
 func readExecutionProofs(path string) (executionProofs, error) {
 	var proofs executionProofs
-	raw, err := readGenerationBytes(path, executionProofReadLimit)
+	raw, err := readGenerationBytesLimit(path, executionProofReadLimit)
 	if errors.Is(err, os.ErrNotExist) {
 		if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
 			return proofs, nil
@@ -150,45 +148,22 @@ func (m fileMemory) publishGeneration(path string, current int, proofs execution
 	return m.replace(path, strconv.Itoa(generation))
 }
 
-func currentProcessSession(client string, anc proc.Ancestor, sessionsDir string) (string, []string, error) {
-	switch client {
-	case string(ClientAntigravity):
-		m := antigravityHelpersMemory(filepath.Dir(sessionsDir))
-		dir, err := os.Lstat(m.dir)
-		if errors.Is(err, os.ErrNotExist) {
-			return "", nil, nil
-		}
-		if err != nil || !dir.IsDir() {
-			return "", nil, ErrSuccessionProof
-		}
-		path := antigravityProcFile(m.dir, anc.PID, anc.StartMS)
+func currentProcessSession(_ string, anc proc.Ancestor, sessionsDir string) (string, []string, error) {
+	path := processWitnessPath(sessionsDir, anc)
+	raw, err := readGenerationBytes(path)
+	if errors.Is(err, os.ErrNotExist) {
 		if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
 			return "", nil, nil
 		}
-		unlock, err := m.lock(hookLockBudget)
-		if err != nil {
-			return "", nil, err
-		}
-		defer unlock()
-		state, ok := readAntigravityProcFile(path)
-		if !ok || state.CurrentSessionID == "" {
-			return "", nil, ErrSuccessionProof
-		}
-		return state.CurrentSessionID, state.SupersededSessionIDs, nil
-	default:
-		raw, err := os.ReadFile(processWitnessPath(sessionsDir, anc))
-		if errors.Is(err, os.ErrNotExist) {
-			return "", nil, nil
-		}
-		if err != nil {
-			return "", nil, err
-		}
-		current := strings.TrimSpace(string(raw))
-		if current == "" {
-			return "", nil, ErrSuccessionProof
-		}
-		return current, nil, nil
 	}
+	if err != nil {
+		return "", nil, err
+	}
+	current := strings.TrimSpace(string(raw))
+	if current == "" {
+		return "", nil, ErrSuccessionProof
+	}
+	return current, nil, nil
 }
 
 func (s *Sessions) currentSession(client string, anc proc.Ancestor) (string, []string, error) {
@@ -200,10 +175,7 @@ func (s *Sessions) CurrentSession(client string, anc proc.Ancestor) (string, boo
 	if anc.PID <= 0 || anc.StartMS <= 0 || !proc.SingleSession(anc, client) {
 		return "", false, nil
 	}
-	current, superseded, err := s.currentSession(client, anc)
-	if slices.Contains(superseded, current) {
-		return "", false, ErrSuccessionProof
-	}
+	current, _, err := s.currentSession(client, anc)
 	return current, current != "", err
 }
 

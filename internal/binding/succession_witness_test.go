@@ -12,14 +12,16 @@ import (
 
 func TestSuccessionRechecksTheProcessWitnessAfterHTTP(t *testing.T) {
 	for _, tc := range []struct {
-		name   string
-		adopt  bool
-		change func(string) error
+		name          string
+		adopt         bool
+		legacyHealthy bool
+		change        func(string) error
 	}{
-		{"clear while succeeding", false, func(path string) error { return os.WriteFile(path, []byte("S2\n"), 0o600) }},
-		{"missing after success", false, os.Remove},
-		{"damaged after success", false, func(path string) error { return os.WriteFile(path, nil, 0o600) }},
-		{"clear while adopting", true, func(path string) error { return os.WriteFile(path, []byte("S2\n"), 0o600) }},
+		{"clear while succeeding", false, false, func(path string) error { return os.WriteFile(path, []byte("S2\n"), 0o600) }},
+		{"missing after success", false, true, os.Remove},
+		{"damaged after success", false, true, func(path string) error { return os.WriteFile(path, nil, 0o600) }},
+		{"withdrawn after success", false, false, func(path string) error { return os.WriteFile(path, []byte("-\n"), 0o600) }},
+		{"clear while adopting", true, false, func(path string) error { return os.WriteFile(path, []byte("S2\n"), 0o600) }},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			ancestor := proc.Ancestor{PID: 42, StartMS: 100, Name: "cursor-agent"}
@@ -53,6 +55,16 @@ func TestSuccessionRechecksTheProcessWitnessAfterHTTP(t *testing.T) {
 			generation, id, proofErr := f.sessions.PrepareSuccession("cursor", "S1", 1, prior, proc.Ancestor{})
 			if generation != 1 || id != prior || proofErr != nil {
 				t.Fatalf("the stale reply changed local proof: generation=%d id=%q err=%v", generation, id, proofErr)
+			}
+			if tc.legacyHealthy {
+				b, err := r.Resolve(t.Context(), "")
+				if err != nil || b.ExecutionID != "ex_two" {
+					t.Fatalf("legacy or damaged evidence broke a healthy binding: bound=%+v err=%v", b, err)
+				}
+				if err := r.Heartbeat(t.Context(), "shim"); err != nil {
+					t.Fatalf("legacy or damaged evidence broke renewal: %v", err)
+				}
+				return
 			}
 			if b, err := r.Resolve(t.Context(), ""); b.ExecutionID != "" || !IsCode(err, "lost") {
 				t.Fatalf("the next process lookup accepted the rejected successor: bound=%+v err=%v", b, err)

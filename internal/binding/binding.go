@@ -376,15 +376,14 @@ func (r *Resolver) checkGenerationHeld(b Bound) error {
 
 func (r *Resolver) checkProcessWitnessHeld(b Bound) error {
 	processBound := b.Rung == 3 || r.last.SessionID == b.SessionID && r.last.Rung == 3
-	ownFallback := r.own && r.bound.ExecutionID == b.ExecutionID || r.pending != nil && r.pending.from.ExecutionID == b.ExecutionID
-	if !processBound || ownFallback || r.Succession == nil || r.Client == "claude" {
+	if !processBound || r.Succession == nil {
 		return nil
 	}
 	current, ok, err := r.Succession.CurrentSession(r.Client, r.ancestor())
-	if err != nil {
-		return &LostError{Cause: err}
+	if err != nil || !ok {
+		return nil
 	}
-	if !ok || current != b.SessionID {
+	if current != b.SessionID {
 		return errGenerationFloor
 	}
 	return nil
@@ -500,6 +499,9 @@ func (r *Resolver) recallSessionHeld(handle string) (string, int, error) {
 	}
 	current, ok, err := r.Succession.CurrentSession(r.Client, anc)
 	if err != nil {
+		if session != "" {
+			return session, rung, nil
+		}
 		return "", 0, &LostError{Cause: err}
 	}
 	if !ok {

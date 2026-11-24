@@ -368,45 +368,42 @@ func TestAntigravityAndKimiCurrentSessionChecks(t *testing.T) {
 		}
 		s := successionSessionFiles(t, "antigravity", "S1", 1, "ex_one")
 		if current, ok, err := s.CurrentSession("antigravity", anc); current != "" || ok || err != nil {
-			t.Fatalf("missing Antigravity state: %q %t %v", current, ok, err)
+			t.Fatalf("missing Antigravity witness: %q %t %v", current, ok, err)
 		}
 		if _, _, err := s.PrepareSuccession("antigravity", "S1", 1, "ex_one", anc); !errors.Is(err, ErrSuccessionProof) {
-			t.Fatalf("missing Antigravity state passed: %v", err)
+			t.Fatalf("missing Antigravity witness passed: %v", err)
 		}
-		m := antigravityHelpersMemory(filepath.Dir(s.tokenPath))
-		if err := m.directory(); err != nil {
-			t.Fatal(err)
-		}
-		if current, ok, err := s.CurrentSession("antigravity", anc); current != "" || ok || err != nil {
-			t.Fatalf("existing helper directory supplied absent process state: %q %t %v", current, ok, err)
-		}
-		path := antigravityProcFile(m.dir, anc.PID, anc.StartMS)
-		if err := writeAntigravityJSON(m.dir, path, antigravityProcState{CurrentSessionID: "S1"}); err != nil {
+		if err := s.memory.rememberProcessSession("antigravity", "S1", anc); err != nil {
 			t.Fatal(err)
 		}
 		if current, ok, err := s.CurrentSession("antigravity", anc); current != "S1" || !ok || err != nil {
 			t.Fatalf("Antigravity CurrentSession: %q %t %v", current, ok, err)
 		}
 		if _, _, err := s.PrepareSuccession("antigravity", "S1", 1, "ex_one", anc); err != nil {
-			t.Fatalf("Antigravity current state was refused: %v", err)
+			t.Fatalf("Antigravity current witness was refused: %v", err)
 		}
+		m := antigravityHelpersMemory(filepath.Dir(s.tokenPath))
+		if err := m.directory(); err != nil {
+			t.Fatal(err)
+		}
+		path := antigravityProcFile(m.dir, anc.PID, anc.StartMS)
 		if err := writeAntigravityJSON(m.dir, path, antigravityProcState{CurrentSessionID: "S2", SupersededSessionIDs: []string{"S1"}}); err != nil {
+			t.Fatal(err)
+		}
+		if current, ok, err := s.CurrentSession("antigravity", anc); current != "S1" || !ok || err != nil {
+			t.Fatalf("helper record overrode independent evidence: %q %t %v", current, ok, err)
+		}
+		if err := s.memory.rememberProcessSession("antigravity", "S2", anc); err != nil {
 			t.Fatal(err)
 		}
 		if _, _, err := s.PrepareSuccession("antigravity", "S1", 1, "ex_one", anc); !errors.Is(err, ErrSuccessionProof) {
 			t.Fatalf("Antigravity supersession was not refused: %v", err)
 		}
-		if err := writeAntigravityJSON(m.dir, path, antigravityProcState{CurrentSessionID: "S1", SupersededSessionIDs: []string{"S1"}}); err != nil {
+		if err := os.WriteFile(processWitnessPath(s.memory.dir, anc), nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
 		if _, _, err := s.CurrentSession("antigravity", anc); !errors.Is(err, ErrSuccessionProof) {
-			t.Fatalf("Antigravity treated a superseded witness as current: %v", err)
-		}
-		if err := os.WriteFile(path, []byte("{"), 0o600); err != nil {
-			t.Fatal(err)
-		}
-		if _, _, err := s.CurrentSession("antigravity", anc); !errors.Is(err, ErrSuccessionProof) {
-			t.Fatalf("damaged Antigravity state: %v", err)
+			t.Fatalf("damaged Antigravity witness: %v", err)
 		}
 	})
 	t.Run("kimi", func(t *testing.T) {
@@ -612,6 +609,24 @@ func TestProcessWitnessReadAndDirectoryFailures(t *testing.T) {
 			t.Fatal("a directory passed as a process witness")
 		}
 	})
+	t.Run("non-regular witness uses the shared reader", func(t *testing.T) {
+		anc := proc.Ancestor{PID: 42, StartMS: 100, Name: "cursor-agent"}
+		s := successionSessionFiles(t, "cursor", "S1", 1, "ex_one")
+		original := generationFileOpen
+		t.Cleanup(func() { generationFileOpen = original })
+		reader, writer, err := os.Pipe()
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = writer.Close() }()
+		generationFileOpen = func(string) (*os.File, error) { return reader, nil }
+		if _, _, err := s.CurrentSession("cursor", anc); !errors.Is(err, ErrInvalidGeneration) {
+			t.Fatalf("non-regular witness was not damaged: %v", err)
+		}
+		if err := reader.Close(); !errors.Is(err, os.ErrClosed) {
+			t.Fatalf("non-regular witness descriptor was not closed: %v", err)
+		}
+	})
 	t.Run("session directory cannot be protected", func(t *testing.T) {
 		parent := filepath.Join(t.TempDir(), "file")
 		if err := os.WriteFile(parent, []byte("not a directory"), 0o600); err != nil {
@@ -627,35 +642,22 @@ func TestProcessWitnessReadAndDirectoryFailures(t *testing.T) {
 }
 
 func TestProcessStateLookupFailures(t *testing.T) {
-	t.Run("antigravity helper path is a file", func(t *testing.T) {
+	t.Run("antigravity succession ignores helper state", func(t *testing.T) {
 		s := successionSessionFiles(t, "antigravity", "S1", 1, "ex_one")
 		anc := proc.Ancestor{PID: 42, StartMS: 100, Name: "agy"}
 		m := antigravityHelpersMemory(filepath.Dir(s.tokenPath))
 		if err := os.WriteFile(m.dir, []byte("invalid directory"), 0o600); err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := s.CurrentSession("antigravity", anc); err == nil {
-			t.Fatal("invalid helper directory was treated as hookless")
+		if current, ok, err := s.CurrentSession("antigravity", anc); current != "" || ok || err != nil {
+			t.Fatalf("helper state supplied succession evidence: %q %t %v", current, ok, err)
 		}
-	})
-	t.Run("antigravity lock", func(t *testing.T) {
-		s := successionSessionFiles(t, "antigravity", "S1", 1, "ex_one")
-		anc := proc.Ancestor{PID: 42, StartMS: 100, Name: "agy"}
-		m := antigravityHelpersMemory(filepath.Dir(s.tokenPath))
-		if err := m.directory(); err != nil {
+		if err := s.memory.rememberProcessSession("antigravity", "S1", anc); err != nil {
 			t.Fatal(err)
 		}
-		if err := writeAntigravityJSON(m.dir, antigravityProcFile(m.dir, anc.PID, anc.StartMS), antigravityProcState{CurrentSessionID: "S1"}); err != nil {
-			t.Fatal(err)
+		if current, ok, err := s.CurrentSession("antigravity", anc); current != "S1" || !ok || err != nil {
+			t.Fatalf("independent Antigravity evidence: %q %t %v", current, ok, err)
 		}
-		unlock, err := m.lock(hookLockBudget)
-		if err != nil {
-			t.Fatal(err)
-		}
-		if _, _, err := s.CurrentSession("antigravity", anc); !errors.Is(err, ErrSessionsLocked) {
-			t.Fatalf("Antigravity lock was ignored: %v", err)
-		}
-		unlock()
 	})
 	t.Run("Kimi succession is independent of its wake lock", func(t *testing.T) {
 		restore := config.SetPinnedForTest(t.TempDir())

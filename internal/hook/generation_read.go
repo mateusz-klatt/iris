@@ -8,6 +8,10 @@ const GenerationReadLimit = 64
 var generationFileOpen = OpenGenerationFile
 
 func readGenerationBytes(path string) ([]byte, error) {
+	return readGenerationBytesLimit(path, GenerationReadLimit)
+}
+
+func readGenerationBytesLimit(path string, limit int64) ([]byte, error) {
 	f, err := generationFileOpen(path)
 	if err != nil {
 		return nil, err
@@ -21,12 +25,12 @@ func readGenerationBytes(path string) ([]byte, error) {
 		_ = f.Close()
 		return nil, ErrInvalidGeneration
 	}
-	raw, readErr := io.ReadAll(io.LimitReader(f, GenerationReadLimit))
+	raw, readErr := io.ReadAll(io.LimitReader(f, limit))
 	_ = f.Close()
 	if readErr != nil {
 		return nil, readErr
 	}
-	if len(raw) == GenerationReadLimit {
+	if int64(len(raw)) == limit {
 		return nil, ErrInvalidGeneration
 	}
 	return raw, nil

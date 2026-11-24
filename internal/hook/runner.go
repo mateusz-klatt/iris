@@ -206,7 +206,7 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 	}
 	// A native SessionStart supersedes the old local witness even when repository discovery or
 	// the hub is unavailable.
-	if ev.Kind == KindSessionStart && ev.ParentSessionID == "" && ev.SessionID != CanarySession {
+	if ev.Kind == KindSessionStart && ev.Client != ClientAntigravity && ev.ParentSessionID == "" && ev.SessionID != CanarySession {
 		if files, ok := r.memory().(fileMemory); ok {
 			if err := files.rememberProcessSession(string(ev.Client), ev.SessionID, r.ancestor()); err != nil {
 				r.recordFailure(stageSessionFiles, err, nil)
