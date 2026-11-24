@@ -35,17 +35,18 @@ func classifyTool(name string, mcp bool) (ToolClass, bool) {
 		return ClassShell, false
 	case "read", "view", "grep", "glob", "ls":
 		return ClassRead, false
-	case "toolsearch", "spawn_subagent", "task", "todowrite", "webfetch", "websearch", "skill":
+	case "toolsearch", "spawn_subagent", "task", "agent", "todowrite", "webfetch", "websearch", "skill":
 		return ClassOther, false
 	// Built-in tools that write no file. Codex names a namespaced tool by its namespace and name
 	// run together: its rollouts record {"namespace":"clock","name":"sleep"}, and the hook sees
 	// "clocksleep". The names are those iris hook logged as unknown on a real host
-	// (hook-observed.log, Codex 0.167.0 and Claude Code 2.1.319). Claude Code's are backed by
-	// captures in testdata/claude; Codex's are not yet. A collaboration tool starts or messages
-	// a subagent, whose own tool calls pass through its own hooks.
+	// (hook-observed.log, Codex 0.167.0 and Claude Code 2.1.319/2.1.331). Claude Code's are backed
+	// by captures in testdata/claude from 2.1.319 on Windows and 2.1.331 on Linux/WSL; Codex's are
+	// not yet. A collaboration tool starts or messages a subagent, whose own tool calls pass
+	// through its own hooks.
 	case "clockcurr_time", "clocksleep", "webrun", "collaborationspawn_agent", "collaborationsend_message",
 		"collaborationfollowup_task", "collaborationlist_agents", "collaborationwait_agent",
-		"taskstop", "schedulewakeup":
+		"taskstop", "schedulewakeup", "pushnotification", "senduserfile", "croncreate", "crondelete":
 		return ClassOther, false
 	case "":
 		return "", false

@@ -1,0 +1,25 @@
+{
+  "session_id": "8710f796-234f-4fd1-8f1f-8bc394da3b5c",
+  "transcript_path": "/home/user/.claude/projects/-workspace-project/8710f796-234f-4fd1-8f1f-8bc394da3b5c.jsonl",
+  "cwd": "/workspace/project",
+  "scratchpad_dir": "/tmp/claude-1000/-workspace-project/8710f796-234f-4fd1-8f1f-8bc394da3b5c/scratchpad",
+  "prompt_id": "f914fc15-8b05-48e1-a707-9d71989fb8a9",
+  "permission_mode": "bypassPermissions",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "tool_name": "PushNotification",
+  "tool_input": {
+    "message": "Iris capture test: one notification for the classifier fixture (safe to ignore)",
+    "status": "proactive"
+  },
+  "tool_response": {
+    "message": "Iris capture test: one notification for the classifier fixture (safe to ignore)",
+    "pushSent": true,
+    "localSent": true,
+    "sentAt": "2026-11-24T21:13:50.856Z"
+  },
+  "tool_use_id": "toolu_017zAtiwUEhRgBfYU32iVES4",
+  "duration_ms": 1
+}
