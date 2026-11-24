@@ -658,6 +658,139 @@ describe("console refresh scheduling", () => {
     }
   });
 
+  async function bouncedResumeWithDeferredRead() {
+    vi.useFakeTimers();
+    const visibility = mockVisibility("visible");
+    const tracker = trackRequests();
+    const opening = deferred<Response>();
+    const resume = deferred<Response>();
+    const counts = { overviews: 0, details: 0 };
+    const reads: DocumentVisibilityState[] = [];
+    server.use(
+      http.get("*/v1/ui/overview", () => {
+        counts.overviews++;
+        return counts.overviews === 2 ? resume.promise : HttpResponse.json(sessionOverview);
+      }),
+      http.get("*/v1/ui/threads/:id", () => {
+        counts.details++;
+        return counts.details === 1 ? opening.promise : HttpResponse.json(threadDetail);
+      }),
+      http.post("*/v1/ui/threads/:id/read/:message", () => {
+        reads.push(document.visibilityState);
+        return HttpResponse.json({ read: 1 });
+      }),
+    );
+    render(<App connect={() => () => {}} />);
+    await flushFakeNetwork();
+
+    // The first show starts a resume while the opening has no rendered detail to read.
+    visibility.set("hidden");
+    fireEvent.click(screen.getByRole("button", { name: /Open thread: Rollout check/ }));
+    await flushFakeNetwork(2);
+    visibility.set("visible");
+    visibility.set("hidden");
+    await flushFakeNetwork(2);
+
+    // Detail commits during the second hidden interval, so its read remains deferred.
+    await act(async () => {
+      opening.resolve(HttpResponse.json(threadDetail));
+    });
+    await flushFakeNetwork();
+    visibility.set("visible");
+    tracker.reset();
+
+    return {
+      counts,
+      reads,
+      visibility,
+      settleResume: async () => {
+        await act(async () => {
+          resume.resolve(HttpResponse.json(sessionOverview));
+        });
+        await flushFakeNetwork();
+      },
+      finish: async () => {
+        opening.resolve(HttpResponse.json(threadDetail));
+        resume.resolve(HttpResponse.json(sessionOverview));
+        await flushFakeNetwork();
+        visibility.restore();
+        tracker.stop();
+      },
+    };
+  }
+
+  it("flushes a read deferred by a visibility bounce when the resume settles, before the fallback", async () => {
+    const view = await bouncedResumeWithDeferredRead();
+    try {
+      expect(view.counts).toEqual({ overviews: 2, details: 2 });
+      expect(view.reads).toEqual([]);
+
+      await view.settleResume();
+      expect(view.reads).toEqual(["visible"]);
+      expect(view.counts.overviews).toBe(2);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(29_000);
+      });
+      await flushFakeNetwork();
+      expect(view.reads).toEqual(["visible"]);
+      expect(view.counts.overviews).toBe(2);
+    } finally {
+      await view.finish();
+    }
+  });
+
+  it("flushes a bounced resume's deferred read once when the detail closes first", async () => {
+    const view = await bouncedResumeWithDeferredRead();
+    try {
+      fireEvent.click(screen.getByRole("button", { name: "Back to threads" }));
+      await flushFakeNetwork();
+      expect(view.reads).toEqual(["visible"]);
+
+      await view.settleResume();
+      expect(view.reads).toEqual(["visible"]);
+      expect(view.counts.overviews).toBe(2);
+    } finally {
+      await view.finish();
+    }
+  });
+
+  it("does not flush a bounced resume's deferred read while hidden at settle", async () => {
+    const view = await bouncedResumeWithDeferredRead();
+    try {
+      view.visibility.set("hidden");
+      await view.settleResume();
+      expect(view.reads).toEqual([]);
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(30_000);
+      });
+      await flushFakeNetwork();
+      expect(view.reads).toEqual([]);
+      expect(view.counts.overviews).toBe(2);
+    } finally {
+      await view.finish();
+    }
+  });
+
+  it("does not start a second resume refresh when a bounce defers a read", async () => {
+    const view = await bouncedResumeWithDeferredRead();
+    try {
+      expect(view.counts.overviews).toBe(2);
+      await view.settleResume();
+      expect(view.counts.overviews).toBe(2);
+      expect(view.reads).toEqual(["visible"]);
+
+      act(() => {
+        document.dispatchEvent(new Event("visibilitychange"));
+      });
+      await flushFakeNetwork();
+      expect(view.counts.overviews).toBe(2);
+    } finally {
+      await view.finish();
+    }
+  });
+
   it("drops a post-read follow-up reload if the tab hides before acknowledgement settles", async () => {
     vi.useFakeTimers();
     const visibility = mockVisibility("visible");
