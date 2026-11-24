@@ -356,10 +356,6 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 			})
 		}
 		if err != nil {
-			if reason, obs, ok := touchRefusal(err); ok {
-				state.observe(obs)
-				return r.finish(state, ev, Encode(ev, Decision{Action: ActionDeny, Reason: reason}))
-			}
 			return state.fail(err, r.failOpen(state, ev, err, allow))
 		}
 		switch strings.ToLower(touch.Action) {
@@ -393,27 +389,6 @@ func (r Runner) failOpen(state *runState, ev Event, err error, allow Output) Out
 
 // recovering is the refusal while a session cannot yet prove itself after a hub restart.
 const recovering = "Iris: the hub restarted and this session cannot prove it is the same one yet, so the edit is refused rather than left unclaimed. Retry shortly: the session reattaches when Iris hears from it with proof, or starts afresh within two minutes of the restart."
-
-const (
-	touchKeyReusedRefused = "Iris refused this edit because this tool call ID was already used for a different claim request. Retry the edit as a new tool call."
-	touchLostRefused      = "Iris refused this edit because the session or its earlier claim is no longer current. Retry the edit as a new tool call. Run `iris doctor` if this repeats."
-	obsTouchKeyReused     = "pre-edit claim refused (key_reused)"
-	obsTouchLost          = "pre-edit claim refused (lost)"
-)
-
-// touchRefusal turns an authoritative HTTP 409 retry refusal (key_reused or lost) into a fixed
-// deny reason and observation. Outages, 5xx replies, bare 409s, and 409 conflict keep D3's
-// fail-open path.
-func touchRefusal(err error) (reason, observation string, ok bool) {
-	switch hubclient.ConflictCode(err) {
-	case "key_reused":
-		return touchKeyReusedRefused, obsTouchKeyReused, true
-	case "lost":
-		return touchLostRefused, obsTouchLost, true
-	default:
-		return "", "", false
-	}
-}
 
 // checkRestoreFloor distinguishes a refused retry from recovery without proof. The latter
 // triggers D9's deliberate denial of an edit while the recovering Execution holds its claims.
