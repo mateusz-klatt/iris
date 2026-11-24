@@ -10,6 +10,21 @@ import (
 	"time"
 )
 
+func runBounded(t *testing.T, r Runner) Output {
+	t.Helper()
+	done := make(chan Output, 1)
+	go func() {
+		done <- r.Run()
+	}()
+	select {
+	case out := <-done:
+		return out
+	case <-time.After(10 * time.Second):
+		t.Fatal("Runner.Run did not finish within 10s")
+		return Output{}
+	}
+}
+
 func TestTouchRetryRefusalDeniesAndObserves(t *testing.T) {
 	const hubSecret = "SECRET HUB MESSAGE"
 	type wantOutput struct {
@@ -94,11 +109,10 @@ func TestTouchRetryRefusalDeniesAndObserves(t *testing.T) {
 							w.WriteHeader(http.StatusNotFound)
 						}
 					}))
-					defer srv.Close()
-
 					r := editRunner(t, c, srv.URL)
+					t.Cleanup(srv.Close)
 					token := r.Getenv("IRIS_TOKEN_FILE")
-					out := r.Run()
+					out := runBounded(t, r)
 
 					mu.Lock()
 					gotPaths := append([]string(nil), touchPaths...)
@@ -205,11 +219,10 @@ func TestTouchFailOpenControlsAndDeadline(t *testing.T) {
 					w.WriteHeader(http.StatusNotFound)
 				}
 			}))
-			defer srv.Close()
-
 			r := editRunner(t, ClientClaude, srv.URL)
+			t.Cleanup(srv.Close)
 			token := r.Getenv("IRIS_TOKEN_FILE")
-			out := r.Run()
+			out := runBounded(t, r)
 			assertAllow(t, ClientClaude, out)
 
 			got := waitForFailure(t, token)
@@ -236,11 +249,10 @@ func TestTouchFailOpenControlsAndDeadline(t *testing.T) {
 				w.WriteHeader(http.StatusNotFound)
 			}
 		}))
-		defer srv.Close()
-
 		r := editRunner(t, ClientClaude, srv.URL)
+		t.Cleanup(srv.Close)
 		token := r.Getenv("IRIS_TOKEN_FILE")
-		out := r.Run()
+		out := runBounded(t, r)
 		if out.Exit != 0 || !strings.Contains(string(out.Stdout), "rejected this host's token") || strings.Contains(string(out.Stdout), "deny") {
 			t.Fatalf("unexpected 401 output: stdout=%q stderr=%q exit=%d", out.Stdout, out.Stderr, out.Exit)
 		}
@@ -260,38 +272,51 @@ func TestTouchFailOpenControlsAndDeadline(t *testing.T) {
 		entered := make(chan struct{})
 		release := make(chan struct{})
 		handlerDone := make(chan struct{})
-		var releaseOnce sync.Once
-		t.Cleanup(func() { releaseOnce.Do(func() { close(release) }) })
+		stopAfter := make(chan struct{})
+		var enterOnce, releaseOnce, handlerDoneOnce, stopAfterOnce sync.Once
+		releaseHandler := func() {
+			releaseOnce.Do(func() { close(release) })
+		}
+		stopWait := func() {
+			stopAfterOnce.Do(func() { close(stopAfter) })
+		}
 
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch r.URL.Path {
 			case "/v1/sessions":
 				_, _ = w.Write([]byte(`{"execution_id":"ex_1","generation":1,"handle":"ex_1"}`))
 			case "/v1/claims/touch":
-				close(entered)
+				enterOnce.Do(func() { close(entered) })
 				<-release
 				w.WriteHeader(http.StatusConflict)
 				_, _ = fmt.Fprintf(w, `{"error":{"code":"lost","message":%q}}`, hubSecret)
-				close(handlerDone)
+				handlerDoneOnce.Do(func() { close(handlerDone) })
 			default:
 				t.Errorf("unexpected path %s", r.URL.Path)
 				w.WriteHeader(http.StatusNotFound)
 			}
 		}))
-		defer srv.Close()
 
 		r := editRunner(t, ClientClaude, srv.URL)
+		// Register srv.Close before releaseHandler so LIFO cleanup unblocks the handler first.
+		t.Cleanup(srv.Close)
+		t.Cleanup(stopWait)
+		t.Cleanup(releaseHandler)
+
 		token := r.Getenv("IRIS_TOKEN_FILE")
 		r.after = func(time.Duration) <-chan time.Time {
 			fired := make(chan time.Time)
 			go func() {
-				<-entered
-				close(fired)
+				select {
+				case <-entered:
+					close(fired)
+				case <-stopAfter:
+				}
 			}()
 			return fired
 		}
 
-		out := r.Run()
+		out := runBounded(t, r)
 		assertAllow(t, ClientClaude, out)
 
 		got := waitForFailure(t, token)
@@ -302,8 +327,12 @@ func TestTouchFailOpenControlsAndDeadline(t *testing.T) {
 			t.Fatalf("observations = %v, err = %v", obs, err)
 		}
 
-		releaseOnce.Do(func() { close(release) })
-		<-handlerDone
+		releaseHandler()
+		select {
+		case <-handlerDone:
+		case <-time.After(10 * time.Second):
+			t.Fatal("touch handler did not finish after release")
+		}
 		if obs, err := ReadRecentObservations(token, 10); err != nil || len(obs) != 0 {
 			t.Fatalf("late 409 recorded observations = %v, err = %v", obs, err)
 		}
