@@ -568,9 +568,15 @@ describe("Iris operator console", () => {
     let reads = 0;
     let details = 0;
     const other = { ...threadsPage.threads[0]!, id: "ms_other", subject: "Other thread", unread: 1 };
+    const otherReadEnded = deferred<void>();
     server.events.on("request:start", ({ request }) => {
       if (request.method === "GET" && new URL(request.url).pathname === "/v1/ui/threads/ms_root") {
         details++;
+      }
+    });
+    server.events.on("request:end", ({ request }) => {
+      if (request.method === "POST" && new URL(request.url).pathname === "/v1/ui/threads/ms_other/read/ms_other") {
+        otherReadEnded.resolve();
       }
     });
     server.use(
@@ -618,19 +624,23 @@ describe("Iris operator console", () => {
     await user.click(await screen.findByRole("button", { name: /Other thread/ }));
     expect(await screen.findByRole("article", { name: "Other thread" })).toBeVisible();
     expect(screen.queryByRole("alert")).toBeNull();
+    await act(async () => { await otherReadEnded.promise; });
+    expect(reads).toBe(readsAfterOpen + 1);
     server.events.removeAllListeners();
   }, 40000);
 
   it("ignores a late acknowledgement for a different opening", async () => {
     const user = userEvent.setup({ delay: null });
     const other = { ...threadsPage.threads[0]!, id: "ms_other", subject: "Other thread", unread: 1 };
-    let release: (value?: void) => void = () => undefined;
-    let gate = new Promise<void>((resolve) => { release = resolve; });
-    let reads = 0;
-    const arm = () => {
-      gate = new Promise<void>((resolve) => { release = resolve; });
-    };
+    const otherRead = "/v1/ui/threads/ms_other/read/ms_other";
+    const readGates = [deferred<void>(), deferred<void>()];
+    const reads: string[] = [];
+    let overviews = 0;
     server.use(
+      http.get("*/v1/ui/overview", () => {
+        overviews++;
+        return HttpResponse.json(sessionOverview);
+      }),
       http.get("*/v1/ui/threads", ({ request }) => {
         const url = new URL(request.url);
         if (url.pathname !== "/v1/ui/threads") {
@@ -651,30 +661,31 @@ describe("Iris operator console", () => {
           }],
         });
       }),
-      http.post("*/v1/ui/threads/:id/read/:message", async () => {
-        const pending = gate;
-        reads++;
+      http.post("*/v1/ui/threads/:id/read/:message", async ({ request }) => {
+        const pending = readGates[reads.length]?.promise;
+        reads.push(new URL(request.url).pathname);
         await pending;
         return HttpResponse.json({ read: 1 });
       }),
     );
     await showSession();
+    const settled = overviews;
     await user.click(await screen.findByRole("button", { name: /Other thread/ }));
-    await waitFor(() => expect(reads).toBe(1));
+    await waitFor(() => expect(reads).toEqual([otherRead]));
     await user.click(screen.getByRole("button", { name: "Back to threads" }));
     await waitFor(() => expect(screen.queryByRole("article")).toBeNull());
-    release();
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
-    arm();
+    readGates[0]!.resolve();
+    await waitFor(() => expect(overviews).toBe(settled + 1));
     await user.click(await screen.findByRole("button", { name: /Other thread/ }));
-    await waitFor(() => expect(reads).toBe(2));
+    await waitFor(() => expect(reads).toEqual([otherRead, otherRead]));
     await user.click(screen.getByRole("button", { name: "Back to threads" }));
     await user.click(await screen.findByRole("button", { name: /Rollout check/ }));
     expect(await screen.findByRole("alert")).toHaveTextContent("Reload the console to mark this thread read.");
-    expect(reads).toBe(2);
-    release();
-    await act(async () => { await new Promise((resolve) => setTimeout(resolve, 50)); });
+    expect(reads).toEqual([otherRead, otherRead]);
+    readGates[1]!.resolve();
+    await waitFor(() => expect(overviews).toBe(settled + 2));
     expect(screen.getByRole("alert")).toHaveTextContent("Reload the console to mark this thread read.");
+    expect(reads).toEqual([otherRead, otherRead]);
   }, 40000);
 
   it("replies and sends as human", async () => {
