@@ -58,10 +58,11 @@ func TestDoctorLiveExitReflectsLiveResults(t *testing.T) {
 	}
 	t.Setenv("IRIS_TOKEN_FILE", token)
 	for _, tc := range []struct {
-		name, client                  string
-		live, grades, codexSlow, pass bool
-		hubUp, tokenOK                bool
-		want                          int
+		name, client                        string
+		live, grades, codexSlow, pass       bool
+		hubUp, tokenOK                      bool
+		damagedMarker, incompleteMarkerScan bool
+		want                                int
 	}{
 		{name: "selected live pass despite unrelated grades", live: true, client: integrate.Grok, grades: true, pass: true, hubUp: true, tokenOK: true},
 		{name: "all selected live clients pass despite grades", live: true, grades: true, pass: true, hubUp: true, tokenOK: true},
@@ -70,10 +71,29 @@ func TestDoctorLiveExitReflectsLiveResults(t *testing.T) {
 		{name: "live failure with healthy offline grades", live: true, client: integrate.Grok, hubUp: true, tokenOK: true, want: 1},
 		{name: "hub failure despite live pass", live: true, client: integrate.Grok, pass: true, tokenOK: true, want: 1},
 		{name: "token failure despite live pass", live: true, client: integrate.Grok, pass: true, hubUp: true, want: 1},
+		{name: "current marker damage despite live pass", live: true, client: integrate.Grok, pass: true, hubUp: true, tokenOK: true, damagedMarker: true, want: 1},
+		{name: "incomplete marker scan despite live pass", live: true, client: integrate.Grok, pass: true, hubUp: true, tokenOK: true, incompleteMarkerScan: true, want: 1},
 		{name: "plain doctor still fails unrelated grades", grades: true, hubUp: true, tokenOK: true, want: 1},
 		{name: "plain doctor still passes healthy grades", hubUp: true, tokenOK: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
+			sessionsDir := hook.NewSessions(token).Dir()
+			if err := os.RemoveAll(sessionsDir); err != nil {
+				t.Fatal(err)
+			}
+			if tc.damagedMarker {
+				if err := os.Mkdir(sessionsDir, 0o700); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(sessionsDir, "damaged.ended"), []byte("broken\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if tc.incompleteMarkerScan {
+				if err := os.WriteFile(sessionsDir, []byte("not a directory"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
 			var log string
 			if tc.grades {
 				when := time.Now().UTC().Format(time.RFC3339)
@@ -137,7 +157,7 @@ func TestDoctorLiveExitReflectsLiveResults(t *testing.T) {
 			if warned := strings.Contains(errOut.String(), warning); warned != (tc.client == integrate.Codex) {
 				t.Fatalf("original unconfirmed readiness step warning = %v:\n%s", warned, errOut.String())
 			}
-			if explained := strings.Contains(out.String(), "exit status reflects live results and hub/token health; offline client grades are reported separately"); explained != tc.live {
+			if explained := strings.Contains(out.String(), "exit status reflects live results and hub/token/end-marker health; offline client grades are reported separately"); explained != tc.live {
 				t.Fatalf("live exit semantics explained = %v, live = %v:\n%s", explained, tc.live, out.String())
 			}
 		})

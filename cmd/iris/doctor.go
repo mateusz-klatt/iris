@@ -57,10 +57,10 @@ func runDoctorIO(ctx context.Context, args []string, stdin io.Reader, stdout, st
 	if !*liveFlag {
 		return res.ExitCode()
 	}
-	_, _ = fmt.Fprintln(stdout, "With --live, exit status reflects live results and hub/token health; offline client grades are reported separately.")
+	_, _ = fmt.Fprintln(stdout, "With --live, exit status reflects live results and hub/token/end-marker health; offline client grades are reported separately.")
 	plans, skipped := doctor.LivePlans(integrate.Layout{}, res.Report.Clients, *only)
 	code := liveStage(ctx, plans, skipped, *yes, *timeout, stdin, stdout, stderr, live)
-	if !res.HubUp || !res.TokenOK {
+	if !res.HubUp || !res.TokenOK || res.Report.CurrentDamagedEndMarkers > 0 || res.Report.EndMarkerScanIncomplete {
 		return 1
 	}
 	return code
