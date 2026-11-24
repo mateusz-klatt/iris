@@ -98,8 +98,8 @@ type Request struct {
 	// not prove ownership of a recovering Execution.
 	RetryGeneration int64 `json:"retry_generation,omitempty"`
 	// PriorGeneration and PriorExecutionID are the exact proof required by post-window succession.
-	PriorGeneration  int64  `json:"prior_generation"`
-	PriorExecutionID string `json:"prior_execution_id"`
+	PriorGeneration  int64  `json:"prior_generation,omitempty"`
+	PriorExecutionID string `json:"prior_execution_id,omitempty"`
 	// EndedThrough refuses registration or succession at or below a generation the client ended locally.
 	EndedThrough int64 `json:"ended_through,omitempty"`
 }

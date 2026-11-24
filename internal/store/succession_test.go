@@ -1,8 +1,11 @@
 package store
 
 import (
+	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"path/filepath"
@@ -33,6 +36,45 @@ func refuseSuccession(t *testing.T, s *Store, req Request, highest int64) {
 	assertRegistrationLost(t, err, highest)
 	if databaseState(t, s) != before {
 		t.Fatal("refused succession changed Agent, Execution, Delivery or Claim state")
+	}
+}
+
+func TestMessageRetryAcceptsOperationWrittenBeforeSuccessionProofFields(t *testing.T) {
+	s, _, _ := testStore(t)
+	exec, registered := session(t, s, 1)
+	request := exec
+	request.Key = "committed-before-upgrade"
+	request.To = []string{registered["agent"].(map[string]any)["name"].(string)}
+	request.Body = "already sent"
+	raw, err := json.Marshal(struct {
+		Route   string
+		Request Request
+	}{"message", request})
+	if err != nil {
+		t.Fatal(err)
+	}
+	proofFields := []byte(`,"prior_generation":0,"prior_execution_id":""`)
+	newRaw := raw
+	if !bytes.Contains(raw, proofFields) {
+		newRaw = bytes.TrimSuffix(raw, []byte("}}"))
+		newRaw = append(newRaw, proofFields...)
+		newRaw = append(newRaw, '}', '}')
+	}
+	oldRaw := bytes.Replace(newRaw, proofFields, nil, 1)
+	if bytes.Equal(oldRaw, newRaw) {
+		t.Fatal("test request did not contain the new zero-valued proof fields")
+	}
+	hash := sha256.Sum256(oldRaw)
+	agentID := registered["agent"].(map[string]any)["id"].(string)
+	if _, err := s.db.Exec("INSERT INTO Operation(principal_agent_id,key,request_hash,result_json,created_ms) VALUES(?,?,?,?,1)", agentID, request.Key, hash[:], `{"message_id":"ms_committed","deliveries":[]}`); err != nil {
+		t.Fatal(err)
+	}
+	replayed := call(t, s, "messages", request)
+	if replayed["message_id"] != "ms_committed" {
+		t.Fatalf("old retry operation was not replayed: %+v", replayed)
+	}
+	if messages := rowCount(t, s, "SELECT COUNT(*) FROM Message"); messages != 0 {
+		t.Fatalf("replayed old operation sent another message: %d", messages)
 	}
 }
 
