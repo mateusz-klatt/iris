@@ -43,6 +43,16 @@ func (r *Resolver) succeedAfterLostHeld(ctx context.Context, session string, run
 			return Bound{}, true, errGenerationFloor
 		}
 	}
+	if r.last.SessionID == session && r.last.ExecutionID != "" && r.last.Generation > 0 && generationFloor > r.last.Generation {
+		winner, err := r.adoptSuccessionWinnerHeld(ctx, session, rung, r.last.Generation, r.last.ExecutionID, anc, processBound)
+		if err != nil {
+			return Bound{}, true, &LostError{Cause: err}
+		}
+		if winner.ExecutionID != "" {
+			return winner, true, nil
+		}
+		return Bound{}, true, errGenerationFloor
+	}
 	lastExecution := ""
 	if r.last.SessionID == session {
 		lastExecution = r.last.ExecutionID
