@@ -1088,3 +1088,71 @@ func TestAReducedReconcileAgainstTheRealHub(t *testing.T) {
 		t.Fatalf("after the repair: %s", text)
 	}
 }
+
+func TestScopedShellRegistrationUsesStrictEndFloor(t *testing.T) {
+	for _, response := range []int64{2, 3} {
+		t.Run(fmt.Sprintf("reply G%d", response), func(t *testing.T) {
+			m := newFileMemory(t)
+			m.Remember("claude", "s", 2)
+			m.Forget("claude", "s", 2)
+			hub := &scopeHub{generation: int(response)}
+			r := Runner{Memory: m}
+			ev := Event{Client: ClientClaude, SessionID: "s", Kind: KindPreTool, CWD: "/repo"}
+			state := &runState{}
+			_, err := r.reconcileScopedSession(context.Background(), state, hub, ev, gitinfo.Repo{Worktree: "/repo"}, "before", map[string]string{}, hubclient.Scope{Mode: "dirty"})
+			if len(hub.scopedOneCall) != 1 {
+				t.Fatalf("scoped registrations = %+v", hub.scopedOneCall)
+			}
+			req := hub.scopedOneCall[0]
+			if req.Generation != 0 || req.RetryGeneration != 2 || req.EndedThrough != 2 {
+				t.Fatalf("scoped registration = %+v, want G0 with ended_through G2", req)
+			}
+			if response == 2 {
+				marker := m.name("claude", "s") + ".ended"
+				want := []string{endedProof(marker).Error()} // gitleaks:allow (a test observation token and path, not a credential)
+				if err != errEndedGeneration || !slices.Equal(state.observations(), want) || m.Recall("claude", "s") != 0 {
+					t.Fatalf("equal reply was used: err %v, observations %v, proof G%d", err, state.observations(), m.Recall("claude", "s"))
+				}
+				return
+			}
+			if err != nil || m.Recall("claude", "s") != 3 {
+				t.Fatalf("successor above the marker was not remembered: G%d, %v", m.Recall("claude", "s"), err)
+			}
+		})
+	}
+}
+
+func TestSplitShellRechecksEndMarkerAfterSnapshot(t *testing.T) {
+	for _, incapable := range []bool{false, true} {
+		name := "separate scoped reconcile"
+		if incapable {
+			name = "separate full reconcile"
+		}
+		t.Run(name, func(t *testing.T) {
+			f := newScopeFixture(t)
+			f.reduced(time.Minute)
+			f.hub.incapable = incapable
+			git := func(ctx context.Context, _ string, scope gitinfo.Scope, a *gitinfo.Attempt) (map[string]string, error) {
+				f.hub.note(statusEntry(scope))
+				a.Begin(ctx, time.Now())
+				f.m.Forget("claude", "s", 2)
+				return map[string]string{}, nil
+			}
+			out, state := f.run(git, time.Hour)
+			if !strings.Contains(string(out.Stdout), `"permissionDecision":"deny"`) {
+				t.Fatalf("split shell after SessionEnd output %q, want confirmed-end denial", out.Stdout)
+			}
+			if len(f.hub.scoped) != 0 || len(f.hub.plain) != 0 || len(f.hub.scopedOneCall) != 0 {
+				t.Fatalf("separate reconcile used ended G2: scoped %+v, plain %+v, combined %+v", f.hub.scoped, f.hub.plain, f.hub.scopedOneCall)
+			}
+			marker := f.m.name("claude", "s") + ".ended"
+			want := []string{endedProof(marker).Error()} // gitleaks:allow (a test observation token and path, not a credential)
+			if !slices.Equal(state.observations(), want) {
+				t.Fatalf("split-shell observations = %v, want %v", state.observations(), want)
+			}
+			if generation, err := readGeneration(marker); generation != 2 || err != nil {
+				t.Fatalf("end marker = G%d, %v", generation, err)
+			}
+		})
+	}
+}

@@ -32,6 +32,44 @@ func TestDoctorReportsAreKeptPerHost(t *testing.T) {
 	}
 }
 
+func TestDoctorReportsPersistOptionalMarkerHealth(t *testing.T) {
+	s, _, _ := testStore(t)
+	damaged, incomplete := 2, true
+	call(t, s, "ui_doctor_put", Request{
+		Host: "current", CheckedAt: "2026-11-24T00:00:00Z",
+		CurrentDamagedEndMarkers: &damaged, EndMarkerScanIncomplete: &incomplete,
+	})
+	zero, complete := 0, false
+	call(t, s, "ui_doctor_put", Request{
+		Host: "zero", CheckedAt: "2026-11-24T00:00:00Z",
+		CurrentDamagedEndMarkers: &zero, EndMarkerScanIncomplete: &complete,
+	})
+	call(t, s, "ui_doctor_put", Request{Host: "legacy", CheckedAt: "2026-11-24T00:00:00Z"})
+
+	hosts := call(t, s, "ui_doctor_get", Request{})["hosts"].([]map[string]any)
+	byHost := make(map[string]map[string]any, len(hosts))
+	for _, report := range hosts {
+		byHost[report["host"].(string)] = report
+	}
+	if got := byHost["current"]["current_damaged_end_markers"]; got != float64(damaged) {
+		t.Fatalf("current damaged count = %v, want %d", got, damaged)
+	}
+	if got := byHost["current"]["end_marker_scan_incomplete"]; got != incomplete {
+		t.Fatalf("current incomplete state = %v, want %v", got, incomplete)
+	}
+	if got, ok := byHost["zero"]["current_damaged_end_markers"]; !ok || got != float64(0) {
+		t.Fatalf("explicit zero count = %v, present %v", got, ok)
+	}
+	if got, ok := byHost["zero"]["end_marker_scan_incomplete"]; !ok || got != false {
+		t.Fatalf("explicit false incomplete state = %v, present %v", got, ok)
+	}
+	for _, field := range []string{"current_damaged_end_markers", "end_marker_scan_incomplete"} {
+		if value, ok := byHost["legacy"][field]; ok {
+			t.Fatalf("legacy report gained %s = %v", field, value)
+		}
+	}
+}
+
 func testStoreOnly(t *testing.T) *Store {
 	t.Helper()
 	s, _, _ := testStore(t)
@@ -53,7 +91,7 @@ func TestACorruptHostReportIsAnError(t *testing.T) {
 // migration keeps it under "unknown".
 func TestTheOldReportMovesToUnknown(t *testing.T) {
 	s, _, file := historicalStore(t, 23)
-	for _, q := range []string{dropHistoricalWorktreeColumns, removeLeaseRenewedTickSchema, removeAttentionIdentitySchema, removeConsoleSchema, "DROP TABLE HostReport", "DROP TABLE WorktreeAlias", "DROP INDEX DeliveryReceiptDue", "ALTER TABLE Delivery DROP COLUMN receipt_due_ms", "CREATE TABLE DoctorReport(id INTEGER PRIMARY KEY CHECK(id=1),report TEXT NOT NULL)", `INSERT INTO DoctorReport VALUES(1,'{"checked_at":"x","clients":[]}')`, "PRAGMA user_version=13"} {
+	for _, q := range []string{removeLeaseRenewedTickSchema, removeAttentionIdentitySchema, removeConsoleSchema, "DROP TABLE HostReport", "DROP TABLE WorktreeAlias", "DROP INDEX DeliveryReceiptDue", "ALTER TABLE Delivery DROP COLUMN receipt_due_ms", "CREATE TABLE DoctorReport(id INTEGER PRIMARY KEY CHECK(id=1),report TEXT NOT NULL)", `INSERT INTO DoctorReport VALUES(1,'{"checked_at":"x","clients":[]}')`, "PRAGMA user_version=13"} {
 		if _, err := s.db.Exec(q); err != nil {
 			t.Fatal(err)
 		}

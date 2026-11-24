@@ -232,7 +232,7 @@ func TestRepairMovesAQuietFolderProjectIntoItsContext(t *testing.T) {
 	expectError(t, s, "merge_outside", repair, "conflict") // its session is still active
 	call(t, s, "end", fr)
 	// A wait and a shell baseline left by the folder's session are dropped, not moved.
-	if _, err := s.db.Exec("INSERT INTO Waiter(execution_id,repository_id,path_key,kind,expires_ms) VALUES(?,?,'x','exact',0)", fr.ExecutionID, folder); err != nil {
+	if _, err := s.db.Exec("INSERT INTO Waiter VALUES(?,?,'x','exact',0)", fr.ExecutionID, folder); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := s.db.Exec("INSERT INTO ShellSnapshot VALUES(?,'{}')", fr.ExecutionID); err != nil {

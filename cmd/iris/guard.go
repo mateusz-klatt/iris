@@ -35,16 +35,13 @@ func runGuard(args []string) error {
 	case "remove":
 		return guard.Remove(ctx, dir)
 	case "check":
-		report, err := guard.Classify(ctx, dir, &hubclient.Client{Config: hubclient.NewConfig()})
+		message, err := guard.Check(ctx, dir, &hubclient.Client{Config: hubclient.NewConfig()})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "Iris: guard could not check claims; allowing commit: %v\n", err)
 			return nil
 		}
-		if report.Message != "" {
-			return errors.New(report.Message)
-		}
-		if text := guard.AdvisoryText(report.Advisories); text != "" {
-			fmt.Fprintln(os.Stderr, text)
+		if message != "" {
+			return errors.New(message)
 		}
 		return nil
 	default:

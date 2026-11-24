@@ -3,8 +3,8 @@ import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import type { Claim, Repository } from "./api";
-import { ClaimScopeLine, ClaimsPanel } from "./ClaimsPanel";
-import "./i18n";
+import { ClaimsPanel } from "./ClaimsPanel";
+import { englishTranslation } from "./i18n";
 import { timeLeft } from "./timeLeft";
 
 const now = Date.parse("2026-11-08T10:00:00Z");
@@ -57,7 +57,7 @@ describe("ClaimsPanel", () => {
     vi.useFakeTimers({ now, toFake: ["Date", "setInterval", "clearInterval"] });
     show();
     const first = screen.getAllByRole("listitem")[0]!;
-    expect(first).toHaveTextContent("iris · claude-laptop-iris · exact");
+    expect(first).toHaveTextContent(`iris · claude-laptop-iris · ${englishTranslation.operator.claimKindExact}`);
     const left = within(first).getByText("in 45 seconds");
     expect(left.tagName).toBe("TIME");
     expect(left).toHaveAttribute("dateTime", "2026-11-08T10:00:45Z");
@@ -147,59 +147,5 @@ describe("ClaimsPanel", () => {
     show([]);
     expect(screen.getByText("None yet.")).toBeVisible();
     expect(screen.queryByRole("group")).toBeNull();
-  });
-
-  it("shows each project's automatic claim scope and leaves a host context out", () => {
-    const repos: Repository[] = [
-      { id: "rp_iris", name: "iris", aliases: [], claim_auto_scope: "repository" },
-      { id: "rp_sample", name: "sample", aliases: [], claim_auto_scope: "worktree" },
-      { id: "rp_old", name: "", aliases: [] },
-      { id: "rp_outside", name: "outside git on home", aliases: ["outside:home"], kind: "outside", host: "home" },
-    ];
-    render(<ClaimsPanel claims={[]} repositories={repos} revoking={null} onRevoke={vi.fn()} />);
-    expect(screen.getByText("iris: Repository-wide")).toBeVisible();
-    expect(screen.getByText(/sample: Worktree-scoped/)).toBeVisible();
-    expect(screen.getByText(/Overlapping automatic claims in different worktrees are advisory/)).toBeVisible();
-    expect(screen.getByText("rp_old: Unknown")).toBeVisible();
-    expect(screen.queryByText(/outside git on home/)).toBeNull();
-    expect(screen.getByText("iris: Repository-wide").closest("p")?.querySelector("small")).toBeNull();
-  });
-
-  it("shows a claim's own checkout, and unknown for a legacy row with no path", () => {
-    const repos: Repository[] = [
-      { id: "rp_iris", name: "iris", aliases: [], claim_auto_scope: "worktree" },
-    ];
-    const rows: Claim[] = [
-      { ...claim(1, "src/api.go", "codex-a", "rp_iris", null), worktree_path: "/wt", branch: "delegate/api", host: "host-a", effective_scope: "worktree" },
-      { ...claim(2, "src/api.go", "codex-b", "rp_iris", null), worktree_path: "/wt", branch: "delegate/web", host: "host-b", effective_scope: "worktree" },
-      { ...claim(3, "README.md", "claude", "rp_iris", null), origin: "explicit", worktree_path: "/wt-explicit", branch: "main", host: "host-a", effective_scope: "repository" },
-      { ...claim(4, "old.go", "claude", "rp_iris", null), worktree_path: "", branch: "", effective_scope: "repository" },
-    ];
-    const view = render(<ClaimsPanel claims={rows} repositories={repos} revoking={null} onRevoke={vi.fn()} />);
-    const row = (fence: string) => view.container.querySelector(`[data-fence="${fence}"]`);
-    expect(row("1")).toHaveTextContent("Worktree /wt on host-a · Branch delegate/api · Applies in this worktree");
-    expect(row("2")).toHaveTextContent("Worktree /wt on host-b · Branch delegate/web · Applies in this worktree");
-    expect(row("3")).toHaveTextContent("Worktree /wt-explicit · Branch main · Applies across the repository");
-    expect(row("3")).not.toHaveTextContent("Applies in this worktree");
-    expect(row("4")).toHaveTextContent("Location unknown · Applies across the repository");
-  });
-
-  it("replaces the checkout and the scope when the claims change", () => {
-    const repos: Repository[] = [{ id: "rp_iris", name: "iris", aliases: [], claim_auto_scope: "repository" }];
-    const first = { ...claim(1, "src/api.go", "codex-a", "rp_iris", null), worktree_path: "/wt1", branch: "main", effective_scope: "repository" };
-    const view = render(<ClaimsPanel claims={[first]} repositories={repos} revoking={null} onRevoke={vi.fn()} />);
-    expect(screen.getByText("src/api.go").closest("li")).toHaveTextContent("Worktree /wt1 · Branch main · Applies across the repository");
-    const next = { ...first, worktree_path: "/wt2", branch: "delegate/api", effective_scope: "worktree" };
-    view.rerender(<ClaimsPanel claims={[next]} repositories={[{ ...repos[0]!, claim_auto_scope: "worktree" }]} revoking={null} onRevoke={vi.fn()} />);
-    expect(screen.getByText("src/api.go").closest("li")).toHaveTextContent("Worktree /wt2 · Branch delegate/api · Applies in this worktree");
-    expect(screen.getByText(/iris: Worktree-scoped/)).toBeVisible();
-  });
-
-  it("names a scope with no repository when the line has no name, and hides the list when there is no project", () => {
-    render(<ClaimScopeLine name="" scope="repository" />);
-    expect(screen.getByText("Repository-wide")).toBeVisible();
-    expect(screen.queryByText(/: Repository-wide/)).toBeNull();
-    render(<ClaimsPanel claims={[]} repositories={[]} revoking={null} onRevoke={vi.fn()} />);
-    expect(screen.queryByLabelText("Automatic claim scope")).toBeNull();
   });
 });

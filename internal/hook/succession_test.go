@@ -132,9 +132,44 @@ func TestRecallBindingGenerationRejectsDamagedExecutionProof(t *testing.T) {
 	}
 }
 
+func TestSessionStartNamesDamagedExecutionProofBeforeRegistration(t *testing.T) {
+	h, _ := newRestoredHook(t, &hookClock{wall: time.Now()})
+	m := sessionsFor(h.getenv)
+	m.remember("claude", "s1", 1, "ex_one")
+	executionPath := m.name("claude", "s1") + ".execution"
+	if err := os.WriteFile(executionPath, []byte("damaged"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	observeReviewRequests(h, func(req floorRequest) error {
+		t.Errorf("SessionStart with damaged execution proof made a request: %+v", req)
+		return nil
+	})
+	out := h.run("SessionStart", `{"session_id":"s1","cwd":`+quote(h.root)+`}`)
+	if out != string(FallbackAllow(ClientClaude).Stdout) {
+		t.Fatalf("SessionStart with damaged execution proof returned %q", out)
+	}
+	assertReviewObservation(t, h, DamagedGenerationProof+" at "+executionPath)
+}
+
+func TestRememberDoesNotPublishMalformedExecutionProof(t *testing.T) {
+	s := NewSessions(filepath.Join(t.TempDir(), "hub.token"))
+	s.memory.remember("claude", "s1", 1, "ex")
+	state := &runState{}
+	generation, ended, err := registrationProof(state, Event{Client: ClientClaude, SessionID: "s1", Kind: KindSessionStart}, s.memory, 0)
+	if generation != 1 || ended != 0 || err != nil || len(state.observations()) != 0 {
+		t.Fatalf("malformed hub ID poisoned later registration: G%d ended=%d err=%v observations=%v", generation, ended, err, state.observations())
+	}
+	proofs, err := readExecutionProofs(s.memory.name("claude", "s1") + ".execution")
+	if err != nil || proofs.at(1) != "" {
+		t.Fatalf("malformed hub ID was published as exact proof: %+v, %v", proofs, err)
+	}
+}
+
 func TestReadExecutionProofValidation(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "proof")
+	first := "ex_" + strings.Repeat("a", 32)
+	second := "ex_" + strings.Repeat("b", 32)
 	for _, tc := range []struct {
 		body       string
 		generation int
@@ -143,6 +178,7 @@ func TestReadExecutionProofValidation(t *testing.T) {
 	}{
 		{body: "1 ex_one", generation: 1, want: "ex_one"},
 		{body: "1 ex_one\n2 ex_OK-1_", generation: 2, want: "ex_OK-1_"},
+		{body: "1 " + first + "\n2 " + second, generation: 2, want: second},
 		{body: "1 ex_one\n2 ex_OK-1_", generation: 3},
 		{body: "1 ex_legacy", generation: 2},
 		{body: "ex_legacy", generation: 1},
@@ -155,6 +191,7 @@ func TestReadExecutionProofValidation(t *testing.T) {
 		{body: "0 ex_zero", invalid: true},
 		{body: "1 ex_one\n1 ex_other", invalid: true},
 		{body: "1 ex_one\n2 ex_two\n3 ex_three", invalid: true},
+		{body: strings.Repeat(" ", executionProofReadLimit), invalid: true},
 	} {
 		if err := os.WriteFile(path, []byte(tc.body), 0o600); err != nil {
 			t.Fatal(err)
@@ -408,6 +445,7 @@ func TestAdvanceGenerationCASAndConcurrentMemoryWriters(t *testing.T) {
 		{"old execution", "", "ex_two", 1, 2},
 		{"new generation", "ex_one", "ex_two", 1, 3},
 		{"new execution", "ex_one", "", 1, 2},
+		{"malformed new execution", "ex_one", "ex", 1, 2},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			s := successionSessionFiles(t, "claude", "s", 1, "ex_one")

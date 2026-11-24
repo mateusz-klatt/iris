@@ -51,9 +51,9 @@ func (h *Hub) authenticate(r *http.Request) principal {
 	return principal{name, tokenDigest(token)}
 }
 func (h *Hub) tokenRoutes() {
-	// Repository repair, deletion, contact and claim-scope changes affect other hosts'
-	// coordination. They require the owner's credential (ADR 004, ADR 012 and ADR 037).
-	for route, op := range map[string]string{"POST /v1/admin/forget": "forget", "POST /v1/admin/contact": "contact", "POST /v1/admin/merge": "merge", "POST /v1/admin/merge/outside": "merge_outside", "POST /v1/admin/unalias": "unalias", "POST /v1/admin/policy": "policy"} {
+	// Repository repair, deletion and contact changes affect other hosts' coordination
+	// and mail. They require the owner's credential (ADR 004 and ADR 012).
+	for route, op := range map[string]string{"POST /v1/admin/forget": "forget", "POST /v1/admin/contact": "contact", "POST /v1/admin/merge": "merge", "POST /v1/admin/merge/outside": "merge_outside", "POST /v1/admin/unalias": "unalias"} {
 		h.mux.HandleFunc(route, func(w http.ResponseWriter, r *http.Request) {
 			if !h.ownerOnly(w, r) {
 				return

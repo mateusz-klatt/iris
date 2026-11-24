@@ -8,124 +8,35 @@ import (
 	"os"
 	"path/filepath"
 	"time"
-	"unsafe"
 
 	"golang.org/x/sys/windows"
 )
 
-const antigravityRenamePause = time.Millisecond
+const antigravityRenamePause = sessionFileRenamePause
+const antigravityRenameAttempts = sessionFileRenameAttempts
 
-const antigravityRenameAttempts = int(hookLockBudget / antigravityRenamePause)
+type antigravityRenameInfo = sessionRenameInfo
 
-// antigravityRenameInfo is the Win32 FILE_RENAME_INFO passed to
-// SetFileInformationByHandle with FileRenameInfoEx. Flags is that struct's
-// DWORD union member, FILE_RENAME_FLAG_REPLACE_IF_EXISTS |
-// FILE_RENAME_FLAG_POSIX_SEMANTICS, which x/sys names without the FLAG_ infix.
-// The handle field is pointer-aligned, matching the Windows header.
-type antigravityRenameInfo struct {
-	Flags          uint32
-	RootDirectory  windows.Handle
-	FileNameLength uint32
-	FileName       uint16
-}
-
-// renameAntigravityStateFile replaces the file at newpath with oldpath.
-// A reader that still has newpath open keeps that handle on the previous
-// contents, and a later open sees the replacement. MoveFileEx cannot do this:
-// it refuses while any handle is open, including one opened with
-// FILE_SHARE_DELETE. FileRenameInfoEx with POSIX semantics can, on Windows 10
-// version 1607 and later and on a volume that supports it. Where that call is
-// rejected, the rename falls back to MoveFileEx and retries access-denied and
-// sharing-violation until hookLockBudget has elapsed or the attempt cap is
-// reached. The fallback still cannot replace a file a reader holds open.
-// Tests set this to the error a replace returns after those retries are finished.
-var renameAntigravityStateFile = func(oldpath, newpath string) error {
-	return replaceAntigravityState(oldpath, newpath, renameAntigravityStatePOSIX, os.Rename, time.Sleep)
-}
+var renameAntigravityStateFile = replaceSessionFile
 
 func replaceAntigravityState(oldpath, newpath string, posix, classic func(string, string) error, pause func(time.Duration)) error {
-	unsupported := false
-	return retryAntigravityStateRename(func() error {
-		if !unsupported {
-			err := posix(oldpath, newpath)
-			if err == nil || !posixRenameUnsupported(err) {
-				return err
-			}
-			unsupported = true
-		}
-		return classic(oldpath, newpath)
-	}, pause)
+	return replaceSessionFileWithRetry(oldpath, newpath, posix, classic, pause)
 }
 
-// posixRenameUnsupported reports that this Windows or this volume rejected
-// FileRenameInfoEx. Older Windows returns ERROR_INVALID_PARAMETER or
-// ERROR_INVALID_FUNCTION. A volume without POSIX rename, such as FAT, returns
-// ERROR_NOT_SUPPORTED.
 func posixRenameUnsupported(err error) bool {
-	return errors.Is(err, windows.ERROR_INVALID_PARAMETER) ||
-		errors.Is(err, windows.ERROR_NOT_SUPPORTED) ||
-		errors.Is(err, windows.ERROR_INVALID_FUNCTION)
+	return sessionPOSIXRenameUnsupported(err)
 }
 
 func renameAntigravityStatePOSIX(oldpath, newpath string) error {
-	from, err := windows.UTF16PtrFromString(oldpath)
-	if err != nil {
-		return err
-	}
-	to, err := windows.UTF16FromString(newpath)
-	if err != nil {
-		return err
-	}
-	h, err := windows.CreateFile(
-		from,
-		windows.DELETE,
-		windows.FILE_SHARE_READ|windows.FILE_SHARE_WRITE|windows.FILE_SHARE_DELETE,
-		nil,
-		windows.OPEN_EXISTING,
-		windows.FILE_FLAG_BACKUP_SEMANTICS|windows.FILE_FLAG_OPEN_REPARSE_POINT,
-		0,
-	)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = windows.CloseHandle(h) }()
-
-	// FileNameLength is the name in bytes and excludes the trailing NUL.
-	// UTF16FromString returns at least that NUL.
-	var probe antigravityRenameInfo
-	size := int(unsafe.Offsetof(probe.FileName)) + len(to)*2
-	words := make([]uint64, (size+7)/8)
-	buf := unsafe.Slice((*byte)(unsafe.Pointer(&words[0])), size)
-	info := (*antigravityRenameInfo)(unsafe.Pointer(&buf[0]))
-	info.Flags = windows.FILE_RENAME_REPLACE_IF_EXISTS | windows.FILE_RENAME_POSIX_SEMANTICS
-	info.FileNameLength = uint32((len(to) - 1) * 2)
-	copy(unsafe.Slice((*uint16)(unsafe.Pointer(&info.FileName)), len(to)), to)
-	return windows.SetFileInformationByHandle(h, windows.FileRenameInfoEx, &buf[0], uint32(size))
+	return renameSessionFilePOSIX(oldpath, newpath)
 }
 
 func retryAntigravityStateRename(rename func() error, pause func(time.Duration)) error {
-	return retryAntigravityStateRenameUntil(rename, pause, time.Now)
+	return retrySessionFileRename(rename, pause)
 }
 
-// retryAntigravityStateRenameUntil retries access-denied and sharing-violation
-// until hookLockBudget has elapsed or the attempt cap is reached, whichever
-// comes first. now is the clock, so a test can advance it without sleeping.
-// MoveFileEx still cannot replace a file a reader holds open once the budget ends.
 func retryAntigravityStateRenameUntil(rename func() error, pause func(time.Duration), now func() time.Time) error {
-	start := now()
-	for attempt := 0; ; attempt++ {
-		err := rename()
-		if err == nil {
-			return nil
-		}
-		if !errors.Is(err, os.ErrPermission) && !errors.Is(err, windows.ERROR_SHARING_VIOLATION) {
-			return err
-		}
-		if !now().Before(start.Add(hookLockBudget)) || attempt+1 == antigravityRenameAttempts {
-			return err
-		}
-		pause(antigravityRenamePause)
-	}
+	return retrySessionFileRenameUntil(rename, pause, now)
 }
 
 func openAntigravityStateFile(path string) (*os.File, error) {

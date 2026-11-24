@@ -6,7 +6,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { App } from "./App";
 import * as api from "./api";
 import type { WatchFrame, WatchStatus } from "./api";
-import i18n from "./i18n";
+import i18n, { englishTranslation } from "./i18n";
 import { reviewAndSend } from "./test/send";
 import { soundPreferenceKey } from "./notificationSound";
 import { uiLocalePreferenceKey } from "./preferences";
@@ -279,38 +279,6 @@ describe("Iris operator console", () => {
     expect(await screen.findByLabelText("Username")).toBeVisible();
   });
 
-  it("shows a repository's claim scope and updates a claim's checkout when the watch reports a change", async () => {
-    let onFrame: ((frame: WatchFrame) => void) | undefined;
-    let scope = "repository";
-    let worktree = "/wt1";
-    server.use(http.get("*/v1/ui/overview", () => HttpResponse.json({
-      ...sessionOverview,
-      repositories: [{ ...sessionOverview.repositories[0], claim_auto_scope: scope }],
-      claims: [{
-        ...sessionOverview.claims[0],
-        worktree_path: worktree,
-        branch: "main",
-        host: "local",
-        effective_scope: scope,
-      }],
-    })));
-    const user = userEvent.setup();
-    render(<App connect={(frame, status) => { onFrame = frame; status?.("live"); return () => undefined; }} />);
-    await user.click(await screen.findByRole("button", { name: /^Fleet/ }));
-    const projects = screen.getByRole("table", { name: "Repositories" });
-    expect(within(projects).getByText("iris: Repository-wide")).toBeVisible();
-    expect(within(projects).queryByText(/not enforcement/)).toBeNull();
-    await user.click(screen.getByRole("button", { name: /^Claims/ }));
-    const claimsView = () => screen.getByRole("heading", { name: "Claims" }).closest("article")!;
-    expect(within(claimsView()).getByText("docs/api.md").closest("li")).toHaveTextContent("Worktree /wt1 · Branch main · Applies across the repository");
-    scope = "worktree";
-    worktree = "/wt2";
-    onFrame?.({ cursor: 2, kind: "changed" });
-    await waitFor(() => expect(within(claimsView()).getByText("docs/api.md").closest("li")).toHaveTextContent("Worktree /wt2 · Branch main · Applies in this worktree"));
-    expect(within(claimsView()).getByText(/iris: Worktree-scoped/)).toBeVisible();
-    expect(within(claimsView()).getByText(/An advisory is not enforcement/)).toBeVisible();
-  });
-
   it("shows repositories, agents, and claims from the overview", async () => {
     const user = userEvent.setup();
     await showSession();
@@ -481,7 +449,7 @@ describe("Iris operator console", () => {
     const user = userEvent.setup({ delay: null });
     const reads: { url: string; body: unknown }[] = [];
     server.use(
-      http.post("*/v1/ui/threads/:id/read", async ({ request }) => {
+      http.post("*/v1/ui/threads/:id/read/:message", async ({ request }) => {
         reads.push({ url: request.url, body: await request.json() });
         return reads.length === 1 ? new HttpResponse(null, { status: 204 }) : new HttpResponse(null, { status: 500 });
       }),
@@ -490,12 +458,234 @@ describe("Iris operator console", () => {
     await user.click(await screen.findByRole("button", { name: /Rollout check/ }));
     await screen.findByRole("article", { name: "Rollout check" });
     await waitFor(() => expect(reads).toHaveLength(1));
-    expect(reads[0]?.url).toContain("/v1/ui/threads/ms_root/read");
+    expect(reads[0]?.url).toContain("/v1/ui/threads/ms_root/read/ms_root");
     expect(reads[0]?.body).toEqual({ repository_id: "", last_message_id: "ms_root" });
     await user.click(screen.getByRole("button", { name: "Back to threads" }));
     await user.click(await screen.findByRole("button", { name: /Rollout check/ }));
     await waitFor(() => expect(reads).toHaveLength(2));
     expect(await screen.findByRole("article", { name: "Rollout check" })).toBeVisible();
+  }, 40000);
+
+  it("sends the snapshot high-water id, not the last displayed message", async () => {
+    const user = userEvent.setup({ delay: null });
+    const reads: { url: string; body: unknown }[] = [];
+    const insertedLast = {
+      ...threadDetail.messages[0]!,
+      id: "ms_inserted",
+      created_at: "2026-11-06T09:00:00Z",
+      body: "Inserted later and shown first.",
+    };
+    const displayedLast = {
+      ...threadDetail.messages[0]!,
+      id: "ms_displayed",
+      created_at: "2026-11-06T11:00:00Z",
+      body: "Shown last after the clock moved forward.",
+    };
+    server.use(
+      http.get("*/v1/ui/threads/:id", () => HttpResponse.json({
+        ...threadDetail,
+        high_water_message_id: "ms_inserted",
+        messages: [insertedLast, displayedLast],
+      })),
+      http.post("*/v1/ui/threads/:id/read/:message", async ({ request }) => {
+        reads.push({ url: new URL(request.url).pathname, body: await request.json() });
+        return HttpResponse.json({ read: 2 });
+      }),
+    );
+    await showSession();
+    await user.click(await screen.findByRole("button", { name: /Rollout check/ }));
+    expect(await screen.findByText("Shown last after the clock moved forward.")).toBeVisible();
+    await waitFor(() => expect(reads).toEqual([{
+      url: "/v1/ui/threads/ms_root/read/ms_inserted",
+      body: { repository_id: "", last_message_id: "ms_inserted" },
+    }]));
+  }, 40000);
+
+  it("shows a reload hint when acknowledgement is refused", async () => {
+    const user = userEvent.setup({ delay: null });
+    server.use(
+      http.post("*/v1/ui/threads/:id/read/:message", () => HttpResponse.json(
+        { error: { code: "bad_request", message: "reload the console to acknowledge this thread" } },
+        { status: 400 },
+      )),
+    );
+    await showSession();
+    await user.click(await screen.findByRole("button", { name: /Rollout check/ }));
+    expect(await screen.findByText("All checks passed.")).toBeVisible();
+    expect(await screen.findByRole("alert")).toHaveTextContent("Reload the console to mark this thread read.");
+  }, 40000);
+
+  it("does not acknowledge a snapshot from an old hub", async () => {
+    const user = userEvent.setup({ delay: null });
+    const reads: string[] = [];
+    server.events.on("request:start", ({ request }) => {
+      if (request.method === "POST" && new URL(request.url).pathname.includes("/read")) {
+        reads.push(new URL(request.url).pathname);
+      }
+    });
+    server.use(http.get("*/v1/ui/threads/:id", () => HttpResponse.json({
+      ...threadDetail,
+      high_water_message_id: undefined,
+    })));
+    await showSession();
+    await user.click(await screen.findByRole("button", { name: /Rollout check/ }));
+    expect(await screen.findByText("All checks passed.")).toBeVisible();
+    expect(await screen.findByRole("alert")).toHaveTextContent("Reload the console to mark this thread read.");
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    expect(reads).toEqual([]);
+    server.events.removeAllListeners();
+  }, 40000);
+
+  it("shows a reload hint when the acknowledgement reaches an old hub", async () => {
+    const user = userEvent.setup({ delay: null });
+    const legacy: string[] = [];
+    const watermark: string[] = [];
+    server.use(
+      http.post("*/v1/ui/threads/:id/read", ({ request }) => {
+        const path = new URL(request.url).pathname;
+        if (path.split("/").filter(Boolean).length !== 5) {
+          return undefined;
+        }
+        legacy.push(path);
+        return HttpResponse.json({ read: 1 });
+      }),
+      http.post("*/v1/ui/threads/:id/read/:message", ({ request }) => {
+        watermark.push(new URL(request.url).pathname);
+        return HttpResponse.json({ error: { code: "not_found", message: "unknown console route" } }, { status: 404 });
+      }),
+    );
+    await showSession();
+    await user.click(await screen.findByRole("button", { name: /Rollout check/ }));
+    expect(await screen.findByText("All checks passed.")).toBeVisible();
+    expect(await screen.findByRole("alert")).toHaveTextContent("Reload the console to mark this thread read.");
+    await waitFor(() => expect(watermark).toEqual(["/v1/ui/threads/ms_root/read/ms_root"]));
+    expect(legacy).toEqual([]);
+  }, 40000);
+
+  it("keeps the reload hint across a passive refresh of that opening", async () => {
+    const user = userEvent.setup({ delay: null });
+    let onFrame: ((frame: WatchFrame) => void) | undefined;
+    let reads = 0;
+    let details = 0;
+    const other = { ...threadsPage.threads[0]!, id: "ms_other", subject: "Other thread", unread: 1 };
+    const otherReadEnded = deferred<void>();
+    server.events.on("request:start", ({ request }) => {
+      if (request.method === "GET" && new URL(request.url).pathname === "/v1/ui/threads/ms_root") {
+        details++;
+      }
+    });
+    server.events.on("request:end", ({ request }) => {
+      if (request.method === "POST" && new URL(request.url).pathname === "/v1/ui/threads/ms_other/read/ms_other") {
+        otherReadEnded.resolve();
+      }
+    });
+    server.use(
+      http.get("*/v1/ui/threads", ({ request }) => {
+        const url = new URL(request.url);
+        if (url.pathname !== "/v1/ui/threads") {
+          return undefined;
+        }
+        return HttpResponse.json({ threads: [...threadsPage.threads, other] });
+      }),
+      http.get("*/v1/ui/threads/:id", ({ params }) => {
+        const id = String(params.id);
+        return HttpResponse.json({
+          ...threadDetail,
+          id,
+          high_water_message_id: id,
+          messages: [{
+            ...threadDetail.messages[0]!,
+            id,
+            subject: id === "ms_other" ? "Other thread" : "Rollout check",
+          }],
+        });
+      }),
+      http.post("*/v1/ui/threads/:id/read/:message", ({ params }) => {
+        reads++;
+        if (params.id === "ms_root") {
+          return HttpResponse.json(
+            { error: { code: "bad_request", message: "reload the console to acknowledge this thread" } },
+            { status: 400 },
+          );
+        }
+        return HttpResponse.json({ read: 1 });
+      }),
+    );
+    render(<App refreshGap={0} connect={(frame) => { onFrame = frame; return () => {}; }} />);
+    await user.click(await screen.findByRole("button", { name: /Rollout check/ }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Reload the console to mark this thread read.");
+    const afterOpen = details;
+    const readsAfterOpen = reads;
+    onFrame?.({ cursor: 9, kind: "changed" });
+    await waitFor(() => expect(details).toBeGreaterThan(afterOpen));
+    expect(screen.getByRole("alert")).toHaveTextContent("Reload the console to mark this thread read.");
+    expect(reads).toBe(readsAfterOpen);
+    await user.click(screen.getByRole("button", { name: "Back to threads" }));
+    await user.click(await screen.findByRole("button", { name: /Other thread/ }));
+    expect(await screen.findByRole("article", { name: "Other thread" })).toBeVisible();
+    expect(screen.queryByRole("alert")).toBeNull();
+    await act(async () => { await otherReadEnded.promise; });
+    expect(reads).toBe(readsAfterOpen + 1);
+    server.events.removeAllListeners();
+  }, 40000);
+
+  it("ignores a late acknowledgement for a different opening", async () => {
+    const user = userEvent.setup({ delay: null });
+    const other = { ...threadsPage.threads[0]!, id: "ms_other", subject: "Other thread", unread: 1 };
+    const otherRead = "/v1/ui/threads/ms_other/read/ms_other";
+    const readGates = [deferred<void>(), deferred<void>()];
+    const reads: string[] = [];
+    let overviews = 0;
+    server.use(
+      http.get("*/v1/ui/overview", () => {
+        overviews++;
+        return HttpResponse.json(sessionOverview);
+      }),
+      http.get("*/v1/ui/threads", ({ request }) => {
+        const url = new URL(request.url);
+        if (url.pathname !== "/v1/ui/threads") {
+          return undefined;
+        }
+        return HttpResponse.json({ threads: [...threadsPage.threads, other] });
+      }),
+      http.get("*/v1/ui/threads/:id", ({ params }) => {
+        const id = String(params.id);
+        return HttpResponse.json({
+          ...threadDetail,
+          id,
+          high_water_message_id: id === "ms_root" ? undefined : id,
+          messages: [{
+            ...threadDetail.messages[0]!,
+            id,
+            subject: id === "ms_other" ? "Other thread" : "Rollout check",
+          }],
+        });
+      }),
+      http.post("*/v1/ui/threads/:id/read/:message", async ({ request }) => {
+        const pending = readGates[reads.length]?.promise;
+        reads.push(new URL(request.url).pathname);
+        await pending;
+        return HttpResponse.json({ read: 1 });
+      }),
+    );
+    await showSession();
+    const settled = overviews;
+    await user.click(await screen.findByRole("button", { name: /Other thread/ }));
+    await waitFor(() => expect(reads).toEqual([otherRead]));
+    await user.click(screen.getByRole("button", { name: "Back to threads" }));
+    await waitFor(() => expect(screen.queryByRole("article")).toBeNull());
+    readGates[0]!.resolve();
+    await waitFor(() => expect(overviews).toBe(settled + 1));
+    await user.click(await screen.findByRole("button", { name: /Other thread/ }));
+    await waitFor(() => expect(reads).toEqual([otherRead, otherRead]));
+    await user.click(screen.getByRole("button", { name: "Back to threads" }));
+    await user.click(await screen.findByRole("button", { name: /Rollout check/ }));
+    expect(await screen.findByRole("alert")).toHaveTextContent("Reload the console to mark this thread read.");
+    expect(reads).toEqual([otherRead, otherRead]);
+    readGates[1]!.resolve();
+    await waitFor(() => expect(overviews).toBe(settled + 2));
+    expect(screen.getByRole("alert")).toHaveTextContent("Reload the console to mark this thread read.");
+    expect(reads).toEqual([otherRead, otherRead]);
   }, 40000);
 
   it("replies and sends as human", async () => {
@@ -516,7 +706,7 @@ describe("Iris operator console", () => {
     await waitFor(() => expect(bodies).toHaveLength(1));
     expect(bodies[0]).toMatchObject({
       to: ["claude-host"],
-      subject: "Re: Rollout check",
+      subject: englishTranslation.operator.replySubject.replace("{{subject}}", "Rollout check"),
       body: "Noted.",
       reply_to: "ms_root",
     });
@@ -608,7 +798,7 @@ describe("Iris operator console", () => {
     let connects = 0;
     let reads = 0;
     server.use(
-      http.post("*/v1/ui/threads/:id/read", () => {
+      http.post("*/v1/ui/threads/:id/read/:message", () => {
         reads++;
         return new HttpResponse(null, { status: 204 });
       }),
@@ -644,7 +834,7 @@ describe("Iris operator console", () => {
       http.get("*/v1/ui/threads/:id", () =>
         HttpResponse.json({ ...threadDetail, messages: threadDetail.messages.map((message) => ({ ...message, recipients: [{ name: "human", state }] })) }),
       ),
-      http.post("*/v1/ui/threads/:id/read", () => {
+      http.post("*/v1/ui/threads/:id/read/:message", () => {
         reads++;
         return HttpResponse.json({ read });
       }),
@@ -1286,14 +1476,14 @@ describe("Iris operator console", () => {
     expect(within(detail).queryByRole("button", { name: "Review" })).toBeNull();
   });
 
-  it("keeps a subject that already starts with Re: and sends the edited reply", async () => {
+  it("keeps an existing reply subject when its parent is outside the view and sends the edited reply", async () => {
     const user = userEvent.setup();
     const bodies: unknown[] = [];
     server.use(
       http.get("*/v1/ui/threads/:id", () =>
         HttpResponse.json({
           ...threadDetail,
-          messages: [{ ...threadDetail.messages[0], subject: "Re: Rollout check" }],
+          messages: [{ ...threadDetail.messages[0], id: "ms_reply", reply_to: "ms_root", subject: "Re: Rollout check" }],
         }),
       ),
       http.post("*/v1/ui/messages", async ({ request }) => {
@@ -1314,7 +1504,7 @@ describe("Iris operator console", () => {
     await user.type(within(detail).getByRole("textbox", { name: "Message" }), "Ok.");
     await reviewAndSend(user, within(detail), "Reply");
     await waitFor(() => expect(bodies).toHaveLength(1));
-    expect(bodies[0]).toMatchObject({ to: ["human"], subject: "Re: Noted", body: "Ok.", reply_to: "ms_root" });
+    expect(bodies[0]).toMatchObject({ to: ["human"], subject: "Re: Noted", body: "Ok.", reply_to: "ms_reply" });
   }, 20000);
 
   it("keeps the draft when sending fails and signs out on an expired session", async () => {

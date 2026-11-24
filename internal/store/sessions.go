@@ -14,21 +14,23 @@ import (
 
 // Request contains the version-one wire fields. Unknown client metadata is ignored.
 type Request struct {
-	CommonDir string            `json:"common_dir"`
-	Status    map[string]string `json:"status"`
-	Scope     *ShellScope       `json:"scope,omitempty"`
-	ReplyTo   string            `json:"reply_to"`
-	Q         string            `json:"q"`
-	Agent     string            `json:"agent"`
-	DryRun    bool              `json:"dry_run"`
-	Before    string            `json:"before"`
-	CheckedAt string            `json:"checked_at"`
-	Clients   []map[string]any  `json:"clients"`
-	Client    string            `json:"client"`
-	SessionID string            `json:"session_id"`
-	Host      string            `json:"host"`
-	Cwd       string            `json:"cwd"`
-	Worktree  string            `json:"worktree"`
+	CommonDir                string            `json:"common_dir"`
+	Status                   map[string]string `json:"status"`
+	Scope                    *ShellScope       `json:"scope,omitempty"`
+	ReplyTo                  string            `json:"reply_to"`
+	Q                        string            `json:"q"`
+	Agent                    string            `json:"agent"`
+	DryRun                   bool              `json:"dry_run"`
+	Before                   string            `json:"before"`
+	CheckedAt                string            `json:"checked_at"`
+	Clients                  []map[string]any  `json:"clients"`
+	CurrentDamagedEndMarkers *int              `json:"current_damaged_end_markers,omitempty"`
+	EndMarkerScanIncomplete  *bool             `json:"end_marker_scan_incomplete,omitempty"`
+	Client                   string            `json:"client"`
+	SessionID                string            `json:"session_id"`
+	Host                     string            `json:"host"`
+	Cwd                      string            `json:"cwd"`
+	Worktree                 string            `json:"worktree"`
 	// WorktreeID names the worktree root by device and inode; another path to the same
 	// directory is made the first path this host named for it (D6).
 	WorktreeID string `json:"worktree_id"`
@@ -65,26 +67,23 @@ type Request struct {
 	Groups []ClaimGroup `json:"groups,omitempty"`
 	// Checkout is the checkout of an explicit claim's path on the grouped route, whose Paths it
 	// leaves out (ADR 033).
-	Checkout      *ClaimGroup `json:"checkout,omitempty"`
-	Kind          string      `json:"kind"`
-	Path          string      `json:"path"`
-	RepoWide      bool        `json:"repo_wide"`
-	TTLS          int64       `json:"ttl_s"`
-	Fence         int64       `json:"fence"`
-	All           bool        `json:"all"`
-	Token         string      `json:"token"`
-	To            []string    `json:"to"`
-	Subject       string      `json:"subject"`
-	Body          string      `json:"body"`
-	Attempt       int64       `json:"attempt"`
-	Handled       bool        `json:"handled"`
-	RepositoryID  string      `json:"repository_id"`
-	LastMessageID string      `json:"last_message_id,omitempty"`
-	// ClaimAutoScope is read only by the policy operation. A session, touch, check
-	// or message that carries it does not change the repository (ADR 037).
-	ClaimAutoScope string `json:"claim_auto_scope,omitempty"`
-	FromRepository string `json:"from_repository_id,omitempty"`
-	IntoRepository string `json:"into_repository_id,omitempty"`
+	Checkout       *ClaimGroup `json:"checkout,omitempty"`
+	Kind           string      `json:"kind"`
+	Path           string      `json:"path"`
+	RepoWide       bool        `json:"repo_wide"`
+	TTLS           int64       `json:"ttl_s"`
+	Fence          int64       `json:"fence"`
+	All            bool        `json:"all"`
+	Token          string      `json:"token"`
+	To             []string    `json:"to"`
+	Subject        string      `json:"subject"`
+	Body           string      `json:"body"`
+	Attempt        int64       `json:"attempt"`
+	Handled        bool        `json:"handled"`
+	RepositoryID   string      `json:"repository_id"`
+	LastMessageID  string      `json:"last_message_id,omitempty"`
+	FromRepository string      `json:"from_repository_id,omitempty"`
+	IntoRepository string      `json:"into_repository_id,omitempty"`
 	// Aliases names the exact alias mappings an owner unalias removes from RepositoryID.
 	Aliases    []string `json:"aliases,omitempty"`
 	After      int64    `json:"after"`
@@ -95,12 +94,14 @@ type Request struct {
 	// ask; a watch socket's own reads never do.
 	Attention bool `json:"attention"`
 
-	// RetryGeneration is a registration floor when Generation is zero. It does
+	// RetryGeneration is an inclusive registration floor when Generation is zero. It does
 	// not prove ownership of a recovering Execution.
 	RetryGeneration int64 `json:"retry_generation,omitempty"`
 	// PriorGeneration and PriorExecutionID are the exact proof required by post-window succession.
 	PriorGeneration  int64  `json:"prior_generation"`
 	PriorExecutionID string `json:"prior_execution_id"`
+	// EndedThrough refuses registration or succession at or below a generation the client ended locally.
+	EndedThrough int64 `json:"ended_through,omitempty"`
 }
 
 // Receipt names one delivery a fetch returned, at the attempt that fetch gave it.
@@ -117,16 +118,12 @@ type execution struct {
 	Single, Heartbeat                                                       bool
 	// Outside says e belongs to its host's context of sessions outside git (ADR 034).
 	Outside bool
-	// WorktreeKey is the session root's canonical key, empty when registration had
-	// no usable WorktreeID. It is fixed at insert: a later resume does not backfill
-	// it, or a null-key claim this Execution already holds would stop matching itself.
-	WorktreeKey string
 }
 
-const executionSelect = `SELECT e.id,e.agent_id,e.repository_id,e.host_id,e.client,e.session_id,e.worktree,e.branch,e.state,a.name,e.generation,e.boot_epoch,e.deadline_tick_ms,e.client_pid,e.client_pid_start_ms,e.hook_seen_ms,e.recovery_deadline,e.parent_id,e.single_session,e.heartbeat_mode,COALESCE(e.worktree_key,''),EXISTS(SELECT 1 FROM RepositoryAlias o WHERE o.alias='outside:'||e.host_id AND o.repository_id=e.repository_id) FROM Execution e JOIN Agent a ON a.id=e.agent_id `
+const executionSelect = `SELECT e.id,e.agent_id,e.repository_id,e.host_id,e.client,e.session_id,e.worktree,e.branch,e.state,a.name,e.generation,e.boot_epoch,e.deadline_tick_ms,e.client_pid,e.client_pid_start_ms,e.hook_seen_ms,e.recovery_deadline,e.parent_id,e.single_session,e.heartbeat_mode,EXISTS(SELECT 1 FROM RepositoryAlias o WHERE o.alias='outside:'||e.host_id AND o.repository_id=e.repository_id) FROM Execution e JOIN Agent a ON a.id=e.agent_id `
 
 func (e *execution) fields() []any {
-	return []any{&e.ID, &e.AgentID, &e.Repo, &e.Host, &e.Client, &e.Session, &e.Worktree, &e.Branch, &e.State, &e.Name, &e.Generation, &e.Epoch, &e.Deadline, &e.PID, &e.PIDStart, &e.HookSeenMS, &e.Recovery, &e.Parent, &e.Single, &e.Heartbeat, &e.WorktreeKey, &e.Outside}
+	return []any{&e.ID, &e.AgentID, &e.Repo, &e.Host, &e.Client, &e.Session, &e.Worktree, &e.Branch, &e.State, &e.Name, &e.Generation, &e.Epoch, &e.Deadline, &e.PID, &e.PIDStart, &e.HookSeenMS, &e.Recovery, &e.Parent, &e.Single, &e.Heartbeat, &e.Outside}
 }
 
 func scanExecution(row interface{ Scan(...any) error }) (e execution, err error) {
@@ -390,10 +387,8 @@ func (t *transaction) resume(e *execution, strong bool) (int64, error) {
 	e.Deadline = tick + lease
 	// Rotate the numeric fence as well as the epoch: release accepts a fence
 	// without a complete token, so retaining the number would admit zombies.
-	// The copy keeps the claim's worktree key and display location. Recovery
-	// must not turn a keyed claim into a repository-wide one (ADR 037).
-	if _, err := t.exec(`INSERT INTO Claim(execution_id,repository_id,kind,path,path_key,origin,boot_epoch,expires_ms,worktree_key,worktree_path,branch)
-            SELECT execution_id,repository_id,kind,path,path_key,origin,?,expires_ms,worktree_key,worktree_path,branch FROM Claim
+	if _, err := t.exec(`INSERT INTO Claim(execution_id,repository_id,kind,path,path_key,origin,boot_epoch,expires_ms)
+            SELECT execution_id,repository_id,kind,path,path_key,origin,?,expires_ms FROM Claim
             WHERE execution_id=? AND revoked_ms IS NULL AND boot_epoch<>?`, t.s.epoch, e.ID, t.s.epoch); err != nil {
 		return 0, err
 	}
@@ -410,12 +405,19 @@ func (t *transaction) session(r Request) (map[string]any, error) {
 // register registers a session in its checkout's repository, or with outside in its host's
 // context. An active Execution keeps its record either way: mail and claims never move silently,
 // and nothing is learned across the two kinds (ADR 034, decisions 2 and 4).
+func endedThroughRefusal(message string) error {
+	return &Error{Code: "lost", Message: message, Details: map[string]any{"reason": "ended_through"}}
+}
+
 func (t *transaction) register(r Request, outside bool) (map[string]any, error) {
 	if r.Client == "" || r.SessionID == "" || r.Host == "" || r.Cwd == "" {
 		return nil, fail("bad_request", "client, session_id, host and cwd are required")
 	}
 	if r.RetryGeneration < 0 {
 		return nil, fail("bad_request", "retry_generation cannot be negative")
+	}
+	if r.EndedThrough < 0 {
+		return nil, fail("bad_request", "ended_through cannot be negative")
 	}
 	switch r.Source {
 	case "", "hook", "mcp", "shim", "watch":
@@ -435,6 +437,9 @@ func (t *transaction) register(r Request, outside bool) (map[string]any, error) 
 	if err == nil {
 		if r.Generation != 0 && e.Generation != r.Generation {
 			return nil, fail("lost", "session generation no longer exists")
+		}
+		if r.EndedThrough > 0 && e.Generation <= r.EndedThrough {
+			return nil, endedThroughRefusal("active session is at or below the ended generation")
 		}
 		// The active row itself provides retained history at or above the floor.
 		if r.Generation == 0 && e.Generation < r.RetryGeneration {
@@ -499,6 +504,9 @@ func (t *transaction) register(r Request, outside bool) (map[string]any, error) 
 	// registration, whether or not any retained row recorded a hook.
 	if previous.State == "ended" && r.Source != "hook" {
 		return nil, fail("lost", "non-hook generation-zero registration cannot succeed an ended session")
+	}
+	if r.EndedThrough > 0 && (previous.Generation < r.EndedThrough || generation <= r.EndedThrough) {
+		return nil, endedThroughRefusal("session history cannot advance beyond the ended generation")
 	}
 	if r.RetryGeneration > 0 && (previous.Generation < r.RetryGeneration || generation < r.RetryGeneration) {
 		return nil, fail("lost", "session history is below the retry generation floor")
@@ -571,14 +579,7 @@ func (t *transaction) register(r Request, outside bool) (map[string]any, error) 
 	}
 	ex := id("ex_")
 	tick := t.s.clock.Tick()
-	// The session root's key. An empty WorktreeID, including a session outside git,
-	// stores null and stays repository-wide. The same directory keeps this key
-	// across alias replacement because ensureWorktreeKey is not WorktreeAlias.
-	worktreeKey, err := t.ensureWorktreeKey(r.Host, r.WorktreeID)
-	if err != nil {
-		return nil, err
-	}
-	_, err = t.exec(`INSERT INTO Execution(id,agent_id,repository_id,host_id,client,session_id,generation,worktree,branch,boot_epoch,deadline_tick_ms,lease_renewed_tick_ms,state,parent_id,client_pid,client_pid_start_ms,single_session,heartbeat_mode,worktree_key) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'active',?,?,?,?,?,NULLIF(?,''))`, ex, agent, repo, r.Host, r.Client, r.SessionID, generation, r.Worktree, r.Branch, t.s.epoch, tick+lease, tick, parent, r.ClientPID, r.ClientPIDStartMS, r.SingleSession, heartbeat, worktreeKey)
+	_, err = t.exec(`INSERT INTO Execution(id,agent_id,repository_id,host_id,client,session_id,generation,worktree,branch,boot_epoch,deadline_tick_ms,lease_renewed_tick_ms,state,parent_id,client_pid,client_pid_start_ms,single_session,heartbeat_mode) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'active',?,?,?,?,?)`, ex, agent, repo, r.Host, r.Client, r.SessionID, generation, r.Worktree, r.Branch, t.s.epoch, tick+lease, tick, parent, r.ClientPID, r.ClientPIDStartMS, r.SingleSession, heartbeat)
 	if err != nil {
 		return nil, err
 	}

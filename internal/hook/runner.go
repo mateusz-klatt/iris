@@ -38,6 +38,12 @@ const RestoreFloorHubTooOld = RestoreFloorRefused + ": hub predates restore floo
 
 const errRestoreFloor hookFailure = RestoreFloorRefused
 
+var errEndedGeneration = errors.New("remembered session generation has ended")
+var errDamagedEndMarker = errors.New("session end marker is damaged")
+var errDamagedExecutionProof = errors.New("session execution proof is damaged")
+
+const endedSessionRefused = "Iris: local session proof belongs to an ended session. Start a new client session or run `iris doctor` for recovery details."
+
 type Hub interface {
 	RegisterSession(ctx context.Context, req hubclient.SessionRequest) (hubclient.SessionResponse, error)
 	Touch(ctx context.Context, req hubclient.TouchRequest) (hubclient.TouchResponse, error)
@@ -321,6 +327,9 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		// so it reattaches through POST /v1/sessions, which is defined as idempotent.
 		state.at("session")
 		sess, err := r.register(ctx, state, ev, repo)
+		if err == errEndedGeneration {
+			return r.finish(state, ev, Encode(ev, Decision{Action: ActionDeny, Reason: endedSessionRefused}))
+		}
 		if hubclient.IsCode(err, "lost") {
 			// Only a recovering Execution refuses a request that carries no generation. Its
 			// claims still block others, so allowing the edit would leave it unclaimed.
@@ -424,22 +433,82 @@ func refuseRestoreFloor(state *runState, ev Event, m Memory, generation int, not
 	return errRestoreFloor
 }
 
-// registrationProof reads only the ordinary generation file for hook registration. The
-// succession Execution sidecar and end marker have their own binding checks; neither is
-// independently accepted or rejected as hook-registration proof here.
-func registrationProof(state *runState, ev Event, m Memory, retained int) (int, error) {
+// registrationProof reads local generation, execution and end-marker proof before registration.
+// Missing execution proof is not damage; a registering hook can supply its first exact pair.
+func registrationProof(state *runState, ev Event, m Memory, retained int) (generation, endedThrough int, err error) {
 	if m == nil {
-		return retained, nil
+		return retained, 0, nil
 	}
-	generation, err := m.RecallGeneration(string(ev.Client), ev.SessionID)
+	if files, ok := m.(fileMemory); ok {
+		endedThrough, err = sessionEndFloor(state, ev, files)
+		if err != nil {
+			return 0, 0, err
+		}
+		executionPath := files.name(string(ev.Client), ev.SessionID) + ".execution"
+		if _, proofErr := readExecutionProofs(executionPath); proofErr != nil {
+			state.observe(damagedGenerationObservation(executionPath))
+			return 0, 0, errDamagedExecutionProof
+		}
+	}
+	generation, err = m.RecallGeneration(string(ev.Client), ev.SessionID)
+	var damaged damagedEndMarker
+	if errors.As(err, &damaged) {
+		state.observe(damaged.Error())
+		return 0, 0, errDamagedEndMarker
+	}
+	var ended endedProof
+	if errors.As(err, &ended) {
+		if retained == 0 {
+			if ev.Kind == KindSessionStart {
+				return 0, endedThrough, nil
+			}
+			state.observe(ended.Error())
+			return 0, 0, errEndedGeneration
+		}
+		// A request already sent can use the proof it saw only as its generation-zero
+		// retry floor. Preserve it for refusal diagnostics.
+		return max(retained, generation), endedThrough, nil
+	}
 	if err != nil {
 		note := RestoreFloorRefused
 		if files, ok := m.(fileMemory); ok && errors.Is(err, ErrInvalidGeneration) {
 			note = damagedGenerationObservation(files.name(string(ev.Client), ev.SessionID))
 		}
-		return 0, refuseRestoreFloor(state, ev, m, retained, note)
+		return 0, 0, refuseRestoreFloor(state, ev, m, retained, note)
 	}
-	return max(retained, generation), nil
+	return max(retained, generation), endedThrough, nil
+}
+
+func sessionEndFloor(state *runState, ev Event, files fileMemory) (int, error) {
+	marker := files.name(string(ev.Client), ev.SessionID) + ".ended"
+	ended, expired, err := files.readEndMarker(marker)
+	if err != nil {
+		state.observe(damagedGenerationObservation(marker))
+		return 0, errDamagedEndMarker
+	}
+	if expired {
+		return 0, nil
+	}
+	return ended, nil
+}
+
+func checkEndedRegistration(state *runState, ev Event, m Memory, sentEndedThrough, generation int, proofless bool, err error) error {
+	files, ok := m.(fileMemory)
+	if !ok {
+		return err
+	}
+	ended, proofErr := sessionEndFloor(state, ev, files)
+	if proofErr != nil {
+		return proofErr
+	}
+	ended = max(ended, sentEndedThrough)
+	var hubErr *hubclient.Error
+	strictFloorRefusal := proofless && sentEndedThrough > 0 && errors.As(err, &hubErr) && hubErr.Code == "lost" && hubErr.IsEndedThroughRefusal(sentEndedThrough)
+	if ended > 0 && (err == nil && generation <= ended || strictFloorRefusal) {
+		state.observe(endedProof(files.name(string(ev.Client), ev.SessionID) + ".ended").Error())
+		return errEndedGeneration
+	}
+	return err
 }
 
 // register attaches a hook to its Execution. It can retry stale proof once when the hub retains
@@ -448,11 +517,18 @@ func registrationProof(state *runState, ev Event, m Memory, retained int) (int, 
 func (r Runner) register(ctx context.Context, state *runState, ev Event, repo gitinfo.Repo) (hubclient.SessionResponse, error) {
 	m := r.memory()
 	req := r.sessionReq(ev, repo)
-	generation, err := registrationProof(state, ev, m, 0)
+	generation, sentEndedThrough, err := registrationProof(state, ev, m, 0)
 	if err != nil {
 		return hubclient.SessionResponse{}, err
 	}
 	req.Generation = generation
+	req.EndedThrough = sentEndedThrough
+	if req.Generation <= sentEndedThrough {
+		req.Generation = 0
+	}
+	if req.Generation == 0 {
+		req.RetryGeneration = max(req.RetryGeneration, sentEndedThrough)
+	}
 	send := r.Hub.RegisterSession
 	if repo.Worktree == "" {
 		// A session outside git registers on its own route (ADR 034). A hub without it refuses as
@@ -465,7 +541,7 @@ func (r Runner) register(ctx context.Context, state *runState, ev Event, repo gi
 	}
 	sess, err := send(ctx, req)
 	if req.Generation > 0 && ev.Kind != KindSessionEnd && hubclient.IsCode(err, "lost") {
-		floor, proofErr := registrationProof(state, ev, m, req.Generation)
+		floor, endedThrough, proofErr := registrationProof(state, ev, m, req.Generation)
 		if proofErr != nil {
 			return hubclient.SessionResponse{}, proofErr
 		}
@@ -473,8 +549,11 @@ func (r Runner) register(ctx context.Context, state *runState, ev Event, repo gi
 		if hubclient.IsCode(err, "lost") && ctx.Err() == nil {
 			req.RetryGeneration = floor
 			req.Generation = 0
+			req.EndedThrough = max(req.EndedThrough, endedThrough)
+			req.RetryGeneration = max(req.RetryGeneration, req.EndedThrough)
+			sentEndedThrough = req.EndedThrough
 			sess, err = send(ctx, req)
-			floor, proofErr = registrationProof(state, ev, m, floor)
+			floor, _, proofErr = registrationProof(state, ev, m, floor)
 			if proofErr != nil {
 				return hubclient.SessionResponse{}, proofErr
 			}
@@ -487,14 +566,15 @@ func (r Runner) register(ctx context.Context, state *runState, ev Event, repo gi
 	if hubclient.OlderHub(err) && repo.Worktree == "" {
 		return hubclient.SessionResponse{}, errOlderHub
 	}
+	err = checkEndedRegistration(state, ev, m, sentEndedThrough, sess.Generation, req.Generation == 0, err)
 	if err == nil {
 		r.learnScope(sess.Capabilities)
 	}
 	if err == nil && m != nil {
 		rememberGeneration(m, string(ev.Client), ev.SessionID, sess.Generation, sess.ExecutionID)
 		if ev.Kind == KindSessionStart {
-			if f, ok := m.(fileMemory); ok {
-				if err := f.prune(); err != nil {
+			if files, ok := m.(fileMemory); ok {
+				if err := files.prune(); err != nil {
 					r.recordFailure(stageSessionFiles, err, nil)
 				}
 			}
@@ -585,16 +665,18 @@ func (r Runner) crossLoad(sessionID string, requested Client) (Client, bool) {
 	if len(found) > 0 {
 		return found[0], true
 	}
-	process := r.ancestor()
-	ancestor, hasAncestor := proc.ClientNameWithEnv(process.Name, getenv)
+	ancestor, hasAncestor := proc.ClientNameWithEnv(r.ancestor().Name, getenv)
 	if hasAncestor && Client(ancestor) == requested {
 		return "", false
 	}
 	if requested != ClientCursor && hasAncestor && Client(ancestor) == ClientCursor {
 		return ClientCursor, true
 	}
-	// Cursor 2026.11.22 omits CURSOR_CONVERSATION_ID from cross-loaded Claude hooks.
-	if requested != ClientCursor && !hasAncestor && (proc.AgentAlias(process.Name) || proc.CursorEnvironment(getenv)) {
+	// Cursor 2026.11.22 omits CURSOR_CONVERSATION_ID from cross-loaded Claude hooks. For a Claude
+	// hook the pair counts only with no recognized client ancestor, so a real Claude nested in
+	// another client keeps its identity. Every other client keeps the v0.1.13 rule: the pair
+	// alone identifies Cursor unless the requested client was recognized above.
+	if requested != ClientCursor && (requested != ClientClaude || !hasAncestor) && proc.CursorEnvironment(getenv) {
 		return ClientCursor, true
 	}
 	return "", false
@@ -658,12 +740,21 @@ func (r Runner) sessionReq(ev Event, repo gitinfo.Repo) hubclient.SessionRequest
 	}
 }
 
-var nearestAncestor = proc.Nearest
+// nearestAncestor is a Claude hook's walk, which reads Cursor's marker pair because Cursor
+// cross-loads Claude plugins only (measured). plainAncestor is every other client's walk, as in
+// v0.1.13: a pair there was inherited, and a bare `agent` is not taken for Cursor.
+var (
+	nearestAncestor = proc.Nearest
+	plainAncestor   = proc.NearestWithoutMarkers
+)
 
 func (r Runner) ancestor() proc.Ancestor {
 	fn := r.Ancestor
 	if fn == nil {
-		fn = nearestAncestor
+		fn = plainAncestor
+		if Canonical(r.ClientName) == ClientClaude {
+			fn = nearestAncestor
+		}
 	}
 	a, err := fn()
 	if err != nil {

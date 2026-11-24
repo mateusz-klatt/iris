@@ -99,9 +99,33 @@ func TestConsoleObjectRoutingUsesPathIDsAndReturnsOperationResults(t *testing.T)
 	if replay := consoleRoute(t, h, server, cookie, csrf, "POST", "/v1/ui/messages", body, 200); replay["message_id"] != message {
 		t.Fatal("HTTP retry lost its accepted message")
 	}
-	read := consoleRoute(t, h, server, cookie, csrf, "POST", "/v1/ui/threads/"+thread+"/read", `{"key":"forged-body-id"}`, 200)
+	refused := consoleRoute(t, h, server, cookie, csrf, "POST", "/v1/ui/threads/"+thread+"/read", `{"key":"forged-body-id"}`, 400)
+	refusal := refused["error"].(map[string]any)
+	if refusal["code"] != "bad_request" || !strings.Contains(refusal["message"].(string), "reload the console") {
+		t.Fatal("missing watermark", refused)
+	}
+	read := consoleRoute(t, h, server, cookie, csrf, "POST", "/v1/ui/threads/"+thread+"/read", `{"key":"forged-body-id","last_message_id":"`+message+`"}`, 200)
 	if read["read"] != float64(0) {
 		t.Fatal("opening sent mail acknowledged unrelated deliveries")
+	}
+	// The path is the watermark. A body without last_message_id must not become a whole-thread read.
+	// v0.1.13's read is exactly three segments ending in "read"; this fourth segment is unknown there.
+	marked := consoleRoute(t, h, server, cookie, csrf, "POST", "/v1/ui/threads/"+thread+"/read/"+message, `{"key":"forged-body-id"}`, 200)
+	if marked["read"] != float64(0) {
+		t.Fatal("path watermark acknowledged unrelated deliveries", marked)
+	}
+	watermark := strings.Split(strings.TrimPrefix("/v1/ui/threads/"+thread+"/read/"+message, "/v1/ui/"), "/")
+	if len(watermark) == 3 && watermark[0] == "threads" && watermark[2] == "read" {
+		t.Fatal("watermark path is the v0.1.13 read route")
+	}
+	missing := consoleRoute(t, h, server, cookie, csrf, "POST", "/v1/ui/threads/"+thread+"/read/ms_missing", `{}`, 404)
+	if missing["error"].(map[string]any)["code"] != "not_found" {
+		t.Fatal("unknown path watermark", missing)
+	}
+	// An empty path segment is not the watermark route, so a body watermark never stands in for it.
+	empty := consoleRoute(t, h, server, cookie, csrf, "POST", "/v1/ui/threads/"+thread+"/read/", `{"last_message_id":"`+message+`"}`, 404)
+	if empty["error"].(map[string]any)["code"] != "not_found" {
+		t.Fatal("empty path watermark was accepted", empty)
 	}
 	claimBody := authority(session)
 	claimBody["key"], claimBody["path"], claimBody["kind"] = "route-claim", "file.go", "exact"

@@ -41,7 +41,7 @@ function serveThread(messages: ThreadMessage[]) {
   server.use(
     http.get("*/v1/ui/threads/ms_root", () => {
       state.loads++;
-      const detail: ThreadDetail = { id: "ms_root", messages: state.messages };
+      const detail: ThreadDetail = { id: "ms_root", high_water_message_id: state.messages.at(-1)?.id ?? "", messages: state.messages };
       return HttpResponse.json(detail);
     }),
   );

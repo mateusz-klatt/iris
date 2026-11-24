@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"database/sql"
 	"strings"
 	"testing"
 	"time"
@@ -141,93 +140,6 @@ func TestAFirstMonitorFailsWhenTheClaimsCannotBeRead(t *testing.T) {
 	}
 	if _, err := s.Call(context.Background(), "monitor_cursor", waiter); err == nil || !strings.Contains(err.Error(), "origin") {
 		t.Fatalf("a monitor started without checking the claims: %v", err)
-	}
-}
-
-// A superproject Execution waits on a submodule path. The two repositories use different
-// policies and both have a live claim of the same path name. Replay follows the repository
-// that owned the wait: the superproject's claim does not suppress a free submodule path, an
-// exempt automatic overlap in the submodule does not either, and a real claim there does.
-// Asking again returns the same cursor. An event with no repository, or one whose repository
-// is gone, is not rewound: waking could meet a claim the replay did not see.
-func TestFreedRewindFollowsTheRepositoryThatOwnedTheWait(t *testing.T) {
-	s, _, _ := testStore(t)
-	parent, po := checkoutSession(t, s, "codex", "", "parent", "/src/snapper", "dev:super", superRemote, "snapper-root", "main")
-	parentRepo := po["repository_id"].(string)
-	holder, ho := checkoutSession(t, s, "codex", "", "holder", "/src/frontend", "dev:fe", frontendRemote, "frontend-root", "main")
-	subRepo := ho["repository_id"].(string)
-	if parentRepo == subRepo {
-		t.Fatal("the superproject and the submodule share a repository")
-	}
-	setScope(t, s, parentRepo, "repository")
-	setScope(t, s, subRepo, "worktree")
-	call(t, s, "touch", touchRequest(parent, "super-name", "src/x.ts"))
-	call(t, s, "touch", touchRequest(holder, "sub-holds", "src/x.ts"))
-	group := submodule("src/x.ts")
-	group.WorktreeID = "dev:fe"
-	group.Branch = "feature"
-	if denied := call(t, s, "touch_files", filesTouch(parent, "wait-in-sub", group)); denied["action"] != "deny" {
-		t.Fatal(denied)
-	}
-	var waitRepo, waitKey string
-	if err := s.db.QueryRow("SELECT repository_id,COALESCE(worktree_key,'') FROM Waiter WHERE execution_id=?", parent.ExecutionID).Scan(&waitRepo, &waitKey); err != nil || waitRepo != subRepo || waitKey == "" {
-		t.Fatalf("parent waits in %q with key %q, %v", waitRepo, waitKey, err)
-	}
-	call(t, s, "release", releaseAll(holder))
-	freed := newestEvent(t, s, "claim_available")
-	var eventRepo sql.NullString
-	if err := s.db.QueryRow("SELECT repository_id FROM Event WHERE seq=?", freed).Scan(&eventRepo); err != nil || eventRepo.String != subRepo {
-		t.Fatalf("event repository %v, %v", eventRepo, err)
-	}
-	// Another worktree of the submodule may hold the path. That pair is exempt only
-	// because the submodule opted into worktree. The superproject did not, and it still
-	// holds the same path name, which would block a replay that read the wrong repository.
-	other, _ := checkoutSession(t, s, "codex", "", "other", "/src/frontend-wt", "dev:fe2", frontendRemote, "frontend-root", "side")
-	if got := call(t, s, "touch", touchRequest(other, "exempt", "src/x.ts")); got["action"] != "allow" {
-		t.Fatal(got)
-	}
-	cursor := func() any { return call(t, s, "monitor_cursor", parent)["cursor"] }
-	if got := cursor(); got != freed-1 {
-		t.Fatalf("submodule path did not rewind: %v, freed %d", got, freed)
-	}
-	if again := cursor(); again != freed-1 {
-		t.Fatalf("replay changed the cursor from %d to %v", freed-1, again)
-	}
-	call(t, s, "claim", claimRequest(other, "blocks", "src/x.ts", "exact"))
-	if got := cursor(); got == freed-1 {
-		t.Fatal("a claim in the owning repository did not block the rewind")
-	}
-	call(t, s, "release", releaseAll(other))
-	call(t, s, "release", releaseAll(parent))
-	if got := cursor(); got != freed-1 {
-		t.Fatalf("the freed submodule path stayed blocked after both claims were released: %v", got)
-	}
-	if _, err := s.db.Exec("UPDATE Event SET repository_id=NULL WHERE seq=?", freed); err != nil {
-		t.Fatal(err)
-	}
-	if got := cursor(); got == freed-1 {
-		t.Fatal("a legacy event with no repository rewound")
-	}
-	if _, err := s.db.Exec("UPDATE Event SET repository_id='rp_gone' WHERE seq=?", freed); err != nil {
-		t.Fatal(err)
-	}
-	if got := cursor(); got == freed-1 {
-		t.Fatal("an event whose repository is gone rewound")
-	}
-}
-
-// A monitor does not start when the owning repository's policy cannot be read. Starting
-// would rewind without knowing whether a live claim still blocks the path.
-func TestAFirstMonitorFailsWhenTheOwningRepositoryCannotBeRead(t *testing.T) {
-	s, _, _ := testStore(t)
-	holder, _ := session(t, s, 1)
-	waiter, _ := session(t, s, 2)
-	freeFor(t, s, holder, waiter, "a", "a.go")
-	if _, err := s.db.Exec("ALTER TABLE Repository RENAME COLUMN auto_claim_scope TO renamed"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := s.Call(context.Background(), "monitor_cursor", waiter); err == nil || !strings.Contains(err.Error(), "auto_claim_scope") {
-		t.Fatalf("a monitor started without the owning repository's policy: %v", err)
 	}
 }
 

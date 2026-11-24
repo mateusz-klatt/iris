@@ -171,3 +171,75 @@ func TestCombinedShellRefusalReportsOnlyCommittedHistory(t *testing.T) {
 		t.Fatalf("failed reconcile published its provisional replacement: %v", out)
 	}
 }
+
+func TestEndedThroughRegistrationFloor(t *testing.T) {
+	for _, tc := range []struct {
+		name                 string
+		generations          int
+		end, exact, combined bool
+		floor, want          int64
+		badRequest           bool
+	}{
+		{name: "proofless renewal at the end", generations: 2, floor: 2},
+		{name: "exact proof at the end", generations: 2, exact: true, floor: 2},
+		{name: "active generation below the end", generations: 2, floor: 3},
+		{name: "active generation above the end", generations: 2, floor: 1, want: 2},
+		{name: "restored terminal history below the end", generations: 1, end: true, floor: 2},
+		{name: "ordinary successor above the end", generations: 2, end: true, floor: 2, want: 3},
+		{name: "empty history below the end", floor: 2},
+		{name: "combined shell renewal at the end", generations: 2, combined: true, floor: 2},
+		{name: "negative end", generations: 1, floor: -1, badRequest: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, _, _ := testStore(t)
+			registration := Request{Client: "codex", Host: "host", SessionID: "same", Cwd: "/repo/w1", Worktree: "/repo/w1", Source: "hook"}
+			var previous map[string]any
+			for generation := 1; generation <= tc.generations; generation++ {
+				previous = call(t, s, "sessions", registration)
+				if generation < tc.generations || tc.end {
+					call(t, s, "end", Request{ExecutionID: previous["execution_id"].(string), Generation: int64(generation)})
+				}
+			}
+			before := databaseState(t, s)
+			registration.EndedThrough = tc.floor
+			if tc.exact {
+				registration.Generation = int64(tc.generations)
+			}
+			operation := "sessions"
+			if tc.combined {
+				registration.Kind = "before"
+				registration.Status = map[string]string{}
+				operation = "reconcile"
+			}
+			out, err := s.Call(t.Context(), operation, registration)
+			if tc.badRequest {
+				var domain *Error
+				if !errors.As(err, &domain) || domain.Code != "bad_request" || out != nil || databaseState(t, s) != before {
+					t.Fatalf("negative ended_through = %v, %v; state changed: %t", out, err, databaseState(t, s) != before)
+				}
+				return
+			}
+			if tc.want == 0 {
+				assertRegistrationLost(t, err, int64(tc.generations))
+				var lost *Error
+				if !errors.As(err, &lost) {
+					t.Fatal("strict refusal lost its typed error")
+				}
+				details, _ := lost.Details.(map[string]any)
+				if details["reason"] != "ended_through" {
+					t.Fatalf("strict refusal reason = %v, want ended_through", details)
+				}
+				if out != nil || databaseState(t, s) != before {
+					t.Fatalf("strict-floor refusal returned authority or changed state: %v, %v", out, err)
+				}
+				return
+			}
+			if err != nil || out["generation"] != tc.want {
+				t.Fatalf("registration above the strict floor = %v, %v, want G%d", out, err, tc.want)
+			}
+			if tc.end && out["execution_id"] == previous["execution_id"] || !tc.end && out["execution_id"] != previous["execution_id"] {
+				t.Fatalf("registration above the strict floor used the wrong Execution: before %v, after %v", previous, out)
+			}
+		})
+	}
+}

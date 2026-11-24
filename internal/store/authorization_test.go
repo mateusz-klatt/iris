@@ -45,7 +45,7 @@ func TestConsoleOperationMatrixAndCredentialBoundaries(t *testing.T) {
 			}
 		}
 		p := consoleTestPrincipal(t, s, a)
-		for _, op := range []string{"ack", "claim", "touch", "release", "ui_read", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_accounts", "ui_access", "contact", "forget", "merge", "unalias", "policy", "messages", "agents", "sessions", "status", "events", "unknown"} {
+		for _, op := range []string{"ack", "claim", "touch", "release", "ui_read", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_accounts", "ui_access", "contact", "forget", "merge", "unalias", "messages", "agents", "sessions", "status", "events", "unknown"} {
 			_, err := s.CallConsole(context.Background(), p, op, Request{RepositoryID: repo})
 			consoleError(t, err, "forbidden")
 		}
@@ -70,7 +70,7 @@ func TestConsoleOperationMatrixAndCredentialBoundaries(t *testing.T) {
 	}
 	operator := createTestConsoleAccount(t, s, "operator", "operator")
 	p := consoleTestPrincipal(t, s, operator)
-	for _, op := range []string{"ack", "claim", "messages", "ui_doctor_put", "merge", "unalias", "forget", "contact", "policy"} {
+	for _, op := range []string{"ack", "claim", "messages", "ui_doctor_put", "merge", "unalias", "forget", "contact"} {
 		_, err := s.CallConsole(context.Background(), p, op, Request{})
 		consoleError(t, err, "forbidden")
 	}
@@ -90,7 +90,7 @@ func TestConsoleOperationMatrixAndCredentialBoundaries(t *testing.T) {
 			t.Fatal("machine status refused", err)
 		}
 	}
-	for _, op := range []string{"merge", "unalias", "forget", "contact", "policy"} {
+	for _, op := range []string{"merge", "unalias", "forget", "contact"} {
 		_, err := s.CallAuthorized(context.Background(), Principal{Kind: HostPrincipal}, op, Request{})
 		consoleError(t, err, "forbidden")
 	}
@@ -276,7 +276,7 @@ func TestConsoleAuthorizationStorageFailuresRollback(t *testing.T) {
 				case "accounts":
 					_, err = s.ListConsoleAccounts(context.Background(), p)
 				case "ack":
-					_, err = s.CallConsole(context.Background(), p, "ui_read", Request{RepositoryID: repo, Key: mail["thread_id"].(string)})
+					_, err = s.CallConsole(context.Background(), p, "ui_read", Request{RepositoryID: repo, Key: mail["thread_id"].(string), LastMessageID: mail["message_id"].(string)})
 				case "revoke":
 					_, err = s.CallConsole(context.Background(), p, "ui_revoke", Request{Fence: claim["fence"].(int64)})
 				}

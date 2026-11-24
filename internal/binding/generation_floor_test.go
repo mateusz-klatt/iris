@@ -338,6 +338,13 @@ func TestFirstFallbackChecksGenerationProofAfterGrace(t *testing.T) {
 					if mode == "watch" {
 						r.HeartbeatSource = "watch"
 					}
+					var refusals []bool
+					r.ObserveBindingRefusal = func(client, session string, ended bool) {
+						if client != "claude" || session != "S" {
+							t.Errorf("reported a refusal for %s/%s", client, session)
+						}
+						refusals = append(refusals, ended)
+					}
 					r.Recall = func(client, session string) (int, int, error) {
 						if client != "claude" || session != "S" {
 							t.Errorf("recall for %s/%s", client, session)
@@ -366,6 +373,13 @@ func TestFirstFallbackChecksGenerationProofAfterGrace(t *testing.T) {
 							t.Fatalf("session with %s proof bootstrapped: %+v, %v", proof, b, err)
 						}
 						h.expect(t, "bind session_id=S", "bind session_id=S")
+					}
+					if proof == "remembered" || proof == "ended" {
+						if len(refusals) != 1 || refusals[0] != (proof == "ended") {
+							t.Fatalf("fallback did not report %s proof: ended refusals %v", proof, refusals)
+						}
+					} else if len(refusals) != 0 {
+						t.Fatalf("fallback reported a readable proof refusal for %s proof: %v", proof, refusals)
 					}
 				})
 			})

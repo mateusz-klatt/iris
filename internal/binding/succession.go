@@ -51,6 +51,16 @@ func (r *Resolver) succeedAfterLostHeld(ctx context.Context, session string, run
 	if err != nil {
 		return Bound{}, true, &LostError{Cause: err}
 	}
+	proofGeneration, endedThrough, err := r.recallGeneration(session)
+	if err != nil {
+		return Bound{}, true, &LostError{Cause: err}
+	}
+	if proofGeneration != priorGeneration {
+		return Bound{}, true, errGenerationFloor
+	}
+	if endedThrough >= priorGeneration {
+		return Bound{}, true, r.refuseBindingGeneration(session, false, true)
+	}
 	if processBound {
 		after, err := r.Ancestor()
 		if err != nil {
@@ -63,7 +73,7 @@ func (r *Resolver) succeedAfterLostHeld(ctx context.Context, session string, run
 	request := map[string]any{
 		"client": r.Client, "host": r.Host, "session_id": session, "source": "shim",
 		"prior_generation": priorGeneration, "prior_execution_id": priorExecution,
-		"client_pid": 0, "client_pid_start_ms": 0,
+		"ended_through": endedThrough, "client_pid": 0, "client_pid_start_ms": 0,
 	}
 	if processBound {
 		request["client_pid"] = anc.PID

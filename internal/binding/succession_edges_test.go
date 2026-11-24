@@ -2,6 +2,7 @@ package binding
 
 import (
 	"errors"
+	"fmt"
 	"net/http"
 	"testing"
 
@@ -444,6 +445,76 @@ func TestSuccessionRetainedRung3UsesProcessIdentity(t *testing.T) {
 	b, attempted, err := r.succeedAfterLostHeld(t.Context(), "S", 2, 1)
 	if !attempted || err != nil || b.ExecutionID != "ex_two" || b.Rung != 2 {
 		t.Fatalf("retained Rung 3 succession: bound=%+v attempted=%t err=%v", b, attempted, err)
+	}
+}
+
+func TestSuccessionRechecksGenerationProof(t *testing.T) {
+	t.Run("recall failure makes no request", func(t *testing.T) {
+		h := &tickHub{reply: func(req *http.Request, _ map[string]any) (int, any) {
+			t.Fatalf("proof read failure reached %s", req.URL.Path)
+			return 0, nil
+		}}
+		memory := &fakeSuccessionMemory{generation: 1, execution: "ex_one"}
+		r := scriptedSuccessionResolver(h, memory)
+		r.Recall = func(string, string) (int, int, error) { return 0, 0, errors.New("proof read") }
+		if _, attempted, err := r.succeedAfterLostHeld(t.Context(), "S", 2, 1); !attempted || !IsCode(err, "lost") {
+			t.Fatalf("proof read failure: attempted=%t err=%v", attempted, err)
+		}
+	})
+	t.Run("recall mismatch makes no request", func(t *testing.T) {
+		h := &tickHub{reply: func(req *http.Request, _ map[string]any) (int, any) {
+			t.Fatalf("mismatched proof reached %s", req.URL.Path)
+			return 0, nil
+		}}
+		memory := &fakeSuccessionMemory{generation: 1, execution: "ex_one"}
+		r := scriptedSuccessionResolver(h, memory)
+		r.Recall = func(string, string) (int, int, error) { return 2, 0, nil }
+		if _, attempted, err := r.succeedAfterLostHeld(t.Context(), "S", 2, 1); !attempted || !IsCode(err, "lost") {
+			t.Fatalf("proof mismatch: attempted=%t err=%v", attempted, err)
+		}
+	})
+	t.Run("end veto makes no request and reports the marker", func(t *testing.T) {
+		h := &tickHub{reply: func(req *http.Request, _ map[string]any) (int, any) {
+			t.Fatalf("ended proof reached %s", req.URL.Path)
+			return 0, nil
+		}}
+		memory := &fakeSuccessionMemory{generation: 1, execution: "ex_one"}
+		r := scriptedSuccessionResolver(h, memory)
+		r.Recall = func(string, string) (int, int, error) { return 1, 1, nil }
+		observed := false
+		r.ObserveBindingRefusal = func(client, session string, ended bool) {
+			observed = client == "claude" && session == "S" && ended
+		}
+		if _, attempted, err := r.succeedAfterLostHeld(t.Context(), "S", 2, 1); !attempted || !IsCode(err, "lost") || !observed {
+			t.Fatalf("end veto: attempted=%t err=%v observed=%t", attempted, err, observed)
+		}
+	})
+	for _, adopted := range []bool{false, true} {
+		t.Run(fmt.Sprintf("winner proof failure adopted=%t", adopted), func(t *testing.T) {
+			h := &tickHub{reply: func(req *http.Request, _ map[string]any) (int, any) {
+				if req.URL.Path == "/v1/sessions/succeed" {
+					if adopted {
+						return refused("lost")
+					}
+					return http.StatusOK, map[string]any{"execution_id": "ex_two", "generation": 2, "session_id": "S"}
+				}
+				return http.StatusOK, map[string]any{"execution_id": "ex_two", "generation": 2, "session_id": "S", "match": "succession"}
+			}}
+			memory := &fakeSuccessionMemory{generation: 1, execution: "ex_one"}
+			r := scriptedSuccessionResolver(h, memory)
+			recalls := 0
+			r.Recall = func(string, string) (int, int, error) {
+				recalls++
+				if recalls == 1 {
+					return memory.generation, 0, nil
+				}
+				return 0, 0, errors.New("winner proof changed")
+			}
+			b, attempted, err := r.succeedAfterLostHeld(t.Context(), "S", 2, 1)
+			if !attempted || b.ExecutionID != "" || !IsCode(err, "lost") || recalls != 2 {
+				t.Fatalf("unverifiable winner: bound=%+v attempted=%t err=%v recalls=%d", b, attempted, err, recalls)
+			}
+		})
 	}
 }
 

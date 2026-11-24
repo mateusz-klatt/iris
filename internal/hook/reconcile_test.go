@@ -137,3 +137,31 @@ func TestCodexJavaScriptToolIsReconciledLikeAShell(t *testing.T) {
 		}
 	}
 }
+
+type fullShellOnlyHub struct {
+	*recoveryHub
+	reconciles int
+}
+
+func (h *fullShellOnlyHub) Reconcile(context.Context, hubclient.ReconcileRequest) (hubclient.CheckResponse, error) {
+	h.reconciles++
+	return hubclient.CheckResponse{}, nil
+}
+
+func TestFullSplitShellRechecksEndMarkerAfterSnapshot(t *testing.T) {
+	m := newFileMemory(t)
+	hub := &fullShellOnlyHub{recoveryHub: &recoveryHub{generation: 2}}
+	ev := Event{Client: ClientClaude, SessionID: "s", Kind: KindPreTool, CWD: "/repo", ToolClass: ClassShell}
+	r := Runner{Hub: hub, Memory: m}
+	r.Status = func(context.Context, string, gitinfo.Scope, *gitinfo.Attempt) (map[string]string, error) {
+		m.Forget("claude", "s", 2)
+		return map[string]string{}, nil
+	}
+	state := &runState{}
+	_, fromGit, err := r.shellFull(context.Background(), hub, ev, gitinfo.Repo{Worktree: "/repo"}, state, &shellRun{}, "before")
+	marker := m.name("claude", "s") + ".ended"
+	observations := state.observations()
+	if err != errEndedGeneration || fromGit || hub.reconciles != 0 || len(observations) != 1 || observations[0] != endedProof(marker).Error() { // gitleaks:allow (a test observation token and path, not a credential)
+		t.Fatalf("full split shell used ended G2: err %v, fromGit %t, reconciles %d, observations %v", err, fromGit, hub.reconciles, observations)
+	}
+}

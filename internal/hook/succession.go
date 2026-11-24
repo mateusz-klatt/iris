@@ -56,6 +56,9 @@ type executionProof struct {
 
 type executionProofs [2]executionProof
 
+// Two pairs can each hold a 64-bit generation and a full hub Execution ID.
+const executionProofReadLimit = 128
+
 func (proofs executionProofs) at(generation int) string {
 	for _, proof := range proofs {
 		if proof.generation == generation && proof.id != "-" {
@@ -67,7 +70,7 @@ func (proofs executionProofs) at(generation int) string {
 
 func readExecutionProofs(path string) (executionProofs, error) {
 	var proofs executionProofs
-	raw, err := os.ReadFile(path)
+	raw, err := readGenerationBytes(path, executionProofReadLimit)
 	if errors.Is(err, os.ErrNotExist) {
 		if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
 			return proofs, nil
@@ -275,7 +278,7 @@ func (s *Sessions) readSuccessionProof(client, session string, minimumGeneration
 
 // AdvanceGeneration compares and advances the local proof pair without recreating forgotten proof.
 func (s *Sessions) AdvanceGeneration(client, session, expectedExec string, expectedOld, newGen int, newExec string) (current int, updated bool, err error) {
-	if expectedOld <= 0 || expectedExec == "" || newGen != expectedOld+1 || newExec == "" {
+	if expectedOld <= 0 || expectedExec == "" || newGen != expectedOld+1 || !validExecutionProofID(newExec) {
 		return 0, false, ErrSuccessionProof
 	}
 	if err := s.Protect(); err != nil {

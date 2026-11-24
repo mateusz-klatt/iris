@@ -48,7 +48,7 @@ function trackRequests() {
     else if (path === "/v1/ui/doctor") counts.doctor++;
     else if (path === "/v1/ui/deliveries") counts.deliveries++;
     else if (path === "/v1/ui/threads") counts.threads++;
-    else if (path.startsWith("/v1/ui/threads/") && !path.endsWith("/read")) counts.thread++;
+    else if (request.method === "GET" && path.startsWith("/v1/ui/threads/") && !path.includes("/read")) counts.thread++;
   };
   server.events.on("request:start", listener);
   return {
@@ -166,7 +166,7 @@ describe("console refresh scheduling", () => {
     const tracker = trackRequests();
     let onFrame: ((frame: WatchFrame) => void) | undefined;
     try {
-      server.use(http.post("*/v1/ui/threads/:id/read", () => HttpResponse.json({ read: 0 })));
+      server.use(http.post("*/v1/ui/threads/:id/read/:message", () => HttpResponse.json({ read: 0 })));
       render(
         <App
           connect={(frame, status?: (s: WatchStatus) => void) => {
@@ -220,7 +220,7 @@ describe("console refresh scheduling", () => {
     const tracker = trackRequests();
     let onFrame: ((frame: WatchFrame) => void) | undefined;
     try {
-      server.use(http.post("*/v1/ui/threads/:id/read", () => HttpResponse.json({ read: 1 })));
+      server.use(http.post("*/v1/ui/threads/:id/read/:message", () => HttpResponse.json({ read: 1 })));
       render(
         <App
           connect={(frame, status?: (s: WatchStatus) => void) => {
@@ -408,7 +408,7 @@ describe("console refresh scheduling", () => {
     const tracker = trackRequests();
     let onFrame: ((frame: WatchFrame) => void) | undefined;
     try {
-      server.use(http.post("*/v1/ui/threads/:id/read", () => HttpResponse.json({ read: 0 })));
+      server.use(http.post("*/v1/ui/threads/:id/read/:message", () => HttpResponse.json({ read: 0 })));
       render(
         <App
           connect={(frame) => {
@@ -553,7 +553,7 @@ describe("console refresh scheduling", () => {
     try {
       server.use(
         http.get("*/v1/ui/overview", () => HttpResponse.json({ ...sessionOverview, human_unread: unread })),
-        http.post("*/v1/ui/threads/:id/read", () => {
+        http.post("*/v1/ui/threads/:id/read/:message", () => {
           unread = 0;
           return HttpResponse.json({ read: 1 });
         }),
@@ -598,7 +598,7 @@ describe("console refresh scheduling", () => {
           overviews++;
           return overviews === 1 ? HttpResponse.json(sessionOverview) : overviewGate.promise;
         }),
-        http.post("*/v1/ui/threads/:id/read", () => {
+        http.post("*/v1/ui/threads/:id/read/:message", () => {
           reads++;
           return readGate.promise;
         }),
@@ -664,7 +664,7 @@ describe("console refresh scheduling", () => {
     const tracker = trackRequests();
     const ackReady = deferred<Response>();
     try {
-      server.use(http.post("*/v1/ui/threads/:id/read", () => ackReady.promise));
+      server.use(http.post("*/v1/ui/threads/:id/read/:message", () => ackReady.promise));
       render(<App connect={() => () => {}} />);
       await flushFakeNetwork();
 
@@ -692,7 +692,7 @@ describe("console refresh scheduling", () => {
     const tracker = trackRequests();
     const ackReady = deferred<Response>();
     try {
-      server.use(http.post("*/v1/ui/threads/:id/read", () => ackReady.promise));
+      server.use(http.post("*/v1/ui/threads/:id/read/:message", () => ackReady.promise));
       const { unmount } = render(<App connect={() => () => {}} />);
       await flushFakeNetwork();
 
@@ -840,7 +840,7 @@ describe("console refresh scheduling", () => {
     try {
       server.use(
         http.get("*/v1/ui/overview", () => holdOverview ? overviewGate.promise : HttpResponse.json(sessionOverview)),
-        http.post("*/v1/ui/threads/:id/read", () => ackGate.promise),
+        http.post("*/v1/ui/threads/:id/read/:message", () => ackGate.promise),
       );
       render(<App connect={(frame) => { onFrame = frame; return () => {}; }} />);
       await flushFakeNetwork();

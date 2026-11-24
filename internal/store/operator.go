@@ -174,7 +174,14 @@ func (t *transaction) operator(op string, r Request) (map[string]any, error) {
 				return nil, fail("bad_request", "invalid doctor status")
 			}
 		}
-		raw, err := json.Marshal(map[string]any{"checked_at": r.CheckedAt, "clients": r.Clients})
+		report := map[string]any{"checked_at": r.CheckedAt, "clients": r.Clients}
+		if r.CurrentDamagedEndMarkers != nil {
+			report["current_damaged_end_markers"] = *r.CurrentDamagedEndMarkers
+		}
+		if r.EndMarkerScanIncomplete != nil {
+			report["end_marker_scan_incomplete"] = *r.EndMarkerScanIncomplete
+		}
+		raw, err := json.Marshal(report)
 		if err != nil {
 			return nil, err
 		}
@@ -227,11 +234,11 @@ func (t *transaction) overview() (map[string]any, error) {
 	}
 	for _, id := range ids {
 		aliases := []string{}
-		var name, access, accountID, scope string
+		var name, access, accountID string
 		if t.console != nil {
 			accountID = t.console.ID
 		}
-		if err = t.row("SELECT name,auto_claim_scope,COALESCE((SELECT mode FROM ConsoleRepositoryAccess WHERE account_id=? AND repository_id=Repository.id),'') FROM Repository WHERE id=?", accountID, id).Scan(&name, &scope, &access); err != nil {
+		if err = t.row("SELECT name,COALESCE((SELECT mode FROM ConsoleRepositoryAccess WHERE account_id=? AND repository_id=Repository.id),'') FROM Repository WHERE id=?", accountID, id).Scan(&name, &access); err != nil {
 			return nil, err
 		}
 		rows, err = t.rows("SELECT alias FROM RepositoryAlias WHERE repository_id=? ORDER BY alias", id)
@@ -258,11 +265,6 @@ func (t *transaction) overview() (map[string]any, error) {
 		repository := map[string]any{"id": id, "name": name, "aliases": aliases, "kind": kind}
 		if host != "" {
 			repository["host"] = host
-		}
-		// A host's context of sessions outside git has no claim.auto_scope in force (ADR 034).
-		// The column still exists; the console must not present that default as a policy.
-		if kind == "repository" {
-			repository["claim_auto_scope"] = scope
 		}
 		// This describes the current console controls; each mutation still checks
 		// authority in its own transaction. Legacy link sessions have no account.
@@ -463,17 +465,26 @@ func (t *transaction) threads(r Request) (map[string]any, error) {
 func (t *transaction) thread(id, repo string) (map[string]any, error) {
 	visible, args := t.visibleIn("m", repo)
 	originScope, originArgs := t.repositoryVisibleSQL("m.repository_id")
-	rows, err := t.rows(`SELECT m.id,CASE WHEN a.client='human' THEN 'human' ELSE a.name END,m.subject,m.body,m.created_ms,m.reply_to,CASE WHEN `+originScope+` THEN m.repository_id ELSE '' END,COALESCE(m.sender_account_id,''),COALESCE(m.sender_username,''),COALESCE(m.sender_display_name,'') FROM Message m JOIN Execution e ON e.id=m.sender_execution_id JOIN Agent a ON a.id=e.agent_id WHERE m.thread_id=? AND `+visible+` ORDER BY m.created_ms,m.rowid`, append(append(originArgs, id), args...)...)
+	rows, err := t.rows(`SELECT m.id,CASE WHEN a.client='human' THEN 'human' ELSE a.name END,m.subject,m.body,m.created_ms,m.reply_to,CASE WHEN `+originScope+` THEN m.repository_id ELSE '' END,COALESCE(m.sender_account_id,''),COALESCE(m.sender_username,''),COALESCE(m.sender_display_name,''),m.rowid FROM Message m JOIN Execution e ON e.id=m.sender_execution_id JOIN Agent a ON a.id=e.agent_id WHERE m.thread_id=? AND `+visible+` ORDER BY m.created_ms,m.rowid`, append(append(originArgs, id), args...)...)
 	if err != nil {
 		return nil, err
 	}
 	defer func(rows *queryRows) { _ = rows.Close() }(rows)
 	messages := []map[string]any{}
+	// Display order follows the hub clock. The acknowledgement watermark follows
+	// insertion order, so a clock step back cannot hide a visible row behind an
+	// earlier one.
+	var highWaterRowID int64
+	var highWaterID string
 	for rows.Next() {
 		var mid, sender, subject, body, repo, accountID, username, displayName string
-		var at int64
+		var at, rowID int64
 		var reply sql.NullString
-		rows.Scan(&mid, &sender, &subject, &body, &at, &reply, &repo, &accountID, &username, &displayName)
+		rows.Scan(&mid, &sender, &subject, &body, &at, &reply, &repo, &accountID, &username, &displayName, &rowID)
+		if rowID > highWaterRowID {
+			highWaterRowID = rowID
+			highWaterID = mid
+		}
 		// The sender's repository, so a thread that crosses repositories shows where each message came from.
 		message := map[string]any{"id": mid, "thread_id": id, "sender": sender, "subject": subject, "body": body, "created_at": timestamp(sql.NullInt64{Int64: at, Valid: true}), "reply_to": reply.String}
 		if repo != "" {
@@ -513,14 +524,14 @@ func (t *transaction) thread(id, repo string) (map[string]any, error) {
 		}
 		m["recipients"] = recipients
 	}
-	return map[string]any{"id": id, "messages": messages}, nil
+	return map[string]any{"id": id, "high_water_message_id": highWaterID, "messages": messages}, nil
 }
 
 // readThread acknowledges the operator's unread mail through the requested high-water
-// message, or the whole thread for a legacy request without one. Opening a thread lowers
-// the human inbox's unread count (gap review A13). With a repository, only that repository's
-// human deliveries are read; from the whole-hub view, every repository's. There is no way
-// back to unread.
+// message. Opening a thread lowers the human inbox's unread count (gap review A13).
+// With a repository, only that repository's human deliveries are read; from the
+// whole-hub view, every repository's. The watermark is required, so a console opened
+// before it existed cannot acknowledge the thread. There is no way back to unread.
 func (t *transaction) readThread(r Request) (map[string]any, error) {
 	var n int
 	if err := t.row("SELECT COUNT(*) FROM Message WHERE thread_id=?", r.Key).Scan(&n); err != nil {
@@ -529,21 +540,18 @@ func (t *transaction) readThread(r Request) (map[string]any, error) {
 	if n == 0 {
 		return nil, fail("not_found", "unknown thread")
 	}
-	boundary := ""
-	args := []any{r.Key}
-	if r.LastMessageID != "" {
-		visible, visibleArgs := t.visibleIn("m", r.RepositoryID)
-		var highWaterRowID int64
-		highWaterArgs := append([]any{r.LastMessageID, r.Key}, visibleArgs...)
-		if err := t.row("SELECT m.rowid FROM Message m WHERE m.id=? AND m.thread_id=? AND "+visible, highWaterArgs...).Scan(&highWaterRowID); err != nil {
-			return nil, missing(err, "unknown message in thread")
-		}
-		boundary = " AND m.rowid<=?"
-		args = append(args, highWaterRowID)
+	if r.LastMessageID == "" {
+		return nil, fail("bad_request", "reload the console to acknowledge this thread")
 	}
-	args = append(args, r.RepositoryID, r.RepositoryID)
+	visible, visibleArgs := t.visibleIn("m", r.RepositoryID)
+	var highWaterRowID int64
+	highWaterArgs := append([]any{r.LastMessageID, r.Key}, visibleArgs...)
+	if err := t.row("SELECT m.rowid FROM Message m WHERE m.id=? AND m.thread_id=? AND "+visible, highWaterArgs...).Scan(&highWaterRowID); err != nil {
+		return nil, missing(err, "unknown message in thread")
+	}
+	args := []any{r.Key, highWaterRowID, r.RepositoryID, r.RepositoryID}
 	rows, err := t.rows(`SELECT d.id,d.attempt,a.repository_id FROM Delivery d JOIN Message m ON m.id=d.message_id JOIN Agent a ON a.id=d.recipient_agent_id
- WHERE m.thread_id=?`+boundary+` AND a.client='human' AND (?='' OR a.repository_id=?) AND d.id NOT IN (SELECT delivery_id FROM Ack) ORDER BY d.id`, args...)
+ WHERE m.thread_id=? AND m.rowid<=? AND a.client='human' AND (?='' OR a.repository_id=?) AND d.id NOT IN (SELECT delivery_id FROM Ack) ORDER BY d.id`, args...)
 	if err != nil {
 		return nil, err
 	}

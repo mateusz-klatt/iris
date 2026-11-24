@@ -30,6 +30,14 @@ type Memory interface {
 // session ends normally.
 const memoryAge = 30 * 24 * time.Hour
 
+type endedProof string
+
+func (p endedProof) Error() string { return EndedGenerationRefused + " at " + string(p) }
+
+type damagedEndMarker string
+
+func (p damagedEndMarker) Error() string { return damagedGenerationObservation(string(p)) }
+
 // fileMemory stores one small file per session beside the token, protected as the token is:
 // mode 0600 in a 0700 directory, and on Windows the token's owner-only DACL. So anyone who
 // can read it can read the token, which already grants everything the generation would.
@@ -55,7 +63,7 @@ func (m fileMemory) read(path string) string {
 }
 
 func readGeneration(path string) (int, error) {
-	raw, err := os.ReadFile(path)
+	raw, err := readGenerationBytes(path, GenerationReadLimit)
 	if errors.Is(err, os.ErrNotExist) {
 		// A dangling link occupies the generation path even if its target is missing.
 		if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
@@ -72,7 +80,8 @@ func readGeneration(path string) (int, error) {
 	return generation, nil
 }
 
-// RecallGeneration keeps known proof fresh before a request can race idle pruning.
+// RecallGeneration keeps known proof fresh before a request can race idle pruning. Absent proof
+// needs no lock, so unrelated session-file work cannot suppress a fresh SessionStart.
 func (m fileMemory) RecallGeneration(client, session string) (int, error) {
 	path := m.name(client, session)
 	generation, readErr := readGeneration(path)
@@ -82,10 +91,22 @@ func (m fileMemory) RecallGeneration(client, session string) (int, error) {
 	if err := m.underLock(func() {
 		var current int
 		current, readErr = readGeneration(path)
+		if readErr != nil {
+			return
+		}
 		// Another hook can write newer proof before we take the lock. A prune can also
 		// win the lock, in which case the proof we already read still belongs in the request.
-		if current >= generation {
-			generation = current
+		generation = max(generation, current)
+		ended, err := readGeneration(path + ".ended")
+		if err != nil {
+			readErr = damagedEndMarker(path + ".ended")
+			return
+		}
+		if generation <= ended {
+			readErr = endedProof(path + ".ended")
+			return
+		}
+		if current == generation {
 			m.touchGeneration(path)
 			m.touchGeneration(path + ".execution")
 		}
@@ -95,19 +116,46 @@ func (m fileMemory) RecallGeneration(client, session string) (int, error) {
 	return generation, readErr
 }
 
-// Remember keeps the higher proof when another hook already recorded a newer registration.
+// readEndMarker reads the marker and reports whether it has aged past local retention.
+func (m fileMemory) readEndMarker(marker string) (generation int, expired bool, err error) {
+	generation, err = readGeneration(marker)
+	if generation == 0 {
+		return 0, false, err
+	}
+	info, statErr := os.Lstat(marker)
+	return generation, statErr == nil && info.ModTime().Before(m.now().Add(-memoryAge)), nil
+}
+
+// Remember keeps newer live proof and ignores replies for a generation another hook ended.
+// An accepted registration can replace an expired marker even if a sweep missed it.
 func (m fileMemory) Remember(client, session string, generation int) {
 	m.remember(client, session, generation, "")
 }
 
 func (m fileMemory) remember(client, session string, generation int, executionID string) {
+	if !validExecutionProofID(executionID) {
+		executionID = ""
+	}
 	if err := m.directory(); err != nil {
 		return
 	}
 	_ = m.underLock(func() {
 		path := m.name(client, session)
-		if current, err := readGeneration(path); err == nil && generation > 0 && generation >= current {
-			proofs, _ := readExecutionProofs(path + ".execution")
+		marker := path + ".ended"
+		ended, expired, _ := m.readEndMarker(marker)
+		current, err := readGeneration(path)
+		if err != nil || generation <= 0 {
+			return
+		}
+		proofs, _ := readExecutionProofs(path + ".execution")
+		switch {
+		case expired && current <= ended:
+			// Clear stale proof before its veto, and clear the expired veto before
+			// publishing the accepted generation to lock-free binding readers.
+			if (current == 0 || os.Remove(path) == nil) && os.Remove(marker) == nil {
+				_ = m.publishGeneration(path, 0, proofs, generation, executionID)
+			}
+		case generation > ended && generation >= current:
 			_ = m.publishGeneration(path, current, proofs, generation, executionID)
 		}
 	})
@@ -121,7 +169,7 @@ func rememberGeneration(m Memory, client, session string, generation int, execut
 	m.Remember(client, session, generation)
 }
 
-// Forget removes only the proof of the Execution that successfully ended.
+// Forget removes proof at or below the generation that successfully ended.
 func (m fileMemory) Forget(client, session string, generation int) {
 	_ = m.forget(client, session, generation)
 }
@@ -148,7 +196,7 @@ func (m fileMemory) forget(client, session string, generation int) string {
 			damaged = marker
 			return
 		}
-		if current, readErr := readGeneration(path); readErr == nil && current == generation {
+		if current, readErr := readGeneration(path); readErr == nil && current <= generation {
 			_ = os.Remove(path)
 			_ = os.Remove(path + ".execution")
 		}
@@ -541,7 +589,7 @@ func (m fileMemory) replace(path, body string) error {
 		err = m.restrict(f.Name())
 	}
 	if err == nil {
-		err = os.Rename(f.Name(), path)
+		err = replaceSessionFile(f.Name(), path)
 	}
 	if err != nil {
 		_ = os.Remove(f.Name())

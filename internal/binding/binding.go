@@ -83,6 +83,9 @@ type Resolver struct {
 	Succession SuccessionMemory
 	// ParentAlive is checked immediately before local succession work.
 	ParentAlive func() bool
+	// ObserveBindingRefusal records the local proof that refused binding or renewal. Like Recall,
+	// it may run with the resolver lock held and must not call back into the resolver.
+	ObserveBindingRefusal func(client, session string, ended bool)
 	// HeartbeatSource names the heartbeat source sent during refresh reattachment (default "shim").
 	HeartbeatSource string
 	mu              sync.Mutex
@@ -143,7 +146,17 @@ type handover struct {
 func New(h *hubclient.Client, client string) *Resolver {
 	host, _ := os.Hostname()
 	cwd, _ := os.Getwd()
-	return &Resolver{Hub: h, Client: client, Host: host, CWD: cwd, Getenv: os.Getenv, Ancestor: proc.Nearest, Grace: 15 * time.Second}
+	return &Resolver{Hub: h, Client: client, Host: host, CWD: cwd, Getenv: os.Getenv, Ancestor: AncestorFor(client), Grace: 15 * time.Second}
+}
+
+// AncestorFor is the shim's ancestor walk for client. Cursor cross-loads Claude plugins only
+// (measured), so only a Claude shim reads Cursor's marker pair during the walk. Any other
+// client walks as v0.1.13 did, past a bare `agent`.
+func AncestorFor(client string) func() (proc.Ancestor, error) {
+	if client == "claude" {
+		return proc.Nearest
+	}
+	return proc.NearestWithoutMarkers
 }
 
 // ObservedClientMismatch groups observations of a shim another client cross-loaded.
@@ -156,15 +169,21 @@ func ClientMismatchObservation(client, runner string) string {
 
 // CheckClient refuses every binding route when another client cross-loaded this shim.
 func (r *Resolver) CheckClient() bool {
-	ancestor := r.ancestor()
-	runner, known := proc.ClientNameWithEnv(ancestor.Name, r.Getenv)
+	// Cursor cross-loads Claude plugins only (measured), and its MCP stdio environment carries no
+	// markers, so for any other client a marker pair seen here was inherited, for example by Grok
+	// started from a Cursor terminal, and is no evidence of Cursor.
+	markers := r.Client == "claude" && proc.CursorEnvironment(r.Getenv)
+	name := r.ancestor().Name
+	runner, known := proc.ClientName(name)
+	if markers {
+		runner, known = proc.ClientNameWithEnv(name, r.Getenv)
+	}
 	if known && runner == r.Client {
 		return false
 	}
 	// A matching nearest client keeps a native session nested in Cursor usable. Without one,
 	// Cursor's marker pair identifies its cross-loaded hook shell despite an inherited Claude id.
-	// An unidentified agent is also refused rather than allowed to lend the shim an outer identity.
-	if !known && r.Client != "cursor" && (proc.AgentAlias(ancestor.Name) || proc.CursorEnvironment(r.Getenv)) {
+	if !known && markers {
 		runner, known = "cursor", true
 	}
 	if !known {
@@ -328,10 +347,19 @@ func (r *Resolver) checkGeneration(session string, generation, retained int, own
 	if err != nil {
 		return err
 	}
-	if ended > 0 && generation <= ended || ownSession && generation < max(gen, retained) {
-		return errGenerationFloor
+	endedVeto := ended > 0 && generation <= ended
+	liveVeto := ownSession && gen > 0 && generation < gen
+	if endedVeto || liveVeto || ownSession && generation < max(0, retained) {
+		return r.refuseBindingGeneration(session, liveVeto, endedVeto)
 	}
 	return nil
+}
+
+func (r *Resolver) refuseBindingGeneration(session string, liveVeto, endedVeto bool) error {
+	if (liveVeto || endedVeto) && r.ObserveBindingRefusal != nil {
+		r.ObserveBindingRefusal(r.Client, session, endedVeto)
+	}
+	return errGenerationFloor
 }
 
 // checkGenerationHeld applies an end marker to any identified session and live proof to the
@@ -480,13 +508,14 @@ func (r *Resolver) explicitBindingHeld(handle string) bool {
 // reattachByMemoryHeld uses local proof for a positively identified session, with mu held.
 // A fresh process witness can only make an exact-proof succession attempt. Established session
 // routes can reattach with live generation memory, and no memory leaves them without an attempt.
+// Malformed or mismatched memory never falls back to a generation-0 registration.
 func (r *Resolver) reattachByMemoryHeld(ctx context.Context, session string, rung int, allowSuccession bool) (Bound, bool, error) {
 	gen, ended, err := r.recallGeneration(session)
 	if err != nil {
 		return Bound{}, true, err
 	}
 	if ended > 0 && gen <= ended {
-		return Bound{}, true, errGenerationFloor
+		return Bound{}, true, r.refuseBindingGeneration(session, false, true)
 	}
 	if rung == 3 && (!r.last.HookSeen || r.last.SessionID != session) {
 		if allowSuccession && gen > 0 {
@@ -500,7 +529,7 @@ func (r *Resolver) reattachByMemoryHeld(ctx context.Context, session string, run
 		return Bound{}, false, nil
 	}
 	if gen < r.processGenerationHeld(session) {
-		return Bound{}, true, errGenerationFloor
+		return Bound{}, true, r.refuseBindingGeneration(session, true, false)
 	}
 	req := hubclient.SessionRequest{
 		Client:     r.Client,
@@ -633,7 +662,7 @@ func (r *Resolver) register(ctx context.Context, session string, a proc.Ancestor
 func (r *Resolver) fallbackGenerationError(session string) error {
 	gen, ended, err := r.recallGeneration(session)
 	if max(gen, ended, r.processGenerationHeld(session)) > 0 {
-		return errGenerationFloor
+		return r.refuseBindingGeneration(session, gen > 0, ended > 0)
 	}
 	return err
 }
@@ -783,14 +812,22 @@ func (r *Resolver) Heartbeat(ctx context.Context, source string) error {
 	return r.beatOne(ctx, b, source)
 }
 
-func (r *Resolver) beatOne(ctx context.Context, b Bound, source string) error {
+// CheckHeartbeatGeneration checks the exact binding a caller will renew or return after
+// renewal. A stale binding is dropped. A read error keeps the binding for a later check.
+func (r *Resolver) CheckHeartbeatGeneration(b Bound) error {
 	r.mu.Lock()
+	defer r.mu.Unlock()
 	if err := r.checkGenerationHeld(b); err != nil {
 		r.markGenerationLossHeld(b, err)
-		r.mu.Unlock()
 		return err
 	}
-	r.mu.Unlock()
+	return nil
+}
+
+func (r *Resolver) beatOne(ctx context.Context, b Bound, source string) error {
+	if err := r.CheckHeartbeatGeneration(b); err != nil {
+		return err
+	}
 
 	call, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()

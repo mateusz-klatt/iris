@@ -25,10 +25,10 @@ func withSubmodule(t *testing.T) (root, modules string) {
 		}
 	}
 	for path, body := range map[string]string{
-		filepath.Join(modules, "HEAD"):                     "ref: refs/heads/feature\n",
-		filepath.Join(modules, "refs", "heads", "feature"): "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
-		filepath.Join(modules, "config"):                   "[remote \"origin\"]\n\turl = https://example.com/frontend.git\n",
-		filepath.Join(root, "frontend", ".git"):            "gitdir: ../.git/modules/frontend\n",
+		filepath.Join(modules, "HEAD"):                  "ref: refs/heads/main\n",
+		filepath.Join(modules, "refs", "heads", "main"): "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb\n",
+		filepath.Join(modules, "config"):                "[remote \"origin\"]\n\turl = https://example.com/frontend.git\n",
+		filepath.Join(root, "frontend", ".git"):         "gitdir: ../.git/modules/frontend\n",
 	} {
 		if err := os.WriteFile(path, []byte(body), 0o644); err != nil {
 			t.Fatal(err)
@@ -51,14 +51,14 @@ func TestFileGroupsPlaceEachPathInItsOwnCheckout(t *testing.T) {
 	if len(groups) != 3 {
 		t.Fatalf("groups %+v", groups)
 	}
-	if groups[0].Worktree != root || groups[0].Branch != "main" || !reflect.DeepEqual(groups[0].Paths, []string{"README.md"}) {
+	if groups[0].Worktree != root || !reflect.DeepEqual(groups[0].Paths, []string{"README.md"}) {
 		t.Fatalf("superproject group %+v", groups[0])
 	}
 	sub := groups[1]
-	if sub.Worktree != filepath.Join(root, "frontend") || sub.Branch != "feature" || sub.CommonDir != modules || sub.RemoteURL != "https://example.com/frontend.git" || !reflect.DeepEqual(sub.Paths, []string{"src/x.ts", "src/old.ts", "src/new.ts"}) {
+	if sub.Worktree != filepath.Join(root, "frontend") || sub.CommonDir != modules || sub.RemoteURL != "https://example.com/frontend.git" || !reflect.DeepEqual(sub.Paths, []string{"src/x.ts", "src/old.ts", "src/new.ts"}) {
 		t.Fatalf("submodule group %+v", sub)
 	}
-	if groups[2].Worktree != other || groups[2].Branch != "main" || !reflect.DeepEqual(groups[2].Paths, []string{"src/main.go"}) {
+	if groups[2].Worktree != other || !reflect.DeepEqual(groups[2].Paths, []string{"src/main.go"}) {
 		t.Fatalf("other project group %+v", groups[2])
 	}
 	// Relative paths go from the worktree when the event names no working directory.
@@ -138,7 +138,7 @@ func TestAnEditIsTouchedByCheckoutOnlyWhereTheHubTakesIt(t *testing.T) {
 	var plain []hubclient.TouchRequest
 	capable := fileHub{capabilities: []string{"shell_scope", "file_claims"}, files: &files, plain: &plain}
 	out := run(capable, filepath.Join(root, "frontend", "src", "x.ts"))
-	if len(files) != 1 || len(plain) != 0 || files[0].ToolCallID != "call-1" || files[0].Groups[0].Worktree != filepath.Join(root, "frontend") || files[0].Groups[0].Branch != "feature" || files[0].Groups[0].Paths[0] != "src/x.ts" {
+	if len(files) != 1 || len(plain) != 0 || files[0].ToolCallID != "call-1" || files[0].Groups[0].Worktree != filepath.Join(root, "frontend") || files[0].Groups[0].Paths[0] != "src/x.ts" {
 		t.Fatalf("grouped %+v plain %+v", files, plain)
 	}
 	if !strings.Contains(string(out.Stdout), `"permissionDecision":"deny"`) || !strings.Contains(string(out.Stdout), "in repository frontend") {

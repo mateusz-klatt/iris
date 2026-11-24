@@ -61,6 +61,7 @@ func (f successionBindingFixture) resolver(clientName, session string, anc proc.
 		Hub: &hubclient.Client{Config: config{f.hub.srv.URL}}, Client: clientName, Host: "floor-host", CWD: f.cwd, Grace: 0,
 		Getenv: successionEnvironment(clientName, session, f.token), Ancestor: func() (proc.Ancestor, error) { return anc, nil },
 		Recall: f.sessions.RecallBindingGeneration, Succession: f.sessions, ParentAlive: func() bool { return true },
+		ObserveBindingRefusal: f.sessions.ObserveBindingRefusal,
 	}
 }
 
@@ -105,7 +106,7 @@ func TestMCPPostWindowSuccessionRung2AndOneHopBound(t *testing.T) {
 		t.Fatalf("Rung 2 succession: bound=%+v err=%v", b, err)
 	}
 	requests := f.hub.successions()
-	if len(requests) != 1 || requests[0]["prior_generation"] != float64(1) || requests[0]["prior_execution_id"] != rows[0].id || requests[0]["client_pid"] != float64(0) || requests[0]["client_pid_start_ms"] != float64(0) {
+	if len(requests) != 1 || requests[0]["prior_generation"] != float64(1) || requests[0]["prior_execution_id"] != rows[0].id || requests[0]["ended_through"] != float64(0) || requests[0]["client_pid"] != float64(0) || requests[0]["client_pid_start_ms"] != float64(0) {
 		t.Fatalf("succession proof request: %+v", requests)
 	}
 	assertNoGenerationZeroRegistration(t, f.hub.sessions())
@@ -157,6 +158,55 @@ func TestMCPPostWindowSuccessionFreshRung3AndCursorIDEExclusion(t *testing.T) {
 	if len(fIDE.hub.successions()) != 0 || len(nonHookSessionRequests(fIDE.hub.sessions())) != 0 {
 		t.Fatalf("Cursor IDE emitted registration or succession: %+v %+v", fIDE.hub.sessions(), fIDE.hub.successions())
 	}
+}
+
+func TestMCPPostWindowSuccessionCarriesEndFloorAndHonorsVeto(t *testing.T) {
+	secondGeneration := func(t *testing.T) successionBindingFixture {
+		t.Helper()
+		f := newSuccessionBindingFixture(t, "claude", "SessionStart", "S", proc.Ancestor{})
+		for _, event := range []string{"SessionEnd", "SessionStart"} {
+			out := (hook.Runner{
+				ClientName: "claude", EventName: event, Stdin: strings.NewReader(`{"session_id":"S","cwd":` + quoteJSON(f.cwd) + `}`),
+				Hub: &hubclient.Client{Config: config{f.hub.srv.URL}}, Getenv: successionEnvironment("claude", "S", f.token), Host: func() string { return "floor-host" },
+				Ancestor: func() (proc.Ancestor, error) { return proc.Ancestor{}, nil },
+				Find:     func(string) (gitinfo.Repo, error) { return gitinfo.Repo{}, gitinfo.ErrNotRepo },
+			}).Run()
+			if failures, err := hook.ReadRecentFailures(f.token, 10); err != nil || len(failures) != 0 {
+				t.Fatalf("%s failures: %v %v, stdout=%s stderr=%s", event, failures, err, out.Stdout, out.Stderr)
+			}
+		}
+		return f
+	}
+	t.Run("older marker is the strict floor", func(t *testing.T) {
+		f := secondGeneration(t)
+		f.hub.clock.Advance(16 * time.Minute)
+		r := f.resolver("claude", "S", proc.Ancestor{})
+		b, err := r.Resolve(t.Context(), "")
+		if err != nil || b.Generation != 3 {
+			t.Fatalf("succession above the end floor: bound=%+v err=%v", b, err)
+		}
+		requests := f.hub.successions()
+		if len(requests) != 1 || requests[0]["prior_generation"] != float64(2) || requests[0]["ended_through"] != float64(1) {
+			t.Fatalf("succession end floor: %+v", requests)
+		}
+	})
+	t.Run("marker at the prior generation vetoes", func(t *testing.T) {
+		f := secondGeneration(t)
+		path := f.generationPath(t) + ".ended"
+		if err := os.WriteFile(path, []byte("2"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		f.hub.clock.Advance(16 * time.Minute)
+		r := f.resolver("claude", "S", proc.Ancestor{})
+		if b, err := r.Resolve(t.Context(), ""); b.ExecutionID != "" || !IsCode(err, "lost") {
+			t.Fatalf("ended proof succeeded: bound=%+v err=%v", b, err)
+		}
+		if len(f.hub.successions()) != 0 {
+			t.Fatalf("ended proof reached succession: %+v", f.hub.successions())
+		}
+		assertBindingObservation(t, f.token, hook.EndedGenerationRefused+" at "+path)
+		assertNoGenerationZeroRegistration(t, f.hub.sessions())
+	})
 }
 
 func TestChoiceAProoflessMCPAndWatchAfterLossAreRefused(t *testing.T) {

@@ -5,6 +5,7 @@ import { describe, expect, it } from "vitest";
 
 import { App } from "./App";
 import type { DoctorReports } from "./api";
+import { englishTranslation } from "./i18n";
 import { doctorReport, emptyOverview, server } from "./test/server";
 
 // ADR 007: each host keeps its own report. A run on one machine no longer replaces another's,
@@ -29,7 +30,7 @@ describe("doctor reports per host", () => {
     render(<App connect={() => () => {}} />);
     const mac = await screen.findByRole("region", { name: "mac" });
     const pc = screen.getByRole("region", { name: "pc" });
-    const unknown = screen.getByRole("region", { name: "unknown" });
+    const unknown = screen.getByRole("region", { name: englishTranslation.operator.doctorUnknownHost });
     expect(within(mac).getByRole("heading", { name: "mac" })).toBeVisible();
     expect(mac.dataset.stale).toBe("no");
     expect(within(mac).queryByText(/more than a day ago/)).toBeNull();

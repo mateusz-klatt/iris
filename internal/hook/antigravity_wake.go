@@ -608,7 +608,7 @@ func (r Runner) antigravityConfigMatchesPinned(configDir string) bool {
 func (r Runner) antigravityAncestor() (proc.Ancestor, bool) {
 	ancestor := r.Ancestor
 	if ancestor == nil {
-		ancestor = nearestAncestor
+		ancestor = plainAncestor
 	}
 	a, err := ancestor()
 	if err != nil || a.PID <= 0 || a.StartMS <= 0 || !proc.SingleSession(a, "antigravity") {

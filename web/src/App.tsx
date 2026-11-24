@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import type { TFunction } from "i18next";
 
@@ -26,7 +26,7 @@ import {
   type WatchStatus,
 } from "./api";
 import { DeliveryProblems } from "./DeliveryProblems";
-import { ClaimScopeLine, ClaimsPanel } from "./ClaimsPanel";
+import { ClaimsPanel } from "./ClaimsPanel";
 import { DraftBody, DraftReview } from "./DraftReview";
 import { RecipientPicker } from "./RecipientPicker";
 import { useReview } from "./review";
@@ -45,10 +45,16 @@ import Login from "./Login";
 import Account from "./Account";
 import AccessPanel from "./access";
 import { recordName } from "./recordName";
+import { consoleLabel, replySubject } from "./consoleText";
 import "./app.css";
 import "./console.css";
 
-type ThreadOpening = { id: string };
+// Each explicit open gets its own generation, shared by all of its refresh requests.
+type ThreadOpening = { id: string; generation: number };
+
+function openingKey(opening: ThreadOpening): string {
+  return `${opening.id}:${opening.generation}`;
+}
 
 // The hub limits a message by its UTF-8 bytes, not by characters: a draft of 16 KiB of
 // characters outside ASCII can be several times that (gap review A11).
@@ -107,7 +113,7 @@ const noAgents: Agent[] = [];
 // replyDraft starts a reply to a thread. It answers the other party: the latest sender who is not
 // the operator, or, in a thread only the operator has written to, whom they wrote to. Answering
 // the latest sender would address a follow-up after the operator's own message back to them.
-function replyDraft(messages: ThreadMessage[]): Draft | null {
+function replyDraft(messages: ThreadMessage[], t: TFunction): Draft | null {
   const last = messages.at(-1);
   if (last === undefined) {
     return null;
@@ -119,11 +125,16 @@ function replyDraft(messages: ThreadMessage[]): Draft | null {
       .map((recipient) => recipient.name)
       .filter((name) => name !== operatorName)
       .join(", ");
-  return newDraft({ to, subject: last.subject.startsWith("Re:") ? last.subject : `Re: ${last.subject}`, replyTo: last.id, offered: true });
+  return newDraft({
+    to,
+    subject: replySubject(last.subject, t, Boolean(last.reply_to), maximumSubjectBytes),
+    replyTo: last.id,
+    offered: true,
+  });
 }
 
-function resolveReplySuggestion(messages: ThreadMessage[], member: boolean, agents: Agent[]): Draft | null {
-  const suggestion = replyDraft(messages);
+function resolveReplySuggestion(messages: ThreadMessage[], member: boolean, agents: Agent[], t: TFunction): Draft | null {
+  const suggestion = replyDraft(messages, t);
   if (suggestion === null || !member) {
     return suggestion;
   }
@@ -259,7 +270,7 @@ function HostReport({ report }: { report: DoctorReport }) {
   const { t, i18n } = useTranslation();
   const stale = isReportStale(report);
   return (
-    <section className="host-report" data-host={report.host} data-stale={stale ? "yes" : "no"} aria-label={report.host}>
+    <section className="host-report" data-host={report.host} data-stale={stale ? "yes" : "no"} aria-label={report.host === "unknown" ? t("operator.doctorUnknownHost") : report.host}>
       <h2>{report.host === "unknown" ? t("operator.doctorUnknownHost") : report.host}</h2>
       {report.checked_at !== null ? <p>{t("operator.checkedAt", { date: formatWhen(report.checked_at, i18n.language) })}</p> : null}
       {stale ? <p className="stale-note">{t("operator.doctorStale")}</p> : null}
@@ -354,6 +365,9 @@ export function App({ connect = watchUi, refreshGap = frameRefreshGap }: { conne
 
 function Console({ connect, refreshGap, session, onSession, onSignedOut }: { connect: typeof watchUi; refreshGap: number; session: AccountSession; onSession: (session: AccountSession) => void; onSignedOut: (passwordChanged?: boolean) => void }) {
   const { t, i18n } = useTranslation();
+  // Reconnects validate the mounted account, auth version and token. Profile
+  // changes do not replace that authentication or require a new watch connection.
+  const watchSession = useRef(session);
   const member = session.account.role === "member";
   const isOperator = session.account.role === "operator";
   const [locale, setLocale] = useState<SupportedLocale>("en");
@@ -380,6 +394,8 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const [showInactive, setShowInactive] = useState(false);
   const [agentSearch, setAgentSearch] = useState("");
   const [threadError, setThreadError] = useState(false);
+  const [readReloadKey, setReadReloadKey] = useState<string | null>(null);
+  const openingGeneration = useRef(0);
   const readerTitle = useRef<HTMLHeadingElement>(null);
   const lastThreadButton = useRef<HTMLButtonElement | null>(null);
   const sessions = useMemo(() => overview?.agents ?? [], [overview]);
@@ -401,9 +417,13 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
   const [olderCursor, setOlderCursor] = useState<string | undefined>(undefined);
   const [threadsError, setThreadsError] = useState(false);
   const [openedThread, setOpenedThread] = useState<ThreadOpening | null>(null);
+  const openedThreadRef = useRef<ThreadOpening | null>(null);
+  openedThreadRef.current = openedThread;
   const selectedId = openedThread?.id ?? null;
-  const readRequestedFor = useRef<ThreadOpening | Promise<ThreadDetail> | null>(null);
-  const pendingRead = useRef<{ id: string; repositoryId: string; lastMessageId: string } | null>(null);
+  const showReadReload = openedThread !== null && readReloadKey === openingKey(openedThread);
+  const activeOpening = useRef<ThreadOpening | null>(null);
+  const readRequestedFor = useRef<ThreadOpening | null>(null);
+  const renderedThread = useRef<{ opening: ThreadOpening; repositoryId: string; detail: ThreadDetail } | null>(null);
   const [loadedThread, setLoadedThread] = useState<{ opening: ThreadOpening; detail: ThreadDetail } | null>(null);
   const loadedThreadRef = useRef(loadedThread);
   loadedThreadRef.current = loadedThread;
@@ -481,7 +501,6 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
 
   const cancelThreadRead = useCallback(() => {
     readRequestedFor.current = null;
-    pendingRead.current = null;
   }, []);
 
   const transientState = {
@@ -569,25 +588,59 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       if (current !== overviewRequest.current || isAbort(error)) {
         return;
       }
-      cancelThreadRead();
+      renderedThread.current = null;
       setPhase("error");
     }
-  }, [cancelThreadRead, member]);
+  }, [member]);
 
   const flushRead = useCallback((deferReload = false) => {
-    const pending = pendingRead.current;
-    if (pending === null || document.visibilityState === "hidden") {
+    const rendered = renderedThread.current;
+    if (rendered === null || document.visibilityState === "hidden" || readRequestedFor.current !== rendered.opening) {
       return null;
     }
-    pendingRead.current = null;
-    return readThread(pending.id, pending.repositoryId, pending.lastMessageId)
+    const highWater = rendered.detail.high_water_message_id ?? "";
+    if (highWater === "") {
+      return null;
+    }
+    // Only a committed, visible snapshot consumes this opening's authorization.
+    // Refresh responses received while hidden may replace it before the tab resumes.
+    readRequestedFor.current = null;
+    if (member || !unreadForOperator(rendered.detail)) {
+      return null;
+    }
+    // A response belongs to the opening that sent it. A later opening, including another
+    // visit to the same thread, keeps its own reload hint.
+    const applyRead = (refused: boolean) => {
+      const current = openedThreadRef.current;
+      const currentKey = current === null ? "" : openingKey(current);
+      if (currentKey !== openingKey(rendered.opening)) {
+        return;
+      }
+      setReadReloadKey(refused ? currentKey : null);
+    };
+    return readThread(rendered.opening.id, rendered.repositoryId, highWater)
       .then((read) => {
+        applyRead(false);
         if (!deferReload && read > 0) {
           postReadRefresh.current?.();
         }
       })
-      .catch(() => undefined);
-  }, []);
+      .catch((error: unknown) => {
+        // 400 is this hub refusing a watermark. 404 is a v0.1.13 hub, which has no path-watermark route.
+        if (error instanceof ApiError && (error.status === 400 || error.status === 404)) {
+          applyRead(true);
+        }
+      });
+  }, [member]);
+
+  useLayoutEffect(() => {
+    // Publish the reader only after React commits its DOM. Promise callbacks may
+    // enqueue several snapshots together; none can acknowledge an unrendered one.
+    renderedThread.current = phase === "ready" && activeView === "messages" && loadedThread !== null && loadedThread.opening === openedThread
+      ? { ...loadedThread, repositoryId }
+      : null;
+    void flushRead();
+  }, [activeView, flushRead, loadedThread, openedThread, phase, repositoryId]);
 
   useEffect(() => () => cancelThreadRead(), [cancelThreadRead]);
 
@@ -749,7 +802,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
         return;
       }
       setStream(status);
-    }, { check: () => getSession(undefined, session) });
+    }, { check: () => getSession(undefined, watchSession.current) });
     return () => {
       // A load still in flight lands on a closed view, so it is dropped.
       requests.current++;
@@ -760,7 +813,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
       document.removeEventListener("visibilitychange", onVisibilityChange);
       stop();
     };
-  }, [connect, flushRead, reload, refreshGap, revision, onUnauthorized, session]);
+  }, [connect, flushRead, reload, refreshGap, revision, onUnauthorized]);
 
   useEffect(() => {
     if (phase !== "ready") {
@@ -809,8 +862,12 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     };
   }, [participant, openedPages, phase, query, repositoryId, threadRevision]);
 
+  // Language changes affect the suggestion, not the in-flight detail request's
+  // read authorization. Read the latest translator without restarting that request.
+  const replyTranslationRef = useRef(t);
+  replyTranslationRef.current = t;
   const applyReplySuggestion = useCallback((messages: ThreadMessage[], scope: string, agents: Agent[]) => {
-    const fresh = resolveReplySuggestion(messages, member, agents);
+    const fresh = resolveReplySuggestion(messages, member, agents, replyTranslationRef.current);
     if (fresh !== null) {
       setReplies((current) => current[scope]?.offered === false ? current : { ...current, [scope]: fresh });
     }
@@ -823,42 +880,37 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     const { id } = openedThread;
     let ignore = false;
     const request = getThread(id, repositoryId);
-    // The first detail request for an explicit open takes its read authorization.
-    if (readRequestedFor.current === openedThread) {
-      readRequestedFor.current = request;
-    }
-    const releaseReadAuthorization = () => {
-      if (readRequestedFor.current !== request) {
-        return false;
-      }
-      readRequestedFor.current = null;
-      return true;
-    };
     void request
       .then((detail) => {
-        if (ignore) {
+        if (activeOpening.current !== openedThread) {
+          return;
+        }
+        const highWater = detail.high_water_message_id ?? "";
+        const acceptsRead = readRequestedFor.current === openedThread && highWater !== "";
+        // A superseded request may still supply an authorized opening's detail.
+        // Once a snapshot is shown visibly, superseded responses cannot replace it.
+        if (ignore && !acceptsRead) {
           return;
         }
         setLoadedThread({ opening: openedThread, detail });
         setThreadError(false);
-        if (releaseReadAuthorization() && !member && unreadForOperator(detail)) {
-          pendingRead.current = { id, repositoryId, lastMessageId: detail.messages.at(-1)!.id };
-          void flushRead();
+        // A passive refresh cannot authorize another read or clear this opening's
+        // reload hint. An old hub omits the snapshot watermark; never acknowledge it.
+        if (!member && unreadForOperator(detail) && highWater === "") {
+          setReadReloadKey(openingKey(openedThread));
         }
         // Refresh an untouched suggestion together with loaded detail, retaining edited drafts (A14).
         applyReplySuggestion(detail.messages, JSON.stringify([repositoryId, id]), replyAgentsRef.current);
       })
       .catch((error: unknown) => {
-        releaseReadAuthorization();
         if (!ignore && !isAbort(error)) {
           setThreadError(true);
         }
       });
     return () => {
       ignore = true;
-      releaseReadAuthorization();
     };
-  }, [activeView, applyReplySuggestion, phase, repositoryId, openedThread, threadRevision, member, flushRead]);
+  }, [activeView, applyReplySuggestion, phase, repositoryId, openedThread, threadRevision, member]);
 
   useEffect(() => {
     // Re-resolve an untouched member suggestion whenever the active-agent directory changes
@@ -995,6 +1047,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     replyReview.stop();
     composeReview.stop();
     cancelThreadRead();
+    activeOpening.current = null;
     setOpenedThread(null);
     setLoadedThread(null);
     setThreadError(false);
@@ -1015,9 +1068,9 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
     lastThreadButton.current = trigger;
     chooseView("messages");
     // Each click requests fresh detail, even when the selected ID stays the same.
-    const opened = { id };
+    const opened = { id, generation: ++openingGeneration.current };
+    activeOpening.current = opened;
     readRequestedFor.current = opened;
-    pendingRead.current = null;
     setOpenedThread(opened);
     if (id === selectedId) {
       readerTitle.current?.focus();
@@ -1170,6 +1223,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
                         <h2 id="thread-title" tabIndex={-1} ref={readerTitle}>{thread === null ? t(threadError ? "operator.loadError" : "message.loading") : thread.messages[0]?.subject ?? thread.id}</h2>
                       </header>
                       {threadError ? <div className="state-panel"><p role="alert">{t("operator.loadError")}</p><button type="button" onClick={() => { readerTitle.current?.focus(); setThreadError(false); setThreadRevision((value) => value + 1); }}>{t("operator.retry")}</button></div> : null}
+                      {showReadReload ? <p role="alert">{t("operator.readReload")}</p> : null}
                       {thread !== null ? <>
                   {thread.messages.map((message) => (
                     <article key={message.id} className="thread-message">
@@ -1179,7 +1233,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
                           <span className="message-repository">{repositoryName(overview, message.repository_id, t)}</span>
                         ) : null}
                         <small>
-                          {t("message.to")}: {message.recipients.map((recipient) => `${recipient.name} (${recipient.state})`).join(", ")}
+                          {t("message.to")}: {message.recipients.map((recipient) => `${recipient.name} (${consoleLabel("delivery", recipient.state, t)})`).join(", ")}
                         </small>
                         <time dateTime={message.created_at}>{formatWhen(message.created_at, i18n.language)}</time>
                       </header>
@@ -1274,10 +1328,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
                       {projects.map((repository) => (
                         <tr key={repository.id}>
                           <th scope="row">{repository.name}</th>
-                          <td>
-                            <ClaimScopeLine name={repository.name} scope={repository.claim_auto_scope} />
-                            <details className="repository-details"><summary>{t("console.aliases")}</summary><code>{repository.id}</code><ul>{repository.aliases.map((alias) => <li key={alias}>{alias}</li>)}</ul></details>
-                          </td>
+                          <td><details className="repository-details"><summary>{t("console.aliases")}</summary><code>{repository.id}</code><ul>{repository.aliases.map((alias) => <li key={alias}>{alias}</li>)}</ul></details></td>
                         </tr>
                       ))}
                     </tbody>
@@ -1311,7 +1362,7 @@ function Console({ connect, refreshGap, session, onSession, onSignedOut }: { con
                           <tr key={item.id}>
                             <th scope="row">{item.name}</th>
                             <td>
-                              {item.host} · {item.client} · {item.state}<br />{item.branch}
+                              {item.host} · {item.client} · {consoleLabel("session", item.state, t)}<br />{item.branch}
                             </td>
                             <td>{repositoryName(overview, item.repository_id, t)}</td>
                             <td><SessionActivity agent={item} /></td>

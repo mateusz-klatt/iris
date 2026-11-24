@@ -2,11 +2,13 @@ package mcpserver
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"reflect"
 	"strings"
@@ -16,6 +18,7 @@ import (
 	"time"
 
 	"github.com/mateusz-klatt/iris/internal/binding"
+	"github.com/mateusz-klatt/iris/internal/hook"
 	"github.com/mateusz-klatt/iris/internal/hub"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 	"github.com/mateusz-klatt/iris/internal/store"
@@ -220,6 +223,76 @@ func TestCachedBindingsExplainLossAndKeepTheirHeartbeatProof(t *testing.T) {
 			defer mu.Unlock()
 			if len(binds) != 3 || binds[1]["execution"] != "ex" || binds[2]["execution"] != "ex" {
 				t.Fatalf("a cached binding was not refreshed and retried by Execution: %+v", binds)
+			}
+		})
+	}
+}
+
+func TestWhoamiHonorsAnEndRecordedAfterBinding(t *testing.T) {
+	for _, phase := range []string{"before heartbeat", "during heartbeat"} {
+		t.Run(phase, func(t *testing.T) {
+			token := filepath.Join(t.TempDir(), "hub.token")
+			proof := hook.NewSessions(token)
+			if err := os.MkdirAll(proof.Dir(), 0o700); err != nil {
+				t.Fatal(err)
+			}
+			hash := sha256.Sum256([]byte("claude\x00s"))
+			marker := filepath.Join(proof.Dir(), fmt.Sprintf("%x.ended", hash[:16]))
+			markEnded := func() {
+				if err := os.WriteFile(marker, []byte("3\n"), 0o600); err != nil {
+					t.Errorf("record SessionEnd: %v", err)
+				}
+			}
+			var beats atomic.Int64
+			handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/v1/bind":
+					_, _ = w.Write([]byte(`{"execution_id":"ex","generation":3,"repository_id":"rp","session_id":"s"}`))
+				case "/v1/executions/ex/heartbeat":
+					beats.Add(1)
+					if phase == "during heartbeat" {
+						markEnded()
+					}
+					_, _ = w.Write([]byte(`{"lease_ms":60000}`))
+				default:
+					t.Errorf("unexpected hub request: %s", r.URL.Path)
+					w.WriteHeader(http.StatusNotFound)
+				}
+			})
+			session, resolver := lostSession(t, handler, "claude", map[string]string{"CLAUDE_CODE_SESSION_ID": "s"})
+			var afterBind sync.Once
+			resolver.Recall = func(client, session string) (int, int, error) {
+				generation, ended, err := proof.RecallBindingGeneration(client, session)
+				if phase == "before heartbeat" {
+					afterBind.Do(markEnded)
+				}
+				return generation, ended, err
+			}
+			resolver.ObserveBindingRefusal = proof.ObserveBindingRefusal
+			callLost(t, session, "whoami", nil, nil, nil)
+			var want int64
+			if phase == "during heartbeat" {
+				want = 1
+			}
+			if beats.Load() != want || !resolver.Lost() {
+				t.Fatalf("whoami sent %d heartbeats, want %d, binding lost = %t", beats.Load(), want, resolver.Lost())
+			}
+			deadline := time.Now().Add(time.Second)
+			for {
+				entries, err := hook.ReadRecentObservations(token, 10)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if len(entries) > 0 {
+					if len(entries) != 1 || !entries[0].Observed() || !strings.Contains(entries[0].Error, marker) {
+						t.Fatalf("doctor observations = %+v, want %s", entries, marker)
+					}
+					break
+				}
+				if time.Now().After(deadline) {
+					t.Fatalf("doctor did not report %s", marker)
+				}
+				time.Sleep(time.Millisecond)
 			}
 		})
 	}

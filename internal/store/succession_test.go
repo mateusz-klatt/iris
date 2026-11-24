@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"testing"
 	"time"
@@ -124,42 +125,6 @@ func TestSucceedRecoveryBoundaryAndSuccessorStallCredit(t *testing.T) {
 	}
 }
 
-func TestSucceedPreservesWorktreeScopedAutomaticClaims(t *testing.T) {
-	s, clock, _ := testStore(t)
-	registration := Request{
-		Client: "codex", Host: "host", SessionID: "successor", Source: "hook",
-		Cwd: "/repo/wt1", Worktree: "/repo/wt1", WorktreeID: "dev:1", RemoteURL: scopeRemote, RootCommit: "root", Branch: "main",
-	}
-	req, previous := successionFixture(t, s, clock, registration)
-	repo := previous["repository_id"].(string)
-	setScope(t, s, repo, "worktree")
-	holder, _ := scopeSession(t, s, "host", "holder", "/repo/wt2", "dev:2", "other")
-	call(t, s, "touch", touchRequest(holder, "held", "edit.go", "shell.go"))
-
-	succeeded := call(t, s, "succeed", req)
-	exec := Request{ExecutionID: succeeded["execution_id"].(string), Generation: succeeded["generation"].(int64)}
-	edited := call(t, s, "touch", touchRequest(exec, "edit", "edit.go"))
-	granted := edited["granted"].([]string)
-	advisories, _ := edited["advisories"].([]map[string]any)
-	if edited["action"] != "allow" || len(granted) != 1 || granted[0] != "edit.go" || len(advisories) != 1 {
-		t.Errorf("successor edit did not claim a cross-worktree overlap with an advisory: %v", edited)
-	}
-
-	registration.Generation = exec.Generation
-	registration.Kind, registration.Status = "before", map[string]string{}
-	before := call(t, s, "reconcile", registration)
-	if session := before["session"].(map[string]any); session["execution_id"] != exec.ExecutionID {
-		t.Fatalf("shell hook bound to a different Execution: %v", session)
-	}
-	registration.Kind, registration.Status = "after", map[string]string{"shell.go": " M"}
-	reconciled := call(t, s, "reconcile", registration)
-	claimed := reconciled["claimed"].([]string)
-	advisories, _ = reconciled["advisories"].([]map[string]any)
-	if len(claimed) != 1 || claimed[0] != "shell.go" || len(advisories) != 1 || len(reconciled["conflicts"].([]map[string]any)) != 0 {
-		t.Errorf("successor shell hook did not claim a cross-worktree overlap with an advisory: %v", reconciled)
-	}
-}
-
 func TestSucceedValidatesRequestsWithoutMutation(t *testing.T) {
 	s, clock, _ := testStore(t)
 	base, _ := successionFixture(t, s, clock, Request{Client: "codex", Host: "host", SessionID: "S", Cwd: "/repo/w", Worktree: "/repo/w"})
@@ -172,6 +137,7 @@ func TestSucceedValidatesRequestsWithoutMutation(t *testing.T) {
 		{"session", func(r *Request) { r.SessionID = "" }},
 		{"zero generation", func(r *Request) { r.PriorGeneration = 0 }},
 		{"negative generation", func(r *Request) { r.PriorGeneration = -1 }},
+		{"negative ended floor", func(r *Request) { r.EndedThrough = -1 }},
 		{"execution", func(r *Request) { r.PriorExecutionID = "" }},
 		{"missing source", func(r *Request) { r.Source = "" }},
 		{"mcp source", func(r *Request) { r.Source = "mcp" }},
@@ -189,6 +155,42 @@ func TestSucceedValidatesRequestsWithoutMutation(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestSucceedEndedThroughFloorAndVeto(t *testing.T) {
+	for _, floor := range []int64{1, 2} {
+		t.Run(fmt.Sprintf("prior at or below G%d", floor), func(t *testing.T) {
+			s, clock, _ := testStore(t)
+			req, _ := successionFixture(t, s, clock, Request{Client: "codex", Host: "host", SessionID: "S", Cwd: "/repo/w", Worktree: "/repo/w"})
+			req.EndedThrough = floor
+			before := databaseState(t, s)
+			out, err := s.Call(t.Context(), "succeed", req)
+			if out != nil || databaseState(t, s) != before {
+				t.Fatalf("ended succession returned authority or changed state: %+v, %v", out, err)
+			}
+			assertRegistrationLost(t, err, 1)
+			var lost *Error
+			if !errors.As(err, &lost) {
+				t.Fatal("strict succession refusal lost its typed error")
+			}
+			details, _ := lost.Details.(map[string]any)
+			if details["reason"] != "ended_through" {
+				t.Fatalf("strict succession reason = %v", details)
+			}
+		})
+	}
+	t.Run("prior above the floor", func(t *testing.T) {
+		s, clock, _ := testStore(t)
+		registration := Request{Client: "codex", Host: "host", SessionID: "S", Cwd: "/repo/w", Worktree: "/repo/w", Source: "hook"}
+		first := call(t, s, "sessions", registration)
+		call(t, s, "end", Request{ExecutionID: first["execution_id"].(string), Generation: 1})
+		req, _ := successionFixture(t, s, clock, registration)
+		req.EndedThrough = 1
+		out := call(t, s, "succeed", req)
+		if out["generation"] != int64(3) {
+			t.Fatalf("succession above the end floor: %+v", out)
+		}
+	})
 }
 
 func TestSucceedRefusesMissingStaleTerminalAndHookUnseenHistory(t *testing.T) {

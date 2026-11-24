@@ -408,8 +408,17 @@ func (h *Hub) consoleOperation(w http.ResponseWriter, r *http.Request, p store.P
 	op := map[string]string{"GET overview": "ui_overview", "GET deliveries": "ui_deliveries", "GET threads": "ui_threads", "POST messages": "ui_messages", "GET doctor": "ui_doctor_get"}[r.Method+" "+strings.Join(parts, "/")]
 	key := ""
 	fence := int64(0)
+	// v0.1.13 acknowledges only POST /v1/ui/threads/{id}/read, and its decoder ignores unknown
+	// JSON fields, so a body watermark does not stop a whole-thread read. A message id in the
+	// path is a route that hub does not have: it answers unknown console route and stores nothing.
+	pathWatermark := ""
 	if len(parts) == 2 && parts[0] == "threads" && r.Method == http.MethodGet {
 		op, key = "ui_thread", parts[1]
+	}
+	// An empty message id is not this route: the new route always takes its watermark from the
+	// path, never from a body field that an older client might also send.
+	if len(parts) == 4 && parts[0] == "threads" && parts[2] == "read" && parts[3] != "" && r.Method == http.MethodPost {
+		op, key, pathWatermark = "ui_read", parts[1], parts[3]
 	}
 	if len(parts) == 3 {
 		switch {
@@ -468,6 +477,9 @@ func (h *Hub) consoleOperation(w http.ResponseWriter, r *http.Request, p store.P
 	req.Q, req.Agent, req.Before = r.URL.Query().Get("q"), r.URL.Query().Get("agent"), r.URL.Query().Get("before")
 	if key != "" {
 		req.Key = key
+	}
+	if pathWatermark != "" {
+		req.LastMessageID = pathWatermark
 	}
 	req.Fence = fence
 	out, err := h.store.CallConsole(r.Context(), p, op, req)

@@ -46,6 +46,10 @@ type Report struct {
 	Host      string         `json:"host"`
 	CheckedAt time.Time      `json:"checked_at"`
 	Clients   []ClientReport `json:"clients"`
+	// CurrentDamagedEndMarkers counts the local scan's findings without their paths or clients.
+	// It is a lower bound when EndMarkerScanIncomplete is true.
+	CurrentDamagedEndMarkers int  `json:"current_damaged_end_markers,omitempty"`
+	EndMarkerScanIncomplete  bool `json:"end_marker_scan_incomplete,omitempty"`
 }
 
 // ClientReport is one client's doctor row.
@@ -65,6 +69,8 @@ type ClientReport struct {
 	// localProofDamage names local generation files for recovery, including an .ended
 	// marker a refusal named. The report sent to the hub has only the observation kind and count.
 	localProofDamage string
+	// currentProofDamage is local-only evidence that a damaged end marker still blocks registration.
+	currentProofDamage bool
 }
 
 // Result is the human-readable outcome plus the stored report.
@@ -89,11 +95,6 @@ type Result struct {
 	// Case warns when the repository doctor ran in is case-sensitive at the hub while this
 	// checkout folds case. Empty means there is nothing to warn about, or nothing known.
 	Case string
-	// ClaimScope is claim.auto_scope for the checkout doctor examined (ADR 037).
-	// Empty when this directory is not a git repository, so no policy is in force.
-	// The text is repository, worktree or unknown. Unknown means the hub did not
-	// report the setting; doctor does not assume either value.
-	ClaimScope string
 	// LineEndings warns when the repository doctor ran in holds CRLF files that this git reads
 	// as modified, which keeps the shell reconcile past its budget. Empty means nothing to warn
 	// about, or nothing known.
@@ -110,6 +111,10 @@ type Result struct {
 	// fallbackTokenFile is the default token path when client.json relocated token_file to
 	// another directory, so a Bundle also reads entries logged during slow client.json reads.
 	fallbackTokenFile string
+	// Current marker paths and scan errors are local only. The report carries counts and completion.
+	localMarkerDamage   string
+	currentMarkerDamage bool
+	markerScanNote      string
 }
 
 // Options configures one offline doctor run. RunLive is separate because it calls a model.
@@ -127,6 +132,9 @@ type Options struct {
 	Self string
 	// Host is this machine's name as its hooks give it to the hub. Empty means os.Hostname.
 	Host string
+	// Package-private seams let doctor tests exercise the scan budgets deterministically.
+	markerScanEntryLimit int
+	markerScanTimeout    time.Duration
 }
 
 func (o Options) self() string {
@@ -150,6 +158,17 @@ func (o Options) host() string {
 	}
 	host, _ := os.Hostname() // what iris hook sends; an error leaves "", and the hub then says nothing
 	return host
+}
+
+func (o Options) endMarkerScanConfig() endMarkerScanConfig {
+	config := defaultEndMarkerScanConfig()
+	if o.markerScanEntryLimit != 0 {
+		config.entryLimit = o.markerScanEntryLimit
+	}
+	if o.markerScanTimeout != 0 {
+		config.timeout = o.markerScanTimeout
+	}
+	return config
 }
 
 // versionTimeout is long enough for a normal client and short enough to keep doctor usable.
@@ -193,14 +212,13 @@ func Run(ctx context.Context, opt Options) (Result, error) {
 	for _, c := range integrate.All() {
 		res.Report.Clients = append(res.Report.Clients, checkClient(ctx, opt, c))
 	}
-	if err := applyFailuresFrom(&res, tokenFile, fallbackTokenFile, opt.Now()); err != nil {
+	if err := applyFailuresFrom(ctx, &res, tokenFile, fallbackTokenFile, opt.Now(), opt.endMarkerScanConfig()); err != nil {
 		res.HubDetail = joinDetail(res.HubDetail, "failure log: "+err.Error())
 	}
 	for i := range res.Report.Clients {
 		applyVersion(&res.Report.Clients[i])
 	}
 	res.Guard = guardLine(ctx, opt.Dir)
-	res.ClaimScope = claimScopeLine(ctx, hubURL, token, opt.host(), opt.Dir, opt.HTTP)
 	res.LineEndings = lineEndingsLine(ctx, opt.Dir)
 	res.Scope = scopeReport(tokenFile, opt.Now())
 	res.Wake = wakeReport(opt.Layout, tokenFile, opt.Now())
@@ -244,13 +262,14 @@ func guardLine(ctx context.Context, dir string) string {
 	return state + " (" + path + "); run `iris guard install`"
 }
 
-// ExitCode is 1 when the hub or token is unusable, or any client is silent or slow.
+// ExitCode is 1 when the hub or token is unusable, any client is silent or slow, a damaged
+// end marker still blocks registration, or the current marker scan is incomplete.
 func (r Result) ExitCode() int {
-	if !r.HubUp || !r.TokenOK {
+	if !r.HubUp || !r.TokenOK || r.currentMarkerDamage || r.Report.EndMarkerScanIncomplete {
 		return 1
 	}
 	for _, c := range r.Report.Clients {
-		if c.Status == StatusSilent || c.Status == StatusSlow {
+		if c.Status == StatusSilent || c.Status == StatusSlow || c.currentProofDamage {
 			return 1
 		}
 	}
@@ -302,11 +321,14 @@ func (r Result) Format() string {
 		}
 		b.WriteByte('\n')
 	}
+	if r.localMarkerDamage != "" {
+		fmt.Fprintf(&b, "local sessions without a client observation\t%s\t%s\n", r.localMarkerDamage, currentEndMarkerDiagnostic)
+	}
+	if r.markerScanNote != "" {
+		fmt.Fprintf(&b, "local sessions: %s\n", r.markerScanNote)
+	}
 	if r.Case != "" {
 		fmt.Fprintf(&b, "case policy: %s\n", r.Case)
-	}
-	if r.ClaimScope != "" {
-		fmt.Fprintf(&b, "claim auto scope: %s\n", r.ClaimScope)
 	}
 	if r.Guard != "" {
 		fmt.Fprintf(&b, "pre-commit guard: %s\n", r.Guard)
@@ -454,10 +476,12 @@ const slowLimit = 10
 // row keeps its status and says how many were skipped and what that may delay (ADR 017). An entry
 // proves that a hook ran, so it counts even when doctor found no configuration.
 func applyFailures(res *Result, tokenFile string, now time.Time) error {
-	return applyFailuresFrom(res, tokenFile, "", now)
+	return applyFailuresFrom(context.Background(), res, tokenFile, "", now, defaultEndMarkerScanConfig())
 }
 
-func applyFailuresFrom(res *Result, tokenFile, fallbackTokenFile string, now time.Time) error {
+const currentEndMarkerDiagnostic = "this damaged end marker prevents this session from registering, so it has no hub binding, no mail delivery and no claims, while hooks still allow edits and commands. Stop that session's client, hooks, MCP shim and watch. Verify the configured hub and that session's history. Repair the marker with the verified ended generation (a single decimal), or archive it (move it aside), then restart the client"
+
+func applyFailuresFrom(ctx context.Context, res *Result, tokenFile, fallbackTokenFile string, now time.Time, scanConfig endMarkerScanConfig) error {
 	if strings.TrimSpace(tokenFile) == "" {
 		return nil
 	}
@@ -469,8 +493,16 @@ func applyFailuresFrom(res *Result, tokenFile, fallbackTokenFile string, now tim
 	skipped := map[string]int{}
 	observed := map[string]map[string]int{}
 	proofDamage := map[string]map[string]int{}
+	markerDamage := map[string]map[string]string{}
+	markerClients := map[string]string{}
+	otherDamage := map[string]bool{}
 	for _, entry := range entries {
 		name := integrate.Canonical(entry.Client)
+		if name != "" && entry.Observed() {
+			if kind, path, ok := observedLocalPath(entry.Error); ok && kind == hook.DamagedGenerationProof && strings.HasSuffix(path, ".ended") {
+				markerClients[path] = name
+			}
+		}
 		if name == "" || now.Sub(entry.Time) > failureWindow {
 			continue
 		}
@@ -490,19 +522,65 @@ func applyFailuresFrom(res *Result, tokenFile, fallbackTokenFile string, now tim
 			note := entry.Error
 			if kind, path, ok := observedLocalPath(note); ok {
 				note = kind
-				if strings.IndexFunc(path, func(r rune) bool { return !unicode.IsPrint(r) }) >= 0 {
-					path = strconv.Quote(path)
-				}
+				display := localObservationDisplay(kind, path)
 				if proofDamage[name] == nil {
 					proofDamage[name] = map[string]int{}
 				}
-				proofDamage[name][kind+" at "+path]++
+				proofDamage[name][display]++
+				if kind == hook.DamagedGenerationProof {
+					if strings.HasSuffix(path, ".ended") {
+						if markerDamage[name] == nil {
+							markerDamage[name] = map[string]string{}
+						}
+						markerDamage[name][display] = path
+					} else {
+						otherDamage[name] = true
+					}
+				}
 			}
 			observed[name][note]++
 			continue
 		}
 		broken[name] = append(broken[name], entry)
 	}
+
+	observedSet := map[string]bool{}
+	for _, markers := range markerDamage {
+		for _, path := range markers {
+			observedSet[path] = true
+		}
+	}
+	observedPaths := make([]string, 0, len(observedSet))
+	for path := range observedSet {
+		observedPaths = append(observedPaths, path)
+	}
+	sort.Strings(observedPaths)
+	scan := scanDamagedEndMarkers(ctx, tokenFile, fallbackTokenFile, observedPaths, scanConfig)
+	res.markerScanNote = scan.note()
+	res.Report.CurrentDamagedEndMarkers = len(scan.damaged)
+	res.Report.EndMarkerScanIncomplete = scan.incomplete != ""
+	localDamage := map[string]int{}
+	for _, path := range scan.damaged {
+		display := localObservationDisplay(hook.DamagedGenerationProof, path)
+		name := markerClients[path]
+		if name == "" {
+			localDamage[display+" (still damaged)"]++
+			continue
+		}
+		if proofDamage[name] == nil {
+			proofDamage[name] = map[string]int{}
+		}
+		if proofDamage[name][display] == 0 {
+			proofDamage[name][display] = 1
+		}
+		if markerDamage[name] == nil {
+			markerDamage[name] = map[string]string{}
+		}
+		markerDamage[name][display] = path
+	}
+	res.currentMarkerDamage = len(localDamage) > 0
+	res.localMarkerDamage = observedText(localDamage)
+
 	for i := range res.Report.Clients {
 		row := &res.Report.Clients[i]
 		if row.readinessStatus == "" {
@@ -525,10 +603,34 @@ func applyFailuresFrom(res *Result, tokenFile, fallbackTokenFile string, now tim
 		if seen := observed[row.Client]; len(seen) > 0 {
 			row.Detail = joinDetail(row.Detail, "observed in 24 h: "+observedText(seen))
 			if seen[hook.RestoreFloorRefused]+seen[hook.RestoreFloorHubTooOld] > 0 {
-				row.Detail = joinDetail(row.Detail, "the hook kept its generation proof and left the session unregistered. Edits may have gone unclaimed")
+				row.Detail = joinDetail(row.Detail, "the hook kept its generation proof and left the session unregistered. Edits may have gone unclaimed. Verify the configured hub and its restore history, or start a new client session")
+			}
+			if seen[hook.EndedGenerationRefused]+seen[hook.BindingGenerationRefused] > 0 || otherDamage[row.Client] {
+				row.Detail = joinDetail(row.Detail, "start a new client session to obtain fresh proof. To resume this session, verify the configured hub and its session history before archiving any named file. Keep the end marker while it protects against a backup of the ended session")
 			}
 			if row.Client == integrate.Claude && (seen[binding.ClientMismatchObservation(integrate.Claude, integrate.Cursor)] > 0 || seen["cross-load: ran in a session of cursor"] > 0) {
 				row.Detail = joinDetail(row.Detail, cursorClaudeCrossLoadWarning)
+			}
+		}
+		if markers := markerDamage[row.Client]; len(markers) > 0 {
+			unknown := false
+			for display, path := range markers {
+				state, ok := scan.states[path]
+				if !ok {
+					state = "not rechecked"
+					unknown = true
+				}
+				row.currentProofDamage = row.currentProofDamage || state == "still damaged"
+				proofDamage[row.Client][display+" ("+state+")"] = proofDamage[row.Client][display]
+				delete(proofDamage[row.Client], display)
+			}
+			switch {
+			case row.currentProofDamage:
+				row.Detail = joinDetail(row.Detail, currentEndMarkerDiagnostic)
+			case unknown:
+				row.Detail = joinDetail(row.Detail, "the current state of an observed damaged end marker is unknown because the scan is incomplete")
+			default:
+				row.Detail = joinDetail(row.Detail, "the damaged end marker has been repaired or archived since the observation and no longer blocks registration")
 			}
 		}
 		if paths := proofDamage[row.Client]; len(paths) > 0 {
@@ -537,6 +639,14 @@ func applyFailuresFrom(res *Result, tokenFile, fallbackTokenFile string, now tim
 		row.unusable = observed[row.Client][binding.ObservedUnusable] > 0
 	}
 	return errors.Join(failErr, obsErr)
+}
+
+func localObservationDisplay(kind, path string) string {
+	displayPath := path
+	if strings.IndexFunc(path, func(r rune) bool { return !unicode.IsPrint(r) }) >= 0 {
+		displayPath = strconv.Quote(path)
+	}
+	return kind + " at " + displayPath
 }
 
 // unusableHint says what doctor's own evidence makes of calls that named a session without a
@@ -738,8 +848,22 @@ type hubProbe struct {
 	detail, tokenDetail string
 }
 
-// hubRequest sends one call. An empty token sends no credential.
+// hubRequest sends one call. An empty token sends no credential; the status
+// probe uses that. A non-empty token is a bearer, and this is the only place
+// doctor attaches one: the agents probe, the stored report, last-hook times
+// and the case warning. The target must pass
+// hubclient.ValidateURL first, the same rule as the probe (https, or http only
+// for the literal hosts 127.0.0.1 and ::1). Anything else is refused before
+// the header is set and before the client runs. The check cannot see a
+// redirect a transport might apply later; NoRedirects refuses every redirect.
+// It cannot catch a bearer attached anywhere else, and a refusal does not
+// recall a token that has already left the machine.
 func hubRequest(ctx context.Context, method, target, token string, body io.Reader, hc *http.Client) (*http.Response, error) {
+	if token != "" {
+		if err := hubclient.ValidateURL(target); err != nil {
+			return nil, err
+		}
+	}
 	req, err := http.NewRequestWithContext(ctx, method, target, body)
 	if err != nil {
 		return nil, err
@@ -932,47 +1056,6 @@ func caseLine(ctx context.Context, base, token, host, dir string, hc *http.Clien
 	return "this repository is case-sensitive at the hub, but this checkout folds case (core.ignorecase), so a claim on a.go does not stop an edit of A.GO here"
 }
 
-// claimScopeLine asks the hub which claim.auto_scope is in force for dir.
-// A directory that is not a git checkout has none (ADR 034). A hub that cannot
-// report the setting, including one from before ADR 037, is unknown: doctor
-// does not treat silence as repository or as worktree.
-func claimScopeLine(ctx context.Context, base, token, host, dir string, hc *http.Client) string {
-	if dir == "" {
-		dir = "."
-	}
-	repo, err := gitinfo.Find(dir)
-	if err != nil {
-		return ""
-	}
-	body, _ := json.Marshal(hubclient.CheckRequest{CommonDir: repo.CommonDir, Host: host, Worktree: repo.Worktree, WorktreeID: repo.WorktreeID, RemoteURL: repo.RemoteURL, RootCommit: repo.RootCommit, Paths: []string{}})
-	res, err := hubRequest(ctx, http.MethodPost, strings.TrimRight(base, "/")+"/v1/guard/check", token, bytes.NewReader(body), hc)
-	if err != nil {
-		return claimScopeText("")
-	}
-	defer func() { _ = res.Body.Close() }()
-	var out struct {
-		Scope *string `json:"claim_auto_scope"`
-	}
-	if res.StatusCode != http.StatusOK || json.NewDecoder(res.Body).Decode(&out) != nil || out.Scope == nil {
-		return claimScopeText("")
-	}
-	return claimScopeText(*out.Scope)
-}
-
-// claimScopeText is the human line after "claim auto scope: ".
-// worktree says what the opt-in means and what it cannot do. It is advice about
-// the policy, not a claim that Iris still prevents those collisions.
-func claimScopeText(scope string) string {
-	switch scope {
-	case "repository":
-		return "repository. Automatic claims apply across every worktree and branch of this repository. An explicit claim does too."
-	case "worktree":
-		return "worktree. Cross-worktree automatic overlaps are advisory: the edit is allowed, and the overlap can meet immediately in a shared filesystem tree or surface at rebase or merge. Explicit claims stay repository-wide. A claim with no worktree key stays repository-wide. An advisory is information, not enforcement: it does not make concurrent edits safe, resolve their contents or prove that the work is disjoint. The same directory seen from two hosts gets two keys, so those automatic claims become advisory. This covers every worktree in the repository, including a human's or an unrelated agent's, not only one coordinator's delegates."
-	default:
-		return "unknown. The hub did not report claim.auto_scope for this checkout, so this does not assume repository or worktree."
-	}
-}
-
 // lineEndingsLine names a worktree where this git reads many tracked files as modified only
 // because they hold CRLF and git stores LF, as when a Windows checkout written with
 // core.autocrlf=true is used from WSL. Every git status there re-reads those files, so the
@@ -1010,7 +1093,7 @@ const crlfFloor = 20
 // The kind is what a stored report may count. The path stays on the machine that holds the file.
 // The longer refusal is listed first so it is not read as the shorter one.
 func observedLocalPath(note string) (kind, path string, ok bool) {
-	for _, kind := range []string{hook.RestoreFloorHubTooOld, hook.DamagedGenerationProof, hook.RestoreFloorRefused} {
+	for _, kind := range []string{hook.RestoreFloorHubTooOld, hook.DamagedGenerationProof, hook.RestoreFloorRefused, hook.EndedGenerationRefused, hook.BindingGenerationRefused} {
 		if path, ok := strings.CutPrefix(note, kind+" at "); ok {
 			return kind, path, true
 		}

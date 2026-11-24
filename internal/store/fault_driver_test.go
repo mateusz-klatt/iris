@@ -122,7 +122,7 @@ func installFaultDriver(t *testing.T, s *Store, file string) *storageFault {
 }
 
 func TestStorageFailuresRollBackAndRetry(t *testing.T) {
-	for _, op := range []string{"sessions", "sessions-process-history", "succeed", "session-resume", "session-resume-new-process", "session-resume-learns-root", "session-remote-learns-root", "session-checkout-continuity", "session-checkout-rewrite", "session-isolated", "heartbeat-recovery", "session-new-slot", "session-learns-root", "touch-cached", "touch-conflict", "claim-conflict", "check-known", "policy", "bind", "heartbeat", "end", "end-handover", "touch", "claim", "claim-reuse", "claim-cached", "release", "claims", "messages", "message-repo", "contact", "message-cached", "inbox", "ack", "ack-handled", "inbox-receipt", "receipt-sweep", "receipts", "read_body", "agents", "agents-all", "hooks_seen", "events", "events-reset", "status", "validate", "monitor_cursor", "check", "check-alias", "session-alias", "reconcile", "reconcile-release", "reconcile-session", "reconcile-scoped", "reconcile-scoped-compare", "reconcile-full-after-scoped", "reconcile-shared", "ui_overview", "ui_deliveries", "ui_threads", "ui_threads-human", "ui_thread", "ui_read", "ui_messages", "ui_messages-existing-human", "ui_messages-cached", "ui_messages-merged-cached", "ui_messages-retired-cached", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_events", "expire", "sweep", "forget", "forget-repository", "history", "thread", "read_message_body", "merge", "merge-dry-run", "unalias", "unalias-dry-run", "touch-files", "touch-files-known", "touch-files-conflict", "touch-files-cached", "release-foreign", "reconcile-foreign", "claim-files", "claim-files-reuse", "sessions-outside", "sessions-outside-known", "merge-outside", "merge-outside-dry-run", "claim-scope", "touch-worktree", "claim-worktree-fold"} {
+	for _, op := range []string{"sessions", "sessions-process-history", "succeed", "session-resume", "session-resume-new-process", "session-resume-learns-root", "session-remote-learns-root", "session-checkout-continuity", "session-checkout-rewrite", "session-isolated", "heartbeat-recovery", "session-new-slot", "session-learns-root", "touch-cached", "touch-conflict", "claim-conflict", "check-known", "policy", "bind", "heartbeat", "end", "end-handover", "touch", "claim", "claim-reuse", "claim-cached", "release", "claims", "messages", "message-repo", "contact", "message-cached", "inbox", "ack", "ack-handled", "inbox-receipt", "receipt-sweep", "receipts", "read_body", "agents", "agents-all", "hooks_seen", "events", "events-reset", "status", "validate", "monitor_cursor", "check", "check-alias", "session-alias", "reconcile", "reconcile-release", "reconcile-session", "reconcile-scoped", "reconcile-scoped-compare", "reconcile-full-after-scoped", "reconcile-shared", "ui_overview", "ui_deliveries", "ui_threads", "ui_threads-human", "ui_thread", "ui_read", "ui_messages", "ui_messages-existing-human", "ui_messages-cached", "ui_messages-merged-cached", "ui_messages-retired-cached", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_events", "expire", "sweep", "forget", "forget-repository", "history", "thread", "read_message_body", "merge", "merge-dry-run", "unalias", "unalias-dry-run", "touch-files", "touch-files-known", "touch-files-conflict", "touch-files-cached", "release-foreign", "reconcile-foreign", "claim-files", "claim-files-reuse", "sessions-outside", "sessions-outside-known", "merge-outside", "merge-outside-dry-run"} {
 		t.Run(op, func(t *testing.T) {
 			s, clock, file := testStore(t)
 			a, ar := session(t, s, 1)
@@ -212,25 +212,6 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 				// Use an independent namespace whose policy is not pinned by claims.
 				independent := call(t, s, "sessions", Request{Client: "codex", Host: "policy", SessionID: "policy", Cwd: "/policy", RemoteURL: "https://policy.example/policy.git"})
 				r.RepositoryID = independent["repository_id"].(string)
-			case "claim-scope":
-				route = "policy"
-				r = Request{RepositoryID: repo, ClaimAutoScope: "worktree"}
-			case "touch-worktree":
-				// An automatic overlap of two known, different worktrees is allowed.
-				// A fault while that grant is written must not publish half of it.
-				route = "touch"
-				call(t, s, "policy", Request{RepositoryID: repo, ClaimAutoScope: "worktree"})
-				holder := call(t, s, "sessions", Request{Client: "codex", Host: "host", SessionID: "wt-holder", Cwd: "/repo/wt-h", Worktree: "/repo/wt-h", WorktreeID: "dev:holder", RemoteURL: "https://example.com/team/project.git", RootCommit: "root", Branch: "holder", Source: "hook"})
-				incoming := call(t, s, "sessions", Request{Client: "codex", Host: "host", SessionID: "wt-incoming", Cwd: "/repo/wt-i", Worktree: "/repo/wt-i", WorktreeID: "dev:incoming", RemoteURL: "https://example.com/team/project.git", RootCommit: "root", Branch: "incoming", Source: "hook"})
-				call(t, s, "touch", touchRequest(Request{ExecutionID: holder["execution_id"].(string), Generation: holder["generation"].(int64)}, "wt-held", "overlap.go"))
-				r = touchRequest(Request{ExecutionID: incoming["execution_id"].(string), Generation: incoming["generation"].(int64)}, "wt-take", "overlap.go")
-			case "claim-worktree-fold":
-				// A new explicit claim revokes this Execution's automatic sibling in
-				// another worktree. The revocation and its release wake commit together.
-				route = "claim"
-				call(t, s, "policy", Request{RepositoryID: repo, ClaimAutoScope: "worktree"})
-				call(t, s, "touch_files", filesTouch(a, "fold-auto", ClaimGroup{Worktree: "/repo/wt2", WorktreeID: "dev:fold", RemoteURL: "https://example.com/team/project.git", RootCommit: "root", Branch: "other", Paths: []string{"fold.go"}}))
-				r = claimRequest(a, "fold-explicit", "fold.go", "exact")
 			case "touch-files", "touch-files-known", "touch-files-conflict", "touch-files-cached", "release-foreign":
 				// A grouped touch of a's own checkout and of a submodule (ADR 033), which a session
 				// of its own registers first, holds a path in, or which is new to the hub.
@@ -267,7 +248,6 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 					grouped.Paths = []string{"src/b.ts"}
 					call(t, s, "touch_files", filesTouch(a, "fe-first", grouped))
 				}
-				sub.WorktreeID = "dev:fe-claim"
 				r = claimRequest(a, "planned-"+op, "fe/src/b.ts", "exact")
 				r.Checkout = &sub
 			case "reconcile-foreign":
@@ -449,7 +429,8 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 				// The operator reads a thread with human mail in it.
 				human := mail
 				human.Key, human.To = "to-human", []string{"human"}
-				r = Request{Key: call(t, s, "messages", human)["thread_id"].(string)}
+				sentHuman := call(t, s, "messages", human)
+				r = Request{Key: sentHuman["thread_id"].(string), LastMessageID: sentHuman["message_id"].(string)}
 			case "ui_thread":
 				r.Key = sent["thread_id"].(string)
 			case "ui_deliveries":
@@ -535,7 +516,7 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 				call(t, s, "claim", claimRequest(otherRequest, "overlapping", "held", "exact"))
 				historySend(t, s, otherRequest, name, "merge-mail", "", "merge", "source mail survives")
 				call(t, s, "contact", Request{RepositoryID: otherID, Agent: otherAgent["name"].(string)})
-				if _, err := s.db.Exec("INSERT INTO Waiter(execution_id,repository_id,path_key,kind,expires_ms) VALUES(?,?,'waiting','exact',?)", otherRequest.ExecutionID, otherID, clock.Now().UnixMilli()+60000); err != nil {
+				if _, err := s.db.Exec("INSERT INTO Waiter VALUES(?,?,'waiting','exact',?)", otherRequest.ExecutionID, otherID, clock.Now().UnixMilli()+60000); err != nil {
 					t.Fatal(err)
 				}
 				r = mergeRequest(otherID, repo, op == "merge-dry-run")
@@ -554,7 +535,7 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 				folderRequest := Request{ExecutionID: folder["execution_id"].(string), Generation: folder["generation"].(int64)}
 				historySend(t, s, folderRequest, name, "folder-mail", "", "folder", "folder mail survives")
 				call(t, s, "end", folderRequest)
-				if _, err := s.db.Exec("INSERT INTO Waiter(execution_id,repository_id,path_key,kind,expires_ms) VALUES(?,?,'waiting','exact',0)", folderRequest.ExecutionID, folder["repository_id"]); err != nil {
+				if _, err := s.db.Exec("INSERT INTO Waiter VALUES(?,?,'waiting','exact',0)", folderRequest.ExecutionID, folder["repository_id"]); err != nil {
 					t.Fatal(err)
 				}
 				if _, err := s.db.Exec("INSERT INTO ShellSnapshot VALUES(?,'{}')", folderRequest.ExecutionID); err != nil {

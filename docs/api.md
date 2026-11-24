@@ -41,8 +41,8 @@ Codes: `unauthorized`, `bad_request`, `not_found`, `conflict`, `key_reused`, `un
 ```
 
 Registration `source` is exactly `hook`, `mcp`, `shim` or `watch`. An empty or omitted source stays
-valid as a legacy non-hook source; any other value gets `bad_request`. `retry_generation` must not
-be negative.
+valid as a legacy non-hook source; any other value gets `bad_request`. `retry_generation` and
+`ended_through` must not be negative.
 
 Response:
 
@@ -118,12 +118,15 @@ hub omits `highest_generation`, so an upgraded hook keeps its proof and skips th
 
 ```json
 {"client":"claude","session_id":"...","host":"...","source":"shim",
- "prior_generation":1,"prior_execution_id":"ex_...",
+ "prior_generation":1,"prior_execution_id":"ex_...","ended_through":0,
  "client_pid":123,"client_pid_start_ms":1793917887311}
 ```
 
 Both `prior_generation > 0` and non-empty `prior_execution_id` are required; missing or invalid
-request fields are `bad_request`. The route has no working-directory or git-discovery fields and
+request fields, including a negative `ended_through`, are `bad_request`. The shim sends its readable
+local end marker as `ended_through`. Prior proof at or below that floor is vetoed, the successor
+must be strictly above it, and this refusal carries `error.details.reason:"ended_through"`. The
+route has no working-directory or git-discovery fields and
 does not resolve a repository or mutate aliases. Its successful response has the registration
 shape, with `generation = prior_generation + 1`, the same Agent, repository (or outside-host
 context) and worktree claim scope, `lease_ms:60000`, and no inherited claims. The new Execution
@@ -160,6 +163,18 @@ history. Restore markers and `stream_id` rotation grant no authority. A backup a
 share the identical `(execution_id, generation)` history remain indistinguishable. These fields are self-declared within
 D13's host-token boundary: they provide attribution and accidental-race protection, not
 authentication against a malicious token holder.
+
+An unexpired local `.ended` marker for generation G is sent as `ended_through:G` on ordinary,
+outside-git and combined shell registration, including SessionStart. A generation-zero request
+also sends `retry_generation:G`, so an older hub that ignores `ended_through` keeps the inclusive
+safeguard. The strict floor requires retained history of at least G and an active or newly created
+Execution above G. The hub refuses an equal active generation before renewing it and a candidate
+at or below G before creating it. A terminal G still permits a normal G+1 successor. A strict-floor
+`lost` includes `error.details.reason:"ended_through"`; recovery refusals for later generations
+do not carry that reason. The hook re-checks the marker before remembering the response or making
+a separate follow-up call. A combined shell reconcile runs on the hub before the response, which
+an older hub can commit before the client discards a vetoed reply. An old hook that omits the floor
+cannot be protected server-side.
 
 A shim or `iris watch` that retains the binding reattaches by heartbeat: a heartbeat with the
 current generation does the same work during the recovery window and returns the same response.
@@ -347,14 +362,7 @@ server places an explicit claim's path.
 `POST /v1/claims/release` takes `{"execution_id":"...","generation":1,"fence":12}`, or `"all":true`. An optional `token` validates the complete stream/epoch fence returned
 by explicit claim creation. Generation and ownership are always checked.
 
-`GET /v1/claims?repository_id=...` lists live claims. Each row has `fence`, `path`, `kind`,
-`holder`, `origin`, `expires_at`, and the claim's own checkout as `worktree_path`, `branch` and
-`host` (ADR 037). An empty string means that fact was not recorded. A legacy row therefore shows
-an unknown location; the hub does not copy the holder's current checkout into it. `effective_scope`
-is `worktree` only when the repository's `claim.auto_scope` is `worktree`, the origin is `auto`
-and the claim's worktree key is set. Otherwise it is `repository`: an explicit claim stays
-repository-wide even with a display path, and so does a null-key claim. The key itself is not
-returned. The same fields are on each claim in `GET /v1/ui/overview`.
+`GET /v1/claims?repository_id=...` lists live claims.
 
 ## Messages
 
@@ -840,19 +848,13 @@ It is presentation metadata, not authorization supplied by the browser. Member
 queries remain scoped by current grants in the store transaction.
 
 ```json
-{"repositories":[{"id":"rp_...","name":"iris","aliases":["..."],"kind":"repository","claim_auto_scope":"repository"}],
+{"repositories":[{"id":"rp_...","name":"iris","aliases":["..."],"kind":"repository"}],
  "agents":[{"id":"ag_...","name":"...","client":"claude","host":"...","repository_id":"rp_...",
             "worktree":"...","branch":"main","state":"active","last_seen":"...","hook_seen":"...","watch_seen":"...","unread":0}],
  "claims":[{"fence":1,"repository_id":"rp_...","path":"...","kind":"exact","holder":"...",
-            "origin":"auto","expires_at":"...","worktree_path":"...","branch":"main","host":"...",
-            "effective_scope":"repository"}],
+            "origin":"auto","expires_at":"..."}],
  "human_unread":0}
 ```
-
-A repository's `claim_auto_scope` is `repository` or `worktree` (ADR 037). A host's context of
-sessions outside git (`kind` `outside`) omits it: no scope is in force there. Claim rows carry
-the fields described under `GET /v1/claims`. The console shows the policy and each claim's
-checkout. It does not change the setting; only the owner token does.
 
 Each agent's `last_seen`, `hook_seen` and `watch_seen` come from its latest Execution on the hub
 (`null` when never observed). The console's Fleet → Agents table shows these per-session liveness
@@ -903,25 +905,45 @@ the top. Mail can repeat a thread across pages in this way, but it never leaves 
 that names no thread is read as a millisecond timestamp and returns the threads whose last message
 is older.
 
-`GET /v1/ui/threads/{id}` returns the thread's messages:
+`GET /v1/ui/threads/{id}` returns the thread's messages and `high_water_message_id`, the
+visible message with the greatest Message `rowid`:
 
 ```json
-{"id":"ms_...","messages":[{"id":"ms_...","sender":"...","recipients":[{"name":"...",
-  "state":"acked"}],"subject":"...","body":"...","created_at":"..."}]}
+{"id":"ms_...","high_water_message_id":"ms_...","messages":[{"id":"ms_...","sender":"...",
+  "recipients":[{"name":"...","state":"acked"}],"subject":"...","body":"...","created_at":"..."}]}
 ```
 
-`POST /v1/ui/threads/{id}/read` takes `{"repository_id":"...","last_message_id":"ms_..."}` and
-acknowledges the human deliveries whose Message `rowid` is no greater than that message's
-`rowid`: the selected repository's deliveries, or every repository's when `repository_id` is
-empty. This insertion-order bound keeps later commits unread even when their wall-clock
-timestamps or random ids sort before the watermark. Thread detail orders messages by
-`(created_ms, rowid)`, and list titles select the first message in that same order. The message
-must belong to the thread and be visible in that view; an unknown, foreign or hidden id returns
-`not_found`. It returns `{"read": n}`. The console sends the newest message from the detail
-response loaded by an explicit, visible open. A passive refresh does not advance that high-water
-mark or authorize another read. For one release, omitting `last_message_id` keeps the legacy
-behavior of acknowledging the whole thread; a later release will require it. There is no way to
-mark mail unread again.
+Messages are ordered by `(created_ms, rowid)`. List titles select the first message in that
+same order. `high_water_message_id` does not: it is the maximum `rowid` among the messages in
+this response. After a wall-clock step back, the last displayed message can have a smaller
+`rowid` than one shown above it.
+
+`POST /v1/ui/threads/{id}/read/{message_id}` acknowledges through the message id in the path.
+The body is `{"repository_id":"..."}`. The path id is the watermark; a `last_message_id` in the
+body does not replace it. An unknown thread, or an unknown, foreign or hidden id, returns
+`not_found` and acknowledges nothing. The hub then acknowledges human deliveries whose Message
+`rowid` is no greater than that message's `rowid`: the selected repository's deliveries, or every
+repository's when `repository_id` is empty. This insertion-order bound keeps later commits unread
+even when their wall-clock timestamps or random ids sort before the watermark. It returns
+`{"read": n}`.
+
+The console sends this request only for an explicit, visible open whose detail response included
+a non-empty `high_water_message_id`, and that id is the path segment. A snapshot that omits the
+field is not acknowledged; the console asks the operator to reload. v0.1.13 does not have this route.
+Its handler returns `not_found` (`unknown console route`) before any acknowledgement. That hub's
+`POST /v1/ui/threads/{id}/read` acknowledges every visible human delivery in the thread and
+ignores `last_message_id`: its decoder accepts unknown fields, and its read takes no watermark.
+The current console does not call that route.
+
+`POST /v1/ui/threads/{id}/read` remains for a console opened before the path watermark. An unknown
+thread is still `not_found` and acknowledges nothing. When the thread exists, omitting
+`last_message_id` returns `bad_request` and acknowledges nothing. The error tells the operator
+to reload the console, because a tab opened before this requirement has no watermark. A supplied
+`last_message_id` uses the same `rowid` bound as the path form.
+
+A passive refresh does not advance that high-water mark or authorize another read. Mail
+committed after that snapshot stays unread until the next explicit open. There is no way to mark
+mail unread again.
 
 `POST /v1/ui/messages` takes `{"key":"...","to":["..."],"subject":"...","body":"...","reply_to":""}`
 and sends as `human`.
@@ -963,23 +985,10 @@ one ask for a single more, which starts when it ends and no sooner than two seco
 `root_commit` and repository-relative `paths`. It creates no Execution, takes no
 claims and allocates no repository: a checkout it cannot place returns `ambiguous` when several
 repositories could be it and `not_found` when none is known, and the CLI then warns and allows
-the commit (ADR 032). The response contains `message`, `conflicts`, `case_policy` and `claim_auto_scope`
-(`repository` or `worktree`, ADR 037). `claim_auto_scope` is always present. A hub from
-before that field omits it, and `iris doctor` then says the scope is unknown. A nonempty
-message means a live claim overlaps a path in another host/worktree. Repository case policy and
+the commit (ADR 032). The response contains `message` and `conflicts`; a nonempty message means a
+live claim overlaps a path in another host/worktree. Repository case policy and
 prefix boundaries apply. Same-worktree claims are excluded. Git's staged rename
 source and destination are both checked by the CLI.
-
-Under `worktree`, a staged path whose only overlaps are automatic claims with different non-null
-worktree keys leaves `message` empty and returns `advisories`. Each advisory has `path`, `holder`,
-`worktree`, `branch`, `repository_id` and `fence`. `advisories` is omitted when there are none.
-An advisory allows the commit: the overlap can meet in one filesystem or at rebase or merge, and
-it does not make concurrent edits safe or prove the edits are disjoint. A real conflict still
-fills `message` and `conflicts`; advisories do not weaken that refusal. `iris guard` prints
-advisories to standard error and exits successfully. An older guard that reads only `message`
-allows the same commit without printing them. Shell reconciliation uses the same check and, when
-`message` would otherwise stay empty, renders those advisories into `message` so the shell hook's
-existing warning shows them.
 
 This endpoint identifies a checkout, not the committing session. Session or Execution fields
 do not exempt claims in another worktree. Each conflict includes the holder's `branch`,
@@ -1074,17 +1083,6 @@ rotated through its file rather than this API.
 An Execution in a host's context of sessions outside git takes no claim: `POST /v1/claims/touch`,
 `/v1/claims/touch/files`, `/v1/claims`, `/v1/claims/files` and every shell reconciliation answer
 `outside_git` (HTTP 400), before any replay, wait or conflict. Release and end stay open (ADR 034).
-
-## Claim scope
-
-`POST /v1/admin/policy` takes `{"repository_id":"...","claim_auto_scope":"repository"}` or
-`"worktree"` (ADR 037). Only the owner token may call it. It stores `claim.auto_scope` on that
-repository and does not rewrite existing claims. Later checks, claim lists and the overview read
-the new value. The response is `{"repository_id":"...","claim_auto_scope":"worktree"}`. Any other
-value is `bad_request` (400). An unknown repository is `not_found` (404). A host token or a console
-account gets `forbidden` (403). `iris admin policy --repository <id> --claim-auto-scope
-repository|worktree` prints the response. A hook payload, a message body and a coordination
-envelope are not inputs to this value.
 
 ## Removing aliases
 

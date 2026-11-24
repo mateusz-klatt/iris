@@ -6,6 +6,8 @@ workflow [43117855817](https://github.com/mateusz-klatt/iris/actions/runs/431178
 The configuration below includes changes made after that commit, including ADR 022's image
 job; that earlier release does not validate the later job.
 
+Worktree-scoped automatic claims (ADR 037) are not in this release; claims stay repository-wide as in v0.1.13.
+
 A pushed `v*` tag runs `.github/workflows/release.yml`, which makes a **draft**
 GitHub release (`release: draft: true`) for the owner to publish. After the release and
 Windows verification jobs succeed, a separate job publishes a signed, attested
@@ -17,6 +19,15 @@ can be public before the draft is published. Homebrew, Scoop and winget remain
 [ADR 022](adr/022-release-container-image.md) records this extension of D15.
 A final release tag is the owner's call ([release candidate runbook](#release-candidate-runbook));
 this configuration neither creates one nor authorizes anyone to create it.
+
+## Notes for the next operator release
+
+Publish this in the release notes:
+
+Reload every console tab after the upgrade. An old tab silently stops marking threads read.
+
+Reload console tabs after a rollback to an older hub as well. A tab left open from this console does not mark a thread read against that hub.
+
 The GoReleaser dependency is not part of the application module.
 
 The web tooling pins Vitest and its coverage provider together. The `minimatch` override

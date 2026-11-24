@@ -97,8 +97,8 @@ func TestNearestFrom(t *testing.T) {
 		t.Fatalf("Cursor's agent alias did not stop before outer Claude: %+v, %v", got, ok)
 	}
 	got, ok = NearestFrom(20, agentGet, nil)
-	if !ok || got.PID != 18 || got.Name != "/opt/agent" {
-		t.Fatalf("unidentified agent did not stop before outer Claude: %+v, %v", got, ok)
+	if !ok || got.PID != 17 || got.Name != "claude" {
+		t.Fatalf("bare agent did not walk on to outer Claude: %+v, %v", got, ok)
 	}
 }
 
@@ -119,6 +119,20 @@ func TestNearestLive(t *testing.T) {
 	}
 	if runtime.GOOS == "linux" && a.StartMS <= 0 {
 		t.Fatalf("start %d", a.StartMS)
+	}
+}
+
+// TestNearestFrom covers the agent tree with and without the pair; this only checks that the
+// live walk without markers finds a real process, whatever ancestry runs the test.
+func TestNearestWithoutMarkersLive(t *testing.T) {
+	t.Setenv("CURSOR_PROJECT_DIR", "/outer/cursor/project")
+	t.Setenv("CURSOR_VERSION", "2026.11.22-e9042b2")
+	a, err := NearestWithoutMarkers()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.PID <= 1 {
+		t.Fatalf("pid %d", a.PID)
 	}
 }
 

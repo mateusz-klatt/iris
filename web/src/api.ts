@@ -14,11 +14,6 @@ export interface Repository {
   host?: string;
   /** Current account capability, checked again by the store. */
   console_access?: "ro" | "rw";
-  /**
-   * claim.auto_scope for a project (ADR 037). Absent for a host's context of
-   * sessions outside git, and for a hub that cannot report it.
-   */
-  claim_auto_scope?: string;
 }
 
 export interface Agent {
@@ -44,14 +39,6 @@ export interface Claim {
   holder: string;
   origin: string;
   expires_at: string | null;
-  /** Canonical display path of the claim's own checkout. Empty means unknown. */
-  worktree_path?: string;
-  /** Branch observed for that checkout. Empty means unknown. */
-  branch?: string;
-  /** Holding Execution's host, shown when two claims share a display path. */
-  host?: string;
-  /** `worktree` only for an opted-in automatic claim with a key. Otherwise `repository`. */
-  effective_scope?: string;
 }
 
 export interface Overview {
@@ -90,6 +77,8 @@ export interface ThreadRecipient {
 
 export interface ThreadMessage extends MessageAuthor {
   id: string;
+  /** Parent message ID for a reply; empty or absent for a root message. */
+  reply_to?: string;
   sender: string;
   /** The sender's repository. A thread can cross repositories (ADR 004). */
   repository_id?: string;
@@ -101,6 +90,11 @@ export interface ThreadMessage extends MessageAuthor {
 
 export interface ThreadDetail {
   id: string;
+  /**
+   * Visible message with the greatest Message rowid, in insertion order.
+   * A hub from before this field omits it. The console then does not acknowledge.
+   */
+  high_water_message_id?: string;
   messages: ThreadMessage[];
 }
 
@@ -275,14 +269,21 @@ export function getThread(id: string, repositoryId = "", signal?: AbortSignal): 
   return getJson(`/v1/ui/threads/${encodeURIComponent(id)}${suffix}`, signal);
 }
 
-/** Reads operator mail through lastMessageId, or the whole thread when it is omitted for legacy callers. */
-export async function readThread(id: string, repositoryId = "", lastMessageId?: string, signal?: AbortSignal): Promise<number> {
+/**
+ * Acknowledges operator mail through lastMessageId, the snapshot's insertion-order high water.
+ * The id is a path segment. v0.1.13 only acknowledges `POST .../read` and ignores a body watermark,
+ * so that hub rejects this route. An empty id is not sent.
+ */
+export async function readThread(id: string, repositoryId = "", lastMessageId: string, signal?: AbortSignal): Promise<number> {
+  if (lastMessageId === "") {
+    throw new ApiError(400);
+  }
   const token = consoleCsrf;
-  const response = await request(`/v1/ui/threads/${encodeURIComponent(id)}/read`, {
+  const response = await request(`/v1/ui/threads/${encodeURIComponent(id)}/read/${encodeURIComponent(lastMessageId)}`, {
     method: "POST",
     signal,
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ repository_id: repositoryId, ...(lastMessageId === undefined ? {} : { last_message_id: lastMessageId }) }),
+    body: JSON.stringify({ repository_id: repositoryId, last_message_id: lastMessageId }),
   });
   const out = (await response.json()) as { read: number };
   requireConsoleSession(token);

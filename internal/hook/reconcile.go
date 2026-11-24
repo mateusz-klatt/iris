@@ -132,6 +132,14 @@ func (r Runner) reconcile(ctx context.Context, ev Event, state *runState) Output
 			done <- settle(err, allow)
 			return
 		}
+		if err == errEndedGeneration {
+			decision := Decision{Action: ActionWarn, Context: endedSessionRefused}
+			if ev.Kind == KindPreTool {
+				decision = Decision{Action: ActionDeny, Reason: endedSessionRefused}
+			}
+			done <- settle(err, Encode(ev, decision))
+			return
+		}
 		if hubclient.IsCode(err, "lost") {
 			// A recovering session without its proof must not run unclaimed changes past it, as
 			// an edit may not. After the call, only a warning is possible.
@@ -233,6 +241,9 @@ func (r Runner) shellFull(ctx context.Context, hub shellHub, ev Event, repo giti
 		r.fullSucceeded(state, repo)
 	}
 	state.at("shell reconcile")
+	if err = checkEndedRegistration(state, ev, r.memory(), 0, sess.Generation, false, nil); err != nil {
+		return out, false, err
+	}
 	out, err = hub.Reconcile(ctx, reconcileRequest(sess.ExecutionID, sess.Generation, phase, taken, repo))
 	return out, false, err
 }
@@ -243,12 +254,17 @@ func (r Runner) shellFull(ctx context.Context, hub shellHub, ev Event, repo giti
 func (r Runner) reconcileSession(ctx context.Context, state *runState, hub sessionShellHub, ev Event, repo gitinfo.Repo, phase string, snapshot map[string]string) (hubclient.CheckResponse, error) {
 	req := hubclient.ShellSessionRequest{SessionRequest: r.sessionReq(ev, repo), Kind: phase, Status: snapshot}
 	m := r.memory()
-	generation, err := registrationProof(state, ev, m, 0)
+	generation, endedThrough, err := registrationProof(state, ev, m, 0)
 	if err != nil {
 		return hubclient.CheckResponse{}, err
 	}
 	req.Generation = generation
+	req.EndedThrough = endedThrough
+	if req.Generation == 0 {
+		req.RetryGeneration = endedThrough
+	}
 	res, err := hub.ReconcileSession(ctx, req)
+	err = checkEndedRegistration(state, ev, m, endedThrough, res.Session.Generation, req.Generation == 0, err)
 	r.answered(m, ev, res, err)
 	return res.CheckResponse, checkRestoreFloor(state, ev, m, req.Generation, err)
 }

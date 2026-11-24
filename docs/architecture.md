@@ -80,7 +80,9 @@ Hard rules for `iris hook`, because failure semantics differ between clients:
 | Grok | allowed unless `failClosed` | allowed | JSON with exit 2 |
 | Kimi | allowed | allowed | exit 2 with stderr |
 
-1. Everything is caught. A failure of any kind produces that client's valid allow output.
+1. Everything is caught. A failure of any kind produces that client's valid allow output. A damaged
+   local generation file or `.ended` marker closes registration but also returns allow; a confirmed
+   ended generation keeps D9's deliberate pre-tool refusal.
 2. The exit code is non-zero only for a deliberate deny on a client whose contract requires it.
 3. A 1.5 s internal deadline ends the hook's work, followed by up to 50 ms for best-effort failure
    logging before the allow output is written (about 1.55 s total); the client-side timeout is set
@@ -177,14 +179,15 @@ Claude hooks that Grok runs. A client counts as the runner only when its session
 the session id on stdin, for example `GROK_SESSION_ID` equal to `sessionId`. Cursor 2026.11.22
 omits `CURSOR_CONVERSATION_ID` from a cross-loaded Claude hook, so Cursor is also confirmed by a
 nearest `cursor-agent` ancestor or, with no recognized client ancestor, by `CURSOR_PROJECT_DIR`
-together with `CURSOR_VERSION`. Cursor's measured `agent` alias counts as Cursor with that pair.
-Without it, no measured env-free evidence distinguishes the bare alias from an unrelated tool on
-Linux, Windows or macOS. The walk therefore stops at an unidentified `agent`, and the hook and shim
-fail safe with Cursor's mismatch rather than borrow an outer client's identity. An unrelated `agent`
-can be refused too: that false positive is intentional because walking through it can corrupt a real
-session. A nearest recognized client matching the requested client, with no `agent` between, keeps a
-real nested session native, and markers never relabel a known third client. An inherited
-`CLAUDE_CODE_SESSION_ID` never outranks Cursor's process or marker evidence.
+together with `CURSOR_VERSION`. Cursor's measured `agent` alias counts as Cursor only with that
+pair. A bare `agent` without the pair is not a client, and the walk continues past it, because Grok
+installs an `agent` alias of its own (`~/.grok/bin/agent`, the same binary as `grok`). The hook gets
+the pair, so a cross-loaded Cursor hook under `agent` is still recognized. The nearest recognized
+client wins. One matching the requested client keeps a real nested session native.
+- **A Claude hook** (`claude` or `claude-code`): the marker walk applies, and markers never relabel a known third client.
+- **Every other client:** the walk ignores the markers. The marker pair alone still identifies Cursor, as in v0.1.13, unless the requested client was recognized.
+
+An inherited `CLAUDE_CODE_SESSION_ID` never outranks Cursor's process or marker evidence.
 
 When a hook meant for one client runs under another, it prints the runner's allow output, exits
 0 and does not call the hub, whether or not the runner has its own integration. `iris doctor`
@@ -210,16 +213,24 @@ The Grok cell is the stdio MCP child. Grok's `monitor` shell does not inherit
 hook stored for that grok process ([ADR 025](adr/025-grok-stop-monitor.md)).
 
 At MCP startup, a recognized nearest client that does not match `--client` identifies a cross-loaded
-shim. `CURSOR_PROJECT_DIR` together with `CURSOR_VERSION` recognizes Cursor's generic `agent` alias
-during the walk. Cursor's MCP stdio environment has no such markers (measured), and no env-free
-alias measurement reliably distinguishes `agent` from an unrelated tool. An unidentified `agent`
-therefore stops the walk and the shim refuses the mismatch instead of binding through an outer
-client, including through its inherited session id; an unrelated `agent` can be refused for the same
-reason. A recognized nearest client that matches `--client`, with no `agent` between, keeps a real
-nested session native despite inherited markers. Cursor's process or marker evidence outranks an
-inherited `CLAUDE_CODE_SESSION_ID`. Before any binding or generation-proof check, a cross-loaded
-shim refuses every rung, including an inherited execution or session id, and never registers or
-heartbeats. Its stdio server stays up; tool calls answer typed `client_mismatch` and direct the model
+shim. For `--client claude` only, `CURSOR_PROJECT_DIR` together with `CURSOR_VERSION` recognizes
+Cursor's generic `agent` alias during the walk. With no recognized nearest client, the pair also
+identifies Cursor. Cursor cross-loads Claude plugins only (measured), so for any other client a
+marker pair in the shim's environment was inherited, for example by Grok started from a Cursor
+terminal, and is ignored. A recognized nearest client that matches `--client` keeps a real nested
+session native despite inherited markers. Cursor's process or marker evidence outranks an inherited
+`CLAUDE_CODE_SESSION_ID`.
+
+**Known limit:** Cursor's MCP stdio environment has no markers (measured).
+- A cross-loaded Cursor shim started by the bare `agent` alias therefore sees an unknown `agent`.
+- Its walk can continue to an outer client, for example a Claude Code session that launched Cursor, and it can bind to that client, as v0.1.13 did.
+- `cursor-agent`, and an `agent` that has the pair, are recognized.
+- A bare `agent` is not treated as a boundary, because that refused native Grok, whose own alias has the same name.
+- Telling the two apart needs executable or launcher evidence on each OS. That work is in progress.
+
+The refusal below applies only to a DETECTED cross-load; it does not prevent the undetected case
+above. Before any binding or generation-proof check, a detected cross-loaded shim refuses every rung,
+including an inherited execution or session id, and never registers or heartbeats. Its stdio server stays up; tool calls answer typed `client_mismatch` and direct the model
 to the running client's native Iris server. One observation goes to the log doctor reads.
 
 `iris mcp` resolves its Execution at the first tool call, by this chain, and outside Codex and id
@@ -258,30 +269,30 @@ correct attribution, not a security property.
 
 The session's hook is its registrar: one session is one Execution and one mailbox. An MCP server
 usually starts before the `SessionStart` hook has run, so when no rung finds the session its
-first bind keeps looking, with backoff, for 15 s. Only then, if it has no hook generation proof,
-can the shim register an MCP-only Execution so that messaging still works, for example in an
-untrusted folder. It needs a session it can name by id or as a single-session process. If
-the hook registers later after all, the shim's heartbeat finds the hook's Execution for the same
-client process, moves to it and ends its own, handing over the mail its stray mailbox received
-meanwhile, so a slow hook cannot leave the session split either. A first tool call that ends
-while the grace period runs is told Iris is still binding the session and to retry. After a loss
-the shim first waits for an eligible binding or uses exact generation proof for reattachment (D9).
-If that proof is refused after the recovery window, an eligible shim with exact generation and
-Execution identity proof can request one post-window succession instead (D9). A generation-zero
-registration from `mcp`, `shim`, `watch` or a legacy non-hook client is refused over any retained
-hook-registered history for that session, and over hook history for the same positively
-single-session client process (or top-level Claude process), in every state. It is also refused
-when the newest retained Execution is `ended`, even if that row recorded no hook. This closes the
-synthetic `mcp-<pid>-<start_ms>` fallback as well. A genuinely hookless session keeps its initial
-fallback, as in an untrusted folder. If `SessionStart` wins the race between the last grace-period
-lookup and the fallback registration, one bounded lookup can bind its live Execution under the
-normal proof checks. Cursor IDE lacks the single-session process evidence required for
+first bind keeps looking, with backoff, for 15 s. After that grace period, a shim with neither
+hook generation proof nor a local `.ended` marker can register an MCP-only Execution so that
+messaging still works, for example in an untrusted folder. It needs a session it can name by id
+or as a single-session process. If the hook registers later, the shim's heartbeat finds the
+hook's Execution for the same client process, moves to it and ends its own, handing over the
+mail its stray mailbox received meanwhile, so a slow hook cannot leave the session split either.
+A first tool call that ends during the grace period asks the model to retry because Iris is still
+binding the session. After a loss the shim waits for an eligible binding or uses exact generation
+proof for reattachment (D9). If that proof is refused after the recovery window, an eligible shim
+with exact generation and Execution identity proof can request one post-window succession instead.
+A generation-zero registration from `mcp`, `shim`, `watch` or a legacy non-hook client is refused
+over any retained hook-registered history for that session, and over hook history for the same
+positively single-session client process (or top-level Claude process), in every state. It is also
+refused when the newest retained Execution is `ended`, even if that row recorded no hook. This
+closes the synthetic `mcp-<pid>-<start_ms>` fallback as well. A genuinely hookless session keeps
+its initial fallback, as in an untrusted folder. If `SessionStart` wins the race between the last
+grace-period lookup and the fallback registration, one bounded lookup can bind its live Execution
+under the normal proof checks. Cursor IDE lacks the single-session process evidence required for
 process-bound succession.
-A Codex root thread's shim in id mode waits the same grace period on its first bind. Its own
-session is eligible for proof-required succession on a call without an explicit `execution`
-argument. An explicit argument leaves binding pinned to the metadata session and disables
-succession for that call. The generation-zero fallback and its mailbox handover belong to the
-ordinary binding chain.
+A Codex root thread's shim in id mode waits the same grace period on its first bind. Id-mode
+shims never create Executions through the ordinary fallback, adopt them or hand over mail, so this
+fallback and the adoption below belong to the chain above alone. The root's own session is eligible
+for proof-required succession on a call without an explicit `execution` argument; an explicit
+argument leaves binding pinned to the metadata session and disables succession for that call.
 
 A shim also looks on its heartbeat tick ([ADR 027](adr/027-shim-binds-on-its-tick.md)). Without
 that, one that had no tool call yet, or lost its generation and had no call since, renewed
@@ -440,13 +451,16 @@ duplicate. Otherwise the claim clears the request and any latch: a watcher's sta
 explicit start.
 
 It then looks up, and never registers, the Execution a hook registered for its Kimi process and
-session, and requires the hub's combined match (#335). A watcher with no record takes the hub's
-high-water mark as a baseline and announces no history.
+session, and requires the hub's combined match (#335). The returned generation must pass the
+local hook-file and `.ended` checks in D9 before the watcher accepts it. A watcher with no record
+takes the hub's high-water mark as a baseline and announces no history.
 
-It follows the stream without a `consumer_id`. Every 20 seconds it renews only its pinned generation
-as a shim, so the session is not marked monitored, and checks its Kimi process, the preference and
-the session map. Event reads that a recovering hub refuses are retried. Only a heartbeat that
-answers `lost` ends the watcher for its generation.
+It follows the stream without a `consumer_id`. Every 20 seconds it tries to renew only its pinned
+generation as a shim, so the session is not marked monitored, and checks its Kimi process, the
+preference and the session map. It checks local generation files before and after the heartbeat.
+A read error before the heartbeat skips renewal for that tick. The watcher exits `Lost` if the
+local check vetoes the pinned generation or the hub refuses to renew it as `lost`. Event reads
+that a recovering hub refuses are retried.
 
 Before a line, an authoritative read and the session's told state decide what is new:
 - Mail fetched or told is checkpointed silently.
@@ -602,9 +616,9 @@ Notifications and digests carry the `kind` only.
 ### D8. Liveness comes from the MCP process
 
 A stdio MCP server normally follows the client process that launched it. `iris mcp` sends a
-heartbeat every 20 s for its positively bound Execution generation. In id mode (ADR 017), a Codex
-sub-agent's `iris mcp` renews nothing, and neither does a call that names a session other than its
-shim's.
+heartbeat every 20 s for its positively bound Execution generation, subject to the local `.ended`
+veto in D9. In id mode (ADR 017), a Codex sub-agent's `iris mcp` renews nothing, and neither does
+a call that names a session other than its shim's.
 Before renewing a fallback Execution, the client may look for the hook's Execution and hand over
 to it (D6). That attempt has a five-second deadline, separate from the heartbeat's five seconds,
 so a stalled lookup or handover cannot prevent lease renewal. An outage that also prevents the
@@ -700,10 +714,10 @@ Changes from the reference schema:
    claims still block others, but it may do nothing until it reattaches with the same session
    and generation, which clears the deadline and grants a lease in the new epoch. A heartbeat
    from `iris mcp` or `iris watch` carries that proof if the sender retains the binding, so those
-   idle sessions can reattach too. An unbound shim has no generation to send, and Codex id-mode
-   sub-agent and foreign-session lookups renew nothing. At the deadline, the recovering
-   Execution is lost. Repeated restarts cannot extend the window, because an existing deadline
-   is never moved, and an expired generation is never revived.
+   idle sessions can reattach too. An unbound shim needs the hook's live generation file to
+   reattach. Codex id-mode sub-agent and foreign-session lookups renew nothing. At the deadline,
+   the recovering Execution is lost. Repeated restarts cannot extend the window, because an
+   existing deadline is never moved, and an expired generation is never revived.
 
    A hook is a new process for every tool call, so it keeps the last generation for its session
    in a file beside the token and sends it as that proof. Without proof, a recovering session's
@@ -717,13 +731,16 @@ Changes from the reference schema:
    lost. With a heartbeating `iris mcp` that was one edit. An `iris mcp` binds on its first tool
    call, or, outside Codex and id mode, on its heartbeat tick (D6, ADR 027), and only a bound one
    heartbeats. When a bound `iris mcp` refreshes on a tool call and `/v1/bind` answers `lost`,
-   it immediately heartbeats with its exact remembered generation and retries `/v1/bind`, so a
-   recovering Execution reattaches on the tool call itself without waiting for the next 20 s tick.
-   An unbound `iris mcp` may read the hook's local generation memory for a positively identified,
-   hook-registered session and send a reattach-only registration (`source: "shim"`,
-   `generation > 0`). The hub requires `hook_seen_ms > 0` and an open 120 s recovery window.
-   Reattachment excludes Codex id-mode sub-agents and foreign-session lookups. An unbound shim
-   that knows a Rung 3 session only from its current-session witness uses it for succession.
+   it checks the local `.ended` veto, then heartbeats with its exact remembered generation and
+   retries `/v1/bind` if the heartbeat succeeds. That lets an eligible Execution reattach on the
+   tool call itself without waiting for the next 20 s tick.
+   An unbound `iris mcp` (on a tool call or its heartbeat tick, excluding Codex id-mode sub-agents
+   and foreign-session lookups) may also read the hook's local generation memory for a positively
+   identified, hook-registered session and send a reattach-only registration (`source: "shim"`,
+   `generation > 0`): missing, malformed or mismatched memory never falls back to a generation-0
+   registration, and the hub refuses shim reattach for any Execution without `hook_seen_ms > 0` or
+   past its 120 s deadline. An unbound shim that knows a Rung 3 session only from its current-session
+   witness uses that evidence for succession instead.
    `iris watch` heartbeats immediately on reconnect and on `reset` frames while keeping its
    periodic heartbeat and reconnect backoff, and never revives a terminal Execution. A heartbeat
    that finds its generation lost, as after a
@@ -752,19 +769,119 @@ Changes from the reference schema:
    combined shell registration. If the retry is unsafe, the hook keeps G, records
    `restore_floor_refused` for doctor, and fails open without claiming or reconciling the edit.
    The proofless-edit denial during recovery still applies. An unreadable or malformed
-   generation file, including a dangling symlink, also fails open before registration. Local
-   doctor output names the damaged file. It also names an `.ended` marker that contributed a
-   generation or is damaged, and the `.ended` path when SessionEnd could not write that marker
-   or take the sessions lock. Those paths stay in the local report. The hook refreshes readable
-   proof under the bounded session lock before sending it. A refusal can restore proof to a
-   missing file only above any ended generation recorded under the same lock. Generation writes
-   keep the highest proof and SessionEnd clears only matching proof. The shim and plain watch
-   apply retained process and disk generation proof to their own session. An `.ended` marker is
-   read separately for every identified session and vetoes binding, reattachment and renewal
-   through its recorded generation. Either the generation file or `.ended` blocks a first-bind
-   generation-zero fallback. A Codex id-mode sub-agent checks disk proof for its native session
-   during its one lookup. Malformed proof files also block binding. For
-   deployment order and empty-hub recovery, see the
+   generation file, including a dangling symlink, also fails open before registration. An
+   unreadable or malformed `<hash>.execution` sidecar or `.ended` marker likewise stops every
+   ordinary, combined shell or SessionStart registration, including a retry that could use
+   retained live proof, and returns the client's allow output. A missing sidecar is not damage:
+   a registering hook supplies its first exact pair. Local doctor output names the damaged file
+   as an observation, not a hook failure. It also names an `.ended` marker that contributed a generation or is damaged,
+   and the `.ended` path when SessionEnd could not write that marker or take the sessions lock.
+   Doctor re-reads every damaged marker named by an observation from the last 24 hours and,
+   independently of observation age and the rolling log, scans the sessions directories beside the
+   resolved and fallback token paths. A cleaned-absolute
+   fast path and `os.SameFile` on directory Stat results deduplicate lexical, symlink and case
+   aliases. One read-only worker performs every directory and observation-marker I/O, with
+   incremental non-recursive reads across both directories sharing a 4096-entry cap. It publishes
+   progressive snapshots under a mutex. The caller waits at most one second or the earlier parent
+   deadline, then renders the latest snapshot; there are no per-read deadlines. At most one scan is
+   in flight per process. A concurrent call returns incomplete immediately with "previous
+   end-marker scan still running", so abandoned workers and open descriptors cannot accumulate.
+   Suffix matching is case-insensitive. A candidate whose name differs from its lowercase canonical
+   name is graded at that canonical hook path only when Stat and `os.SameFile` prove that both paths
+   resolve to the same file; a case variant of another file is ignored. Before opening an examined
+   entry, the worker requires a regular file or a symlink to a regular target. Hooks only ever write
+   regular files, so a directory, FIFO, socket, device or other non-regular entry is never a valid
+   marker and is damaged without being opened. A dangling link or a link to a non-regular target is
+   damaged too. An entry or link that disappears between enumeration and metadata collection is
+   absent, matching the hook, rather than damaged. Hook and doctor use one bounded generation-file
+   reader for live proof, execution proof and end markers. It opens with FILE_SHARE_READ,
+   FILE_SHARE_WRITE and FILE_SHARE_DELETE on Windows and portable `os.Open` elsewhere, and closes
+   the handle before parsing. Generation and marker reads are bounded at 64 bytes; the two-pair
+   execution sidecar has its own 128-byte bound. A read that fills its bound is damaged. The shared
+   reader and native replacement preserve long paths with extended-length normalization, and the
+   `os.Rename` fallback retains Go's own normalization. Otherwise the hook's read rule applies: a
+   positive generation is healthy; malformed or unreadable content is damaged. Current damage makes
+   doctor exit 1 however old or evicted its observation is. Exhausting the entry cap, the outer
+   deadline, cancellation, or a directory open or iteration error other than ENOENT marks the scan
+   incomplete and also makes doctor exit 1, even when no damage was found. A directory failure does
+   not stop the other directory's scan. A local-only note states why, gives the number found so far
+   as a lower bound, and says plainly that more may be damaged. An observation not yet re-checked is
+   unknown, not repaired. A matching retained observation supplies the client; otherwise doctor
+   prints a clearly labelled local-only line without one. Repaired or archived files named by an
+   observation remain history and do not fail doctor. A healthy or missing sessions directory adds
+   nothing. The local detail states the blocked registration, absent binding, mail
+   and claims, the continuing allow behavior, and the stop, verify, repair-or-archive and restart
+   steps. Paths and the incomplete reason stay only in the local report; uploads and bundles carry
+   the aggregate `current_damaged_end_markers` lower bound and an `end_marker_scan_incomplete`
+   boolean. The scan grades only `.ended` files: a damaged execution sidecar is named when a hook,
+   shim or watch reads it, but does not contribute to that aggregate.
+
+   Only `iris doctor` (plain, `--bundle`, and the offline phase of `--live`) and `iris setup` call
+   `doctor.Run` and reach this scan. Bundle formatting happens after that call. The diagnostic
+   upload sends only the resulting redacted report. No MCP tool runs doctor, `iris watch` only
+   recommends it, and hub doctor routes store or retrieve reports without scanning the host. An
+   abandoned worker is read-only: it mutates no caller result, hub state or session files, and its
+   late completion cannot change the returned report.
+
+   On Windows, the shared session-file replacement used by Antigravity state and session memory
+   calls FileRenameInfoEx with REPLACE_IF_EXISTS and POSIX_SEMANTICS. An Iris reader holding the old
+   file open keeps its contents while later opens see the replacement. Readers outside Iris,
+   including antivirus, indexers and editors, need not grant FILE_SHARE_DELETE and can still make
+   that replacement fail. On Windows versions or volumes without POSIX rename, the helper falls back
+   to MoveFileEx, where any held handle can still block replacement. Access-denied and
+   sharing-violation retries stay within the existing 50 ms session-lock budget and attempt cap;
+   the deadline is checked before every attempt, the MoveFileEx fallback included. On SessionEnd's
+   marker-write path, a failure after the bounded retries records the existing damaged-marker
+   observation, preserves live proof and still returns valid hook output. Ordinary proof publication
+   still discards write errors and adds no observation. Other systems keep `os.Rename`. Registration
+   reads the marker before refreshing live
+   proof under the bounded session lock. Absent proof takes no lock, so unrelated attention or
+   cleanup cannot suppress a fresh SessionStart. The reads are not atomic and the lock is released
+   before dispatch: SessionEnd can leave a request with an older floor, a known B1-min limit. A readable
+   marker vetoes hook proof and delayed generation writes at or below its value. A refusal can
+   restore proof to a missing file only above the recorded end. Generation writes keep the highest
+   proof and its generation-keyed Execution ID under the same bounded lock. SessionEnd clears the
+   generation and execution pair at or below the generation it ended. Every ordinary,
+   outside-git, combined shell and SessionStart registration carries an unexpired marker as
+   `ended_through`, including when live proof above it remains usable. A hook with absent proof,
+   or a SessionStart whose proof the marker vetoes, sends `generation:0`; other hooks with vetoed
+   proof refuse locally. A generation-zero request also sends the marker as the inclusive
+   `retry_generation`, so an older hub that ignores `ended_through` retains #417's safeguard. A
+   retry carries the newest observed marker in both fields. Unlike `retry_generation`,
+   `ended_through` is strict: the hub requires retained history at least at the marker and a
+   resulting binding strictly above it. It refuses an active Execution at or below the marker
+   before renewal, and refuses a restored lower history or a candidate at or below the marker
+   before insertion. Such a refusal carries `error.details.reason:"ended_through"`. Without that
+   reason, a valid `highest_generation` strictly below the sent marker identifies an older hub's
+   inclusive-floor refusal. Equal or higher generations keep D9's ordinary recovery handling.
+   Retained terminal history at the marker
+   still lets a normal SessionStart allocate its successor. A recovering Execution still requires
+   exact live proof. An ordinary hook with stale proof makes no registration request and records
+   the marker path for `iris doctor`. A registration response is checked against the marker again
+   before its generation is remembered. A split shell path makes a lock-free check immediately
+   before its separate reconcile, but SessionEnd can advance the marker after that check and before
+   the hub commits. An ordinary grouped edit has no marker check after checkout discovery and can
+   still send `TouchFiles` for an ended generation. Proof publication is best-effort and discards
+   marker read errors, adding no observation for that write failure. A combined shell reconcile has
+   already run on the hub before its reply, and an older hub can commit it at or below the marker
+   before the client discards the reply. B1-min does not close these remaining client races. An old
+   hook that reports no floor cannot be protected server-side.
+   After a successful registration, the hook can discard vetoed proof and remove the expired marker
+   before publishing replacement proof, under the same lock and independent of the general sweep.
+   The hook reads and refreshes any still-usable idle proof before successful SessionStart pruning
+   can remove old files.
+
+   The shim, plain watch and Antigravity wake helper check same-session bindings against
+   retained process proof and live hook-file proof. They also read the local `.ended` marker
+   alongside any live file. A marker recording G vetoes bindings and heartbeats for G and
+   earlier generations, even after a restore. The Kimi one-shot watcher checks its pinned
+   generation on binding and before and after renewal. A `whoami` call that renews its own
+   binding applies the resolver's generation check before and after the heartbeat. An unbound
+   shim needs a live hook generation above G for reattachment. Live generation proof or a readable
+   `.ended` marker blocks the first-bind generation-zero fallback; damage to the generation,
+   execution or end-marker file blocks binding and fallback too. A Codex id-mode lookup checks the
+   named session's end marker and execution proof, and checks live proof for its native session.
+   Generation refusals based on local files report the path in `iris doctor`. For deployment order and empty-hub recovery, see the
    [ADR 006 addendum](adr/006-retention-and-restore.md#addendum-of-2026-11-22-the-restore-generation-floor).
 
    MCP `lost` answers give fixed, conditional recovery guidance at the shim boundary and preserve
@@ -788,14 +905,17 @@ Changes from the reference schema:
 
    `POST /v1/sessions/succeed` is the only post-window succession route. Its request names
    `client`, `host`, `session_id`, `source:"shim"`, positive `prior_generation`, non-empty
-   `prior_execution_id`, and, for process-bound sessions, `client_pid` and `client_pid_start_ms`.
+   `prior_execution_id`, the local `ended_through` floor and, for process-bound sessions,
+   `client_pid` and `client_pid_start_ms`.
    An id-mode root whose verified nearest ancestor is the session's single-session client process
    sends that identity too; the hub's exact process match is unchanged.
    The route deliberately has no checkout fields: the new Execution keeps its predecessor's repository
    or outside-host context, worktree and its claim scope, branch, parent, process and Agent mailbox.
    The operation needs no repository resolution or alias mutation. In one writer transaction,
    the hub requires the newest retained Execution for that exact session to match the supplied proof,
-   `lost`, and hook-registered. `active` and `ended` predecessors are refused. A process-bound
+   `lost`, and hook-registered. `active` and `ended` predecessors are refused, as is prior proof at
+   or below `ended_through`; the successor must be strictly above that floor and its refusal carries
+   `error.details.reason:"ended_through"`. A process-bound
    predecessor must match the whole process identity; for a single-session process or top-level
    Claude process, any newer hook-registered Execution of another native session on that process
    refuses succession as `/clear` supersession, whether the newer Execution is active, lost or
@@ -817,11 +937,12 @@ Changes from the reference schema:
    rechecks its process around the local proof read. Hooks and shims write a generation-keyed
    Execution ID in `<hash>.execution` while preserving the pair chosen by the integer in `<hash>`.
    Replacing that integer commits the new pair. A failed write leaves the prior pair available.
-   Both writes use the bounded `Sessions.Lock`, and SessionEnd removes the files only for matching
-   generation proof. Succession requires the matching pair and either an absent `.ended` marker or
-   one below the proof generation. An unreadable or malformed proof file fails closed and is
-   reported as `damaged generation proof at <path>`. Hook registration prechecks the ordinary
-   generation file. Binding and succession also read the sidecar and end marker.
+   Both writes use the bounded `Sessions.Lock`, and SessionEnd removes the pair at or below the
+   generation it ended. Succession requires the matching pair and either an absent `.ended` marker
+   or one below the proof generation, which it sends as `ended_through` and rechecks before dispatch.
+   An unreadable or malformed proof file fails closed and is reported as
+   `damaged generation proof at <path>`. Hook registration prechecks the ordinary generation file
+   and execution sidecar. Binding and succession also read the sidecar and end marker.
 
    Single-session launchers publish `sessions/proc-<pid>-<start_ms>` before SessionStart
    registration, except Antigravity, which uses its helper record beside the configured token.
@@ -891,21 +1012,6 @@ of its file: the innermost checkout that contains it, which for a submodule's fi
 submodule's, wherever the session was started (ADR 033). Branch and worktree are
 context, not an exemption: two worktrees editing one file will meet at merge time, which is
 exactly the collision Iris exists to prevent. A narrower policy can be added per repository.
-See [ADR 037](adr/037-worktree-scoped-auto-claims.md) for an opt-in per-repository narrowing of auto claims.
-The setting is `claim.auto_scope` on the repository (`repository` by default, or `worktree`). The
-owner sets it with `iris admin policy --repository <id> --claim-auto-scope repository|worktree`,
-which posts `POST /v1/admin/policy`. A hook payload, message body or coordination envelope cannot
-select it, and a change does not rewrite claims. `iris doctor`, run in a git checkout, reports the
-scope in force. For `worktree` it says that a cross-worktree automatic overlap is advisory: the
-edit is allowed, and the overlap can meet in one filesystem or at rebase or merge. An advisory
-does not make concurrent edits safe, resolve their contents or prove that the work is disjoint.
-Explicit claims and claims with no worktree key stay repository-wide. The same directory on two
-hosts gets two keys. The exemption covers every worktree in the repository, including a human's or
-an unrelated agent's. A hub that omits the setting is reported as unknown. Outside git, doctor
-omits the line: no scope is in force. `GET /v1/claims` and the console name each claim's display
-`worktree_path`, `branch` and `host`, and `effective_scope`. That scope is `worktree` only when the
-policy is `worktree`, the origin is `auto` and the worktree key is set. An empty display path is an
-unknown location. The console shows the policy per repository and has no control that changes it.
 A session outside any git checkout takes no claim at all: it belongs to its host's context of
 sessions outside git, which is for mail only (ADR 034).
 
@@ -916,18 +1022,14 @@ exist yet still conflict. An empty prefix, meaning the whole repository, needs a
 **A pre-edit hook checks and claims in one step**, so protection exists without the model doing
 anything, and `explicit` claims are for planned work. The step is one idempotent transaction
 over every path in the tool call, including both ends of a rename. It grants all missing claims
-or none. Under `repository`, paths the caller already holds are reused exactly as today. Under ADR
-037's `worktree` opt-in, automatic self-reuse also requires the same worktree key. An `explicit`
-claim is never downgraded. An `auto` claim lasts 10 minutes from the last touch. A retried call, identified by its tool call
+or none. Paths the caller already holds are reused, and an `explicit` claim is never downgraded.
+An `auto` claim lasts 10 minutes from the last touch. A retried call, identified by its tool call
 id, does not extend it.
 
 An `auto` claim means "this session has uncommitted changes here". When a shell command takes a
 path out of the session's git status, by commit, stash or restore, the reconcile releases the
 session's own `auto` claim on that path in the same transaction, and wakes whoever waited for it.
-Under the default `repository` policy this release stays path-wide across that session's matching
-claims, exactly as before. Under ADR 037's `worktree` opt-in it releases only the claim with the
-status checkout's worktree key; the session's automatic claim on the same path in another worktree
-stays. An `explicit` claim, and every other session's claim, stays. Committed but unmerged work is
+An `explicit` claim, and every other session's claim, stays. Committed but unmerged work is
 git's business, not a claim's. This happens only at the session's next shell reconcile: a commit
 made outside the session, or an edit-tool claim on a path no shell command ever saw dirty,
 keeps its claim until it expires.
@@ -1055,23 +1157,11 @@ inode, size, modification and change times, and checksum at its end. It never re
 scoped call on the plain route. `iris doctor` shows what each breaker suggests. Windows takes no
 reduced snapshot and keeps no breaker.
 
-`iris guard` is a pre-commit check, installed per repository on request. Under the default
-`repository` policy it refuses a commit of paths claimed from another host/worktree, even by the
-same session, exactly as before: the checkout does not prove who started Git. Same-host/worktree
-claims are skipped. Under ADR 037's `worktree` opt-in, a staged path whose only overlaps are
-automatic claims with different, non-null worktree keys receives an advisory instead of a refusal;
-explicit claims, null-key claims and a committing checkout without a key still refuse outside the
-same-worktree exemption. That exemption then uses the claim's checkout identity, so ADR 033's
-own-session submodule refusal is lifted when the claim and commit are in the same submodule
-checkout. A new guard prints an advisory and allows; an older guard ignores it and allows silently.
-A refusal explains the possible own-session case and gives the fence to release from the holding
-session before retrying. It is the strongest check Iris has, and it is cooperative. The check
-response always includes `claim_auto_scope` (`repository` or `worktree`). When the only overlaps
-are exempt, `message` stays empty and `advisories` names each one by path, holder, worktree,
-branch, repository and fence. `advisories` is omitted when there are none. A nonempty `message`
-remains a refusal; advisories do not weaken it. An older guard that reads only `message` allows
-an exempt overlap without printing it. A hub from before the field omits `claim_auto_scope`, and
-doctor reports that as unknown.
+`iris guard` is a pre-commit check, installed per repository on request. It refuses a commit
+of paths claimed from another host/worktree, even by the same session: the checkout does not
+prove who started Git. Same-host/worktree claims are skipped. A refusal explains the possible
+own-session case and gives the fence to release from the holding session before retrying.
+It is the strongest check Iris has, and it is cooperative.
 
 ### D13. Security
 
@@ -1272,11 +1362,12 @@ not a bypass of trust in the user's own workspaces. Output is per client binary,
 `cursor-agent` differ.
 
 The offline grades remain visible with `--live`, but its exit status reflects the selected
-live runs and the configured hub and token checks. It exits 0 only when at least one client
-runs, every live result passes and the hub and token are usable. A failed live result, no
-eligible client or a declined run exits 1. Other clients' offline grades do not fail a live
-run. Plain `iris doctor` still exits 1 when the hub or token is unusable or any client is
-`silent` or `slow`.
+live runs and the configured hub, token and current end-marker health. It exits 0 only when at
+least one client runs, every live result passes, the hub and token are usable, and the host scan
+found neither current damage nor an incomplete result. A failed live result, no eligible client,
+a declined run, current damage or an incomplete scan exits 1. Other clients' offline grades do not
+fail a live run. Plain `iris doctor` still exits 1 when the hub or token is unusable or any client
+is `silent` or `slow`.
 
 Each live run happens in a scratch repository under the temporary directory, with no commit and
 an origin of `https://example.invalid/iris-doctor-live/<random>.git`, never in one of the user's
@@ -1410,18 +1501,25 @@ controls. These controls describe current capabilities; every request remains
 subject to store authorization. Messages show immutable person attribution
 alongside the shared human transport and explain that replies use a shared mailbox.
 
-An operator's explicit, visible thread open acknowledges only through `last_message_id`, the
-newest message in the detail response that open loaded. The hub requires that message to belong
-to the thread and be visible in the requested view, then acknowledges human deliveries whose
-Message `rowid` is no greater than its `rowid`. This insertion-order bound excludes later commits
-even if their wall-clock timestamps or random ids sort earlier. Thread detail orders messages by
-`(created_ms, rowid)`, and list titles select the first message in that same order. Because the
-display order uses the hub's wall clock while the bound uses insertion order, a message shown
-before the watermark but inserted after it, which needs a wall-clock step back, stays unread
-until the next open: the bound can under-acknowledge, never over-acknowledge. A passive
-refresh does not advance the mark or authorize a read. For one release, omitting
-`last_message_id` retains the legacy thread-wide acknowledgement; a later release will require
-the field.
+An operator's explicit, visible thread open acknowledges only through a watermark. The console
+sends `high_water_message_id` from the detail response that open loaded: the visible message
+with the greatest Message `rowid`, not the last message in display order. It posts that id as
+a path segment, `POST /v1/ui/threads/{id}/read/{message_id}`. The hub requires that message to
+belong to the thread and be visible in the requested view, then acknowledges human deliveries
+whose Message `rowid` is no greater than its `rowid`. This insertion-order bound excludes later
+commits even if their wall-clock timestamps or random ids sort earlier. Thread detail orders
+messages by `(created_ms, rowid)`, and list titles select the first message in that same order.
+The snapshot's high water is that response's maximum `rowid`, so a wall-clock step back does
+not leave a message from the snapshot unread. A snapshot that omits `high_water_message_id` is
+not acknowledged; the console asks the operator to reload and keeps that hint for the opening
+across a passive refresh. v0.1.13 has no path-watermark route, so that post is an unknown console
+route and acknowledges nothing. Its `POST /v1/ui/threads/{id}/read` still acknowledges the whole
+thread and ignores a watermark, which is why the current console does not call it. That older
+route remains on this hub for a tab opened before the change. An unknown thread is `not_found`.
+An existing thread with no `last_message_id` is `bad_request` and acknowledges nothing; the error
+tells the operator to reload the console. A passive refresh does not advance the mark or
+authorize a read. Mail committed after the snapshot stays unread until the next explicit open.
+There is no way to mark mail unread again.
 
 The new-message recipient picker stores Agent IDs, not display names, and sends those IDs
 through the existing address resolver. If a selected ID disappears from the directory, review
@@ -1519,16 +1617,10 @@ was measured, the tool was unknown to Iris, so its writes went unreconciled and 
 
 On `modernc.org/sqlite`, with real concurrency:
 
-- Of concurrent overlapping grants, exactly one wins, except that ADR 037's `worktree` opt-in lets
-  an automatic/automatic pair with different, non-null worktree keys both win. A multi-path grant
-  is all or nothing.
-- Prefix, case-folding and rename boundaries hold across worktrees. For ADR 037's sole exempted
-  automatic/automatic pair with different, non-null keys, ADR 003 path identity and those boundaries
-  are unchanged; only the conflict action changes.
-- Under `repository`, a self-touch reuses a claim and shell release stays path-wide exactly as
-  today, even when rows carry worktree keys. Under ADR 037's `worktree` opt-in, automatic
-  self-reuse and release are key-scoped. An own explicit claim is reused repository-wide and is
-  never downgraded. A replayed tool call does not extend an expiry.
+- Of concurrent overlapping grants, exactly one wins. A multi-path grant is all or nothing.
+- Prefix, case-folding and rename boundaries hold across worktrees.
+- A self-touch reuses a claim and never downgrades an `explicit` one. A replayed tool call does
+  not extend an expiry.
 - Expired, released, wrong-owner and old-epoch fence tokens fail. A lost lease cannot renew.
 - Retries cannot double-send or resurrect a claim. A key reused with a different request gets 409.
 - A failed transaction exposes nothing.
@@ -1545,27 +1637,37 @@ On `modernc.org/sqlite`, with real concurrency:
   `lost` row; merge liveness shares this predicate without advancing the baseline. A hub stall
   longer than about 120 s since the last committed heartbeat still loses sessions.
 - Repeated restarts cannot extend recovery. An unattached Execution is lost at its deadline.
+- The shim, plain watch, Antigravity wake and Kimi one-shot watch refuse bindings and heartbeats
+  at or below the locally recorded `.ended` generation. The marker alone cannot reattach a
+  restored Execution or authorize a first-bind generation-zero fallback.
+- Ordinary, outside-git, combined shell and SessionStart hooks report an unexpired marker as
+  `ended_through`; generation-zero requests also carry it as `retry_generation`, and the hub
+  neither renews nor creates an Execution at or below the strict floor. A damaged marker or
+  execution sidecar closes every hook registration locally while returning the client's allow
+  output. An old hook that omits the floor cannot receive this server-side protection.
 - Over any retained hook-registered Execution for a session, no generation-zero registration from
   a non-hook source, empty legacy source included, succeeds in active, lost or ended state,
   regardless of retry floor. The same registration is refused when the newest retained Execution
   is `ended`, even if that row recorded no hook. The same refusal covers a positively single-session
-  process's hook history and its synthetic MCP session ID. A registering hook still advances lost or ended history
-  to G+1. A truly hook-less session keeps the untrusted-folder fallback. If the 30-day retention
+  process's hook history and its synthetic MCP session ID. A registering hook still advances lost
+  or ended history to G+1. A truly hook-less session keeps the untrusted-folder fallback. The hub
+  trusts the host-token holder for that host's sessions and `source` is self-declared: this closes
+  the fallback path of unmodified Iris clients and old or foreign non-hook clients, not a malicious
+  host-token holder who can claim `hook` and already register sessions. If the 30-day retention
   sweep removes all relevant rows, these guards have nothing left to check.
 - Post-window succession creates exactly one G+1 Execution only from the newest retained, lost,
   hook-registered Execution named by exact generation and ID proof, with its mailbox and worktree
   claim scope and with zero inherited claims. The transaction checks process identity, retained
-  `/clear` history and mailbox occupancy. The shim requires current-session evidence for a
-  single-session process and rechecks it after the hub replies. A hub commit can precede the
-  newer SessionStart reaching the hub. The successor has `hook_seen_ms = 0`, so a second
-  automatic hop needs an intervening hook. Stream rotation grants no authority. A hub refusal
-  leaves mailbox and claim state unchanged, and a shim refusal never triggers a generation-zero
-  retry. The hub trusts the host-token holder: `source` and proof fields are self-declared
-  attribution and accidental-race checks, not authentication against that holder.
+  `/clear` history, mailbox occupancy and the strict local-end floor; proof at or below that floor
+  is vetoed. The shim requires current-session evidence for a single-session process and rechecks
+  it after the hub replies. A hub commit can precede the newer SessionStart reaching the hub. The
+  successor has `hook_seen_ms = 0`, so a second automatic hop needs an intervening hook. Stream
+  rotation grants no authority. A hub refusal leaves mailbox and claim state unchanged, and a shim
+  refusal never triggers a generation-zero retry. Succession proof is self-declared attribution and
+  accidental-race protection, not authentication against a host-token holder.
 - An orphaned heartbeat cannot preserve ownership. A second, unregistered session in one process
   cannot bind to the first. In id mode, a tool call that names its session binds only that
   session's Execution, never through a handle.
 - An ambiguous URL cannot join a repository automatically.
-- A policy a client cannot express never becomes an allow. Under ADR 037, every real conflict still
-  turns Codex `ask` into `deny` (R5).
+- A policy a client cannot express never becomes an allow.
 - For every client, a crash, a timeout and a missing binary all leave the tool usable.

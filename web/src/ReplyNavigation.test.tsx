@@ -15,9 +15,10 @@ function conversations() {
     ms_root: threadDetail,
     ms_second: {
       id: "ms_second",
+      high_water_message_id: "ms_second",
       messages: [{ ...threadDetail.messages[0]!, id: "ms_second", sender: "codex-host", subject: "Second conversation" }],
     },
-    ms_empty: { id: "ms_empty", messages: [] },
+    ms_empty: { id: "ms_empty", high_water_message_id: "", messages: [] },
   };
   server.use(
     http.get("*/v1/ui/overview", () => HttpResponse.json({ ...sessionOverview, repositories: [

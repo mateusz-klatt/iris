@@ -36,20 +36,9 @@ func countRenamePause(t *testing.T, pauses *int, advance func()) func(time.Durat
 	}
 }
 
-// retryFallbackUntil is the unsupported-then-classic latch in replaceAntigravityState,
-// run on a clock the test controls.
+// retryFallbackUntil runs the shared unsupported-then-classic latch on a controlled clock.
 func retryFallbackUntil(posix, classic func(string, string) error, pause func(time.Duration), now func() time.Time) error {
-	unsupported := false
-	return retryAntigravityStateRenameUntil(func() error {
-		if !unsupported {
-			err := posix("old", "new")
-			if err == nil || !posixRenameUnsupported(err) {
-				return err
-			}
-			unsupported = true
-		}
-		return classic("old", "new")
-	}, pause, now)
+	return replaceSessionFileWithRetryUntil("old", "new", posix, classic, pause, now)
 }
 
 func TestRetryAntigravityStateRename(t *testing.T) {
@@ -118,8 +107,25 @@ func TestRetryAntigravityStateRenameStopsAtTheBudget(t *testing.T) {
 		pauses++
 		now = now.Add(hookLockBudget)
 	}, func() time.Time { return now })
-	if !errors.Is(err, os.ErrPermission) || calls != 2 || pauses != 1 {
-		t.Fatalf("budget stopped the retry = %v after %d calls and %d pauses", err, calls, pauses)
+	if !errors.Is(err, os.ErrPermission) || calls != 1 || pauses != 1 {
+		t.Fatalf("retry started after its deadline = %v after %d calls and %d pauses", err, calls, pauses)
+	}
+}
+
+func TestReplaceAntigravityStateDoesNotFallbackAfterBudget(t *testing.T) {
+	start := time.Unix(1_000, 0)
+	now := start
+	posixCalls, classicCalls, pauses := 0, 0, 0
+	err := retryFallbackUntil(func(string, string) error {
+		posixCalls++
+		now = now.Add(hookLockBudget)
+		return windows.ERROR_INVALID_PARAMETER
+	}, func(string, string) error {
+		classicCalls++
+		return nil
+	}, func(time.Duration) { pauses++ }, func() time.Time { return now })
+	if !errors.Is(err, windows.ERROR_INVALID_PARAMETER) || posixCalls != 1 || classicCalls != 0 || pauses != 0 {
+		t.Fatalf("fallback ran after its deadline = %v, POSIX %d, classic %d, pauses %d", err, posixCalls, classicCalls, pauses)
 	}
 }
 
@@ -136,6 +142,9 @@ func TestOpenRegularTranscriptWindows(t *testing.T) {
 	}
 	if _, _, _, err := openRegularTranscript(filepath.Join(dir, "missing.jsonl")); err == nil {
 		t.Fatal("expected missing file error")
+	}
+	if _, err := openAntigravityStateFile(filepath.Join(dir, "missing.json")); err == nil {
+		t.Fatal("expected missing state file error")
 	}
 
 	target := filepath.Join(dir, "real.jsonl")
