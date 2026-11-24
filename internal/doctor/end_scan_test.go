@@ -359,3 +359,85 @@ func TestDoctorMarkerScanCancellationAfterStart(t *testing.T) {
 		assertIncompleteMarkerScan(t, got.result, "context cancelled", 1, 0)
 	}
 }
+
+func TestEndMarkerDirectoryOpenErrorIsOnlyANote(t *testing.T) {
+	token := filepath.Join(t.TempDir(), "hub.token")
+	original := endMarkerOpen
+	t.Cleanup(func() { endMarkerOpen = original })
+	endMarkerOpen = func(string) (*os.File, error) { return nil, errors.New("injected open failure") }
+	res := Result{
+		HubUp: true, TokenOK: true,
+		Report: Report{Clients: []ClientReport{{Client: integrate.Claude, Status: StatusOK}}},
+	}
+	if err := applyFailures(&res, token, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if res.ExitCode() != 0 || res.Report.EndMarkerScanIncomplete {
+		t.Fatalf("open-error result = %+v", res)
+	}
+	if report := res.Format(); !strings.Contains(report, "could not scan for damaged end markers: injected open failure") {
+		t.Fatalf("open-error note missing:\n%s", report)
+	}
+}
+
+func TestEndMarkerObservedCurrentDamageUsesScanVerdict(t *testing.T) {
+	token := filepath.Join(t.TempDir(), "hub.token")
+	sessions := hook.NewSessions(token)
+	if err := os.Mkdir(sessions.Dir(), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	marker := filepath.Join(sessions.Dir(), "observed.ended")
+	if err := os.WriteFile(marker, []byte("broken\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	writeEndedMarkerObservation(t, sessions, marker, integrate.Claude, time.Now().Add(-time.Hour))
+	res := Result{
+		HubUp: true, TokenOK: true,
+		Report: Report{Clients: []ClientReport{{Client: integrate.Claude, Status: StatusOK}}},
+	}
+	if err := applyFailures(&res, token, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+	if res.ExitCode() != 1 || res.Report.CurrentDamagedEndMarkers != 1 || res.Report.EndMarkerScanIncomplete {
+		t.Fatalf("observed current-damage result = %+v", res)
+	}
+	if report := res.Format(); !strings.Contains(report, marker+" (still damaged)") || strings.Contains(report, "not rechecked") {
+		t.Fatalf("observed current damage did not reuse scan verdict:\n%s", report)
+	}
+}
+
+func TestEndMarkerDamageStatusRejectsNonRegularMarker(t *testing.T) {
+	originalLstat, originalRead := endMarkerLstat, endMarkerReadGeneration
+	t.Cleanup(func() { endMarkerLstat, endMarkerReadGeneration = originalLstat, originalRead })
+	endMarkerLstat = func(string) (fs.FileInfo, error) {
+		return fakeMarkerInfo{mode: fs.ModeNamedPipe}, nil
+	}
+	read := false
+	endMarkerReadGeneration = func(string) (int, error) {
+		read = true
+		return 0, errors.New("must not be read")
+	}
+	if got := markerDamageStatus("x.ended"); got != "still damaged" {
+		t.Fatalf("markerDamageStatus() = %q", got)
+	}
+	if read {
+		t.Fatal("non-regular observation was opened")
+	}
+}
+
+func TestEndMarkerDamageStatusReportsAbsentMarker(t *testing.T) {
+	originalLstat, originalRead := endMarkerLstat, endMarkerReadGeneration
+	t.Cleanup(func() { endMarkerLstat, endMarkerReadGeneration = originalLstat, originalRead })
+	endMarkerLstat = func(string) (fs.FileInfo, error) { return nil, fs.ErrNotExist }
+	read := false
+	endMarkerReadGeneration = func(string) (int, error) {
+		read = true
+		return 0, errors.New("must not be read")
+	}
+	if got := markerDamageStatus("x.ended"); got != "archived since" {
+		t.Fatalf("markerDamageStatus() = %q", got)
+	}
+	if read {
+		t.Fatal("absent observation was opened")
+	}
+}

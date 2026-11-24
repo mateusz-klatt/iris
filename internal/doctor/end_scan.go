@@ -33,6 +33,7 @@ func defaultEndMarkerScanConfig() endMarkerScanConfig {
 var (
 	endMarkerLstat          = os.Lstat
 	endMarkerStat           = os.Stat
+	endMarkerOpen           = os.Open
 	endMarkerReadGeneration = hook.ReadGeneration
 	endMarkerScanFlight     = make(chan struct{}, 1)
 )
@@ -195,7 +196,7 @@ type endMarkerScanner struct {
 }
 
 func (s *endMarkerScanner) readDirectory(dir string) string {
-	f, err := os.Open(dir)
+	f, err := endMarkerOpen(dir)
 	if errors.Is(err, os.ErrNotExist) {
 		return ""
 	}

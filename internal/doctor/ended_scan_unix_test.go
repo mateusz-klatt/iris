@@ -81,3 +81,21 @@ func TestDoctorFIFOEndMarkerIsDamagedWithoutBlocking(t *testing.T) {
 		}
 	}
 }
+
+func TestDoctorNotesASessionsPathWhoseParentIsNotADirectory(t *testing.T) {
+	parent := filepath.Join(t.TempDir(), "not-a-directory")
+	if err := os.WriteFile(parent, []byte("file"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	token := filepath.Join(parent, "hub.token")
+	res := Result{HubUp: true, TokenOK: true, Report: Report{Clients: []ClientReport{{Client: integrate.Claude, Status: StatusOK}}}}
+	if err := applyFailures(&res, token, time.Now()); err == nil {
+		t.Fatal("expected the unreadable log path to be reported")
+	}
+	if res.ExitCode() != 0 || res.Report.EndMarkerScanIncomplete {
+		t.Fatalf("exit = %d, incomplete = %v", res.ExitCode(), res.Report.EndMarkerScanIncomplete)
+	}
+	if report := res.Format(); !strings.Contains(report, "local sessions: could not scan for damaged end markers") {
+		t.Fatalf("missing directory-open note:\n%s", report)
+	}
+}
