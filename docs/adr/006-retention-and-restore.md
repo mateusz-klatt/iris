@@ -4,8 +4,7 @@ Status: accepted. The decisions below were made by `claude-holzera-iris` under t
 delegation, from a proposal by `claude-home-iris` (gap review D3). Implementation is planned, not
 done. Decision 7 is amended below, on 2026-11-13 (a restored copy runs on a new stream), on
 2026-11-22 (in-window reattachment by `iris mcp` and `iris watch`, and the restore generation floor),
-and on 2026-11-24 (a strict `ended_through` floor on every hook registration, and doctor's current
-end-marker scan).
+and on 2026-11-24 (a strict `ended_through` floor on every hook registration).
 
 ## Problem
 
@@ -257,41 +256,13 @@ a local doctor observation and returns the client's allow output, including for 
 a confirmed ended generation keeps its existing pre-tool refusal. A dangling symlink is unreadable, not absent: only
 a path that is not there at all, link and all, allows a hook to start registration without proof
 or allows `Forget` to record an end. Local `iris doctor` output reports
-`damaged generation proof at <path>` and re-reads every named `.ended` marker. Independently of
-observation age and the bounded log, doctor also scans the sessions directories beside the resolved
-and fallback token paths. Cleaned absolute paths and `os.SameFile` on directory Stat results deduplicate
-lexical, symlink and case aliases. One read-only worker performs all directory and observation-marker
-I/O and publishes progressive snapshots under a mutex. Non-recursive reads across both directories
-share a 4096-entry cap. The caller waits at most one second or the earlier parent deadline and renders
-the latest snapshot; per-read deadlines are removed. A process-wide single-flight guard makes a
-concurrent call return incomplete immediately with "previous end-marker scan still running", so
-abandoned workers and descriptors cannot accumulate.
-
-Before opening an examined entry, the worker requires a regular file or a symlink to a regular
-target. Hooks only ever write regular files, so a directory, FIFO, socket, device or other
-non-regular entry is never valid and is damaged without being opened. Dangling links and links to
-non-regular targets are damaged too. An entry or link that disappears between enumeration and
-metadata collection is absent, matching the hook, rather than damaged. Regular files then use the
-hook's rule. A marker still damaged is current and makes doctor exit 1 even when its observation is
-old or evicted; one repaired with a positive generation or archived since an observation remains
-history and does not fail doctor. Exhausting the cap, the outer deadline or cancellation makes the
-scan incomplete and doctor exit 1 even without a finding. A local-only note gives the reason and
-the number found so far as a lower bound, and says plainly that more may be damaged. An observation
-not yet re-checked is unknown, not repaired. Current damage uses the client from a matching
-retained observation, or a clearly labelled local-only line without a client when no observation
-remains. A healthy or missing directory adds nothing, and an unreadable directory produces a doctor
-note rather than a crash. The local detail explains that current damage prevents registration,
-binding, mail delivery and claims while hooks still allow work. Stop that session's client, hooks,
-MCP shim and watch, verify the configured hub and that session's history, then repair the marker
-with the verified ended generation as a single decimal or archive it before restarting the client.
-Paths and the incomplete reason stay only in the local report; uploads and bundles carry the
-aggregate current-damage lower bound and an `end_marker_scan_incomplete` boolean alone.
-
-Only `iris doctor` (plain, `--bundle`, and the offline phase of `--live`) and `iris setup` call
-`doctor.Run` and reach the scan. Bundle formatting is afterwards, and uploads carry only the
-redacted result. No MCP tool runs doctor, `iris watch` only recommends it, and hub doctor routes
-store or retrieve reports without a host scan. An abandoned worker mutates no caller result, hub
-state or session files, and its late completion cannot change the returned report.
+`damaged generation proof at <path>` and re-reads every named `.ended` marker. A marker still
+damaged is current and makes doctor exit 1; one repaired with a positive generation or archived
+since the observation is history and does not fail doctor. The local detail explains that current
+damage prevents registration, binding, mail delivery and claims while hooks still allow work. Stop
+that session's client, hooks, MCP shim and watch, verify the configured hub and that session's
+history, then repair the marker with the verified ended generation as a single decimal or archive
+it before restarting the client. Paths stay only in the local report; uploads carry counts alone.
 The same observation names the `.ended` path when `Forget` cannot write that marker or cannot take
 the sessions lock, and the proof stays.
 
