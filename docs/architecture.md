@@ -794,7 +794,7 @@ Changes from the reference schema:
    marker and is damaged without being opened. A dangling link or a link to a non-regular target is
    damaged too. An entry or link that disappears between enumeration and metadata collection is
    absent, matching the hook, rather than damaged. Hook and doctor use one bounded generation-file
-   reader for live proof, execution proof and end markers. It opens with FILE_SHARE_READ,
+   reader for live proof, execution proof, end markers and process witnesses. It opens with FILE_SHARE_READ,
    FILE_SHARE_WRITE and FILE_SHARE_DELETE on Windows and O_NONBLOCK elsewhere, then checks the
    opened descriptor and rejects anything but a regular file as damaged before reading. A FIFO,
    including one reached through a symlink, therefore cannot wait for a writer while holding the
@@ -912,7 +912,7 @@ Changes from the reference schema:
    An id-mode root whose verified nearest ancestor is the session's single-session client process
    sends that identity too; the hub's exact process match is unchanged.
    The route deliberately has no checkout fields: the new Execution keeps its predecessor's repository
-   or outside-host context, worktree and its claim scope, branch, parent, process and Agent mailbox.
+   or outside-host context and its repository-wide claim scope, worktree, branch, parent, process and Agent mailbox.
    The operation needs no repository resolution or alias mutation. In one writer transaction,
    the hub requires the newest retained Execution for that exact session to match the supplied proof,
    `lost`, and hook-registered. `active` and `ended` predecessors are refused, as is prior proof at
@@ -946,16 +946,19 @@ Changes from the reference schema:
    `damaged generation proof at <path>`. Hook registration prechecks the ordinary generation file
    and execution sidecar. Binding and succession also read the sidecar and end marker.
 
-   Single-session launchers publish `sessions/proc-<pid>-<start_ms>` before SessionStart repository
-   discovery and hub registration, except Antigravity, which uses its helper record beside the configured token.
-   If Antigravity cannot protect or lock that record's directory or replace the record, SessionStart
-   removes the old succession witness, records the failure and still fails open. Kimi's wake map
-   retains its separate rule that the hub must accept the session first. For a
+   Single-session launchers, Antigravity included, publish `sessions/proc-<pid>-<start_ms>` before
+   SessionStart repository discovery and hub registration. Antigravity publishes this separate evidence
+   before touching its helper JSON; that JSON remains wake state and is not consulted for succession,
+   so a helper or conversation-state write failure leaves successfully published evidence intact.
+   A failed process-witness publication attempts to leave `-` as a durable withdrawal marker and records
+   the failure while failing open. Witness reads use the shared bounded non-blocking regular-file reader.
+   Kimi's wake map retains its separate rule that the hub must accept the session first. For a
    single-session process, current witness evidence takes precedence over the shim's last session,
-   and the last Execution ID applies only to its own session. The shim requires the witness to
+   and the last Execution ID applies only to its own session. Succession requires the witness to
    match the requested native session and rechecks it after the HTTP reply. Ordinary process-bound
-   lookup, refresh and heartbeat renewal apply the same check; only an MCP-owned untrusted-folder
-   fallback has no hook witness. The shim can reject a stale
+   lookup, refresh and heartbeat renewal accept absent or damaged evidence as legacy; only `-` or a
+   witness naming another session rejects an existing healthy binding. A restarted shim likewise needs
+   no in-memory ownership flag to bind and renew an existing hookless fallback. The shim can reject a stale
    reply even if the hub committed the successor before the new SessionStart reached it. Closing
    that hub window requires ADR 036. No sessions lock spans network I/O.
 

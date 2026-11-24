@@ -157,7 +157,8 @@ overrides and calls with explicit handles are excluded. The generation in `<hash
 a matching Execution ID in `<hash>.execution`. Missing or damaged proof, an `.ended` marker at or
 above the generation, a `/clear` witness mismatch, a changed process, or restore lineage mismatch
 fails closed. The shim rechecks the witness after the HTTP reply. Ordinary process-bound lookup,
-refresh and heartbeat renewal apply the same current-session witness check. A succession request already in
+refresh and heartbeat renewal accept absent or damaged evidence as legacy; only an explicit `-`
+withdrawal marker or a witness naming another session rejects an existing healthy binding. A succession request already in
 flight can commit at the hub before the newer `SessionStart` reaches it, even when the shim rejects
 the reply. Exact generation and ID checks detect counter rollback and equal-generation divergent
 history. Restore markers and `stream_id` rotation grant no authority. A backup and live hub that
@@ -260,7 +261,7 @@ local proof no longer recovers on a prompt alone: recovery needs a recognized pr
 `SessionStart` or resume. Intact eligible proof permits the one MCP succession above. Damage to
 `<hash>`, `<hash>.execution` or `.ended` blocks shim binding and succession. A readable `.ended`
 marker blocks generations at or below its value and a proofless fallback. The hook registration
-precheck validates the ordinary generation file `<hash>`. Proof readers accept only regular files;
+precheck validates both `<hash>` and `<hash>.execution`. Proof and process-witness readers accept only regular files;
 on POSIX they open without waiting for a FIFO writer and reject the opened non-regular descriptor
 as damaged. `iris doctor` reports `damaged generation proof at <path>` when a proof reader detects damage. Verify the intended hub
 and its session history, then archive or repair the named proof as ADR 006 directs.

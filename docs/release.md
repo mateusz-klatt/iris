@@ -30,7 +30,7 @@ Reload console tabs after a rollback to an older hub as well. A tab left open fr
 
 After a Cursor or Grok session is lost with no local generation proof, recovery needs a registering
 edit, `SessionStart` or resume. A prompt alone does not register on these clients. Intact eligible
-proof still permits one guarded MCP succession.
+proof, meaning both the generation and its matching execution ID, still permits one guarded MCP succession.
 
 The GoReleaser dependency is not part of the application module.
 
