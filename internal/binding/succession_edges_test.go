@@ -412,6 +412,28 @@ func TestSuccessionProcessWinnerAndAdvanceRace(t *testing.T) {
 	})
 }
 
+func TestSuccessionAdoptsWinnerWhenProofAdvancesBeforeDispatch(t *testing.T) {
+	h := &tickHub{reply: func(req *http.Request, body map[string]any) (int, any) {
+		if req.URL.Path != "/v1/bind" || body["prior_generation"] != float64(1) || body["prior_execution_id"] != "ex_one" {
+			t.Fatalf("winner lookup used the wrong proof: %s %+v", req.URL.Path, body)
+		}
+		return http.StatusOK, map[string]any{"execution_id": "ex_two", "generation": 2, "session_id": "S", "match": "succession"}
+	}}
+	memory := &fakeSuccessionMemory{proofs: []fakeSuccessionProof{{generation: 1, execution: "ex_one"}, {generation: 2, execution: "ex_two"}}}
+	memory.advance = func(string, int, string) (int, bool, error) { return 2, false, nil }
+	r := scriptedSuccessionResolver(h, memory)
+	recalls := 0
+	r.Recall = func(string, string) (int, int, error) {
+		recalls++
+		return 2, 0, nil
+	}
+	b, attempted, err := r.succeedAfterLostHeld(t.Context(), "S", 2, 1)
+	if !attempted || err != nil || b.ExecutionID != "ex_two" || recalls != 2 || memory.advanceCall != 1 {
+		t.Fatalf("concurrent winner was not adopted: bound=%+v attempted=%t err=%v recalls=%d advances=%d", b, attempted, err, recalls, memory.advanceCall)
+	}
+	h.expect(t, "bind session_id=S")
+}
+
 func TestSuccessionFollowsProofAdvancedDuringReattach(t *testing.T) {
 	h := &tickHub{reply: func(req *http.Request, body map[string]any) (int, any) {
 		if body["prior_generation"] != float64(2) || body["prior_execution_id"] != "ex_hook" {
@@ -461,10 +483,12 @@ func TestSuccessionRechecksGenerationProof(t *testing.T) {
 			t.Fatalf("proof read failure: attempted=%t err=%v", attempted, err)
 		}
 	})
-	t.Run("recall mismatch makes no request", func(t *testing.T) {
-		h := &tickHub{reply: func(req *http.Request, _ map[string]any) (int, any) {
-			t.Fatalf("mismatched proof reached %s", req.URL.Path)
-			return 0, nil
+	t.Run("recall mismatch without a confirmed winner", func(t *testing.T) {
+		h := &tickHub{reply: func(req *http.Request, body map[string]any) (int, any) {
+			if req.URL.Path != "/v1/bind" || body["prior_generation"] != float64(1) || body["prior_execution_id"] != "ex_one" {
+				t.Fatalf("mismatched proof reached %s with %+v", req.URL.Path, body)
+			}
+			return refused("unbound")
 		}}
 		memory := &fakeSuccessionMemory{generation: 1, execution: "ex_one"}
 		r := scriptedSuccessionResolver(h, memory)
@@ -472,6 +496,22 @@ func TestSuccessionRechecksGenerationProof(t *testing.T) {
 		if _, attempted, err := r.succeedAfterLostHeld(t.Context(), "S", 2, 1); !attempted || !IsCode(err, "lost") {
 			t.Fatalf("proof mismatch: attempted=%t err=%v", attempted, err)
 		}
+		h.expect(t, "bind session_id=S")
+	})
+	t.Run("recall mismatch with an unverifiable winner", func(t *testing.T) {
+		h := &tickHub{reply: func(req *http.Request, _ map[string]any) (int, any) {
+			if req.URL.Path != "/v1/bind" {
+				t.Fatalf("unverifiable winner reached %s", req.URL.Path)
+			}
+			return http.StatusOK, map[string]any{"execution_id": "ex_two", "generation": 2, "session_id": "S", "match": "succession"}
+		}}
+		memory := &fakeSuccessionMemory{proofs: []fakeSuccessionProof{{generation: 1, execution: "ex_one"}, {err: errors.New("bad winner proof")}}}
+		r := scriptedSuccessionResolver(h, memory)
+		r.Recall = func(string, string) (int, int, error) { return 2, 0, nil }
+		if b, attempted, err := r.succeedAfterLostHeld(t.Context(), "S", 2, 1); !attempted || b.ExecutionID != "" || !IsCode(err, "lost") {
+			t.Fatalf("unverifiable concurrent winner was accepted: bound=%+v attempted=%t err=%v", b, attempted, err)
+		}
+		h.expect(t, "bind session_id=S")
 	})
 	t.Run("end veto makes no request and reports the marker", func(t *testing.T) {
 		h := &tickHub{reply: func(req *http.Request, _ map[string]any) (int, any) {

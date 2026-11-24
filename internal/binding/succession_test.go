@@ -398,6 +398,23 @@ func TestSuccessionRequiresLiveParentAndExcludesWatch(t *testing.T) {
 	}
 }
 
+func TestLegacyExplicitHandleDisablesSuccessionAfterExpiry(t *testing.T) {
+	f := newSuccessionBindingFixture(t, "claude", "SessionStart", "S", proc.Ancestor{})
+	prior := executionRows(t, f.hub.file)[0].id
+	r := f.resolver("claude", "S", proc.Ancestor{})
+	if b, err := r.Resolve(t.Context(), prior); err != nil || b.ExecutionID != prior {
+		t.Fatalf("initial explicit-handle bind: bound=%+v err=%v", b, err)
+	}
+	f.hub.clock.Advance(16 * time.Minute)
+	if b, err := r.Resolve(t.Context(), prior); b.ExecutionID != "" || !IsCode(err, "lost") {
+		t.Fatalf("expired explicit handle triggered succession: bound=%+v err=%v", b, err)
+	}
+	if requests := f.hub.successions(); len(requests) != 0 {
+		t.Fatalf("explicit handle reached succession: %+v", requests)
+	}
+	assertNoGenerationZeroRegistration(t, f.hub.sessions())
+}
+
 func TestSuccessionPrefersCurrentRung3SessionAfterClear(t *testing.T) {
 	anc := proc.Ancestor{PID: 42, StartMS: 100, Name: "cursor-agent"}
 	f := newSuccessionBindingFixture(t, "cursor", "sessionStart", "S1", anc)

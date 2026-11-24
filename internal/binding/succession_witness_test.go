@@ -26,12 +26,16 @@ func TestSuccessionRechecksTheProcessWitnessAfterHTTP(t *testing.T) {
 			f := newSuccessionBindingFixture(t, "cursor", "sessionStart", "S1", ancestor)
 			prior := executionRows(t, f.hub.file)[0].id
 			witness := filepath.Join(f.sessions.Dir(), fmt.Sprintf("proc-%d-%d", ancestor.PID, ancestor.StartMS))
+			changed := false
 			h := &tickHub{reply: func(req *http.Request, _ map[string]any) (int, any) {
 				if tc.adopt && req.URL.Path == "/v1/sessions/succeed" {
 					return refused("lost")
 				}
-				if err := tc.change(witness); err != nil {
-					t.Fatal(err)
+				if !changed {
+					if err := tc.change(witness); err != nil {
+						t.Fatal(err)
+					}
+					changed = true
 				}
 				return http.StatusOK, map[string]any{"execution_id": "ex_two", "generation": 2, "session_id": "S1", "match": "succession"}
 			}}
@@ -49,6 +53,24 @@ func TestSuccessionRechecksTheProcessWitnessAfterHTTP(t *testing.T) {
 			generation, id, proofErr := f.sessions.PrepareSuccession("cursor", "S1", 1, prior, proc.Ancestor{})
 			if generation != 1 || id != prior || proofErr != nil {
 				t.Fatalf("the stale reply changed local proof: generation=%d id=%q err=%v", generation, id, proofErr)
+			}
+			if b, err := r.Resolve(t.Context(), ""); b.ExecutionID != "" || !IsCode(err, "lost") {
+				t.Fatalf("the next process lookup accepted the rejected successor: bound=%+v err=%v", b, err)
+			}
+			stale := Bound{ExecutionID: "ex_two", Generation: 2, SessionID: "S1", Rung: 3}
+			r = f.resolver("cursor", "", ancestor)
+			r.Hub, r.bound = h.client(), stale
+			if b, err := r.Resolve(t.Context(), ""); b.ExecutionID != "" || !IsCode(err, "lost") {
+				t.Fatalf("refresh accepted the rejected successor: bound=%+v err=%v", b, err)
+			}
+			r = f.resolver("cursor", "", ancestor)
+			r.Hub, r.bound = h.client(), stale
+			beforeHeartbeat := len(h.lines)
+			if err := r.Heartbeat(t.Context(), "shim"); !IsCode(err, "lost") {
+				t.Fatalf("renewal accepted the rejected successor: %v", err)
+			}
+			if len(h.lines) != beforeHeartbeat {
+				t.Fatalf("renewal reached the hub after the witness changed: %v", h.lines[beforeHeartbeat:])
 			}
 		})
 	}

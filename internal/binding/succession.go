@@ -55,12 +55,6 @@ func (r *Resolver) succeedAfterLostHeld(ctx context.Context, session string, run
 	if err != nil {
 		return Bound{}, true, &LostError{Cause: err}
 	}
-	if proofGeneration != priorGeneration {
-		return Bound{}, true, errGenerationFloor
-	}
-	if endedThrough >= priorGeneration {
-		return Bound{}, true, r.refuseBindingGeneration(session, false, true)
-	}
 	if processBound {
 		after, err := r.Ancestor()
 		if err != nil {
@@ -69,6 +63,19 @@ func (r *Resolver) succeedAfterLostHeld(ctx context.Context, session string, run
 		if after.PID != anc.PID || after.StartMS != anc.StartMS || after.Name != anc.Name {
 			return Bound{}, true, errGenerationFloor
 		}
+	}
+	if proofGeneration != priorGeneration {
+		winner, adoptErr := r.adoptSuccessionWinnerHeld(ctx, session, rung, priorGeneration, priorExecution, anc, processBound)
+		if adoptErr != nil {
+			return Bound{}, true, &LostError{Cause: adoptErr}
+		}
+		if winner.ExecutionID != "" {
+			return winner, true, nil
+		}
+		return Bound{}, true, errGenerationFloor
+	}
+	if endedThrough >= priorGeneration {
+		return Bound{}, true, r.refuseBindingGeneration(session, false, true)
 	}
 	request := map[string]any{
 		"client": r.Client, "host": r.Host, "session_id": session, "source": "shim",
@@ -120,7 +127,7 @@ func (r *Resolver) succeedAfterLostHeld(ctx context.Context, session string, run
 			return Bound{}, true, &LostError{Cause: err}
 		}
 	}
-	if err := r.checkGenerationHeld(b); err != nil {
+	if err := r.checkGeneration(b.SessionID, b.Generation, r.processGenerationHeld(b.SessionID), r.processRungHeld(b) > 0); err != nil {
 		return Bound{}, true, err
 	}
 	if advanced {

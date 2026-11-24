@@ -366,7 +366,26 @@ func (r *Resolver) refuseBindingGeneration(session string, liveVeto, endedVeto b
 // process's own session.
 func (r *Resolver) checkGenerationHeld(b Bound) error {
 	if b.SessionID != "" {
-		return r.checkGeneration(b.SessionID, b.Generation, r.processGenerationHeld(b.SessionID), r.processRungHeld(b) > 0)
+		if err := r.checkGeneration(b.SessionID, b.Generation, r.processGenerationHeld(b.SessionID), r.processRungHeld(b) > 0); err != nil {
+			return err
+		}
+		return r.checkProcessWitnessHeld(b)
+	}
+	return nil
+}
+
+func (r *Resolver) checkProcessWitnessHeld(b Bound) error {
+	processBound := b.Rung == 3 || r.last.SessionID == b.SessionID && r.last.Rung == 3
+	ownFallback := r.own && r.bound.ExecutionID == b.ExecutionID || r.pending != nil && r.pending.from.ExecutionID == b.ExecutionID
+	if !processBound || ownFallback || r.Succession == nil || r.Client == "claude" {
+		return nil
+	}
+	current, ok, err := r.Succession.CurrentSession(r.Client, r.ancestor())
+	if err != nil {
+		return &LostError{Cause: err}
+	}
+	if !ok || current != b.SessionID {
+		return errGenerationFloor
 	}
 	return nil
 }
@@ -497,7 +516,7 @@ func (r *Resolver) reattachRecalledHeld(ctx context.Context, handle string) (Bou
 	if session == "" {
 		return Bound{}, false, nil
 	}
-	return r.reattachByMemoryHeld(ctx, session, rung, true)
+	return r.reattachByMemoryHeld(ctx, session, rung, handle == "")
 }
 
 func (r *Resolver) explicitBindingHeld(handle string) bool {
@@ -652,7 +671,7 @@ func (r *Resolver) register(ctx context.Context, session string, a proc.Ancestor
 		return Bound{}, err
 	}
 	b := Bound{ExecutionID: response.ExecutionID, Generation: response.Generation, RepositoryID: response.RepositoryID, Agent: response.Agent, SessionID: session, Rung: rung, Worktree: response.Worktree, Capabilities: Capabilities(strings.Join(response.Capabilities, "\n")), Outside: response.OutsideGit}
-	if err := r.checkGenerationHeld(b); err != nil {
+	if err := r.checkGeneration(b.SessionID, b.Generation, r.processGenerationHeld(b.SessionID), r.processRungHeld(b) > 0); err != nil {
 		return Bound{}, err
 	}
 	r.bound, r.own = b, true
