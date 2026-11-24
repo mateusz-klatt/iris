@@ -267,6 +267,8 @@ const (
 	// ScheduleWakeup tools.
 	claudeToolsSession  = "76d28899-a30f-4b4f-9598-1fce6bc60152"
 	claudeWakeupSession = "af647fc5-1139-4ada-b6da-902ec2615848"
+	// Captured from Claude Code 2.1.331 on Linux/WSL for built-in tool classification.
+	claudeBuiltinsSession = "8710f796-234f-4fd1-8f1f-8bc394da3b5c"
 	// Captured from Claude Code 2.1.323 on Linux on 2026-11-13, from a scratch session that ran a
 	// general-purpose sub-agent: the root's session id, with the sub-agent named agent_id. As with
 	// Codex, agent_id is not read, so the sub-agent decodes to its root session (ADR 017).
@@ -309,6 +311,16 @@ var fixtureWant = map[string]decoded{
 	"claude/PreToolUse-taskstop.json":                {kind: KindPreTool, session: claudeToolsSession, cwd: `C:\workspace\project`, tool: "TaskStop", class: ClassOther, call: "toolu_01ML52guJBoybuMwGLdoWYyV"},
 	"claude/PostToolUse-schedulewakeup.json":         {kind: KindPostTool, session: claudeWakeupSession, cwd: `C:\workspace\project`, tool: "ScheduleWakeup", class: ClassOther, call: "toolu_01Hdf8TP1aVtHQ33idivgnvE"},
 	"claude/PreToolUse-schedulewakeup.json":          {kind: KindPreTool, session: claudeWakeupSession, cwd: `C:\workspace\project`, tool: "ScheduleWakeup", class: ClassOther, call: "toolu_01Hdf8TP1aVtHQ33idivgnvE"},
+	"claude/PostToolUse-agent.json":                  {kind: KindPostTool, session: claudeBuiltinsSession, cwd: proj, tool: "Agent", class: ClassOther, call: "toolu_018UDC1c1XB1Qi4EGUJGRSdu"},
+	"claude/PreToolUse-agent.json":                   {kind: KindPreTool, session: claudeBuiltinsSession, cwd: proj, tool: "Agent", class: ClassOther, call: "toolu_018UDC1c1XB1Qi4EGUJGRSdu"},
+	"claude/PostToolUse-pushnotification.json":       {kind: KindPostTool, session: claudeBuiltinsSession, cwd: proj, tool: "PushNotification", class: ClassOther, call: "toolu_017zAtiwUEhRgBfYU32iVES4"},
+	"claude/PreToolUse-pushnotification.json":        {kind: KindPreTool, session: claudeBuiltinsSession, cwd: proj, tool: "PushNotification", class: ClassOther, call: "toolu_017zAtiwUEhRgBfYU32iVES4"},
+	"claude/PostToolUse-senduserfile.json":           {kind: KindPostTool, session: claudeBuiltinsSession, cwd: proj, tool: "SendUserFile", class: ClassOther, call: "toolu_01Qpo9YBqM8S65kUdwZcbzd3"},
+	"claude/PreToolUse-senduserfile.json":            {kind: KindPreTool, session: claudeBuiltinsSession, cwd: proj, tool: "SendUserFile", class: ClassOther, call: "toolu_01Qpo9YBqM8S65kUdwZcbzd3"},
+	"claude/PostToolUse-croncreate.json":             {kind: KindPostTool, session: claudeBuiltinsSession, cwd: proj, tool: "CronCreate", class: ClassOther, call: "toolu_01KXFuoFFQ9eTSCXBM3LYrbb", unknown: true},
+	"claude/PreToolUse-croncreate.json":              {kind: KindPreTool, session: claudeBuiltinsSession, cwd: proj, tool: "CronCreate", class: ClassOther, call: "toolu_01KXFuoFFQ9eTSCXBM3LYrbb", unknown: true},
+	"claude/PostToolUse-crondelete.json":             {kind: KindPostTool, session: claudeBuiltinsSession, cwd: proj, tool: "CronDelete", class: ClassOther, call: "toolu_01AJLKgLcDJb2tSXgcJuhWmf", unknown: true},
+	"claude/PreToolUse-crondelete.json":              {kind: KindPreTool, session: claudeBuiltinsSession, cwd: proj, tool: "CronDelete", class: ClassOther, call: "toolu_01AJLKgLcDJb2tSXgcJuhWmf", unknown: true},
 	"claude/SessionEnd.json":                         {kind: KindSessionEnd, session: claudeSession, cwd: proj},
 	"claude/SessionStart.json":                       {kind: KindSessionStart, session: claudeSession, cwd: proj},
 	"claude/Stop.json":                               {kind: KindStop, session: claudeSession, cwd: proj},
