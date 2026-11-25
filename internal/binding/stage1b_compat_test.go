@@ -3,9 +3,11 @@ package binding
 import (
 	"context"
 	"database/sql"
+	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -310,6 +312,117 @@ func TestV0115BindingResolverInertAgainstStage1bHub(t *testing.T) {
 		}
 		if b.ExecutionID != reg.ExecutionID || !b.HookSeen {
 			t.Fatalf("migrated resolver bind mismatch: %+v", b)
+		}
+	})
+
+	t.Run("un-opted heartbeat keeps v0.1.15 D9 recovery lost on G2 after restart", func(t *testing.T) {
+		clock := newCompatClock(time.Unix(1800000000, 0))
+		dbPath := filepath.Join(t.TempDir(), "hb-d9-pin.db")
+		s, err := store.Open(dbPath, clock)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var activeStore = s
+		var srv *httptest.Server
+		var reattachCalls atomic.Int64
+		wrapHub := func(st *store.Store) *httptest.Server {
+			server := httptest.NewUnstartedServer(nil)
+			h := hub.New(st, "secret", []string{server.Listener.Addr().String()})
+			server.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/v1/sessions" {
+					reattachCalls.Add(1)
+				}
+				h.ServeHTTP(w, r)
+			})
+			server.Start()
+			return server
+		}
+		t.Cleanup(func() {
+			if srv != nil {
+				srv.Close()
+			}
+			if activeStore != nil {
+				_ = activeStore.Close()
+			}
+		})
+		srv = wrapHub(s)
+		hc := &hubclient.Client{Config: compatHubConfig{url: srv.URL, token: "secret"}}
+
+		// Step 1: MCP G1 exists without hook_seen_ms; cursor Rung-3 resolver (no env session) binds it with HookSeen=false.
+		g1, err := hc.RegisterSession(t.Context(), hubclient.SessionRequest{
+			Client: "cursor", Host: "host", SessionID: "S-hb-d9",
+			CWD: "/repo/w", Worktree: "/repo/w", Branch: "main", Source: "mcp",
+			ClientPID: 810, ClientPIDStartMS: 8810, SingleSession: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		var memGen atomic.Int64
+		res := newCompatResolver(srv.URL, "cursor", "host", "/repo/w", nil, 810, 8810)
+		res.Recall = func(client, session string) (int, int, error) {
+			if client == "cursor" && session == "S-hb-d9" {
+				return int(memGen.Load()), 0, nil
+			}
+			return 0, 0, nil
+		}
+		b1, err := res.Resolve(t.Context(), "")
+		if err != nil || b1.ExecutionID != g1.ExecutionID || b1.HookSeen || b1.Rung != 3 {
+			t.Fatalf("unexpected initial cursor bind: b=%+v err=%v", b1, err)
+		}
+
+		// Step 2: A hook arrives on G1 (setting hook_seen_ms > 0 on the hub) while res still holds HookSeen=false,
+		// then the unchanged v0.1.15 resolver sends a plain heartbeat without succession_proof.
+		if _, err := hc.RegisterSession(t.Context(), hubclient.SessionRequest{
+			Client: "cursor", Host: "host", SessionID: "S-hb-d9",
+			CWD: "/repo/w", Worktree: "/repo/w", Branch: "main", Source: "hook",
+			ClientPID: 810, ClientPIDStartMS: 8810, SingleSession: true,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		if err := res.Heartbeat(t.Context(), "shim"); err != nil {
+			t.Fatal(err)
+		}
+
+		// Step 3: G1 expires and Heartbeat confirms loss, keeping res.last={SessionID:"S-hb-d9", Rung:3, HookSeen:false}.
+		clock.Advance(16 * time.Minute)
+		if _, err := activeStore.Call(t.Context(), "expire", store.Request{}); err != nil {
+			t.Fatal(err)
+		}
+		if err := res.Heartbeat(t.Context(), "shim"); !IsCode(err, "lost") || !res.Lost() {
+			t.Fatalf("expected G1 loss confirmation, got err=%v lost=%t", err, res.Lost())
+		}
+
+		// Step 4: Hook starts G2 (ex2), local recall updates to gen=2, and hub restarts so G2 enters recovery.
+		if _, err := hc.RegisterSession(t.Context(), hubclient.SessionRequest{
+			Client: "cursor", Host: "host", SessionID: "S-hb-d9",
+			CWD: "/repo/w", Worktree: "/repo/w", Branch: "main", Source: "hook",
+			ClientPID: 810, ClientPIDStartMS: 8810, SingleSession: true,
+		}); err != nil {
+			t.Fatal(err)
+		}
+		memGen.Store(2)
+
+		if err := activeStore.Close(); err != nil {
+			t.Fatal(err)
+		}
+		activeStore = nil
+		reopened, err := store.Open(dbPath, clock)
+		if err != nil {
+			t.Fatal(err)
+		}
+		activeStore = reopened
+		srv.Close()
+		srv = wrapHub(reopened)
+		res.Hub = &hubclient.Client{Config: compatHubConfig{url: srv.URL, token: "secret"}}
+
+		// Reset counter right before Resolve: with un-opted heartbeat omitting hook_seen, res keeps
+		// last.HookSeen=false (matching v0.1.15) so Resolve must return lost and send zero /v1/sessions reattach.
+		reattachCalls.Store(0)
+		if b2, err := res.Resolve(t.Context(), ""); !IsCode(err, "lost") {
+			t.Fatalf("v0.1.15 resolver unexpectedly resumed G2 instead of returning lost: b=%+v err=%v", b2, err)
+		}
+		if got := reattachCalls.Load(); got != 0 {
+			t.Fatalf("v0.1.15 resolver sent %d /v1/sessions reattach requests after restart, want 0", got)
 		}
 	})
 }

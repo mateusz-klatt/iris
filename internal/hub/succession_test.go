@@ -755,8 +755,16 @@ func TestHTTPStage1bClassifiedRepliesAndCompatibilityGuards(t *testing.T) {
 		"client": "claude", "host": "host", "execution": childID,
 	}, http.StatusOK)
 	assertHTTPClassified(t, plainBind, parentID, "shim", "shim_succession", true)
-	watchHB := do(http.MethodPost, "/v1/executions/"+childID+"/heartbeat", map[string]any{
+	watchHBLegacy := do(http.MethodPost, "/v1/executions/"+childID+"/heartbeat", map[string]any{
 		"generation": float64(2), "source": "watch",
+	}, http.StatusOK)
+	for _, k := range []string{"prior_execution_id", "creation_source", "creation_proof", "hook_seen"} {
+		if _, exists := watchHBLegacy[k]; exists {
+			t.Fatalf("un-opted HTTP heartbeat leaked stage 1b key %q: %+v", k, watchHBLegacy)
+		}
+	}
+	watchHB := do(http.MethodPost, "/v1/executions/"+childID+"/heartbeat", map[string]any{
+		"generation": float64(2), "source": "watch", "succession_proof": true,
 	}, http.StatusOK)
 	assertHTTPClassified(t, watchHB, parentID, "shim", "shim_succession", true)
 }

@@ -17,6 +17,22 @@ func readHookSeenMS(t *testing.T, s *Store, id string) int64 {
 	return seen
 }
 
+func assertLegacyHeartbeatReply(t *testing.T, reply map[string]any) {
+	t.Helper()
+	caps, ok := reply["capabilities"].([]string)
+	if !ok {
+		t.Fatalf("capabilities type=%T value=%#v, want []string", reply["capabilities"], reply["capabilities"])
+	}
+	if !slices.Equal(caps, []string{"shell_scope", "file_claims"}) {
+		t.Fatalf("un-opted heartbeat capabilities=%v, want legacy [shell_scope file_claims]", caps)
+	}
+	for _, key := range []string{"prior_execution_id", "creation_source", "creation_proof", "hook_seen"} {
+		if _, exists := reply[key]; exists {
+			t.Fatalf("un-opted heartbeat leaked stage 1b key %q: %+v", key, reply)
+		}
+	}
+}
+
 func assertClassifiedReply(t *testing.T, reply map[string]any, wantPrior, wantSource, wantProof any, wantHookSeen bool) {
 	t.Helper()
 	caps, ok := reply["capabilities"].([]string)
@@ -90,12 +106,16 @@ func TestStage1bClassifiedRepliesAcrossRoutesAndMigratedRows(t *testing.T) {
 		t.Fatalf("unexpected handle bind: %+v", b)
 	}
 
-	// 3. Live and recovering heartbeats carry classified candidate fields.
-	hbLive := call(t, s, "heartbeat", Request{ExecutionID: hookID, Generation: 1, Source: "shim"})
+	// 3. Heartbeats stay byte-compatible without SuccessionProof, and emit classification with SuccessionProof=true.
+	hbLiveLegacy := call(t, s, "heartbeat", Request{ExecutionID: hookID, Generation: 1, Source: "shim"})
+	assertLegacyHeartbeatReply(t, hbLiveLegacy)
+	hbLive := call(t, s, "heartbeat", Request{ExecutionID: hookID, Generation: 1, Source: "shim", SuccessionProof: true})
 	assertClassifiedReply(t, hbLive, nil, "hook", "initial", true)
 
 	s = restart(t, s, dbPath, clock)
-	hbRec := call(t, s, "heartbeat", Request{ExecutionID: hookID, Generation: 1, Source: "shim"})
+	hbRecLegacy := call(t, s, "heartbeat", Request{ExecutionID: hookID, Generation: 1, Source: "shim"})
+	assertLegacyHeartbeatReply(t, hbRecLegacy)
+	hbRec := call(t, s, "heartbeat", Request{ExecutionID: hookID, Generation: 1, Source: "shim", SuccessionProof: true})
 	assertClassifiedReply(t, hbRec, nil, "hook", "initial", true)
 
 	// 4. Succeed creates and replays a classified hookless shim succession child.
@@ -159,11 +179,20 @@ func TestStage1bClassifiedRepliesAcrossRoutesAndMigratedRows(t *testing.T) {
 	}
 	defer func() { _ = upgraded.Close() }()
 
-	// On first open after restart, Execution enters recovery; heartbeat resumes with nil provenance.
-	legRecHB := call(t, upgraded, "heartbeat", Request{ExecutionID: legID, Generation: 1, Source: "shim"})
+	// On first open after restart, Execution enters recovery; legacy heartbeat stays compatible,
+	// while SuccessionProof=true resumes with nil provenance.
+	legRecLegacy := call(t, upgraded, "heartbeat", Request{ExecutionID: legID, Generation: 1, Source: "shim"})
+	assertLegacyHeartbeatReply(t, legRecLegacy)
+
+	// Reopen again so opted-in recovering heartbeat is exercised too, then test live both ways.
+	upgraded = restart(t, upgraded, legacyDB, legacyClock)
+	legRecHB := call(t, upgraded, "heartbeat", Request{ExecutionID: legID, Generation: 1, Source: "shim", SuccessionProof: true})
 	assertClassifiedReply(t, legRecHB, nil, nil, nil, true)
 
-	legLiveHB := call(t, upgraded, "heartbeat", Request{ExecutionID: legID, Generation: 1, Source: "watch"})
+	legLiveLegacy := call(t, upgraded, "heartbeat", Request{ExecutionID: legID, Generation: 1, Source: "watch"})
+	assertLegacyHeartbeatReply(t, legLiveLegacy)
+
+	legLiveHB := call(t, upgraded, "heartbeat", Request{ExecutionID: legID, Generation: 1, Source: "watch", SuccessionProof: true})
 	assertClassifiedReply(t, legLiveHB, nil, nil, nil, true)
 
 	for _, req := range []Request{
@@ -281,7 +310,9 @@ func TestStage1bCompatibilityGuardsAndHookUnlock(t *testing.T) {
 			b := call(t, s, "bind", req)
 			assertClassifiedReply(t, b, parentID, "shim", "shim_succession", true)
 		}
-		hbWatch := call(t, s, "heartbeat", Request{ExecutionID: childID, Generation: 2, Source: "watch"})
+		hbWatchLegacy := call(t, s, "heartbeat", Request{ExecutionID: childID, Generation: 2, Source: "watch"})
+		assertLegacyHeartbeatReply(t, hbWatchLegacy)
+		hbWatch := call(t, s, "heartbeat", Request{ExecutionID: childID, Generation: 2, Source: "watch", SuccessionProof: true})
 		assertClassifiedReply(t, hbWatch, parentID, "shim", "shim_succession", true)
 	})
 

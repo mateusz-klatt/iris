@@ -223,8 +223,12 @@ alone. A `client_pid` or `client_pid_start_ms` that is missing or not positive b
 lookups above.
 
 `POST /v1/executions/{id}/heartbeat` takes `{"generation":1,"source":"shim"}`, where `source` is
-`shim`, `watch` or `hook`. It returns `{"execution_id":"...","generation":1,"agent":{...},"session_id":"...","capabilities":["shell_scope","file_claims","succession_proof"],"prior_execution_id":null,"creation_source":"hook","creation_proof":"initial","hook_seen":true,"lease_ms":60000}`,
-or `lost`. A live or recovering hookless shim-succession child (`hook_seen:false`) is renewed or
+`shim`, `watch` or `hook`. Without `"succession_proof":true`, it returns the byte-compatible legacy
+reply shape (`{"execution_id":"...","generation":1,"agent":{...},"session_id":"...","capabilities":["shell_scope","file_claims"],"lease_ms":60000}`,
+omitting `hook_seen` and provenance so v0.1.15 resolvers retain their existing D9 behavior); with
+`"succession_proof":true`, it returns the full classified fields including `succession_proof` in
+`capabilities`, `prior_execution_id`, `creation_source`, `creation_proof`, and `hook_seen`, or
+`lost`. A live or recovering hookless shim-succession child (`hook_seen:false`) is renewed or
 resumed only when the heartbeat sends both `"source":"shim"` and `"succession_proof":true`; `hook`
 and `watch` heartbeats cannot satisfy that check and return `lost`.
 

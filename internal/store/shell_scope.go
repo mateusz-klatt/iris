@@ -18,8 +18,14 @@ type ShellScope struct {
 // maxScopeSubmodules bounds a scope's paths, as maxClaims bounds an Execution's claims.
 const maxScopeSubmodules = 500
 
-// shellCapabilities is what a registration, bind, or heartbeat answer names: a hook sends a
-// reduced snapshot only to a hub that names shell_scope, and only on the scoped route, which an
+// legacyCapabilities is the pre-stage-1b capability set returned on un-opted heartbeats so old
+// clients continue decoding byte-compatible replies (ADR 039).
+func legacyCapabilities() []string {
+	return []string{"shell_scope", "file_claims"}
+}
+
+// shellCapabilities is what a registration, bind, or opted-in heartbeat answer names: a hook sends
+// a reduced snapshot only to a hub that names shell_scope, and only on the scoped route, which an
 // older hub refuses (ADR 018 decision 3). It sends a grouped touch only to a hub that names
 // file_claims, on the grouped route, which an older hub refuses too (ADR 033). A stage 1b hub
 // also names succession_proof for classified replies and POST /v1/sessions/succeed/exact (ADR 039).

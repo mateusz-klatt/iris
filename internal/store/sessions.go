@@ -153,23 +153,28 @@ func (t *transaction) live(ex string, generation int64) (execution, error) {
 //
 // An Execution outside git also says so, and its MCP server refuses a claim before it reads the
 // filesystem (ADR 034).
-func bound(e execution) map[string]any {
+func baseBound(e execution, caps []string) map[string]any {
 	out := map[string]any{
-		"execution_id":       e.ID,
-		"generation":         e.Generation,
-		"repository_id":      e.Repo,
-		"agent":              map[string]any{"id": e.AgentID, "name": e.Name},
-		"session_id":         e.Session,
-		"worktree":           e.Worktree,
-		"capabilities":       shellCapabilities(),
-		"hook_seen":          e.HookSeenMS > 0,
-		"prior_execution_id": nullableString(e.PriorExecutionID),
-		"creation_source":    nullableString(e.CreationSource),
-		"creation_proof":     nullableString(e.CreationProof),
+		"execution_id":  e.ID,
+		"generation":    e.Generation,
+		"repository_id": e.Repo,
+		"agent":         map[string]any{"id": e.AgentID, "name": e.Name},
+		"session_id":    e.Session,
+		"worktree":      e.Worktree,
+		"capabilities":  caps,
 	}
 	if e.Outside {
 		out["outside_git"] = true
 	}
+	return out
+}
+
+func bound(e execution) map[string]any {
+	out := baseBound(e, shellCapabilities())
+	out["hook_seen"] = e.HookSeenMS > 0
+	out["prior_execution_id"] = nullableString(e.PriorExecutionID)
+	out["creation_source"] = nullableString(e.CreationSource)
+	out["creation_proof"] = nullableString(e.CreationProof)
 	return out
 }
 
@@ -506,7 +511,7 @@ func (t *transaction) register(r Request, outside bool) (map[string]any, error) 
 		if r.Source == "hook" {
 			e.HookSeenMS = t.s.clock.Now().UnixMilli()
 		}
-		return t.sessionResponse(e, lease)
+		return t.sessionResponse(e, lease, true)
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
@@ -613,10 +618,13 @@ func (t *transaction) register(r Request, outside bool) (map[string]any, error) 
 	if r.Source == "hook" {
 		e.HookSeenMS = t.s.clock.Now().UnixMilli()
 	}
-	return t.sessionResponse(e, lease)
+	return t.sessionResponse(e, lease, true)
 }
-func (t *transaction) sessionResponse(e execution, lease int64) (map[string]any, error) {
-	out := bound(e)
+func (t *transaction) sessionResponse(e execution, lease int64, classified bool) (map[string]any, error) {
+	out := baseBound(e, legacyCapabilities())
+	if classified {
+		out = bound(e)
+	}
 	out["handle"] = e.ID
 	out["lease_ms"] = lease
 	peers, err := t.agents(e.Repo)
@@ -734,7 +742,7 @@ func (t *transaction) heartbeat(r Request) (map[string]any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return t.sessionResponse(e, lease)
+		return t.sessionResponse(e, lease, r.SuccessionProof)
 	}
 	if e, err = t.live(r.ExecutionID, r.Generation); err != nil {
 		return nil, err
@@ -754,7 +762,12 @@ func (t *transaction) heartbeat(r Request) (map[string]any, error) {
 		// The session's monitor is alive, so its hooks need not repeat what it says (A4).
 		err = t.watchSeen(e.ID)
 	}
-	out := bound(e)
+	// Keep un-opted heartbeat replies byte-compatible with v0.1.15 clients so BeatOne and
+	// Refresh never absorb hook_seen or alter D9 recovery behavior.
+	out := baseBound(e, legacyCapabilities())
+	if r.SuccessionProof {
+		out = bound(e)
+	}
 	out["lease_ms"] = lease
 	return out, err
 }

@@ -132,7 +132,7 @@ func (t *transaction) succeed(r Request) (map[string]any, error) {
 	}
 	t.generationChanged(latest, current, r)
 	t.generationChange.Proof = "shim_succession"
-	return t.sessionResponse(current, 60000)
+	return t.sessionResponse(current, 60000, true)
 }
 
 func (t *transaction) replaySuccession(latest execution, r Request) (map[string]any, error) {
@@ -174,5 +174,5 @@ func (t *transaction) replaySuccession(latest execution, r Request) (map[string]
 		return nil, fail("lost", "child Execution is no longer live; reattach the session")
 	}
 	t.replayed = true
-	return t.sessionResponse(latest, remaining)
+	return t.sessionResponse(latest, remaining, true)
 }

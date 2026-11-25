@@ -287,13 +287,22 @@ func TestMixedVersionStage1bHubClientAndStoreMatrix(t *testing.T) {
 		defer srv.Close()
 		c := &hubclient.Client{Config: mixedHubConfig{url: srv.URL, token: "secret"}}
 
-		recHB, err := c.Heartbeat(t.Context(), reg.ExecutionID, hubclient.HeartbeatRequest{
+		recHBLegacy, err := c.Heartbeat(t.Context(), reg.ExecutionID, hubclient.HeartbeatRequest{
 			Generation: reg.Generation, Source: "shim",
 		})
 		if err != nil {
 			t.Fatal(err)
 		}
-		hbCls, err := recHB.Classify()
+		if legCls, err := recHBLegacy.Classify(); err != nil || legCls.Kind != hubclient.CandidateUnclassified || recHBLegacy.HookSeen.Known {
+			t.Fatalf("un-opted heartbeat leaked classification: cand=%+v cls=%+v err=%v", recHBLegacy, legCls, err)
+		}
+		liveHBOpted, err := c.Heartbeat(t.Context(), reg.ExecutionID, hubclient.HeartbeatRequest{
+			Generation: reg.Generation, Source: "shim", SuccessionProof: true,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		hbCls, err := liveHBOpted.Classify()
 		if err != nil || hbCls.Kind != hubclient.CandidateLegacy || !hbCls.HookSeen {
 			t.Fatalf("migrated heartbeat classification=%+v err=%v", hbCls, err)
 		}
