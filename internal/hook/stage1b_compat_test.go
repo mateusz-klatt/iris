@@ -153,7 +153,21 @@ func TestV0115HookRunnerUnlocksHooklessSuccessionChildOnStage1bHub(t *testing.T)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if cls.Kind != hubclient.CandidateShimSuccession || !cls.HookSeen || cls.PriorExecutionID != parent.ExecutionID {
-		t.Fatalf("unexpected unlocked classification: %+v", cls)
+	if cls.Kind != hubclient.CandidateUnclassified || !cls.HookSeen {
+		t.Fatalf("unexpected un-opted unlocked classification: %+v", cls)
+	}
+
+	optedBound, err := client.Bind(t.Context(), hubclient.BindRequest{
+		Client: string(ClientClaude), Host: "testhost", Execution: child.ExecutionID, SuccessionProof: true,
+	})
+	if err != nil {
+		t.Fatalf("opted bind after hook arrival failed: %v", err)
+	}
+	optedCls, err := optedBound.Classify()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if optedCls.Kind != hubclient.CandidateShimSuccession || !optedCls.HookSeen || optedCls.PriorExecutionID != parent.ExecutionID {
+		t.Fatalf("unexpected opted unlocked classification: %+v", optedCls)
 	}
 }

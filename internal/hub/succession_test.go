@@ -643,18 +643,45 @@ func TestHTTPStage1bClassifiedRepliesAndCompatibilityGuards(t *testing.T) {
 		return out
 	}
 
-	// Classified hook replies on /v1/sessions, /v1/sessions/outside, /v1/bind, and heartbeat.
-	parent := do(http.MethodPost, "/v1/sessions", map[string]any{
+	// Un-opted replies omit succession_proof and provenance; opted replies classify on /v1/sessions, /v1/sessions/outside, /v1/bind, and heartbeat.
+	assertHTTPUnopted := func(t *testing.T, reply map[string]any, expectHookSeen bool) {
+		t.Helper()
+		caps, ok := reply["capabilities"].([]any)
+		if !ok || len(caps) != 2 || caps[0] != "shell_scope" || caps[1] != "file_claims" {
+			t.Fatalf("un-opted capabilities=%#v, want [shell_scope file_claims]", reply["capabilities"])
+		}
+		for _, k := range []string{"prior_execution_id", "creation_source", "creation_proof"} {
+			if _, exists := reply[k]; exists {
+				t.Fatalf("un-opted JSON reply leaked stage 1b key %q: %+v", k, reply)
+			}
+		}
+		if _, exists := reply["hook_seen"]; exists != expectHookSeen {
+			t.Fatalf("un-opted JSON reply hook_seen presence=%t want=%t: %+v", exists, expectHookSeen, reply)
+		}
+	}
+
+	parentUnopted := do(http.MethodPost, "/v1/sessions", map[string]any{
 		"client": "claude", "host": "host", "session_id": "S-http",
 		"cwd": "/repo/w", "worktree": "/repo/w", "source": "hook",
 		"client_pid": 801, "client_pid_start_ms": 8801,
 	}, http.StatusOK)
+	assertHTTPUnopted(t, parentUnopted, false)
+	parent := do(http.MethodPost, "/v1/sessions", map[string]any{
+		"client": "claude", "host": "host", "session_id": "S-http",
+		"cwd": "/repo/w", "worktree": "/repo/w", "source": "hook",
+		"client_pid": 801, "client_pid_start_ms": 8801, "succession_proof": true,
+	}, http.StatusOK)
 	parentID := parent["execution_id"].(string)
 	assertHTTPClassified(t, parent, nil, "hook", "initial", true)
 
-	outside := do(http.MethodPost, "/v1/sessions/outside", map[string]any{
+	outsideUnopted := do(http.MethodPost, "/v1/sessions/outside", map[string]any{
 		"client": "codex", "host": "host", "session_id": "S-out-http",
 		"cwd": "/tmp/out", "source": "hook",
+	}, http.StatusOK)
+	assertHTTPUnopted(t, outsideUnopted, false)
+	outside := do(http.MethodPost, "/v1/sessions/outside", map[string]any{
+		"client": "codex", "host": "host", "session_id": "S-out-http",
+		"cwd": "/tmp/out", "source": "hook", "succession_proof": true,
 	}, http.StatusOK)
 	assertHTTPClassified(t, outside, nil, "hook", "initial", true)
 
@@ -748,21 +775,21 @@ func TestHTTPStage1bClassifiedRepliesAndCompatibilityGuards(t *testing.T) {
 	attached := do(http.MethodPost, "/v1/sessions", map[string]any{
 		"client": "claude", "host": "host", "session_id": "S-http",
 		"cwd": "/repo/w", "worktree": "/repo/w", "source": "hook",
-		"client_pid": 802, "client_pid_start_ms": 8802,
+		"client_pid": 802, "client_pid_start_ms": 8802, "succession_proof": true,
 	}, http.StatusOK)
 	assertHTTPClassified(t, attached, parentID, "shim", "shim_succession", true)
-	plainBind := do(http.MethodPost, "/v1/bind", map[string]any{
+	plainBindLegacy := do(http.MethodPost, "/v1/bind", map[string]any{
 		"client": "claude", "host": "host", "execution": childID,
+	}, http.StatusOK)
+	assertHTTPUnopted(t, plainBindLegacy, true)
+	plainBind := do(http.MethodPost, "/v1/bind", map[string]any{
+		"client": "claude", "host": "host", "execution": childID, "succession_proof": true,
 	}, http.StatusOK)
 	assertHTTPClassified(t, plainBind, parentID, "shim", "shim_succession", true)
 	watchHBLegacy := do(http.MethodPost, "/v1/executions/"+childID+"/heartbeat", map[string]any{
 		"generation": float64(2), "source": "watch",
 	}, http.StatusOK)
-	for _, k := range []string{"prior_execution_id", "creation_source", "creation_proof", "hook_seen"} {
-		if _, exists := watchHBLegacy[k]; exists {
-			t.Fatalf("un-opted HTTP heartbeat leaked stage 1b key %q: %+v", k, watchHBLegacy)
-		}
-	}
+	assertHTTPUnopted(t, watchHBLegacy, false)
 	watchHB := do(http.MethodPost, "/v1/executions/"+childID+"/heartbeat", map[string]any{
 		"generation": float64(2), "source": "watch", "succession_proof": true,
 	}, http.StatusOK)

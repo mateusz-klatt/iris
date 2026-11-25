@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -84,11 +85,26 @@ func TestMixedVersionStage1bHubClientAndStoreMatrix(t *testing.T) {
 		srv = startMixedHub(s)
 		c := &hubclient.Client{Config: mixedHubConfig{url: srv.URL, token: "secret"}}
 
-		// Hook registers inside git and outside git: both advertise succession_proof and ordinary classification.
-		hookResp, err := c.RegisterSession(t.Context(), hubclient.SessionRequest{
+		// Un-opted registration omits succession_proof and classification; opted-in registration advertises both.
+		unoptedHookResp, err := c.RegisterSession(t.Context(), hubclient.SessionRequest{
 			Client: "claude", Host: "host", SessionID: "S-mix",
 			CWD: "/repo/w", Worktree: "/repo/w", Branch: "main", Source: "hook",
 			ClientPID: 301, ClientPIDStartMS: 3301,
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(unoptedHookResp.Capabilities, []string{"shell_scope", "file_claims"}) || unoptedHookResp.HookSeen.Known {
+			t.Fatalf("un-opted registration leaked stage 1b fields: %+v", unoptedHookResp)
+		}
+		if uCls, err := unoptedHookResp.Candidate().Classify(); err != nil || uCls != (hubclient.Classification{Kind: hubclient.CandidateUnclassified}) {
+			t.Fatalf("unexpected un-opted hook classification: cls=%+v err=%v", uCls, err)
+		}
+
+		hookResp, err := c.RegisterSession(t.Context(), hubclient.SessionRequest{
+			Client: "claude", Host: "host", SessionID: "S-mix",
+			CWD: "/repo/w", Worktree: "/repo/w", Branch: "main", Source: "hook",
+			ClientPID: 301, ClientPIDStartMS: 3301, SuccessionProof: true,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -101,8 +117,18 @@ func TestMixedVersionStage1bHubClientAndStoreMatrix(t *testing.T) {
 			t.Fatalf("unexpected hook classification: %+v", cls)
 		}
 
-		outResp, err := c.RegisterOutsideSession(t.Context(), hubclient.SessionRequest{
+		unoptedOutResp, err := c.RegisterOutsideSession(t.Context(), hubclient.SessionRequest{
 			Client: "codex", Host: "host", SessionID: "S-out-mix", CWD: "/tmp/out", Source: "hook",
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if !slices.Equal(unoptedOutResp.Capabilities, []string{"shell_scope", "file_claims"}) || unoptedOutResp.HookSeen.Known {
+			t.Fatalf("un-opted outside registration leaked stage 1b fields: %+v", unoptedOutResp)
+		}
+
+		outResp, err := c.RegisterOutsideSession(t.Context(), hubclient.SessionRequest{
+			Client: "codex", Host: "host", SessionID: "S-out-mix", CWD: "/tmp/out", Source: "hook", SuccessionProof: true,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -224,7 +250,7 @@ func TestMixedVersionStage1bHubClientAndStoreMatrix(t *testing.T) {
 		reattachHook, err := c.RegisterSession(t.Context(), hubclient.SessionRequest{
 			Client: "claude", Host: "host", SessionID: "S-mix",
 			CWD: "/repo/w", Worktree: "/repo/w", Branch: "main", Source: "hook",
-			ClientPID: 301, ClientPIDStartMS: 3301,
+			ClientPID: 301, ClientPIDStartMS: 3301, SuccessionProof: true,
 		})
 		if err != nil {
 			t.Fatal(err)
@@ -236,8 +262,19 @@ func TestMixedVersionStage1bHubClientAndStoreMatrix(t *testing.T) {
 		if unlockCls.IsHooklessSuccession() || !unlockCls.HookSeen || unlockCls.Kind != hubclient.CandidateShimSuccession {
 			t.Fatalf("hook attach did not preserve shim_succession provenance with hook_seen=true: %+v", unlockCls)
 		}
-		if _, err := c.Bind(t.Context(), hubclient.BindRequest{Client: "claude", Host: "host", Execution: succResp.ExecutionID}); err != nil {
+		unoptedUnlocked, err := c.Bind(t.Context(), hubclient.BindRequest{Client: "claude", Host: "host", Execution: succResp.ExecutionID})
+		if err != nil {
 			t.Fatalf("ordinary bind failed after hook attach: %v", err)
+		}
+		if uCls, err := unoptedUnlocked.Classify(); err != nil || uCls != (hubclient.Classification{Kind: hubclient.CandidateUnclassified, HookSeen: true}) {
+			t.Fatalf("unexpected un-opted bind classification after hook attach: cls=%+v err=%v", uCls, err)
+		}
+		optedUnlocked, err := c.Bind(t.Context(), hubclient.BindRequest{Client: "claude", Host: "host", Execution: succResp.ExecutionID, SuccessionProof: true})
+		if err != nil {
+			t.Fatalf("opted bind failed after hook attach: %v", err)
+		}
+		if oCls, err := optedUnlocked.Classify(); err != nil || oCls.Kind != hubclient.CandidateShimSuccession || !oCls.HookSeen {
+			t.Fatalf("unexpected opted bind classification after hook attach: cls=%+v err=%v", oCls, err)
 		}
 		if _, err := c.Heartbeat(t.Context(), succResp.ExecutionID, hubclient.HeartbeatRequest{Generation: succResp.Generation, Source: "watch"}); err != nil {
 			t.Fatalf("watch heartbeat failed after hook attach: %v", err)
@@ -313,7 +350,14 @@ func TestMixedVersionStage1bHubClientAndStoreMatrix(t *testing.T) {
 		if err != nil || hbCls.Kind != hubclient.CandidateLegacy || !hbCls.HookSeen {
 			t.Fatalf("migrated heartbeat classification=%+v err=%v", hbCls, err)
 		}
-		bound, err := c.Bind(t.Context(), hubclient.BindRequest{Client: "claude", Host: "host", Execution: reg.ExecutionID})
+		unoptedBound, err := c.Bind(t.Context(), hubclient.BindRequest{Client: "claude", Host: "host", Execution: reg.ExecutionID})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if uCls, err := unoptedBound.Classify(); err != nil || uCls != (hubclient.Classification{Kind: hubclient.CandidateUnclassified, HookSeen: true}) || unoptedBound.PriorExecutionID.Known {
+			t.Fatalf("un-opted migrated bind leaked classification: cand=%+v cls=%+v err=%v", unoptedBound, uCls, err)
+		}
+		bound, err := c.Bind(t.Context(), hubclient.BindRequest{Client: "claude", Host: "host", Execution: reg.ExecutionID, SuccessionProof: true})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -584,4 +628,166 @@ func TestHTTPHeartbeatExactV0115GoldenBytes(t *testing.T) {
 			}
 		})
 	}
+}
+
+// TestHTTPUnoptedRoutesExactV0115GoldenBytes verifies that un-opted POST /v1/sessions,
+// POST /v1/sessions/outside, and POST /v1/bind (all four lookup modes, inside and outside a
+// repository) produce exact v0.1.15 JSON bytes, while opted-in requests ("succession_proof":true)
+// advertise succession_proof in capabilities.
+func TestHTTPUnoptedRoutesExactV0115GoldenBytes(t *testing.T) {
+	clock := newLockedClock(time.Unix(1800000000, 0))
+	s, err := store.Open(filepath.Join(t.TempDir(), "golden-routes.db"), clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	srv := startMixedHub(s)
+	defer srv.Close()
+
+	postBytes := func(path, rawReq string) []byte {
+		t.Helper()
+		req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, srv.URL+path, strings.NewReader(rawReq))
+		if err != nil {
+			t.Fatal(err)
+		}
+		req.Header.Set("Authorization", "Bearer secret")
+		req.Header.Set("Content-Type", "application/json")
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer func() { _ = resp.Body.Close() }()
+		body, err := io.ReadAll(resp.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("%s status=%d body=%s", path, resp.StatusCode, body)
+		}
+		return body
+	}
+
+	assertOptedHasSuccessionProof := func(path string, req map[string]any, nestedSession bool) {
+		t.Helper()
+		req["succession_proof"] = true
+		raw, err := json.Marshal(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out map[string]any
+		if err := json.Unmarshal(postBytes(path, string(raw)), &out); err != nil {
+			t.Fatal(err)
+		}
+		target := out
+		if nestedSession {
+			target = out["session"].(map[string]any)
+		}
+		caps, ok := target["capabilities"].([]any)
+		if !ok || len(caps) != 3 || caps[0] != "shell_scope" || caps[1] != "file_claims" || caps[2] != "succession_proof" {
+			t.Fatalf("%s opted capabilities=%#v, want [shell_scope file_claims succession_proof]", path, target["capabilities"])
+		}
+	}
+
+	// 1. POST /v1/sessions (inside repo)
+	sessRaw := postBytes("/v1/sessions", `{"client":"codex","host":"host","session_id":"S-gold-in","cwd":"/repo/w","worktree":"/repo/w","branch":"main","source":"hook","client_pid":701,"client_pid_start_ms":7701,"single_session":true}`)
+	var sessDoc hubclient.SessionResponse
+	if err := json.Unmarshal(sessRaw, &sessDoc); err != nil {
+		t.Fatal(err)
+	}
+	normIn := strings.NewReplacer(
+		sessDoc.Agent.ID, "<AGENT_ID>",
+		sessDoc.ExecutionID, "<EXEC_ID>",
+		sessDoc.RepositoryID, "<REPO_ID>",
+	)
+	wantSess := "{\"agent\":{\"id\":\"<AGENT_ID>\",\"name\":\"codex-host-w\"},\"attention\":{\"available\":0,\"high_water\":0,\"identity\":null,\"monitored\":false,\"unread\":0},\"capabilities\":[\"shell_scope\",\"file_claims\"],\"claims\":[],\"execution_id\":\"<EXEC_ID>\",\"generation\":1,\"handle\":\"<EXEC_ID>\",\"lease_ms\":900000,\"peers\":[{\"branch\":\"main\",\"client\":\"codex\",\"id\":\"<AGENT_ID>\",\"name\":\"codex-host-w\",\"state\":\"active\",\"worktree\":\"/repo/w\"}],\"repository_id\":\"<REPO_ID>\",\"session_id\":\"S-gold-in\",\"unread\":0,\"worktree\":\"/repo/w\"}\n"
+	if got := normIn.Replace(string(sessRaw)); got != wantSess {
+		t.Fatalf("/v1/sessions un-opted bytes mismatch:\ngot:  %q\nwant: %q", got, wantSess)
+	}
+	assertOptedHasSuccessionProof("/v1/sessions", map[string]any{
+		"client": "codex", "host": "host", "session_id": "S-gold-in",
+		"cwd": "/repo/w", "worktree": "/repo/w", "branch": "main", "source": "hook",
+		"client_pid": 701, "client_pid_start_ms": 7701, "single_session": true,
+	}, false)
+
+	// 2. POST /v1/sessions/outside
+	outRaw := postBytes("/v1/sessions/outside", `{"client":"codex","host":"host","session_id":"S-gold-out","cwd":"/tmp/outside","source":"hook"}`)
+	var outDoc hubclient.SessionResponse
+	if err := json.Unmarshal(outRaw, &outDoc); err != nil {
+		t.Fatal(err)
+	}
+	normOut := strings.NewReplacer(
+		outDoc.Agent.ID, "<AGENT_ID>",
+		outDoc.ExecutionID, "<EXEC_ID>",
+		outDoc.RepositoryID, "<REPO_ID>",
+	)
+	wantOutside := "{\"agent\":{\"id\":\"<AGENT_ID>\",\"name\":\"codex-host-outside\"},\"attention\":{\"available\":0,\"high_water\":2,\"identity\":null,\"monitored\":false,\"unread\":0},\"capabilities\":[\"shell_scope\",\"file_claims\"],\"claims\":[],\"execution_id\":\"<EXEC_ID>\",\"generation\":1,\"handle\":\"<EXEC_ID>\",\"lease_ms\":900000,\"outside_git\":true,\"peers\":[{\"branch\":\"\",\"client\":\"codex\",\"id\":\"<AGENT_ID>\",\"name\":\"codex-host-outside\",\"state\":\"active\",\"worktree\":\"/tmp/outside\"}],\"repository_id\":\"<REPO_ID>\",\"session_id\":\"S-gold-out\",\"unread\":0,\"worktree\":\"/tmp/outside\"}\n"
+	if got := normOut.Replace(string(outRaw)); got != wantOutside {
+		t.Fatalf("/v1/sessions/outside un-opted bytes mismatch:\ngot:  %q\nwant: %q", got, wantOutside)
+	}
+	assertOptedHasSuccessionProof("/v1/sessions/outside", map[string]any{
+		"client": "codex", "host": "host", "session_id": "S-gold-out",
+		"cwd": "/tmp/outside", "source": "hook",
+	}, false)
+
+	// 3. POST /v1/bind across all 4 lookup modes (inside) + explicit handle (outside)
+	wantBind := "{\"agent\":{\"id\":\"<AGENT_ID>\",\"name\":\"codex-host-w\"},\"capabilities\":[\"shell_scope\",\"file_claims\"],\"execution_id\":\"<EXEC_ID>\",\"generation\":1,\"hook_seen\":true,\"repository_id\":\"<REPO_ID>\",\"session_id\":\"S-gold-in\",\"worktree\":\"/repo/w\"}\n"
+	wantCombined := "{\"agent\":{\"id\":\"<AGENT_ID>\",\"name\":\"codex-host-w\"},\"capabilities\":[\"shell_scope\",\"file_claims\"],\"execution_id\":\"<EXEC_ID>\",\"generation\":1,\"hook_seen\":true,\"match\":\"process_session\",\"repository_id\":\"<REPO_ID>\",\"session_id\":\"S-gold-in\",\"worktree\":\"/repo/w\"}\n"
+	wantBindOut := "{\"agent\":{\"id\":\"<AGENT_ID>\",\"name\":\"codex-host-outside\"},\"capabilities\":[\"shell_scope\",\"file_claims\"],\"execution_id\":\"<EXEC_ID>\",\"generation\":1,\"hook_seen\":true,\"outside_git\":true,\"repository_id\":\"<REPO_ID>\",\"session_id\":\"S-gold-out\",\"worktree\":\"/tmp/outside\"}\n"
+	for _, tc := range []struct {
+		name string
+		req  map[string]any
+		norm *strings.Replacer
+		want string
+	}{
+		{"handle", map[string]any{"client": "codex", "host": "host", "execution": sessDoc.ExecutionID}, normIn, wantBind},
+		{"session", map[string]any{"client": "codex", "host": "host", "session_id": "S-gold-in"}, normIn, wantBind},
+		{"process", map[string]any{"client": "codex", "host": "host", "client_pid": 701, "client_pid_start_ms": 7701}, normIn, wantBind},
+		{"combined", map[string]any{"client": "codex", "host": "host", "session_id": "S-gold-in", "client_pid": 701, "client_pid_start_ms": 7701}, normIn, wantCombined},
+		{"outside", map[string]any{"client": "codex", "host": "host", "execution": outDoc.ExecutionID}, normOut, wantBindOut},
+	} {
+		t.Run("bind/"+tc.name, func(t *testing.T) {
+			rawReq, _ := json.Marshal(tc.req)
+			got := tc.norm.Replace(string(postBytes("/v1/bind", string(rawReq))))
+			if got != tc.want {
+				t.Fatalf("/v1/bind (%s) un-opted bytes mismatch:\ngot:  %q\nwant: %q", tc.name, got, tc.want)
+			}
+			assertOptedHasSuccessionProof("/v1/bind", tc.req, false)
+		})
+	}
+
+	// 4. Combined POST /v1/shell/reconcile and POST /v1/shell/scoped session replies.
+	shellReq := `{"client":"codex","host":"host","session_id":"S-gold-shell","cwd":"/repo/shell","worktree":"/repo/shell","source":"hook","kind":"before","status":{}}`
+	shellRaw := postBytes("/v1/shell/reconcile", shellReq)
+	var shellDoc hubclient.ShellResponse
+	if err := json.Unmarshal(shellRaw, &shellDoc); err != nil {
+		t.Fatal(err)
+	}
+	normShell := strings.NewReplacer(shellDoc.Session.ExecutionID, "<EXEC_ID>")
+	wantShell := "{\"attention\":{\"available\":0,\"high_water\":4,\"identity\":null,\"monitored\":false,\"unread\":0},\"conflicts\":[],\"message\":\"\",\"session\":{\"capabilities\":[\"shell_scope\",\"file_claims\"],\"execution_id\":\"<EXEC_ID>\",\"generation\":1}}\n"
+	if got := normShell.Replace(string(shellRaw)); got != wantShell {
+		t.Fatalf("/v1/shell/reconcile un-opted bytes mismatch:\ngot:  %q\nwant: %q", got, wantShell)
+	}
+	assertOptedHasSuccessionProof("/v1/shell/reconcile", map[string]any{
+		"client": "codex", "host": "host", "session_id": "S-gold-shell-opt",
+		"cwd": "/repo/shell-opt", "worktree": "/repo/shell-opt", "source": "hook",
+		"kind": "before", "status": map[string]string{},
+	}, true)
+
+	scopedReq := `{"client":"codex","host":"host","session_id":"S-gold-scoped","cwd":"/repo/scoped","worktree":"/repo/scoped","source":"hook","kind":"before","status":{},"scope":{"mode":"dirty","submodules":["lib"]}}`
+	scopedRaw := postBytes("/v1/shell/scoped", scopedReq)
+	var scopedDoc hubclient.ShellResponse
+	if err := json.Unmarshal(scopedRaw, &scopedDoc); err != nil {
+		t.Fatal(err)
+	}
+	normScoped := strings.NewReplacer(scopedDoc.Session.ExecutionID, "<EXEC_ID>")
+	wantScoped := "{\"attention\":{\"available\":0,\"high_water\":6,\"identity\":null,\"monitored\":false,\"unread\":0},\"conflicts\":[],\"message\":\"\",\"session\":{\"capabilities\":[\"shell_scope\",\"file_claims\"],\"execution_id\":\"<EXEC_ID>\",\"generation\":1}}\n"
+	if got := normScoped.Replace(string(scopedRaw)); got != wantScoped {
+		t.Fatalf("/v1/shell/scoped un-opted bytes mismatch:\ngot:  %q\nwant: %q", got, wantScoped)
+	}
+	assertOptedHasSuccessionProof("/v1/shell/scoped", map[string]any{
+		"client": "codex", "host": "host", "session_id": "S-gold-scoped-opt",
+		"cwd": "/repo/scoped-opt", "worktree": "/repo/scoped-opt", "source": "hook",
+		"kind": "before", "status": map[string]string{},
+		"scope": map[string]any{"mode": "dirty", "submodules": []string{"lib"}},
+	}, true)
 }

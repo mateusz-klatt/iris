@@ -218,6 +218,7 @@ func TestCandidateClassifyRulesAndHelpers(t *testing.T) {
 }
 
 func TestStage1bClientMethods(t *testing.T) {
+	var seenSess SessionRequest
 	var seenBind BindRequest
 	var seenHB HeartbeatRequest
 	var seenSucc SucceedRequest
@@ -226,6 +227,16 @@ func TestStage1bClientMethods(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		seenPath = r.URL.Path
 		switch r.URL.Path {
+		case "/v1/sessions":
+			if err := json.NewDecoder(r.Body).Decode(&seenSess); err != nil {
+				t.Fatal(err)
+			}
+			_, _ = w.Write([]byte(`{
+				"execution_id":"ex_sess","generation":1,"handle":"ex_sess","repository_id":"rp_1",
+				"agent":{"id":"ag_1","name":"codex-h-w"},"session_id":"S1","lease_ms":900000,"peers":[],"claims":[],"unread":0,
+				"attention":{},"capabilities":["shell_scope","file_claims","succession_proof"],"worktree":"/w",
+				"prior_execution_id":null,"creation_source":"hook","creation_proof":"initial","hook_seen":true
+			}`))
 		case "/v1/bind":
 			if err := json.NewDecoder(r.Body).Decode(&seenBind); err != nil {
 				t.Fatal(err)
@@ -266,6 +277,19 @@ func TestStage1bClientMethods(t *testing.T) {
 	defer srv.Close()
 
 	c := &Client{Config: staticConfig{url: srv.URL, token: "tok"}}
+
+	sessResp, err := c.RegisterSession(t.Context(), SessionRequest{
+		Client: "codex", Host: "h", SessionID: "S1", CWD: "/w", Worktree: "/w", Source: "hook", SuccessionProof: true,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !seenSess.SuccessionProof || sessResp.ExecutionID != "ex_sess" {
+		t.Fatalf("unexpected session request/reply: req=%+v resp=%+v", seenSess, sessResp)
+	}
+	if cls, err := sessResp.Candidate().Classify(); err != nil || cls.Kind != CandidateOrdinary || !cls.HookSeen {
+		t.Fatalf("session classify failed: cls=%+v err=%v", cls, err)
+	}
 
 	cand, err := c.Bind(t.Context(), BindRequest{
 		Client: "codex", Host: "h", SessionID: "S1", SuccessionProof: true,

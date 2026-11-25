@@ -102,8 +102,9 @@ type Request struct {
 	PriorExecutionID string `json:"prior_execution_id,omitempty"`
 	// EndedThrough refuses registration or succession at or below a generation the client ended locally.
 	EndedThrough int64 `json:"ended_through,omitempty"`
-	// SuccessionProof opts a shim bind or heartbeat into attaching to or renewing a hookless
-	// succession child.
+	// SuccessionProof opts a session, combined shell, bind, or heartbeat request into the stage 1b
+	// succession_proof capability and classification fields (and allows bind or shim heartbeat to
+	// attach to or renew a hookless succession child).
 	SuccessionProof bool `json:"succession_proof,omitempty"`
 }
 
@@ -167,6 +168,19 @@ func baseBound(e execution, caps []string) map[string]any {
 		out["outside_git"] = true
 	}
 	return out
+}
+
+func boundWithHooks(e execution) map[string]any {
+	out := baseBound(e, legacyCapabilities())
+	out["hook_seen"] = e.HookSeenMS > 0
+	return out
+}
+
+func bindBound(e execution, classified bool) map[string]any {
+	if classified {
+		return bound(e)
+	}
+	return boundWithHooks(e)
 }
 
 func bound(e execution) map[string]any {
@@ -511,7 +525,7 @@ func (t *transaction) register(r Request, outside bool) (map[string]any, error) 
 		if r.Source == "hook" {
 			e.HookSeenMS = t.s.clock.Now().UnixMilli()
 		}
-		return t.sessionResponse(e, lease, true)
+		return t.sessionResponse(e, lease, r.SuccessionProof)
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
@@ -618,7 +632,7 @@ func (t *transaction) register(r Request, outside bool) (map[string]any, error) 
 	if r.Source == "hook" {
 		e.HookSeenMS = t.s.clock.Now().UnixMilli()
 	}
-	return t.sessionResponse(e, lease, true)
+	return t.sessionResponse(e, lease, r.SuccessionProof)
 }
 func (t *transaction) sessionResponse(e execution, lease int64, classified bool) (map[string]any, error) {
 	out := baseBound(e, legacyCapabilities())
@@ -659,7 +673,7 @@ func (t *transaction) bind(r Request) (map[string]any, error) {
 		if isHooklessSuccessionChild(e) && !r.SuccessionProof {
 			return nil, fail("lost", "hookless succession child requires succession_proof opt-in")
 		}
-		return bound(e), nil
+		return bindBound(e, r.SuccessionProof), nil
 	}
 	query := executionSelect + "WHERE e.client=? AND e.host_id=? AND e.state='active' AND e.recovery_deadline IS NULL AND e.boot_epoch=? AND e.deadline_tick_ms>?"
 	args := []any{r.Client, r.Host, t.s.epoch, t.s.clock.Tick()}
@@ -714,7 +728,7 @@ func (t *transaction) bind(r Request) (map[string]any, error) {
 	if isHooklessSuccessionChild(matches[0]) && !r.SuccessionProof {
 		return nil, fail("lost", "hookless succession child requires succession_proof opt-in")
 	}
-	out := bound(matches[0])
+	out := bindBound(matches[0], r.SuccessionProof)
 	if combined {
 		// Only this branch says so. A hub from before it takes such a request by session alone
 		// and answers without this field, which the asking client must refuse.
