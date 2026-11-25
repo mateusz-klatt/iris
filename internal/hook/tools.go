@@ -6,7 +6,7 @@ import (
 	"strings"
 )
 
-func classifyTool(name string, mcp bool) (ToolClass, bool) {
+func classifyTool(client Client, name string, mcp bool) (ToolClass, bool) {
 	low := strings.ToLower(name)
 	// Codex's Code Mode runs JavaScript through its built-in node_repl server, and that code can
 	// write any file (measured: fs.appendFile on 0.167.0, with no apply_patch). Iris cannot read
@@ -16,10 +16,37 @@ func classifyTool(name string, mcp bool) (ToolClass, bool) {
 	if low == "mcp__node_repl__js" {
 		return ClassShell, false
 	}
-	// Antigravity 1.5.16's call_mcp_tool is its generic MCP dispatcher: the capture in
-	// testdata/antigravity/pre_tool_use_call_mcp_tool.json carries ServerName and ToolName.
-	if mcp || low == "call_mcp_tool" || strings.HasPrefix(low, "mcp__") || strings.HasPrefix(low, "mcp:") {
+	if mcp || strings.HasPrefix(low, "mcp__") || strings.HasPrefix(low, "mcp:") {
 		return ClassMCP, false
+	}
+	// Capture-backed aliases apply only to their own client. Elsewhere they stay unknown so doctor
+	// still reports a custom tool or client drift.
+	if client == ClientAntigravity {
+		switch low {
+		// Antigravity 1.5.16's call_mcp_tool is its generic MCP dispatcher: the capture in
+		// testdata/antigravity/pre_tool_use_call_mcp_tool.json carries ServerName and ToolName.
+		case "call_mcp_tool":
+			return ClassMCP, false
+		// Antigravity 1.5.16's read_file capture has only a Path argument, decoded through the same
+		// path keys as Claude Code's Read.
+		case "read_file":
+			return ClassRead, false
+		// Captures show update_steps carrying plan state and search_web carrying a query.
+		case "update_steps", "search_web":
+			return ClassOther, false
+		// manage_task's send_input can resume a command that writes after run_command returns. Like
+		// Monitor, reconcile it as a shell: writes are detected, not prevented.
+		case "manage_task":
+			return ClassShell, false
+		}
+	}
+	if client == ClientKimi {
+		switch low {
+		// Kimi Code 2.7.3 captures show TodoList carrying plan state and FetchURL only a URL.
+		// FetchURL's output_path belongs to tool_output, not to its input arguments.
+		case "todolist", "fetchurl":
+			return ClassOther, false
+		}
 	}
 	switch low {
 	case "write", "edit", "multiedit", "notebookedit", "apply_patch", "write_file", "edit_file",
@@ -35,19 +62,9 @@ func classifyTool(name string, mcp bool) (ToolClass, bool) {
 	// remains the checkpoint.
 	case "bash", "powershell", "shell", "run_terminal_command", "run_command", "monitor":
 		return ClassShell, false
-	// Antigravity 1.5.16's read_file capture in testdata/antigravity has only a Path argument,
-	// decoded through the same path keys as Claude Code's Read.
-	case "read", "view", "grep", "glob", "ls", "read_file":
+	case "read", "view", "grep", "glob", "ls":
 		return ClassRead, false
 	case "toolsearch", "spawn_subagent", "task", "agent", "todowrite", "webfetch", "websearch", "skill":
-		return ClassOther, false
-	// Antigravity 1.5.16 captures in testdata/antigravity show update_steps and manage_task
-	// carrying plan/task state and search_web carrying a query, with no file arguments.
-	case "update_steps", "manage_task", "search_web":
-		return ClassOther, false
-	// Kimi Code 2.7.3 captures in testdata/kimi show TodoList carrying plan state and FetchURL
-	// only a URL. FetchURL's output_path belongs to tool_output, not to its input arguments.
-	case "todolist", "fetchurl":
 		return ClassOther, false
 	// CronCreate and CronDelete deliberately remain unknown: durable jobs write
 	// .claude/scheduled_tasks.json.
@@ -71,7 +88,7 @@ func classifyTool(name string, mcp bool) (ToolClass, bool) {
 
 func applyTool(ev *Event, name string, raw json.RawMessage, mcp bool) {
 	ev.ToolName = name
-	ev.ToolClass, ev.UnknownTool = classifyTool(name, mcp)
+	ev.ToolClass, ev.UnknownTool = classifyTool(ev.Client, name, mcp)
 	m, str, isStr := parseRaw(raw)
 	if isStr {
 		if looksLikePatch(str) {

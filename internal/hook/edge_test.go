@@ -419,7 +419,7 @@ func TestWriteLinesRespectsItsBudget(t *testing.T) {
 }
 
 func TestClassifyTool(t *testing.T) {
-	if class, unknown := classifyTool("", false); class != "" || unknown {
+	if class, unknown := classifyTool(ClientClaude, "", false); class != "" || unknown {
 		t.Fatal(class, unknown)
 	}
 }
