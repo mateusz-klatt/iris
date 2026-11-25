@@ -1,6 +1,8 @@
 # ADR 039: Admit session successors only from exact local proof
 
-Status: Proposed
+Status: accepted by the owner on 2026-11-25, with implementation of stage 1b to follow. The
+questions in "Open questions" remain the owner's to decide before stage 1b ships. Until the
+stage 1b implementation merges, `main` keeps today's client behaviour.
 
 **In short.** The hub can create a successor Execution even when the shim never receives the
 reply. The hub labels shim-created successors so the client can distinguish a child that still
