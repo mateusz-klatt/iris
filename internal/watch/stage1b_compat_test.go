@@ -1,11 +1,15 @@
 package watch
 
 import (
+	"bufio"
 	"bytes"
 	"context"
+	"net"
+	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -48,6 +52,21 @@ type watchCompatConfig struct {
 func (c watchCompatConfig) HubURL() string       { return c.url }
 func (watchCompatConfig) Token() (string, error) { return "secret", nil }
 
+type watchHijackSpy struct {
+	http.ResponseWriter
+	onHijack func()
+}
+
+func (w *watchHijackSpy) Unwrap() http.ResponseWriter { return w.ResponseWriter }
+
+func (w *watchHijackSpy) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	c, rw, err := w.ResponseWriter.(http.Hijacker).Hijack()
+	if err == nil && w.onHijack != nil {
+		w.onHijack()
+	}
+	return c, rw, err
+}
+
 func TestV0115WatchRunnerInertAgainstStage1bHub(t *testing.T) {
 	clock := &watchCompatClock{wall: time.Unix(1800000000, 0), tick: 1000}
 	s, err := store.Open(filepath.Join(t.TempDir(), "watch.db"), clock)
@@ -55,8 +74,24 @@ func TestV0115WatchRunnerInertAgainstStage1bHub(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = s.Close() }()
+
+	streamAccepted := make(chan struct{}, 1)
 	srv := httptest.NewUnstartedServer(nil)
-	srv.Config.Handler = hub.New(s, "secret", []string{srv.Listener.Addr().String()})
+	h := hub.New(s, "secret", []string{srv.Listener.Addr().String()})
+	srv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/watch" {
+			w = &watchHijackSpy{
+				ResponseWriter: w,
+				onHijack: func() {
+					select {
+					case streamAccepted <- struct{}{}:
+					default:
+					}
+				},
+			}
+		}
+		h.ServeHTTP(w, r)
+	})
 	srv.Start()
 	defer srv.Close()
 
@@ -99,21 +134,32 @@ func TestV0115WatchRunnerInertAgainstStage1bHub(t *testing.T) {
 		Grace: 5 * time.Millisecond,
 	}
 
-	ticks := make(chan time.Time, 16)
+	var tries atomic.Int64
+	var unlocked atomic.Bool
+	permit := make(chan time.Time)
+	tryEntered := make(chan struct{}, 1)
 	frames := make(chan Frame, 8)
 	var out bytes.Buffer
 	runner := &Runner{
 		Resolver: resolver,
 		Output:   &out,
 		Backoff:  5 * time.Millisecond,
-		after: func(time.Duration) <-chan time.Time {
-			ticks <- time.Now()
-			ch := make(chan time.Time, 1)
-			ch <- time.Now()
-			return ch
+		after: func(d time.Duration) <-chan time.Time {
+			if unlocked.Load() {
+				return time.After(d)
+			}
+			tries.Add(1)
+			select {
+			case tryEntered <- struct{}{}:
+			default:
+			}
+			return permit
 		},
 		received: func(f Frame) {
-			frames <- f
+			select {
+			case frames <- f:
+			default:
+			}
 		},
 	}
 
@@ -122,60 +168,105 @@ func TestV0115WatchRunnerInertAgainstStage1bHub(t *testing.T) {
 	go func() {
 		done <- runner.Run(runCtx)
 	}()
+	stopRunner := sync.OnceValue(func() error {
+		cancel()
+		return <-done
+	})
+	defer func() { _ = stopRunner() }()
 
-	// Wait through two retry ticks while the child is still hookless: watch.Runner must stay
-	// unattached (never opening a stream or setting watch_seen_ms).
-	for range 2 {
-		select {
-		case <-ticks:
-		case f := <-frames:
-			cancel()
-			t.Fatalf("watch.Runner unexpectedly streamed hookless succession child: %+v", f)
-		case <-time.After(5 * time.Second):
-			cancel()
-			t.Fatal("timed out waiting for watch backoff while hookless")
+	waitTry := func(want int64) {
+		t.Helper()
+		timer := time.NewTimer(5 * time.Second)
+		defer timer.Stop()
+		for tries.Load() < want {
+			select {
+			case <-tryEntered:
+			case f := <-frames:
+				t.Fatalf("watch.Runner unexpectedly streamed hookless succession child: %+v", f)
+			case <-timer.C:
+				t.Fatalf("timed out waiting for watch backoff attempt %d (got %d)", want, tries.Load())
+			}
 		}
 	}
+
+	// Step through two retry waits using the cancellable barrier while the child is hookless:
+	// Runner stays parked inside its select on ctx.Done vs permit with zero channel buildup.
+	waitTry(1)
+	select {
+	case permit <- time.Now():
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out releasing retry #1 permit")
+	}
+	waitTry(2)
+
 	var agents struct {
 		Agents []struct {
 			Name      string `json:"name"`
 			WatchSeen any    `json:"watch_seen"`
 		} `json:"agents"`
 	}
-	if err := hc.Do(t.Context(), "GET", "/v1/agents?all=1", nil, &agents); err != nil {
-		cancel()
+	if err := hc.Do(t.Context(), http.MethodGet, "/v1/agents?all=1", nil, &agents); err != nil {
 		t.Fatal(err)
 	}
 	for _, a := range agents.Agents {
 		if a.WatchSeen != nil {
-			cancel()
 			t.Fatalf("watch_seen recorded before hook attach: %+v", a)
 		}
 	}
+	select {
+	case f := <-frames:
+		t.Fatalf("unexpected frame before hook attach: %+v", f)
+	case <-streamAccepted:
+		t.Fatal("/v1/watch accepted before hook attach")
+	default:
+	}
 
-	// Genuine hook arrival unlocks the same child; watch.Runner binds and streams immediately.
+	// Genuine hook arrival unlocks the same child; release the retry barrier and wait until
+	// the runner itself binds, opens /v1/watch (post monitor_cursor), and receives a live frame.
 	if _, err := hc.RegisterSession(t.Context(), hubclient.SessionRequest{
 		Client: "claude", Host: "host", SessionID: "S-watch-1b",
 		CWD: "/repo/w", Worktree: "/repo/w", Branch: "main", Source: "hook",
 		ClientPID: 701, ClientPIDStartMS: 7701,
 	}); err != nil {
-		cancel()
+		t.Fatal(err)
+	}
+	unlocked.Store(true)
+	close(permit)
+
+	select {
+	case <-streamAccepted:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for watch.Runner to open /v1/watch after hook unlock")
+	}
+
+	sender, err := hc.RegisterSession(t.Context(), hubclient.SessionRequest{
+		Client: "codex", Host: "host", SessionID: "S-watch-sender",
+		CWD: "/repo/w", Worktree: "/repo/w", Branch: "main", Source: "hook",
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := hc.Do(t.Context(), http.MethodPost, "/v1/messages", map[string]any{
+		"execution_id": sender.ExecutionID,
+		"generation":   sender.Generation,
+		"key":          "watch-unlock-frame",
+		"to":           []string{child.Agent.Name},
+		"subject":      "wake check",
+		"body":         "frame delivery check",
+	}, &struct{}{}); err != nil {
 		t.Fatal(err)
 	}
 
-	for deadline := time.Now().Add(5 * time.Second); ; {
-		if b, err := resolver.Resolve(t.Context(), ""); err == nil && b.ExecutionID == child.ExecutionID && b.HookSeen {
-			break
+	select {
+	case f := <-frames:
+		if f.Kind != "inbox_changed" {
+			t.Fatalf("unexpected frame kind %q after unlock: %+v", f.Kind, f)
 		}
-		if time.Now().After(deadline) {
-			cancel()
-			t.Fatalf("watch resolver did not bind unlocked child %s", child.ExecutionID)
-		}
-		time.Sleep(10 * time.Millisecond)
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for watch.Runner to receive frame after hook unlock")
 	}
 
-	cancel()
-	if err := <-done; err != nil {
+	if err := stopRunner(); err != nil {
 		t.Fatalf("watch runner exited with unexpected error: %v", err)
 	}
 }
