@@ -56,6 +56,7 @@ type SessionResponse struct {
 	// OutsideGit says the Execution belongs to its host's context of sessions outside git, which
 	// takes no claim (ADR 034). An older hub never says so.
 	OutsideGit bool `json:"outside_git,omitempty"`
+	Provenance
 }
 
 // Attention is what still needs the session's attention: deliveries that still need a wake, and
