@@ -1,3 +1,5 @@
+//go:build compat
+
 package store
 
 import (
@@ -34,7 +36,10 @@ var historicalRefs = []historicalRef{
 	{name: "m1", commit: "90546a36ce0ea340d5b47776be1574851f6f45cd", schemaVersion: 29},
 }
 
-var historicalWorktreeSeq atomic.Int64
+var (
+	historicalWorktreeMu  sync.Mutex
+	historicalWorktreeSeq atomic.Int64
+)
 
 func repoRoot(t *testing.T) string {
 	t.Helper()
@@ -48,14 +53,23 @@ func repoRoot(t *testing.T) string {
 func buildHistoricalBinary(t *testing.T, root, outDir string, ref historicalRef) string {
 	t.Helper()
 	wt := filepath.Join(t.TempDir(), fmt.Sprintf("wt-%s-%d-%d", ref.name, os.Getpid(), historicalWorktreeSeq.Add(1)))
+	var removeOnce sync.Once
 	removeWorktree := func() {
-		_, _ = exec.Command("git", "-C", root, "worktree", "remove", "--force", wt).CombinedOutput()
-	}
-	if out, err := exec.Command("git", "-C", root, "worktree", "add", "--detach", wt, ref.commit).CombinedOutput(); err != nil {
-		t.Fatalf("git worktree add %s (%s): %v\n%s", ref.name, ref.commit, err, out)
+		removeOnce.Do(func() {
+			historicalWorktreeMu.Lock()
+			defer historicalWorktreeMu.Unlock()
+			_, _ = exec.Command("git", "-C", root, "worktree", "remove", "--force", wt).CombinedOutput()
+		})
 	}
 	t.Cleanup(removeWorktree)
 	defer removeWorktree()
+
+	historicalWorktreeMu.Lock()
+	out, err := exec.Command("git", "-C", root, "worktree", "add", "--detach", wt, ref.commit).CombinedOutput()
+	historicalWorktreeMu.Unlock()
+	if err != nil {
+		t.Fatalf("git worktree add %s (%s): %v\n%s", ref.name, ref.commit, err, out)
+	}
 
 	bin := filepath.Join(outDir, "iris-"+ref.name)
 	if runtime.GOOS == "windows" {

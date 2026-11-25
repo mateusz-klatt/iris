@@ -5,7 +5,7 @@ VERSION ?= dev
 
 # web/go.mod keeps the Node workspace outside Go's recursive package discovery.
 # Keep ./... for every Go-wide check: new application packages must count too.
-.PHONY: test race fixtures build image web cov cov-check check-all lint vuln secrets pins refresh copilot-extension
+.PHONY: test race compat fixtures build image web cov cov-check check-all lint vuln secrets pins refresh copilot-extension
 
 # The CI tools under .github are outside ./... (GITHUB_TOOLS, below), so their tests are named:
 # CI's check-all job tests some of them before it runs check-all, and this tests them all.
@@ -17,6 +17,11 @@ test:
 race:
 	# Exhaustive SQLite rollback sweeps need more time under race instrumentation.
 	CGO_ENABLED=1 $(GO) test -race -timeout=30m ./...
+
+compat:
+	$(GO) vet -tags compat ./...
+	# Builds pinned historical iris binaries via git worktree; kept out of default targets so tests stay hermetic.
+	CGO_ENABLED=0 $(GO) test -tags compat ./...
 
 fixtures:
 	CGO_ENABLED=0 $(GO) test ./internal/hook/...
