@@ -254,6 +254,7 @@ func (r SessionResponse) Candidate() Candidate {
 		Handle:       r.Handle,
 		RepositoryID: r.RepositoryID,
 		Agent:        r.Agent,
+		SessionID:    r.SessionID,
 		Worktree:     r.Worktree,
 		OutsideGit:   r.OutsideGit,
 		Capabilities: slices.Clone(r.Capabilities),

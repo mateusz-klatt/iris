@@ -249,7 +249,7 @@ func TestStage1bClientMethods(t *testing.T) {
 			}
 			_, _ = w.Write([]byte(`{
 				"execution_id":"ex_child","generation":2,"handle":"ex_child","repository_id":"rp_1",
-				"agent":{"id":"ag_1","name":"codex-h-w"},"lease_ms":60000,"peers":[],"claims":[],"unread":0,
+				"agent":{"id":"ag_1","name":"codex-h-w"},"session_id":"S1","lease_ms":60000,"peers":[],"claims":[],"unread":0,
 				"attention":{},"capabilities":["shell_scope","file_claims","succession_proof"],"worktree":"/w",
 				"prior_execution_id":"ex_parent","creation_source":"shim","creation_proof":"shim_succession","hook_seen":false
 			}`))
@@ -295,7 +295,11 @@ func TestStage1bClientMethods(t *testing.T) {
 	if seenPath != "/v1/sessions/succeed/exact" || seenSucc.PriorExecutionID != "ex_parent" {
 		t.Fatalf("unexpected succeed call: path=%q req=%+v", seenPath, seenSucc)
 	}
-	if cls, err := resp.Candidate().Classify(); err != nil || !cls.IsHooklessSuccession() {
+	succCand := resp.Candidate()
+	if resp.SessionID != "S1" || succCand.SessionID != "S1" {
+		t.Fatalf("succeed dropped session_id: resp=%q cand=%q", resp.SessionID, succCand.SessionID)
+	}
+	if cls, err := succCand.Classify(); err != nil || !cls.IsHooklessSuccession() {
 		t.Fatalf("succeed classify failed: cls=%+v err=%v", cls, err)
 	}
 

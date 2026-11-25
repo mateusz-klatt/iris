@@ -145,7 +145,11 @@ func TestMixedVersionStage1bHubClientAndStoreMatrix(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		childCls, err := succResp.Candidate().Classify()
+		succCand := succResp.Candidate()
+		if succResp.SessionID != "S-mix" || succCand.SessionID != "S-mix" {
+			t.Fatalf("succeed response/candidate dropped session_id: resp=%q cand=%q", succResp.SessionID, succCand.SessionID)
+		}
+		childCls, err := succCand.Classify()
 		if err != nil {
 			t.Fatal(err)
 		}

@@ -44,6 +44,7 @@ type SessionResponse struct {
 	Handle       string    `json:"handle"`
 	RepositoryID string    `json:"repository_id"`
 	Agent        Agent     `json:"agent"`
+	SessionID    string    `json:"session_id,omitempty"`
 	LeaseMS      int64     `json:"lease_ms"`
 	Peers        []Peer    `json:"peers"`
 	Claims       []Claim   `json:"claims"`
