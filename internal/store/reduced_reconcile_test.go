@@ -250,7 +250,7 @@ func TestTheScopedRouteRegistersAndReconcilesInOneCall(t *testing.T) {
 	register := Request{Client: "codex", Host: "host", Cwd: "/repo/w1", Worktree: "/repo/w1", RemoteURL: "https://example.com/team/project.git", RootCommit: "root", SessionID: "1", Source: "hook"}
 	out := call(t, s, "reconcile_scoped", reduced(register, "before", map[string]string{}, "lib"))
 	answer := out["session"].(map[string]any)
-	if !reflect.DeepEqual(answer["capabilities"], []string{"shell_scope", "file_claims"}) {
+	if !reflect.DeepEqual(answer["capabilities"], []string{"shell_scope", "file_claims", "succession_proof"}) {
 		t.Fatalf("answer: %v", answer)
 	}
 	var seen int64

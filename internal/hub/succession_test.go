@@ -2,6 +2,7 @@ package hub
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"log"
 	"net/http"
@@ -65,7 +66,7 @@ func TestHTTPSucceedRouteCreatesAndReplays(t *testing.T) {
 		"client": "codex", "host": "host", "session_id": "S", "source": "shim",
 		"prior_generation": first["generation"], "prior_execution_id": first["execution_id"],
 	}
-	created := call(http.MethodPost, "/v1/sessions/succeed", succeedReq, http.StatusOK)
+	created := call(http.MethodPost, "/v1/sessions/succeed/exact", succeedReq, http.StatusOK)
 	childID := created["execution_id"].(string)
 	if created["generation"] != float64(2) || childID == first["execution_id"] {
 		t.Fatalf("created child: %+v", created)
@@ -79,7 +80,7 @@ func TestHTTPSucceedRouteCreatesAndReplays(t *testing.T) {
 
 	// Replay returns the exact same live child without advancing the event high-water mark or logging a second bump.
 	clock.advance(5 * time.Second)
-	replayed := call(http.MethodPost, "/v1/sessions/succeed", succeedReq, http.StatusOK)
+	replayed := call(http.MethodPost, "/v1/sessions/succeed/exact", succeedReq, http.StatusOK)
 	if replayed["execution_id"] != childID || replayed["generation"] != float64(2) || replayed["lease_ms"] != float64(55000) {
 		t.Fatalf("replayed child: %+v", replayed)
 	}
@@ -93,7 +94,7 @@ func TestHTTPSucceedRouteCreatesAndReplays(t *testing.T) {
 
 	// Equal ended_through floor refuses with 409 lost + reason=ended_through.
 	succeedReq["ended_through"] = float64(1)
-	floorRefused := call(http.MethodPost, "/v1/sessions/succeed", succeedReq, http.StatusConflict)
+	floorRefused := call(http.MethodPost, "/v1/sessions/succeed/exact", succeedReq, http.StatusConflict)
 	floorErr := floorRefused["error"].(map[string]any)
 	if floorErr["code"] != "lost" || floorErr["details"].(map[string]any)["reason"] != "ended_through" {
 		t.Fatalf("floor refusal: %+v", floorRefused)
@@ -216,11 +217,11 @@ func TestHTTPSucceedRouteAuthAndUnexpectedCallerFences(t *testing.T) {
 		headers map[string]string
 		cookies []*http.Cookie
 	}{
-		{"missing bearer", "http://127.0.0.1/v1/sessions/succeed", nil, nil},
-		{"unknown bearer", "http://127.0.0.1/v1/sessions/succeed", map[string]string{"Authorization": "Bearer wrong"}, nil},
-		{"revoked bearer", "http://127.0.0.1/v1/sessions/succeed", map[string]string{"Authorization": "Bearer " + revokedToken}, nil},
-		{"console cookie without bearer", "http://127.0.0.1/v1/sessions/succeed", nil, []*http.Cookie{{Name: consoleCookieName, Value: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}}},
-		{"disallowed Host header", "http://evil.example/v1/sessions/succeed", map[string]string{"Authorization": "Bearer owner-secret"}, nil},
+		{"missing bearer", "http://127.0.0.1/v1/sessions/succeed/exact", nil, nil},
+		{"unknown bearer", "http://127.0.0.1/v1/sessions/succeed/exact", map[string]string{"Authorization": "Bearer wrong"}, nil},
+		{"revoked bearer", "http://127.0.0.1/v1/sessions/succeed/exact", map[string]string{"Authorization": "Bearer " + revokedToken}, nil},
+		{"console cookie without bearer", "http://127.0.0.1/v1/sessions/succeed/exact", nil, []*http.Cookie{{Name: consoleCookieName, Value: "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}}},
+		{"disallowed Host header", "http://evil.example/v1/sessions/succeed/exact", map[string]string{"Authorization": "Bearer owner-secret"}, nil},
 	} {
 		t.Run("auth/"+tc.name, func(t *testing.T) {
 			out := doRaw(http.MethodPost, tc.url, validRaw, tc.headers, tc.cookies, http.StatusUnauthorized)
@@ -249,7 +250,7 @@ func TestHTTPSucceedRouteAuthAndUnexpectedCallerFences(t *testing.T) {
 				req[k] = v
 			}
 			tc.change(req)
-			out := do(http.MethodPost, "/v1/sessions/succeed", req, hostToken, http.StatusBadRequest)
+			out := do(http.MethodPost, "/v1/sessions/succeed/exact", req, hostToken, http.StatusBadRequest)
 			if out["error"].(map[string]any)["code"] != "bad_request" {
 				t.Fatalf("unexpected error: %+v", out)
 			}
@@ -277,7 +278,7 @@ func TestHTTPSucceedRouteAuthAndUnexpectedCallerFences(t *testing.T) {
 				req[k] = v
 			}
 			tc.change(req)
-			out := do(http.MethodPost, "/v1/sessions/succeed", req, hostToken, http.StatusConflict)
+			out := do(http.MethodPost, "/v1/sessions/succeed/exact", req, hostToken, http.StatusConflict)
 			errObj := out["error"].(map[string]any)
 			if errObj["code"] != "lost" {
 				t.Fatalf("unexpected error: %+v", out)
@@ -296,7 +297,7 @@ func TestHTTPSucceedRouteAuthAndUnexpectedCallerFences(t *testing.T) {
 		"client": "codex", "host": "host", "session_id": "S-live", "cwd": "/repo/w", "worktree": "/repo/w", "source": "hook",
 	}, hostToken, http.StatusOK)
 	beforeLive := snapshot()
-	liveRefused := do(http.MethodPost, "/v1/sessions/succeed", map[string]any{
+	liveRefused := do(http.MethodPost, "/v1/sessions/succeed/exact", map[string]any{
 		"client": "codex", "host": "host", "session_id": "S-live", "source": "shim",
 		"prior_generation": float64(1), "prior_execution_id": active["execution_id"],
 	}, hostToken, http.StatusConflict)
@@ -311,7 +312,7 @@ func TestHTTPSucceedRouteAuthAndUnexpectedCallerFences(t *testing.T) {
 	}, hostToken, http.StatusOK)
 	do(http.MethodPost, "/v1/executions/"+ended["execution_id"].(string)+"/end", map[string]any{"generation": float64(1)}, hostToken, http.StatusOK)
 	beforeEnded := snapshot()
-	endedRefused := do(http.MethodPost, "/v1/sessions/succeed", map[string]any{
+	endedRefused := do(http.MethodPost, "/v1/sessions/succeed/exact", map[string]any{
 		"client": "codex", "host": "host", "session_id": "S-ended", "source": "shim",
 		"prior_generation": float64(1), "prior_execution_id": ended["execution_id"],
 	}, hostToken, http.StatusConflict)
@@ -324,7 +325,7 @@ func TestHTTPSucceedRouteAuthAndUnexpectedCallerFences(t *testing.T) {
 		"client": "codex", "host": "host", "session_id": "S-ended", "cwd": "/repo/w", "worktree": "/repo/w", "source": "hook",
 	}, hostToken, http.StatusOK)
 	beforeEndedReplay := snapshot()
-	endedReplayRefused := do(http.MethodPost, "/v1/sessions/succeed", map[string]any{
+	endedReplayRefused := do(http.MethodPost, "/v1/sessions/succeed/exact", map[string]any{
 		"client": "codex", "host": "host", "session_id": "S-ended", "source": "shim",
 		"prior_generation": float64(1), "prior_execution_id": ended["execution_id"],
 	}, hostToken, http.StatusConflict)
@@ -348,13 +349,13 @@ func TestHTTPSucceedRouteAuthAndUnexpectedCallerFences(t *testing.T) {
 		"prior_generation": float64(1), "prior_execution_id": sup["execution_id"],
 		"client_pid": 42, "client_pid_start_ms": 100,
 	}
-	do(http.MethodPost, "/v1/sessions/succeed", supReq, hostToken, http.StatusOK)
+	do(http.MethodPost, "/v1/sessions/succeed/exact", supReq, hostToken, http.StatusOK)
 	do(http.MethodPost, "/v1/sessions", map[string]any{
 		"client": "cursor", "host": "host", "session_id": "S-sup-2", "cwd": "/repo/w", "worktree": "/repo/w",
 		"source": "hook", "client_pid": 42, "client_pid_start_ms": 100, "single_session": true,
 	}, hostToken, http.StatusOK)
 	beforeSup := snapshot()
-	supRefused := do(http.MethodPost, "/v1/sessions/succeed", supReq, hostToken, http.StatusConflict)
+	supRefused := do(http.MethodPost, "/v1/sessions/succeed/exact", supReq, hostToken, http.StatusConflict)
 	if supRefused["error"].(map[string]any)["code"] != "lost" {
 		t.Fatalf("superseded replay error: %+v", supRefused)
 	}
@@ -392,7 +393,7 @@ func TestHTTPSucceedRouteAuthAndUnexpectedCallerFences(t *testing.T) {
 	h.Log = log.New(&logs, "", 0)
 
 	beforeRec := snapshot()
-	recRefused := do(http.MethodPost, "/v1/sessions/succeed", map[string]any{
+	recRefused := do(http.MethodPost, "/v1/sessions/succeed/exact", map[string]any{
 		"client": "codex", "host": "host", "session_id": "S-rec", "source": "shim",
 		"prior_generation": float64(1), "prior_execution_id": rec["execution_id"],
 	}, hostToken, http.StatusConflict)
@@ -402,7 +403,7 @@ func TestHTTPSucceedRouteAuthAndUnexpectedCallerFences(t *testing.T) {
 	assertInert(beforeRec, "recovering predecessor")
 }
 
-// TestHTTPSucceedRouteTwoValidHostTokens exercises POST /v1/sessions/succeed with two distinct
+// TestHTTPSucceedRouteTwoValidHostTokens exercises POST /v1/sessions/succeed/exact with two distinct
 // valid host tokens, verifying cross-host proof fencing and documenting that named HostToken
 // records give attribution rather than host-to-host credential isolation (see docs/api.md).
 func TestHTTPSucceedRouteTwoValidHostTokens(t *testing.T) {
@@ -456,14 +457,14 @@ func TestHTTPSucceedRouteTwoValidHostTokens(t *testing.T) {
 	}
 
 	// Token B cannot attach host-b to host-a's predecessor proof, and vice versa.
-	refusedAB := do("/v1/sessions/succeed", map[string]any{
+	refusedAB := do("/v1/sessions/succeed/exact", map[string]any{
 		"client": "codex", "host": "host-b", "session_id": "S-a", "source": "shim",
 		"prior_generation": float64(1), "prior_execution_id": sessA["execution_id"],
 	}, tokenB, http.StatusConflict)
 	if refusedAB["error"].(map[string]any)["code"] != "lost" {
 		t.Fatalf("expected 409 lost on cross-host mismatch: %+v", refusedAB)
 	}
-	refusedBA := do("/v1/sessions/succeed", map[string]any{
+	refusedBA := do("/v1/sessions/succeed/exact", map[string]any{
 		"client": "codex", "host": "host-a", "session_id": "S-b", "source": "shim",
 		"prior_generation": float64(1), "prior_execution_id": sessB["execution_id"],
 	}, tokenA, http.StatusConflict)
@@ -472,7 +473,7 @@ func TestHTTPSucceedRouteTwoValidHostTokens(t *testing.T) {
 	}
 
 	// Token B succeeds cleanly for its own host-b session.
-	succB := do("/v1/sessions/succeed", map[string]any{
+	succB := do("/v1/sessions/succeed/exact", map[string]any{
 		"client": "codex", "host": "host-b", "session_id": "S-b", "source": "shim",
 		"prior_generation": float64(1), "prior_execution_id": sessB["execution_id"],
 	}, tokenB, http.StatusOK)
@@ -482,15 +483,288 @@ func TestHTTPSucceedRouteTwoValidHostTokens(t *testing.T) {
 
 	// Today's HostToken model has no host-to-token binding on any session route (attribution only):
 	// token B presenting host-a's exact proof behaves the same as /v1/sessions and succeeds/replays.
-	succCross := do("/v1/sessions/succeed", map[string]any{
+	succCross := do("/v1/sessions/succeed/exact", map[string]any{
 		"client": "codex", "host": "host-a", "session_id": "S-a", "source": "shim",
 		"prior_generation": float64(1), "prior_execution_id": sessA["execution_id"],
 	}, tokenB, http.StatusOK)
-	replayedByA := do("/v1/sessions/succeed", map[string]any{
+	replayedByA := do("/v1/sessions/succeed/exact", map[string]any{
 		"client": "codex", "host": "host-a", "session_id": "S-a", "source": "shim",
 		"prior_generation": float64(1), "prior_execution_id": sessA["execution_id"],
 	}, tokenA, http.StatusOK)
 	if replayedByA["execution_id"] != succCross["execution_id"] {
 		t.Fatalf("replayed child changed across tokens: %+v vs %+v", succCross, replayedByA)
 	}
+}
+
+func TestHTTPSucceedStage1aRouteRefusedWithoutMutation(t *testing.T) {
+	clock := &generationClock{now: time.Unix(1800000000, 0)}
+	dbPath := filepath.Join(t.TempDir(), "hub.db")
+	s, err := store.Open(dbPath, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	h := New(s, "test-secret", []string{"127.0.0.1"})
+
+	do := func(method, path string, req map[string]any, want int) map[string]any {
+		t.Helper()
+		var body *bytes.Reader
+		if req != nil {
+			raw, err := json.Marshal(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body = bytes.NewReader(raw)
+		} else {
+			body = bytes.NewReader(nil)
+		}
+		r := httptest.NewRequest(method, "http://127.0.0.1"+path, body)
+		r.Header.Set("Authorization", "Bearer test-secret")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%s %s status=%d want=%d body=%s", method, path, w.Code, want, w.Body.String())
+		}
+		var out map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+
+	first := do(http.MethodPost, "/v1/sessions", map[string]any{
+		"client": "codex", "host": "host", "session_id": "S-1a", "cwd": "/repo/w", "worktree": "/repo/w", "source": "hook",
+	}, http.StatusOK)
+	firstID := first["execution_id"].(string)
+
+	// Advance past lease without expiring: unsupported stage 1a route must return 404 not_found
+	// BEFORE running expire() or mutating any store row.
+	clock.advance(16 * time.Minute)
+	out := do(http.MethodPost, "/v1/sessions/succeed", map[string]any{
+		"client": "codex", "host": "host", "session_id": "S-1a", "source": "shim",
+		"prior_generation": float64(1), "prior_execution_id": firstID,
+	}, http.StatusNotFound)
+	errObj := out["error"].(map[string]any)
+	if errObj["code"] != "not_found" || errObj["message"] != "unknown API route" {
+		t.Fatalf("unexpected 404 body: %+v", out)
+	}
+
+	// Inspect SQLite directly without running expire()-bearing operations to verify the
+	// unsupported stage 1a route caused zero mutation (row stays active and single).
+	roDB, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = roDB.Close() }()
+	var state string
+	var rows, events int
+	if err := roDB.QueryRow("SELECT state FROM Execution WHERE id=?", firstID).Scan(&state); err != nil {
+		t.Fatal(err)
+	}
+	if err := roDB.QueryRow("SELECT COUNT(*) FROM Execution").Scan(&rows); err != nil {
+		t.Fatal(err)
+	}
+	if err := roDB.QueryRow("SELECT COUNT(*) FROM Event").Scan(&events); err != nil {
+		t.Fatal(err)
+	}
+	if state != "active" || rows != 1 || events != 1 {
+		t.Fatalf("stage 1a route mutated DB: state=%q rows=%d events=%d", state, rows, events)
+	}
+}
+
+func TestHTTPStage1bClassifiedRepliesAndCompatibilityGuards(t *testing.T) {
+	assertHTTPClassified := func(t *testing.T, reply map[string]any, wantPrior, wantSource, wantProof any, wantHookSeen bool) {
+		t.Helper()
+		caps, ok := reply["capabilities"].([]any)
+		if !ok {
+			t.Fatalf("capabilities=%#v, want []any", reply["capabilities"])
+		}
+		var hasCap bool
+		for _, c := range caps {
+			if c == "succession_proof" {
+				hasCap = true
+			}
+		}
+		if !hasCap {
+			t.Fatalf("capabilities=%v missing succession_proof", caps)
+		}
+		for _, k := range []string{"prior_execution_id", "creation_source", "creation_proof", "hook_seen"} {
+			if _, exists := reply[k]; !exists {
+				t.Fatalf("JSON reply missing explicit key %q: %+v", k, reply)
+			}
+		}
+		if reply["prior_execution_id"] != wantPrior || reply["creation_source"] != wantSource || reply["creation_proof"] != wantProof || reply["hook_seen"] != wantHookSeen {
+			t.Fatalf("classification mismatch: got=(prior=%#v, source=%#v, proof=%#v, hook=%#v) want=(prior=%#v, source=%#v, proof=%#v, hook=%#v)",
+				reply["prior_execution_id"], reply["creation_source"], reply["creation_proof"], reply["hook_seen"],
+				wantPrior, wantSource, wantProof, wantHookSeen)
+		}
+	}
+
+	clock := &generationClock{now: time.Unix(1800000000, 0)}
+	dbPath := filepath.Join(t.TempDir(), "hub.db")
+	s, err := store.Open(dbPath, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var openStores []*store.Store
+	openStores = append(openStores, s)
+	t.Cleanup(func() {
+		for _, st := range openStores {
+			if st != nil {
+				_ = st.Close()
+			}
+		}
+	})
+	h := New(s, "test-secret", []string{"127.0.0.1"})
+
+	do := func(method, path string, req map[string]any, want int) map[string]any {
+		t.Helper()
+		var body *bytes.Reader
+		if req != nil {
+			raw, err := json.Marshal(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body = bytes.NewReader(raw)
+		} else {
+			body = bytes.NewReader(nil)
+		}
+		r := httptest.NewRequest(method, "http://127.0.0.1"+path, body)
+		r.Header.Set("Authorization", "Bearer test-secret")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%s %s status=%d want=%d body=%s", method, path, w.Code, want, w.Body.String())
+		}
+		var out map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+
+	// Classified hook replies on /v1/sessions, /v1/sessions/outside, /v1/bind, and heartbeat.
+	parent := do(http.MethodPost, "/v1/sessions", map[string]any{
+		"client": "claude", "host": "host", "session_id": "S-http",
+		"cwd": "/repo/w", "worktree": "/repo/w", "source": "hook",
+		"client_pid": 801, "client_pid_start_ms": 8801,
+	}, http.StatusOK)
+	parentID := parent["execution_id"].(string)
+	assertHTTPClassified(t, parent, nil, "hook", "initial", true)
+
+	outside := do(http.MethodPost, "/v1/sessions/outside", map[string]any{
+		"client": "codex", "host": "host", "session_id": "S-out-http",
+		"cwd": "/tmp/out", "source": "hook",
+	}, http.StatusOK)
+	assertHTTPClassified(t, outside, nil, "hook", "initial", true)
+
+	// Expire parent and create shim succession child on /v1/sessions/succeed/exact.
+	clock.advance(16 * time.Minute)
+	if _, err := s.Call(t.Context(), "expire", store.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	child := do(http.MethodPost, "/v1/sessions/succeed/exact", map[string]any{
+		"client": "claude", "host": "host", "session_id": "S-http", "source": "shim",
+		"prior_generation": float64(1), "prior_execution_id": parentID,
+		"client_pid": 801, "client_pid_start_ms": 8801,
+	}, http.StatusOK)
+	childID := child["execution_id"].(string)
+	assertHTTPClassified(t, child, parentID, "shim", "shim_succession", false)
+
+	// Bind without opt-in returns 409 lost across handle/session/process; with opt-in returns 200 classified.
+	for _, body := range []map[string]any{
+		{"client": "claude", "host": "host", "execution": childID},
+		{"client": "claude", "host": "host", "session_id": "S-http"},
+		{"client": "claude", "host": "host", "client_pid": 801, "client_pid_start_ms": 8801},
+	} {
+		errOut := do(http.MethodPost, "/v1/bind", body, http.StatusConflict)
+		if errOut["error"].(map[string]any)["code"] != "lost" {
+			t.Fatalf("bind without opt-in error: %+v", errOut)
+		}
+		body["succession_proof"] = true
+		okOut := do(http.MethodPost, "/v1/bind", body, http.StatusOK)
+		assertHTTPClassified(t, okOut, parentID, "shim", "shim_succession", false)
+	}
+
+	// Heartbeat without shim+opt-in returns 409 lost; with shim+opt-in returns 200 classified.
+	for _, body := range []map[string]any{
+		{"generation": float64(2), "source": "hook", "succession_proof": true},
+		{"generation": float64(2), "source": "watch", "succession_proof": true},
+		{"generation": float64(2), "source": "shim"},
+	} {
+		errOut := do(http.MethodPost, "/v1/executions/"+childID+"/heartbeat", body, http.StatusConflict)
+		if errOut["error"].(map[string]any)["code"] != "lost" {
+			t.Fatalf("refused live heartbeat: %+v", errOut)
+		}
+	}
+	hbOK := do(http.MethodPost, "/v1/executions/"+childID+"/heartbeat", map[string]any{
+		"generation": float64(2), "source": "shim", "succession_proof": true,
+	}, http.StatusOK)
+	assertHTTPClassified(t, hbOK, parentID, "shim", "shim_succession", false)
+
+	// Non-hook registrations cannot attach on either route while child is hookless.
+	for _, path := range []string{"/v1/sessions", "/v1/sessions/outside"} {
+		body := map[string]any{
+			"client": "claude", "host": "host", "session_id": "S-http",
+			"cwd": "/repo/w", "source": "mcp",
+		}
+		if path == "/v1/sessions" {
+			body["worktree"] = "/repo/w"
+		}
+		refused := do(http.MethodPost, path, body, http.StatusConflict)
+		if refused["error"].(map[string]any)["code"] != "lost" {
+			t.Fatalf("%s non-hook attach error: %+v", path, refused)
+		}
+	}
+
+	// Restart hub into recovery: only shim+opt-in heartbeat resumes; hook/watch/shim-without-opt-in return 409 lost.
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	openStores[0] = nil
+	reopened, err := store.Open(dbPath, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	openStores = append(openStores, reopened)
+	h = New(reopened, "test-secret", []string{"127.0.0.1"})
+
+	for _, body := range []map[string]any{
+		{"generation": float64(2), "source": "hook", "succession_proof": true},
+		{"generation": float64(2), "source": "watch", "succession_proof": true},
+		{"generation": float64(2), "source": "shim"},
+	} {
+		errOut := do(http.MethodPost, "/v1/executions/"+childID+"/heartbeat", body, http.StatusConflict)
+		if errOut["error"].(map[string]any)["code"] != "lost" {
+			t.Fatalf("refused recovery heartbeat: %+v", errOut)
+		}
+	}
+	resumed := do(http.MethodPost, "/v1/executions/"+childID+"/heartbeat", map[string]any{
+		"generation": float64(2), "source": "shim", "succession_proof": true,
+	}, http.StatusOK)
+	assertHTTPClassified(t, resumed, parentID, "shim", "shim_succession", false)
+
+	// Genuine hook registration marks hook_seen=true and unlocks ordinary bind and watch heartbeat.
+	attached := do(http.MethodPost, "/v1/sessions", map[string]any{
+		"client": "claude", "host": "host", "session_id": "S-http",
+		"cwd": "/repo/w", "worktree": "/repo/w", "source": "hook",
+		"client_pid": 802, "client_pid_start_ms": 8802,
+	}, http.StatusOK)
+	assertHTTPClassified(t, attached, parentID, "shim", "shim_succession", true)
+	plainBind := do(http.MethodPost, "/v1/bind", map[string]any{
+		"client": "claude", "host": "host", "execution": childID,
+	}, http.StatusOK)
+	assertHTTPClassified(t, plainBind, parentID, "shim", "shim_succession", true)
+	watchHBLegacy := do(http.MethodPost, "/v1/executions/"+childID+"/heartbeat", map[string]any{
+		"generation": float64(2), "source": "watch",
+	}, http.StatusOK)
+	for _, k := range []string{"prior_execution_id", "creation_source", "creation_proof", "hook_seen"} {
+		if _, exists := watchHBLegacy[k]; exists {
+			t.Fatalf("un-opted HTTP heartbeat leaked stage 1b key %q: %+v", k, watchHBLegacy)
+		}
+	}
+	watchHB := do(http.MethodPost, "/v1/executions/"+childID+"/heartbeat", map[string]any{
+		"generation": float64(2), "source": "watch", "succession_proof": true,
+	}, http.StatusOK)
+	assertHTTPClassified(t, watchHB, parentID, "shim", "shim_succession", true)
 }

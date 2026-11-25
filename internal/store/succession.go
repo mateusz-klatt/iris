@@ -14,6 +14,24 @@ func normalizeCreationSource(source string) string {
 	}
 }
 
+func nullableString(s sql.NullString) any {
+	if !s.Valid {
+		return nil
+	}
+	return s.String
+}
+
+func isHooklessSuccessionChild(e execution) bool {
+	return e.CreationSource.String == "shim" && e.CreationProof.String == "shim_succession" && e.HookSeenMS == 0
+}
+
+func allowHooklessHeartbeat(e execution, r Request) error {
+	if isHooklessSuccessionChild(e) && (r.Source != "shim" || !r.SuccessionProof) {
+		return fail("lost", "hookless succession child requires shim succession_proof opt-in")
+	}
+	return nil
+}
+
 func creationProvenance(previous execution, r Request) (priorID any, source, proof string) {
 	source = normalizeCreationSource(r.Source)
 	if previous.ID == "" {
@@ -114,7 +132,7 @@ func (t *transaction) succeed(r Request) (map[string]any, error) {
 	}
 	t.generationChanged(latest, current, r)
 	t.generationChange.Proof = "shim_succession"
-	return t.sessionResponse(current, 60000)
+	return t.sessionResponse(current, 60000, true)
 }
 
 func (t *transaction) replaySuccession(latest execution, r Request) (map[string]any, error) {
@@ -156,5 +174,5 @@ func (t *transaction) replaySuccession(latest execution, r Request) (map[string]
 		return nil, fail("lost", "child Execution is no longer live; reattach the session")
 	}
 	t.replayed = true
-	return t.sessionResponse(latest, remaining)
+	return t.sessionResponse(latest, remaining, true)
 }

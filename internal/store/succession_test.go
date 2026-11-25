@@ -501,6 +501,77 @@ func TestSucceedRefusesIneligibleCreateAndReplay(t *testing.T) {
 	})
 }
 
+func TestSucceedReplayRefusesNullCreationSourceAtGuard(t *testing.T) {
+	testSucceedReplayRefusesNullProvenanceAtGuard(t, "creation_source=NULL")
+}
+
+func TestSucceedReplayRefusesNullCreationProofAtGuard(t *testing.T) {
+	testSucceedReplayRefusesNullProvenanceAtGuard(t, "creation_proof=NULL")
+}
+
+func TestSucceedReplayRefusesNullCreationProvenanceAtGuard(t *testing.T) {
+	testSucceedReplayRefusesNullProvenanceAtGuard(t, "creation_source=NULL,creation_proof=NULL")
+}
+
+func testSucceedReplayRefusesNullProvenanceAtGuard(t *testing.T, nullColumns string) {
+	t.Helper()
+	s, clock, _ := testStore(t)
+	req, _ := successionFixture(t, s, clock, Request{Client: "codex", Host: "host", SessionID: "S", Cwd: "/repo/w", Worktree: "/repo/w"})
+	child := call(t, s, "succeed", req)
+	childID := child["execution_id"].(string)
+	if _, err := s.db.Exec("UPDATE Execution SET "+nullColumns+" WHERE id=?", childID); err != nil {
+		t.Fatal(err)
+	}
+
+	var prior, source, proof sql.NullString
+	if err := s.db.QueryRow("SELECT prior_execution_id,creation_source,creation_proof FROM Execution WHERE id=?", childID).Scan(&prior, &source, &proof); err != nil {
+		t.Fatal(err)
+	}
+	if !prior.Valid || prior.String != req.PriorExecutionID {
+		t.Fatalf("child lineage changed: prior=%+v want=%s", prior, req.PriorExecutionID)
+	}
+
+	type executionState struct {
+		id         string
+		generation int64
+		state      string
+		hookSeen   sql.NullInt64
+	}
+	readState := func(id string) executionState {
+		t.Helper()
+		var row executionState
+		if err := s.db.QueryRow("SELECT id,generation,state,hook_seen_ms FROM Execution WHERE id=?", id).
+			Scan(&row.id, &row.generation, &row.state, &row.hookSeen); err != nil {
+			t.Fatal(err)
+		}
+		return row
+	}
+	beforeParent, beforeChild := readState(req.PriorExecutionID), readState(childID)
+	beforeDatabase := databaseState(t, s)
+
+	out, err := s.Call(t.Context(), "succeed", req)
+	if out != nil {
+		t.Fatalf("NULL provenance replay returned authority: %+v", out)
+	}
+	var lost *Error
+	if !errors.As(err, &lost) || lost.Code != "lost" {
+		t.Fatalf("NULL provenance replay error = %v, want code lost", err)
+	}
+	assertRegistrationLost(t, err, 2)
+	if lost.Message != "child Execution was not created by eligible succession or hook registration" {
+		t.Fatalf("NULL provenance replay did not reach the provenance guard: %v", err)
+	}
+	t.Logf("lineage prior_execution_id=%q; guard refusal code=%s message=%q", prior.String, lost.Code, lost.Message)
+
+	afterParent, afterChild := readState(req.PriorExecutionID), readState(childID)
+	if afterParent != beforeParent || afterChild != beforeChild {
+		t.Fatalf("refused replay changed Execution rows: parent before=%+v after=%+v; child before=%+v after=%+v", beforeParent, afterParent, beforeChild, afterChild)
+	}
+	if databaseState(t, s) != beforeDatabase {
+		t.Fatal("refused NULL provenance replay mutated the database")
+	}
+}
+
 func TestSucceedProcessIdentityAndBusyMailboxRefusals(t *testing.T) {
 	for _, tc := range []struct {
 		name   string

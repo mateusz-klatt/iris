@@ -37,7 +37,7 @@ func TestAnExplicitFileClaimHasARouteOfItsOwn(t *testing.T) {
 	_, s := setup(t)
 	a := register(t, s, 1)
 	bound := request(t, s, "POST", "/v1/bind", map[string]any{"execution": a["execution_id"], "client": "codex", "host": "host"}, 200)
-	if bound["worktree"] != "/repo/1" || len(bound["capabilities"].([]any)) != 2 {
+	if bound["worktree"] != "/repo/1" || len(bound["capabilities"].([]any)) != 3 {
 		t.Fatalf("binding: %v", bound)
 	}
 	r := authority(a)

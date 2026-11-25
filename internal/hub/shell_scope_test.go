@@ -45,7 +45,7 @@ func TestReducedSnapshotsHaveARouteOfTheirOwn(t *testing.T) {
 	registration := func() map[string]any {
 		return map[string]any{"client": "codex", "session_id": "one", "host": "host", "cwd": "/repo", "worktree": "/repo", "remote_url": "https://example.com/team/project.git", "source": "hook", "kind": "before", "status": map[string]string{}}
 	}
-	capabilities := []any{"shell_scope", "file_claims"}
+	capabilities := []any{"shell_scope", "file_claims", "succession_proof"}
 	if got := post("/v1/sessions", registration(), http.StatusOK)["capabilities"]; !reflect.DeepEqual(got, capabilities) {
 		t.Fatalf("registration answer: %v", got)
 	}

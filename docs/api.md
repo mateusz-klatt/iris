@@ -56,13 +56,19 @@ Response:
  "peers":[{"name":"...","client":"...","state":"active","worktree":"...","branch":"..."}],
  "claims":[{"fence":1,"path":"...","kind":"exact","holder":"...","origin":"auto",
             "expires_at":"..."}],
- "capabilities":["shell_scope"],"unread":0,
+ "capabilities":["shell_scope","file_claims","succession_proof"],
+ "prior_execution_id":null,"creation_source":"hook","creation_proof":"initial","hook_seen":true,
+ "unread":0,
  "attention":{"unread":0,"available":0,"monitored":false,"identity":null,"high_water":17}}
 ```
 
 `capabilities` names what this hub accepts beyond the rest of version one. `shell_scope` means
-that it takes reduced shell snapshots on `POST /v1/shell/scoped` (below). A hook sends one only
-to a hub whose last registration answer named it.
+that it takes reduced shell snapshots on `POST /v1/shell/scoped` (below). `file_claims` means
+that it takes grouped file touches on `POST /v1/claims/touch/files` (below). `succession_proof`
+means that it returns explicit classification metadata (`prior_execution_id`, `creation_source`,
+`creation_proof`, `hook_seen`) and accepts `POST /v1/sessions/succeed/exact` plus
+`succession_proof:true` opt-in on bind and heartbeat (ADR 039). A hook sends reduced shell
+snapshots only to a hub whose last registration answer named `shell_scope`.
 
 `attention` is what is pending for the session. `unread` counts its mail that still needs a wake,
 `available` counts the paths freed for this Execution, and `monitored` says its `iris watch` beat
@@ -111,11 +117,12 @@ SessionEnd, only a generation-zero hook registration can advance it: every non-h
 empty included, gets `409 lost` regardless of `retry_generation`. If retention has removed the
 ended Execution, that state is no longer available to check. An older hub omits the detail, so an
 upgraded hook keeps its proof and skips the retry. (Broader Choice A refusal of proofless non-hook
-generation-zero registration over non-ended hook history is deferred to ADR 038 stage 1b so stage 1a
-remains inert for v0.1.15 clients.)
+generation-zero registration over non-ended hook history remains deferred until client-side admission
+lands in M2 so stage 1b M1 remains inert for v0.1.15 clients.)
 
-`POST /v1/sessions/succeed` is the versioned create-or-replay post-window succession route (ADR 038
-stage 1a, hub only — unused by any Iris client until stage 1b):
+`POST /v1/sessions/succeed/exact` is the ADR 039 stage 1b exact-proof succession route (calling the
+ADR 038 stage 1a create-or-replay transaction; unreleased route `POST /v1/sessions/succeed` from
+stage 1a returns `404 not_found` before any mutation):
 
 ```json
 {"client":"claude","session_id":"...","host":"...","source":"shim",
@@ -158,8 +165,9 @@ In one writer transaction, the hub checks the newest retained Execution for `(ho
 
 These proof fields are self-declared and are not host-token-isolated across hosts: they prevent
 accidental races and stale retries inside the shared bearer-token boundary rather than authenticating
-an adversarial bearer holder or scoping requests by `HostToken.name`. No client invokes
-`POST /v1/sessions/succeed` in stage 1a; client-side succession and Choice A ship in stage 1b.
+an adversarial bearer holder or scoping requests by `HostToken.name`. `POST /v1/sessions/succeed/exact`
+and the stage 1b classified replies and compatibility guards ship first in M1; client-side admission
+and Choice A land in M2.
 
 An unexpired local `.ended` marker for generation G is sent as `ended_through:G` on ordinary,
 outside-git and combined shell registration, including SessionStart. A generation-zero request
@@ -188,13 +196,21 @@ the session needs a new generation.
  "client_pid":123,"client_pid_start_ms":1793917887311,"cwd":"..."}
 ```
 
-It returns `{"execution_id":"...","generation":1,"agent":{...},"session_id":"...","hook_seen":true}`,
+It returns `{"execution_id":"...","generation":1,"agent":{...},"session_id":"...","capabilities":["shell_scope","file_claims","succession_proof"],"prior_execution_id":null,"creation_source":"hook","creation_proof":"initial","hook_seen":true}`,
 `unbound`, `ambiguous`, or `lost` for an explicit Execution that is unusable. The returned
 `session_id` is the native session registered by the hook; an older hub may omit it, in which case
 Kimi's native wake stays disarmed. Binding only looks up a usable Execution; it does not reattach
 one. A lookup by session id excludes recovering Executions, so Codex id mode without a cached
 binding answers `unbound` during recovery. `hook_seen` says whether any hook has reached the hub
-for that Execution. Codex and Kimi wake require it to be true.
+for that Execution; Codex and Kimi wake require it to be true. `prior_execution_id`,
+`creation_source`, and `creation_proof` are explicit JSON strings or JSON `null` (when absent on
+initial or pre-migration-029 rows).
+
+A matching live hookless shim-succession child (`creation_source:"shim"`,
+`creation_proof:"shim_succession"`, `hook_seen:false`) returns `lost` on `POST /v1/bind` (including
+handle lookup) unless the request sets `"succession_proof":true`. Non-hook registration on
+`/v1/sessions` and `/v1/sessions/outside` refuses attaching to or replacing a hookless succession
+child even after expiry and predecessor pruning, until a genuine hook registers and sets `hook_seen`.
 
 A request with `session_id` and the client process (`client_pid` and `client_pid_start_ms`)
 looks both up together (ADR 030). Every one of `client`, `host`, `session_id`, `client_pid` and
@@ -207,7 +223,14 @@ alone. A `client_pid` or `client_pid_start_ms` that is missing or not positive b
 lookups above.
 
 `POST /v1/executions/{id}/heartbeat` takes `{"generation":1,"source":"shim"}`, where `source` is
-`shim`, `watch` or `hook`. It returns `{"lease_ms":60000}`, or `lost`.
+`shim`, `watch` or `hook`. Without `"succession_proof":true`, it returns the byte-compatible legacy
+reply shape (`{"execution_id":"...","generation":1,"agent":{...},"session_id":"...","capabilities":["shell_scope","file_claims"],"lease_ms":60000}`,
+omitting `hook_seen` and provenance so v0.1.15 resolvers retain their existing D9 behavior); with
+`"succession_proof":true`, it returns the full classified fields including `succession_proof` in
+`capabilities`, `prior_execution_id`, `creation_source`, `creation_proof`, and `hook_seen`, or
+`lost`. A live or recovering hookless shim-succession child (`hook_seen:false`) is renewed or
+resumed only when the heartbeat sends both `"source":"shim"` and `"succession_proof":true`; `hook`
+and `watch` heartbeats cannot satisfy that check and return `lost`.
 
 `POST /v1/executions/{id}/end` is a best-effort end of session. It takes `{"generation":1}`. With
 `"hand_over":"ex_..."` it first moves the Execution's agent's unacknowledged deliveries to the agent
