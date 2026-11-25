@@ -99,8 +99,23 @@ func TestLookupOS(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.PID != os.Getpid() || got.PPID != os.Getppid() || got.StartMS <= 0 || !strings.EqualFold(got.Name, bin) {
+	if got.PID != os.Getpid() || got.PPID != os.Getppid() || got.StartMS <= 0 || !strings.EqualFold(got.Name, bin) || !strings.EqualFold(got.Exe, bin) {
 		t.Fatalf("%+v, executable %s", got, bin)
+	}
+	if got.Launcher != "" {
+		t.Fatalf("the walk read a command line it does not query: %q", got.Launcher)
+	}
+}
+
+func TestExecutablePathSurvivesARetitledAgent(t *testing.T) {
+	image := `C:\Users\dev\.grok\downloads\grok-1.0.92-windows-x86_64.exe`
+	got, err := executableOS(1, Snapshot{Name: "grok", Exe: image})
+	if err != nil || got != image {
+		t.Fatalf("retitled agent executable = %q, %v", got, err)
+	}
+	got, err = executableOS(1, Snapshot{Name: image})
+	if err != nil || got != image {
+		t.Fatalf("image-only executable = %q, %v", got, err)
 	}
 }
 

@@ -17,8 +17,8 @@ func TestLookupReadsThisProcess(t *testing.T) {
 	if want := filepath.Base(os.Args[0]); got.Name != want {
 		t.Fatalf("%q, want %q", got.Name, want)
 	}
-	if got.StartMS <= 0 || got.StartMS > before {
-		t.Fatalf("started at %d, now %d", got.StartMS, before)
+	if got.StartMS <= 0 || got.StartMS > before || got.Exe == "" {
+		t.Fatalf("started at %d, now %d, exe %q", got.StartMS, before, got.Exe)
 	}
 }
 
@@ -80,6 +80,83 @@ func TestFirstArgumentReadsTheProcargsLayout(t *testing.T) {
 			t.Fatalf("%s: %q, want %q", name, got, tc.want)
 		}
 	}
+}
+
+func TestProcessNamePromotesTheAgentAlias(t *testing.T) {
+	node := "/Users/user/.local/share/cursor-agent/versions/2026.11.22-e9042b2/node"
+	index := "/Users/user/.local/share/cursor-agent/versions/2026.11.22-e9042b2/index.js"
+	grok := "/Users/user/.grok/downloads/grok-1.0.92-macos-x86_64"
+	cursorRaw := procargsBuffer(node, "/Users/user/.local/bin/agent", "--use-system-ca", "--max-old-space-size=4096", index, "-p", "hi")
+	name, exe, launcher := identityFromProcargs("node", cursorRaw)
+	if name != "cursor-agent" || exe != node || launcher != index {
+		t.Fatalf("cursor promotion: %q %q %q", name, exe, launcher)
+	}
+	systemNodeRaw := procargsBuffer("/usr/local/bin/node", "/Users/user/.local/bin/agent", "--use-system-ca", index)
+	name, exe, launcher = identityFromProcargs("node", systemNodeRaw)
+	if name != "cursor-agent" || exe != "/usr/local/bin/node" || launcher != index {
+		t.Fatalf("system node cursor promotion: %q %q %q", name, exe, launcher)
+	}
+	cursorAgentName, _, _ := identityFromProcargs("node", procargsBuffer(node, "/Users/user/.local/bin/cursor-agent", "--use-system-ca", index))
+	if cursorAgentName != "cursor-agent" {
+		t.Fatalf("cursor-agent symlink: %q", cursorAgentName)
+	}
+	grokName, grokExe, grokLauncher := identityFromProcargs("node", procargsBuffer(grok, "agent"))
+	if grokName != "grok" || grokExe != grok || grokLauncher != "" {
+		t.Fatalf("grok promotion: %q %q %q", grokName, grokExe, grokLauncher)
+	}
+	grokNamed, _, _ := identityFromProcargs("grok-1.0.92-mac", procargsBuffer(grok, "/Users/user/.grok/bin/grok"))
+	if grokNamed != "grok" {
+		t.Fatalf("grok symlink: %q", grokNamed)
+	}
+	unknownName, unknownExe, _ := identityFromProcargs("node", procargsBuffer("/bin/sleep", "/Users/user/.local/bin/agent", "30"))
+	if unknownName != "agent" || unknownExe != "/bin/sleep" {
+		t.Fatalf("unidentified agent: %q %q", unknownName, unknownExe)
+	}
+	// A buffer with a count but no terminated argument still yields the executable.
+	// The missing launcher is not guessed.
+	cut := procargsBuffer("/bin/sh", "sh")
+	cut = cut[:len(cut)-1]
+	kept, keptExe, keptLauncher := identityFromProcargs("sleep", cut)
+	if kept != "sleep" || keptExe != "/bin/sh" || keptLauncher != "" {
+		t.Fatalf("short argument list: %q %q %q", kept, keptExe, keptLauncher)
+	}
+	tree := map[int]Snapshot{
+		10: {PID: 10, PPID: 9, Name: "iris"},
+		9:  {PID: 9, PPID: 2, Name: name, Exe: exe, Launcher: launcher},
+		2:  {PID: 2, PPID: 1, Name: "claude"},
+	}
+	got, ok := NearestFrom(10, func(pid int) (Snapshot, bool) {
+		s, ok := tree[pid]
+		return s, ok
+	}, nil)
+	if !ok || got.Name != "cursor-agent" {
+		t.Fatalf("promoted cursor did not stop before Claude: %+v %v", got, ok)
+	}
+	if client, known := ClientNameOf(got, nil); !known || client != "cursor" {
+		t.Fatalf("promoted client %q %v", client, known)
+	}
+}
+
+func TestProcessNameKeepsAnUnidentifiedAgentVisible(t *testing.T) {
+	pid := startNamed(t, "agent")
+	got, ok := lookupOS(pid)
+	if !ok || got.Name != "agent" {
+		t.Fatalf("p_comm replaced an unidentified agent: %+v %v", got, ok)
+	}
+	if client, known := ClientNameOf(got, nil); known {
+		t.Fatalf("unidentified agent became %s", client)
+	}
+}
+
+func procargsBuffer(exe string, args ...string) []byte {
+	buf := []byte{byte(len(args)), 0, 0, 0}
+	buf = append(buf, exe...)
+	buf = append(buf, 0)
+	for _, arg := range args {
+		buf = append(buf, arg...)
+		buf = append(buf, 0)
+	}
+	return buf
 }
 
 func TestExecutableOSReadsThisProcessAndRefusesKernelProcesses(t *testing.T) {
