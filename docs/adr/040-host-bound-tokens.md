@@ -1,6 +1,7 @@
 # ADR 040 — Bind host tokens to their host
 
-Status: Proposed
+Status: accepted by the owner on 2026-11-25. Enforcement stays off until the owner switches it
+on, as described below.
 
 The owner agreed to address [issue #442](https://github.com/mateusz-klatt/iris/issues/442)
 on 2026-11-25. This proposal is for the owner's acceptance before implementation.
