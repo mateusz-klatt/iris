@@ -155,7 +155,7 @@ func setup(args []string, env setupEnv) int {
 			return 0
 		}
 	}
-	if err := hubclient.WriteConfig(configFile, hubclient.FileConfig{Hub: hubURL, TokenFile: tokenFile}); err != nil {
+	if err := hubclient.UpdateConfig(configFile, hubclient.FileConfig{Hub: hubURL, TokenFile: tokenFile}); err != nil {
 		_, _ = fmt.Fprintln(env.errw, err)
 		return 1
 	}

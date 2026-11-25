@@ -3,11 +3,14 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"testing"
 
 	"github.com/mateusz-klatt/iris/internal/doctor"
@@ -470,4 +473,151 @@ func TestSetupStopsWhenItCannotSaveTheConfiguration(t *testing.T) {
 	if code != 1 {
 		t.Fatalf("code %d\n%s", code, out.String())
 	}
+}
+
+type promptWatchWriter struct {
+	mu      sync.Mutex
+	buf     bytes.Buffer
+	once    sync.Once
+	seen    chan struct{}
+	trigger string
+}
+
+func (w *promptWatchWriter) Write(p []byte) (int, error) {
+	w.mu.Lock()
+	n, err := w.buf.Write(p)
+	text := w.buf.String()
+	w.mu.Unlock()
+	if strings.Contains(text, w.trigger) {
+		w.once.Do(func() { close(w.seen) })
+	}
+	return n, err
+}
+
+func TestSetupPreservesOwnerDisableDuringPromptAndUntouchedToggle(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		ownerJSON string
+		wantNil   bool
+	}{
+		{
+			name:      "owner sets false while setup waits on prompt",
+			ownerJSON: `{"hub_url":"https://old.example","session_succession":false}`,
+			wantNil:   false,
+		},
+		{
+			name:      "owner removes key while setup waits on prompt",
+			ownerJSON: `{"hub_url":"https://old.example"}`,
+			wantNil:   true,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			home := t.TempDir()
+			tokenFile := filepath.Join(home, "hub.token")
+			cfgPath := filepath.Join(home, "client.json")
+			if err := os.WriteFile(tokenFile, []byte("tok"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			enable := true
+			if err := hubclient.WriteConfig(cfgPath, hubclient.FileConfig{Hub: "https://old.example", TokenFile: "hub.token", SessionSuccession: &enable}); err != nil {
+				t.Fatal(err)
+			}
+
+			pr, pw := io.Pipe()
+			out := &promptWatchWriter{seen: make(chan struct{}), trigger: "Proceed? [y/N]"}
+			var errBuf bytes.Buffer
+			codeCh := make(chan int, 1)
+			go func() {
+				codeCh <- setup([]string{"--hub-url", "https://new.example"}, setupEnv{
+					in:             pr,
+					out:            out,
+					errw:           &errBuf,
+					getenv:         func(string) string { return "" },
+					tokenFile:      tokenFile,
+					detect:         func(func(string) (string, error)) []string { return nil },
+					installService: func(string, string) error { return nil },
+					runDoctor: func(context.Context, doctor.Options) (doctor.Result, error) {
+						return doctor.Result{HubUp: true, TokenOK: true}, nil
+					},
+				})
+			}()
+
+			<-out.seen
+			if err := os.WriteFile(cfgPath, []byte(tc.ownerJSON), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if _, err := io.WriteString(pw, "y\n"); err != nil {
+				t.Fatal(err)
+			}
+			_ = pw.Close()
+
+			if code := <-codeCh; code != 0 {
+				t.Fatalf("setup exited %d: %s", code, errBuf.String())
+			}
+			raw, err := os.ReadFile(cfgPath)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var got hubclient.FileConfig
+			if err := json.Unmarshal(raw, &got); err != nil {
+				t.Fatal(err)
+			}
+			if got.Hub != "https://new.example" {
+				t.Fatalf("hub not updated: %+v", got)
+			}
+			if tc.wantNil && got.SessionSuccession != nil {
+				t.Fatalf("stale true or unexpected value wrote session_succession=%v", *got.SessionSuccession)
+			}
+			if !tc.wantNil && (got.SessionSuccession == nil || *got.SessionSuccession) {
+				t.Fatalf("stale true overwrote false disable: %+v", got.SessionSuccession)
+			}
+		})
+	}
+
+	// --yes preserves existing true and cleans up invalid string values cleanly.
+	t.Run("preserve untouched true and drop invalid value", func(t *testing.T) {
+		home := t.TempDir()
+		tokenFile := filepath.Join(home, "hub.token")
+		cfgPath := filepath.Join(home, "client.json")
+		_ = os.WriteFile(tokenFile, []byte("tok"), 0o600)
+		enable := true
+		_ = hubclient.WriteConfig(cfgPath, hubclient.FileConfig{Hub: "https://old.example", TokenFile: "hub.token", SessionSuccession: &enable})
+
+		var out bytes.Buffer
+		if code := setup([]string{"--yes", "--hub-url", "https://new.example"}, setupEnv{
+			out: &out, errw: &out, getenv: func(string) string { return "" },
+			tokenFile: tokenFile,
+			detect:    func(func(string) (string, error)) []string { return nil },
+			runDoctor: func(context.Context, doctor.Options) (doctor.Result, error) {
+				return doctor.Result{HubUp: true, TokenOK: true}, nil
+			},
+		}); code != 0 {
+			t.Fatalf("setup --yes failed: %d\n%s", code, out.String())
+		}
+		var got hubclient.FileConfig
+		raw, _ := os.ReadFile(cfgPath)
+		_ = json.Unmarshal(raw, &got)
+		if got.SessionSuccession == nil || !*got.SessionSuccession {
+			t.Fatalf("setup dropped valid true toggle: %s", raw)
+		}
+
+		// Invalid value must not block setup and gets dropped when omitted.
+		if err := os.WriteFile(cfgPath, []byte(`{"hub_url":"https://old.example","session_succession":"bad"}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		out.Reset()
+		if code := setup([]string{"--yes", "--hub-url", "https://clean.example"}, setupEnv{
+			out: &out, errw: &out, getenv: func(string) string { return "" },
+			tokenFile: tokenFile,
+			detect:    func(func(string) (string, error)) []string { return nil },
+			runDoctor: func(context.Context, doctor.Options) (doctor.Result, error) {
+				return doctor.Result{HubUp: true, TokenOK: true}, nil
+			},
+		}); code != 0 {
+			t.Fatalf("setup with bad session_succession failed: %d\n%s", code, out.String())
+		}
+		if raw, _ = os.ReadFile(cfgPath); bytes.Contains(raw, []byte("session_succession")) {
+			t.Fatalf("invalid session_succession remained after setup: %s", raw)
+		}
+	})
 }
