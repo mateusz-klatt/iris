@@ -70,7 +70,7 @@ func readExactRecordDeadline(path string, now func() time.Time, deadline time.Ti
 	}
 	linfo, id, lerr := exactRecordStat(path)
 	if lerr != nil {
-		if errors.Is(lerr, os.ErrNotExist) {
+		if sessionPathAbsent(path, lerr) {
 			if deadlineExpired(now, deadline) {
 				return sessionproof.Record{}, "", os.ErrDeadlineExceeded
 			}
@@ -91,7 +91,7 @@ func readExactRecordDeadline(path string, now func() time.Time, deadline time.Ti
 		if deadlineExpired(now, deadline) {
 			return sessionproof.Record{}, "", os.ErrDeadlineExceeded
 		}
-		if _, serrr := lstatSessionFile(path); errors.Is(serrr, os.ErrNotExist) {
+		if _, serrr := lstatSessionFile(path); sessionPathAbsent(path, serrr) {
 			return sessionproof.Record{}, sessionproof.FileAbsent, nil
 		}
 		return sessionproof.Record{}, sessionproof.FileDamaged, sessionproof.ErrInvalidRecord
@@ -140,7 +140,7 @@ func (m fileMemory) cleanupExpiredEnd(prefix string, ended int, deadline time.Ti
 		}
 		_, lerr := lstatSessionFile(execPath)
 		switch {
-		case errors.Is(lerr, os.ErrNotExist):
+		case sessionPathAbsent(execPath, lerr):
 		case lerr != nil:
 			return false, lerr
 		case current > ended:
@@ -189,7 +189,7 @@ func (m fileMemory) inspectEvidenceDeadline(client, session string, callerDeadli
 	if deadlineExpired(mono, deadline) {
 		return snap, os.ErrDeadlineExceeded
 	}
-	if _, err := lstatSessionFile(m.dir); errors.Is(err, os.ErrNotExist) {
+	if _, err := lstatSessionFile(m.dir); sessionPathAbsent(m.dir, err) {
 		snap.GenerationState = sessionproof.FileAbsent
 		snap.EndedState = sessionproof.FileAbsent
 		if successionEnabled {

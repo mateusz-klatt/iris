@@ -556,9 +556,9 @@ func TestAntigravityStopGatesAndFailOpen(t *testing.T) {
 
 	// Directory protection failure, lock contention, and write failure all fail open without looping.
 	origProtect := protectPath
+	t.Cleanup(func() { protectPath = origProtect })
 	protectPath = func(string) error { return errors.New("acl err") }
 	if out := (Runner{ClientName: "antigravity", EventName: "Stop", Stdin: baseStop(nil), Getenv: getenv, Ancestor: anc}).Run(); string(out.Stdout) != "{}\n" {
-		protectPath = origProtect
 		t.Fatalf("protect err = %q", out.Stdout)
 	}
 	protectPath = origProtect
@@ -575,6 +575,7 @@ func TestAntigravityStopGatesAndFailOpen(t *testing.T) {
 	}
 
 	origCreate := createAntigravityTemp
+	t.Cleanup(func() { createAntigravityTemp = origCreate })
 	createAntigravityTemp = func(string, string) (*os.File, error) { return nil, errors.New("disk full") }
 	out = (Runner{ClientName: "antigravity", EventName: "Stop", Stdin: baseStop(nil), Getenv: getenv, Ancestor: anc}).Run()
 	createAntigravityTemp = origCreate
@@ -586,9 +587,9 @@ func TestAntigravityStopGatesAndFailOpen(t *testing.T) {
 	// directory (both via default hubclient.PinnedConfigDir and via explicit PinnedConfigDir), or when
 	// PinnedConfigDir fails, while accepting case-insensitive equality on Windows.
 	origPinned := pinnedAntigravityConfigDir
+	t.Cleanup(func() { pinnedAntigravityConfigDir = origPinned })
 	pinnedAntigravityConfigDir = hubclient.PinnedConfigDir
 	if out := (Runner{ClientName: "antigravity", EventName: "Stop", Stdin: baseStop(nil), Getenv: getenv, Ancestor: anc}).Run(); string(out.Stdout) != "{}\n" {
-		pinnedAntigravityConfigDir = origPinned
 		t.Fatalf("mismatched default pinned dir = %q", out.Stdout)
 	}
 	pinnedAntigravityConfigDir = origPinned
@@ -1160,6 +1161,7 @@ func TestAntigravityHelperStoreEdgesCleanupAndTeardown(t *testing.T) {
 		return proc.ErrNotFound
 	}
 	origCreate := createAntigravityTemp
+	t.Cleanup(func() { createAntigravityTemp = origCreate })
 	createAntigravityTemp = func(string, string) (*os.File, error) { return nil, errors.New("write err") }
 	err = StopAntigravityWakeHelpers(configDir)
 	createAntigravityTemp = origCreate
@@ -1174,37 +1176,33 @@ func TestAntigravityHelperStoreEdgesCleanupAndTeardown(t *testing.T) {
 	}
 	createAntigravityTemp = func(string, string) (*os.File, error) { return os.Open(roPath) }
 	if err := writeAntigravityJSON(hm.dir, filepath.Join(hm.dir, "out.json"), antigravityProcState{}); err == nil {
-		createAntigravityTemp = origCreate
 		t.Fatal("expected Write error on read-only fd")
 	}
 	createAntigravityTemp = origCreate
 
 	origSync := syncAntigravityTemp
+	t.Cleanup(func() { syncAntigravityTemp = origSync })
 	syncAntigravityTemp = func(*os.File) error { return errors.New("sync failed") }
 	if err := writeAntigravityJSON(hm.dir, filepath.Join(hm.dir, "out.json"), antigravityProcState{}); err == nil {
-		syncAntigravityTemp = origSync
 		t.Fatal("expected Sync error")
 	}
 	syncAntigravityTemp = func(f *os.File) error { _ = f.Close(); return nil }
 	if err := writeAntigravityJSON(hm.dir, filepath.Join(hm.dir, "out.json"), antigravityProcState{}); err == nil {
-		syncAntigravityTemp = origSync
 		t.Fatal("expected Close error")
 	}
 	syncAntigravityTemp = origSync
 
 	origProtect := protectPath
+	t.Cleanup(func() { protectPath = origProtect })
 	protectPath = func(string) error { return errors.New("protect failed") }
 	if err := writeAntigravityJSON(hm.dir, filepath.Join(hm.dir, "out.json"), antigravityProcState{}); err == nil {
-		protectPath = origProtect
 		t.Fatal("expected protectPath error")
 	}
 	// Also cover PublishAntigravityHelper and FailAntigravityHelper directory() error via protectPath.
 	if _, err := PublishAntigravityHelper(configDir, owner, lookup); err == nil {
-		protectPath = origProtect
 		t.Fatal("expected Publish directory error")
 	}
 	if err := FailAntigravityHelper(configDir, 10, 20, "s-active", lookup); err == nil {
-		protectPath = origProtect
 		t.Fatal("expected Fail directory error")
 	}
 	protectPath = origProtect

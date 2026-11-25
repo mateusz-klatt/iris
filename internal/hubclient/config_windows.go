@@ -43,16 +43,16 @@ func verifyWindowsRegularHandle(h windows.Handle) (configFileID, error) {
 }
 
 func statRegularConfig(path string) (os.FileInfo, configFileID, error) {
+	p, err := windows.UTF16PtrFromString(path)
+	if err != nil {
+		return nil, configFileID{}, err
+	}
 	info, err := os.Lstat(path)
 	if err != nil {
 		return nil, configFileID{}, err
 	}
 	if !info.Mode().IsRegular() {
 		return info, configFileID{}, nil
-	}
-	p, err := windows.UTF16PtrFromString(path)
-	if err != nil {
-		return nil, configFileID{}, err
 	}
 	h, err := winConfigCreateFile(
 		p,

@@ -109,7 +109,7 @@ func readGenerationDeadline(path string, now func() time.Time, deadline time.Tim
 			return 0, os.ErrDeadlineExceeded
 		}
 		// A dangling link occupies the generation path even if its target is missing.
-		if _, lerr := os.Lstat(path); errors.Is(lerr, os.ErrNotExist) {
+		if _, lerr := lstatSessionFile(path); sessionPathAbsent(path, lerr) {
 			return 0, nil
 		}
 	}

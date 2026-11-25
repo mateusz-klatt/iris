@@ -3,11 +3,16 @@
 package hook
 
 import (
+	"errors"
 	"os"
 	"syscall"
 
 	"github.com/mateusz-klatt/iris/internal/sessionproof"
 )
+
+func sessionPathAbsent(_ string, err error) bool {
+	return errors.Is(err, os.ErrNotExist)
+}
 
 type exactRecordID struct {
 	dev uint64

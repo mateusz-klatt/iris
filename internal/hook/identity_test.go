@@ -170,7 +170,9 @@ func TestANoteIsNotDecidedOnceTheCallerHasGivenUp(t *testing.T) {
 // high-water mark, in an answer no telling preceded, means the hub went back: what is pending is
 // said once more, even an identity older than the one told, and only once.
 func TestAToldCursorAboveTheHighWaterMarkIsSaidOnceMore(t *testing.T) {
+	clock := time.Unix(1_800_000_000, 0)
 	m := newFileMemory(t)
+	m.mono = func() time.Time { return clock }
 	r := Runner{Memory: m}
 	ev := Event{Client: ClientCodex, Kind: KindPrompt, SessionID: "s"}
 	r.attentionNote(context.Background(), ev, pending(200, 2, 0), false, r.toldRevision(ev))
@@ -246,7 +248,9 @@ func TestTheSameIdentityIsSaidOnceMoreAfterTenMinutes(t *testing.T) {
 // One pruning removes at most pruneLimit stale entries, so a month away does not hold the lock
 // for every session's files at once; the next pruning goes on.
 func TestOnePruningRemovesAtMostItsLimit(t *testing.T) {
+	clock := time.Unix(1_800_000_000, 0)
 	m := newFileMemory(t)
+	m.mono = func() time.Time { return clock }
 	if err := m.directory(); err != nil {
 		t.Fatal(err)
 	}
@@ -598,6 +602,10 @@ func newestAttempt(v map[string]any) map[string]any {
 // writeWake writes a wake file as the planned runner will, its directory first.
 func writeWake(t *testing.T, m fileMemory, client, session, body string) {
 	t.Helper()
+	if m.mono == nil {
+		fixed := time.Unix(1_800_000_000, 0)
+		m.mono = func() time.Time { return fixed }
+	}
 	if err := os.MkdirAll(filepath.Join(m.dir, wakeDir), 0o700); err != nil {
 		t.Fatal(err)
 	}

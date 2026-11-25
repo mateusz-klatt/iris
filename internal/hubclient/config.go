@@ -249,6 +249,7 @@ var (
 	configOpen         = openRegularConfig
 	configFileLock     = lockConfigFile
 	afterConfigStat    = func() {}
+	afterConfigRead    = func(string) {}
 )
 
 func boolPtr(v bool) *bool { return &v }
@@ -459,6 +460,7 @@ func UpdateConfig(path string, f FileConfig) error {
 	defer unlock()
 	for range configCASAttempts {
 		before := readConfigSnapshot(path)
+		afterConfigRead(path)
 		out := f
 		if out.SessionSuccession == nil {
 			out.SessionSuccession = before.cur

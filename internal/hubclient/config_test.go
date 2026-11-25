@@ -441,8 +441,9 @@ func TestUpdateConfigPreservesDisableOverStaleTrue(t *testing.T) {
 		t.Fatalf("invalid value not dropped cleanly: %s (%v)", raw, err)
 	}
 
-	// Exact race: atomic replacement with disable swapped in right after open (before rename) via CAS retry.
-	atomicSwapFile := func(target, body string) {
+	// Exact race: atomic replacement with disable swapped in after open/read (before staging/rename) via CAS retry.
+	atomicSwapFile := func(t *testing.T, target, body string) {
+		t.Helper()
 		tmp := target + ".owner.tmp"
 		if err := os.WriteFile(tmp, []byte(body), 0o600); err != nil {
 			t.Fatal(err)
@@ -463,19 +464,19 @@ func TestUpdateConfigPreservesDisableOverStaleTrue(t *testing.T) {
 			if err := WriteConfig(cfgPath, FileConfig{Hub: "https://old.example", SessionSuccession: boolPtr(true)}); err != nil {
 				t.Fatal(err)
 			}
-			origAfterStat := afterConfigStat
-			t.Cleanup(func() { afterConfigStat = origAfterStat })
+			origAfterRead := afterConfigRead
+			t.Cleanup(func() { afterConfigRead = origAfterRead })
 			swapped := false
-			afterConfigStat = func() {
+			afterConfigRead = func(p string) {
 				if !swapped {
 					swapped = true
-					atomicSwapFile(cfgPath, tc.ownerContent)
+					atomicSwapFile(t, p, tc.ownerContent)
 				}
 			}
 			if err := UpdateConfig(cfgPath, FileConfig{Hub: "https://updated.example"}); err != nil {
 				t.Fatal(err)
 			}
-			afterConfigStat = origAfterStat
+			afterConfigRead = origAfterRead
 			var merged FileConfig
 			data, _ := os.ReadFile(cfgPath)
 			if err := json.Unmarshal(data, &merged); err != nil {
@@ -502,7 +503,7 @@ func TestUpdateConfigPreservesDisableOverStaleTrue(t *testing.T) {
 	beforeConfigRename = func(p string) {
 		if !swappedAbsent {
 			swappedAbsent = true
-			atomicSwapFile(p, `{"hub_url":"https://old.example","session_succession":false}`)
+			atomicSwapFile(t, p, `{"hub_url":"https://old.example","session_succession":false}`)
 		}
 	}
 	if err := UpdateConfig(absentRacePath, FileConfig{Hub: "https://new.example"}); err != nil {
@@ -515,7 +516,7 @@ func TestUpdateConfigPreservesDisableOverStaleTrue(t *testing.T) {
 
 	// Same bytes replaced by new inode (non-same file identity) & persistent conflict -> ErrConfigChanged.
 	beforeConfigRename = func(p string) {
-		atomicSwapFile(p, `{"hub_url":"https://old.example","session_succession":false}`)
+		atomicSwapFile(t, p, `{"hub_url":"https://old.example","session_succession":false}`)
 	}
 	if err := UpdateConfig(absentRacePath, FileConfig{Hub: "https://abort.example"}); !errors.Is(err, ErrConfigChanged) {
 		t.Fatalf("persistent CAS swap = %v, want ErrConfigChanged", err)
@@ -532,7 +533,7 @@ func TestUpdateConfigPreservesDisableOverStaleTrue(t *testing.T) {
 	afterConfigCompare = func(p string) {
 		if !swappedAfterCompare {
 			swappedAfterCompare = true
-			atomicSwapFile(p, `{"hub_url":"https://old.example","session_succession":false}`)
+			atomicSwapFile(t, p, `{"hub_url":"https://old.example","session_succession":false}`)
 		}
 	}
 	if err := UpdateConfig(cfgPath, FileConfig{Hub: "https://after-compare.example", TokenFile: "hub.token"}); err != nil {

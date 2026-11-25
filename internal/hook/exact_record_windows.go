@@ -3,11 +3,38 @@
 package hook
 
 import (
+	"errors"
 	"os"
+	"path/filepath"
 
 	"github.com/mateusz-klatt/iris/internal/sessionproof"
 	"golang.org/x/sys/windows"
 )
+
+func sessionPathAbsent(path string, err error) bool {
+	if !errors.Is(err, os.ErrNotExist) {
+		return false
+	}
+	if !errors.Is(err, windows.ERROR_PATH_NOT_FOUND) {
+		return true
+	}
+	// On Windows, ERROR_PATH_NOT_FOUND can mean either a missing parent directory or an
+	// existing non-directory ancestor (Unix ENOTDIR); only missing directories count as absent.
+	for cur := filepath.Dir(filepath.Clean(path)); ; {
+		info, lerr := lstatSessionFile(cur)
+		if lerr == nil {
+			return info.IsDir()
+		}
+		if !errors.Is(lerr, os.ErrNotExist) {
+			return false
+		}
+		parent := filepath.Dir(cur)
+		if parent == cur {
+			return true
+		}
+		cur = parent
+	}
+}
 
 type exactRecordID struct {
 	vol   uint32
@@ -39,16 +66,16 @@ func verifyWindowsExactRecordHandle(h windows.Handle) (exactRecordID, error) {
 }
 
 func statExactRecordFile(path string) (os.FileInfo, exactRecordID, error) {
+	p, err := windows.UTF16PtrFromString(extendedWindowsPath(path))
+	if err != nil {
+		return nil, exactRecordID{}, err
+	}
 	info, err := lstatSessionFile(path)
 	if err != nil {
 		return nil, exactRecordID{}, err
 	}
 	if !info.Mode().IsRegular() {
 		return info, exactRecordID{}, nil
-	}
-	p, err := windows.UTF16PtrFromString(extendedWindowsPath(path))
-	if err != nil {
-		return nil, exactRecordID{}, err
 	}
 	h, err := winExactRecordCreateFile(
 		p,
