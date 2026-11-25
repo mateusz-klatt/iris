@@ -176,122 +176,158 @@ func TestLockDeadlineChecksEveryStepAndCapsSleep(t *testing.T) {
 			t.Fatalf("lockDeadline = %v, want failSessionsLock", err)
 		}
 	})
+
+	t.Run("acquireOnly lock succeeds even when OpenFile and protect exceed 50ms", func(t *testing.T) {
+		clock := time.Unix(1_000, 0)
+		m := fileMemory{
+			dir:      filepath.Join(t.TempDir(), "sessions"),
+			mono:     func() time.Time { return clock },
+			restrict: config.OwnerOnly,
+		}
+		if err := m.directory(); err != nil {
+			t.Fatal(err)
+		}
+		origProtect := protectSessionsLock
+		t.Cleanup(func() { protectSessionsLock = origProtect })
+		protectSessionsLock = func(f *os.File) error {
+			// Slow OpenFile/protect on Windows must not skip the first tryLockFile under acquireOnly.
+			clock = clock.Add(2 * hookLockBudget)
+			return origProtect(f)
+		}
+		unlock, err := m.lock(hookLockBudget)
+		if err != nil {
+			t.Fatalf("acquireOnly lock failed after slow protect: %v", err)
+		}
+		unlock()
+	})
 }
 
-func TestSingleDeadlineAttentionAndWakeWriters(t *testing.T) {
-	t.Run("consumeWake shares one deadline across both lock phases and discards temp after unlock", func(t *testing.T) {
+func TestAcquireOnlyNonSuccessionAndOFFWritersCompletePast50ms(t *testing.T) {
+	t.Run("attention, wake, prune, retainGeneration, recall, and OFF evidence complete past 50ms hold", func(t *testing.T) {
 		clock := time.Unix(1_800_000_000, 0)
 		m := fileMemory{
 			dir:      filepath.Join(t.TempDir(), "sessions"),
 			now:      func() time.Time { return clock },
 			mono:     func() time.Time { return clock },
 			restrict: config.OwnerOnly,
+			pause:    func(d time.Duration) { clock = clock.Add(d) },
 		}
-		writeWake(t, m, "codex", "s", `{"version":1,"attempts":[{"id":"a1","kind":"queue","slot":0,"token":"tok","message":"hello"}]}`)
 
-		// Phase 1 lock barrier consumes 40ms of the 50ms budget; phase 2 pause at 50ms must fail
-		// without getting a nested 50ms budget!
-		step := 0
-		m.pause = func(d time.Duration) { clock = clock.Add(d) }
+		// 1. Attention writers (updateAttention + Runner.attentionNote + toldRevision + forgetAttention)
+		// advance past 50ms inside lock hold and inside temp prepare and still complete.
+		if err := m.updateAttention("codex", "att", func(s *toldState) bool {
+			clock = clock.Add(2 * hookLockBudget)
+			s.Rev = 7
+			return true
+		}); err != nil {
+			t.Fatalf("updateAttention past 50ms hold = %v", err)
+		}
+		if rev, err := m.toldRevision("codex", "att"); err != nil || rev != 7 {
+			t.Fatalf("toldRevision past 50ms = (%d, %v), want (7, nil)", rev, err)
+		}
+		r := Runner{
+			Memory: m,
+			Now: func() time.Time {
+				// Advance >50ms inside attentionNote's lock hold after acquisition and before m.replace.
+				clock = clock.Add(2 * hookLockBudget)
+				return clock
+			},
+		}
+		ev := Event{Client: ClientCodex, Kind: KindPrompt, SessionID: "att"}
+		if note := r.attentionNote(context.Background(), ev, pending(100, 2, 0), false, 7); note == "" {
+			t.Fatal("attentionNote dropped note when hold exceeded 50ms")
+		}
+		if err := m.forgetAttention("codex", "att"); err != nil {
+			t.Fatalf("forgetAttention = %v", err)
+		}
+
+		// 2. Wake writers (writeWake + consumeWake across both lock phases + m.replace) complete past 50ms.
+		writeWake(t, m, "codex", "w1", `{"version":1,"attempts":[{"id":"a1","kind":"queue","slot":0,"token":"tok","message":"hello"}]}`)
 		origRestrict := m.restrict
-		m.restrict = func(path string) error {
-			step++
-			if step == 1 {
-				// First restrict call (directory before 2nd lock): consume remaining 10ms past deadline!
-				clock = clock.Add(50 * time.Millisecond)
-			}
-			return origRestrict(path)
+		mSlowWake := m
+		mSlowWake.restrict = func(p string) error {
+			clock = clock.Add(2 * hookLockBudget)
+			return origRestrict(p)
 		}
-		err := m.consumeWakeDeadline("codex", "s", "hello", clock.Add(hookLockBudget))
-		if !errors.Is(err, failSessionsLock) {
-			t.Fatalf("consumeWakeDeadline past single deadline = %v, want failSessionsLock", err)
+		if err := mSlowWake.consumeWake("codex", "w1", "hello"); err != nil {
+			t.Fatalf("consumeWake past 50ms hold = %v", err)
+		}
+		if got := newestAttempt(wakeOf(t, m, "w1"))["consumed_ms"]; got == nil {
+			t.Fatal("consumeWake failed to mark attempt consumed after >50ms hold")
+		}
+
+		// 3. prune (all pruneLimit=64 stale files) completes even when each entry advances >50ms.
+		old := clock.Add(-memoryAge - time.Hour)
+		for i := range pruneLimit {
+			p := m.name("claude", "prune-"+string(rune('a'+i/26))+string(rune('a'+i%26)))
+			if err := os.WriteFile(p, []byte("1\n"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			if err := os.Chtimes(p, old, old); err != nil {
+				t.Fatal(err)
+			}
+		}
+		origLstat := lstatSessionFile
+		t.Cleanup(func() { lstatSessionFile = origLstat })
+		mPruneClock := clock
+		lstatSessionFile = func(p string) (os.FileInfo, error) {
+			mPruneClock = mPruneClock.Add(10 * time.Millisecond)
+			return origLstat(p)
+		}
+		mPrune := m
+		mPrune.mono = func() time.Time { return mPruneClock }
+		if err := mPrune.prune(); err != nil {
+			t.Fatalf("prune past 50ms = %v", err)
 		}
 		for _, info := range mustList(t, m.dir) {
-			if strings.HasPrefix(info.Name(), ".tmp-") {
-				t.Fatalf("leftover temp file after failed consumeWake: %s", info.Name())
+			if strings.Contains(filepath.Base(m.name("claude", "")), info.Name()) {
+				continue
+			}
+			if info.Name() != sessionsLock && info.Name() != wakeDir && !strings.HasPrefix(info.Name(), ".") {
+				if info.ModTime().Before(clock.Add(-memoryAge)) {
+					t.Fatalf("prune stopped early under OFF/v0.1.15 semantics, left %s", info.Name())
+				}
 			}
 		}
+		lstatSessionFile = origLstat
 
-		// Expiry during phase 1 lock check returns ErrDeadlineExceeded without protecting dir.
-		clock = time.Unix(1_800_000_000, 0)
-		calls := 0
-		m2 := fileMemory{
-			dir:  m.dir,
-			now:  func() time.Time { return clock },
-			mono: func() time.Time { return clock },
-			restrict: func(string) error {
-				t.Fatal("directory protected after phase 1 deadline expiry")
-				return nil
-			},
+		// 4. retainGeneration + RecallGeneration + OFF evidence (Remember, Forget, InspectEvidence)
+		// all complete even when reads and temp restrictions inside the hold advance >50ms.
+		origOpen := generationFileOpen
+		t.Cleanup(func() { generationFileOpen = origOpen })
+		generationFileOpen = func(p string) (*os.File, error) {
+			clock = clock.Add(2 * hookLockBudget)
+			return origOpen(p)
 		}
-		m2.mono = func() time.Time {
-			calls++
-			if calls == 6 {
-				clock = clock.Add(hookLockBudget)
-			}
-			return clock
+		mSlowEv := m
+		mSlowEv.restrict = func(p string) error {
+			clock = clock.Add(2 * hookLockBudget)
+			return origRestrict(p)
 		}
-		if err := m2.consumeWakeDeadline("codex", "s", "hello", clock.Add(hookLockBudget)); !errors.Is(err, os.ErrDeadlineExceeded) {
-			t.Fatalf("consumeWake phase 1 expiry = %v, want ErrDeadlineExceeded", err)
+		marker := mSlowEv.retainGeneration("claude", "ret", 3)
+		if marker.Damaged || m.Recall("claude", "ret") != 3 {
+			t.Fatalf("retainGeneration past 50ms = (%+v, G%d), want undamaged G3", marker, m.Recall("claude", "ret"))
 		}
-
-		// Directory error and temp-prepare error after phase 1 match.
-		clock = time.Unix(1_800_000_000, 0)
-		m3 := fileMemory{
-			dir:      m.dir,
-			now:      func() time.Time { return clock },
-			mono:     func() time.Time { return clock },
-			restrict: func(string) error { return errors.New("dir err") },
+		if gen, err := mSlowEv.RecallGeneration("claude", "ret"); err != nil || gen != 3 {
+			t.Fatalf("RecallGeneration past 50ms = (G%d, %v), want (G3, nil)", gen, err)
 		}
-		if err := m3.consumeWakeDeadline("codex", "s", "hello", clock.Add(hookLockBudget)); err == nil {
-			t.Fatal("expected directory error")
+		mSlowEv.Remember("claude", "off-rec", 5)
+		if m.Recall("claude", "off-rec") != 5 {
+			t.Fatalf("OFF Remember past 50ms = G%d, want G5", m.Recall("claude", "off-rec"))
 		}
-		restrictCalls := 0
-		m3.restrict = func(p string) error {
-			restrictCalls++
-			if restrictCalls == 2 {
-				return errors.New("temp restrict err")
-			}
-			return config.OwnerOnly(p)
+		if snap, err := mSlowEv.inspectEvidenceDeadline("claude", "off-rec", clock.Add(hookLockBudget), false, true); err != nil || snap.Generation != 5 {
+			t.Fatalf("OFF inspectEvidenceDeadline past 50ms = (%+v, %v), want G5/nil", snap, err)
 		}
-		if err := m3.consumeWakeDeadline("codex", "s", "hello", clock.Add(hookLockBudget)); err == nil {
-			t.Fatal("expected temp restrict error")
+		if damaged := mSlowEv.forget("claude", "off-rec", 5); damaged != "" {
+			t.Fatalf("OFF forget past 50ms returned damaged=%q", damaged)
 		}
-
-		// Expiry inside phase 2 lock before readWake.
-		clock = time.Unix(1_800_000_000, 0)
-		phase2Calls := 0
-		var unlockedOnTemp bool
-		m4 := fileMemory{
-			dir:  m.dir,
-			now:  func() time.Time { return clock },
-			mono: func() time.Time { return clock },
-			restrict: func(p string) error {
-				phase2Calls++
-				return config.OwnerOnly(p)
-			},
+		if m.Recall("claude", "off-rec") != 0 {
+			t.Fatal("OFF forget left generation behind")
 		}
-		// Advance clock right after phase 2 lock succeeds (mono call 11 at line 741).
-		monoCalls := 0
-		m4.mono = func() time.Time {
-			monoCalls++
-			if phase2Calls >= 2 && monoCalls >= 11 {
-				clock = clock.Add(hookLockBudget)
-			}
-			return clock
-		}
-		_ = unlockedOnTemp
-		if err := m4.consumeWakeDeadline("codex", "s", "hello", clock.Add(hookLockBudget)); !errors.Is(err, os.ErrDeadlineExceeded) {
-			t.Fatalf("consumeWake phase 2 expiry = %v, want ErrDeadlineExceeded", err)
-		}
-		for _, info := range mustList(t, m.dir) {
-			if strings.HasPrefix(info.Name(), ".tmp-") {
-				t.Fatalf("leftover temp file after phase 2 expiry: %s", info.Name())
-			}
-		}
+		generationFileOpen = origOpen
 	})
 
-	t.Run("updateAttention, toldRevision, forgetAttention respect single deadline and temp cleanup", func(t *testing.T) {
+	t.Run("updateAttention, writePreparedSessionFile, consumeWake, and replace error and contention paths", func(t *testing.T) {
 		clock := time.Unix(1_800_000_000, 0)
 		m := fileMemory{
 			dir:      filepath.Join(t.TempDir(), "sessions"),
@@ -302,7 +338,9 @@ func TestSingleDeadlineAttentionAndWakeWriters(t *testing.T) {
 		if err := m.directory(); err != nil {
 			t.Fatal(err)
 		}
-		// Temp restrict error before lock.
+		writeWake(t, m, "codex", "s", `{"version":1,"attempts":[{"id":"a1","kind":"queue","slot":0,"token":"tok","message":"hello"}]}`)
+
+		// Temp restrict error inside m.replace.
 		badTemp := m
 		badTemp.restrict = func(p string) error {
 			if p != m.dir {
@@ -310,86 +348,49 @@ func TestSingleDeadlineAttentionAndWakeWriters(t *testing.T) {
 			}
 			return config.OwnerOnly(p)
 		}
-		if err := badTemp.updateAttentionDeadline("codex", "s", clock.Add(hookLockBudget), func(*toldState) bool { return true }); err == nil {
+		if err := badTemp.updateAttention("codex", "s", func(*toldState) bool { return true }); err == nil {
 			t.Fatal("expected temp restrict failure")
 		}
+		// Callback returning false writes nothing cleanly.
+		if err := m.updateAttention("codex", "s", func(*toldState) bool { return false }); err != nil {
+			t.Fatalf("no-op updateAttention = %v", err)
+		}
 
-		// Locked contention cancels updateAttention before writing.
+		// Directory error and temp-prepare error in consumeWake.
+		badDir := m
+		badDir.restrict = func(string) error { return errors.New("dir err") }
+		if err := badDir.consumeWake("codex", "s", "hello"); err == nil {
+			t.Fatal("expected consumeWake directory error")
+		}
+		badTemp.dir = m.dir
+		if err := badTemp.consumeWake("codex", "s", "hello"); err == nil {
+			t.Fatal("expected consumeWake temp restrict error")
+		}
+
+		// Locked contention fails acquisition in updateAttention, toldRevision, forgetAttention.
 		holder, err := m.lock(hookLockBudget)
 		if err != nil {
 			t.Fatal(err)
 		}
+		defer holder()
 		mPause := m
 		mPause.pause = func(d time.Duration) { clock = clock.Add(d) }
-		if err := mPause.updateAttentionDeadline("codex", "s", clock.Add(5*time.Millisecond), func(*toldState) bool {
+		if err := mPause.updateAttention("codex", "s", func(*toldState) bool {
 			t.Fatal("callback ran while lock missed")
 			return true
 		}); !errors.Is(err, failSessionsLock) {
-			holder()
 			t.Fatalf("contended updateAttention = %v, want failSessionsLock", err)
 		}
-		holder()
-		for _, info := range mustList(t, m.dir) {
-			if strings.HasPrefix(info.Name(), ".tmp-") {
-				t.Fatalf("contended updateAttention left temp file: %s", info.Name())
-			}
+		if rev, err := mPause.toldRevision("codex", "s"); !errors.Is(err, failSessionsLock) || rev != fromReplay {
+			t.Fatalf("toldRevision = (%d, %v), want (%d, failSessionsLock)", rev, err, fromReplay)
 		}
-
-		// Expiry inside updateAttention after lock acquisition.
-		clock = time.Unix(1_800_000_000, 0)
-		monoCalls := 0
-		mExp := m
-		mExp.mono = func() time.Time {
-			monoCalls++
-			if monoCalls == 6 {
-				clock = clock.Add(hookLockBudget)
-			}
-			return clock
-		}
-		if err := mExp.updateAttentionDeadline("codex", "s", clock.Add(hookLockBudget), func(*toldState) bool { return true }); !errors.Is(err, os.ErrDeadlineExceeded) {
-			t.Fatalf("updateAttention expiry = %v, want ErrDeadlineExceeded", err)
-		}
-
-		// Expiry inside replacePreparedDeadline right before writePreparedSessionFile.
-		clock = time.Unix(1_800_000_000, 0)
-		monoCalls = 0
-		mExp2 := m
-		mExp2.mono = func() time.Time {
-			monoCalls++
-			if monoCalls == 7 {
-				clock = clock.Add(hookLockBudget)
-			}
-			return clock
-		}
-		if err := mExp2.updateAttentionDeadline("codex", "s", clock.Add(hookLockBudget), func(*toldState) bool { return true }); !errors.Is(err, os.ErrDeadlineExceeded) {
-			t.Fatalf("replacePreparedDeadline expiry = %v, want ErrDeadlineExceeded", err)
+		if err := mPause.forgetAttention("codex", "s"); !errors.Is(err, failSessionsLock) {
+			t.Fatalf("forgetAttention = %v, want failSessionsLock", err)
 		}
 
 		// writePreparedSessionFile error when temp vanished.
 		if err := writePreparedSessionFile(filepath.Join(m.dir, "nonexistent-tmp"), "x"); err == nil {
 			t.Fatal("expected error writing missing temp file")
-		}
-		tmp, err := prepareSessionFile(m.dir, "seed", config.OwnerOnly)
-		if err != nil {
-			t.Fatal(err)
-		}
-		_ = os.Remove(tmp)
-		if err := m.replacePreparedDeadline(&tmp, m.counts("codex", "s"), "1 0 0 0", clock.Add(hookLockBudget), false); err == nil {
-			t.Fatal("expected replacePreparedDeadline error on missing temp")
-		}
-
-		// toldRevision and forgetAttention when lock is held past short deadline.
-		holder, err = m.lock(hookLockBudget)
-		if err != nil {
-			t.Fatal(err)
-		}
-		defer holder()
-		clock = time.Unix(1_800_000_000, 0)
-		if rev, err := mPause.toldRevisionDeadline("codex", "s", clock.Add(5*time.Millisecond)); !errors.Is(err, failSessionsLock) || rev != fromReplay {
-			t.Fatalf("toldRevision = (%d, %v), want (%d, failSessionsLock)", rev, err, fromReplay)
-		}
-		if err := mPause.forgetAttentionDeadline("codex", "s", clock.Add(5*time.Millisecond)); !errors.Is(err, failSessionsLock) {
-			t.Fatalf("forgetAttention = %v, want failSessionsLock", err)
 		}
 	})
 }
@@ -436,29 +437,11 @@ func TestDeadlineChecksInEvidenceWritersAndScanners(t *testing.T) {
 		}
 	})
 
-	t.Run("recallGenerationDeadline expiry on ended read", func(t *testing.T) {
-		clock := time.Unix(1_800_000_000, 0)
-		m := fileMemory{dir: filepath.Join(t.TempDir(), "sessions"), now: func() time.Time { return clock }, restrict: config.OwnerOnly}
-		m.Remember("claude", "s", 3)
-		calls := 0
-		m.mono = func() time.Time {
-			calls++
-			// Expire right when reading .ended inside underLockDeadline.
-			if calls == 12 {
-				clock = clock.Add(hookLockBudget)
-			}
-			return clock
-		}
-		if _, err := m.recallGenerationDeadline("claude", "s", clock.Add(hookLockBudget)); !errors.Is(err, os.ErrDeadlineExceeded) {
-			t.Fatalf("recallGenerationDeadline ended expiry = %v, want ErrDeadlineExceeded", err)
-		}
-	})
-
-	t.Run("rememberDeadline and forgetDeadline and pruneDeadline expiry", func(t *testing.T) {
+	t.Run("ON succession evidence holds fail closed cleanly at deadline", func(t *testing.T) {
 		clock := time.Unix(1_800_000_000, 0)
 		m := fileMemory{dir: filepath.Join(t.TempDir(), "sessions"), now: func() time.Time { return clock }, restrict: config.OwnerOnly}
 		m.Remember("claude", "s", 0) // early return on generation <= 0
-		m.Remember("claude", "s", 2)
+		m.rememberWithSuccession("claude", "s", 2, clock.Add(hookLockBudget), true)
 		marker := m.name("claude", "s") + ".ended"
 		if err := os.WriteFile(marker, []byte("2\n"), 0o600); err != nil {
 			t.Fatal(err)
@@ -467,7 +450,7 @@ func TestDeadlineChecksInEvidenceWritersAndScanners(t *testing.T) {
 		if err := os.Chtimes(marker, old, old); err != nil {
 			t.Fatal(err)
 		}
-		// Expire during readEndMarkerDeadline inside rememberDeadline.
+		// ON: Expire during readEndMarkerDeadline inside rememberWithSuccession(true).
 		calls := 0
 		mExp := m
 		mExp.mono = func() time.Time {
@@ -477,28 +460,28 @@ func TestDeadlineChecksInEvidenceWritersAndScanners(t *testing.T) {
 			}
 			return clock
 		}
-		mExp.rememberDeadline("claude", "s", 4, clock.Add(hookLockBudget))
+		mExp.rememberWithSuccession("claude", "s", 4, clock.Add(hookLockBudget), true)
 		if m.Recall("claude", "s") != 2 {
-			t.Fatalf("rememberDeadline modified proof past deadline")
+			t.Fatalf("rememberWithSuccession ON modified proof past deadline")
 		}
 
-		// Expire right before removing current in expired rememberDeadline.
+		// ON: Expire right before removing current in expired rememberWithSuccession(true).
 		clock = time.Unix(1_800_000_000, 0)
 		calls = 0
 		mExp2 := m
 		mExp2.mono = func() time.Time {
 			calls++
-			if calls == 13 {
+			if calls == 15 {
 				clock = clock.Add(hookLockBudget)
 			}
 			return clock
 		}
-		mExp2.rememberDeadline("claude", "s", 4, clock.Add(hookLockBudget))
+		mExp2.rememberWithSuccession("claude", "s", 4, clock.Add(hookLockBudget), true)
 		if m.Recall("claude", "s") != 2 {
-			t.Fatalf("rememberDeadline removed proof past deadline")
+			t.Fatalf("rememberWithSuccession ON removed proof past deadline")
 		}
 
-		// Expire right before removing marker in expired rememberDeadline.
+		// ON: Expire right before removing marker in expired rememberWithSuccession(true).
 		clock = time.Unix(1_800_000_000, 0)
 		mClean := fileMemory{dir: filepath.Join(t.TempDir(), "sessions"), now: func() time.Time { return clock }, restrict: config.OwnerOnly}
 		if err := mClean.directory(); err != nil {
@@ -514,17 +497,17 @@ func TestDeadlineChecksInEvidenceWritersAndScanners(t *testing.T) {
 		calls = 0
 		mClean.mono = func() time.Time {
 			calls++
-			if calls == 12 {
+			if calls == 14 {
 				clock = clock.Add(hookLockBudget)
 			}
 			return clock
 		}
-		mClean.rememberDeadline("claude", "s", 4, clock.Add(hookLockBudget))
+		mClean.rememberWithSuccession("claude", "s", 4, clock.Add(hookLockBudget), true)
 		if _, err := os.Lstat(mk2); err != nil {
-			t.Fatalf("rememberDeadline removed marker past deadline: %v", err)
+			t.Fatalf("rememberWithSuccession ON removed marker past deadline: %v", err)
 		}
 
-		// forgetDeadline error on dir under file, and expiry before floor write.
+		// forget error on dir under file, and ON expiry before floor write / .ended replace.
 		fileParent := filepath.Join(t.TempDir(), "file")
 		if err := os.WriteFile(fileParent, nil, 0o600); err != nil {
 			t.Fatal(err)
@@ -549,7 +532,7 @@ func TestDeadlineChecksInEvidenceWritersAndScanners(t *testing.T) {
 		clock = time.Unix(1_800_000_000, 0)
 		mForget := fileMemory{dir: filepath.Join(t.TempDir(), "sessions"), now: func() time.Time { return clock }, restrict: config.OwnerOnly}
 		mForget.Remember("claude", "s", 3)
-		// Expire right before writing .ended: forgetDeadline fails and preserves existing proof.
+		// ON: Expire right before writing .ended: forgetEvidence fails closed and preserves existing proof.
 		calls = 0
 		mForgetExp := mForget
 		mForgetExp.mono = func() time.Time {
@@ -559,17 +542,17 @@ func TestDeadlineChecksInEvidenceWritersAndScanners(t *testing.T) {
 			}
 			return clock
 		}
-		if got := mForgetExp.forgetDeadline("claude", "s", 3, clock.Add(hookLockBudget)); got == "" {
-			t.Fatal("expected forgetDeadline to fail when deadline expired before .ended replace")
+		if got := mForgetExp.forgetEvidence("claude", "s", 3, clock.Add(hookLockBudget), true); got == "" {
+			t.Fatal("expected forgetEvidence ON to fail when deadline expired before .ended replace")
 		}
 		if mForget.Recall("claude", "s") != 3 {
-			t.Fatal("forgetDeadline deleted proof even though .ended replace failed")
+			t.Fatal("forgetEvidence ON deleted proof even though .ended replace failed")
 		}
 		clock = time.Unix(1_800_000_000, 0)
 		if got := mForget.forget("claude", "s", 3); got != "" {
 			t.Fatal(got)
 		}
-		// Now marker=3; calling forget(1) with expiry before writePreparedSessionFile keeps marker=3.
+		// Now marker=3; calling forgetEvidence(1, true) with expiry before writePreparedSessionFile keeps marker=3.
 		calls = 0
 		mForget.mono = func() time.Time {
 			calls++
@@ -578,11 +561,11 @@ func TestDeadlineChecksInEvidenceWritersAndScanners(t *testing.T) {
 			}
 			return clock
 		}
-		if got := mForget.forgetDeadline("claude", "s", 1, clock.Add(hookLockBudget)); got == "" {
-			t.Fatal("expected forgetDeadline to fail on expired floor write")
+		if got := mForget.forgetEvidence("claude", "s", 1, clock.Add(hookLockBudget), true); got == "" {
+			t.Fatal("expected forgetEvidence ON to fail on expired floor write")
 		}
 
-		// pruneDeadline expiry inside stale removal loop.
+		// ON: pruneWithSuccession(true) expiry inside stale removal loop stops cleanly.
 		clock = time.Unix(1_800_000_000, 0)
 		mPrune := fileMemory{dir: filepath.Join(t.TempDir(), "sessions"), now: func() time.Time { return clock }, restrict: config.OwnerOnly}
 		mPrune.Remember("claude", "old", 1)
@@ -597,15 +580,15 @@ func TestDeadlineChecksInEvidenceWritersAndScanners(t *testing.T) {
 			}
 			return clock
 		}
-		if err := mPrune.pruneDeadline(clock.Add(hookLockBudget)); err != nil {
+		if err := mPrune.pruneWithSuccession(clock.Add(hookLockBudget), true, nil); err != nil {
 			t.Fatal(err)
 		}
 		if mPrune.Recall("claude", "old") != 1 {
-			t.Fatal("prune removed entry after deadline expired")
+			t.Fatal("prune ON removed entry after deadline expired")
 		}
 	})
 
-	t.Run("replaceSessionFileDeadline and Antigravity deadline expiry", func(t *testing.T) {
+	t.Run("replaceSessionFileDeadline, Antigravity writes, and ScanAntigravityWakeSession acquireOnly", func(t *testing.T) {
 		if runtime.GOOS != "windows" {
 			dir := t.TempDir()
 			src := filepath.Join(dir, "src")
@@ -631,8 +614,9 @@ func TestDeadlineChecksInEvidenceWritersAndScanners(t *testing.T) {
 		if err := writeAntigravityJSONDeadline(dir, filepath.Join(dir, "out.json"), antigravityProcState{}, now, func() time.Time { return now }); !errors.Is(err, os.ErrDeadlineExceeded) {
 			t.Fatalf("writeAntigravityJSONDeadline expired = %v, want ErrDeadlineExceeded", err)
 		}
+		renameAntigravityStateFile = origRename
 
-		// ScanAntigravityWakeSession temp-prepare error and post-lock deadline expiry.
+		// ScanAntigravityWakeSession temp-prepare error and completion when hold > budget under acquireOnly.
 		_, tokenPath, _ := agyTestEnv(t)
 		tDir := t.TempDir()
 		tr := filepath.Join(tDir, "t.jsonl")
@@ -661,13 +645,14 @@ func TestDeadlineChecksInEvidenceWritersAndScanners(t *testing.T) {
 		s.memory.restrict = config.OwnerOnly
 		s.memory.mono = func() time.Time {
 			calls++
-			if calls >= 6 {
+			// Jump >budget after acquisition once replace enters (Windows) while still using fresh rename budget.
+			if calls == 2 {
 				clock = clock.Add(2 * time.Second)
 			}
 			return clock
 		}
-		if _, _, err := ScanAntigravityWakeSession(s, convID, tr, time.Now(), time.Second); !errors.Is(err, os.ErrDeadlineExceeded) {
-			t.Fatalf("ScanAntigravityWakeSession expired = %v, want ErrDeadlineExceeded", err)
+		if _, _, err := ScanAntigravityWakeSession(s, convID, tr, clock, 0); err != nil {
+			t.Fatalf("ScanAntigravityWakeSession tryOnce/acquireOnly = %v, want nil", err)
 		}
 	})
 }
@@ -855,7 +840,7 @@ func TestExactRecordDeadlineCheckpointsAnd60msAntigravitySync(t *testing.T) {
 		rememberWithDeadline(fakeMemory{hub}, "claude", "s", 2, time.Now().Add(time.Second))
 	})
 
-	t.Run("shell reconcile threads remaining caller deadline into rememberDeadline", func(t *testing.T) {
+	t.Run("shell reconcile threads remaining caller deadline into acquisition budget", func(t *testing.T) {
 		clock := time.Unix(1_800_000_000, 0)
 		var slept time.Duration
 		m := fileMemory{
@@ -884,7 +869,7 @@ func TestExactRecordDeadlineCheckpointsAnd60msAntigravitySync(t *testing.T) {
 			t.Fatalf("reconcileSession slept %v waiting on held lock, want 4ms caller cap instead of fresh 50ms", slept)
 		}
 		if m.Recall(string(ev.Client), ev.SessionID) != 0 {
-			t.Fatal("rememberDeadline wrote proof past caller deadline")
+			t.Fatal("rememberWithDeadline wrote proof past caller acquisition cap")
 		}
 	})
 }
@@ -1494,10 +1479,13 @@ func TestOFFImmunityAndIndependentInspectAndForgetAndPrune(t *testing.T) {
 				t.Fatalf("InspectEvidence created sessions dir on absent session: %v", statErr)
 			}
 		}
-		// Already-expired deadline fails even on absent dir.
+		// Already-expired caller deadline fails under ON fullHold even on absent dir, while OFF acquireOnly stays unaffected.
 		past := time.Now().Add(-time.Second)
-		if _, err := s.InspectEvidence("claude", "s", past, false, false); !errors.Is(err, os.ErrDeadlineExceeded) {
-			t.Fatalf("InspectEvidence expired = %v, want ErrDeadlineExceeded", err)
+		if snapOffPast, err := s.InspectEvidence("claude", "s", past, false, false); err != nil || snapOffPast.RecordState != sessionproof.FileSkipped {
+			t.Fatalf("InspectEvidence OFF past deadline = (%+v, %v), want FileSkipped/nil", snapOffPast, err)
+		}
+		if _, err := s.InspectEvidence("claude", "s", past, true, false); !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("InspectEvidence ON expired = %v, want ErrDeadlineExceeded", err)
 		}
 
 		// Bad dir path returns lock error cleanly.
@@ -1774,7 +1762,7 @@ func TestOFFImmunityAndIndependentInspectAndForgetAndPrune(t *testing.T) {
 			t.Fatalf("prune deleted .ended after deadline expired in readEndMarkerDeadline: %v", err)
 		}
 
-		// Expiry between Lstat and Remove in pruneWithSuccession leaves stale entry untouched (P2 #6a).
+		// Expiry between Lstat and Remove in ON pruneWithSuccession leaves stale entry untouched.
 		mLstatExp := fileMemory{dir: filepath.Join(t.TempDir(), "sessions"), now: func() time.Time { return clock }, mono: func() time.Time { return clock }, restrict: config.OwnerOnly}
 		_ = mLstatExp.directory()
 		staleFile := filepath.Join(mLstatExp.dir, "stale-entry")
@@ -1792,11 +1780,11 @@ func TestOFFImmunityAndIndependentInspectAndForgetAndPrune(t *testing.T) {
 			return info, err
 		}
 		mLstatExp.mono = func() time.Time { return pruneClock }
-		if err := mLstatExp.pruneWithSuccession(pruneDeadline, false, nil); err != nil {
+		if err := mLstatExp.pruneWithSuccession(pruneDeadline, true, nil); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := os.Lstat(staleFile); err != nil {
-			t.Fatalf("prune deleted staleFile after deadline expired during Lstat: %v", err)
+			t.Fatalf("prune ON deleted staleFile after deadline expired during Lstat: %v", err)
 		}
 	})
 }

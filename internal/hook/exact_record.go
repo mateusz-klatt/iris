@@ -184,9 +184,12 @@ func (m fileMemory) inspectEvidenceDeadline(client, session string, callerDeadli
 	}
 	prefix := m.name(client, session)
 	snap := sessionproof.Snapshot{BasePath: prefix}
-	deadline := m.lockBudgetDeadline(callerDeadline)
+	// ADR 039 fullHold covers succession-evidence inspection only when session_succession is ON;
+	// when OFF, keep v0.1.15's acquisition-only budget (no hold deadline) and never open .execution.
+	mode := m.lockModeForSuccession(callerDeadline, successionEnabled)
+	holdDeadline := mode.holdDeadline
 	mono := m.monoClock()
-	if deadlineExpired(mono, deadline) {
+	if !holdDeadline.IsZero() && deadlineExpired(mono, holdDeadline) {
 		return snap, os.ErrDeadlineExceeded
 	}
 	if _, err := lstatSessionFile(m.dir); sessionPathAbsent(m.dir, err) {
@@ -200,19 +203,19 @@ func (m fileMemory) inspectEvidenceDeadline(client, session string, callerDeadli
 		return snap, nil
 	}
 	var inspectErr error
-	if err := m.underLockDeadline(deadline, func() {
-		ended, expired, markerErr := m.readEndMarkerDeadline(prefix+".ended", deadline)
+	if err := m.underLockMode(mode, func() {
+		ended, expired, markerErr := m.readEndMarkerDeadline(prefix+".ended", holdDeadline)
 		if errors.Is(markerErr, os.ErrDeadlineExceeded) {
 			inspectErr = markerErr
 			return
 		}
 		if cleanExpired && markerErr == nil && ended > 0 && expired {
-			_, cleanErr := m.cleanupExpiredEnd(prefix, ended, deadline, successionEnabled)
+			_, cleanErr := m.cleanupExpiredEnd(prefix, ended, holdDeadline, successionEnabled)
 			if errors.Is(cleanErr, os.ErrDeadlineExceeded) {
 				inspectErr = cleanErr
 				return
 			}
-			ended, _, markerErr = m.readEndMarkerDeadline(prefix+".ended", deadline)
+			ended, _, markerErr = m.readEndMarkerDeadline(prefix+".ended", holdDeadline)
 			if errors.Is(markerErr, os.ErrDeadlineExceeded) {
 				inspectErr = markerErr
 				return
@@ -228,7 +231,7 @@ func (m fileMemory) inspectEvidenceDeadline(client, session string, callerDeadli
 			snap.EndedState = sessionproof.FileAbsent
 		}
 
-		current, genErr := readGenerationDeadline(prefix, mono, deadline)
+		current, genErr := readGenerationDeadline(prefix, mono, holdDeadline)
 		switch {
 		case errors.Is(genErr, os.ErrDeadlineExceeded):
 			inspectErr = genErr
@@ -246,7 +249,7 @@ func (m fileMemory) inspectEvidenceDeadline(client, session string, callerDeadli
 			snap.RecordState = sessionproof.FileSkipped
 			return
 		}
-		rec, recState, recErr := readExactRecordDeadline(executionPath(prefix), mono, deadline)
+		rec, recState, recErr := readExactRecordDeadline(executionPath(prefix), mono, holdDeadline)
 		if errors.Is(recErr, os.ErrDeadlineExceeded) {
 			inspectErr = recErr
 			return

@@ -267,11 +267,11 @@ func PublishAntigravityHelper(configDir string, owner AntigravityHelperOwner, lo
 		lookup = lookupAntigravityProc
 	}
 	m := antigravityHelpersMemory(configDir)
-	deadline := time.Now().Add(antigravityHelperLockBudget)
 	if err := m.directory(); err != nil {
 		return false, err
 	}
-	unlock, err := m.lockDeadline(deadline)
+	// Helper lifecycle writes keep an acquisition-only lock budget (no post-lock hold deadline).
+	unlock, err := m.lockAcquire(acquireOnly(antigravityHelperLockBudget))
 	if err != nil {
 		return false, err
 	}
@@ -298,7 +298,7 @@ func PublishAntigravityHelper(configDir string, owner AntigravityHelperOwner, lo
 			SessionID: owner.SessionID,
 			AttemptID: owner.AttemptID,
 		}
-		return writeAntigravityJSONDeadline(m.dir, antigravityProcFile(m.dir, owner.AgyPID, owner.AgyStartMS), st, deadline, time.Now)
+		return writeAntigravityJSON(m.dir, antigravityProcFile(m.dir, owner.AgyPID, owner.AgyStartMS), st)
 	}()
 	if oldPID > 0 {
 		_ = terminateAntigravityProc(oldPID, oldStart)
@@ -316,11 +316,11 @@ func FailAntigravityHelper(configDir string, agyPID int, agyStartMS int64, sessi
 		lookup = lookupAntigravityProc
 	}
 	m := antigravityHelpersMemory(configDir)
-	deadline := time.Now().Add(antigravityHelperLockBudget)
 	if err := m.directory(); err != nil {
 		return err
 	}
-	unlock, err := m.lockDeadline(deadline)
+	// Helper lifecycle writes keep an acquisition-only lock budget (no post-lock hold deadline).
+	unlock, err := m.lockAcquire(acquireOnly(antigravityHelperLockBudget))
 	if err != nil {
 		return err
 	}
@@ -333,7 +333,7 @@ func FailAntigravityHelper(configDir string, agyPID int, agyStartMS int64, sessi
 		return nil
 	}
 	st.Helper = &antigravityHelperRecord{Status: "failed"}
-	return writeAntigravityJSONDeadline(m.dir, antigravityProcFile(m.dir, agyPID, agyStartMS), st, deadline, time.Now)
+	return writeAntigravityJSON(m.dir, antigravityProcFile(m.dir, agyPID, agyStartMS), st)
 }
 
 // VerifyAntigravityHelper reports whether wake remains enabled, the host agy process is alive,
@@ -366,11 +366,11 @@ func CleanupAntigravityHelper(configDir string, owner AntigravityHelperOwner) er
 		return nil
 	}
 	m := antigravityHelpersMemory(configDir)
-	deadline := time.Now().Add(antigravityHelperLockBudget)
 	if _, err := os.Stat(m.dir); err != nil {
 		return nil
 	}
-	unlock, err := m.lockDeadline(deadline)
+	// Helper cleanup keeps an acquisition-only lock budget (no post-lock hold deadline).
+	unlock, err := m.lockAcquire(acquireOnly(antigravityHelperLockBudget))
 	if err != nil {
 		return err
 	}
@@ -381,7 +381,7 @@ func CleanupAntigravityHelper(configDir string, owner AntigravityHelperOwner) er
 		return nil
 	}
 	st.Helper = nil
-	return writeAntigravityJSONDeadline(m.dir, antigravityProcFile(m.dir, owner.AgyPID, owner.AgyStartMS), st, deadline, time.Now)
+	return writeAntigravityJSON(m.dir, antigravityProcFile(m.dir, owner.AgyPID, owner.AgyStartMS), st)
 }
 
 // StopAntigravityWakeHelpers terminates any live recorded Antigravity wake helpers under configDir
@@ -428,8 +428,8 @@ func StopAntigravityWakeHelpers(configDir string) error {
 			firstErr = err
 		}
 	}
-	deadline := time.Now().Add(antigravityHelperLockBudget)
-	unlock, err := m.lockDeadline(deadline)
+	// Helper teardown keeps an acquisition-only lock budget (no post-lock hold deadline).
+	unlock, err := m.lockAcquire(acquireOnly(antigravityHelperLockBudget))
 	if err != nil {
 		if firstErr != nil {
 			return firstErr
@@ -444,7 +444,7 @@ func StopAntigravityWakeHelpers(configDir string) error {
 		}
 		if st.Helper.PID == t.rec.PID && st.Helper.StartMS == t.rec.StartMS && st.Helper.AttemptID == t.rec.AttemptID {
 			st.Helper = nil
-			if werr := writeAntigravityJSONDeadline(m.dir, t.path, st, deadline, time.Now); werr != nil && firstErr == nil {
+			if werr := writeAntigravityJSON(m.dir, t.path, st); werr != nil && firstErr == nil {
 				firstErr = werr
 			}
 		}
@@ -679,7 +679,6 @@ func (r Runner) antigravityHook(ev Event, note func(string)) (Output, bool) {
 	}
 
 	m := antigravityHelpersMemory(configDir)
-	lockDeadline := m.lockBudgetDeadline(time.Time{})
 	writeBudget := antigravityHelperLockBudget
 	if r.Deadline > 0 && r.Deadline < writeBudget {
 		writeBudget = r.Deadline
@@ -688,7 +687,9 @@ func (r Runner) antigravityHook(ev Event, note func(string)) (Output, bool) {
 	if err := m.directory(); err != nil {
 		return Output{}, false
 	}
-	unlock, err := m.lockDeadline(lockDeadline)
+	// Keep v0.1.15's acquisition-only 50 ms lock budget for helper state; writeDeadline bounds
+	// slow syncs separately against Runner.Deadline.
+	unlock, err := m.lockAcquire(acquireOnly(hookLockBudget))
 	if err != nil {
 		return Output{}, false
 	}
@@ -1018,28 +1019,16 @@ func ScanAntigravityWakeSession(s *Sessions, sessionID, transcriptHint string, n
 	if !pass.Matched && !pass.RotatedOrTruncated && pass.Next == target.Cursor {
 		return false, false, nil
 	}
-	deadline := s.memory.monoClock()().Add(budget)
 	if err := s.Protect(); err != nil {
 		return false, false, err
 	}
-	tmp, err := prepareSessionFile(s.memory.dir, "", s.memory.restrict)
-	if err != nil {
-		return false, false, err
-	}
-	defer func() {
-		if tmp != "" {
-			_ = os.Remove(tmp)
-		}
-	}()
-	unlock, err := s.memory.lockAcquire(deadline, budget <= 0)
+	// Wake cursor/consumption updates keep v0.1.15's acquisition-only lock budget (no hold deadline).
+	unlock, err := s.Lock(budget)
 	if err != nil {
 		return false, false, err
 	}
 	defer unlock()
 
-	if deadlineExpired(s.memory.monoClock(), deadline) {
-		return false, false, os.ErrDeadlineExceeded
-	}
 	d, ok := readWake(wakePath)
 	if !ok || len(d.attempts) == 0 {
 		return false, false, nil
@@ -1051,7 +1040,7 @@ func ScanAntigravityWakeSession(s *Sessions, sessionID, transcriptHint string, n
 	if pass.Matched {
 		newest["consumed_ms"] = json.RawMessage(strconv.FormatInt(now.UnixMilli(), 10))
 		d.forget(now.Add(-memoryAge))
-		return true, false, s.memory.replacePreparedDeadline(&tmp, wakePath, d.encode(), deadline, false)
+		return true, false, s.memory.replace(wakePath, d.encode())
 	}
 	var stored AntigravityScanCursor
 	_ = json.Unmarshal(newest["scan"], &stored)
@@ -1061,5 +1050,5 @@ func ScanAntigravityWakeSession(s *Sessions, sessionID, transcriptHint string, n
 	// AntigravityScanCursor holds only strings, int64 and bool, so Marshal cannot fail.
 	rawScan, _ := json.Marshal(pass.Next)
 	newest["scan"] = rawScan
-	return false, pass.HasMore, s.memory.replacePreparedDeadline(&tmp, wakePath, d.encode(), deadline, false)
+	return false, pass.HasMore, s.memory.replace(wakePath, d.encode())
 }

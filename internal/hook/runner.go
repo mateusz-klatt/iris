@@ -556,6 +556,8 @@ func (r Runner) register(ctx context.Context, state *runState, ev Event, repo gi
 	}
 	if err == nil && m != nil {
 		deadline, _ := ctx.Deadline()
+		// M2b keeps session_succession OFF in production hooks: remember and prune use
+		// v0.1.15's acquisition-only budget (no hold deadline), capping only lock wait.
 		rememberWithDeadline(m, string(ev.Client), ev.SessionID, sess.Generation, deadline)
 		if ev.Kind == KindSessionStart {
 			if files, ok := m.(fileMemory); ok {

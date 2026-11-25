@@ -282,6 +282,7 @@ func (r Runner) answered(ctx context.Context, m Memory, ev Event, res hubclient.
 	}
 	if m != nil && res.Session.Generation > 0 {
 		deadline, _ := ctx.Deadline()
+		// M2b keeps session_succession OFF in hooks: only lock wait is capped by deadline.
 		rememberWithDeadline(m, string(ev.Client), ev.SessionID, res.Session.Generation, deadline)
 	}
 	r.learnScope(res.Session.Capabilities)

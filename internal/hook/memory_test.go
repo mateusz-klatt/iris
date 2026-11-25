@@ -346,9 +346,7 @@ func TestRetainGenerationNamesAMarkerThatContributed(t *testing.T) {
 		client  = "claude"
 		session = "s"
 	)
-	clock := time.Unix(1_800_000_000, 0)
 	m := newFileMemory(t)
-	m.mono = func() time.Time { return clock }
 	if err := m.directory(); err != nil {
 		t.Fatal(err)
 	}
@@ -388,9 +386,7 @@ func TestRetainGenerationNamesAMarkerThatContributed(t *testing.T) {
 }
 
 func TestDanglingEndedMarkerIsDamageAndOnlyAnAbsentPathIsEmpty(t *testing.T) {
-	clock := time.Unix(1_800_000_000, 0)
 	m := newFileMemory(t)
-	m.mono = func() time.Time { return clock }
 	if err := m.directory(); err != nil {
 		t.Fatal(err)
 	}
