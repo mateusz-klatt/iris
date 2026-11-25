@@ -137,15 +137,107 @@ func TestStatusValue(t *testing.T) {
 
 func TestLookupReadsThisProcess(t *testing.T) {
 	got, ok := lookupOS(os.Getpid())
+	link, err := os.Readlink("/proc/self/exe")
+	if err != nil {
+		t.Fatal(err)
+	}
 	if !ok || got.PPID != os.Getppid() || got.StartMS <= 0 || !strings.Contains(got.Name, "proc.test") {
 		t.Fatalf("%+v %v", got, ok)
 	}
+	if got.Exe != strings.TrimSuffix(link, " (deleted)") || got.Launcher != "" {
+		t.Fatalf("exe %q launcher %q link %q", got.Exe, got.Launcher, link)
+	}
 }
 
-func TestLookupOfAProcessWithoutACommandLine(t *testing.T) {
-	if got := argv0(0x7FFFFFF0); got != "" {
-		t.Fatal(got)
+func TestLookupReadsCursorLauncherEvidenceAndLeavesAnUnknownAgent(t *testing.T) {
+	nodeBin := filepath.Join(t.TempDir(), "node")
+	self, err := os.ReadFile(os.Args[0])
+	if err != nil {
+		t.Fatal(err)
 	}
+	if err := os.WriteFile(nodeBin, self, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	index := "/home/user/.local/share/cursor-agent/versions/2026.11.22-e9042b2/index.js"
+	cursor := exec.Command(nodeBin, "-test.run=^TestProcDeletedExeChild$", "--", "--use-system-ca", index)
+	cursor.Args[0] = "/Users/user/.local/bin/agent"
+	cursor.Env = append(os.Environ(), "IRIS_PROC_DELETED_MODE=sleep")
+	if err := cursor.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = cursor.Process.Kill()
+		_ = cursor.Wait()
+	})
+	otherWithIndex := exec.Command(os.Args[0], "-test.run=^TestProcDeletedExeChild$", "--", "--use-system-ca", index)
+	otherWithIndex.Args[0] = "/Users/user/.local/bin/agent"
+	otherWithIndex.Env = append(os.Environ(), "IRIS_PROC_DELETED_MODE=sleep")
+	if err := otherWithIndex.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = otherWithIndex.Process.Kill()
+		_ = otherWithIndex.Wait()
+	})
+	unknown := exec.Command(os.Args[0], "-test.run=^TestProcDeletedExeChild$")
+	unknown.Args[0] = "agent"
+	unknown.Env = append(os.Environ(), "IRIS_PROC_DELETED_MODE=sleep")
+	if err := unknown.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = unknown.Process.Kill()
+		_ = unknown.Wait()
+	})
+	deadline := time.Now().Add(5 * time.Second)
+	var foundCursor, foundOther, foundUnknown Snapshot
+	for {
+		if s, ok := lookupOS(cursor.Process.Pid); ok && s.Launcher == index {
+			foundCursor = s
+		}
+		if s, ok := lookupOS(otherWithIndex.Process.Pid); ok && s.Launcher == index {
+			foundOther = s
+		}
+		if s, ok := lookupOS(unknown.Process.Pid); ok && s.Name == "agent" {
+			foundUnknown = s
+		}
+		if foundCursor.PID != 0 && foundOther.PID != 0 && foundUnknown.PID != 0 {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("cursor %+v other %+v unknown %+v", foundCursor, foundOther, foundUnknown)
+		}
+		time.Sleep(time.Millisecond)
+	}
+	wantExe, err := filepath.EvalSymlinks(nodeBin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotExe, err := filepath.EvalSymlinks(foundCursor.Exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if foundCursor.Name != "cursor-agent" || gotExe != wantExe {
+		t.Fatalf("cursor launcher %+v (want exe %q)", foundCursor, wantExe)
+	}
+	if client, ok := ClientNameOf(foundCursor, nil); !ok || client != "cursor" {
+		t.Fatalf("cursor client %q %v", client, ok)
+	}
+	if foundOther.Name != "/Users/user/.local/bin/agent" || foundOther.Exe == "" {
+		t.Fatalf("non-node binary with index.js changed name: %+v", foundOther)
+	}
+	if client, ok := ClientNameOf(foundOther, nil); ok {
+		t.Fatalf("non-node binary with index.js became %s", client)
+	}
+	if foundUnknown.Name != "agent" || foundUnknown.Launcher != "" {
+		t.Fatalf("unknown agent %+v", foundUnknown)
+	}
+	if client, ok := ClientNameOf(foundUnknown, nil); ok {
+		t.Fatalf("unknown agent became %s", client)
+	}
+}
+
+func TestLookupOfAMissingProcessHasNoStartTime(t *testing.T) {
 	if _, _, err := statEvidence(0x7FFFFFF0); err == nil {
 		t.Fatal("no such process")
 	}

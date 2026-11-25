@@ -318,7 +318,7 @@ func TestCrossLoad(t *testing.T) {
 	}
 }
 
-func TestSessionEnvironmentCrossLoadSkipsAncestorWalk(t *testing.T) {
+func TestSessionEnvironmentCrossLoadChecksAgentBoundaryFirst(t *testing.T) {
 	called := false
 	r := Runner{
 		Getenv: func(key string) string {
@@ -333,8 +333,21 @@ func TestSessionEnvironmentCrossLoadSkipsAncestorWalk(t *testing.T) {
 		},
 	}
 	runner, cross := r.crossLoad("s1", ClientClaude)
-	if !cross || runner != ClientAntigravity || called {
+	if !cross || runner != ClientAntigravity || !called {
 		t.Fatalf("runner %q, cross %v, ancestor walk called %v", runner, cross, called)
+	}
+	r.Getenv = func(key string) string {
+		if key == "GROK_SESSION_ID" {
+			return "s1"
+		}
+		return ""
+	}
+	r.Ancestor = func() (proc.Ancestor, error) {
+		return proc.Ancestor{Name: "/opt/agent"}, nil
+	}
+	runner, cross = r.crossLoad("s1", ClientGrok)
+	if !cross || runner != "" {
+		t.Fatalf("unidentified agent with matching session env: runner %q, cross %v", runner, cross)
 	}
 }
 

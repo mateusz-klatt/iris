@@ -169,16 +169,14 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 	state.at("decode")
 	ev, err := Decode(client, r.EventName, payload)
 	if err != nil {
-		if runner, cross := r.crossLoad(peekSessionID(payload), client); cross {
-			state.observe(crossLoadText(runner))
-			return FallbackAllow(runner)
+		if out, stop := r.foreignRunner(peekSessionID(payload), client, state); stop {
+			return out
 		}
 		state.shaped(payloadShape(payload))
 		return state.fail(err, allow)
 	}
-	if runner, cross := r.crossLoad(ev.SessionID, client); cross {
-		state.observe(crossLoadText(runner))
-		return FallbackAllow(runner)
+	if out, stop := r.foreignRunner(ev.SessionID, client, state); stop {
+		return out
 	}
 	state.received(r.canaryReceipt(ev))
 	if ev.Client == ClientAntigravity {
@@ -654,6 +652,17 @@ var sessionEnv = map[Client]string{
 
 func (r Runner) crossLoad(sessionID string, requested Client) (Client, bool) {
 	getenv := r.Getenv
+	process := r.ancestor()
+	var markerEnv func(string) string
+	if requested == ClientClaude {
+		markerEnv = getenv
+	}
+	ancestor, hasAncestor := proc.ClientNameOf(proc.Snapshot(process), markerEnv)
+	// An agent alias that no executable or marker rule identified stops here before any
+	// session variable can match, so it never borrows another session from the environment.
+	if !hasAncestor && proc.AgentAlias(process.Name) {
+		return "", true
+	}
 	var found []Client
 	if getenv != nil && sessionID != "" {
 		for _, c := range []Client{ClientGrok, ClientCopilot, ClientCursor, ClientAntigravity} {
@@ -670,12 +679,11 @@ func (r Runner) crossLoad(sessionID string, requested Client) (Client, bool) {
 	if len(found) > 0 {
 		return found[0], true
 	}
-	ancestor, hasAncestor := proc.ClientNameWithEnv(r.ancestor().Name, getenv)
 	if hasAncestor && Client(ancestor) == requested {
 		return "", false
 	}
-	if requested != ClientCursor && hasAncestor && Client(ancestor) == ClientCursor {
-		return ClientCursor, true
+	if hasAncestor && (Client(ancestor) == ClientCursor || Client(ancestor) == ClientGrok) {
+		return Client(ancestor), true
 	}
 	// Cursor 2026.11.22 omits CURSOR_CONVERSATION_ID from cross-loaded Claude hooks. For a Claude
 	// hook the pair counts only with no recognized client ancestor, so a real Claude nested in
@@ -685,6 +693,26 @@ func (r Runner) crossLoad(sessionID string, requested Client) (Client, bool) {
 		return ClientCursor, true
 	}
 	return "", false
+}
+
+// unidentifiedAgentObservation records a hook that stopped at an agent alias
+// the executable did not identify. It names no client.
+const unidentifiedAgentObservation = "cross-load: stopped at an unidentified agent"
+
+// foreignRunner answers a hook that is running under someone else.
+// An empty runner with cross set is the unidentified agent boundary: the hook
+// answers as the client it was invoked as and does not call the hub.
+func (r Runner) foreignRunner(sessionID string, requested Client, state *runState) (Output, bool) {
+	runner, cross := r.crossLoad(sessionID, requested)
+	if !cross {
+		return Output{}, false
+	}
+	if runner == "" {
+		state.observe(unidentifiedAgentObservation)
+		return FallbackAllow(requested), true
+	}
+	state.observe(crossLoadText(runner))
+	return FallbackAllow(runner), true
 }
 
 func (r Runner) repoFor(ev Event) (gitinfo.Repo, error) {
@@ -746,8 +774,9 @@ func (r Runner) sessionReq(ev Event, repo gitinfo.Repo) hubclient.SessionRequest
 }
 
 // nearestAncestor is a Claude hook's walk, which reads Cursor's marker pair because Cursor
-// cross-loads Claude plugins only (measured). plainAncestor is every other client's walk, as in
-// v0.1.13: a pair there was inherited, and a bare `agent` is not taken for Cursor.
+// cross-loads Claude plugins only (measured). plainAncestor is every other client's walk,
+// ignoring inherited markers so an unresolved agent remains an unidentified boundary unless
+// its executable identifies a client.
 var (
 	nearestAncestor = proc.Nearest
 	plainAncestor   = proc.NearestWithoutMarkers

@@ -97,8 +97,437 @@ func TestNearestFrom(t *testing.T) {
 		t.Fatalf("Cursor's agent alias did not stop before outer Claude: %+v, %v", got, ok)
 	}
 	got, ok = NearestFrom(20, agentGet, nil)
-	if !ok || got.PID != 17 || got.Name != "claude" {
-		t.Fatalf("bare agent did not walk on to outer Claude: %+v, %v", got, ok)
+	if !ok || got.PID != 18 || got.Name != "/opt/agent" {
+		t.Fatalf("unidentified agent did not stop before outer Claude: %+v, %v", got, ok)
+	}
+	if client, known := ClientNameOf(got, nil); known {
+		t.Fatalf("unidentified agent was assigned %s", client)
+	}
+}
+
+func TestNearestFromResolvesMeasuredAgentAliases(t *testing.T) {
+	cursorExe := "/home/user/.local/share/cursor-agent/versions/2026.11.22-e9042b2/node"
+	cursorIndex := "/home/user/.local/share/cursor-agent/versions/2026.11.22-e9042b2/index.js"
+	cursorScript := "/home/user/.local/share/cursor-agent/versions/2026.11.22-e9042b2/cursor-agent"
+	grokExe := "/home/user/.grok/downloads/grok-1.0.92-linux-x86_64"
+	for _, tc := range []struct {
+		name   string
+		agent  Snapshot
+		client string
+		known  bool
+	}{
+		{name: "grok executable", agent: Snapshot{PID: 18, PPID: 17, Name: "agent", Exe: grokExe}, client: "grok", known: true},
+		{name: "grok .grok/bin/agent exe", agent: Snapshot{PID: 18, PPID: 17, Name: "/Users/user/.local/bin/agent", Exe: "/Users/user/.grok/bin/agent"}, client: "grok", known: true},
+		{name: "grok .grok/downloads symlink target", agent: Snapshot{PID: 18, PPID: 17, Name: "/Users/user/.grok/bin/agent", Exe: "/Users/user/.grok/downloads/grok-1.0.92-macos-x86_64"}, client: "grok", known: true},
+		{name: "agent outside .grok/downloads", agent: Snapshot{PID: 18, PPID: 17, Name: "agent", Exe: "/opt/grok-foo"}},
+		{name: "cursor node and index.js", agent: Snapshot{PID: 18, PPID: 17, Name: "agent", Exe: cursorExe, Launcher: cursorIndex}, client: "cursor", known: true},
+		{name: "cursor index.js launcher only", agent: Snapshot{PID: 18, PPID: 17, Name: "/Users/user/.local/bin/agent", Exe: "/usr/local/bin/node", Launcher: cursorIndex}, client: "cursor", known: true},
+		{name: "cursor-agent executable", agent: Snapshot{PID: 18, PPID: 17, Name: "agent", Exe: cursorScript}, client: "cursor", known: true},
+		{name: "unidentified agent", agent: Snapshot{PID: 18, PPID: 17, Name: "/opt/agent"}},
+		{name: "cursor-agent unchanged", agent: Snapshot{PID: 18, PPID: 17, Name: "cursor-agent"}, client: "cursor", known: true},
+		{name: "grok unchanged", agent: Snapshot{PID: 18, PPID: 17, Name: "grok"}, client: "grok", known: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tree := map[int]Snapshot{
+				20: {PID: 20, PPID: 19, Name: "iris"},
+				19: {PID: 19, PPID: 18, Name: "bash"},
+				18: tc.agent,
+				17: {PID: 17, PPID: 1, Name: "claude"},
+			}
+			got, ok := NearestFrom(20, func(pid int) (Snapshot, bool) {
+				s, ok := tree[pid]
+				return s, ok
+			}, nil)
+			if !ok || got.PID != 18 {
+				t.Fatalf("walk %+v %v", got, ok)
+			}
+			client, known := ClientNameOf(got, nil)
+			if client != tc.client || known != tc.known {
+				t.Fatalf("client %q known %v", client, known)
+			}
+		})
+	}
+	t.Run("non-agent grok-wrapper is skipped to native claude", func(t *testing.T) {
+		tree := map[int]Snapshot{
+			20: {PID: 20, PPID: 19, Name: "iris"},
+			19: {PID: 19, PPID: 18, Name: "bash"},
+			18: {PID: 18, PPID: 17, Name: "grok-wrapper", Exe: "/usr/local/bin/grok-wrapper"},
+			17: {PID: 17, PPID: 1, Name: "claude"},
+		}
+		got, ok := NearestFrom(20, func(pid int) (Snapshot, bool) {
+			s, ok := tree[pid]
+			return s, ok
+		}, nil)
+		if !ok || got.PID != 17 {
+			t.Fatalf("walk stopped at %+v %v, want PID 17 (claude)", got, ok)
+		}
+		if client, known := ClientNameOf(got, nil); !known || client != "claude" {
+			t.Fatalf("client %q known %v", client, known)
+		}
+	})
+}
+
+func TestAgentAliasEvidence(t *testing.T) {
+	cursorNode := "/home/user/.local/share/cursor-agent/versions/2026.11.22-e9042b2/node"
+	macCursorNode := "/Users/user/.local/share/cursor-agent/versions/2026.11.22-e9042b2/node"
+	cursorIndex := "/home/user/.local/share/cursor-agent/versions/2026.11.22-e9042b2/index.js"
+	macCursorIndex := "/Users/user/.local/share/cursor-agent/versions/2026.11.22-e9042b2/index.js"
+	cursorScript := "/home/user/.local/share/cursor-agent/versions/2026.11.22-e9042b2/cursor-agent"
+	grokExe := "/home/user/.grok/downloads/grok-1.0.92-linux-x86_64"
+	macGrokExe := "/Users/user/.grok/downloads/grok-1.0.92-macos-x86_64"
+	windowsNode := `C:\Users\me\AppData\Local\cursor-agent\versions\2026.11.22-e9042b2\node.exe`
+	windowsGrok := `C:\Users\me\.grok\downloads\grok-1.0.92-windows-x86_64.exe`
+	windowsAgent := `C:\Tools\agent.exe`
+	cursorEnv := func(key string) string {
+		return map[string]string{"CURSOR_PROJECT_DIR": "/project", "CURSOR_VERSION": "2026.11.22"}[key]
+	}
+	for _, tc := range []struct {
+		name     string
+		snap     Snapshot
+		getenv   func(string) string
+		client   string
+		known    bool
+		visible  string
+		promoted string
+		comm     string
+	}{
+		{
+			name: "versioned grok executable", snap: Snapshot{Name: "agent", Exe: grokExe},
+			client: "grok", known: true, visible: "grok", promoted: "grok", comm: "node",
+		},
+		{
+			name: "macos grok executable is not promoted to cursor", snap: Snapshot{Name: "/Users/user/.local/bin/agent", Exe: macGrokExe},
+			client: "grok", known: true, visible: "grok", promoted: "grok", comm: "grok-1.0.92-mac",
+		},
+		{
+			name: "agent with /opt/grok-foo outside .grok/downloads", snap: Snapshot{Name: "agent", Exe: "/opt/grok-foo"},
+			visible: "agent", promoted: "agent", comm: "grok-foo",
+		},
+		{
+			name: "agent with versioned grok outside .grok/downloads", snap: Snapshot{Name: "agent", Exe: "/opt/grok-1.0.92-linux-x86_64"},
+			visible: "agent", promoted: "agent", comm: "grok-1.0.92-lin",
+		},
+		{
+			name: "agent under .grok/bin/agent is grok", snap: Snapshot{Name: "agent", Exe: "/Users/user/.grok/bin/agent"},
+			client: "grok", known: true, visible: "grok", promoted: "grok", comm: "agent",
+		},
+		{
+			name: "agent under .grok/bin/other without downloads target", snap: Snapshot{Name: "agent", Exe: "/Users/user/.grok/bin/other"},
+			visible: "agent", promoted: "agent", comm: "other",
+		},
+		{
+			name: "agent with grok-wrapper under .grok/downloads is not grok", snap: Snapshot{Name: "agent", Exe: "/home/user/.grok/downloads/grok-wrapper"},
+			visible: "agent", promoted: "agent", comm: "grok-wrapper",
+		},
+		{
+			name: "agent under nested .grok/downloads/cache is not grok", snap: Snapshot{Name: "agent", Exe: "/home/user/.grok/downloads/cache/grok-1.0.92-linux-x86_64"},
+			visible: "agent", promoted: "agent", comm: "grok-1.0.92-lin",
+		},
+		{
+			name: "non-agent named grok-wrapper is not grok", snap: Snapshot{Name: "grok-wrapper", Exe: "/usr/local/bin/grok-wrapper"},
+			visible: "grok-wrapper", promoted: "grok-wrapper", comm: "grok-wrapper",
+		},
+		{
+			name: "unreadable exe with .grok argv0 stays unidentified", snap: Snapshot{Name: "/home/user/.grok/bin/agent"},
+			visible: "/home/user/.grok/bin/agent", promoted: "agent", comm: "node",
+		},
+		{
+			name: "grok executable beats cursor index.js launcher", snap: Snapshot{Name: "agent", Exe: grokExe, Launcher: cursorIndex},
+			client: "grok", known: true, visible: "grok", promoted: "grok", comm: "node",
+		},
+		{
+			name: "grok .grok/downloads exe beats cursor index.js launcher", snap: Snapshot{Name: "/Users/user/.grok/bin/agent", Exe: macGrokExe, Launcher: cursorIndex},
+			client: "grok", known: true, visible: "grok", promoted: "grok", comm: "grok-1.0.92-mac",
+		},
+		{
+			name: "incompatible binary with cursor index.js stays unidentified", snap: Snapshot{Name: "/Users/user/.local/bin/agent", Exe: "/tmp/proc.test", Launcher: cursorIndex},
+			visible: "/Users/user/.local/bin/agent", promoted: "agent", comm: "proc.test",
+		},
+		{
+			name: "unreadable exe with cursor index.js launcher", snap: Snapshot{Name: "agent", Launcher: cursorIndex},
+			client: "cursor", known: true, visible: "cursor-agent", promoted: "cursor-agent", comm: "node",
+		},
+		{
+			name: "agent with windows grok image", snap: Snapshot{Name: "agent", Exe: windowsGrok},
+			client: "grok", known: true, visible: "grok", promoted: "grok", comm: "node",
+		},
+		{
+			name: "non-agent windows grok image is not grok", snap: Snapshot{Name: windowsGrok, Exe: windowsGrok},
+			visible: windowsGrok, promoted: "grok-1.0.92-win", comm: "grok-1.0.92-win",
+		},
+		{
+			name: "deleted grok executable still matches", snap: Snapshot{Name: "agent", Exe: grokExe + " (deleted)"},
+			client: "grok", known: true, visible: "grok", promoted: "grok", comm: "node",
+		},
+		{
+			name: "cursor node", snap: Snapshot{Name: "agent", Exe: cursorNode},
+			client: "cursor", known: true, visible: "cursor-agent", promoted: "cursor-agent", comm: "node",
+		},
+		{
+			name: "macos full-path argv0 with cursor node", snap: Snapshot{Name: "/Users/user/.local/bin/agent", Exe: macCursorNode},
+			client: "cursor", known: true, visible: "cursor-agent", promoted: "cursor-agent", comm: "node",
+		},
+		{
+			name: "cursor index.js with a system node", snap: Snapshot{Name: "agent", Exe: "/usr/bin/node", Launcher: cursorIndex},
+			client: "cursor", known: true, visible: "cursor-agent", promoted: "cursor-agent", comm: "node",
+		},
+		{
+			name: "cursor-agent executable", snap: Snapshot{Name: "agent", Exe: cursorScript},
+			client: "cursor", known: true, visible: "cursor-agent", promoted: "cursor-agent", comm: "node",
+		},
+		{
+			name: "windows cursor node image", snap: Snapshot{Name: windowsNode, Exe: windowsNode},
+			client: "cursor", known: true, visible: "cursor-agent", promoted: "cursor-agent", comm: "node",
+		},
+		{
+			name: "system node is not cursor", snap: Snapshot{Name: "node", Exe: "/usr/bin/node"},
+			visible: "node", promoted: "sleep", comm: "sleep",
+		},
+		{
+			name:    "node directly under cursor-agent/versions without version segment is not cursor",
+			snap:    Snapshot{Name: "agent", Exe: "/home/user/.local/share/cursor-agent/versions/node"},
+			visible: "agent", promoted: "agent", comm: "node",
+		},
+		{
+			name: "index.js outside the launcher", snap: Snapshot{Name: "agent", Launcher: "/tmp/index.js"},
+			visible: "agent", promoted: "agent", comm: "node",
+		},
+		{
+			name: "index.js missing version segment", snap: Snapshot{Name: "agent", Launcher: "/home/user/.local/share/cursor-agent/versions/index.js"},
+			visible: "agent", promoted: "agent", comm: "node",
+		},
+		{
+			name: "unrelated full-path agent", snap: Snapshot{Name: "/Users/user/.local/bin/agent", Exe: "/opt/unrelated/agent"},
+			visible: "/Users/user/.local/bin/agent", promoted: "agent", comm: "sleep",
+		},
+		{
+			name: "bare windows agent image", snap: Snapshot{Name: windowsAgent, Exe: windowsAgent},
+			visible: windowsAgent, promoted: "agent", comm: "node",
+		},
+		{
+			name: "markers do not relabel grok", snap: Snapshot{Name: "agent", Exe: grokExe}, getenv: cursorEnv,
+			client: "grok", known: true, visible: "grok", promoted: "grok", comm: "node",
+		},
+		{
+			name: "markers do not relabel grok .grok/downloads symlink target", snap: Snapshot{Name: "/Users/user/.local/bin/agent", Exe: macGrokExe}, getenv: cursorEnv,
+			client: "grok", known: true, visible: "grok", promoted: "grok", comm: "grok-1.0.92-mac",
+		},
+		{
+			name: "markers still name an unresolved agent", snap: Snapshot{Name: "agent"}, getenv: cursorEnv,
+			client: "cursor", known: true, visible: "agent", promoted: "agent", comm: "node",
+		},
+		{
+			name: "markers name a full-path unresolved agent", snap: Snapshot{Name: "/Users/user/.local/bin/agent", Exe: "/opt/unrelated/agent"}, getenv: cursorEnv,
+			client: "cursor", known: true, visible: "/Users/user/.local/bin/agent", promoted: "agent", comm: "node",
+		},
+		{
+			name: "a named client keeps its title", snap: Snapshot{Name: "grok", Exe: cursorNode},
+			client: "grok", known: true, visible: "grok", promoted: "grok", comm: "grok",
+		},
+		{
+			name: "cursor-agent is unchanged", snap: Snapshot{Name: "cursor-agent"},
+			client: "cursor", known: true, visible: "cursor-agent", promoted: "cursor-agent", comm: "cursor-agent",
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			client, known := ClientNameOf(tc.snap, tc.getenv)
+			if client != tc.client || known != tc.known {
+				t.Fatalf("ClientNameOf %q %v", client, known)
+			}
+			visible := resolveVisibleName(tc.snap.Name, tc.snap.Exe, tc.snap.Launcher)
+			if visible != tc.visible {
+				t.Fatalf("visible %q", visible)
+			}
+			promoted := promotedProcessName(tc.comm, tc.snap.Name, tc.snap.Exe, tc.snap.Launcher)
+			if promoted != tc.promoted {
+				t.Fatalf("promoted %q", promoted)
+			}
+		})
+	}
+	if got := promotedProcessName("node", "", cursorNode, ""); got != "cursor-agent" {
+		t.Fatalf("empty argv[0] with Cursor's node: %q", got)
+	}
+	if got := promotedProcessName("sleep", "", "", ""); got != "sleep" {
+		t.Fatalf("empty argv[0]: %q", got)
+	}
+	if got := promotedProcessName("sleep", "-zsh", "/bin/zsh", ""); got != "sleep" {
+		t.Fatalf("login shell: %q", got)
+	}
+	if got := promotedProcessName("sleep", "/opt/bin/Claude", "", ""); got != "claude" {
+		t.Fatalf("client path: %q", got)
+	}
+	name, exe, launcher := commandIdentity("python", "agent", grokExe+" (deleted)", nil)
+	if name != "grok" || exe != grokExe || launcher != "" {
+		t.Fatalf("command identity grok: %q %q %q", name, exe, launcher)
+	}
+	name, exe, launcher = commandIdentity("bash", "", "/bin/bash", []string{"/usr/bin/index.js"})
+	if name != "bash" || exe != "/bin/bash" || launcher != "" {
+		t.Fatalf("command identity without argv[0]: %q %q %q", name, exe, launcher)
+	}
+	name, exe, launcher = commandIdentity("node", "/Users/user/.local/bin/agent", macCursorNode, []string{"/Users/user/.local/bin/agent", "--disable-sigusr1", "--use-system-ca", macCursorIndex})
+	if name != "cursor-agent" || exe != macCursorNode || launcher != macCursorIndex {
+		t.Fatalf("macos cursor capture argv: %q %q %q", name, exe, launcher)
+	}
+	if client, known := ClientNameOf(Snapshot{Name: "/Users/user/.local/bin/agent", Exe: macCursorNode, Launcher: launcher}, nil); !known || client != "cursor" {
+		t.Fatalf("macos cursor capture client: %q %v", client, known)
+	}
+	name, exe, launcher = commandIdentity("node", "/Users/user/.local/bin/agent", "/usr/bin/node", []string{"/Users/user/.local/bin/agent", "--disable-sigusr1", "--use-system-ca", "--max-old-space-size=4096", macCursorIndex, "-p", "hi"})
+	if name != "cursor-agent" || exe != "/usr/bin/node" || launcher != macCursorIndex {
+		t.Fatalf("command identity launcher after node flags: %q %q %q", name, exe, launcher)
+	}
+	for _, bad := range []string{
+		"",
+		"/home/user/.grok-backup/downloads/grok-1.0.92-linux-x86_64",
+		"/opt/grok-1.0.92-linux-x86_64",
+		"/home/user/.grok/downloads/cache/grok-1.0.92-linux-x86_64",
+		"/home/user/.grok/downloads/grok-wrapper",
+		"/home/user/.grok/bin/other",
+		"/home/user/.grok/downloads",
+	} {
+		if grokExecutable(bad) {
+			t.Fatalf("unexpected grok match for %q", bad)
+		}
+	}
+	for _, good := range []string{
+		"/home/user/.grok/downloads/grok-1.0.92-linux-x86_64",
+		"/Users/user/.grok/bin/agent",
+	} {
+		if !grokExecutable(good) {
+			t.Fatalf("expected grok executable match for %q", good)
+		}
+	}
+}
+
+func TestAgentAliasExternalSymlinkToGrokDownloads(t *testing.T) {
+	home := t.TempDir()
+	downloads := filepath.Join(home, ".grok", "downloads")
+	nestedDownloads := filepath.Join(downloads, "cache")
+	localBin := filepath.Join(home, ".local", "bin")
+	if err := os.MkdirAll(nestedDownloads, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(localBin, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	grokTarget := filepath.Join(downloads, "grok-1.0.92-macos-x86_64")
+	if err := os.WriteFile(grokTarget, []byte("bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	nestedTarget := filepath.Join(nestedDownloads, "grok-1.0.92-linux-x86_64")
+	if err := os.WriteFile(nestedTarget, []byte("bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	unrelatedTarget := filepath.Join(home, "unrelated-tool")
+	if err := os.WriteFile(unrelatedTarget, []byte("bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	grokLink := filepath.Join(localBin, "agent")
+	if err := os.Symlink(grokTarget, grokLink); err != nil {
+		if runtime.GOOS == "windows" {
+			t.Skipf("symlink creation unavailable: %v", err)
+		}
+		t.Fatal(err)
+	}
+	nestedLink := filepath.Join(localBin, "nested-agent")
+	if err := os.Symlink(nestedTarget, nestedLink); err != nil {
+		t.Fatal(err)
+	}
+	otherLink := filepath.Join(localBin, "other-agent")
+	if err := os.Symlink(unrelatedTarget, otherLink); err != nil {
+		t.Fatal(err)
+	}
+	if client, known := ClientNameOf(Snapshot{Name: grokLink, Exe: grokLink}, nil); !known || client != "grok" {
+		t.Fatalf("external symlink to grok downloads: %q %v", client, known)
+	}
+	if got := resolveVisibleName("agent", grokLink, ""); got != "grok" {
+		t.Fatalf("resolveVisibleName symlink = %q", got)
+	}
+	if client, known := ClientNameOf(Snapshot{Name: "grok-wrapper", Exe: grokLink}, nil); known || client != "" {
+		t.Fatalf("non-agent using symlink was relabeled: %q %v", client, known)
+	}
+	if client, known := ClientNameOf(Snapshot{Name: "agent", Exe: nestedLink}, nil); known || client != "" {
+		t.Fatalf("symlink to nested .grok/downloads/cache became %q %v", client, known)
+	}
+	if client, known := ClientNameOf(Snapshot{Name: "agent", Exe: otherLink}, nil); known || client != "" {
+		t.Fatalf("external symlink to non-grok target became %q %v", client, known)
+	}
+}
+
+func TestAgentSleepHelper(t *testing.T) {
+	if os.Getenv("IRIS_PROC_AGENT_SLEEP") == "1" {
+		time.Sleep(time.Minute)
+	}
+}
+
+func TestAgentExeResolvesOnceAcrossHookSteps(t *testing.T) {
+	agentName := "agent"
+	if runtime.GOOS == "windows" {
+		agentName = "agent.exe"
+	}
+	agentBin := filepath.Join(t.TempDir(), agentName)
+	self, err := os.ReadFile(os.Args[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(agentBin, self, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(agentBin, "-test.run=^TestAgentSleepHelper$")
+	cmd.Env = append(os.Environ(), "IRIS_PROC_AGENT_SLEEP=1")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+	var calls int
+	orig := evalSymlinks
+	t.Cleanup(func() { evalSymlinks = orig })
+	evalSymlinks = func(p string) (string, error) {
+		calls++
+		return orig(p)
+	}
+	get := func(pid int) (Snapshot, bool) {
+		if pid == 999999 {
+			return Snapshot{PID: 999999, PPID: cmd.Process.Pid, Name: "iris"}, true
+		}
+		return lookupOS(pid)
+	}
+	// Step 1+2: nearest walks through lookupOS and NearestFrom on the live agent process.
+	anc, err := nearest(999999, get, nil)
+	if err != nil || anc.PID != cmd.Process.Pid {
+		t.Fatalf("nearest = %+v, %v", anc, err)
+	}
+	// Step 3: hook crossLoad converts Ancestor back to Snapshot and classifies it.
+	if client, known := ClientNameOf(Snapshot(anc), nil); known || !AgentAlias(anc.Name) {
+		t.Fatalf("agent classification = %q %v %q", client, known, anc.Name)
+	}
+	if calls != 1 {
+		t.Fatalf("evalSymlinks called %d times across OS lookup + walk + hook classification, want 1", calls)
+	}
+
+	// EvalSymlinks failure caches grokAbsent and also runs once.
+	calls = 0
+	evalSymlinks = func(string) (string, error) {
+		calls++
+		return "", errors.New("broken link")
+	}
+	getBroken := func(pid int) (Snapshot, bool) {
+		if pid == 999999 {
+			return Snapshot{PID: 999999, PPID: 18, Name: "iris"}, true
+		}
+		return Snapshot{PID: 18, PPID: 1, Name: "agent", Exe: "/tmp/unrelated/agent"}, pid == 18
+	}
+	anc, err = nearest(999999, getBroken, nil)
+	if err != nil || anc.PID != 18 {
+		t.Fatalf("broken nearest = %+v, %v", anc, err)
+	}
+	if client, known := ClientNameOf(Snapshot(anc), nil); known || client != "" {
+		t.Fatalf("broken EvalSymlinks became %q %v", client, known)
+	}
+	if calls != 1 {
+		t.Fatalf("broken evalSymlinks called %d times, want 1", calls)
 	}
 }
 

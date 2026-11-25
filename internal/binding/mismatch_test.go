@@ -17,12 +17,13 @@ import (
 
 func TestClientMismatchDisablesEveryBindingRoute(t *testing.T) {
 	for _, tc := range []struct {
-		name     string
-		ancestor string
-		markers  bool
+		name, ancestor, exe, launcher string
+		markers                       bool
 	}{
 		{name: "cursor-agent", ancestor: "/opt/cursor-agent"},
 		{name: "agent alias with Cursor markers", ancestor: "agent", markers: true},
+		{name: "cursor agent executable with an empty environment", ancestor: "agent", exe: "/home/user/.local/share/cursor-agent/versions/2026.11.22-e9042b2/node"},
+		{name: "cursor launcher argument with an empty environment", ancestor: "/Users/user/.local/bin/agent", exe: "/usr/local/bin/node", launcher: "/Users/user/.local/share/cursor-agent/versions/2026.11.22-e9042b2/index.js"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			requests := 0
@@ -40,7 +41,7 @@ func TestClientMismatchDisablesEveryBindingRoute(t *testing.T) {
 				Hub: &hubclient.Client{Config: config{srv.URL}}, Client: "claude", Host: "host", CWD: t.TempDir(),
 				Getenv: func(key string) string { return env[key] },
 				Ancestor: func() (proc.Ancestor, error) {
-					return proc.Ancestor{PID: 42, StartMS: 7, Name: tc.ancestor}, nil
+					return proc.Ancestor{PID: 42, StartMS: 7, Name: tc.ancestor, Exe: tc.exe, Launcher: tc.launcher}, nil
 				},
 				Recall: func(string, string) (int, int, error) {
 					t.Error("a mismatched shim tried generation-memory reattachment")
@@ -105,9 +106,11 @@ func TestCheckClientCursorEvidenceOutranksInheritedClaudeSession(t *testing.T) {
 		ancestor proc.Ancestor
 		markers  bool
 		walk     bool
+		exe      bool
 	}{
 		{name: "cursor ancestor and environment", ancestor: proc.Ancestor{PID: 42, StartMS: 7, Name: "cursor-agent"}, markers: true},
 		{name: "agent alias and environment before outer claude", markers: true, walk: true},
+		{name: "cursor agent executable with empty environment before outer claude", walk: true, exe: true},
 		{name: "cursor environment only", ancestor: proc.Ancestor{PID: 42, StartMS: 7, Name: "helper"}, markers: true},
 		{name: "cursor ancestor only", ancestor: proc.Ancestor{PID: 42, StartMS: 7, Name: "cursor-agent"}},
 	} {
@@ -120,9 +123,14 @@ func TestCheckClientCursorEvidenceOutranksInheritedClaudeSession(t *testing.T) {
 			}
 			ancestor := tc.ancestor
 			if tc.walk {
+				agent := proc.Snapshot{PID: 9, PPID: 2, Name: "agent"}
+				if tc.exe {
+					agent.Exe = "/home/user/.local/share/cursor-agent/versions/2026.11.22-e9042b2/node"
+					agent.Launcher = "/home/user/.local/share/cursor-agent/versions/2026.11.22-e9042b2/index.js"
+				}
 				tree := map[int]proc.Snapshot{
 					10: {PID: 10, PPID: 9, Name: "iris"},
-					9:  {PID: 9, PPID: 2, Name: "agent"},
+					9:  agent,
 					2:  {PID: 2, PPID: 1, Name: "claude"},
 				}
 				got, ok := proc.NearestFrom(10, func(pid int) (proc.Snapshot, bool) {
@@ -170,37 +178,13 @@ func TestCheckClientKeepsNativeAndUnknownAncestorsUsable(t *testing.T) {
 			t.Fatalf("native Claude binding: %+v, %v, requests %v", b, err, h.bound)
 		}
 	})
-	t.Run("bare agent walks on to native Claude", func(t *testing.T) {
-		h := &scriptedHub{}
-		env := map[string]string{"CLAUDE_CODE_SESSION_ID": "native-claude"}
-		tree := map[int]proc.Snapshot{
-			10: {PID: 10, PPID: 9, Name: "iris"},
-			9:  {PID: 9, PPID: 2, Name: "agent"},
-			2:  {PID: 2, PPID: 1, Name: "claude"},
-		}
-		got, ok := proc.NearestFrom(10, func(pid int) (proc.Snapshot, bool) {
-			s, ok := tree[pid]
-			return s, ok
-		}, func(key string) string { return env[key] })
-		if !ok || got.Name != "claude" {
-			t.Fatalf("bare agent stopped the walk instead of reaching Claude: %+v, %v", got, ok)
-		}
-		r := resolverFor(t, h, "claude", env, proc.Ancestor(got))
-		if r.CheckClient() {
-			t.Fatal("a generic agent name without Cursor markers displaced native Claude")
-		}
-		b, err := r.Resolve(context.Background(), "")
-		if err != nil || b.Rung != 2 || len(h.bound) != 1 || h.bound[0]["session_id"] != "native-claude" {
-			t.Fatalf("native Claude after a bare agent: %+v, %v, requests %v", b, err, h.bound)
-		}
-	})
 	// Grok installs its own `agent` alias (~/.grok/bin/agent, the same binary as grok), so
 	// a native Grok shim can sit under a process named agent with no Cursor markers. It must
 	// keep binding as Grok rather than be refused as a cross-loaded Cursor shim.
 	t.Run("native Grok under its own agent alias binds as grok", func(t *testing.T) {
 		h := &scriptedHub{}
 		env := map[string]string{"GROK_SESSION_ID": "native-grok"}
-		r := resolverFor(t, h, "grok", env, proc.Ancestor{PID: 42, StartMS: 7, Name: "/home/user/.grok/bin/agent"})
+		r := resolverFor(t, h, "grok", env, proc.Ancestor{PID: 42, StartMS: 7, Name: "/home/user/.grok/bin/agent", Exe: "/home/user/.grok/downloads/grok-1.0.92-linux-x86_64"})
 		if r.CheckClient() {
 			t.Fatal("native Grok under its agent alias was refused as another client")
 		}
@@ -218,7 +202,7 @@ func TestCheckClientKeepsNativeAndUnknownAncestorsUsable(t *testing.T) {
 			"CURSOR_PROJECT_DIR": "/outer/cursor/project",
 			"CURSOR_VERSION":     "2026.11.22-e9042b2",
 		}
-		r := resolverFor(t, h, "grok", env, proc.Ancestor{PID: 42, StartMS: 7, Name: "/home/user/.grok/bin/agent"})
+		r := resolverFor(t, h, "grok", env, proc.Ancestor{PID: 42, StartMS: 7, Name: "/home/user/.grok/bin/agent", Exe: "/home/user/.grok/downloads/grok-1.0.92-linux-x86_64"})
 		if r.CheckClient() {
 			t.Fatal("inherited Cursor markers refused native Grok as a cross-loaded Cursor shim")
 		}
@@ -227,8 +211,26 @@ func TestCheckClientKeepsNativeAndUnknownAncestorsUsable(t *testing.T) {
 			t.Fatalf("native Grok binding with inherited markers: %+v, %v, requests %v", b, err, h.bound)
 		}
 	})
-	// The shim's walk reads Cursor's markers only for Claude, so with an inherited pair a
-	// cursor shim under `agent` under grok still reaches grok, as v0.1.13 did.
+	// Native Cursor launched through its `agent` alias has executable or index.js evidence and
+	// binds as cursor even with an empty environment or an inherited Claude id.
+	t.Run("native Cursor under its own agent alias binds as cursor", func(t *testing.T) {
+		h := &scriptedHub{}
+		env := map[string]string{"CLAUDE_CODE_SESSION_ID": "inherited-from-claude"}
+		r := resolverFor(t, h, "cursor", env, proc.Ancestor{
+			PID: 42, StartMS: 7, Name: "/Users/user/.local/bin/agent",
+			Exe:      "/Users/user/.local/share/cursor-agent/versions/2026.11.22-e9042b2/node",
+			Launcher: "/Users/user/.local/share/cursor-agent/versions/2026.11.22-e9042b2/index.js",
+		})
+		if r.CheckClient() {
+			t.Fatal("native Cursor under its agent alias was refused")
+		}
+		b, err := r.Resolve(context.Background(), "")
+		if err != nil || b.Rung != 3 || len(h.bound) != 1 {
+			t.Fatalf("native Cursor binding under agent: %+v, %v, requests %v", b, err, h.bound)
+		}
+	})
+	// The shim's walk reads Cursor's markers only for Claude, and an unidentified agent stops
+	// the walk rather than walking through to an outer client or trusting inherited markers.
 	t.Run("only a Claude shim walks with Cursor markers", func(t *testing.T) {
 		if reflect.ValueOf(AncestorFor("claude")).Pointer() != reflect.ValueOf(proc.Nearest).Pointer() {
 			t.Fatal("a Claude shim does not walk with the environment")
@@ -245,16 +247,21 @@ func TestCheckClientKeepsNativeAndUnknownAncestorsUsable(t *testing.T) {
 			2:  {PID: 2, PPID: 1, Name: "grok"},
 		}
 		get := func(pid int) (proc.Snapshot, bool) { s, ok := tree[pid]; return s, ok }
-		if got, ok := proc.NearestFrom(10, get, nil); !ok || got.Name != "grok" {
-			t.Fatalf("walk without markers stopped before grok: %+v, %v", got, ok)
+		got, ok := proc.NearestFrom(10, get, nil)
+		if !ok || got.Name != "agent" {
+			t.Fatalf("walk without markers did not stop at unidentified agent: %+v, %v", got, ok)
+		}
+		h := &scriptedHub{}
+		r := resolverFor(t, h, "grok", env, proc.Ancestor(got))
+		if !r.CheckClient() || !r.unidentified || r.mismatch != "" {
+			t.Fatalf("unresolved agent with inherited markers was not refused without assigning a client: %+v", r)
 		}
 		if got, ok := proc.NearestFrom(10, get, func(k string) string { return env[k] }); !ok || got.Name != "agent" {
 			t.Fatalf("walk with markers did not stop at the Cursor agent alias: %+v, %v", got, ok)
 		}
-		h := &scriptedHub{}
-		r := resolverFor(t, h, "cursor", env, proc.Ancestor{PID: 2, StartMS: 7, Name: "grok"})
-		if !r.CheckClient() {
-			t.Fatal("a cursor shim under grok was not refused as a cross-load")
+		claudeShim := resolverFor(t, h, "claude", env, proc.Ancestor(got))
+		if !claudeShim.CheckClient() || claudeShim.mismatch != "cursor" {
+			t.Fatalf("claude shim with markers under agent was not refused as cursor: %+v", claudeShim)
 		}
 	})
 	t.Run("unknown helper is not a mismatched client", func(t *testing.T) {
@@ -268,4 +275,93 @@ func TestCheckClientKeepsNativeAndUnknownAncestorsUsable(t *testing.T) {
 			t.Fatalf("explicit binding: %+v, %v, requests %v", b, err, h.bound)
 		}
 	})
+}
+
+func TestGrokAgentAliasBindsAsGrok(t *testing.T) {
+	for _, exe := range []string{
+		"/home/user/.grok/downloads/grok-1.0.92-linux-x86_64",
+		"/Users/user/.grok/downloads/grok-1.0.92-macos-x86_64",
+		"/Users/user/.grok/bin/agent",
+		`C:\Users\me\.grok\downloads\grok-1.0.92-windows-x86_64.exe`,
+	} {
+		t.Run(exe, func(t *testing.T) {
+			h := &scriptedHub{}
+			r := resolverFor(t, h, "grok", map[string]string{
+				"GROK_SESSION_ID":        "native-grok",
+				"CLAUDE_CODE_SESSION_ID": "inherited-from-claude",
+				"CURSOR_PROJECT_DIR":     "/outer/cursor",
+				"CURSOR_VERSION":         "2026.11.22-e9042b2",
+			}, proc.Ancestor{PID: 42, StartMS: 7, Name: "agent", Exe: exe})
+			if r.CheckClient() {
+				t.Fatal("Grok's agent alias was refused")
+			}
+			b, err := r.Resolve(context.Background(), "")
+			if err != nil || b.Rung != 2 || len(h.bound) != 1 || h.bound[0]["session_id"] != "native-grok" {
+				t.Fatalf("binding %+v, %v, requests %v", b, err, h.bound)
+			}
+		})
+	}
+}
+
+func TestUnidentifiedAgentRefusesWithoutAClient(t *testing.T) {
+	for _, client := range []string{"claude", "cursor", "grok"} {
+		t.Run(client, func(t *testing.T) {
+			requests := 0
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				requests++
+				_ = json.NewEncoder(w).Encode(map[string]any{"execution_id": "ex_wrong", "generation": 1})
+			}))
+			defer srv.Close()
+			r := &Resolver{
+				Hub: &hubclient.Client{Config: config{srv.URL}}, Client: client, Host: "host", CWD: t.TempDir(),
+				Getenv: func(key string) string {
+					return map[string]string{
+						"IRIS_EXECUTION":         "ex_inherited",
+						"CLAUDE_CODE_SESSION_ID": "inherited-session",
+						"GROK_SESSION_ID":        "inherited-grok",
+					}[key]
+				},
+				Ancestor: func() (proc.Ancestor, error) {
+					return proc.Ancestor{PID: 42, StartMS: 7, Name: "/opt/agent"}, nil
+				},
+			}
+			var observed []string
+			r.Observe = func(text string) { observed = append(observed, text) }
+			if !r.CheckClient() {
+				t.Fatal("an unidentified agent was accepted")
+			}
+			_, err := r.Resolve(context.Background(), "ex_explicit")
+			if !IsCode(err, "client_mismatch") || strings.Contains(err.Error(), "iris mcp --client") || !strings.Contains(err.Error(), "unidentified agent") {
+				t.Fatalf("%v", err)
+			}
+			r.bound = Bound{ExecutionID: "ex_cached", Generation: 1}
+			if hb := r.Heartbeat(context.Background(), "shim"); !IsCode(hb, "client_mismatch") {
+				t.Fatalf("heartbeat %v", hb)
+			}
+			stopped := false
+			r.Maintain(context.Background(), "shim", time.Millisecond, func() bool { return true }, func() { stopped = true })
+			if stopped || requests != 0 {
+				t.Fatalf("stopped %v requests %d", stopped, requests)
+			}
+			if !slices.Equal(observed, []string{UnidentifiedAgentObservation(client)}) {
+				t.Fatalf("observed %q", observed)
+			}
+		})
+	}
+}
+
+func TestCursorLauncherArgumentWithAnEmptyEnvironmentRefusesTheShim(t *testing.T) {
+	h := &scriptedHub{}
+	r := resolverFor(t, h, "claude", map[string]string{
+		"CLAUDE_CODE_SESSION_ID": "inherited-parent-claude",
+	}, proc.Ancestor{
+		PID: 42, StartMS: 7, Name: "agent", Exe: "/usr/bin/node",
+		Launcher: "/home/user/.local/share/cursor-agent/versions/2026.11.22-e9042b2/index.js",
+	})
+	if !r.CheckClient() {
+		t.Fatal("Cursor's index.js argument was not Cursor")
+	}
+	if _, err := r.Resolve(context.Background(), ""); !IsCode(err, "client_mismatch") || len(h.bound) != 0 {
+		t.Fatalf("err %v requests %v", err, h.bound)
+	}
 }
