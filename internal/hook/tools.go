@@ -34,10 +34,6 @@ func classifyTool(client Client, name string, mcp bool) (ToolClass, bool) {
 		// Captures show update_steps carrying plan state and search_web carrying a query.
 		case "update_steps", "search_web":
 			return ClassOther, false
-		// manage_task's send_input can resume a command that writes after run_command returns. Like
-		// Monitor, reconcile it as a shell: writes are detected, not prevented.
-		case "manage_task":
-			return ClassShell, false
 		}
 	}
 	if client == ClientKimi {

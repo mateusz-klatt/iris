@@ -39,7 +39,6 @@ func TestBuiltinToolsAreKnown(t *testing.T) {
 		ClientAntigravity: {
 			"read_file":     ClassRead,
 			"update_steps":  ClassOther,
-			"manage_task":   ClassShell,
 			"search_web":    ClassOther,
 			"call_mcp_tool": ClassMCP,
 		},
@@ -151,28 +150,52 @@ func TestAntigravityAndKimiBuiltinsAllowWithoutObservation(t *testing.T) {
 	}
 }
 
-// The real capture covers list. Change only Action to send_input in memory to prove that the
-// write-capable case takes the existing shell reconciliation path without editing the fixture.
-func TestAntigravityManageTaskUsesShellReconciliation(t *testing.T) {
+// Passive list and write-capable send_input alike stay unknown and off shell reconciliation and
+// the network. The real capture is changed in memory only for send_input.
+func TestAntigravityManageTaskStaysUnknownAndAllows(t *testing.T) {
 	for _, name := range []string{"pre_tool_use_manage_task", "post_tool_use_manage_task"} {
-		t.Run(name, func(t *testing.T) {
-			payload, err := os.ReadFile("testdata/antigravity/" + name + ".json")
-			if err != nil {
-				t.Fatal(err)
-			}
-			sendInput := bytes.Replace(payload, []byte(`"Action":"list"`), []byte(`"Action":"send_input"`), 1)
-			if bytes.Equal(sendInput, payload) {
-				t.Fatal("manage_task action was not replaced")
-			}
-			eventName := argvEvent("antigravity", name+".json")
-			ev, err := Decode(ClientAntigravity, eventName, sendInput)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if ev.ToolClass != ClassShell || ev.UnknownTool || !shellEvent(ev) {
-				t.Fatalf("class %q, unknown %v, shell event %v", ev.ToolClass, ev.UnknownTool, shellEvent(ev))
-			}
-		})
+		for _, action := range []string{"list", "send_input"} {
+			t.Run(name+"/"+action, func(t *testing.T) {
+				payload, err := os.ReadFile("testdata/antigravity/" + name + ".json")
+				if err != nil {
+					t.Fatal(err)
+				}
+				if action == "send_input" {
+					changed := bytes.Replace(payload, []byte(`"Action":"list"`), []byte(`"Action":"send_input"`), 1)
+					if bytes.Equal(changed, payload) {
+						t.Fatal("manage_task action was not replaced")
+					}
+					payload = changed
+				}
+				eventName := argvEvent("antigravity", name+".json")
+				ev, err := Decode(ClientAntigravity, eventName, payload)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if ev.ToolClass != ClassOther || !ev.UnknownTool || shellEvent(ev) {
+					t.Fatalf("class %q, unknown %v, shell event %v", ev.ToolClass, ev.UnknownTool, shellEvent(ev))
+				}
+				env := failureEnv(t)
+				calls := 0
+				out := Runner{
+					ClientName: "antigravity",
+					EventName:  eventName,
+					Stdin:      bytes.NewReader(payload),
+					Getenv:     env,
+					Hub:        &countingHub{fn: func() { calls++ }},
+					after:      never,
+					logAfter:   never,
+				}.Run()
+				assertToolEventAllow(t, ClientAntigravity, eventName, out)
+				if string(out.Stderr) != "iris: unknown tool manage_task\n" || calls != 0 {
+					t.Fatalf("stderr %q, hub calls %d", out.Stderr, calls)
+				}
+				got := observedOnly(t, env("IRIS_TOKEN_FILE"))
+				if !got.Observed() || got.Degraded() || got.Error != "unknown tool manage_task" || got.Client != "antigravity" {
+					t.Fatalf("%+v", got)
+				}
+			})
+		}
 	}
 }
 
@@ -254,7 +277,6 @@ func TestCapturedToolNamesStayUnknownForOtherClients(t *testing.T) {
 	}{
 		{ClientAntigravity, "read_file"},
 		{ClientAntigravity, "update_steps"},
-		{ClientAntigravity, "manage_task"},
 		{ClientAntigravity, "search_web"},
 		{ClientAntigravity, "call_mcp_tool"},
 		{ClientKimi, "TodoList"},
