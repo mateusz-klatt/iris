@@ -97,8 +97,53 @@ func TestNearestFrom(t *testing.T) {
 		t.Fatalf("Cursor's agent alias did not stop before outer Claude: %+v, %v", got, ok)
 	}
 	got, ok = NearestFrom(20, agentGet, nil)
-	if !ok || got.PID != 17 || got.Name != "claude" {
-		t.Fatalf("bare agent did not walk on to outer Claude: %+v, %v", got, ok)
+	if !ok || got.PID != 18 || got.Name != "/opt/agent" {
+		t.Fatalf("unidentified agent did not stop before outer Claude: %+v, %v", got, ok)
+	}
+	if client, known := ClientNameOf(got, nil); known {
+		t.Fatalf("unidentified agent was assigned %s", client)
+	}
+}
+
+func TestNearestFromResolvesMeasuredAgentAliases(t *testing.T) {
+	cursorExe := "/home/user/.local/share/cursor-agent/versions/2026.11.22-e9042b2/node"
+	cursorIndex := "/home/user/.local/share/cursor-agent/versions/2026.11.22-e9042b2/index.js"
+	cursorScript := "/home/user/.local/share/cursor-agent/versions/2026.11.22-e9042b2/cursor-agent"
+	grokExe := "/home/user/.grok/downloads/grok-1.0.92-linux-x86_64"
+	for _, tc := range []struct {
+		name   string
+		agent  Snapshot
+		client string
+		known  bool
+	}{
+		{name: "grok executable", agent: Snapshot{PID: 18, PPID: 17, Name: "agent", Exe: grokExe}, client: "grok", known: true},
+		{name: "grok .grok symlink target", agent: Snapshot{PID: 18, PPID: 17, Name: "/Users/user/.local/bin/agent", Exe: "/Users/user/.grok/bin/agent"}, client: "grok", known: true},
+		{name: "cursor node and index.js", agent: Snapshot{PID: 18, PPID: 17, Name: "agent", Exe: cursorExe, Launcher: cursorIndex}, client: "cursor", known: true},
+		{name: "cursor index.js launcher only", agent: Snapshot{PID: 18, PPID: 17, Name: "/Users/user/.local/bin/agent", Exe: "/usr/local/bin/node", Launcher: cursorIndex}, client: "cursor", known: true},
+		{name: "cursor-agent executable", agent: Snapshot{PID: 18, PPID: 17, Name: "agent", Exe: cursorScript}, client: "cursor", known: true},
+		{name: "unidentified agent", agent: Snapshot{PID: 18, PPID: 17, Name: "/opt/agent"}},
+		{name: "cursor-agent unchanged", agent: Snapshot{PID: 18, PPID: 17, Name: "cursor-agent"}, client: "cursor", known: true},
+		{name: "grok unchanged", agent: Snapshot{PID: 18, PPID: 17, Name: "grok"}, client: "grok", known: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			tree := map[int]Snapshot{
+				20: {PID: 20, PPID: 19, Name: "iris"},
+				19: {PID: 19, PPID: 18, Name: "bash"},
+				18: tc.agent,
+				17: {PID: 17, PPID: 1, Name: "claude"},
+			}
+			got, ok := NearestFrom(20, func(pid int) (Snapshot, bool) {
+				s, ok := tree[pid]
+				return s, ok
+			}, nil)
+			if !ok || got.PID != 18 {
+				t.Fatalf("walk %+v %v", got, ok)
+			}
+			client, known := ClientNameOf(got, nil)
+			if client != tc.client || known != tc.known {
+				t.Fatalf("client %q known %v", client, known)
+			}
+		})
 	}
 }
 
@@ -179,8 +224,8 @@ func TestAgentAliasEvidence(t *testing.T) {
 			visible: "node", promoted: "sleep", comm: "sleep",
 		},
 		{
-			name: "node directly under cursor-agent/versions without version segment is not cursor",
-			snap: Snapshot{Name: "agent", Exe: "/home/user/.local/share/cursor-agent/versions/node"},
+			name:    "node directly under cursor-agent/versions without version segment is not cursor",
+			snap:    Snapshot{Name: "agent", Exe: "/home/user/.local/share/cursor-agent/versions/node"},
 			visible: "agent", promoted: "agent", comm: "node",
 		},
 		{

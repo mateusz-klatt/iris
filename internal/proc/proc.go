@@ -209,9 +209,9 @@ func terminateFrom(
 // Nearest returns the ancestor of the current process that Iris records.
 func Nearest() (Ancestor, error) { return nearest(os.Getpid(), lookupOS, os.Getenv) }
 
-// NearestWithoutMarkers walks like Nearest but ignores Cursor's marker pair, so a bare
-// `agent` is never taken for Cursor. A shim for a client Cursor does not cross-load uses it,
-// because a marker pair in that shim's environment can only have been inherited.
+// NearestWithoutMarkers walks like Nearest but ignores Cursor's marker pair, so an
+// unresolved agent without executable evidence stays an unidentified boundary rather than
+// borrowing Cursor's markers from an outer terminal.
 func NearestWithoutMarkers() (Ancestor, error) { return nearest(os.Getpid(), lookupOS, nil) }
 func nearest(self int, get func(int) (Snapshot, bool), getenv func(string) string) (Ancestor, error) {
 	s, ok := NearestFrom(self, get, getenv)
@@ -222,10 +222,9 @@ func nearest(self int, get func(int) (Snapshot, bool), getenv func(string) strin
 }
 
 // NearestFrom walks parents of self using get and getenv. Shells are skipped. The first
-// recognized client process wins, so a parent client is never chosen over the session
-// that actually spawned the hook. When the chain has no client, the nearest
-// non-shell ancestor is returned. A bare `agent` without Cursor's marker pair is not a
-// client, so the walk continues past it (see docs/architecture.md, D5 and D6, for the limit).
+// recognized client process or unidentified agent boundary wins, so a parent client is never
+// chosen over the session that actually spawned the hook. When the chain has no client, the
+// nearest non-shell ancestor is returned.
 func NearestFrom(self int, get func(int) (Snapshot, bool), getenv func(string) string) (Snapshot, bool) {
 	cur, ok := get(self)
 	if !ok {
@@ -246,7 +245,9 @@ func NearestFrom(self int, get func(int) (Snapshot, bool), getenv func(string) s
 				cp := p
 				fallback = &cp
 			}
-			if _, known := ClientNameOf(p, getenv); known {
+			// A resolved alias is a client. An unresolved agent is still a boundary:
+			// walking through it bound the wrong session.
+			if _, known := ClientNameOf(p, getenv); known || AgentAlias(p.Name) {
 				return p, true
 			}
 		}

@@ -3,6 +3,7 @@ package main
 import (
 	"context"
 	"encoding/json"
+	"os"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -75,11 +76,15 @@ func TestCrossLoadedMCPStaysUpButOnlyAnswersClientMismatch(t *testing.T) {
 	for _, tc := range []struct {
 		name      string
 		ancestor  string
+		exe       string
+		launcher  string
 		markers   bool
 		toolCalls int
 	}{
 		{name: "cursor ancestor", ancestor: "cursor-agent", toolCalls: 2},
 		{name: "cursor environment only", ancestor: "helper", markers: true, toolCalls: 1},
+		{name: "cursor agent executable with empty environment", ancestor: "agent", exe: "/home/user/.local/share/cursor-agent/versions/2026.11.22-e9042b2/node", toolCalls: 1},
+		{name: "cursor launcher argument with empty environment", ancestor: "/Users/user/.local/bin/agent", exe: "/usr/local/bin/node", launcher: "/Users/user/.local/share/cursor-agent/versions/2026.11.22-e9042b2/index.js", toolCalls: 1},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			token, requests := mcpWakeTrap(t)
@@ -92,7 +97,7 @@ func TestCrossLoadedMCPStaysUpButOnlyAnswersClientMismatch(t *testing.T) {
 			t.Cleanup(func() { mcpAncestor = original })
 			mcpAncestor = func(string) func() (proc.Ancestor, error) {
 				return func() (proc.Ancestor, error) {
-					return proc.Ancestor{PID: 42, StartMS: 7, Name: tc.ancestor}, nil
+					return proc.Ancestor{PID: 42, StartMS: 7, Name: tc.ancestor, Exe: tc.exe, Launcher: tc.launcher}, nil
 				}
 			}
 			session, done := connectMCPCommand(t, []string{"--client", "claude"}, "2026.11.22-e9042b2")
@@ -142,5 +147,91 @@ func TestCrossLoadedMCPStaysUpButOnlyAnswersClientMismatch(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestUnidentifiedAgentMCPAssignsNoClient(t *testing.T) {
+	token, requests := mcpWakeTrap(t)
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "inherited-from-an-outer-claude")
+	t.Setenv("IRIS_EXECUTION", "ex_inherited")
+	original := mcpAncestor
+	t.Cleanup(func() { mcpAncestor = original })
+	mcpAncestor = func(string) func() (proc.Ancestor, error) {
+		return func() (proc.Ancestor, error) {
+			return proc.Ancestor{PID: 42, StartMS: 7, Name: "/opt/agent"}, nil
+		}
+	}
+	session, done := connectMCPCommand(t, []string{"--client", "claude"}, "2026.11.22-e9042b2")
+	result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "whoami", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(result.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		Error hubclient.Error `json:"error"`
+	}
+	if err = json.Unmarshal(raw, &out); err != nil {
+		t.Fatal(err)
+	}
+	if !result.IsError || out.Error.Code != "client_mismatch" || strings.Contains(out.Error.Message, "iris mcp --client") || !strings.Contains(out.Error.Message, "unidentified agent") {
+		t.Fatalf("%+v", out.Error)
+	}
+	_ = session.Close()
+	waitMCPCommand(t, done)
+	if requests.Load() != 0 {
+		t.Fatalf("unidentified agent made %d hub requests", requests.Load())
+	}
+	want := binding.UnidentifiedAgentObservation("claude")
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(time.Millisecond) {
+		entries, err := hook.ReadRecentObservations(token, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(entries) == 1 && entries[0].Error == want {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("startup observations: %+v; want %q", entries, want)
+		}
+	}
+}
+
+func TestGrokAgentAliasContactsTheHub(t *testing.T) {
+	token, requests := mcpWakeTrap(t)
+	if err := os.WriteFile(token, []byte("secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("GROK_SESSION_ID", "native-grok")
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "inherited-from-an-outer-claude")
+	original := mcpAncestor
+	t.Cleanup(func() { mcpAncestor = original })
+	mcpAncestor = func(string) func() (proc.Ancestor, error) {
+		return func() (proc.Ancestor, error) {
+			return proc.Ancestor{PID: 42, StartMS: 7, Name: "agent", Exe: "/home/user/.grok/downloads/grok-1.0.92-linux-x86_64"}, nil
+		}
+	}
+	session, done := connectMCPCommand(t, []string{"--client", "grok"}, "1.0.92")
+	result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "whoami", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(result.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		Error hubclient.Error `json:"error"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if result.IsError && out.Error.Code == "client_mismatch" {
+		t.Fatalf("Grok's agent was refused: %+v", out.Error)
+	}
+	_ = session.Close()
+	waitMCPCommand(t, done)
+	if requests.Load() == 0 {
+		t.Fatalf("Grok's agent alias made no hub request: %+v", result)
 	}
 }

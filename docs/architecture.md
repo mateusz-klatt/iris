@@ -220,18 +220,40 @@ Claude hooks that Grok runs. A client counts as the runner only when its session
 the session id on stdin, for example `GROK_SESSION_ID` equal to `sessionId`. Cursor 2026.11.22
 omits `CURSOR_CONVERSATION_ID` from a cross-loaded Claude hook, so Cursor is also confirmed by a
 nearest `cursor-agent` ancestor or, with no recognized client ancestor, by `CURSOR_PROJECT_DIR`
-together with `CURSOR_VERSION`. Cursor's measured `agent` alias counts as Cursor only with that
-pair. A bare `agent` without the pair is not a client, and the walk continues past it, because Grok
-installs an `agent` alias of its own (`~/.grok/bin/agent`, the same binary as `grok`). The hook gets
-the pair, so a cross-loaded Cursor hook under `agent` is still recognized. The nearest recognized
-client wins. One matching the requested client keeps a real nested session native.
-- **A Claude hook** (`claude` or `claude-code`): the marker walk applies, and markers never relabel a known third client.
-- **Every other client:** the walk ignores the markers. The marker pair alone still identifies Cursor, as in v0.1.13, unless the requested client was recognized.
+together with `CURSOR_VERSION`. Cursor's `agent` and Grok's `agent` share `argv[0]` (the
+basename `agent`, or the invoked path) and are different executables. Measured on Linux on
+2026-11-23, `~/.local/bin/agent` is a symlink to `cursor-agent/versions/<ver>/cursor-agent`;
+static evidence from `cursor-agent` 2026.11.22's launcher on Linux and macOS shows both `agent`
+and `cursor-agent` symlinking to that shell script, which sets `CURSOR_INVOKED_AS` and runs
+`exec -a "$0" "$SCRIPT_DIR/node" [$NODE_FLAGS | --use-system-ca] "$SCRIPT_DIR/index.js" "$@"`
+(so `index.js` is not necessarily `argv[1]`). The same day on Linux, `~/.grok/bin/agent` and
+`~/.grok/bin/grok` symlinked to `~/.grok/downloads/grok-<ver>-<os>-<arch>` (static binary); on
+macOS, `~/.grok/bin/agent` and `grok` symlink to `../downloads/grok-<v>-macos-x86_64` (a Mach-O
+binary). The alias is Cursor when the executable is `node` under `cursor-agent/versions/<ver>/`,
+or any `argv` entry is `…/cursor-agent/versions/<ver>/index.js`, or the executable's basename is
+`cursor-agent`. It is Grok when the executable's basename starts with `grok`, or the alias's
+executable lives in a `.grok` directory. Anything else named `agent` stays an unidentified
+boundary: the walk stops, and the hook and shim refuse without assigning a client. The marker
+pair still recognizes Cursor when the executable does not, and never relabels a process the
+executable already identified.
 
-An inherited `CLAUDE_CODE_SESSION_ID` never outranks Cursor's process or marker evidence.
+Linux reads `/proc/<pid>/exe` and `/proc/<pid>/cmdline`. macOS reads `kern.procargs2`, which
+carries the executable path and all arguments; for Cursor's launcher `p_comm` is `node`, and
+`argv[0]` plus any `index.js` past node flags are visible only there. If macOS refuses that
+buffer, only `p_comm` remains, and Iris does not guess a client for `node`. Windows keeps today's
+image-only walk (`QueryFullProcessImageName` without reading the command line), so an `index.js`
+argument is invisible there; an `agent` image outside a Cursor or Grok path stays unidentified.
+The nearest recognized client wins. One matching the requested client, with no unresolved `agent`
+between, keeps a real nested session native.
+- **A Claude hook** (`claude` or `claude-code`): walks with the marker pair, and markers never relabel a known third client or a process identified by its executable.
+- **Every other client:** the walk ignores inherited markers, while executable and launcher evidence still identifies Cursor and Grok. With no unresolved `agent` boundary, the marker pair alone still identifies Cursor, as in v0.1.13, unless the requested client was recognized.
+
+An inherited `CLAUDE_CODE_SESSION_ID` never outranks Cursor's or Grok's process evidence, or Cursor's markers.
 
 When a hook meant for one client runs under another, it prints the runner's allow output, exits
-0 and does not call the hub, whether or not the runner has its own integration. `iris doctor`
+0 and does not call the hub, whether or not the runner has its own integration. An unidentified
+`agent` is not that other client: the hook prints the allow output of the client it was invoked as,
+and still does not call the hub. `iris doctor`
 reports the cross-load. The hub is idempotent per client, session, event and tool call, so a
 double fire is harmless. Configuration of a client is written only for that client.
 
@@ -254,25 +276,27 @@ The Grok cell is the stdio MCP child. Grok's `monitor` shell does not inherit
 hook stored for that grok process ([ADR 025](adr/025-grok-stop-monitor.md)).
 
 At MCP startup, a recognized nearest client that does not match `--client` identifies a cross-loaded
-shim. For `--client claude` only, `CURSOR_PROJECT_DIR` together with `CURSOR_VERSION` recognizes
-Cursor's generic `agent` alias during the walk. With no recognized nearest client, the pair also
-identifies Cursor. Cursor cross-loads Claude plugins only (measured), so for any other client a
-marker pair in the shim's environment was inherited, for example by Grok started from a Cursor
-terminal, and is ignored. A recognized nearest client that matches `--client` keeps a real nested
-session native despite inherited markers. Cursor's process or marker evidence outranks an inherited
-`CLAUDE_CODE_SESSION_ID`.
+shim. Cursor's MCP stdio environment has no `CURSOR_PROJECT_DIR` or `CURSOR_VERSION` (measured).
+The executable and launcher evidence in D5 distinguishes Cursor's `agent` from Grok's `agent`
+without those markers: Cursor's `node` under `cursor-agent/versions/<ver>/`, an `index.js`
+argument there (even past `--use-system-ca` or other node flags), or a `cursor-agent` executable
+is Cursor; Grok's `grok*` executable, or an alias whose executable lives in `.grok`, is Grok.
+For `--client claude` only, `CURSOR_PROJECT_DIR` together with `CURSOR_VERSION` still recognizes
+an unresolved `agent` (or a non-client helper with no recognized client ancestor). Cursor
+cross-loads Claude plugins only (measured), so for any other client a marker pair in the shim's
+environment was inherited, for example by Grok started from a Cursor terminal, and is ignored.
+An unidentified `agent` stops the walk and the shim refuses every rung without assigning a client,
+including through an inherited `IRIS_EXECUTION` or session id. A recognized nearest client that
+matches `--client`, with no unresolved `agent` between, keeps a real nested session native despite
+inherited markers. Cursor's or Grok's process evidence, and Cursor's markers on `--client claude`,
+outrank an inherited `CLAUDE_CODE_SESSION_ID`.
 
-**Known limit:** Cursor's MCP stdio environment has no markers (measured).
-- A cross-loaded Cursor shim started by the bare `agent` alias therefore sees an unknown `agent`.
-- Its walk can continue to an outer client, for example a Claude Code session that launched Cursor, and it can bind to that client, as v0.1.13 did.
-- `cursor-agent`, and an `agent` that has the pair, are recognized.
-- A bare `agent` is not treated as a boundary, because that refused native Grok, whose own alias has the same name.
-- Telling the two apart needs executable or launcher evidence on each OS. That work is in progress.
-
-The refusal below applies only to a DETECTED cross-load; it does not prevent the undetected case
-above. Before any binding or generation-proof check, a detected cross-loaded shim refuses every rung,
-including an inherited execution or session id, and never registers or heartbeats. Its stdio server stays up; tool calls answer typed `client_mismatch` and direct the model
-to the running client's native Iris server. One observation goes to the log doctor reads.
+Before any binding or generation-proof check, a cross-loaded or unidentified-`agent` shim refuses
+every rung and never registers or heartbeats. Its stdio server stays up; tool calls answer typed
+`client_mismatch`. When the runner is a known client, the error directs the model to that client's
+native Iris server; an unidentified `agent` names no client. One observation goes to the log doctor
+reads. Linux, macOS and Windows see only the evidence D5 lists; a signal the OS does not provide
+is not guessed.
 
 `iris mcp` resolves its Execution at the first tool call, by this chain, and outside Codex and id
 mode also on its heartbeat tick (see below):
