@@ -132,7 +132,12 @@ whenever `client_pid > 0` and `client_pid_start_ms > 0` and (`single_session` is
 (`active`, `lost`, or `ended`) for `(host, client, client_pid, client_pid_start_ms)` has
 `hook_seen_ms > 0` (returning `highest_generation: 0` when the synthetic session itself has no
 retained rows; requests carrying a distinct native `session_id` with `single_session: false` are
-checked only by the same-session rule). Genuine hookless D6 bootstrap (zero retained hook history
+checked only by the same-session rule). Because a registration carrying a distinct `session_id` and
+`single_session: false` gives the hub no way to distinguish a Claude `--continue` alias from a
+genuinely new native Rung-2 session on the same process, a fresh MCP resolver whose first resolve
+runs after the hooked session is already `lost` or `ended` holds no cached binding or loss state
+and still registers an active unhooked `generation: 1` row under that alias `session_id`. Genuine
+hookless D6 bootstrap (zero retained hook history
 for the session or applicable process) and positive-generation D9 reattachment stay intact. If retention has removed all matching historical rows, there is no
 retained state left to check. An older hub omits the detail, so an upgraded hook keeps its proof and
 skips the retry.

@@ -383,6 +383,96 @@ func TestChoiceAFreshClaudeRung2AfterEndedAndContinueAliasEndToEnd(t *testing.T)
 	}
 }
 
+func TestKnownLimitFreshContinueAliasAfterTerminalHookRegisters(t *testing.T) {
+	// Known limit in M2a: a fresh Claude --continue resolver whose first Resolve runs after the
+	// real hook session is already lost or ended has empty r.last and r.gone. It falls through
+	// to orRegister and sends its distinct alias CLAUDE_CODE_SESSION_ID with single_session=false.
+	// Choice A skips the process-history EXISTS for distinct native session IDs with
+	// single_session=false so fresh native Rung-2 sessions can bootstrap, and the hub cannot tell
+	// such an alias apart from a new native session with this evidence alone. Fixed in ADR 039
+	// M2d resolver admission, where this assertion flips to refusal.
+	for _, terminal := range []string{"lost", "ended"} {
+		t.Run("fresh resolver registers alias G1 after "+terminal, func(t *testing.T) {
+			ctx := t.Context()
+			h := newRestartableBindingHub(t)
+			cwd := t.TempDir()
+			token := filepath.Join(t.TempDir(), "hub.token")
+			if err := os.WriteFile(token, []byte("secret"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			anc := proc.Ancestor{PID: 42, StartMS: 100, Name: "claude"}
+			client := &hubclient.Client{Config: config{h.srv.URL}}
+			getenvHook := func(key string) string {
+				if key == "IRIS_TOKEN_FILE" {
+					return token
+				}
+				return ""
+			}
+			payload := `{"session_id":"S-continued","cwd":` + quoteJSON(cwd) + `}`
+			runHook := func(event string) {
+				t.Helper()
+				out := (hook.Runner{
+					ClientName: "claude", EventName: event, Stdin: strings.NewReader(payload),
+					Hub: client, Getenv: getenvHook, Host: func() string { return "host" },
+					Ancestor: func() (proc.Ancestor, error) { return anc, nil },
+					Find:     func(string) (gitinfo.Repo, error) { return gitinfo.Repo{}, gitinfo.ErrNotRepo },
+				}).Run()
+				if fails, err := hook.ReadRecentFailures(token, 10); err != nil || len(fails) != 0 {
+					t.Fatalf("%s failures: %v %v\nstdout %s\nstderr %s", event, fails, err, out.Stdout, out.Stderr)
+				}
+			}
+			runHook("SessionStart")
+			if terminal == "ended" {
+				runHook("SessionEnd")
+			} else {
+				h.clock.Advance(16 * time.Minute)
+				if _, err := h.store.Call(ctx, "expire", store.Request{}); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			sessions := hook.NewSessions(token)
+			r := &Resolver{
+				Hub: client, Client: "claude", Host: "host", CWD: cwd, Grace: 0,
+				Getenv: func(key string) string {
+					if key == "CLAUDE_CODE_SESSION_ID" {
+						return "S-continue-alias"
+					}
+					return ""
+				},
+				Ancestor: func() (proc.Ancestor, error) { return anc, nil },
+				Recall:   sessions.RecallBindingGeneration,
+			}
+			before := len(h.sessions())
+			b, err := r.Resolve(ctx, "")
+			reqs := h.sessions()[before:]
+			if err != nil || b.Generation != 1 || b.Rung != 2 || b.SessionID != "S-continue-alias" || b.HookSeen || !r.own || r.Lost() {
+				t.Fatalf("expected alias G1 registration after %s: bound=%+v own=%t lost=%t err=%v reqs=%+v", terminal, b, r.own, r.Lost(), err, reqs)
+			}
+			if len(reqs) != 1 || reqs[0].SessionID != "S-continue-alias" || reqs[0].Generation != 0 || reqs[0].SingleSession || reqs[0].Source != "mcp" || reqs[0].ClientPID != anc.PID || reqs[0].ClientPIDStartMS != anc.StartMS {
+				t.Fatalf("unexpected registration request after %s: %+v", terminal, reqs)
+			}
+
+			rows := executionRows(t, h.file)
+			bySession := make(map[string]executionRow, len(rows))
+			for _, row := range rows {
+				bySession[row.session] = row
+			}
+			hookRow, okHook := bySession["S-continued"]
+			aliasRow, okAlias := bySession["S-continue-alias"]
+			if len(rows) != 2 || !okHook || !okAlias {
+				t.Fatalf("unexpected rows after %s: %+v", terminal, rows)
+			}
+			if hookRow.generation != 1 || hookRow.state != terminal || hookRow.hookSeen == 0 {
+				t.Fatalf("retained hook row mismatch after %s: %+v", terminal, hookRow)
+			}
+			if aliasRow.id != b.ExecutionID || aliasRow.generation != 1 || aliasRow.state != "active" || aliasRow.hookSeen != 0 {
+				t.Fatalf("alias row mismatch after %s: %+v", terminal, aliasRow)
+			}
+		})
+	}
+}
+
 func TestFloorBypassRetainedProofBlocksALostSession(t *testing.T) {
 	ctx := t.Context()
 	h := newRestartableBindingHub(t)
