@@ -242,3 +242,43 @@ func TestGrokAgentAliasContactsTheHub(t *testing.T) {
 		t.Fatalf("Grok's agent alias made no hub request: %+v", result)
 	}
 }
+
+func TestNativeClaudeMCPUnderGrokWrapperKeepsBinding(t *testing.T) {
+	token, requests := mcpWakeTrap(t)
+	if err := os.WriteFile(token, []byte("secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("CLAUDE_CODE_SESSION_ID", "native-claude")
+	t.Setenv("IRIS_EXECUTION", "")
+	t.Setenv("CURSOR_PROJECT_DIR", "")
+	t.Setenv("CURSOR_VERSION", "")
+	t.Setenv("CURSOR_CONVERSATION_ID", "")
+	original := mcpAncestor
+	t.Cleanup(func() { mcpAncestor = original })
+	mcpAncestor = func(string) func() (proc.Ancestor, error) {
+		return func() (proc.Ancestor, error) {
+			return proc.Ancestor{PID: 43, StartMS: 8, Name: "grok-wrapper", Exe: "/usr/local/bin/grok-wrapper"}, nil
+		}
+	}
+	session, done := connectMCPCommand(t, []string{"--client", "claude"}, "2.1.319")
+	result, err := session.CallTool(t.Context(), &mcp.CallToolParams{Name: "whoami", Arguments: map[string]any{}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(result.StructuredContent)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out struct {
+		Error hubclient.Error `json:"error"`
+	}
+	_ = json.Unmarshal(raw, &out)
+	if result.IsError && out.Error.Code == "client_mismatch" {
+		t.Fatalf("native Claude under grok-wrapper was refused: %+v", out.Error)
+	}
+	_ = session.Close()
+	waitMCPCommand(t, done)
+	if requests.Load() == 0 {
+		t.Fatalf("native Claude under grok-wrapper made no hub request: %+v", result)
+	}
+}

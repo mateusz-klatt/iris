@@ -209,8 +209,16 @@ func TestLookupReadsCursorLauncherEvidenceAndLeavesAnUnknownAgent(t *testing.T) 
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if foundCursor.Name != "cursor-agent" || foundCursor.Exe != nodeBin {
-		t.Fatalf("cursor launcher %+v", foundCursor)
+	wantExe, err := filepath.EvalSymlinks(nodeBin)
+	if err != nil {
+		t.Fatal(err)
+	}
+	gotExe, err := filepath.EvalSymlinks(foundCursor.Exe)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if foundCursor.Name != "cursor-agent" || gotExe != wantExe {
+		t.Fatalf("cursor launcher %+v (want exe %q)", foundCursor, wantExe)
 	}
 	if client, ok := ClientNameOf(foundCursor, nil); !ok || client != "cursor" {
 		t.Fatalf("cursor client %q %v", client, ok)

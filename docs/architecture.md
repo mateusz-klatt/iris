@@ -229,16 +229,19 @@ and `cursor-agent` symlinking to that shell script, which sets `CURSOR_INVOKED_A
 (so `index.js` is not necessarily `argv[1]`). The same day on Linux, `~/.grok/bin/agent` and
 `~/.grok/bin/grok` symlinked to `~/.grok/downloads/grok-<ver>-<os>-<arch>` (static binary); on
 macOS, `~/.grok/bin/agent` and `grok` symlink to `../downloads/grok-<v>-macos-x86_64` (a Mach-O
-binary). Positive executable evidence takes precedence: the alias is Grok when the observed
-executable's basename starts with `grok` or its observed path lives in a `.grok` directory
-(never `argv[0]` alone), regardless of `argv`; it is Cursor when the executable is `node`
-under `cursor-agent/versions/<ver>/` or its basename is `cursor-agent`, or when any `argv`
-entry is `…/cursor-agent/versions/<ver>/index.js` while the executable is `node` or
-unreadable/unknown. Anything else named `agent` stays an unidentified boundary: the walk
-stops, checked before any session-variable match, and the hook and shim refuse without
-assigning a client. On `--client claude`, the marker pair still recognizes an unresolved
-`agent` when the executable does not, and never relabels a process the executable already
-identified.
+binary; live macOS capture reports `~/.grok/bin/agent` as the executable symlink path).
+Positive executable evidence takes precedence: at the `agent` alias (never by `grok*`
+basename on other processes), an observed executable matching `.grok/bin/agent`, matching
+`grok-<ver>-<os>-<arch>` under `.grok/downloads/`, or resolving by symlink to
+`.grok/downloads/grok-<ver>-<os>-<arch>` (never `argv[0]` alone) is Grok regardless of
+`argv`, while native `grok` keeps its `comm`/name recognition; it is Cursor when the
+executable is `node` under `cursor-agent/versions/<ver>/` or its basename is
+`cursor-agent`, or when any `argv` entry is `…/cursor-agent/versions/<ver>/index.js` while
+the executable is `node` or unreadable/unknown. Anything else named `agent` stays an
+unidentified boundary: the walk stops, checked before any session-variable match, and the
+hook and shim refuse without assigning a client. On `--client claude`, the marker pair
+still recognizes an unresolved `agent` when the executable does not, and never relabels a
+process the executable already identified.
 
 Linux reads `/proc/<pid>/exe` and `/proc/<pid>/cmdline`. macOS reads `kern.procargs2`, which
 carries the executable path and all arguments; for Cursor's launcher `p_comm` is `node`, and
@@ -283,7 +286,9 @@ shim. Cursor's MCP stdio environment has no `CURSOR_PROJECT_DIR` or `CURSOR_VERS
 The executable and launcher evidence in D5 distinguishes Cursor's `agent` from Grok's `agent`
 without those markers: Cursor's `node` under `cursor-agent/versions/<ver>/`, an `index.js`
 argument there (even past `--use-system-ca` or other node flags), or a `cursor-agent` executable
-is Cursor; Grok's `grok*` executable, or an alias whose executable lives in `.grok`, is Grok.
+is Cursor; on the `agent` alias, an observed `.grok/bin/agent`, `.grok/downloads/grok-<ver>-<os>-<arch>`,
+or symlink resolving there is Grok (never promoting arbitrary `grok*` processes), and native
+`grok` keeps its `comm`/name recognition.
 For `--client claude` only, `CURSOR_PROJECT_DIR` together with `CURSOR_VERSION` still recognizes
 an unresolved `agent` (or a non-client helper with no recognized client ancestor). Cursor
 cross-loads Claude plugins only (measured), so for any other client a marker pair in the shim's

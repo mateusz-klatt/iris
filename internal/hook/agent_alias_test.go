@@ -12,7 +12,7 @@ func TestGrokAgentAliasRegisters(t *testing.T) {
 	for _, exe := range []string{
 		"/home/user/.grok/downloads/grok-1.0.92-linux-x86_64",
 		"/Users/user/.grok/downloads/grok-1.0.92-macos-x86_64",
-		"/home/user/.grok/bin/agent",
+		"/Users/user/.grok/bin/agent",
 		`C:\Users\me\.grok\downloads\grok-1.0.92-windows-x86_64.exe`,
 	} {
 		t.Run(exe, func(t *testing.T) {
@@ -134,7 +134,12 @@ func TestGrokAgentAliasCrossLoadedClaudeHook(t *testing.T) {
 			exe:  "/home/user/.grok/downloads/grok-1.0.92-linux-x86_64",
 		},
 		{
-			name: ".grok symlink exe with inherited cursor markers and no GROK_SESSION_ID",
+			name: ".grok/downloads symlink target with inherited cursor markers and no GROK_SESSION_ID",
+			exe:  "/Users/user/.grok/downloads/grok-1.0.92-macos-x86_64",
+			env:  map[string]string{"CURSOR_PROJECT_DIR": "/outer/cursor", "CURSOR_VERSION": "2026.11.22-e9042b2"},
+		},
+		{
+			name: ".grok/bin/agent exe with inherited cursor markers and no GROK_SESSION_ID",
 			exe:  "/Users/user/.grok/bin/agent",
 			env:  map[string]string{"CURSOR_PROJECT_DIR": "/outer/cursor", "CURSOR_VERSION": "2026.11.22-e9042b2"},
 		},
@@ -171,6 +176,29 @@ func TestGrokAgentAliasCrossLoadedClaudeHook(t *testing.T) {
 				t.Fatalf("%+v", got)
 			}
 		})
+	}
+}
+
+func TestNativeClaudeUnderGrokWrapperContactsHub(t *testing.T) {
+	calls := 0
+	out := Runner{
+		ClientName: "claude",
+		EventName:  "PreToolUse",
+		Stdin:      strings.NewReader(editPayload(ClientClaude, gitRepo(t))),
+		Getenv: func(key string) string {
+			if key == "CLAUDE_CODE_SESSION_ID" {
+				return "native-claude"
+			}
+			return ""
+		},
+		Ancestor: func() (proc.Ancestor, error) {
+			return proc.Ancestor{PID: 43, StartMS: 8, Name: "grok-wrapper", Exe: "/usr/local/bin/grok-wrapper"}, nil
+		},
+		Hub:   denyHub{calls: &calls},
+		after: never,
+	}.Run()
+	if calls == 0 || !denied(ClientClaude, out) {
+		t.Fatalf("native Claude under grok-wrapper skipped hub check: calls %d, output %+v", calls, out)
 	}
 }
 

@@ -92,12 +92,12 @@ func TestProcessNamePromotesTheAgentAlias(t *testing.T) {
 	node := "/Users/user/.local/share/cursor-agent/versions/2026.11.22-e9042b2/node"
 	index := "/Users/user/.local/share/cursor-agent/versions/2026.11.22-e9042b2/index.js"
 	grok := "/Users/user/.grok/downloads/grok-1.0.92-macos-x86_64"
-	cursorRaw := procargsBuffer(node, "/Users/user/.local/bin/agent", "--use-system-ca", "--max-old-space-size=4096", index, "-p", "hi")
+	cursorRaw := procargsBuffer(node, "/Users/user/.local/bin/agent", "--disable-sigusr1", "--use-system-ca", "--max-old-space-size=4096", index, "-p", "hi")
 	name, exe, launcher := identityFromProcargs("node", cursorRaw)
 	if name != "cursor-agent" || exe != node || launcher != index {
 		t.Fatalf("cursor promotion: %q %q %q", name, exe, launcher)
 	}
-	systemNodeRaw := procargsBuffer("/usr/local/bin/node", "/Users/user/.local/bin/agent", "--use-system-ca", index)
+	systemNodeRaw := procargsBuffer("/usr/local/bin/node", "/Users/user/.local/bin/agent", "--disable-sigusr1", "--use-system-ca", index)
 	name, exe, launcher = identityFromProcargs("node", systemNodeRaw)
 	if name != "cursor-agent" || exe != "/usr/local/bin/node" || launcher != index {
 		t.Fatalf("system node cursor promotion: %q %q %q", name, exe, launcher)
@@ -109,6 +109,10 @@ func TestProcessNamePromotesTheAgentAlias(t *testing.T) {
 	grokName, grokExe, grokLauncher := identityFromProcargs("node", procargsBuffer(grok, "agent"))
 	if grokName != "grok" || grokExe != grok || grokLauncher != "" {
 		t.Fatalf("grok promotion: %q %q %q", grokName, grokExe, grokLauncher)
+	}
+	grokSymlinkName, grokSymlinkExe, _ := identityFromProcargs("grok-1.0.92-mac", procargsBuffer("/Users/user/.grok/bin/agent", "/Users/user/.grok/bin/agent"))
+	if grokSymlinkName != "grok" || grokSymlinkExe != "/Users/user/.grok/bin/agent" {
+		t.Fatalf("grok bin/agent symlink promotion: %q %q", grokSymlinkName, grokSymlinkExe)
 	}
 	grokNamed, _, _ := identityFromProcargs("grok-1.0.92-mac", procargsBuffer(grok, "/Users/user/.grok/bin/grok"))
 	if grokNamed != "grok" {

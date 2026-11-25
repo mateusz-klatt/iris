@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 )
@@ -304,12 +305,12 @@ func ClientNameOf(s Snapshot, getenv func(string) string) (string, bool) {
 }
 
 // evidenceClient reads the executable and one launcher argument.
-// Positive executable evidence wins: Grok's versioned binary or an observed .grok
-// executable stays Grok regardless of argv, while Cursor's index.js launcher counts
-// only when the executable is node or unknown. A bare agent is not a client.
+// Positive executable evidence wins: an observed .grok/bin/agent, .grok/downloads/grok-<ver>-<os>-<arch>,
+// or symlink resolving there at the agent alias stays Grok regardless of argv, while Cursor's
+// index.js launcher counts only when the executable is node or unknown. A bare agent is not a client.
 func evidenceClient(s Snapshot) (string, bool) {
 	exe := cleanExe(s.Exe)
-	if grokBinary(exe) || (AgentAlias(s.Name) && underDotGrok(exe)) {
+	if AgentAlias(s.Name) && grokExecutable(exe) {
 		return "grok", true
 	}
 	if cursorExecutable(exe) {
@@ -344,9 +345,13 @@ func underCursorVersions(p string) bool {
 	return cursorVersionParts(p, false)
 }
 
-func cursorVersionParts(p string, index bool) bool {
+func pathParts(p string) []string {
 	p = path.Clean(strings.ToLower(strings.ReplaceAll(p, "\\", "/")))
-	parts := strings.Split(p, "/")
+	return strings.Split(p, "/")
+}
+
+func cursorVersionParts(p string, index bool) bool {
+	parts := pathParts(p)
 	for i := 0; i+3 < len(parts); i++ {
 		if parts[i] == "cursor-agent" && parts[i+1] == "versions" && (!index || (i+4 == len(parts) && parts[i+3] == "index.js")) {
 			return true
@@ -355,14 +360,36 @@ func cursorVersionParts(p string, index bool) bool {
 	return false
 }
 
-func grokBinary(exe string) bool {
-	return strings.HasPrefix(baseName(exe), "grok")
+var grokDownloadBinary = regexp.MustCompile(`^grok-[0-9][0-9a-z.-]*-[a-z]+-[a-z0-9_]+$`)
+
+func grokExecutable(exe string) bool {
+	if exe == "" {
+		return false
+	}
+	if grokBinAgent(exe) || grokDownloadPath(exe) {
+		return true
+	}
+	resolved, err := filepath.EvalSymlinks(exe)
+	if err != nil {
+		return false
+	}
+	return grokDownloadPath(resolved)
 }
 
-func underDotGrok(p string) bool {
-	p = strings.ToLower(strings.ReplaceAll(p, "\\", "/"))
-	for _, part := range strings.Split(p, "/") {
-		if part == ".grok" {
+func grokBinAgent(exe string) bool {
+	parts := pathParts(exe)
+	n := len(parts)
+	return n >= 3 && parts[n-3] == ".grok" && parts[n-2] == "bin" && strings.TrimSuffix(parts[n-1], ".exe") == "agent"
+}
+
+func grokDownloadPath(exe string) bool {
+	parts := pathParts(exe)
+	base := strings.TrimSuffix(parts[len(parts)-1], ".exe")
+	if !grokDownloadBinary.MatchString(base) {
+		return false
+	}
+	for i := 0; i+2 < len(parts); i++ {
+		if parts[i] == ".grok" && parts[i+1] == "downloads" {
 			return true
 		}
 	}
