@@ -99,21 +99,89 @@ func TestReconciliationClaimsWhatTheSessionWrote(t *testing.T) {
 
 func TestReconciliationRespectsTheClaimLimit(t *testing.T) {
 	s, _, _ := testStore(t)
-	shell, _ := session(t, s, 1)
+	holder, _ := session(t, s, 1)
+	shell, joined := session(t, s, 2)
+	repo := joined["repository_id"].(string)
+	call(t, s, "claim", claimRequest(holder, "held", "held.txt", "exact"))
+
+	// Seed an existing auto claim that stays (renewed) and one that leaves (released),
+	// so the test proves the reserve skip keeps the rest of reconcile atomic.
+	call(t, s, "touch", touchRequest(shell, "seed", "kept.txt", "leaving.txt"))
 	shell.Kind = "before"
-	shell.Status = map[string]string{}
+	shell.Status = map[string]string{"kept.txt": " M", "leaving.txt": " M"}
 	call(t, s, "reconcile", shell)
+
 	shell.Kind = "after"
-	shell.Status = map[string]string{}
-	for i := range 501 {
+	shell.Status = map[string]string{"kept.txt": "M ", "held.txt": " M"}
+	// kept.txt already uses 1 slot and leaving.txt frees 1 slot, so 399 of 405 fresh paths fit
+	// before reaching reconcileMaxClaims (400), leaving 6 skipped.
+	for i := range reconcileMaxClaims + 5 {
 		shell.Status[fmt.Sprintf("f%03d", i)] = "??"
 	}
-	// One command can change more files than the limit: claim up to it, keep the reconcile
-	// answer, and say what was left, rather than fail and lose the conflict warning.
 	out := call(t, s, "reconcile", shell)
 	claimed, _ := out["claimed"].([]string)
-	if len(claimed) != 500 || !strings.Contains(out["message"].(string), "left 1 unclaimed") {
-		t.Fatalf("%d claimed, message %q", len(claimed), out["message"])
+	if len(claimed) != reconcileMaxClaims || out["skipped"] != 6 || out["skip_reason"] != skipReasonClaimReserve {
+		t.Fatalf("claimed=%d skipped=%v reason=%v msg=%q", len(claimed), out["skipped"], out["skip_reason"], out["message"])
+	}
+	msg := out["message"].(string)
+	if !strings.Contains(msg, "left 6 unclaimed") || !strings.Contains(msg, "held.txt") {
+		t.Fatalf("message missing skip count or conflict warning: %q", msg)
+	}
+	if _, stillHeld := liveAuto(t, s, shell.ExecutionID, "leaving.txt"); stillHeld {
+		t.Fatal("leaving.txt auto claim was not released atomically")
+	}
+
+	// Headroom up to maxClaims (500) remains available for pre-edit touches.
+	if got := call(t, s, "touch", touchRequest(shell, "post-shell-edit", "edit-after.go")); got["action"] != "allow" {
+		t.Fatalf("pre-edit touch failed after reconcile reserve: %v", got)
+	}
+
+	// Explicit claims can use the remaining headroom all the way up to 500.
+	for i := range reconcileReserve - 1 {
+		call(t, s, "claim", claimRequest(shell, fmt.Sprintf("exp-%03d", i), fmt.Sprintf("explicit-%03d", i), "exact"))
+	}
+	// The 500 hard cap still refuses new grants with too_large (claim_limit).
+	expectTooLargeLimit(t, s, "claim", claimRequest(shell, "over-claim", "over-claim.go", "exact"), "claim_limit")
+	expectTooLargeLimit(t, s, "touch", touchRequest(shell, "over-touch", "over-touch.go"), "claim_limit")
+
+	// Existing claims can still be touched, and a further shell reconcile skips new paths atomically.
+	if got := call(t, s, "touch", touchRequest(shell, "reuse-edit", "edit-after.go")); got["action"] != "allow" {
+		t.Fatalf("reusing held claim at 500 failed: %v", got)
+	}
+	shell.Kind = "before"
+	call(t, s, "reconcile", shell)
+	shell.Kind = "after"
+	shell.Status["new-at-cap-a.go"] = "??"
+	shell.Status["new-at-cap-b.go"] = "??"
+	atCap := call(t, s, "reconcile", shell)
+	if atCap["skipped"] != 2 || atCap["skip_reason"] != skipReasonClaimReserve {
+		t.Fatalf("atCap skipped=%v reason=%v", atCap["skipped"], atCap["skip_reason"])
+	}
+	rows := call(t, s, "claims", Request{RepositoryID: repo})["claims"].([]map[string]any)
+	// holder holds 1 explicit claim; shell holds maxClaims (500).
+	if len(rows) != maxClaims+1 {
+		t.Fatalf("claims count = %d, want %d", len(rows), maxClaims+1)
+	}
+}
+
+func TestScopedReconciliationRespectsReserve(t *testing.T) {
+	s, _, _ := testStore(t)
+	shell, _ := session(t, s, 1)
+	call(t, s, "reconcile_scoped", Request{
+		ExecutionID: shell.ExecutionID, Generation: shell.Generation,
+		Kind: "before", Status: map[string]string{}, Scope: &ShellScope{Mode: "dirty"},
+	})
+	status := map[string]string{}
+	for i := range reconcileMaxClaims + 10 {
+		status[fmt.Sprintf("s%03d", i)] = "??"
+	}
+	out := call(t, s, "reconcile_scoped", Request{
+		ExecutionID: shell.ExecutionID, Generation: shell.Generation,
+		Kind: "after", Status: status, Scope: &ShellScope{Mode: "dirty"},
+	})
+	claimed, _ := out["claimed"].([]string)
+	if len(claimed) != reconcileMaxClaims || out["skipped"] != 10 || out["skip_reason"] != skipReasonClaimReserve {
+		t.Fatalf("scoped claimed=%d skipped=%v reason=%v", len(claimed), out["skipped"], out["skip_reason"])
 	}
 }
 

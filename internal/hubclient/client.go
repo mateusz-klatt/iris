@@ -310,6 +310,8 @@ const (
 	LimitClaim = "claim_limit"
 	// LimitRequestBody identifies a refusal for exceeding the hub's HTTP request body limit.
 	LimitRequestBody = "request_body_limit"
+	// SkipReasonClaimReserve identifies reconcile paths left unclaimed to preserve edit headroom.
+	SkipReasonClaimReserve = "claim_reserve"
 )
 
 // Limit returns the allowlisted limit identifier decoded from details.limit
@@ -485,6 +487,21 @@ type CheckResponse struct {
 	// Attention is in every successful shell reconcile answer from a hub that names attention,
 	// and nil from one before it (ADR 017, decision 6).
 	Attention *Attention `json:"attention,omitempty"`
+	// Skipped is how many changed paths a shell reconcile left unclaimed.
+	Skipped int `json:"skipped,omitempty"`
+	// SkipReason names why a shell reconcile left changed paths unclaimed.
+	SkipReason string `json:"skip_reason,omitempty"`
+}
+
+// AllowlistedSkipReason returns the allowlisted skip reason for a shell reconcile that left
+// paths unclaimed, or "" when SkipReason is absent or unrecognized.
+func (r CheckResponse) AllowlistedSkipReason() string {
+	switch r.SkipReason {
+	case SkipReasonClaimReserve:
+		return SkipReasonClaimReserve
+	default:
+		return ""
+	}
 }
 
 func (c *Client) CheckPaths(ctx context.Context, req CheckRequest) (CheckResponse, error) {

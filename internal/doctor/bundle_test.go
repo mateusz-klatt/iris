@@ -41,7 +41,10 @@ func TestABundleCarriesNoSecretOnlyStatesAndCounts(t *testing.T) {
 		// A decode failure names the payload's tool and field names, for the local log only.
 		fmt.Sprintf(`{"time":%q,"client":"claude","event":"PostToolUse","stage":"decode","error":"hook payload has no session id","shape":{"tool":"secret_shape_tool","keys":["secret_shape_key"]}}`+"\n", now.Add(-time.Hour).Format(time.RFC3339))
 	observed := line(integrate.Copilot, "observed", "unknown tool secret_tool_name", now.Add(-time.Hour)) +
-		line(integrate.Copilot, "observed", "cross-load: ran in a session of antigravity", now.Add(-time.Hour))
+		line(integrate.Copilot, "observed", "cross-load: ran in a session of antigravity", now.Add(-time.Hour)) +
+		line(integrate.Copilot, "observed", "shell reconcile skipped (claim_reserve): 120 path(s)", now.Add(-time.Hour)) +
+		line(integrate.Copilot, "observed", "shell reconcile skipped (unknown): 3 path(s)", now.Add(-time.Hour)) +
+		line(integrate.Copilot, "observed", "shell reconcile skipped (SECRET_REASON): 4 path(s)", now.Add(-time.Hour))
 	if err := os.WriteFile(filepath.Join(dir, "hook-failures.log"), []byte(failures), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -67,7 +70,7 @@ func TestABundleCarriesNoSecretOnlyStatesAndCounts(t *testing.T) {
 		t.Fatal(err)
 	}
 	text := string(raw)
-	for _, secret := range []string{"tok_SECRET_TOKEN", "hunter2", "alice", "hub.private.example", "/Users", "SECRET-MESSAGE-BODY", "secret_tool_name", "antigravity", "client.json", "pre-commit", "500", "secret_old_tool", "secret_stage", "secret_status", "secret_client", "refused", "built by", "secret_shape_tool", "secret_shape_key", "shape"} {
+	for _, secret := range []string{"tok_SECRET_TOKEN", "hunter2", "alice", "hub.private.example", "/Users", "SECRET-MESSAGE-BODY", "secret_tool_name", "antigravity", "client.json", "pre-commit", "500", "secret_old_tool", "secret_stage", "secret_status", "secret_client", "refused", "built by", "secret_shape_tool", "secret_shape_key", "shape", "SECRET_REASON", "120"} {
 		if strings.Contains(text, secret) {
 			t.Errorf("the bundle carries %q:\n%s", secret, text)
 		}
@@ -95,7 +98,13 @@ func TestABundleCarriesNoSecretOnlyStatesAndCounts(t *testing.T) {
 			{Client: integrate.Codex, Stage: "touch", Category: "hook deadline exceeded", Count: 1},
 			{Client: integrate.Codex, Stage: "touch", Category: "other", Count: 1},
 		},
-		Observations:       []BundleCount{{Client: integrate.Copilot, Stage: "observed", Category: "cross-load", Count: 1}, {Client: integrate.Copilot, Stage: "observed", Category: "unknown tool", Count: 1}},
+		Observations: []BundleCount{
+			{Client: integrate.Copilot, Stage: "observed", Category: "cross-load", Count: 1},
+			{Client: integrate.Copilot, Stage: "observed", Category: "other", Count: 1},
+			{Client: integrate.Copilot, Stage: "observed", Category: "shell reconcile skipped (claim_reserve)", Count: 1},
+			{Client: integrate.Copilot, Stage: "observed", Category: "shell reconcile skipped (unknown)", Count: 1},
+			{Client: integrate.Copilot, Stage: "observed", Category: "unknown tool", Count: 1},
+		},
 		Guard:              "installed",
 		CaseWarning:        true,
 		LineEndingsWarning: true,

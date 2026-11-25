@@ -109,6 +109,13 @@ func (t *transaction) reconcileChanges(e execution, r Request) (map[string]any, 
 	if err != nil {
 		return nil, err
 	}
+	// An auto claim means this session has uncommitted changes at its path (D10). One whose path
+	// left the status was committed, stashed or restored, so it is released before counting live
+	// claims below, and its waiters are woken as by a release. Explicit claims, and every other
+	// session's, stay.
+	if err = t.releaseLeft(e, left); err != nil {
+		return nil, err
+	}
 	// A write a shell or Codex's js tool made is claimed for this session afterwards, as an edit
 	// tool's would have been before (gap review C7). A path someone else holds stays theirs, and
 	// the message above reports it.
@@ -116,17 +123,13 @@ func (t *transaction) reconcileChanges(e execution, r Request) (map[string]any, 
 	if err != nil {
 		return nil, err
 	}
-	// An auto claim means this session has uncommitted changes at its path (D10). One whose path
-	// left the status was committed, stashed or restored, so it is released, and its waiters are
-	// woken as by a release. Explicit claims, and every other session's, stay.
-	if err = t.releaseLeft(e, left); err != nil {
-		return nil, err
-	}
 	out["claimed"] = claimed
 	if skipped > 0 {
-		// One command can change more paths than the claim limit allows. The warning about other
+		// One command can change more paths than reconcile's headroom allows. The warning about other
 		// sessions' paths still matters most, so the rest are left unclaimed and that is said.
-		note := fmt.Sprintf("Iris claimed %d changed paths for this session and left %d unclaimed, at the limit of %d live claims.", len(claimed), skipped, maxClaims)
+		out["skipped"] = skipped
+		out["skip_reason"] = skipReasonClaimReserve
+		note := fmt.Sprintf("Iris claimed %d changed paths for this session and left %d unclaimed, keeping %d of %d live-claim slots reserved for edits.", len(claimed), skipped, reconcileReserve, maxClaims)
 		out["message"] = strings.TrimSpace(out["message"].(string) + " " + note)
 	}
 	if text, _ := out["message"].(string); text != "" {
@@ -171,8 +174,19 @@ func (t *transaction) keepShellSnapshot(id string, status map[string]string, sco
 	return err
 }
 
-// maxClaims is claimLimit's bound on the live claims of one Execution.
-const maxClaims = 500
+const (
+	// maxClaims is claimLimit's hard cap on the live claims of one Execution.
+	maxClaims = 500
+	// reconcileReserve keeps 100 live-claim slots (20% of maxClaims) free for pre-edit touches
+	// and explicit claims after a bulk shell step hits the reconcile ceiling, preventing
+	// post-shell single-file edits (as in #439, where 30 edits failed open) from hitting
+	// claim_limit while still auto-claiming up to 400 changed paths per Execution.
+	reconcileReserve = 100
+	// reconcileMaxClaims is the ceiling at which post-shell autoClaim stops adding new claims.
+	reconcileMaxClaims = maxClaims - reconcileReserve
+	// skipReasonClaimReserve is the allowlisted reason reported when reconcile hits the reserve.
+	skipReasonClaimReserve = "claim_reserve"
+)
 
 // releaseLeft releases e's own auto claims on paths that left its status. Both ends of a staged
 // rename stay in the status, so neither is released before the rename is committed.
@@ -261,7 +275,7 @@ func (t *transaction) autoClaim(e execution, paths []string) ([]string, int, err
 		return nil, 0, err
 	}
 	skipped := 0
-	if room := max(maxClaims-live, 0); len(fresh) > room {
+	if room := max(reconcileMaxClaims-live, 0); len(fresh) > room {
 		skipped = len(fresh) - room
 		fresh = fresh[:room]
 	}

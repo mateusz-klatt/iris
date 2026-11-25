@@ -370,6 +370,66 @@ func TestTooLargeErrorDetails(t *testing.T) {
 	}
 }
 
+func TestReconcileReserveAndClaimHeadroomOverHTTP(t *testing.T) {
+	_, s := setup(t)
+	sess := register(t, s, 1)
+
+	request(t, s, "POST", "/v1/shell/reconcile", map[string]any{
+		"execution_id": sess["execution_id"],
+		"generation":   sess["generation"],
+		"kind":         "before",
+		"status":       map[string]string{},
+	}, 200)
+
+	status := make(map[string]string, 420)
+	for i := range 420 {
+		status[fmt.Sprintf("f%03d", i)] = "??"
+	}
+	reconciled := request(t, s, "POST", "/v1/shell/reconcile", map[string]any{
+		"execution_id": sess["execution_id"],
+		"generation":   sess["generation"],
+		"kind":         "after",
+		"status":       status,
+	}, 200)
+	if int(reconciled["skipped"].(float64)) != 20 || reconciled["skip_reason"] != "claim_reserve" {
+		t.Fatalf("reconcile reserve response = %#v", reconciled)
+	}
+	if claimed := reconciled["claimed"].([]any); len(claimed) != 400 {
+		t.Fatalf("claimed len = %d, want 400", len(claimed))
+	}
+
+	// Headroom supports pre-edit touches and explicit claims up to 500.
+	touchResp := request(t, s, "POST", "/v1/claims/touch", map[string]any{
+		"execution_id": sess["execution_id"],
+		"generation":   sess["generation"],
+		"tool_call_id": "edit-1",
+		"paths":        []string{"after-reconcile.go"},
+	}, 200)
+	if touchResp["action"] != "allow" {
+		t.Fatalf("touch response = %#v", touchResp)
+	}
+	for i := range 99 {
+		request(t, s, "POST", "/v1/claims", map[string]any{
+			"execution_id": sess["execution_id"],
+			"generation":   sess["generation"],
+			"key":          fmt.Sprintf("explicit-%02d", i),
+			"kind":         "exact",
+			"path":         fmt.Sprintf("explicit-%02d.go", i),
+		}, 200)
+	}
+
+	over := request(t, s, "POST", "/v1/claims/touch", map[string]any{
+		"execution_id": sess["execution_id"],
+		"generation":   sess["generation"],
+		"tool_call_id": "edit-over",
+		"paths":        []string{"over-500.go"},
+	}, 413)
+	errObj := over["error"].(map[string]any)
+	if errObj["code"] != "too_large" || errObj["details"].(map[string]any)["limit"] != "claim_limit" {
+		t.Fatalf("over-cap touch = %#v", over)
+	}
+}
+
 func TestConnectedWakeTicketRevocation(t *testing.T) {
 	h, s := setup(t)
 	b := register(t, s, 1)

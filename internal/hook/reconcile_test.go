@@ -2,9 +2,11 @@ package hook
 
 import (
 	"context"
+	"fmt"
 	"github.com/mateusz-klatt/iris/internal/hub"
 	"github.com/mateusz-klatt/iris/internal/store"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -14,6 +16,7 @@ import (
 
 	"github.com/mateusz-klatt/iris/internal/gitinfo"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
+	"github.com/mateusz-klatt/iris/internal/proc"
 )
 
 type reconcileHub struct{ wait bool }
@@ -163,5 +166,172 @@ func TestFullSplitShellRechecksEndMarkerAfterSnapshot(t *testing.T) {
 	observations := state.observations()
 	if err != errEndedGeneration || fromGit || hub.reconciles != 0 || len(observations) != 1 || observations[0] != endedProof(marker).Error() { // gitleaks:allow (a test observation token and path, not a credential)
 		t.Fatalf("full split shell used ended G2: err %v, fromGit %t, reconciles %d, observations %v", err, fromGit, hub.reconciles, observations)
+	}
+}
+
+func TestParseReconcileSkipped(t *testing.T) {
+	for _, tc := range []struct {
+		text     string
+		wantKind string
+		wantN    int
+		wantOK   bool
+	}{
+		{"shell reconcile skipped (claim_reserve): 120 path(s)", ReconcileSkippedClaimReserve, 120, true},
+		{"shell reconcile skipped (unknown): 3 path(s)", ReconcileSkippedUnknown, 3, true},
+		{"shell reconcile skipped (secret): 3 path(s)", "", 0, false},
+		{"shell reconcile skipped (claim_reserve): 3", "", 0, false},
+		{"shell reconcile skipped (claim_reserve): abc path(s)", "", 0, false},
+		{"shell reconcile skipped (claim_reserve): 0 path(s)", "", 0, false},
+		{"unknown tool view", "", 0, false},
+	} {
+		kind, n, ok := ParseReconcileSkipped(tc.text)
+		if kind != tc.wantKind || n != tc.wantN || ok != tc.wantOK {
+			t.Errorf("ParseReconcileSkipped(%q) = (%q, %d, %t), want (%q, %d, %t)", tc.text, kind, n, ok, tc.wantKind, tc.wantN, tc.wantOK)
+		}
+	}
+}
+
+type skippedReconcileHub struct{ reconcileHub }
+
+func (skippedReconcileHub) Reconcile(context.Context, hubclient.ReconcileRequest) (hubclient.CheckResponse, error) {
+	return hubclient.CheckResponse{
+		Message:    "Shell edit detected. Iris detects these changes and cannot undo them.",
+		Skipped:    5,
+		SkipReason: "SECRET_HUB_TEXT",
+	}, nil
+}
+
+func TestReconcileSkippedObservationSanitizesReason(t *testing.T) {
+	root := gitRepo(t)
+	getenv := failureEnv(t)
+	token := getenv("IRIS_TOKEN_FILE")
+	payload := fmt.Sprintf(`{"session_id":"s-unrecognized","cwd":%q,"tool_name":"Bash","tool_input":{"command":"ls"}}`, root)
+	out := Runner{
+		ClientName: "claude",
+		EventName:  "PostToolUse",
+		Stdin:      strings.NewReader(payload),
+		Getenv:     getenv,
+		Hub:        skippedReconcileHub{},
+		Ancestor:   func() (proc.Ancestor, error) { return proc.Ancestor{}, nil },
+		Status: func(context.Context, string, gitinfo.Scope, *gitinfo.Attempt) (map[string]string, error) {
+			return map[string]string{"a.go": "??"}, nil
+		},
+		ShellDeadline: time.Minute,
+		after:         never,
+		logAfter:      never,
+	}.Run()
+	if out.Exit != 0 || !strings.Contains(string(out.Stdout), "Shell edit detected.") {
+		t.Fatalf("unexpected hook output: %#v", out)
+	}
+	got := observedOnly(t, token)
+	if got.Error != "shell reconcile skipped (unknown): 5 path(s)" {
+		t.Fatalf("got observation %+v", got)
+	}
+	raw, err := os.ReadFile(observedPath(token))
+	if err != nil || strings.Contains(string(raw), "SECRET_HUB_TEXT") {
+		t.Fatalf("raw observation log leaked or unreadable: err=%v raw=%s", err, raw)
+	}
+}
+
+func TestShellReserveAllowsFollowUpEditsAndLogsObservation(t *testing.T) {
+	root := gitRepo(t)
+	database, err := store.Open(filepath.Join(t.TempDir(), "hub.db"), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = database.Close() }()
+	server := httptest.NewUnstartedServer(nil)
+	server.Config.Handler = hub.New(database, "secret", []string{server.Listener.Addr().String()})
+	server.Start()
+	defer server.Close()
+
+	token := tokenFile(t)
+	getenv := func(key string) string {
+		switch key {
+		case "IRIS_TOKEN_FILE":
+			return token
+		case "IRIS_HUB_URL":
+			return server.URL
+		default:
+			return ""
+		}
+	}
+	client := &hubclient.Client{Config: hubclient.EnvConfig{Getenv: getenv}}
+	runHook := func(event, body string, status func(context.Context, string, gitinfo.Scope, *gitinfo.Attempt) (map[string]string, error)) Output {
+		return Runner{
+			ClientName:    "claude",
+			EventName:     event,
+			Stdin:         strings.NewReader(body),
+			Getenv:        getenv,
+			Hub:           client,
+			Host:          func() string { return "testhost" },
+			Ancestor:      func() (proc.Ancestor, error) { return proc.Ancestor{}, nil },
+			Status:        status,
+			ShellDeadline: time.Minute,
+			after:         never,
+			logAfter:      never,
+		}.Run()
+	}
+
+	shellPayload := fmt.Sprintf(`{"session_id":"s-reserve","cwd":%q,"tool_name":"Bash","tool_input":{"command":"pip install pkg"}}`, root)
+	beforeOut := runHook("PreToolUse", shellPayload, func(context.Context, string, gitinfo.Scope, *gitinfo.Attempt) (map[string]string, error) {
+		return map[string]string{}, nil
+	})
+	assertAllow(t, ClientClaude, beforeOut)
+
+	many := make(map[string]string, 420)
+	for i := range 420 {
+		many[fmt.Sprintf("pkg/f%03d.py", i)] = "??"
+	}
+	afterOut := runHook("PostToolUse", shellPayload, func(context.Context, string, gitinfo.Scope, *gitinfo.Attempt) (map[string]string, error) {
+		return many, nil
+	})
+	if afterOut.Exit != 0 || !strings.Contains(string(afterOut.Stdout), "left 20 unclaimed") {
+		t.Fatalf("post-shell output = %#v", afterOut)
+	}
+	obs := observedOnly(t, token)
+	if obs.Error != "shell reconcile skipped (claim_reserve): 20 path(s)" {
+		t.Fatalf("unexpected reserve observation: %+v", obs)
+	}
+
+	// Subsequent single-file pre-edit hook succeeds because 100 slots stayed reserved.
+	editOne := fmt.Sprintf(`{"session_id":"s-reserve","cwd":%q,"tool_name":"Write","tool_input":{"file_path":%q}}`, root, filepath.Join(root, "edit-after.go"))
+	assertAllow(t, ClientClaude, runHook("PreToolUse", editOne, nil))
+	if failures, err := ReadRecentFailures(token, 10); err != nil || len(failures) != 0 {
+		t.Fatalf("edit after reconcile reserve failed open: %+v %v", failures, err)
+	}
+
+	ctx := context.Background()
+	var bound hubclient.SessionResponse
+	if err := client.Do(ctx, "POST", "/v1/bind", map[string]any{"client": "claude", "host": "testhost", "session_id": "s-reserve"}, &bound); err != nil {
+		t.Fatal(err)
+	}
+	for i := range 99 {
+		if err := client.Do(ctx, "POST", "/v1/claims", map[string]any{
+			"execution_id": bound.ExecutionID,
+			"generation":   bound.Generation,
+			"key":          fmt.Sprintf("exp-%02d", i),
+			"kind":         "exact",
+			"path":         fmt.Sprintf("explicit-%02d.go", i),
+		}, nil); err != nil {
+			t.Fatalf("explicit claim %d failed: %v", i, err)
+		}
+	}
+	var listed struct {
+		Claims []struct{ Path string }
+	}
+	if err := client.Do(ctx, "GET", "/v1/claims?repository_id="+url.QueryEscape(bound.RepositoryID), nil, &listed); err != nil {
+		t.Fatal(err)
+	}
+	if len(listed.Claims) != 500 {
+		t.Fatalf("claims = %d, want 500", len(listed.Claims))
+	}
+
+	// Hard cap of 500 still refuses with too_large (claim_limit) and D3 fails open.
+	editOver := fmt.Sprintf(`{"session_id":"s-reserve","cwd":%q,"tool_name":"Write","tool_input":{"file_path":%q}}`, root, filepath.Join(root, "edit-over.go"))
+	assertAllow(t, ClientClaude, runHook("PreToolUse", editOver, nil))
+	failures, err := ReadRecentFailures(token, 10)
+	if err != nil || len(failures) != 1 || failures[0].Error != "hub request failed: too_large (claim_limit)" {
+		t.Fatalf("failures at 500 cap = %+v, err = %v", failures, err)
 	}
 }
