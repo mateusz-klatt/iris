@@ -865,13 +865,32 @@ func TestSucceedRefusesOrdinaryRegistrationReplayProvenances(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			s, clock, _ := testStore(t)
 			base := Request{Client: "codex", Host: "host", SessionID: "S", Cwd: "/repo/w", Worktree: "/repo/w", Branch: "main"}
-			req, _ := successionFixture(t, s, clock, base)
+			req, previous := successionFixture(t, s, clock, base)
 			reg := base
 			reg.Source = tc.source
 			reg.RetryGeneration = tc.retryGen
-			child := call(t, s, "sessions", reg)
+			// Choice A now refuses new non-hook G=0 registrations over lost hook history; pin that
+			// refusal and then seed the pre-upgrade ordinary G=2 row to verify replay guards too.
+			if out, err := s.Call(t.Context(), "sessions", reg); out != nil {
+				t.Fatalf("Choice A allowed ordinary %q G=0 over lost hook history: %+v", tc.name, out)
+			} else {
+				assertRegistrationLost(t, err, 1)
+			}
+			childID := id("ex_")
+			proof := "absent"
+			if tc.retryGen > 0 {
+				proof = "stale_retry"
+			}
+			tick := clock.Tick()
+			if _, err := s.db.Exec(
+				`INSERT INTO Execution(id,agent_id,repository_id,host_id,client,session_id,generation,worktree,branch,boot_epoch,deadline_tick_ms,lease_renewed_tick_ms,state,client_pid,client_pid_start_ms,single_session,heartbeat_mode,prior_execution_id,creation_source,creation_proof) VALUES(?,?,?,?,?,?,2,?,?,?,?,?,'active',0,0,0,?,?,?,?)`,
+				childID, previous["agent"].(map[string]any)["id"], previous["repository_id"], base.Host, base.Client, base.SessionID,
+				base.Worktree, base.Branch, s.epoch, tick+60000, tick, tc.source != "", req.PriorExecutionID, normalizeCreationSource(tc.source), proof,
+			); err != nil {
+				t.Fatal(err)
+			}
 			if tc.touchAfter {
-				call(t, s, "touch", touchRequest(Request{ExecutionID: child["execution_id"].(string), Generation: 2}, "tc_1", "a.go"))
+				call(t, s, "touch", touchRequest(Request{ExecutionID: childID, Generation: 2}, "tc_1", "a.go"))
 			}
 			var observed bool
 			ctx := WithGenerationObserver(t.Context(), func(GenerationChange) { observed = true })

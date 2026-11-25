@@ -290,7 +290,7 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 					Generation: a.Generation, Kind: "after", Status: map[string]string{"file": "MM", "dir/x": " M"}}
 			case "session-resume":
 				route = "sessions"
-				r = Request{Client: "codex", Host: "host", SessionID: "1", Cwd: "/repo/w1", Worktree: "/repo/w1"}
+				r = Request{Client: "codex", Host: "host", SessionID: "1", Cwd: "/repo/w1", Worktree: "/repo/w1", Source: "hook"}
 			case "session-resume-new-process":
 				// The session's hook, now in another client process: the resume rewrites the
 				// Execution's process identity, which a storage fault must leave as it was.

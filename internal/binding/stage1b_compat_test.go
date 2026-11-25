@@ -75,7 +75,7 @@ func newCompatResolver(url, client, host, cwd string, env map[string]string, pid
 }
 
 func TestV0115BindingResolverInertAgainstStage1bHub(t *testing.T) {
-	t.Run("ordinary session recovery wake and Choice A preserve v0.1.15 behavior", func(t *testing.T) {
+	t.Run("ordinary session recovery wake and Choice A on stage-1b hub", func(t *testing.T) {
 		clock := newCompatClock(time.Unix(1800000000, 0))
 		dbPath := filepath.Join(t.TempDir(), "hub.db")
 		s, err := store.Open(dbPath, clock)
@@ -142,7 +142,8 @@ func TestV0115BindingResolverInertAgainstStage1bHub(t *testing.T) {
 			t.Fatalf("expected same execution after D9 recovery, got %+v", reattached)
 		}
 
-		// After lease expiry, unmodified v0.1.15 Choice A MCP fallback still registers G=2.
+		// After lease expiry, Choice A on stage-1b hubs refuses v0.1.15 proofless MCP fallback over
+		// lost hook history with 409 lost (highest_generation=1), while genuine no-hook fallback still registers G=1.
 		clock.Advance(16 * time.Minute)
 		if _, err := activeStore.Call(t.Context(), "expire", store.Request{}); err != nil {
 			t.Fatal(err)
@@ -158,12 +159,13 @@ func TestV0115BindingResolverInertAgainstStage1bHub(t *testing.T) {
 		if _, err := activeStore.Call(t.Context(), "expire", store.Request{}); err != nil {
 			t.Fatal(err)
 		}
-		fallback, err := res2.Resolve(t.Context(), "")
-		if err != nil {
-			t.Fatal(err)
+		if fallback, err := res2.Resolve(t.Context(), ""); !IsCode(err, "lost") {
+			t.Fatalf("expected Choice A lost for proofless v0.1.15 fallback over lost hook history, got b=%+v err=%v", fallback, err)
 		}
-		if fallback.Generation != 2 {
-			t.Fatalf("expected Choice A G=2 fallback for v0.1.15 resolver, got %+v", fallback)
+		resNoHook := newCompatResolver(srv.URL, "claude", "host", "/repo/w", map[string]string{"CLAUDE_CODE_SESSION_ID": "S-nohook-fb"}, 403, 4403)
+		noHook, err := resNoHook.Resolve(t.Context(), "")
+		if err != nil || noHook.Generation != 1 {
+			t.Fatalf("expected genuine no-hook G=1 fallback, got b=%+v err=%v", noHook, err)
 		}
 	})
 

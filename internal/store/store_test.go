@@ -211,7 +211,10 @@ func TestLeasesFencesAndClientClock(t *testing.T) {
 	c.tick += 60000
 	expectError(t, s, "heartbeat", hb, "lost")
 	expectError(t, s, "claim", q, "lost")
-	replacement := call(t, s, "sessions", Request{Client: "codex", Host: "host", Cwd: "/repo/w1", Worktree: "/repo/w1", SessionID: "1", RemoteURL: "https://example.com/team/project.git", RootCommit: "root"})
+	// Under Choice A, a proofless non-hook registration cannot replace a lost hook session;
+	// a hook registration opens the replacement generation.
+	expectError(t, s, "sessions", Request{Client: "codex", Host: "host", Cwd: "/repo/w1", Worktree: "/repo/w1", SessionID: "1", RemoteURL: "https://example.com/team/project.git", RootCommit: "root"}, "lost")
+	replacement := call(t, s, "sessions", Request{Client: "codex", Host: "host", Cwd: "/repo/w1", Worktree: "/repo/w1", SessionID: "1", RemoteURL: "https://example.com/team/project.git", RootCommit: "root", Source: "hook"})
 	if replacement["execution_id"] == ao["execution_id"] || number(replacement["generation"]) != 2 {
 		t.Fatal(replacement)
 	}
@@ -297,6 +300,8 @@ func TestRestartRecoveryDoesNotExtend(t *testing.T) {
 	expectError(t, reopened, "sessions", reattach, "lost")
 	fresh := reattach
 	fresh.Generation = 0
+	expectError(t, reopened, "sessions", fresh, "lost")
+	fresh.Source = "hook"
 	next := call(t, reopened, "sessions", fresh)
 	if number(next["generation"]) != 2 {
 		t.Fatal(next)

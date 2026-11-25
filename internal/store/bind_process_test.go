@@ -29,15 +29,22 @@ func TestTheClientProcessFindsItsTopLevelSession(t *testing.T) {
 	codex.Client = "codex"
 	expectError(t, s, "bind", codex, "unbound")
 	// A second live top-level session of the process is ambiguous, unless the asker excludes
-	// its own, as an MCP that had to register one does.
+	// its own, as an MCP that had to register before the hook arrived does (D6).
+	// Registering MCP after the hook already reached the hub for this process is refused by Choice A.
+	afterHook := hook
+	afterHook.SessionID, afterHook.Source = "session-after", "mcp"
+	expectError(t, s, "sessions", afterHook, "lost")
+
+	s2, _, _ := testStore(t)
 	own := hook
 	own.SessionID, own.Source = "session-b", "mcp"
-	mine := call(t, s, "sessions", own)
-	expectError(t, s, "bind", bind, "ambiguous")
+	mine := call(t, s2, "sessions", own)
+	top2 := call(t, s2, "sessions", hook)
+	expectError(t, s2, "bind", bind, "ambiguous")
 	past := bind
 	past.Exclude = mine["execution_id"].(string)
-	if got := call(t, s, "bind", past); got["execution_id"] != top["execution_id"] {
-		t.Fatalf("bound %v past its own, the hook's is %v", got["execution_id"], top["execution_id"])
+	if got := call(t, s2, "bind", past); got["execution_id"] != top2["execution_id"] {
+		t.Fatalf("bound %v past its own, the hook's is %v", got["execution_id"], top2["execution_id"])
 	}
 }
 

@@ -479,7 +479,7 @@ func TestStage1bCompatibilityGuardsAndHookUnlock(t *testing.T) {
 		assertClassifiedReply(t, hookNext, childID, "hook", "absent", true)
 	})
 
-	t.Run("choice A stays deferred for ordinary lost hook session", func(t *testing.T) {
+	t.Run("choice A refuses non-hook g0 over ordinary lost hook session", func(t *testing.T) {
 		s, clock, _ := testStore(t)
 		first := call(t, s, "sessions", Request{
 			Client: "codex", Host: "host", SessionID: "S-choicea",
@@ -489,14 +489,45 @@ func TestStage1bCompatibilityGuardsAndHookUnlock(t *testing.T) {
 		clock.advance(16 * time.Minute)
 		call(t, s, "expire", Request{})
 
+		before := databaseState(t, s)
+		for _, source := range []string{"", "mcp", "shim", "watch"} {
+			for _, op := range []string{"sessions", "sessions_outside"} {
+				req := Request{
+					Client: "codex", Host: "host", SessionID: "S-choicea",
+					Cwd: "/repo/w", Source: source,
+				}
+				if op == "sessions" {
+					req.Worktree = "/repo/w"
+				}
+				out, err := s.Call(t.Context(), op, req)
+				if out != nil {
+					t.Fatalf("Choice A allowed %s(%q) over lost hook history: %+v", op, source, out)
+				}
+				assertRegistrationLost(t, err, 1)
+			}
+		}
+		if databaseState(t, s) != before {
+			t.Fatal("refused Choice A non-hook g0 registration mutated DB")
+		}
+
+		// A genuine hook still advances S-choicea to G=2 (legacy un-opted; classified when opted in).
+		nextUnopted := call(t, s, "sessions", Request{
+			Client: "codex", Host: "host", SessionID: "S-choicea",
+			Cwd: "/repo/w", Worktree: "/repo/w", Branch: "main", Source: "hook",
+		})
+		if nextUnopted["generation"] != int64(2) || nextUnopted["execution_id"] == firstID {
+			t.Fatalf("hook registration after loss failed: %+v", nextUnopted)
+		}
+		assertLegacyReply(t, nextUnopted, false)
 		next := call(t, s, "sessions", Request{
 			Client: "codex", Host: "host", SessionID: "S-choicea",
-			Cwd: "/repo/w", Worktree: "/repo/w", Branch: "main", Source: "mcp",
+			Cwd: "/repo/w", Worktree: "/repo/w", Branch: "main", Source: "hook",
+			SuccessionProof: true,
 		})
-		if next["generation"] != int64(2) || next["execution_id"] == firstID {
-			t.Fatalf("Choice A altered ordinary v0.1.15 non-hook G=0 behavior: %+v", next)
+		if next["generation"] != int64(2) || next["execution_id"] != nextUnopted["execution_id"] {
+			t.Fatalf("opted hook attach mismatch: %+v", next)
 		}
-		assertLegacyReply(t, next, false)
+		assertClassifiedReply(t, next, firstID, "hook", "absent", true)
 	})
 
 	t.Run("standalone touch and execution-addressed reconcile never unlock hookless child", func(t *testing.T) {

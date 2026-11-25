@@ -444,6 +444,28 @@ func endedThroughRefusal(message string) error {
 	return &Error{Code: "lost", Message: message, Details: map[string]any{"reason": "ended_through"}}
 }
 
+// refuseChoiceA enforces ADR 035/039 Choice A over all retained hook history so a non-hook
+// generation-zero registration cannot attach to or replace a session (or applicable process)
+// after any hook has reached the hub.
+func (t *transaction) refuseChoiceA(r Request) error {
+	var seen bool
+	if err := t.row("SELECT EXISTS(SELECT 1 FROM Execution WHERE host_id=? AND client=? AND session_id=? AND hook_seen_ms>0)", r.Host, r.Client, r.SessionID).Scan(&seen); err != nil {
+		return err
+	}
+	if seen {
+		return fail("lost", "non-hook generation-zero registration cannot attach to or succeed a hook-registered session")
+	}
+	if r.ClientPID > 0 && r.ClientPIDStartMS > 0 && (r.SingleSession || r.Client == "claude") {
+		if err := t.row("SELECT EXISTS(SELECT 1 FROM Execution WHERE host_id=? AND client=? AND client_pid=? AND client_pid_start_ms=? AND hook_seen_ms>0)", r.Host, r.Client, r.ClientPID, r.ClientPIDStartMS).Scan(&seen); err != nil {
+			return err
+		}
+		if seen {
+			return fail("lost", "non-hook generation-zero registration cannot register over hook-registered process history")
+		}
+	}
+	return nil
+}
+
 func (t *transaction) register(r Request, outside bool) (map[string]any, error) {
 	if r.Client == "" || r.SessionID == "" || r.Host == "" || r.Cwd == "" {
 		return nil, fail("bad_request", "client, session_id, host and cwd are required")
@@ -482,6 +504,11 @@ func (t *transaction) register(r Request, outside bool) (map[string]any, error) 
 		}
 		if r.Source != "hook" && isHooklessSuccessionChild(e) {
 			return nil, fail("lost", "non-hook registration cannot attach to a hookless succession child")
+		}
+		if r.Generation == 0 && r.Source != "hook" {
+			if err := t.refuseChoiceA(r); err != nil {
+				return nil, err
+			}
 		}
 		if r.Source == "shim" && r.Generation != 0 {
 			if e.HookSeenMS == 0 {
@@ -543,6 +570,11 @@ func (t *transaction) register(r Request, outside bool) (map[string]any, error) 
 	}
 	if isHooklessSuccessionChild(previous) && r.Source != "hook" {
 		return nil, fail("lost", "non-hook generation-zero registration cannot succeed a hookless succession child")
+	}
+	if r.Source != "hook" {
+		if err := t.refuseChoiceA(r); err != nil {
+			return nil, err
+		}
 	}
 	if r.EndedThrough > 0 && (previous.Generation < r.EndedThrough || generation <= r.EndedThrough) {
 		return nil, endedThroughRefusal("session history cannot advance beyond the ended generation")

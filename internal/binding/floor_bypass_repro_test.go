@@ -22,8 +22,9 @@ import (
 // These tests drive the generation-zero fallback through the real resolver and the real store.
 // After SessionEnd the session keeps <hash>.ended and no <hash>. An unbound Rung 2 shim or
 // watch must not obtain that same session's next generation. A Rung 3 shim that cannot see a
-// session id follows D6: it binds a live hook Execution for its process, and otherwise registers
-// mcp-<pid>-<start> without advancing the hook's session.
+// session id follows D6: it binds a live hook Execution for its process, registers mcp-<pid>-<start>
+// only when the process has zero retained hook history, and is refused by Choice A once hooks for
+// that process have reached the hub.
 
 func TestFloorBypassAfterSessionEndBlocksRung2AndWatch(t *testing.T) {
 	for _, tc := range []struct {
@@ -204,26 +205,24 @@ func TestFloorBypassRung3AfterEndDoesNotAdvanceTheHookSession(t *testing.T) {
 	b, err := r.Resolve(ctx, "")
 	requests := h.sessions()[before:]
 	rows = executionRows(t, h.file)
-	// D6 names this process as its own session when no live Execution matches it. The floor
-	// for that synthetic id is empty. The hook's session is a different id and stays ended.
+	// Under Choice A, Rung 3 synthetic mcp-<pid>-<start> registration over retained hook process
+	// history (even after SessionEnd) is refused with 409 lost and session-scoped highest_generation 0.
 	wantID := "mcp-42-100"
-	if err != nil || b.SessionID != wantID || b.Generation != 1 || b.Rung != 3 || !r.own {
-		t.Fatalf("rung 3 fallback after SessionEnd: bound=%+v own=%t err=%v\nrecall %v\nrequests %+v\nrows %+v", b, r.own, err, recalls, requests, rows)
+	if err == nil || b.ExecutionID != "" || !IsCode(err, "lost") {
+		t.Fatalf("rung 3 fallback after SessionEnd was not refused by Choice A: bound=%+v err=%v\nrecall %v\nrequests %+v\nrows %+v", b, err, recalls, requests, rows)
+	}
+	var hubErr *hubclient.Error
+	if !errors.As(err, &hubErr) {
+		t.Fatalf("Choice A refusal did not surface hub error: %v", err)
+	}
+	if highest, valid, present := hubErr.HighestGeneration(); !present || !valid || highest != 0 {
+		t.Fatalf("Choice A refusal highest_generation=(%d, valid=%t, present=%t), want 0", highest, valid, present)
 	}
 	if len(requests) != 1 || requests[0].SessionID != wantID || requests[0].Source != "mcp" || requests[0].Generation != 0 || requests[0].RetryGeneration != 0 {
 		t.Fatalf("synthetic registration: %+v", requests)
 	}
-	var hookRow, synthetic executionRow
-	for _, row := range rows {
-		switch row.session {
-		case "real-session":
-			hookRow = row
-		case wantID:
-			synthetic = row
-		}
-	}
-	if hookRow.id != endedID || hookRow.state != "ended" || hookRow.generation != 1 || synthetic.generation != 1 || synthetic.state != "active" || synthetic.hookSeen != 0 {
-		t.Fatalf("hook session was advanced or the synthetic execution is not its own generation 1: %+v", rows)
+	if len(rows) != 1 || rows[0].id != endedID || rows[0].session != "real-session" || rows[0].state != "ended" || rows[0].generation != 1 {
+		t.Fatalf("Choice A refusal mutated ended hook session or created synthetic row: %+v", rows)
 	}
 	for _, recall := range recalls {
 		if strings.Contains(recall, "real-session") {
