@@ -465,7 +465,7 @@ func TestHookLogsTooLargeLimitsAndAllows(t *testing.T) {
 	root := gitRepo(t)
 	cases := []struct {
 		name, event, stage, payload, caps, route, hubResp, wantErr string
-		status                                                     gitStandIn
+		status                                                     func(context.Context, string, gitinfo.Scope, *gitinfo.Attempt) (map[string]string, error)
 	}{
 		{
 			name:    "touch claim_limit",

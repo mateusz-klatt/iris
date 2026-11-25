@@ -272,6 +272,11 @@ func TestStatusReportsGitFailure(t *testing.T) {
 	if _, err := Status(context.Background(), filepath.Join(t.TempDir(), "absent")); err == nil {
 		t.Fatal("no error")
 	}
+	nonRepo := t.TempDir()
+	writeFile(t, filepath.Join(nonRepo, ".git"), "gitdir: missing\n")
+	if _, err := Status(context.Background(), nonRepo); err == nil || errors.Is(err, ErrStatusTooLarge) {
+		t.Fatalf("err = %v, want non-cap git failure", err)
+	}
 }
 
 // The cap fails the write that would pass it and says so in the attempt, so the breaker never
