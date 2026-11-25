@@ -324,7 +324,11 @@ func (t *transaction) claimLimit(e execution, extra int) error {
 		return err
 	}
 	if count+extra > 500 {
-		return fail("too_large", "maximum 500 live claims per Execution")
+		return &Error{
+			Code:    "too_large",
+			Message: "maximum 500 live claims per Execution",
+			Details: map[string]any{"limit": "claim_limit"},
+		}
 	}
 	return nil
 }

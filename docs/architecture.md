@@ -113,7 +113,13 @@ Hard rules for `iris hook`, because failure semantics differ between clients:
    failure graded `silent` is described as a fail-open in the last 24 hours, warning that edits may
    have gone unclaimed. This history cannot establish current client downtime or identify which
    edits went unclaimed. A silent fail-open once hid a real bypass: Copilot sends no tool call id,
-   the hub refused the request, and the edit went through a live claim. Unknown tools and
+   the hub refused the request, and the edit went through a live claim. Failure texts never echo
+   untrusted messages or payloads: a `too_large` hub refusal records only its allowlisted
+   `details.limit` (`hub request failed: too_large (claim_limit)`,
+   `hub request failed: too_large (request_body_limit)`, or `hub request failed: too_large (unknown)`
+   when omitted or unrecognized), and a `git status` aborted at its stdout cap records the fixed
+   reason `git status output exceeds cap` rather than a bare child exit error (`*exec.ExitError`).
+   Unknown tools and
    cross-loads are not failures, but doctor reports them too, from `hook-observed.log` (gap review
    C4), using the same relocated-plus-default merge. Neither is a session-file operation a hook
    skipped, such as a told state its lock budget kept it from writing: the hook's allow or deny is
@@ -1063,7 +1069,11 @@ whenever it starts. The first reduced snapshot after a start therefore only sets
 A worktree's breaker, a file beside the session memory, suggests the scope. It trips on four
 facts: a full status started with at least half the budget left; it had not passed the output
 cap; it was still running when the reconcile's own deadline passed; and the hook itself had not
-been cancelled. A git that has just exited while its output is still being read can trip it
+been cancelled. A status that passes the 48 KiB stdout cap stops reading and records
+`git status output exceeds cap` in `hook-failures.log` instead of tripping the breaker or
+recording a bare `*exec.ExitError`; if the reconcile deadline passes first, that deadline takes
+precedence and records `shell reconciliation passed its deadline` while still leaving the
+breaker untripped. A git that has just exited while its output is still being read can trip it
 falsely. The breaker then suggests reduced scope for a minute, doubled after each full attempt
 that fails again, up to ten minutes, and a full status that succeeds resets it. With hooks
 running at once, this schedule is only approximate. A hook takes the suggestion only when its hub

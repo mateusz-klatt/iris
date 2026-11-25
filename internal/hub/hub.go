@@ -140,18 +140,18 @@ func (h *Hub) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		limit = 64 << 10
 	}
 	if r.ContentLength > limit {
-		writeError(w, &store.Error{Code: "too_large", Message: "request body exceeds limit"})
+		writeError(w, requestBodyTooLarge("request body exceeds limit"))
 		return
 	}
 	if r.Body != nil {
 		body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, limit))
 		if err != nil {
 			var large *http.MaxBytesError
-			code := "bad_request"
 			if errors.As(err, &large) {
-				code = "too_large"
+				writeError(w, requestBodyTooLarge("invalid or oversized request body"))
+				return
 			}
-			writeError(w, &store.Error{Code: code, Message: "invalid or oversized request body"})
+			writeError(w, &store.Error{Code: "bad_request", Message: "invalid or oversized request body"})
 			return
 		}
 		r.Body = io.NopCloser(bytes.NewReader(body))
@@ -233,11 +233,10 @@ func decode(w http.ResponseWriter, r *http.Request) (store.Request, error) {
 	dec := json.NewDecoder(r.Body)
 	if err := dec.Decode(&req); err != nil {
 		var large *http.MaxBytesError
-		code := "bad_request"
 		if errors.As(err, &large) {
-			code = "too_large"
+			return req, requestBodyTooLarge("invalid or oversized JSON request")
 		}
-		return req, &store.Error{Code: code, Message: "invalid or oversized JSON request"}
+		return req, &store.Error{Code: "bad_request", Message: "invalid or oversized JSON request"}
 	}
 	var extra any
 	if err := dec.Decode(&extra); err != io.EOF {
@@ -282,6 +281,14 @@ func writeJSON(w http.ResponseWriter, value any) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(value)
 }
+func requestBodyTooLarge(message string) *store.Error {
+	return &store.Error{
+		Code:    "too_large",
+		Message: message,
+		Details: map[string]any{"limit": "request_body_limit"},
+	}
+}
+
 func writeError(w http.ResponseWriter, err error) {
 	var domain *store.Error
 	if !errors.As(err, &domain) {

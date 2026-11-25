@@ -31,6 +31,10 @@ func TestABundleCarriesNoSecretOnlyStatesAndCounts(t *testing.T) {
 		line(integrate.Claude, "decode", "invalid JSON at byte 3", now.Add(-time.Hour)) +
 		line("not-a-client", "session", "hub request failed", now.Add(-time.Hour)) +
 		line(integrate.Codex, "touch", "hook deadline exceeded", now.Add(-time.Hour)) +
+		line(integrate.Claude, "touch", "hub request failed: too_large (claim_limit)", now.Add(-time.Hour)) +
+		line(integrate.Claude, "touch", "hub request failed: too_large (request_body_limit)", now.Add(-time.Hour)) +
+		line(integrate.Claude, "shell reconcile", "hub request failed: too_large (unknown)", now.Add(-time.Hour)) +
+		line(integrate.Claude, "shell status", "git status output exceeds cap", now.Add(-time.Hour)) +
 		// Lines failureText never writes, as an older iris or another writer might have left.
 		line(integrate.Codex, "touch", "unknown tool secret_old_tool", now.Add(-time.Hour)) +
 		line(integrate.Codex, "secret_stage /Users/alice", "Post https://hub.private.example/v1: refused", now.Add(-time.Hour)) +
@@ -83,6 +87,10 @@ func TestABundleCarriesNoSecretOnlyStatesAndCounts(t *testing.T) {
 			{Client: integrate.Claude, Stage: "decode", Category: "hook payload has no session id", Count: 1},
 			{Client: integrate.Claude, Stage: "decode", Category: "invalid JSON", Count: 1},
 			{Client: integrate.Claude, Stage: "session", Category: "hub request failed: lost", Count: 2},
+			{Client: integrate.Claude, Stage: "shell reconcile", Category: "hub request failed: too_large (unknown)", Count: 1},
+			{Client: integrate.Claude, Stage: "shell status", Category: "git status output exceeds cap", Count: 1},
+			{Client: integrate.Claude, Stage: "touch", Category: "hub request failed: too_large (claim_limit)", Count: 1},
+			{Client: integrate.Claude, Stage: "touch", Category: "hub request failed: too_large (request_body_limit)", Count: 1},
 			{Client: integrate.Codex, Stage: "other", Category: "other", Count: 1},
 			{Client: integrate.Codex, Stage: "touch", Category: "hook deadline exceeded", Count: 1},
 			{Client: integrate.Codex, Stage: "touch", Category: "other", Count: 1},

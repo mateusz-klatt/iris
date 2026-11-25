@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/mateusz-klatt/iris/internal/store"
 )
 
 func TestMalformedAuthenticatedRequests(t *testing.T) {
@@ -141,6 +142,11 @@ func TestDecoderSizeAndBrokenBody(t *testing.T) {
 	r.Body = http.MaxBytesReader(w, r.Body, 10)
 	if _, err := decode(w, r); err == nil {
 		t.Fatal("oversized JSON accepted")
+	} else {
+		var domain *store.Error
+		if !errors.As(err, &domain) || domain.Code != "too_large" || domain.Details.(map[string]any)["limit"] != "request_body_limit" {
+			t.Fatalf("oversized JSON error = %+v", err)
+		}
 	}
 }
 

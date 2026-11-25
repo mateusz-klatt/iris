@@ -3,8 +3,13 @@ package hook
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net/http"
+	"net/http/httptest"
 	"os"
+	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -453,5 +458,140 @@ func TestPinnedObserverPerformsZeroConfigReads(t *testing.T) {
 	entries, err := ReadRecentObservations(token, 10)
 	if err != nil || len(entries) != 5 {
 		t.Fatalf("observations = %+v, err = %v", entries, err)
+	}
+}
+
+func TestHookLogsTooLargeLimitsAndAllows(t *testing.T) {
+	root := gitRepo(t)
+	cases := []struct {
+		name, event, stage, payload, caps, route, hubResp, wantErr string
+		status                                                     func(context.Context, string, gitinfo.Scope, *gitinfo.Attempt) (map[string]string, error)
+	}{
+		{
+			name:    "touch claim_limit",
+			event:   "PreToolUse",
+			stage:   "touch",
+			payload: editPayload(ClientClaude, root),
+			route:   "/v1/claims/touch",
+			hubResp: `{"error":{"code":"too_large","message":"SECRET maximum 500 live claims","details":{"limit":"claim_limit"}}}`,
+			wantErr: "hub request failed: too_large (claim_limit)",
+		},
+		{
+			name:    "touch/files request_body_limit",
+			event:   "PreToolUse",
+			stage:   "touch",
+			payload: editPayload(ClientClaude, root),
+			caps:    `"capabilities":["file_claims"],`,
+			route:   "/v1/claims/touch/files",
+			hubResp: `{"error":{"code":"too_large","message":"SECRET body exceeds limit","details":{"limit":"request_body_limit"}}}`,
+			wantErr: "hub request failed: too_large (request_body_limit)",
+		},
+		{
+			name:    "reconcile older hub without details",
+			event:   "PostToolUse",
+			stage:   "shell session",
+			payload: fmt.Sprintf(`{"session_id":"s1","cwd":%q,"tool_name":"Bash","tool_input":{"command":"ls"}}`, root),
+			route:   "/v1/shell/reconcile",
+			hubResp: `{"error":{"code":"too_large","message":"SECRET legacy body error"}}`,
+			wantErr: "hub request failed: too_large (unknown)",
+			status: func(context.Context, string, gitinfo.Scope, *gitinfo.Attempt) (map[string]string, error) {
+				return map[string]string{"a.txt": "??"}, nil
+			},
+		},
+		{
+			name:    "touch unrecognized limit detail",
+			event:   "PreToolUse",
+			stage:   "touch",
+			payload: editPayload(ClientClaude, root),
+			route:   "/v1/claims/touch",
+			hubResp: `{"error":{"code":"too_large","message":"SECRET","details":{"limit":"SECRET_DETAIL"}}}`,
+			wantErr: "hub request failed: too_large (unknown)",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/v1/sessions" {
+					_, _ = fmt.Fprintf(w, `{"execution_id":"ex_1","generation":1,"handle":"ex_1",%s"agent":{"name":"claude-host"}}`, tc.caps)
+					return
+				}
+				if r.URL.Path == tc.route {
+					w.WriteHeader(http.StatusRequestEntityTooLarge)
+					_, _ = w.Write([]byte(tc.hubResp))
+					return
+				}
+				w.WriteHeader(http.StatusBadRequest)
+			}))
+			defer srv.Close()
+			getenv := failureEnv(t)
+			token := getenv("IRIS_TOKEN_FILE")
+			r := Runner{
+				ClientName:    "claude",
+				EventName:     tc.event,
+				Stdin:         strings.NewReader(tc.payload),
+				Getenv:        getenv,
+				Hub:           &hubclient.Client{Config: hubURL(srv.URL)},
+				Status:        tc.status,
+				ShellDeadline: time.Minute,
+				after:         never,
+				logAfter:      never,
+			}
+			out := r.Run()
+			assertAllow(t, ClientClaude, out)
+			entries, err := ReadRecentFailures(token, 10)
+			if err != nil || len(entries) != 1 {
+				t.Fatalf("entries = %+v, err = %v", entries, err)
+			}
+			if entries[0].Stage != tc.stage || entries[0].Error != tc.wantErr {
+				t.Fatalf("got %+v, want stage %q error %q", entries[0], tc.stage, tc.wantErr)
+			}
+			raw, err := os.ReadFile(failurePath(token))
+			if err != nil {
+				t.Fatal(err)
+			}
+			if strings.Contains(string(raw), "SECRET") {
+				t.Fatalf("hub message or detail leaked: %s", raw)
+			}
+		})
+	}
+}
+
+func TestHookLogsOverCapGitStatusAndAllows(t *testing.T) {
+	root := t.TempDir()
+	initCmd := exec.Command("git", "init", "-q", root)
+	initCmd.Env = append(os.Environ(), "GIT_CONFIG_GLOBAL="+os.DevNull, "GIT_CONFIG_NOSYSTEM=1")
+	if out, err := initCmd.CombinedOutput(); err != nil {
+		t.Fatalf("git init: %v\n%s", err, out)
+	}
+	for i := range 800 {
+		name := strings.Repeat("n", 100) + strconv.Itoa(1000+i)
+		if err := os.WriteFile(filepath.Join(root, name), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	getenv := failureEnv(t)
+	token := getenv("IRIS_TOKEN_FILE")
+	payload := fmt.Sprintf(`{"conversationId":"conv-1","workspacePaths":[%q],"toolCall":{"name":"run_command","args":{"CommandLine":"pip install pkg"}}}`, root)
+	out := Runner{
+		ClientName:    "antigravity",
+		EventName:     "post_tool_use",
+		Stdin:         strings.NewReader(payload),
+		Getenv:        getenv,
+		Hub:           reconcileHub{},
+		ShellDeadline: time.Minute,
+		after:         never,
+		logAfter:      never,
+	}.Run()
+	wantAllow := Encode(Event{Client: ClientAntigravity, Kind: KindPostTool}, Decision{Action: ActionAllow})
+	if out.Exit != wantAllow.Exit || string(out.Stdout) != string(wantAllow.Stdout) {
+		t.Fatalf("got stdout %q stderr %q exit %d; want stdout %q exit %d", out.Stdout, out.Stderr, out.Exit, wantAllow.Stdout, wantAllow.Exit)
+	}
+	entries, err := ReadRecentFailures(token, 10)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("entries = %+v, err = %v", entries, err)
+	}
+	got := entries[0]
+	if got.Stage != "shell status" || got.Error != failStatusTooLarge || got.Degraded() {
+		t.Fatalf("got %+v, want stage shell status and error %q (non-degraded)", got, failStatusTooLarge)
 	}
 }

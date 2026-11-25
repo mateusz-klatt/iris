@@ -250,6 +250,7 @@ type Error struct {
 	Code    string `json:"code"`
 	Message string `json:"message"`
 	Details any    `json:"details"`
+	limit   string
 	status  int
 }
 
@@ -301,6 +302,35 @@ func (e *Error) IsEndedThroughRefusal(floor int) bool {
 	return valid && highest < floor
 }
 
+const (
+	// LimitClaim identifies a refusal for exceeding 500 live claims per Execution.
+	LimitClaim = "claim_limit"
+	// LimitRequestBody identifies a refusal for exceeding the hub's HTTP request body limit.
+	LimitRequestBody = "request_body_limit"
+)
+
+// Limit returns the allowlisted limit identifier decoded from details.limit
+// while parsing the hub response, or empty when absent, malformed, or unrecognized.
+func (e *Error) Limit() string { return e.limit }
+
+func parseTooLargeLimit(raw json.RawMessage) string {
+	if len(raw) == 0 {
+		return ""
+	}
+	var details struct {
+		Limit string `json:"limit"`
+	}
+	if json.Unmarshal(raw, &details) != nil {
+		return ""
+	}
+	switch details.Limit {
+	case LimitClaim, LimitRequestBody:
+		return details.Limit
+	default:
+		return ""
+	}
+}
+
 // Do issues an authenticated JSON request. Callers keep retry keys stable across retries.
 func (c *Client) Do(ctx context.Context, method, path string, body, dest any) error {
 	if c == nil || c.Config == nil {
@@ -350,7 +380,11 @@ func (c *Client) Do(ctx context.Context, method, path string, body, dest any) er
 		}
 		if json.Unmarshal(slurp, &envelope) == nil && envelope.Error != nil {
 			e := envelope.Error
-			return &Error{Code: e.Code, Message: e.Message, Details: e.Details, status: res.StatusCode}
+			var limit string
+			if e.Code == "too_large" {
+				limit = parseTooLargeLimit(e.Details)
+			}
+			return &Error{Code: e.Code, Message: e.Message, Details: e.Details, limit: limit, status: res.StatusCode}
 		}
 		return &StatusError{Path: path, Code: res.StatusCode, Status: res.Status}
 	}

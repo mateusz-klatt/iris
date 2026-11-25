@@ -272,6 +272,11 @@ func TestStatusReportsGitFailure(t *testing.T) {
 	if _, err := Status(context.Background(), filepath.Join(t.TempDir(), "absent")); err == nil {
 		t.Fatal("no error")
 	}
+	nonRepo := t.TempDir()
+	writeFile(t, filepath.Join(nonRepo, ".git"), "gitdir: missing\n")
+	if _, err := Status(context.Background(), nonRepo); err == nil || errors.Is(err, ErrStatusTooLarge) {
+		t.Fatalf("err = %v, want non-cap git failure", err)
+	}
 }
 
 // The cap fails the write that would pass it and says so in the attempt, so the breaker never
@@ -281,7 +286,7 @@ func TestStatusStopsAtItsLimit(t *testing.T) {
 	if n, err := out.Write(make([]byte, statusLimit)); err != nil || n != statusLimit || out.attempt.Capped() {
 		t.Fatal(n, err, out.attempt.Capped())
 	}
-	if _, err := out.Write([]byte{0}); err == nil || !strings.Contains(err.Error(), "limit") || !out.attempt.Capped() {
+	if _, err := out.Write([]byte{0}); !errors.Is(err, ErrStatusTooLarge) || !strings.Contains(err.Error(), "limit") || !out.attempt.Capped() {
 		t.Fatal(err, out.attempt.Capped())
 	}
 	if out.kept.Len() != statusLimit {
@@ -334,9 +339,9 @@ func TestStatusRefusesAWorktreeAboveItsLimit(t *testing.T) {
 	if err != nil || len(got) != 100 {
 		t.Fatalf("below the limit: %d paths, %v", len(got), err)
 	}
-	untracked(100, 600)
-	if got, err = Status(context.Background(), root); err == nil {
-		t.Fatalf("accepted %d paths, %d bytes of status, above the limit of %d", len(got), 600*108, statusLimit)
+	untracked(100, 800)
+	if got, err = Status(context.Background(), root); !errors.Is(err, ErrStatusTooLarge) {
+		t.Fatalf("accepted or misclassified %d paths, %d bytes of status, above the limit of %d: %v", len(got), 800*108, statusLimit, err)
 	}
 }
 

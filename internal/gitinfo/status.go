@@ -78,10 +78,16 @@ func StatusScope(ctx context.Context, root string, scope Scope, a *Attempt) (map
 	err = cmd.Wait()
 	finish()
 	if err != nil {
+		if out.capped {
+			return nil, ErrStatusTooLarge
+		}
 		return nil, err
 	}
 	return ParseStatus(out.kept.Bytes())
 }
+
+// ErrStatusTooLarge is returned when git status stdout exceeds statusLimit.
+var ErrStatusTooLarge = errors.New("git status exceeds reconciliation limit")
 
 // statusLimit bounds what a status may hold, so a large generated tree cannot make the hook
 // allocate without limit or send the hub a snapshot it refuses.
@@ -94,12 +100,14 @@ const statusLimit = 48 << 10
 type limitedStatus struct {
 	kept    bytes.Buffer
 	attempt *Attempt
+	capped  bool
 }
 
 func (b *limitedStatus) Write(p []byte) (int, error) {
 	if b.kept.Len()+len(p) > statusLimit {
+		b.capped = true
 		b.attempt.Cap()
-		return 0, errors.New("git status exceeds reconciliation limit")
+		return 0, ErrStatusTooLarge
 	}
 	return b.kept.Write(p)
 }

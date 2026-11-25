@@ -28,6 +28,10 @@ the key used (gap review A9). Errors look like this:
 Codes: `unauthorized`, `bad_request`, `not_found`, `conflict`, `key_reused`, `unbound`,
 `ambiguous`, `lost`, `too_large`, `rate_limited`.
 
+For `too_large`, `error.details.limit` is optional and additive: `"request_body_limit"` when the
+HTTP request exceeds the hub's request body limit, or `"claim_limit"` when granting claims would
+exceed 500 live claims per Execution. Older hubs and message size limits omit `details.limit`.
+
 ## Sessions
 
 `POST /v1/sessions` registers or reattaches. It is called by the `SessionStart` hook, or by
@@ -1016,9 +1020,11 @@ worktrees without a globally unambiguous remote. It never joins paths across hos
 ## Public service limits
 
 Every route accepts at most 64 KiB of request body, including chunked bodies and routes
-that do not consume JSON. Oversized requests return 413 (`too_large`). An Execution
-may hold at most 500 live claims; a grant exceeding that limit fails atomically with
-`too_large`, while touching existing claims is allowed. The HTTP server has a 10-second
+that do not consume JSON. Oversized requests return 413 (`too_large`) with
+`error.details.limit` set to `"request_body_limit"`. An Execution may hold at most 500 live
+claims; a grant exceeding that limit fails atomically with `too_large` and `error.details.limit`
+set to `"claim_limit"`, while touching existing claims is allowed. Older hubs omit
+`details.limit`. The HTTP server has a 10-second
 read timeout, a 5-second header timeout and a 60-second idle timeout; upgraded sockets
 are independent of these deadlines.
 

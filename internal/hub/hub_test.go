@@ -298,6 +298,78 @@ func TestTransportAndInputGuards(t *testing.T) {
 	request(t, s, "POST", "/v1/messages", map[string]any{"body": strings.Repeat("x", 70<<10)}, 413)
 }
 
+func TestTooLargeErrorDetails(t *testing.T) {
+	_, s := setup(t)
+	sess := register(t, s, 1)
+
+	oversize := request(t, s, "POST", "/v1/claims/touch", map[string]any{
+		"execution_id": sess["execution_id"],
+		"generation":   sess["generation"],
+		"tool_call_id": "huge",
+		"paths":        []string{strings.Repeat("a", 70<<10)},
+	}, 413)
+	errObj := oversize["error"].(map[string]any)
+	if errObj["code"] != "too_large" || errObj["details"].(map[string]any)["limit"] != "request_body_limit" {
+		t.Fatalf("oversize touch error = %#v", oversize)
+	}
+
+	paths := make([]string, 500)
+	for i := range paths {
+		paths[i] = fmt.Sprintf("f-%03d.go", i)
+	}
+	request(t, s, "POST", "/v1/claims/touch", map[string]any{
+		"execution_id": sess["execution_id"],
+		"generation":   sess["generation"],
+		"tool_call_id": "fill",
+		"paths":        paths,
+	}, 200)
+
+	for _, tc := range []struct {
+		path string
+		body map[string]any
+	}{
+		{
+			path: "/v1/claims/touch",
+			body: map[string]any{
+				"execution_id": sess["execution_id"],
+				"generation":   sess["generation"],
+				"tool_call_id": "over-touch",
+				"paths":        []string{"extra.go"},
+			},
+		},
+		{
+			path: "/v1/claims/touch/files",
+			body: map[string]any{
+				"execution_id": sess["execution_id"],
+				"generation":   sess["generation"],
+				"tool_call_id": "over-files",
+				"groups": []map[string]any{{
+					"worktree":    "/repo/1",
+					"remote_url":  "https://example.com/repo.git",
+					"root_commit": "root",
+					"paths":       []string{"extra-file.go"},
+				}},
+			},
+		},
+		{
+			path: "/v1/claims",
+			body: map[string]any{
+				"execution_id": sess["execution_id"],
+				"generation":   sess["generation"],
+				"key":          "over-claim",
+				"kind":         "exact",
+				"path":         "extra-explicit.go",
+			},
+		},
+	} {
+		resp := request(t, s, "POST", tc.path, tc.body, 413)
+		errObj := resp["error"].(map[string]any)
+		if errObj["code"] != "too_large" || errObj["details"].(map[string]any)["limit"] != "claim_limit" {
+			t.Fatalf("%s error = %#v", tc.path, resp)
+		}
+	}
+}
+
 func TestConnectedWakeTicketRevocation(t *testing.T) {
 	h, s := setup(t)
 	b := register(t, s, 1)
