@@ -200,7 +200,7 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 			if registers {
 				ex, _ = out["execution_id"].(string)
 			}
-			hookSQL := "UPDATE Execution SET hook_seen_ms=? WHERE id=? AND NOT (creation_source='shim' AND creation_proof='shim_succession' AND hook_seen_ms=0)"
+			hookSQL := "UPDATE Execution SET hook_seen_ms=? WHERE id=? AND NOT (creation_source IS 'shim' AND creation_proof IS 'shim_succession' AND hook_seen_ms=0)"
 			if (registers || registersShell) && r.Source == "hook" {
 				hookSQL = "UPDATE Execution SET hook_seen_ms=? WHERE id=?"
 			}

@@ -1,11 +1,14 @@
 package hub
 
 import (
+	"bytes"
 	"database/sql"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
@@ -444,4 +447,141 @@ func TestMixedVersionStage1bHubClientAndStoreMatrix(t *testing.T) {
 			t.Fatalf("legacy partial decode failed: %+v err=%v", minimal, err)
 		}
 	})
+}
+
+// TestHTTPHeartbeatExactV0115GoldenBytes sends v0.1.15 binding.Resolver's exact wire request
+// bytes (`{"generation":1,"source":"shim"}`) over real HTTP to the current hub handler and verifies
+// byte-for-byte identity against responses captured verbatim from git tag v0.1.15 (commit 6deecd0)
+// running v0.1.15's real store.Open, hub.New HTTP handler, and binding.Resolver with wall clock
+// 1800000000 and tick 1000.
+//
+// Only the three randomly generated hex resource IDs from session creation (Agent.ID, ExecutionID,
+// RepositoryID) are normalized to <AGENT_ID>, <EXEC_ID>, and <REPO_ID>. Everything else — key
+// ordering, field set, values, and trailing newline — must match byte-for-byte across live and
+// recovering states, both inside and outside a repository.
+func TestHTTPHeartbeatExactV0115GoldenBytes(t *testing.T) {
+	// Captured directly from v0.1.15 (6deecd0) real HTTP handler + binding.Resolver:
+	//   inside/live:  {"agent":{"id":"ag_0789684ef5c176b45167a543b52a0773","name":"codex-host-w"},"capabilities":["shell_scope","file_claims"],"execution_id":"ex_f345482cbc1fee593e8c800e35308ace","generation":1,"lease_ms":60000,"repository_id":"rp_665422cd4aba2bd3d71055c14080eb6f","session_id":"S-gold-in","worktree":"/repo/w"}\n
+	//   inside/rec:   {"agent":{"id":"ag_0789684ef5c176b45167a543b52a0773","name":"codex-host-w"},"attention":{"available":0,"high_water":1,"identity":null,"monitored":false,"unread":0},"capabilities":["shell_scope","file_claims"],"claims":[],"execution_id":"ex_f345482cbc1fee593e8c800e35308ace","generation":1,"handle":"ex_f345482cbc1fee593e8c800e35308ace","lease_ms":60000,"peers":[{"branch":"main","client":"codex","id":"ag_0789684ef5c176b45167a543b52a0773","name":"codex-host-w","state":"active","worktree":"/repo/w"}],"repository_id":"rp_665422cd4aba2bd3d71055c14080eb6f","session_id":"S-gold-in","unread":0,"worktree":"/repo/w"}\n
+	//   outside/live: {"agent":{"id":"ag_21a82859d2eb0790b4be774c84023817","name":"codex-host-outside"},"capabilities":["shell_scope","file_claims"],"execution_id":"ex_5247fa9e20e4b4e950496af5e8f57f90","generation":1,"lease_ms":60000,"outside_git":true,"repository_id":"rp_2738b098791bfc0b46d42872147636d4","session_id":"S-gold-out","worktree":"/tmp/outside"}\n
+	//   outside/rec:  {"agent":{"id":"ag_21a82859d2eb0790b4be774c84023817","name":"codex-host-outside"},"attention":{"available":0,"high_water":1,"identity":null,"monitored":false,"unread":0},"capabilities":["shell_scope","file_claims"],"claims":[],"execution_id":"ex_5247fa9e20e4b4e950496af5e8f57f90","generation":1,"handle":"ex_5247fa9e20e4b4e950496af5e8f57f90","lease_ms":60000,"outside_git":true,"peers":[{"branch":"","client":"codex","id":"ag_21a82859d2eb0790b4be774c84023817","name":"codex-host-outside","state":"active","worktree":"/tmp/outside"}],"repository_id":"rp_2738b098791bfc0b46d42872147636d4","session_id":"S-gold-out","unread":0,"worktree":"/tmp/outside"}\n
+	const v0115HeartbeatReq = `{"generation":1,"source":"shim"}`
+
+	cases := []struct {
+		name     string
+		outside  bool
+		sid      string
+		cwd      string
+		wantLive string
+		wantRec  string
+	}{
+		{
+			name:     "inside repository",
+			outside:  false,
+			sid:      "S-gold-in",
+			cwd:      "/repo/w",
+			wantLive: "{\"agent\":{\"id\":\"<AGENT_ID>\",\"name\":\"codex-host-w\"},\"capabilities\":[\"shell_scope\",\"file_claims\"],\"execution_id\":\"<EXEC_ID>\",\"generation\":1,\"lease_ms\":60000,\"repository_id\":\"<REPO_ID>\",\"session_id\":\"S-gold-in\",\"worktree\":\"/repo/w\"}\n",
+			wantRec:  "{\"agent\":{\"id\":\"<AGENT_ID>\",\"name\":\"codex-host-w\"},\"attention\":{\"available\":0,\"high_water\":1,\"identity\":null,\"monitored\":false,\"unread\":0},\"capabilities\":[\"shell_scope\",\"file_claims\"],\"claims\":[],\"execution_id\":\"<EXEC_ID>\",\"generation\":1,\"handle\":\"<EXEC_ID>\",\"lease_ms\":60000,\"peers\":[{\"branch\":\"main\",\"client\":\"codex\",\"id\":\"<AGENT_ID>\",\"name\":\"codex-host-w\",\"state\":\"active\",\"worktree\":\"/repo/w\"}],\"repository_id\":\"<REPO_ID>\",\"session_id\":\"S-gold-in\",\"unread\":0,\"worktree\":\"/repo/w\"}\n",
+		},
+		{
+			name:     "outside repository",
+			outside:  true,
+			sid:      "S-gold-out",
+			cwd:      "/tmp/outside",
+			wantLive: "{\"agent\":{\"id\":\"<AGENT_ID>\",\"name\":\"codex-host-outside\"},\"capabilities\":[\"shell_scope\",\"file_claims\"],\"execution_id\":\"<EXEC_ID>\",\"generation\":1,\"lease_ms\":60000,\"outside_git\":true,\"repository_id\":\"<REPO_ID>\",\"session_id\":\"S-gold-out\",\"worktree\":\"/tmp/outside\"}\n",
+			wantRec:  "{\"agent\":{\"id\":\"<AGENT_ID>\",\"name\":\"codex-host-outside\"},\"attention\":{\"available\":0,\"high_water\":1,\"identity\":null,\"monitored\":false,\"unread\":0},\"capabilities\":[\"shell_scope\",\"file_claims\"],\"claims\":[],\"execution_id\":\"<EXEC_ID>\",\"generation\":1,\"handle\":\"<EXEC_ID>\",\"lease_ms\":60000,\"outside_git\":true,\"peers\":[{\"branch\":\"\",\"client\":\"codex\",\"id\":\"<AGENT_ID>\",\"name\":\"codex-host-outside\",\"state\":\"active\",\"worktree\":\"/tmp/outside\"}],\"repository_id\":\"<REPO_ID>\",\"session_id\":\"S-gold-out\",\"unread\":0,\"worktree\":\"/tmp/outside\"}\n",
+		},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			clock := newLockedClock(time.Unix(1800000000, 0))
+			dbPath := filepath.Join(t.TempDir(), "golden.db")
+			s, err := store.Open(dbPath, clock)
+			if err != nil {
+				t.Fatal(err)
+			}
+			activeStore := s
+			var srv *httptest.Server
+			t.Cleanup(func() {
+				if srv != nil {
+					srv.Close()
+				}
+				if activeStore != nil {
+					_ = activeStore.Close()
+				}
+			})
+			srv = startMixedHub(s)
+			c := &hubclient.Client{Config: mixedHubConfig{url: srv.URL, token: "secret"}}
+
+			req := hubclient.SessionRequest{
+				Client: "codex", Host: "host", SessionID: tc.sid, CWD: tc.cwd, Source: "hook",
+			}
+			var reg hubclient.SessionResponse
+			if tc.outside {
+				reg, err = c.RegisterOutsideSession(t.Context(), req)
+			} else {
+				req.Worktree = tc.cwd
+				req.Branch = "main"
+				reg, err = c.RegisterSession(t.Context(), req)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			norm := strings.NewReplacer(
+				reg.Agent.ID, "<AGENT_ID>",
+				reg.ExecutionID, "<EXEC_ID>",
+				reg.RepositoryID, "<REPO_ID>",
+			)
+			postExact := func(baseURL string) string {
+				t.Helper()
+				httpReq, err := http.NewRequestWithContext(
+					t.Context(),
+					http.MethodPost,
+					baseURL+"/v1/executions/"+reg.ExecutionID+"/heartbeat",
+					bytes.NewReader([]byte(v0115HeartbeatReq)),
+				)
+				if err != nil {
+					t.Fatal(err)
+				}
+				httpReq.Header.Set("Authorization", "Bearer secret")
+				httpReq.Header.Set("Content-Type", "application/json")
+				resp, err := http.DefaultClient.Do(httpReq)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer func() { _ = resp.Body.Close() }()
+				body, err := io.ReadAll(resp.Body)
+				if err != nil {
+					t.Fatal(err)
+				}
+				if resp.StatusCode != http.StatusOK {
+					t.Fatalf("status=%d body=%s", resp.StatusCode, body)
+				}
+				return norm.Replace(string(body))
+			}
+
+			if gotLive := postExact(srv.URL); gotLive != tc.wantLive {
+				t.Fatalf("live heartbeat bytes mismatch:\ngot:  %q\nwant: %q", gotLive, tc.wantLive)
+			}
+
+			// Restart the store/hub so the Execution enters recovery, then send the exact same request bytes.
+			srv.Close()
+			if err := activeStore.Close(); err != nil {
+				t.Fatal(err)
+			}
+			activeStore = nil
+			reopened, err := store.Open(dbPath, clock)
+			if err != nil {
+				t.Fatal(err)
+			}
+			activeStore = reopened
+			srv = startMixedHub(reopened)
+
+			if gotRec := postExact(srv.URL); gotRec != tc.wantRec {
+				t.Fatalf("recovering heartbeat bytes mismatch:\ngot:  %q\nwant: %q", gotRec, tc.wantRec)
+			}
+		})
+	}
 }

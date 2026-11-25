@@ -544,3 +544,98 @@ func TestStage1bCompatibilityGuardsAndHookUnlock(t *testing.T) {
 		}
 	})
 }
+
+func TestMigratedOrdinaryNullProvenanceTouchAndReconcileSetHookSeen(t *testing.T) {
+	legacyDB := filepath.Join(t.TempDir(), "ordinary-mig.db")
+	clock := &fakeClock{wall: time.Unix(1800000000, 0)}
+	seed, err := Open(legacyDB, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	type target struct {
+		name string
+		sid  string
+		id   string
+	}
+	targets := []target{
+		{name: "touch", sid: "S-mig-touch"},
+		{name: "touch_files", sid: "S-mig-touch-files"},
+		{name: "reconcile", sid: "S-mig-reconcile"},
+		{name: "reconcile_scoped", sid: "S-mig-reconcile-scoped"},
+	}
+	for i := range targets {
+		res := call(t, seed, "sessions", Request{
+			Client: "codex", Host: "host", SessionID: targets[i].sid,
+			Cwd: "/repo/w", Worktree: "/repo/w", Branch: "main", Source: "mcp",
+		})
+		targets[i].id = res["execution_id"].(string)
+	}
+	if err := seed.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	raw, err := sql.Open("sqlite", legacyDB)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, stmt := range []string{
+		`DROP INDEX IF EXISTS execution_prior`,
+		`ALTER TABLE Execution DROP COLUMN prior_execution_id`,
+		`ALTER TABLE Execution DROP COLUMN creation_source`,
+		`ALTER TABLE Execution DROP COLUMN creation_proof`,
+		`PRAGMA user_version = 28`,
+	} {
+		if _, err := raw.Exec(stmt); err != nil {
+			_ = raw.Close()
+			t.Fatalf("%s: %v", stmt, err)
+		}
+	}
+	if err := raw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	upgraded, err := Open(legacyDB, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = upgraded.Close() }()
+
+	for _, tc := range targets {
+		t.Run(tc.name, func(t *testing.T) {
+			var prior, src, proof sql.NullString
+			var seen int64
+			if err := upgraded.db.QueryRow("SELECT prior_execution_id,creation_source,creation_proof,hook_seen_ms FROM Execution WHERE id=?", tc.id).Scan(&prior, &src, &proof, &seen); err != nil {
+				t.Fatal(err)
+			}
+			if prior.Valid || src.Valid || proof.Valid || seen != 0 {
+				t.Fatalf("unexpected pre-op state: prior=%+v src=%+v proof=%+v seen=%d", prior, src, proof, seen)
+			}
+
+			// Resume from recovery first using legacy un-opted heartbeat.
+			rec := call(t, upgraded, "heartbeat", Request{ExecutionID: tc.id, Generation: 1, Source: "shim"})
+			assertLegacyHeartbeatReply(t, rec)
+
+			ref := Request{ExecutionID: tc.id, Generation: 1}
+			clock.advance(5 * time.Second)
+			switch tc.name {
+			case "touch":
+				call(t, upgraded, "touch", touchRequest(ref, "tc_mig", "a.go"))
+			case "touch_files":
+				call(t, upgraded, "touch_files", filesTouch(ref, "tc_mig_files", ClaimGroup{
+					Worktree: "/repo/w", Paths: []string{"b.go"},
+				}))
+			case "reconcile":
+				call(t, upgraded, "reconcile", full(ref, "before", map[string]string{}))
+			case "reconcile_scoped":
+				call(t, upgraded, "reconcile_scoped", reduced(ref, "before", map[string]string{}, "lib"))
+			}
+
+			if after := readHookSeenMS(t, upgraded, tc.id); after == 0 {
+				t.Fatalf("%s failed to set hook_seen_ms on migrated NULL-provenance row", tc.name)
+			}
+			b := call(t, upgraded, "bind", Request{Client: "codex", Host: "host", Execution: tc.id})
+			assertClassifiedReply(t, b, nil, nil, nil, true)
+		})
+	}
+}
