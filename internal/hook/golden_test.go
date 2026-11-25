@@ -223,7 +223,7 @@ func argvEvent(client, file string) string {
 		switch {
 		case strings.HasPrefix(name, "pre_tool_use"):
 			return "PreToolUse"
-		case name == "posttooluse":
+		case strings.HasPrefix(name, "posttooluse"):
 			return "PostToolUse"
 		case strings.HasPrefix(name, "sessionstart"):
 			return "SessionStart"
@@ -243,12 +243,14 @@ func argvEvent(client, file string) string {
 }
 
 const (
-	claudeSession       = "b9f244d4-4326-45bf-8c3d-1d249f8f21b2"
-	codexSession        = "01a1adf0-8c32-7dd1-915f-250ba6059254"
-	codexJS             = "01a1b67e-ac49-7970-8edf-65c03ce13fac"
-	copilotA            = "05a1f795-918d-4cfb-aeb2-f17be274e1b8"
-	copilotB            = "5371905e-5625-4681-bcbc-73b28e2669bb"
-	kimiSession         = "session_114df8a5-1263-4744-bd4a-17c39274ffd6"
+	claudeSession = "b9f244d4-4326-45bf-8c3d-1d249f8f21b2"
+	codexSession  = "01a1adf0-8c32-7dd1-915f-250ba6059254"
+	codexJS       = "01a1b67e-ac49-7970-8edf-65c03ce13fac"
+	copilotA      = "05a1f795-918d-4cfb-aeb2-f17be274e1b8"
+	copilotB      = "5371905e-5625-4681-bcbc-73b28e2669bb"
+	kimiSession   = "session_114df8a5-1263-4744-bd4a-17c39274ffd6"
+	// Captured from Kimi Code 2.7.3 on Linux/WSL on 2026-11-25 for built-in tool classification.
+	kimiBuiltinsSession = "session_9888b63f-9575-4c70-ab7a-0ec9c032f64c"
 	grokParent          = "01a1add0-deb3-7f23-969a-06a73e70b876"
 	grokChild           = "01a1add0-f889-76d3-9b16-1775afd996e6"
 	grokShell           = "01a1add0-8fa6-7132-9db2-85ef40676904"
@@ -256,10 +258,13 @@ const (
 	agySession          = "4d437c2d-a30c-4479-bc04-0c09ca6ebdc5"
 	agyWakeSession      = "ed1e2ecb-6339-4f6c-8851-9d2aad1bbb08"
 	agyWakeProj         = "/tmp/agy-fixture-capture/project"
-	cursorSession       = "<SESSION_OR_TOOL_ID>"
-	cursorPluginSession = "00000000-0000-4000-8000-000000000001"
-	cursorPluginRoot    = "/home/user/tmp/cursor-cap/proj"
-	proj                = "/workspace/project"
+	// Captured from Antigravity 1.5.16 on Linux/WSL on 2026-11-25 for built-in tool classification.
+	agyBuiltinsSession   = "0d71505d-f318-4bd4-bfc9-192d96c2df0c"
+	agyManageTaskSession = "27398647-5f0f-454c-aee3-6a95c55d2f1a"
+	cursorSession        = "<SESSION_OR_TOOL_ID>"
+	cursorPluginSession  = "00000000-0000-4000-8000-000000000001"
+	cursorPluginRoot     = "/home/user/tmp/cursor-cap/proj"
+	proj                 = "/workspace/project"
 	// Captured from Claude Code 2.1.319 on Windows 11, where the PowerShell tool exists.
 	claudeWindowsSession = "a2a33065-7989-4987-bb5f-8f6866658a25"
 	projWindows          = `C:\workspace\project`
@@ -280,15 +285,27 @@ const (
 )
 
 var fixtureWant = map[string]decoded{
-	"antigravity/post_invocation.json":      {kind: KindPostInvocation, session: agySession, cwd: proj},
-	"antigravity/post_tool_use.json":        {kind: KindPostTool, session: agySession, cwd: proj, tool: "write_file", class: ClassEdit, paths: []string{"/workspace/project/test_edit.txt"}, call: "3"},
-	"antigravity/post_tool_use_wake.json":   {kind: KindPostTool, session: agyWakeSession, cwd: agyWakeProj, tool: "run_command", class: ClassShell, command: "/tmp/agy-fixture-capture/project/iris watch --client antigravity --wake", call: "4"},
-	"antigravity/pre_invocation.json":       {kind: KindPreInvocation, session: agySession, cwd: proj},
-	"antigravity/pre_tool_use.json":         {kind: KindPreTool, session: agySession, cwd: proj, tool: "write_file", class: ClassEdit, paths: []string{"/workspace/project/test_edit.txt"}, call: "3"},
-	"antigravity/pre_tool_use_command.json": {kind: KindPreTool, session: agySession, cwd: proj, tool: "run_command", class: ClassShell, command: "ls -l test_edit.txt", call: "5"},
-	"antigravity/session_start.json":        {kind: KindSessionStart, session: agySession, cwd: proj},
-	"antigravity/stop.json":                 {kind: KindStop, session: agySession, cwd: proj},
-	"antigravity/stop_continuation.json":    {kind: KindStop, session: agyWakeSession, cwd: agyWakeProj},
+	"antigravity/post_invocation.json":                 {kind: KindPostInvocation, session: agySession, cwd: proj},
+	"antigravity/post_tool_use.json":                   {kind: KindPostTool, session: agySession, cwd: proj, tool: "write_file", class: ClassEdit, paths: []string{"/workspace/project/test_edit.txt"}, call: "3"},
+	"antigravity/post_tool_use_wake.json":              {kind: KindPostTool, session: agyWakeSession, cwd: agyWakeProj, tool: "run_command", class: ClassShell, command: "/tmp/agy-fixture-capture/project/iris watch --client antigravity --wake", call: "4"},
+	"antigravity/pre_invocation.json":                  {kind: KindPreInvocation, session: agySession, cwd: proj},
+	"antigravity/pre_tool_use.json":                    {kind: KindPreTool, session: agySession, cwd: proj, tool: "write_file", class: ClassEdit, paths: []string{"/workspace/project/test_edit.txt"}, call: "3"},
+	"antigravity/pre_tool_use_command.json":            {kind: KindPreTool, session: agySession, cwd: proj, tool: "run_command", class: ClassShell, command: "ls -l test_edit.txt", call: "5"},
+	"antigravity/post_tool_use_call_mcp_tool.json":     {kind: KindPostTool, session: agyBuiltinsSession, cwd: proj, tool: "call_mcp_tool", class: ClassMCP, call: "6"},
+	"antigravity/pre_tool_use_call_mcp_tool.json":      {kind: KindPreTool, session: agyBuiltinsSession, cwd: proj, tool: "call_mcp_tool", class: ClassMCP, call: "6"},
+	"antigravity/post_tool_use_manage_task.json":       {kind: KindPostTool, session: agyManageTaskSession, cwd: proj, tool: "manage_task", class: ClassOther, call: "3"},
+	"antigravity/pre_tool_use_manage_task.json":        {kind: KindPreTool, session: agyManageTaskSession, cwd: proj, tool: "manage_task", class: ClassOther, call: "3"},
+	"antigravity/post_tool_use_read_file.json":         {kind: KindPostTool, session: agyBuiltinsSession, cwd: proj, tool: "read_file", class: ClassRead, paths: []string{"/workspace/project/notes.txt"}, call: "3"},
+	"antigravity/pre_tool_use_read_file.json":          {kind: KindPreTool, session: agyBuiltinsSession, cwd: proj, tool: "read_file", class: ClassRead, paths: []string{"/workspace/project/notes.txt"}, call: "3"},
+	"antigravity/post_tool_use_search_web.json":        {kind: KindPostTool, session: agyBuiltinsSession, cwd: proj, tool: "search_web", class: ClassOther, call: "5"},
+	"antigravity/pre_tool_use_search_web.json":         {kind: KindPreTool, session: agyBuiltinsSession, cwd: proj, tool: "search_web", class: ClassOther, call: "5"},
+	"antigravity/post_tool_use_update_steps.json":      {kind: KindPostTool, session: agyBuiltinsSession, cwd: proj, tool: "update_steps", class: ClassOther, call: "4"},
+	"antigravity/pre_tool_use_update_steps.json":       {kind: KindPreTool, session: agyBuiltinsSession, cwd: proj, tool: "update_steps", class: ClassOther, call: "4"},
+	"antigravity/post_tool_use_update_steps_done.json": {kind: KindPostTool, session: agyBuiltinsSession, cwd: proj, tool: "update_steps", class: ClassOther, call: "8"},
+	"antigravity/pre_tool_use_update_steps_done.json":  {kind: KindPreTool, session: agyBuiltinsSession, cwd: proj, tool: "update_steps", class: ClassOther, call: "8"},
+	"antigravity/session_start.json":                   {kind: KindSessionStart, session: agySession, cwd: proj},
+	"antigravity/stop.json":                            {kind: KindStop, session: agySession, cwd: proj},
+	"antigravity/stop_continuation.json":               {kind: KindStop, session: agyWakeSession, cwd: agyWakeProj},
 	// The same Stop of agy 1.5.8 under -p, a prompt piped in, and -i in a terminal (ADR 031).
 	"antigravity/stop_interactive.json": {kind: KindStop, session: "67c3ad56-e149-4fbb-aaf9-90195aaa42e5", cwd: proj},
 	"antigravity/stop_piped.json":       {kind: KindStop, session: "f3172ef0-c7f6-4f31-9901-fec18a1237d5", cwd: proj},
@@ -389,11 +406,19 @@ var fixtureWant = map[string]decoded{
 	"grok/SubagentStop.json":              {kind: KindSubagentStop, session: grokChild, cwd: proj},
 	"grok/UserPromptSubmit.json":          {kind: KindPrompt, session: grokMain, cwd: proj},
 
-	"kimi/posttooluse.json":               {kind: KindPostTool, session: kimiSession, cwd: "/workspace/project/hooklab", tool: "Bash", class: ClassShell, command: "pwd", call: "Bash_1_8163a792"},
-	"kimi/pre_tool_use_bash.json":         {kind: KindPreTool, session: kimiSession, cwd: "/workspace/project/hooklab", tool: "Bash", class: ClassShell, command: "pwd", call: "Bash_1_8163a792"},
-	"kimi/pre_tool_use_write_denied.json": {kind: KindPreTool, session: kimiSession, cwd: "/workspace/project/hooklab", tool: "Write", class: ClassEdit, paths: []string{"deny-me.txt"}, call: "Write_0_a89dd82f"},
-	"kimi/sessionstart.json":              {kind: KindSessionStart, session: kimiSession, cwd: "/workspace/project/hooklab"},
-	"kimi/userpromptsubmit.json":          {kind: KindPrompt, session: kimiSession, cwd: "/workspace/project/hooklab"},
+	"kimi/posttooluse.json":                    {kind: KindPostTool, session: kimiSession, cwd: "/workspace/project/hooklab", tool: "Bash", class: ClassShell, command: "pwd", call: "Bash_1_8163a792"},
+	"kimi/pre_tool_use_bash.json":              {kind: KindPreTool, session: kimiSession, cwd: "/workspace/project/hooklab", tool: "Bash", class: ClassShell, command: "pwd", call: "Bash_1_8163a792"},
+	"kimi/pre_tool_use_write_denied.json":      {kind: KindPreTool, session: kimiSession, cwd: "/workspace/project/hooklab", tool: "Write", class: ClassEdit, paths: []string{"deny-me.txt"}, call: "Write_0_a89dd82f"},
+	"kimi/posttooluse_fetchurl.json":           {kind: KindPostTool, session: kimiBuiltinsSession, cwd: proj, tool: "FetchURL", class: ClassOther, call: "tool_aXnV1KxCMZhR0gVqo3z3rtg4"},
+	"kimi/pre_tool_use_fetchurl.json":          {kind: KindPreTool, session: kimiBuiltinsSession, cwd: proj, tool: "FetchURL", class: ClassOther, call: "tool_aXnV1KxCMZhR0gVqo3z3rtg4"},
+	"kimi/posttooluse_todolist_done.json":      {kind: KindPostTool, session: kimiBuiltinsSession, cwd: proj, tool: "TodoList", class: ClassOther, call: "tool_YER7tQWcoBmhaknxb77gNrAv"},
+	"kimi/pre_tool_use_todolist_done.json":     {kind: KindPreTool, session: kimiBuiltinsSession, cwd: proj, tool: "TodoList", class: ClassOther, call: "tool_YER7tQWcoBmhaknxb77gNrAv"},
+	"kimi/posttooluse_todolist_fetching.json":  {kind: KindPostTool, session: kimiBuiltinsSession, cwd: proj, tool: "TodoList", class: ClassOther, call: "tool_Jn5nDbHN1vpG7Gkl8akKzc2b"},
+	"kimi/pre_tool_use_todolist_fetching.json": {kind: KindPreTool, session: kimiBuiltinsSession, cwd: proj, tool: "TodoList", class: ClassOther, call: "tool_Jn5nDbHN1vpG7Gkl8akKzc2b"},
+	"kimi/posttooluse_todolist_reading.json":   {kind: KindPostTool, session: kimiBuiltinsSession, cwd: proj, tool: "TodoList", class: ClassOther, call: "tool_7vs87HcwvbpLn55TA1v7kqBo"},
+	"kimi/pre_tool_use_todolist_reading.json":  {kind: KindPreTool, session: kimiBuiltinsSession, cwd: proj, tool: "TodoList", class: ClassOther, call: "tool_7vs87HcwvbpLn55TA1v7kqBo"},
+	"kimi/sessionstart.json":                   {kind: KindSessionStart, session: kimiSession, cwd: "/workspace/project/hooklab"},
+	"kimi/userpromptsubmit.json":               {kind: KindPrompt, session: kimiSession, cwd: "/workspace/project/hooklab"},
 	// Captured by kimi-home-iris (Kimi 2.6.1, scratch TUI) right after /clear: a new session id,
 	// and source "startup", not "clear".
 	"kimi/sessionstart_clear.json": {kind: KindSessionStart, session: "session_ed6d97b7-bcca-4709-9357-ce4864358892", cwd: "/workspace/project/hooklab"},

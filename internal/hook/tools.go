@@ -16,7 +16,9 @@ func classifyTool(name string, mcp bool) (ToolClass, bool) {
 	if low == "mcp__node_repl__js" {
 		return ClassShell, false
 	}
-	if mcp || strings.HasPrefix(low, "mcp__") || strings.HasPrefix(low, "mcp:") {
+	// Antigravity 1.5.16's call_mcp_tool is its generic MCP dispatcher: the capture in
+	// testdata/antigravity/pre_tool_use_call_mcp_tool.json carries ServerName and ToolName.
+	if mcp || low == "call_mcp_tool" || strings.HasPrefix(low, "mcp__") || strings.HasPrefix(low, "mcp:") {
 		return ClassMCP, false
 	}
 	switch low {
@@ -33,9 +35,19 @@ func classifyTool(name string, mcp bool) (ToolClass, bool) {
 	// remains the checkpoint.
 	case "bash", "powershell", "shell", "run_terminal_command", "run_command", "monitor":
 		return ClassShell, false
-	case "read", "view", "grep", "glob", "ls":
+	// Antigravity 1.5.16's read_file capture in testdata/antigravity has only a Path argument,
+	// decoded through the same path keys as Claude Code's Read.
+	case "read", "view", "grep", "glob", "ls", "read_file":
 		return ClassRead, false
 	case "toolsearch", "spawn_subagent", "task", "agent", "todowrite", "webfetch", "websearch", "skill":
+		return ClassOther, false
+	// Antigravity 1.5.16 captures in testdata/antigravity show update_steps and manage_task
+	// carrying plan/task state and search_web carrying a query, with no file arguments.
+	case "update_steps", "manage_task", "search_web":
+		return ClassOther, false
+	// Kimi Code 2.7.3 captures in testdata/kimi show TodoList carrying plan state and FetchURL
+	// only a URL. FetchURL's output_path belongs to tool_output, not to its input arguments.
+	case "todolist", "fetchurl":
 		return ClassOther, false
 	// CronCreate and CronDelete deliberately remain unknown: durable jobs write
 	// .claude/scheduled_tasks.json.

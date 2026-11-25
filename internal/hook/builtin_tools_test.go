@@ -1,6 +1,7 @@
 package hook
 
 import (
+	"bytes"
 	"encoding/json"
 	"os"
 	"strings"
@@ -12,7 +13,8 @@ import (
 // joins a tool's namespace and name: its rollouts record
 // {"namespace":"collaboration","name":"spawn_agent"}, which the hook sees as
 // "collaborationspawn_agent". Claude Code's names are backed by captures in testdata/claude from
-// 2.1.319 on Windows and 2.1.331 on Linux/WSL, which the golden test decodes. No Codex payload
+// 2.1.319 on Windows and 2.1.331 on Linux/WSL, which the golden test decodes. Antigravity 1.5.16
+// and Kimi Code 2.7.3 names are backed by Linux/WSL captures from 2026-11-25. No Codex payload
 // captures exist yet: Codex runs a new hook only after a person has trusted it.
 func TestBuiltinToolsAreKnown(t *testing.T) {
 	for name, want := range map[string]ToolClass{
@@ -32,6 +34,15 @@ func TestBuiltinToolsAreKnown(t *testing.T) {
 		"TaskStop":         ClassOther,
 		"ScheduleWakeup":   ClassOther,
 		"Monitor":          ClassShell,
+		// Antigravity
+		"read_file":     ClassRead,
+		"update_steps":  ClassOther,
+		"manage_task":   ClassOther,
+		"search_web":    ClassOther,
+		"call_mcp_tool": ClassMCP,
+		// Kimi Code
+		"TodoList": ClassOther,
+		"FetchURL": ClassOther,
 	} {
 		class, unknown := classifyTool(name, false)
 		if class != want || unknown {
@@ -73,6 +84,101 @@ func TestClaudeBuiltinsAllowWithoutObservation(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func assertToolEventAllow(t *testing.T, client Client, eventName string, out Output) {
+	t.Helper()
+	want := Encode(Event{Client: client, Kind: kindFrom(eventName, "")}, Decision{Action: ActionAllow})
+	if out.Exit != want.Exit || !bytes.Equal(out.Stdout, want.Stdout) {
+		t.Fatalf("got stdout %q stderr %q exit %d; want stdout %q exit %d", out.Stdout, out.Stderr, out.Exit, want.Stdout, want.Exit)
+	}
+}
+
+// Every captured Antigravity and Kimi built-in, including generic MCP dispatch, returns the exact
+// allow output without a hub call or an observation. Golden expectations cover path extraction.
+func TestAntigravityAndKimiBuiltinsAllowWithoutObservation(t *testing.T) {
+	for _, tc := range []struct {
+		client    Client
+		pre, post string
+	}{
+		{ClientAntigravity, "pre_tool_use_read_file", "post_tool_use_read_file"},
+		{ClientAntigravity, "pre_tool_use_update_steps", "post_tool_use_update_steps"},
+		{ClientAntigravity, "pre_tool_use_update_steps_done", "post_tool_use_update_steps_done"},
+		{ClientAntigravity, "pre_tool_use_search_web", "post_tool_use_search_web"},
+		{ClientAntigravity, "pre_tool_use_call_mcp_tool", "post_tool_use_call_mcp_tool"},
+		{ClientAntigravity, "pre_tool_use_manage_task", "post_tool_use_manage_task"},
+		{ClientKimi, "pre_tool_use_todolist_reading", "posttooluse_todolist_reading"},
+		{ClientKimi, "pre_tool_use_todolist_fetching", "posttooluse_todolist_fetching"},
+		{ClientKimi, "pre_tool_use_todolist_done", "posttooluse_todolist_done"},
+		{ClientKimi, "pre_tool_use_fetchurl", "posttooluse_fetchurl"},
+	} {
+		for _, name := range []string{tc.pre, tc.post} {
+			t.Run(string(tc.client)+"/"+name, func(t *testing.T) {
+				client := string(tc.client)
+				payload, err := os.ReadFile("testdata/" + client + "/" + name + ".json")
+				if err != nil {
+					t.Fatal(err)
+				}
+				env := failureEnv(t)
+				calls := 0
+				out := Runner{
+					ClientName: client,
+					EventName:  argvEvent(client, name+".json"),
+					Stdin:      bytes.NewReader(payload),
+					Getenv:     env,
+					Hub:        &countingHub{fn: func() { calls++ }},
+					after:      never,
+					logAfter:   never,
+				}.Run()
+				assertToolEventAllow(t, tc.client, argvEvent(client, name+".json"), out)
+				if len(out.Stderr) != 0 || calls != 0 {
+					t.Fatalf("stderr %q, hub calls %d", out.Stderr, calls)
+				}
+				observations, err := ReadRecentObservations(env("IRIS_TOKEN_FILE"), 10)
+				if err != nil || len(observations) != 0 {
+					t.Fatalf("observations %v: %v", observations, err)
+				}
+			})
+		}
+	}
+}
+
+func TestAntigravityCallMCPToolMatchesOrdinaryMCP(t *testing.T) {
+	for _, name := range []string{"pre_tool_use_call_mcp_tool", "post_tool_use_call_mcp_tool"} {
+		t.Run(name, func(t *testing.T) {
+			payload, err := os.ReadFile("testdata/antigravity/" + name + ".json")
+			if err != nil {
+				t.Fatal(err)
+			}
+			ordinary := bytes.Replace(payload, []byte(`"name":"call_mcp_tool"`), []byte(`"name":"mcp__iris__whoami"`), 1)
+			if bytes.Equal(ordinary, payload) {
+				t.Fatal("MCP tool name was not replaced")
+			}
+			run := func(input []byte) (Output, int) {
+				calls := 0
+				out := Runner{
+					ClientName: "antigravity",
+					EventName:  argvEvent("antigravity", name+".json"),
+					Stdin:      bytes.NewReader(input),
+					Getenv:     failureEnv(t),
+					Hub:        &countingHub{fn: func() { calls++ }},
+					after:      never,
+					logAfter:   never,
+				}.Run()
+				return out, calls
+			}
+			got, gotCalls := run(payload)
+			want, wantCalls := run(ordinary)
+			if got.Exit != want.Exit || !bytes.Equal(got.Stdout, want.Stdout) ||
+				!bytes.Equal(got.Stderr, want.Stderr) || gotCalls != wantCalls {
+				t.Fatalf("dispatcher %+v (%d calls); ordinary MCP %+v (%d calls)", got, gotCalls, want, wantCalls)
+			}
+			assertToolEventAllow(t, ClientAntigravity, argvEvent("antigravity", name+".json"), got)
+			if gotCalls != 0 {
+				t.Fatalf("hub calls %d", gotCalls)
+			}
+		})
 	}
 }
 
