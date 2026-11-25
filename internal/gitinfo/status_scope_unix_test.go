@@ -4,7 +4,9 @@ package gitinfo
 
 import (
 	"context"
+	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -30,12 +32,24 @@ func TestEachScopeAsksGitForItsMode(t *testing.T) {
 	}
 }
 
-// A status whose output passes the cap fails, and its attempt says the cap ended it, so the
-// breaker never reads it as a slow git.
+// A status whose output passes the cap fails with ErrStatusTooLarge even when git exits with
+// SIGPIPE, and its attempt says the cap ended it, so the breaker never reads it as a slow git.
 func TestACappedStatusSaysSo(t *testing.T) {
-	fakeGit(t, "head -c 60000 /dev/zero\n")
+	for _, size := range []string{"60000", "262144"} {
+		t.Run(size, func(t *testing.T) {
+			fakeGit(t, "head -c "+size+" /dev/zero\n")
+			a := &Attempt{}
+			_, err := StatusScope(context.Background(), t.TempDir(), FullScope, a)
+			if !errors.Is(err, ErrStatusTooLarge) || !a.Started() || !a.Capped() {
+				t.Fatalf("size %s: started %t, capped %t: %v", size, a.Started(), a.Capped(), err)
+			}
+		})
+	}
+	fakeGit(t, "exit 1\n")
 	a := &Attempt{}
-	if _, err := StatusScope(context.Background(), t.TempDir(), FullScope, a); err == nil || !a.Started() || !a.Capped() {
-		t.Fatalf("started %t, capped %t: %v", a.Started(), a.Capped(), err)
+	_, err := StatusScope(context.Background(), t.TempDir(), FullScope, a)
+	var exited *exec.ExitError
+	if !errors.As(err, &exited) || errors.Is(err, ErrStatusTooLarge) || a.Capped() {
+		t.Fatalf("ordinary exit failure: capped %t: %v", a.Capped(), err)
 	}
 }

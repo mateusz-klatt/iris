@@ -8,6 +8,7 @@ import (
 	"syscall"
 	"testing"
 
+	"github.com/mateusz-klatt/iris/internal/gitinfo"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 )
 
@@ -23,20 +24,24 @@ func TestFailureCategoryKnowsWhatFailureTextWrites(t *testing.T) {
 		t.Fatalf("no type error: %v", err)
 	}
 	cases := map[error]string{
-		context.DeadlineExceeded:              "hook deadline exceeded",
-		context.Canceled:                      "hook operation canceled",
-		errNoSession:                          errNoSession.Error(),
-		failPanic:                             string(failPanic),
-		failPanicShell:                        string(failPanicShell),
-		failUnknownClient:                     string(failUnknownClient),
-		failNoHub:                             string(failNoHub),
-		failNoPaths:                           string(failNoPaths),
-		failBadTouch:                          string(failBadTouch),
-		hookFailure(shellOverBudget):          shellOverBudget,
-		syntax:                                "invalid JSON",
-		mismatch:                              "invalid JSON field type",
-		&hubclient.Error{Code: "lost"}:        "hub request failed: lost",
-		&hubclient.Error{Code: "teapot"}:      "hub request failed",
+		context.DeadlineExceeded:         "hook deadline exceeded",
+		context.Canceled:                 "hook operation canceled",
+		errNoSession:                     errNoSession.Error(),
+		failPanic:                        string(failPanic),
+		failPanicShell:                   string(failPanicShell),
+		failUnknownClient:                string(failUnknownClient),
+		failNoHub:                        string(failNoHub),
+		failNoPaths:                      string(failNoPaths),
+		failBadTouch:                     string(failBadTouch),
+		hookFailure(shellOverBudget):     shellOverBudget,
+		syntax:                           "invalid JSON",
+		mismatch:                         "invalid JSON field type",
+		&hubclient.Error{Code: "lost"}:   "hub request failed: lost",
+		&hubclient.Error{Code: "teapot"}: "hub request failed",
+		&hubclient.Error{Code: "too_large", Details: json.RawMessage(`{"limit":"claim_limit"}`)}:        "hub request failed: too_large (claim_limit)",
+		&hubclient.Error{Code: "too_large", Details: json.RawMessage(`{"limit":"request_body_limit"}`)}: "hub request failed: too_large (request_body_limit)",
+		&hubclient.Error{Code: "too_large"}:   "hub request failed: too_large (unknown)",
+		gitinfo.ErrStatusTooLarge:             failStatusTooLarge,
 		syscall.Errno(2):                      syscall.Errno(2).Error(),
 		io.ErrUnexpectedEOF:                   "incomplete hook input or hub response",
 		errors.New("secret at /home/someone"): "dependency failure",
@@ -53,11 +58,16 @@ func TestFailureCategoryKnowsWhatFailureTextWrites(t *testing.T) {
 func TestFailureCategoryAndStageHideUnknownText(t *testing.T) {
 	for _, text := range []string{
 		"unknown tool secret-tool", "hub request failed: secret-code", "Post https://secret.example/v1",
+		"hub request failed: too_large (secret)", "hub request failed: too_large ()",
 		"invalid JSONsecret", "", "hook deadline exceeded ",
 	} {
 		if got := FailureCategory(text); got != "other" {
 			t.Errorf("FailureCategory(%q) = %q, want other", text, got)
 		}
+	}
+	// An older log line without a limit detail stays categorized as too_large.
+	if got := FailureCategory("hub request failed: too_large"); got != "hub request failed: too_large" {
+		t.Errorf("FailureCategory(legacy too_large) = %q", got)
 	}
 	for _, stage := range []string{"secret stage", "", "Session"} {
 		if got := FailureStage(stage); got != "other" {

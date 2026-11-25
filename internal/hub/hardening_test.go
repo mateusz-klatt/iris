@@ -51,6 +51,15 @@ func TestStatusAndBodyLimits(t *testing.T) {
 			if w.Code != 413 {
 				t.Fatal(path, chunked, w.Code, w.Body.String())
 			}
+			var errEnv struct {
+				Error struct {
+					Code    string         `json:"code"`
+					Details map[string]any `json:"details"`
+				} `json:"error"`
+			}
+			if err := json.Unmarshal(w.Body.Bytes(), &errEnv); err != nil || errEnv.Error.Code != "too_large" || errEnv.Error.Details["limit"] != "request_body_limit" {
+				t.Fatalf("%s chunked=%t: %s (%v)", path, chunked, w.Body.String(), err)
+			}
 		}
 	}
 }

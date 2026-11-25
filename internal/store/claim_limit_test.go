@@ -8,6 +8,19 @@ import (
 	"time"
 )
 
+func expectTooLargeLimit(t *testing.T, s *Store, op string, r Request, want string) {
+	t.Helper()
+	_, err := s.Call(context.Background(), op, r)
+	var e *Error
+	if !errors.As(err, &e) || e.Code != "too_large" {
+		t.Fatalf("%s: got %v, wanted too_large", op, err)
+	}
+	details, _ := e.Details.(map[string]any)
+	if details["limit"] != want {
+		t.Fatalf("%s: details = %#v, want limit %q", op, e.Details, want)
+	}
+}
+
 func TestClaimLimit(t *testing.T) {
 	s, _, _ := testStore(t)
 	r, out := session(t, s, 1)
@@ -17,8 +30,9 @@ func TestClaimLimit(t *testing.T) {
 	}
 	call(t, s, "touch", touchRequest(r, "fill", paths...))
 	call(t, s, "touch", touchRequest(r, "reuse", paths...))
-	expectError(t, s, "claim", claimRequest(r, "extra", "extra", "exact"), "too_large")
-	expectError(t, s, "touch", touchRequest(r, "atomic", "extra-a", "extra-b"), "too_large")
+	expectTooLargeLimit(t, s, "claim", claimRequest(r, "extra", "extra", "exact"), "claim_limit")
+	expectTooLargeLimit(t, s, "touch", touchRequest(r, "atomic", "extra-a", "extra-b"), "claim_limit")
+	expectTooLargeLimit(t, s, "touch_files", filesTouch(r, "files-atomic", ClaimGroup{Worktree: "/repo/w1", RemoteURL: "https://example.com/team/project.git", RootCommit: "root", Paths: []string{"extra-c"}}), "claim_limit")
 	rows := call(t, s, "claims", Request{RepositoryID: out["repository_id"].(string)})
 	if len(rows["claims"].([]map[string]any)) != 500 {
 		t.Fatal(rows)
@@ -58,7 +72,7 @@ func TestTouchAboveTheLimitKeepsPathsAlreadyHeld(t *testing.T) {
 	if out["action"] != "allow" {
 		t.Fatalf("%v", out)
 	}
-	expectError(t, s, "touch", touchRequest(r, "new", paths[0], "other"), "too_large")
+	expectTooLargeLimit(t, s, "touch", touchRequest(r, "new", paths[0], "other"), "claim_limit")
 }
 
 func TestTransactionNeverStartsOnACancelledContext(t *testing.T) {

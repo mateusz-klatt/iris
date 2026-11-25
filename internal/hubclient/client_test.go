@@ -252,3 +252,51 @@ func TestEndedThroughRefusalEvidence(t *testing.T) {
 		})
 	}
 }
+
+func TestTooLargeLimitDetails(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, want string
+	}{
+		{name: "claim limit", body: `{"error":{"code":"too_large","message":"maximum 500 live claims","details":{"limit":"claim_limit"}}}`, want: LimitClaim},
+		{name: "request body limit", body: `{"error":{"code":"too_large","message":"body exceeds limit","details":{"limit":"request_body_limit"}}}`, want: LimitRequestBody},
+		{name: "older hub no details", body: `{"error":{"code":"too_large","message":"too large"}}`, want: ""},
+		{name: "empty details", body: `{"error":{"code":"too_large","message":"too large","details":{}}}`, want: ""},
+		{name: "unrecognized limit", body: `{"error":{"code":"too_large","message":"too large","details":{"limit":"other_limit"}}}`, want: ""},
+		{name: "non-string limit", body: `{"error":{"code":"too_large","message":"too large","details":{"limit":42}}}`, want: ""},
+		{name: "non-object details", body: `{"error":{"code":"too_large","message":"too large","details":[]}}`, want: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				w.WriteHeader(http.StatusRequestEntityTooLarge)
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+			c := &Client{Config: staticConfig{url: srv.URL, token: "tok"}}
+			_, err := c.Touch(context.Background(), TouchRequest{ExecutionID: "ex_1", Generation: 1, ToolCallID: "t1", Paths: []string{"a.go"}})
+			var hubErr *Error
+			if !errors.As(err, &hubErr) || hubErr.Code != "too_large" {
+				t.Fatalf("Touch error = %v, want *Error{Code: too_large}", err)
+			}
+			if got := hubErr.Limit(); got != tc.want {
+				t.Fatalf("Limit() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+	for _, tc := range []struct {
+		name    string
+		details any
+		want    string
+	}{
+		{name: "programmatic claim limit", details: map[string]any{"limit": LimitClaim}, want: LimitClaim},
+		{name: "programmatic body limit", details: map[string]any{"limit": LimitRequestBody}, want: LimitRequestBody},
+		{name: "programmatic unknown", details: map[string]any{"limit": "other"}, want: ""},
+		{name: "nil details", details: nil, want: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			err := &Error{Code: "too_large", Details: tc.details}
+			if got := err.Limit(); got != tc.want {
+				t.Fatalf("Limit() = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}

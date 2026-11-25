@@ -301,6 +301,37 @@ func (e *Error) IsEndedThroughRefusal(floor int) bool {
 	return valid && highest < floor
 }
 
+const (
+	// LimitClaim identifies a refusal for exceeding 500 live claims per Execution.
+	LimitClaim = "claim_limit"
+	// LimitRequestBody identifies a refusal for exceeding the hub's HTTP request body limit.
+	LimitRequestBody = "request_body_limit"
+)
+
+// Limit returns the allowlisted limit identifier from details.limit when present,
+// or empty when absent, malformed, or unrecognized.
+func (e *Error) Limit() string {
+	var limit string
+	switch d := e.Details.(type) {
+	case json.RawMessage:
+		var details struct {
+			Limit string `json:"limit"`
+		}
+		if json.Unmarshal(d, &details) != nil {
+			return ""
+		}
+		limit = details.Limit
+	case map[string]any:
+		limit, _ = d["limit"].(string)
+	}
+	switch limit {
+	case LimitClaim, LimitRequestBody:
+		return limit
+	default:
+		return ""
+	}
+}
+
 // Do issues an authenticated JSON request. Callers keep retry keys stable across retries.
 func (c *Client) Do(ctx context.Context, method, path string, body, dest any) error {
 	if c == nil || c.Config == nil {

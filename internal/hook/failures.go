@@ -18,6 +18,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/mateusz-klatt/iris/internal/gitinfo"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 )
 
@@ -119,7 +120,11 @@ var fixedFailures = []string{
 	string(failPanic), string(failPanicShell), string(failUnknownClient), string(failNoHub),
 	string(failNoPaths), string(failBadTouch), string(failSessionsLock), string(errRestoreFloor), shellOverBudget, shellScopeUnknown, errNoSession.Error(),
 	"hook deadline exceeded", "hook operation canceled", "incomplete hook input or hub response",
-	"hub request failed", failHubRedirect, failHubTooLarge, failHubNoExecution, failHubNoAction,
+	"hub request failed",
+	"hub request failed: too_large (" + hubclient.LimitClaim + ")",
+	"hub request failed: too_large (" + hubclient.LimitRequestBody + ")",
+	"hub request failed: too_large (unknown)",
+	failHubRedirect, failHubTooLarge, failHubNoExecution, failHubNoAction, failStatusTooLarge,
 }
 
 // The hub client's own failures that carry no hub error envelope, each logged as a fixed text.
@@ -128,6 +133,7 @@ const (
 	failHubTooLarge    = "hub response too large"
 	failHubNoExecution = "hub returned no execution id"
 	failHubNoAction    = "hub returned no action"
+	failStatusTooLarge = "git status output exceeds cap"
 	// failHubStatus prefixes the status code of an answer without an envelope, from the hub or
 	// from a proxy in front of it, as during a deploy.
 	failHubStatus = "hub answered HTTP "
@@ -268,6 +274,9 @@ func failureText(err error) string {
 	}
 	var hub *hubclient.Error
 	if errors.As(err, &hub) {
+		if hub.Code == "too_large" {
+			return tooLargeFailure(hub.Limit())
+		}
 		if slices.Contains(hubCodes, hub.Code) {
 			return "hub request failed: " + hub.Code
 		}
@@ -285,6 +294,7 @@ func failureText(err error) string {
 		{hubclient.ErrResponseTooLarge, failHubTooLarge},
 		{hubclient.ErrNoExecution, failHubNoExecution},
 		{hubclient.ErrNoAction, failHubNoAction},
+		{gitinfo.ErrStatusTooLarge, failStatusTooLarge},
 	} {
 		if errors.Is(err, known.err) {
 			return known.text
@@ -310,6 +320,15 @@ func failureText(err error) string {
 		return "incomplete hook input or hub response"
 	}
 	return fmt.Sprintf("dependency failure (%T)", err)
+}
+
+func tooLargeFailure(limit string) string {
+	switch limit {
+	case hubclient.LimitClaim, hubclient.LimitRequestBody:
+		return "hub request failed: too_large (" + limit + ")"
+	default:
+		return "hub request failed: too_large (unknown)"
+	}
 }
 func (r Runner) recordFailure(stage string, err error, shape *PayloadShape) {
 	r.record(stage, failureText(err), shape)

@@ -41,6 +41,10 @@ func TestFailuresAreGradedByStage(t *testing.T) {
 		{"only skipped session-file operations", strings.Repeat(entry(integrate.Claude, "session files", "sessions directory lock held past its budget"), 2), StatusOK, "skipped in 24 h: 2 session-file operation(s), which may delay an attention note, a wake's consumption or the cleanup of session files; the hooks' allow or deny was unaffected", 0},
 		{"a skipped one beside a slow git status", overBudget(integrate.Claude, 1) + entry(integrate.Claude, "session files", "dependency failure (*os.LinkError)"), StatusOK, "degraded: 1 shell reconciliation(s) ran past their budget in 24 h; skipped in 24 h: 1 session-file operation(s)", 0},
 		{"a skipped one beside a broken hook", entry(integrate.Claude, "session files", "sessions directory lock held past its budget") + entry(integrate.Claude, "decode", "invalid JSON at byte 1"), StatusSilent, "pre_tool decode: invalid JSON at byte 1, at 11:00 UTC; skipped in 24 h: 1 session-file operation(s)", 1},
+		{"too_large claim limit grouped", strings.Repeat(entry(integrate.Claude, "touch", "hub request failed: too_large (claim_limit)"), 3), StatusSilent, "pre_tool touch: hub request failed: too_large (claim_limit) ×3, last at", 1},
+		{"too_large request body limit", entry(integrate.Claude, "touch", "hub request failed: too_large (request_body_limit)"), StatusSilent, "pre_tool touch: hub request failed: too_large (request_body_limit), at", 1},
+		{"too_large unknown limit", entry(integrate.Claude, "shell session", "hub request failed: too_large (unknown)"), StatusSilent, "pre_tool shell session: hub request failed: too_large (unknown), at", 1},
+		{"git status output exceeds cap", strings.Repeat(entry(integrate.Claude, "shell status", "git status output exceeds cap"), 12), StatusSilent, "pre_tool shell status: git status output exceeds cap ×12, last at", 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
