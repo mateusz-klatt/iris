@@ -15,10 +15,12 @@ func (copilotAdapter) Decode(eventName string, payload []byte) (Event, error) {
 		return Event{}, err
 	}
 	ev := Event{
-		Client:    ClientCopilot,
-		Kind:      kindFrom(eventName, ""),
-		SessionID: p.SessionID,
-		CWD:       p.CWD,
+		Client:            ClientCopilot,
+		Kind:              kindFrom(eventName, ""),
+		SessionID:         p.SessionID,
+		ConversationID:    p.SessionID,
+		NamespaceVerified: p.SessionID != "",
+		CWD:               p.CWD,
 	}
 	if p.ToolName != "" {
 		applyTool(&ev, p.ToolName, p.ToolArgs, false)

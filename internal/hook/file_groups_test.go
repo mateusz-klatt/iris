@@ -138,7 +138,8 @@ func TestAnEditIsTouchedByCheckoutOnlyWhereTheHubTakesIt(t *testing.T) {
 	var plain []hubclient.TouchRequest
 	capable := fileHub{capabilities: []string{"shell_scope", "file_claims"}, files: &files, plain: &plain}
 	out := run(capable, filepath.Join(root, "frontend", "src", "x.ts"))
-	if len(files) != 1 || len(plain) != 0 || files[0].ToolCallID != "call-1" || files[0].Groups[0].Worktree != filepath.Join(root, "frontend") || files[0].Groups[0].Paths[0] != "src/x.ts" {
+	wantCall := namespaceToolCallID(Event{Client: ClientClaude, ConversationID: "s1", ToolCallID: "call-1", NamespaceVerified: true})
+	if len(files) != 1 || len(plain) != 0 || files[0].ToolCallID != wantCall || files[0].Groups[0].Worktree != filepath.Join(root, "frontend") || files[0].Groups[0].Paths[0] != "src/x.ts" {
 		t.Fatalf("grouped %+v plain %+v", files, plain)
 	}
 	if !strings.Contains(string(out.Stdout), `"permissionDecision":"deny"`) || !strings.Contains(string(out.Stdout), "in repository frontend") {

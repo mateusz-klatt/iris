@@ -52,19 +52,38 @@ const (
 
 // Event is the canonical hook input. Paths are as the client wrote them.
 type Event struct {
-	Client          Client
-	Kind            Kind
-	SessionID       string
-	ParentSessionID string
-	CWD             string
-	ToolName        string
-	ToolClass       ToolClass
-	Paths           []string
-	Command         string
-	ToolCallID      string
-	RenameFrom      string
-	RenameTo        string
-	UnknownTool     bool
+	Client         Client
+	Kind           Kind
+	SessionID      string
+	ConversationID string
+	// NamespaceVerified means ConversationID is the client conversation identity evidenced by the
+	// captures below, not an Iris Agent or Execution. False means "namespace unverified" and
+	// preserves the legacy raw claim retry key.
+	//
+	// Client      | Capture field                   | Per-conversation evidence
+	// Claude      | session_id                      | SessionStart and Pre/PostToolUse-write agree; other captured sessions differ
+	// Codex       | session_id                      | SessionStart and Pre/PostToolUse-apply_patch agree; resume and other sessions differ
+	// Copilot     | sessionId                       | sessionStart and pre/postToolUse-apply_patch agree; the second captured session differs
+	// Cursor      | conversation_id (== session_id) | sessionStart, preToolUse and sessionEnd agree; the plugin and stop conversations differ
+	// Antigravity | conversationId                  | pre/post_tool_use agree at stepIdx 3; other captured conversations differ
+	// Grok        | session_id (== sessionId)       | SessionStart and Pre/PostToolUse agree; shell and parent conversations differ
+	// Kimi        | session_id                      | sessionstart and pre/posttooluse agree; sessionstart_clear has a new ID
+	//
+	// Antigravity's continued conversation keeps conversationId between post_tool_use_wake and
+	// stop_continuation (executionNum 1). The captures contain no same-conversation executionNum
+	// 0/1 pair, so they do not directly prove that transition; research records stable identity
+	// within a session and continuation executions 0..4.
+	NamespaceVerified bool
+	ParentSessionID   string
+	CWD               string
+	ToolName          string
+	ToolClass         ToolClass
+	Paths             []string
+	Command           string
+	ToolCallID        string
+	RenameFrom        string
+	RenameTo          string
+	UnknownTool       bool
 	// Workspaces are extra roots. Antigravity's process cwd is not the repository.
 	Workspaces []string
 	// Prompt is a prompt event's whole prompt, for one comparison only: whether it is the message

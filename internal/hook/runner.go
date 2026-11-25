@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -195,6 +196,7 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		hash := sha256.Sum256(payload)
 		ev.ToolCallID = "payload:" + hex.EncodeToString(hash[:])
 	}
+	ev.ToolCallID = namespaceToolCallID(ev)
 	// Stop asks for a monitor before the repository check. A session outside a git checkout
 	// still needs the wake, and the ask does not call the hub (ADR 025).
 	if out, ok := r.grokMonitorAsk(ev, state.observe); ok {
@@ -579,6 +581,25 @@ func (r Runner) now() time.Time {
 		return r.Now()
 	}
 	return time.Now()
+}
+
+const claimKeyDomain = "iris.hook.claim-retry.v1\x00"
+
+// namespaceToolCallID keeps Agent-scoped retry operations distinct across client conversations.
+// Length prefixes make the tuple unambiguous; only the digest reaches the hub as tool_call_id.
+func namespaceToolCallID(ev Event) string {
+	if !ev.NamespaceVerified || ev.ConversationID == "" {
+		return ev.ToolCallID
+	}
+	var input strings.Builder
+	input.WriteString(claimKeyDomain)
+	for _, part := range []string{string(ev.Client), ev.ConversationID, ev.ToolCallID} {
+		input.WriteString(strconv.Itoa(len(part)))
+		input.WriteByte(':')
+		input.WriteString(part)
+	}
+	digest := sha256.Sum256([]byte(input.String()))
+	return hex.EncodeToString(digest[:])
 }
 
 func needsNetwork(ev Event) bool {
