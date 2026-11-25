@@ -97,7 +97,10 @@ type Request struct {
 	// RetryGeneration is an inclusive registration floor when Generation is zero. It does
 	// not prove ownership of a recovering Execution.
 	RetryGeneration int64 `json:"retry_generation,omitempty"`
-	// EndedThrough refuses registration at or below a generation the client ended locally.
+	// PriorGeneration and PriorExecutionID are the exact proof required by post-window succession.
+	PriorGeneration  int64  `json:"prior_generation,omitempty"`
+	PriorExecutionID string `json:"prior_execution_id,omitempty"`
+	// EndedThrough refuses registration or succession at or below a generation the client ended locally.
 	EndedThrough int64 `json:"ended_through,omitempty"`
 }
 
@@ -111,16 +114,16 @@ type execution struct {
 	ID, AgentID, Repo, Host, Client, Session, Worktree, Branch, State, Name string
 	Generation, Epoch, Deadline, PID, PIDStart, HookSeenMS                  int64
 	Recovery                                                                sql.NullInt64
-	Parent                                                                  sql.NullString
+	Parent, PriorExecutionID, CreationSource, CreationProof                 sql.NullString
 	Single, Heartbeat                                                       bool
 	// Outside says e belongs to its host's context of sessions outside git (ADR 034).
 	Outside bool
 }
 
-const executionSelect = `SELECT e.id,e.agent_id,e.repository_id,e.host_id,e.client,e.session_id,e.worktree,e.branch,e.state,a.name,e.generation,e.boot_epoch,e.deadline_tick_ms,e.client_pid,e.client_pid_start_ms,e.hook_seen_ms,e.recovery_deadline,e.parent_id,e.single_session,e.heartbeat_mode,EXISTS(SELECT 1 FROM RepositoryAlias o WHERE o.alias='outside:'||e.host_id AND o.repository_id=e.repository_id) FROM Execution e JOIN Agent a ON a.id=e.agent_id `
+const executionSelect = `SELECT e.id,e.agent_id,e.repository_id,e.host_id,e.client,e.session_id,e.worktree,e.branch,e.state,a.name,e.generation,e.boot_epoch,e.deadline_tick_ms,e.client_pid,e.client_pid_start_ms,e.hook_seen_ms,e.recovery_deadline,e.parent_id,e.prior_execution_id,e.creation_source,e.creation_proof,e.single_session,e.heartbeat_mode,EXISTS(SELECT 1 FROM RepositoryAlias o WHERE o.alias='outside:'||e.host_id AND o.repository_id=e.repository_id) FROM Execution e JOIN Agent a ON a.id=e.agent_id `
 
 func (e *execution) fields() []any {
-	return []any{&e.ID, &e.AgentID, &e.Repo, &e.Host, &e.Client, &e.Session, &e.Worktree, &e.Branch, &e.State, &e.Name, &e.Generation, &e.Epoch, &e.Deadline, &e.PID, &e.PIDStart, &e.HookSeenMS, &e.Recovery, &e.Parent, &e.Single, &e.Heartbeat, &e.Outside}
+	return []any{&e.ID, &e.AgentID, &e.Repo, &e.Host, &e.Client, &e.Session, &e.Worktree, &e.Branch, &e.State, &e.Name, &e.Generation, &e.Epoch, &e.Deadline, &e.PID, &e.PIDStart, &e.HookSeenMS, &e.Recovery, &e.Parent, &e.PriorExecutionID, &e.CreationSource, &e.CreationProof, &e.Single, &e.Heartbeat, &e.Outside}
 }
 
 func scanExecution(row interface{ Scan(...any) error }) (e execution, err error) {
@@ -571,7 +574,8 @@ func (t *transaction) register(r Request, outside bool) (map[string]any, error) 
 	}
 	ex := id("ex_")
 	tick := t.s.clock.Tick()
-	_, err = t.exec(`INSERT INTO Execution(id,agent_id,repository_id,host_id,client,session_id,generation,worktree,branch,boot_epoch,deadline_tick_ms,lease_renewed_tick_ms,state,parent_id,client_pid,client_pid_start_ms,single_session,heartbeat_mode) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'active',?,?,?,?,?)`, ex, agent, repo, r.Host, r.Client, r.SessionID, generation, r.Worktree, r.Branch, t.s.epoch, tick+lease, tick, parent, r.ClientPID, r.ClientPIDStartMS, r.SingleSession, heartbeat)
+	priorID, creationSource, creationProof := creationProvenance(previous, r)
+	_, err = t.exec(`INSERT INTO Execution(id,agent_id,repository_id,host_id,client,session_id,generation,worktree,branch,boot_epoch,deadline_tick_ms,lease_renewed_tick_ms,state,parent_id,client_pid,client_pid_start_ms,single_session,heartbeat_mode,prior_execution_id,creation_source,creation_proof) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,'active',?,?,?,?,?,?,?,?)`, ex, agent, repo, r.Host, r.Client, r.SessionID, generation, r.Worktree, r.Branch, t.s.epoch, tick+lease, tick, parent, r.ClientPID, r.ClientPIDStartMS, r.SingleSession, heartbeat, priorID, creationSource, creationProof)
 	if err != nil {
 		return nil, err
 	}

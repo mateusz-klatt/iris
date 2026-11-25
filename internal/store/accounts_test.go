@@ -20,9 +20,11 @@ const consoleLegacyScryptHash = "scrypt$16384$8$1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAA
 // trigger names.
 const removeAttentionIdentitySchema = "DROP TRIGGER delivery_attention_seq;\nALTER TABLE Delivery DROP COLUMN attention_seq;\n"
 
-// removeLeaseRenewedTickSchema undoes migration 028 so older-version migration tests can reopen
-// and replay 028 without duplicate-column errors.
-const removeLeaseRenewedTickSchema = "ALTER TABLE Execution DROP COLUMN lease_renewed_tick_ms;\n"
+const removeSuccessionProvenanceSchema = "DROP INDEX IF EXISTS execution_prior;\nALTER TABLE Execution DROP COLUMN creation_proof;\nALTER TABLE Execution DROP COLUMN creation_source;\nALTER TABLE Execution DROP COLUMN prior_execution_id;\n"
+
+// removeLeaseRenewedTickSchema undoes migrations 029 and 028 so older-version migration tests can reopen
+// and replay without duplicate-column errors.
+const removeLeaseRenewedTickSchema = removeSuccessionProvenanceSchema + "ALTER TABLE Execution DROP COLUMN lease_renewed_tick_ms;\n"
 
 // Old-schema fixtures undo only this migration before reconstructing their
 // historical version. Fresh-migration tests remain backed by captured old SQL.

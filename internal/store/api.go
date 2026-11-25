@@ -36,7 +36,7 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 		// A merge plan and a refused merge must leave even expired leases and
 		// delivery attempts untouched. The merge checks liveness without expiring.
 		// An unalias plan likewise changes nothing.
-		if operation != "merge" && operation != "merge_outside" && operation != "unalias" {
+		if operation != "merge" && operation != "merge_outside" && operation != "unalias" && operation != "succeed" {
 			if err := t.expire(); err != nil {
 				return err
 			}
@@ -50,7 +50,7 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 			}
 			r.RepositoryID = e.Repo
 		}
-		registers := operation == "sessions" || operation == "sessions_outside"
+		registers := operation == "sessions" || operation == "sessions_outside" || operation == "succeed"
 		registersShell := shellSession(operation, r)
 		var err error
 		switch operation {
@@ -91,6 +91,8 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 			out, err = t.session(r)
 		case "sessions_outside":
 			out, err = t.sessionOutside(r)
+		case "succeed":
+			out, err = t.succeed(r)
 		case "bind":
 			out, err = t.bind(r)
 		case "heartbeat":
@@ -184,7 +186,7 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 		if (registers || registersShell) && errors.As(err, &lost) && lost.Code == "lost" {
 			return t.registrationLost(r, lost)
 		}
-		if err == nil && (registers || operation == "heartbeat") {
+		if err == nil && ((registers && !t.replayed) || operation == "heartbeat") {
 			ex := r.ExecutionID
 			if registers {
 				ex, _ = out["execution_id"].(string)
@@ -202,6 +204,10 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 		}
 		if err == nil {
 			switch operation {
+			case "succeed":
+				if !t.replayed {
+					err = t.event("", "", "changed", "")
+				}
 			case "sessions", "sessions_outside", "end", "touch", "touch_files", "claim", "claim_files", "release", "messages", "ack":
 				err = t.event("", "", "changed", "")
 			}
