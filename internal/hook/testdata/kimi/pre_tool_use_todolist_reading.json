@@ -1,0 +1,1 @@
+{"hook_event_name":"PreToolUse","session_id":"session_9888b63f-9575-4c70-ab7a-0ec9c032f64c","cwd":"/workspace/project","client_type":"kimi_code_cli","tool_name":"TodoList","tool_input":{"todos":[{"title":"read notes","status":"in_progress"},{"title":"fetch page","status":"pending"}]},"tool_call_id":"tool_7vs87HcwvbpLn55TA1v7kqBo"}

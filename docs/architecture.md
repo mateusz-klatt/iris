@@ -1575,7 +1575,15 @@ was measured, the tool was unknown to Iris, so its writes went unreconciled and 
   Monitor, TaskStop and ScheduleWakeup are backed by captures from 2.1.319 on Windows; Agent,
   PushNotification and SendUserFile are backed by captures from 2.1.331 on Linux/WSL. CronCreate
   and CronDelete also have 2.1.331 captures, but they remain unknown because durable jobs write
-  `.claude/scheduled_tasks.json`; the captures cover only session-only jobs.
+  `.claude/scheduled_tasks.json`; the captures cover only session-only jobs. Antigravity 1.5.16
+  captures on Linux/WSL back `read_file` as a read, `call_mcp_tool` as ordinary MCP dispatch, and
+  `update_steps` and `search_web` as non-editing tools. `manage_task` deliberately stays unknown:
+  `send_input` can resume a command that writes after `run_command` returns, while passive `list`
+  and `status` actions must stay off the network. Per-action classification needs its own captures
+  and design. Kimi Code 2.7.3 captures on Linux/WSL back `TodoList` and `FetchURL` as non-editing
+  tools; all were recorded on 2026-11-25. FetchURL's saved `output_path` appears in `tool_output`, not its input arguments,
+  and is not treated as an edit path. These aliases apply only to their capturing client: a
+  same-named tool from another client remains unknown and observed.
 - Claude Code's Monitor is reconciled like a shell, but its PostToolUse arrives at launch:
   measured on 2.1.319, 590 ms after the call, carrying only the task id, while the command ran
   on. A file its command writes later is not reconciled or claimed, and the same holds for Bash
