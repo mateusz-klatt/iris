@@ -216,6 +216,9 @@ func (c Candidate) Classify() (Classification, error) {
 		if c.CreationProof.Value != "initial" {
 			return Classification{}, errors.New("hubclient: candidate without prior_execution_id must have initial creation_proof")
 		}
+		if c.Generation != 1 {
+			return Classification{}, errors.New("hubclient: initial candidate without prior_execution_id requires generation 1")
+		}
 	} else {
 		if c.PriorExecutionID.Value == "" || c.PriorExecutionID.Value == c.ExecutionID {
 			return Classification{}, errors.New("hubclient: invalid prior_execution_id")

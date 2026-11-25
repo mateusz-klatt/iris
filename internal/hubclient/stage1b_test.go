@@ -191,6 +191,11 @@ func TestCandidateClassifyRulesAndHelpers(t *testing.T) {
 			{"unknown creation_source", func(c *Candidate) { c.CreationSource.Value = "evil" }},
 			{"unknown creation_proof", func(c *Candidate) { c.CreationProof.Value = "bogus" }},
 			{"absent prior with non-initial proof", func(c *Candidate) { c.PriorExecutionID.Valid = false }},
+			{"initial proof with null prior at generation > 1", func(c *Candidate) {
+				c.PriorExecutionID.Valid = false
+				c.CreationSource.Value = "hook"
+				c.CreationProof.Value = "initial"
+			}},
 			{"empty prior string", func(c *Candidate) { c.PriorExecutionID.Value = "" }},
 			{"self prior_execution_id", func(c *Candidate) { c.PriorExecutionID.Value = "ex_2" }},
 			{"prior with generation 1", func(c *Candidate) { c.Generation = 1 }},
