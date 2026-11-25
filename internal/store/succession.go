@@ -14,6 +14,24 @@ func normalizeCreationSource(source string) string {
 	}
 }
 
+func nullableString(s sql.NullString) any {
+	if !s.Valid {
+		return nil
+	}
+	return s.String
+}
+
+func isHooklessSuccessionChild(e execution) bool {
+	return e.CreationSource.String == "shim" && e.CreationProof.String == "shim_succession" && e.HookSeenMS == 0
+}
+
+func allowHooklessHeartbeat(e execution, r Request) error {
+	if isHooklessSuccessionChild(e) && (r.Source != "shim" || !r.SuccessionProof) {
+		return fail("lost", "hookless succession child requires shim succession_proof opt-in")
+	}
+	return nil
+}
+
 func creationProvenance(previous execution, r Request) (priorID any, source, proof string) {
 	source = normalizeCreationSource(r.Source)
 	if previous.ID == "" {

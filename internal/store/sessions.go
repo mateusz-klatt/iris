@@ -102,6 +102,9 @@ type Request struct {
 	PriorExecutionID string `json:"prior_execution_id,omitempty"`
 	// EndedThrough refuses registration or succession at or below a generation the client ended locally.
 	EndedThrough int64 `json:"ended_through,omitempty"`
+	// SuccessionProof opts a shim bind or heartbeat into attaching to or renewing a hookless
+	// succession child.
+	SuccessionProof bool `json:"succession_proof,omitempty"`
 }
 
 // Receipt names one delivery a fetch returned, at the attempt that fetch gave it.
@@ -144,13 +147,26 @@ func (t *transaction) live(ex string, generation int64) (execution, error) {
 	return e, nil
 }
 
-// bound is what an Execution's binding tells its MCP server: its identity, and its worktree with
-// the hub's capabilities, from which an explicit claim's path is placed in its checkout (ADR 033).
+// bound is what an Execution's binding tells its MCP server: its identity, classification,
+// hook reachability, and worktree with the hub's capabilities, from which an explicit claim's path
+// is placed in its checkout (ADR 033, ADR 039).
 //
 // An Execution outside git also says so, and its MCP server refuses a claim before it reads the
 // filesystem (ADR 034).
 func bound(e execution) map[string]any {
-	out := map[string]any{"execution_id": e.ID, "generation": e.Generation, "repository_id": e.Repo, "agent": map[string]any{"id": e.AgentID, "name": e.Name}, "session_id": e.Session, "worktree": e.Worktree, "capabilities": shellCapabilities()}
+	out := map[string]any{
+		"execution_id":       e.ID,
+		"generation":         e.Generation,
+		"repository_id":      e.Repo,
+		"agent":              map[string]any{"id": e.AgentID, "name": e.Name},
+		"session_id":         e.Session,
+		"worktree":           e.Worktree,
+		"capabilities":       shellCapabilities(),
+		"hook_seen":          e.HookSeenMS > 0,
+		"prior_execution_id": nullableString(e.PriorExecutionID),
+		"creation_source":    nullableString(e.CreationSource),
+		"creation_proof":     nullableString(e.CreationProof),
+	}
 	if e.Outside {
 		out["outside_git"] = true
 	}
@@ -445,6 +461,9 @@ func (t *transaction) register(r Request, outside bool) (map[string]any, error) 
 		if e.Recovery.Valid && r.Generation != e.Generation {
 			return nil, fail("lost", "recovery requires the prior session generation")
 		}
+		if r.Source != "hook" && isHooklessSuccessionChild(e) {
+			return nil, fail("lost", "non-hook registration cannot attach to a hookless succession child")
+		}
 		if r.Source == "shim" && r.Generation != 0 {
 			if e.HookSeenMS == 0 {
 				return nil, fail("lost", "reattach requires a hook-registered session")
@@ -484,6 +503,9 @@ func (t *transaction) register(r Request, outside bool) (map[string]any, error) 
 		if err != nil {
 			return nil, err
 		}
+		if r.Source == "hook" {
+			e.HookSeenMS = t.s.clock.Now().UnixMilli()
+		}
 		return t.sessionResponse(e, lease)
 	}
 	if !errors.Is(err, sql.ErrNoRows) {
@@ -499,6 +521,9 @@ func (t *transaction) register(r Request, outside bool) (map[string]any, error) 
 	generation := previous.Generation + 1
 	if previous.State == "ended" && r.Source != "hook" {
 		return nil, fail("lost", "non-hook generation-zero registration cannot succeed an ended session")
+	}
+	if isHooklessSuccessionChild(previous) && r.Source != "hook" {
+		return nil, fail("lost", "non-hook generation-zero registration cannot succeed a hookless succession child")
 	}
 	if r.EndedThrough > 0 && (previous.Generation < r.EndedThrough || generation <= r.EndedThrough) {
 		return nil, endedThroughRefusal("session history cannot advance beyond the ended generation")
@@ -585,14 +610,15 @@ func (t *transaction) register(r Request, outside bool) (map[string]any, error) 
 		return nil, err
 	}
 	t.generationChanged(previous, e, r)
+	if r.Source == "hook" {
+		e.HookSeenMS = t.s.clock.Now().UnixMilli()
+	}
 	return t.sessionResponse(e, lease)
 }
 func (t *transaction) sessionResponse(e execution, lease int64) (map[string]any, error) {
 	out := bound(e)
 	out["handle"] = e.ID
-	out["repository_id"] = e.Repo
 	out["lease_ms"] = lease
-	out["capabilities"] = shellCapabilities()
 	peers, err := t.agents(e.Repo)
 	if err != nil {
 		return nil, err
@@ -622,7 +648,10 @@ func (t *transaction) bind(r Request) (map[string]any, error) {
 		if e.Client != r.Client || e.Host != r.Host {
 			return nil, fail("unbound", "handle does not match this client and host")
 		}
-		return boundWithHooks(e), nil
+		if isHooklessSuccessionChild(e) && !r.SuccessionProof {
+			return nil, fail("lost", "hookless succession child requires succession_proof opt-in")
+		}
+		return bound(e), nil
 	}
 	query := executionSelect + "WHERE e.client=? AND e.host_id=? AND e.state='active' AND e.recovery_deadline IS NULL AND e.boot_epoch=? AND e.deadline_tick_ms>?"
 	args := []any{r.Client, r.Host, t.s.epoch, t.s.clock.Tick()}
@@ -674,7 +703,10 @@ func (t *transaction) bind(r Request) (map[string]any, error) {
 	if len(matches) > 1 {
 		return nil, fail("ambiguous", "multiple sessions match; provide an explicit execution handle")
 	}
-	out := boundWithHooks(matches[0])
+	if isHooklessSuccessionChild(matches[0]) && !r.SuccessionProof {
+		return nil, fail("lost", "hookless succession child requires succession_proof opt-in")
+	}
+	out := bound(matches[0])
 	if combined {
 		// Only this branch says so. A hub from before it takes such a request by session alone
 		// and answers without this field, which the asking client must refuse.
@@ -683,14 +715,6 @@ func (t *transaction) bind(r Request) (map[string]any, error) {
 	return out, nil
 }
 
-// boundWithHooks is a bind answer: the binding, and whether any hook has reached the hub for that
-// Execution. ADR 017 requires Codex's wake to arm only on that evidence, because only the
-// session's prompt hook can release the wake's reservation.
-func boundWithHooks(e execution) map[string]any {
-	out := bound(e)
-	out["hook_seen"] = e.HookSeenMS > 0
-	return out
-}
 func (t *transaction) heartbeat(r Request) (map[string]any, error) {
 	if r.Source != "hook" && r.Source != "shim" && r.Source != "watch" {
 		return nil, fail("bad_request", "unknown heartbeat source")
@@ -703,6 +727,9 @@ func (t *transaction) heartbeat(r Request) (map[string]any, error) {
 		return nil, err
 	}
 	if err == nil && e.State == "active" && e.Recovery.Valid && e.Generation == r.Generation {
+		if err := allowHooklessHeartbeat(e, r); err != nil {
+			return nil, err
+		}
 		lease, err := t.resume(&e, strong)
 		if err != nil {
 			return nil, err
@@ -710,6 +737,9 @@ func (t *transaction) heartbeat(r Request) (map[string]any, error) {
 		return t.sessionResponse(e, lease)
 	}
 	if e, err = t.live(r.ExecutionID, r.Generation); err != nil {
+		return nil, err
+	}
+	if err := allowHooklessHeartbeat(e, r); err != nil {
 		return nil, err
 	}
 	lease := int64(900000)
