@@ -24,9 +24,9 @@ this configuration neither creates one nor authorizes anyone to create it.
 
 Publish this in the release notes:
 
-Reload every console tab after the upgrade. An old tab silently stops marking threads read.
+Reload every console tab after an upgrade from v0.1.13 or older. A tab loaded from that older console silently stops marking threads read.
 
-Reload console tabs after a rollback to an older hub as well. A tab left open from this console does not mark a thread read against that hub.
+Reload console tabs after a rollback to a v0.1.13 or older hub as well. A tab left open from a newer console does not mark a thread read against that hub. Between v0.1.14 and later versions, both consoles mark threads read against either hub, and a reload only picks up the console the running hub serves.
 
 The GoReleaser dependency is not part of the application module.
 
