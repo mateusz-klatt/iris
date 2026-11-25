@@ -129,6 +129,63 @@ func TestIsCodeLooksThroughWrapping(t *testing.T) {
 	}
 }
 
+func TestConflictCodeRequiresHTTP409HubError(t *testing.T) {
+	var typedNil *Error
+	for _, tc := range []struct {
+		name string
+		err  error
+		want string
+	}{
+		{name: "nil", err: nil, want: ""},
+		{name: "non-hub error", err: errors.New("lost"), want: ""},
+		{name: "typed nil hub error", err: typedNil, want: ""},
+		{name: "status error 409", err: &StatusError{Path: "/v1/claims/touch", Code: http.StatusConflict, Status: "409 Conflict"}, want: ""},
+		{name: "untracked status", err: &Error{Code: "lost", Message: "no http status"}, want: ""},
+		{name: "503 envelope", err: &Error{Code: "lost", Message: "proxy", status: http.StatusServiceUnavailable}, want: ""},
+		{name: "401 envelope", err: &Error{Code: "unauthorized", status: http.StatusUnauthorized}, want: ""},
+		{name: "409 key_reused", err: &Error{Code: "key_reused", status: http.StatusConflict}, want: "key_reused"},
+		{name: "wrapped 409 lost", err: fmt.Errorf("touch: %w", &Error{Code: "lost", status: http.StatusConflict}), want: "lost"},
+		{name: "409 conflict", err: &Error{Code: "conflict", status: http.StatusConflict}, want: "conflict"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ConflictCode(tc.err); got != tc.want {
+				t.Fatalf("ConflictCode(%v) = %q, want %q", tc.err, got, tc.want)
+			}
+		})
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/409-key-reused":
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(`{"error":{"code":"key_reused","message":"reused"}}`))
+		case "/409-lost":
+			w.WriteHeader(http.StatusConflict)
+			_, _ = w.Write([]byte(`{"error":{"code":"lost","message":"gone"}}`))
+		case "/409-bare":
+			w.WriteHeader(http.StatusConflict)
+		case "/503-lost":
+			w.WriteHeader(http.StatusServiceUnavailable)
+			_, _ = w.Write([]byte(`{"error":{"code":"lost","message":"upstream"}}`))
+		}
+	}))
+	defer srv.Close()
+	c := &Client{Config: staticConfig{url: srv.URL, token: "tok"}}
+	for _, tc := range []struct {
+		path, want string
+	}{
+		{"/409-key-reused", "key_reused"},
+		{"/409-lost", "lost"},
+		{"/409-bare", ""},
+		{"/503-lost", ""},
+	} {
+		err := c.Do(context.Background(), http.MethodPost, tc.path, map[string]any{}, nil)
+		if got := ConflictCode(err); got != tc.want {
+			t.Fatalf("%s: ConflictCode(%v) = %q, want %q", tc.path, err, got, tc.want)
+		}
+	}
+}
+
 func TestRegistrationRestoreFloorRequiresAnIntegerInAConflict(t *testing.T) {
 	for _, tc := range []struct {
 		name, details  string

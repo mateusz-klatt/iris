@@ -82,7 +82,15 @@ Hard rules for `iris hook`, because failure semantics differ between clients:
 
 1. Everything is caught. A failure of any kind produces that client's valid allow output. A damaged
    local generation file or `.ended` marker closes registration but also returns allow; a confirmed
-   ended generation keeps D9's deliberate pre-tool refusal.
+   ended generation keeps D9's deliberate pre-tool refusal. An authoritative HTTP 409 `lost` from
+   claim touch (when the Execution or cached grant is no longer current) denies the edit for every
+   client. HTTP 409 `key_reused` (when the same tool call ID carries a different request) denies only
+   with the verified conversation namespace from rule 7. An unverified raw key can belong to another
+   conversation, so that answer keeps fail-open and records the failure plus the fixed observation
+   `pre-edit claim refused (key_reused)`. Deliberate refusals use fixed reasons, and their observations
+   are `pre-edit claim refused (key_reused)` or `pre-edit claim refused (lost)`, never hub text. Network
+   errors, deadlines, 5xx responses, bare or malformed 409s, 409 `conflict`, and 401 `unauthorized`
+   keep fail-open.
 2. The exit code is non-zero only for a deliberate deny on a client whose contract requires it.
 3. A 1.5 s internal deadline ends the hook's work, followed by up to 50 ms for best-effort failure
    logging before the allow output is written (about 1.55 s total); the client-side timeout is set
@@ -232,8 +240,8 @@ An inherited `CLAUDE_CODE_SESSION_ID` never outranks Cursor's process or marker 
 
 When a hook meant for one client runs under another, it prints the runner's allow output, exits
 0 and does not call the hub, whether or not the runner has its own integration. `iris doctor`
-reports the cross-load. The hub is idempotent per client, session, event and tool call, so a
-double fire is harmless. Configuration of a client is written only for that client.
+reports the cross-load. Registration and the conversation-namespaced claim retry key are idempotent,
+so a double fire is harmless. Configuration of a client is written only for that client.
 
 ### D6. Binding a tool call to an Execution
 
