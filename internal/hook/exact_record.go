@@ -14,8 +14,11 @@ import (
 const SessionEvidenceWriteFailed = "session evidence write failed"
 
 var (
-	lstatSessionFile  = os.Lstat
-	removeSessionFile = os.Remove
+	lstatSessionFile      = os.Lstat
+	removeSessionFile     = os.Remove
+	exactRecordStat       = statExactRecordFile
+	exactRecordOpen       = openExactRecordFile
+	errOFFUnknownExecKeep = errors.New("cannot retire .ended under OFF while .execution survives above ended floor")
 )
 
 func executionPath(prefix string) string {
@@ -62,7 +65,25 @@ func writePreparedSessionFile(path, body string) error {
 }
 
 func readExactRecordDeadline(path string, now func() time.Time, deadline time.Time) (sessionproof.Record, sessionproof.FileState, error) {
-	raw, err := readRegularBoundedBytesDeadline(path, sessionproof.RecordReadLimit, now, deadline)
+	if deadlineExpired(now, deadline) {
+		return sessionproof.Record{}, "", os.ErrDeadlineExceeded
+	}
+	linfo, id, lerr := exactRecordStat(path)
+	if lerr != nil {
+		if errors.Is(lerr, os.ErrNotExist) {
+			if deadlineExpired(now, deadline) {
+				return sessionproof.Record{}, "", os.ErrDeadlineExceeded
+			}
+			return sessionproof.Record{}, sessionproof.FileAbsent, nil
+		}
+		return sessionproof.Record{}, sessionproof.FileDamaged, fmt.Errorf("%w: %v", sessionproof.ErrInvalidRecord, lerr)
+	}
+	if !linfo.Mode().IsRegular() {
+		return sessionproof.Record{}, sessionproof.FileDamaged, sessionproof.ErrInvalidRecord
+	}
+	raw, err := readRegularBoundedBytesWithOpenDeadline(path, sessionproof.RecordReadLimit, now, deadline, func(p string) (*os.File, error) {
+		return exactRecordOpen(p, id)
+	})
 	if errors.Is(err, os.ErrDeadlineExceeded) {
 		return sessionproof.Record{}, "", err
 	}
@@ -70,7 +91,7 @@ func readExactRecordDeadline(path string, now func() time.Time, deadline time.Ti
 		if deadlineExpired(now, deadline) {
 			return sessionproof.Record{}, "", os.ErrDeadlineExceeded
 		}
-		if _, lerr := lstatSessionFile(path); errors.Is(lerr, os.ErrNotExist) {
+		if _, serrr := lstatSessionFile(path); errors.Is(serrr, os.ErrNotExist) {
 			return sessionproof.Record{}, sessionproof.FileAbsent, nil
 		}
 		return sessionproof.Record{}, sessionproof.FileDamaged, sessionproof.ErrInvalidRecord
@@ -109,15 +130,26 @@ func (m fileMemory) cleanupExpiredEnd(prefix string, ended int, deadline time.Ti
 		}
 		if recState == sessionproof.FileValid && recordEndedAt(rec, ended) {
 			removeExec = true
+			if current > 0 && current <= rec.Generation {
+				removeHash = true
+			}
 		}
-	} else if current <= ended {
+	} else {
 		if deadlineExpired(mono, deadline) {
 			return false, os.ErrDeadlineExceeded
 		}
-		if _, lerr := lstatSessionFile(execPath); lerr == nil {
-			removeExec = true
-		} else if !errors.Is(lerr, os.ErrNotExist) {
+		_, lerr := lstatSessionFile(execPath)
+		switch {
+		case errors.Is(lerr, os.ErrNotExist):
+		case lerr != nil:
 			return false, lerr
+		case current > ended:
+			// Under OFF, never open .execution content (F2). Keep .ended in place when a live
+			// <hash> > ended sits beside an .execution of unknown content so a shim record with
+			// prior <= ended cannot lose its end veto upon re-enable.
+			return false, errOFFUnknownExecKeep
+		default:
+			removeExec = true
 		}
 	}
 

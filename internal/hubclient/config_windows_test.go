@@ -46,3 +46,52 @@ func TestWriteConfigRefusesADirectoryThatCannotCreateFiles(t *testing.T) {
 		t.Fatalf("failed write left temporary files: %v, %v", entries, err)
 	}
 }
+
+func TestConfigWindowsReparseAndFileIndexVerification(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "client.json")
+	if err := os.WriteFile(path, []byte(`{"session_succession":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	info, id, err := statRegularConfig(path)
+	if err != nil || !info.Mode().IsRegular() {
+		t.Fatalf("statRegularConfig = (%v, %+v, %v)", info, id, err)
+	}
+	f, actual, err := openRegularConfig(path, id)
+	if err != nil || !sameConfigFileID(id, actual) {
+		t.Fatalf("openRegularConfig = (%v, %+v, %v)", f, actual, err)
+	}
+	_ = f.Close()
+
+	// Volume serial / file index mismatch rejects a swapped file between Lstat and open.
+	if _, _, err := openRegularConfig(path, configFileID{vol: id.vol + 1, idxHi: id.idxHi, idxLo: id.idxLo}); err == nil {
+		t.Fatal("accepted mismatched volume serial number")
+	}
+
+	origInfo := winConfigFileInfo
+	origType := winConfigFileType
+	t.Cleanup(func() {
+		winConfigFileInfo = origInfo
+		winConfigFileType = origType
+	})
+	winConfigFileInfo = func(h windows.Handle, bhfi *windows.ByHandleFileInformation) error {
+		if err := origInfo(h, bhfi); err != nil {
+			return err
+		}
+		bhfi.FileAttributes |= windows.FILE_ATTRIBUTE_REPARSE_POINT
+		return nil
+	}
+	if _, _, err := openRegularConfig(path, id); err == nil {
+		t.Fatal("accepted reparse-point attribute")
+	}
+	if _, _, err := statRegularConfig(path); err == nil {
+		t.Fatal("statRegularConfig accepted reparse-point attribute")
+	}
+	winConfigFileInfo = origInfo
+	winConfigFileType = func(windows.Handle) (uint32, error) {
+		return windows.FILE_TYPE_PIPE, nil
+	}
+	if _, _, err := openRegularConfig(path, id); err == nil {
+		t.Fatal("accepted non-disk file type")
+	}
+}

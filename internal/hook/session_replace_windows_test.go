@@ -168,6 +168,21 @@ func TestReplaceSessionFileDeadlineWindowsCheckpoints(t *testing.T) {
 		if !errors.Is(err, os.ErrDeadlineExceeded) {
 			t.Fatalf("pre-CreateFile expiry = %v, want ErrDeadlineExceeded", err)
 		}
+
+		// Path resolution consuming remaining budget stops cleanly before CreateFile.
+		pathClock := time.Unix(1_000, 0)
+		deadline := pathClock.Add(hookLockBudget)
+		calls := 0
+		err = renameSessionFilePOSIXDeadline("old", "new", deadline, func() time.Time {
+			calls++
+			if calls == 2 {
+				pathClock = deadline
+			}
+			return pathClock
+		})
+		if !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("post-path-resolution expiry = %v, want ErrDeadlineExceeded", err)
+		}
 	})
 
 	t.Run("expired between CreateFile and SetFileInformationByHandle", func(t *testing.T) {

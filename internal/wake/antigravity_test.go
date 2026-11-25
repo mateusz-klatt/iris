@@ -103,6 +103,7 @@ type agyTestHarness struct {
 
 	mu       sync.Mutex
 	lsCalls  []fakeLSRequest
+	lsNotify chan fakeLSRequest
 	nextResp func(fakeLSRequest) fakeLSResponse
 }
 
@@ -144,6 +145,7 @@ func newAgyTestHarness(t *testing.T, convID string) *agyTestHarness {
 		hubURL:    hubSrv.URL,
 		store:     s,
 		hubSrv:    hubSrv,
+		lsNotify:  make(chan fakeLSRequest, 16),
 	}
 	h.nextResp = func(req fakeLSRequest) fakeLSResponse {
 		recipient := ""
@@ -174,6 +176,10 @@ func newAgyTestHarness(t *testing.T, convID string) *agyTestHarness {
 			h.lsCalls = append(h.lsCalls, req)
 			resp := h.nextResp(req)
 			h.mu.Unlock()
+			select {
+			case h.lsNotify <- req:
+			default:
+			}
 			_ = json.NewEncoder(w).Encode(resp)
 		})},
 	}
@@ -738,6 +744,7 @@ func TestAntigravityChildHandshakeValidationSpoofRejectionAndEndToEndWakeAndCont
 	})
 
 	opts := h.baseOptions(convID, secret)
+	opts.handshakeTimeout = 5 * time.Second
 	baseEnv := opts.getenv
 	opts.getenv = func(k string) string {
 		if k == antigravityHelperEnv {
@@ -798,20 +805,14 @@ func TestAntigravityChildHandshakeValidationSpoofRejectionAndEndToEndWakeAndCont
 		t.Fatal(err)
 	}
 
-	// Wait for the helper to execute <agy-exe> agentapi send-message <convID> <wakePrompt>!
+	// Wait deterministically for the helper's send-message POST (or immediate failure if child exits).
 	var wakeCall fakeLSRequest
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		h.mu.Lock()
-		n := len(h.lsCalls)
-		if n > 0 {
-			wakeCall = h.lsCalls[0]
-		}
-		h.mu.Unlock()
-		if len(wakeCall.Args) > 0 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
+	select {
+	case wakeCall = <-h.lsNotify:
+	case err := <-childDone:
+		t.Fatalf("antigravity child exited before wake send: %v", err)
+	case <-time.After(15 * time.Second):
+		t.Fatal("timed out waiting for antigravity send-message call")
 	}
 	if len(wakeCall.Args) != 4 || wakeCall.Args[0] != "agentapi" || wakeCall.Args[1] != "send-message" || wakeCall.Args[2] != convID {
 		t.Fatalf("unexpected send-message args: %v", wakeCall.Args)
@@ -851,8 +852,13 @@ func TestAntigravityChildHandshakeValidationSpoofRejectionAndEndToEndWakeAndCont
 
 	// Wait for helper continuation passes to consume the outstanding guard!
 	consumed := false
-	deadline = time.Now().Add(5 * time.Second)
+	deadline := time.Now().Add(15 * time.Second)
 	for time.Now().Before(deadline) {
+		select {
+		case err := <-childDone:
+			t.Fatalf("antigravity child exited before consuming guard: %v", err)
+		default:
+		}
 		guards, err := Inspect(h.tokenPath)
 		if err == nil && len(guards) == 1 && !guards[0].Outstanding && guards[0].Outcome == "submitted" && guards[0].ConsumedMS > 0 && guards[0].Slot0 == 2 {
 			consumed = true

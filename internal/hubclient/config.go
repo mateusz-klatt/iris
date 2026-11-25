@@ -18,7 +18,11 @@ const (
 	DefaultHubURL          = "http://127.0.0.1:7878"
 	maxConfigBytes         = 64 << 10
 	configSuccessionBudget = 25 * time.Millisecond
+	configCASAttempts      = 3
 )
+
+// ErrConfigChanged reports that client.json changed concurrently on every CAS attempt.
+var ErrConfigChanged = errors.New("client config changed concurrently")
 
 type Config interface {
 	HubURL() string
@@ -238,47 +242,50 @@ func (e EnvConfig) SuccessionEnabledContext(ctx context.Context) bool {
 var (
 	prepareConfigWrite = func(*os.File) {}
 	prepareConfigClose = func(*os.File) {}
+	createConfigTemp   = os.CreateTemp
 	beforeConfigRename = func(string) {}
-	configLstat        = os.Lstat
+	configStat         = statRegularConfig
 	configOpen         = openRegularConfig
+	configFileLock     = lockConfigFile
 	afterConfigStat    = func() {}
 )
 
 func boolPtr(v bool) *bool { return &v }
 
-func equalBoolPtr(a, b *bool) bool {
-	return (a == nil && b == nil) || (a != nil && b != nil && *a == *b)
+func readBoundedRegularConfig(path string) ([]byte, error) {
+	raw, _, err := readBoundedRegularConfigWithID(path)
+	return raw, err
 }
 
-func readBoundedRegularConfig(path string) ([]byte, error) {
-	info, err := configLstat(path)
+func readBoundedRegularConfigWithID(path string) ([]byte, configFileID, error) {
+	info, expected, err := configStat(path)
 	if err != nil {
-		return nil, err
+		return nil, configFileID{}, err
 	}
 	if !info.Mode().IsRegular() || info.Size() > maxConfigBytes {
-		return nil, errors.New("client config is not a bounded regular file")
+		return nil, configFileID{}, errors.New("client config is not a bounded regular file")
 	}
-	f, err := configOpen(path)
+	f, actual, err := configOpen(path, expected)
 	if err != nil {
-		return nil, err
+		return nil, configFileID{}, err
 	}
 	defer func() { _ = f.Close() }()
 	finfo, err := f.Stat()
 	if err != nil {
-		return nil, err
+		return nil, configFileID{}, err
 	}
 	if !finfo.Mode().IsRegular() || finfo.Size() > maxConfigBytes {
-		return nil, errors.New("client config is not a bounded regular file")
+		return nil, configFileID{}, errors.New("client config is not a bounded regular file")
 	}
 	afterConfigStat()
 	raw, err := io.ReadAll(io.LimitReader(f, maxConfigBytes+1))
 	if err != nil {
-		return nil, err
+		return nil, configFileID{}, err
 	}
 	if len(raw) > maxConfigBytes {
-		return nil, errors.New("client config exceeds 64 KiB")
+		return nil, configFileID{}, errors.New("client config exceeds 64 KiB")
 	}
-	return raw, nil
+	return raw, actual, nil
 }
 
 func parseSessionSuccession(raw []byte) (*bool, bool) {
@@ -301,13 +308,52 @@ func parseSessionSuccession(raw []byte) (*bool, bool) {
 	}
 }
 
-func readCurrentSuccession(path string) *bool {
-	raw, err := readBoundedRegularConfig(path)
+type configSnapshot struct {
+	absent bool
+	valid  bool
+	id     configFileID
+	raw    []byte
+	cur    *bool
+}
+
+func readConfigSnapshot(path string) configSnapshot {
+	raw, id, err := readBoundedRegularConfigWithID(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return configSnapshot{absent: true}
+	}
 	if err != nil {
-		return nil
+		return configSnapshot{}
 	}
 	val, _ := parseSessionSuccession(raw)
-	return val
+	return configSnapshot{valid: true, id: id, raw: raw, cur: val}
+}
+
+func sameConfigSnapshot(a, b configSnapshot) bool {
+	if a.absent != b.absent {
+		return false
+	}
+	if a.absent {
+		return true
+	}
+	if a.valid != b.valid || !bytes.Equal(a.raw, b.raw) {
+		return false
+	}
+	return !a.valid || sameConfigFileID(a.id, b.id)
+}
+
+func lockConfig(path string) (func(), error) {
+	f, err := os.OpenFile(path+".lock", os.O_RDWR|os.O_CREATE, 0o600)
+	if err != nil {
+		return nil, err
+	}
+	if err := configFileLock(f); err != nil {
+		_ = f.Close()
+		return nil, err
+	}
+	return func() {
+		unlockConfigFile(f)
+		_ = f.Close()
+	}, nil
 }
 
 func readSessionSuccession(ctx context.Context, path string, customRead func(string) ([]byte, error)) bool {
@@ -346,7 +392,7 @@ func readSessionSuccession(ctx context.Context, path string, customRead func(str
 func stageConfigTemp(path string, f FileConfig) (string, error) {
 	// FileConfig contains only strings and a *bool, so JSON encoding cannot fail.
 	raw, _ := json.MarshalIndent(f, "", "  ")
-	temp, err := os.CreateTemp(filepath.Dir(path), ".client-*")
+	temp, err := createConfigTemp(filepath.Dir(path), ".client-*")
 	if err != nil {
 		return "", err
 	}
@@ -381,6 +427,11 @@ func WriteConfig(path string, f FileConfig) error {
 	if err := privateDir(filepath.Dir(path)); err != nil {
 		return err
 	}
+	unlock, err := lockConfig(path)
+	if err != nil {
+		return err
+	}
+	defer unlock()
 	name, err := stageConfigTemp(path, f)
 	if err != nil {
 		return err
@@ -388,9 +439,10 @@ func WriteConfig(path string, f FileConfig) error {
 	return renameConfigTemp(name, path)
 }
 
-// UpdateConfig persists client settings while preserving valid on-disk session_succession
-// when f omits it, and ensuring a stale true never overwrites an owner disable that arrives
-// before the rename completes.
+// UpdateConfig performs a lock-serialized compare-and-swap update of Hub and TokenFile while
+// preserving whatever valid session_succession is on disk at commit time. If the on-disk config
+// changes between opening and renaming (e.g., an external atomic replacement with false), it
+// retries against the new disk state or aborts with ErrConfigChanged without writing stale true.
 func UpdateConfig(path string, f FileConfig) error {
 	if err := ValidateURL(f.Hub); err != nil {
 		return err
@@ -398,25 +450,28 @@ func UpdateConfig(path string, f FileConfig) error {
 	if err := privateDir(filepath.Dir(path)); err != nil {
 		return err
 	}
-	cur := readCurrentSuccession(path)
-	out := f
-	if out.SessionSuccession == nil {
-		out.SessionSuccession = cur
-	}
-	name, err := stageConfigTemp(path, out)
+	unlock, err := lockConfig(path)
 	if err != nil {
 		return err
 	}
-	beforeConfigRename(path)
-	if out.SessionSuccession != nil && *out.SessionSuccession {
-		if latest := readCurrentSuccession(path); !equalBoolPtr(cur, latest) && (latest == nil || !*latest) {
-			_ = os.Remove(name)
-			out.SessionSuccession = latest
-			name, err = stageConfigTemp(path, out)
-			if err != nil {
-				return err
-			}
+	defer unlock()
+	for range configCASAttempts {
+		before := readConfigSnapshot(path)
+		out := f
+		if out.SessionSuccession == nil {
+			out.SessionSuccession = before.cur
 		}
+		name, err := stageConfigTemp(path, out)
+		if err != nil {
+			return err
+		}
+		beforeConfigRename(path)
+		after := readConfigSnapshot(path)
+		if !sameConfigSnapshot(before, after) {
+			_ = os.Remove(name)
+			continue
+		}
+		return renameConfigTemp(name, path)
 	}
-	return renameConfigTemp(name, path)
+	return ErrConfigChanged
 }

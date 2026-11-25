@@ -1,6 +1,7 @@
 package hook
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
@@ -10,6 +11,8 @@ import (
 	"time"
 
 	"github.com/mateusz-klatt/iris/internal/config"
+	"github.com/mateusz-klatt/iris/internal/gitinfo"
+	"github.com/mateusz-klatt/iris/internal/proc"
 	"github.com/mateusz-klatt/iris/internal/sessionproof"
 )
 
@@ -691,15 +694,220 @@ func writeTestExecutionRecord(t *testing.T, m fileMemory, client, session string
 	return execPath
 }
 
+var timeZero time.Time
+
+func TestExactRecordDeadlineCheckpointsAnd60msAntigravitySync(t *testing.T) {
+	t.Run("writeAntigravityJSONDeadline checks expiry before every mutating step", func(t *testing.T) {
+		dir := t.TempDir()
+		target := filepath.Join(dir, "state.json")
+		clock := time.Unix(1_800_000_000, 0)
+		deadline := clock.Add(10 * time.Millisecond)
+
+		// 1) Expired before createAntigravityTemp.
+		origCreate := createAntigravityTemp
+		t.Cleanup(func() { createAntigravityTemp = origCreate })
+		createAntigravityTemp = func(string, string) (*os.File, error) {
+			t.Fatal("createAntigravityTemp ran past deadline")
+			return nil, nil
+		}
+		if err := writeAntigravityJSONDeadline(dir, target, antigravityProcState{}, clock, func() time.Time { return clock }); !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("pre-create expiry = %v, want ErrDeadlineExceeded", err)
+		}
+		createAntigravityTemp = origCreate
+
+		// 2) Expired after createAntigravityTemp, before f.Write.
+		calls := 0
+		if err := writeAntigravityJSONDeadline(dir, target, antigravityProcState{}, deadline, func() time.Time {
+			calls++
+			if calls == 2 {
+				return deadline
+			}
+			return clock
+		}); !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("pre-write expiry = %v, want ErrDeadlineExceeded", err)
+		}
+
+		// 3) Expired after f.Write, before syncAntigravityTemp.
+		calls = 0
+		origSync := syncAntigravityTemp
+		t.Cleanup(func() { syncAntigravityTemp = origSync })
+		syncAntigravityTemp = func(*os.File) error {
+			t.Fatal("syncAntigravityTemp ran past deadline")
+			return nil
+		}
+		if err := writeAntigravityJSONDeadline(dir, target, antigravityProcState{}, deadline, func() time.Time {
+			calls++
+			if calls == 3 {
+				return deadline
+			}
+			return clock
+		}); !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("pre-sync expiry = %v, want ErrDeadlineExceeded", err)
+		}
+
+		// 4) Expired during syncAntigravityTemp, before protectPath.
+		calls = 0
+		origProtect := protectPath
+		t.Cleanup(func() { protectPath = origProtect })
+		syncAntigravityTemp = func(*os.File) error { return nil }
+		protectPath = func(string) error {
+			t.Fatal("protectPath ran past deadline")
+			return nil
+		}
+		if err := writeAntigravityJSONDeadline(dir, target, antigravityProcState{}, deadline, func() time.Time {
+			calls++
+			if calls == 4 {
+				return deadline
+			}
+			return clock
+		}); !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("pre-protect expiry = %v, want ErrDeadlineExceeded", err)
+		}
+
+		// 5) Expired during protectPath, before renameAntigravityStateFile hook.
+		calls = 0
+		protectPath = config.OwnerOnly
+		origRenameHook := renameAntigravityStateFile
+		t.Cleanup(func() { renameAntigravityStateFile = origRenameHook })
+		renameAntigravityStateFile = func(string, string) error {
+			t.Fatal("renameAntigravityStateFile ran past deadline")
+			return nil
+		}
+		if err := writeAntigravityJSONDeadline(dir, target, antigravityProcState{}, deadline, func() time.Time {
+			calls++
+			if calls == 5 {
+				return deadline
+			}
+			return clock
+		}); !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("pre-rename hook expiry = %v, want ErrDeadlineExceeded", err)
+		}
+		renameAntigravityStateFile = origRenameHook
+
+		for _, info := range mustList(t, dir) {
+			if strings.HasPrefix(info.Name(), ".tmp-") {
+				t.Fatalf("leftover temp file %s", info.Name())
+			}
+		}
+	})
+
+	t.Run("Antigravity Stop idle update succeeds across 60ms sync while shorter hook Deadline caps writeBudget", func(t *testing.T) {
+		root, tokenPath, _ := agyTestEnv(t)
+		const convID = "e28a6164-6409-4810-b8ee-df8202a16a0c"
+		tr := filepath.Join(root, "transcript.jsonl")
+		if err := os.WriteFile(tr, []byte(`{"step_index":0}`+"\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		origSync := syncAntigravityTemp
+		t.Cleanup(func() { syncAntigravityTemp = origSync })
+		syncAntigravityTemp = func(f *os.File) error {
+			time.Sleep(60 * time.Millisecond)
+			return origSync(f)
+		}
+		stopPayload := `{"conversationId":"` + convID + `","transcriptPath":` + `"` + filepath.ToSlash(tr) + `"` + `,"executionNum":0,"continuationActive":false,"fullyIdle":true,"terminationReason":"NO_TOOL_CALL","workspacePaths":["/repo"]}`
+		_ = (Runner{
+			ClientName:      "antigravity",
+			EventName:       "Stop",
+			Stdin:           strings.NewReader(stopPayload),
+			PinnedConfigDir: func() (string, error) { return filepath.Dir(tokenPath), nil },
+			Getenv: func(k string) string {
+				if k == "IRIS_TOKEN_FILE" {
+					return tokenPath
+				}
+				return ""
+			},
+			Ancestor: func() (proc.Ancestor, error) { return proc.Ancestor{}, errors.New("no agy") },
+		}).Run()
+		conv, ok := ReadAntigravityConvState(filepath.Dir(tokenPath), convID)
+		if !ok || !conv.Idle {
+			t.Fatalf("60ms sync dropped Stop idle update: ok=%v conv=%+v", ok, conv)
+		}
+
+		// Shorter Runner.Deadline caps Antigravity write budget below 1s.
+		const convShort = "e28a6164-6409-4810-b8ee-df8202a16a0d"
+		stopShort := `{"conversationId":"` + convShort + `","executionNum":0,"continuationActive":false,"fullyIdle":true,"terminationReason":"NO_TOOL_CALL","workspacePaths":["/repo"]}`
+		syncAntigravityTemp = func(f *os.File) error {
+			time.Sleep(35 * time.Millisecond)
+			return origSync(f)
+		}
+		_ = (Runner{
+			ClientName:      "antigravity",
+			EventName:       "Stop",
+			Deadline:        20 * time.Millisecond,
+			Stdin:           strings.NewReader(stopShort),
+			PinnedConfigDir: func() (string, error) { return filepath.Dir(tokenPath), nil },
+			Getenv: func(k string) string {
+				if k == "IRIS_TOKEN_FILE" {
+					return tokenPath
+				}
+				return ""
+			},
+			Ancestor: func() (proc.Ancestor, error) { return proc.Ancestor{}, errors.New("no agy") },
+			after:    func(time.Duration) <-chan time.Time { return nil },
+		}).Run()
+		if convShortState, ok := ReadAntigravityConvState(filepath.Dir(tokenPath), convShort); ok && convShortState.Idle {
+			t.Fatalf("20ms capped writeBudget recorded idle update past 35ms sync: %+v", convShortState)
+		}
+	})
+
+	t.Run("rememberWithDeadline delegates non-fileMemory to Memory.Remember", func(t *testing.T) {
+		hub := &recoveryHub{}
+		rememberWithDeadline(fakeMemory{hub}, "claude", "s", 2, time.Now().Add(time.Second))
+	})
+
+	t.Run("shell reconcile threads remaining caller deadline into rememberDeadline", func(t *testing.T) {
+		clock := time.Unix(1_800_000_000, 0)
+		var slept time.Duration
+		m := fileMemory{
+			dir:      filepath.Join(t.TempDir(), "sessions"),
+			now:      func() time.Time { return clock },
+			mono:     func() time.Time { return clock },
+			pause:    func(d time.Duration) { slept += d; clock = clock.Add(d) },
+			restrict: config.OwnerOnly,
+		}
+		holder, err := m.lock(hookLockBudget)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer holder()
+
+		// Simulate shell context with only 4ms left (well under 50ms hookLockBudget).
+		ctx, cancel := context.WithDeadline(context.Background(), clock.Add(4*time.Millisecond))
+		defer cancel()
+		r := Runner{Memory: m}
+		ev := Event{Client: ClientClaude, SessionID: "s"}
+		_, err = r.reconcileSession(ctx, &runState{}, newOneCallHub(), ev, gitinfo.Repo{Worktree: "/repo"}, "before", map[string]string{})
+		if err != nil {
+			t.Fatalf("reconcileSession err = %v", err)
+		}
+		if slept != 4*time.Millisecond {
+			t.Fatalf("reconcileSession slept %v waiting on held lock, want 4ms caller cap instead of fresh 50ms", slept)
+		}
+		if m.Recall(string(ev.Client), ev.SessionID) != 0 {
+			t.Fatal("rememberDeadline wrote proof past caller deadline")
+		}
+	})
+}
+
 func denyExecutionOpen(t *testing.T, forbiddenPath string) {
 	t.Helper()
-	orig := generationFileOpen
-	t.Cleanup(func() { generationFileOpen = orig })
+	origGen := generationFileOpen
+	origExact := exactRecordOpen
+	t.Cleanup(func() {
+		generationFileOpen = origGen
+		exactRecordOpen = origExact
+	})
 	generationFileOpen = func(path string) (*os.File, error) {
 		if path == forbiddenPath {
 			t.Fatalf("OFF mode opened %s; .execution content must never be opened or parsed under OFF", path)
 		}
-		return orig(path)
+		return origGen(path)
+	}
+	exactRecordOpen = func(path string, id exactRecordID) (*os.File, error) {
+		if path == forbiddenPath {
+			t.Fatalf("OFF mode opened exact %s; .execution content must never be opened or parsed under OFF", path)
+		}
+		return origExact(path, id)
 	}
 }
 
@@ -872,13 +1080,14 @@ func TestEndRetirementAbsentPermutationsAndCleanupFailures(t *testing.T) {
 			wantCleaned:       true,
 		},
 		{
-			name:              "shim prior<=ended retired under ON",
+			name:              "shim prior<=ended retired with hash under ON",
 			hashGen:           3,
 			execRec:           &sessionproof.Record{Version: 1, Origin: sessionproof.OriginShim, Generation: 3, ExecutionID: testExecutionID("3"), PriorGeneration: 2, PriorExecutionID: testExecutionID("2")},
 			endedGen:          2,
 			successionEnabled: true,
 			wantCleaned:       true,
-			wantHashKept:      true,
+			wantHashKept:      false,
+			wantExecKept:      false,
 		},
 		{
 			name:              "newer hook execution kept under ON while ended retires",
@@ -891,14 +1100,22 @@ func TestEndRetirementAbsentPermutationsAndCleanupFailures(t *testing.T) {
 			wantExecKept:      true,
 		},
 		{
-			name:              "newer hash protects unknown execution under OFF",
+			name:              "shim prior<=ended with hash>ended under OFF keeps ended veto",
+			hashGen:           3,
+			execRec:           &sessionproof.Record{Version: 1, Origin: sessionproof.OriginShim, Generation: 3, ExecutionID: testExecutionID("3"), PriorGeneration: 2, PriorExecutionID: testExecutionID("2")},
+			endedGen:          2,
+			successionEnabled: false,
+			wantCleaned:       false,
+			wantHashKept:      true,
+			wantExecKept:      true,
+		},
+		{
+			name:              "absent execution with hash>ended under OFF retires ended only",
 			hashGen:           4,
-			corruptExec:       true,
 			endedGen:          2,
 			successionEnabled: false,
 			wantCleaned:       true,
 			wantHashKept:      true,
-			wantExecKept:      true,
 		},
 		{
 			name:              "corrupt execution retired by name when hash absent under OFF",
@@ -1120,6 +1337,41 @@ func TestEndRetirementAbsentPermutationsAndCleanupFailures(t *testing.T) {
 		if ok, err := mExp.cleanupExpiredEnd(prefix, 2, deadline, false); ok || !errors.Is(err, os.ErrDeadlineExceeded) {
 			t.Fatalf("removeMarker deadline = (%v, %v)", ok, err)
 		}
+
+		// Explicit P2 #2 regression: <hash>=3, .ended=2, shim G=3 prior=2 keeps .ended under OFF,
+		// then retires cleanly upon re-enable ON.
+		prefixShim := m.name("claude", "shim-veto")
+		execShim := executionPath(prefixShim)
+		markerShim := prefixShim + ".ended"
+		if err := os.WriteFile(prefixShim, []byte("3\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		writeTestExecutionRecord(t, m, "claude", "shim-veto", sessionproof.Record{
+			Version:          sessionproof.FormatVersion,
+			Origin:           sessionproof.OriginShim,
+			Generation:       3,
+			ExecutionID:      testExecutionID("8"),
+			PriorGeneration:  2,
+			PriorExecutionID: testExecutionID("7"),
+		})
+		_ = os.WriteFile(markerShim, []byte("2\n"), 0o600)
+		old := clock.Add(-memoryAge - time.Hour)
+		_ = os.Chtimes(markerShim, old, old)
+		denyExecutionOpen(t, execShim)
+		snapOff, err := (&Sessions{tokenPath: filepath.Join(filepath.Dir(m.dir), "hub.token"), memory: m}).InspectEvidence("claude", "shim-veto", clock.Add(hookLockBudget), false, true)
+		if err != nil || snapOff.EndedState != sessionproof.FileValid || snapOff.Ended != 2 || snapOff.Generation != 3 {
+			t.Fatalf("OFF retirement dropped shim veto: %+v, %v", snapOff, err)
+		}
+		if _, err := os.Lstat(execShim); err != nil {
+			t.Fatalf("OFF dropped .execution unexpectedly: %v", err)
+		}
+		// Re-enable ON: exact record read parses prior<=2 and retires <hash>=3, .execution, and .ended.
+		generationFileOpen = OpenGenerationFile
+		exactRecordOpen = openExactRecordFile
+		snapOn, err := (&Sessions{tokenPath: filepath.Join(filepath.Dir(m.dir), "hub.token"), memory: m}).InspectEvidence("claude", "shim-veto", clock.Add(hookLockBudget), true, true)
+		if err != nil || snapOn.EndedState != sessionproof.FileAbsent || snapOn.GenerationState != sessionproof.FileAbsent || snapOn.RecordState != sessionproof.FileAbsent {
+			t.Fatalf("ON re-enable did not retire shim veto: %+v, %v", snapOn, err)
+		}
 	})
 }
 
@@ -1130,16 +1382,74 @@ func TestOFFImmunityAndIndependentInspectAndForgetAndPrune(t *testing.T) {
 		clock := time.Unix(1_800_000_000, 0)
 		deadline := clock.Add(10 * time.Millisecond)
 
-		origOpen := generationFileOpen
-		t.Cleanup(func() { generationFileOpen = origOpen })
-		generationFileOpen = func(string) (*os.File, error) {
+		origStat := exactRecordStat
+		origOpen := exactRecordOpen
+		t.Cleanup(func() {
+			exactRecordStat = origStat
+			exactRecordOpen = origOpen
+		})
+		exactRecordStat = func(string) (os.FileInfo, exactRecordID, error) {
+			clock = deadline
+			return nil, exactRecordID{}, os.ErrNotExist
+		}
+		if _, _, err := readExactRecordDeadline(absent, func() time.Time { return clock }, deadline); !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("readExactRecordDeadline expired after stat ErrNotExist = %v", err)
+		}
+		exactRecordStat = origStat
+
+		// Open-time ErrNotExist race (absent vs dangling symlink) + deadline expiry.
+		vanish := filepath.Join(dir, "vanish.execution")
+		if err := os.WriteFile(vanish, []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		exactRecordOpen = func(p string, _ exactRecordID) (*os.File, error) {
+			_ = os.Remove(p)
+			return nil, os.ErrNotExist
+		}
+		if _, st, err := readExactRecordDeadline(vanish, nil, time.Time{}); err != nil || st != sessionproof.FileAbsent {
+			t.Fatalf("vanished file on open = (%v, %v), want FileAbsent/nil", st, err)
+		}
+		clock = time.Unix(1_800_000_000, 0)
+		if err := os.WriteFile(vanish, []byte("{}"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		exactRecordOpen = func(string, exactRecordID) (*os.File, error) {
 			clock = deadline
 			return nil, os.ErrNotExist
 		}
-		if _, _, err := readExactRecordDeadline(absent, func() time.Time { return clock }, deadline); !errors.Is(err, os.ErrDeadlineExceeded) {
-			t.Fatalf("readExactRecordDeadline expired after ErrNotExist = %v", err)
+		if _, _, err := readExactRecordDeadline(vanish, func() time.Time { return clock }, deadline); !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("open ErrNotExist deadline = %v, want ErrDeadlineExceeded", err)
 		}
-		generationFileOpen = origOpen
+		clock = time.Unix(1_800_000_000, 0)
+		exactRecordOpen = func(p string, id exactRecordID) (*os.File, error) {
+			clock = deadline
+			return origOpen(p, id)
+		}
+		if _, _, err := readExactRecordDeadline(vanish, func() time.Time { return clock }, deadline); !errors.Is(err, os.ErrDeadlineExceeded) {
+			t.Fatalf("post-open ErrDeadlineExceeded = %v, want ErrDeadlineExceeded", err)
+		}
+		if runtime.GOOS != "windows" {
+			exactRecordOpen = func(p string, _ exactRecordID) (*os.File, error) {
+				_ = os.Remove(p)
+				if err := os.Symlink(filepath.Join(dir, "missing"), p); err != nil {
+					t.Fatal(err)
+				}
+				return nil, os.ErrNotExist
+			}
+			if _, st, err := readExactRecordDeadline(vanish, nil, time.Time{}); st != sessionproof.FileDamaged || !errors.Is(err, sessionproof.ErrInvalidRecord) {
+				t.Fatalf("dangling symlink race = (%v, %v), want FileDamaged", st, err)
+			}
+		}
+		exactRecordOpen = origOpen
+
+		// exactRecordStat unexpected non-ENOENT error counts as damaged.
+		exactRecordStat = func(string) (os.FileInfo, exactRecordID, error) {
+			return nil, exactRecordID{}, os.ErrPermission
+		}
+		if _, st, err := readExactRecordDeadline(vanish, nil, time.Time{}); st != sessionproof.FileDamaged || !errors.Is(err, sessionproof.ErrInvalidRecord) {
+			t.Fatalf("stat permission err = (%v, %v), want FileDamaged", st, err)
+		}
+		exactRecordStat = origStat
 
 		// Directory at .execution is damaged, not absent.
 		dirPath := filepath.Join(dir, "dir.execution")
@@ -1273,7 +1583,7 @@ func TestOFFImmunityAndIndependentInspectAndForgetAndPrune(t *testing.T) {
 		}{
 			{"initial marker", true, 7},
 			{"during cleanup", true, 11},
-			{"post-cleanup reread", true, 20},
+			{"post-cleanup reread", true, 21},
 			{"generation read", false, 11},
 			{"execution read", false, 14},
 		} {
@@ -1365,7 +1675,7 @@ func TestOFFImmunityAndIndependentInspectAndForgetAndPrune(t *testing.T) {
 		execOrphan := writeTestExecutionRecord(t, mPrune, "claude", "orphan", sessionproof.Record{Version: 1, Origin: sessionproof.OriginHook, Generation: 1, ExecutionID: testExecutionID("6")})
 		_ = os.Chtimes(execOrphan, old, old)
 
-		// Corrupt aged .ended falls through to raw stale removal; expired valid .ended cleans via cleanupExpiredEnd.
+		// Aged damaged .ended stays in place and is observed; expired valid .ended cleans via cleanupExpiredEnd.
 		dmgEnded := mPrune.name("claude", "dmg-ended") + ".ended"
 		_ = os.WriteFile(dmgEnded, []byte("bad"), 0o600)
 		_ = os.Chtimes(dmgEnded, old, old)
@@ -1377,7 +1687,10 @@ func TestOFFImmunityAndIndependentInspectAndForgetAndPrune(t *testing.T) {
 		_ = os.Chtimes(mPrune.name("claude", "aged-ended")+".ended", old, old)
 		_ = os.Chtimes(execAgedEnd, old, old)
 
-		if err := mPrune.pruneWithSuccession(time.Time{}, true); err != nil {
+		var observed []string
+		if err := mPrune.pruneWithSuccession(time.Time{}, true, func(note string) {
+			observed = append(observed, note)
+		}); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := os.Lstat(execActive); err != nil {
@@ -1389,14 +1702,37 @@ func TestOFFImmunityAndIndependentInspectAndForgetAndPrune(t *testing.T) {
 		if _, err := os.Lstat(execOrphan); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("prune left orphaned stale .execution: %v", err)
 		}
-		if _, err := os.Lstat(dmgEnded); !errors.Is(err, os.ErrNotExist) {
-			t.Fatalf("prune kept damaged aged .ended: %v", err)
+		if _, err := os.Lstat(dmgEnded); err != nil {
+			t.Fatalf("prune deleted damaged aged .ended: %v", err)
+		}
+		if len(observed) != 1 || observed[0] != damagedGenerationObservation(dmgEnded) {
+			t.Fatalf("observed = %v, want [%s]", observed, damagedGenerationObservation(dmgEnded))
 		}
 		if _, err := os.Lstat(execAgedEnd); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("prune left expired ended .execution: %v", err)
 		}
 		if _, err := os.Lstat(mPrune.name("claude", "aged-ended") + ".ended"); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("prune left expired .ended: %v", err)
+		}
+
+		// Runner SessionStart records damaged .ended observation during prune and leaves file in place.
+		getenv := failureEnv(t)
+		root := gitRepo(t)
+		rm := sessionsFor(getenv)
+		_ = rm.directory()
+		hookDmgEnded := rm.name("claude", "sess-dmg") + ".ended"
+		_ = os.WriteFile(hookDmgEnded, []byte("bad\n"), 0o600)
+		_ = os.Chtimes(hookDmgEnded, old, old)
+		_ = (Runner{
+			ClientName: "claude", EventName: "SessionStart", Stdin: strings.NewReader(`{"session_id":"sess-new","cwd":` + quote(root) + `,"hook_event_name":"SessionStart"}`),
+			Hub: &recoveryHub{generation: 1}, Memory: rm, Getenv: getenv, after: never, logAfter: never,
+		}).Run()
+		if _, err := os.Lstat(hookDmgEnded); err != nil {
+			t.Fatalf("SessionStart prune removed damaged .ended: %v", err)
+		}
+		notes, nerr := ReadRecentObservations(getenv("IRIS_TOKEN_FILE"), 10)
+		if nerr != nil || len(notes) != 1 || notes[0].Error != damagedGenerationObservation(hookDmgEnded) {
+			t.Fatalf("SessionStart observations = %+v, %v", notes, nerr)
 		}
 
 		// Valid .ended touched fresh after ReadDir is skipped during prune, and readEndMarkerDeadline expiry exits prune cleanly.
@@ -1414,7 +1750,7 @@ func TestOFFImmunityAndIndependentInspectAndForgetAndPrune(t *testing.T) {
 			}
 			return clock
 		}
-		if err := mRace.pruneWithSuccession(clock.Add(hookLockBudget), true); err != nil {
+		if err := mRace.pruneWithSuccession(clock.Add(hookLockBudget), true, nil); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := os.Lstat(raceEnded); err != nil {
@@ -1431,11 +1767,36 @@ func TestOFFImmunityAndIndependentInspectAndForgetAndPrune(t *testing.T) {
 			}
 			return clock
 		}
-		if err := mRace.pruneWithSuccession(deadline, true); err != nil {
+		if err := mRace.pruneWithSuccession(deadline, true, nil); err != nil {
 			t.Fatal(err)
 		}
 		if _, err := os.Lstat(raceEnded); err != nil {
 			t.Fatalf("prune deleted .ended after deadline expired in readEndMarkerDeadline: %v", err)
+		}
+
+		// Expiry between Lstat and Remove in pruneWithSuccession leaves stale entry untouched (P2 #6a).
+		mLstatExp := fileMemory{dir: filepath.Join(t.TempDir(), "sessions"), now: func() time.Time { return clock }, mono: func() time.Time { return clock }, restrict: config.OwnerOnly}
+		_ = mLstatExp.directory()
+		staleFile := filepath.Join(mLstatExp.dir, "stale-entry")
+		_ = os.WriteFile(staleFile, []byte("1"), 0o600)
+		_ = os.Chtimes(staleFile, old, old)
+		origLstat := lstatSessionFile
+		t.Cleanup(func() { lstatSessionFile = origLstat })
+		pruneClock := clock
+		pruneDeadline := pruneClock.Add(hookLockBudget)
+		lstatSessionFile = func(p string) (os.FileInfo, error) {
+			info, err := origLstat(p)
+			if p == staleFile {
+				pruneClock = pruneDeadline
+			}
+			return info, err
+		}
+		mLstatExp.mono = func() time.Time { return pruneClock }
+		if err := mLstatExp.pruneWithSuccession(pruneDeadline, false, nil); err != nil {
+			t.Fatal(err)
+		}
+		if _, err := os.Lstat(staleFile); err != nil {
+			t.Fatalf("prune deleted staleFile after deadline expired during Lstat: %v", err)
 		}
 	})
 }

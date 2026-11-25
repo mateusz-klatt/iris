@@ -100,6 +100,9 @@ func renameSessionFilePOSIXDeadline(oldpath, newpath string, deadline time.Time,
 	if err != nil {
 		return err
 	}
+	if deadlineExpired(now, deadline) {
+		return os.ErrDeadlineExceeded
+	}
 	h, err := winCreateFile(
 		from,
 		windows.DELETE,

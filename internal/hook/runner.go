@@ -555,10 +555,11 @@ func (r Runner) register(ctx context.Context, state *runState, ev Event, repo gi
 		r.learnScope(sess.Capabilities)
 	}
 	if err == nil && m != nil {
-		m.Remember(string(ev.Client), ev.SessionID, sess.Generation)
+		deadline, _ := ctx.Deadline()
+		rememberWithDeadline(m, string(ev.Client), ev.SessionID, sess.Generation, deadline)
 		if ev.Kind == KindSessionStart {
 			if files, ok := m.(fileMemory); ok {
-				if err := files.prune(); err != nil {
+				if err := files.pruneWithSuccession(deadline, false, state.observe); err != nil {
 					r.recordFailure(stageSessionFiles, err, nil)
 				}
 			}

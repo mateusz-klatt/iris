@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -335,26 +336,32 @@ func TestSessionSuccessionBoundedReloadRejectsStallsAndSpecialFiles(t *testing.T
 		configOpen = origOpen
 		afterConfigStat = origAfter
 	})
-	configOpen = func(string) (*os.File, error) { return nil, os.ErrPermission }
+	configOpen = func(string, configFileID) (*os.File, configFileID, error) {
+		return nil, configFileID{}, os.ErrPermission
+	}
 	if e.SuccessionEnabled() {
 		t.Fatal("configOpen error enabled succession")
 	}
-	configOpen = func(p string) (*os.File, error) {
+	configOpen = func(p string, expected configFileID) (*os.File, configFileID, error) {
 		f, err := os.Open(p)
 		if err == nil {
 			_ = f.Close()
 		}
-		return f, err
+		return f, expected, err
 	}
 	if e.SuccessionEnabled() {
 		t.Fatal("Stat error on closed fd enabled succession")
 	}
-	configOpen = func(string) (*os.File, error) { return os.Open(dir) }
+	configOpen = func(_ string, expected configFileID) (*os.File, configFileID, error) {
+		f, err := os.Open(dir)
+		return f, expected, err
+	}
 	if e.SuccessionEnabled() {
 		t.Fatal("directory handle from configOpen enabled succession")
 	}
-	configOpen = func(p string) (*os.File, error) {
-		return os.OpenFile(p, os.O_WRONLY, 0)
+	configOpen = func(p string, expected configFileID) (*os.File, configFileID, error) {
+		f, err := os.OpenFile(p, os.O_WRONLY, 0)
+		return f, expected, err
 	}
 	if e.SuccessionEnabled() {
 		t.Fatal("write-only fd enabled succession")
@@ -372,7 +379,7 @@ func TestUpdateConfigPreservesDisableOverStaleTrue(t *testing.T) {
 	dir := t.TempDir()
 	cfgPath := filepath.Join(dir, "client.json")
 
-	// Validation & privateDir errors.
+	// Validation, privateDir, and lock errors on WriteConfig & UpdateConfig.
 	if err := UpdateConfig(cfgPath, FileConfig{Hub: "http://example.com"}); err == nil {
 		t.Fatal("expected ValidateURL error")
 	}
@@ -383,6 +390,26 @@ func TestUpdateConfigPreservesDisableOverStaleTrue(t *testing.T) {
 	if err := UpdateConfig(filepath.Join(fileParent, "client.json"), FileConfig{Hub: "https://hub.example"}); err == nil {
 		t.Fatal("expected privateDir error")
 	}
+	lockBlockDir := filepath.Join(dir, "lock-block")
+	if err := os.MkdirAll(filepath.Join(lockBlockDir, "client.json.lock"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteConfig(filepath.Join(lockBlockDir, "client.json"), FileConfig{Hub: "https://hub.example"}); err == nil {
+		t.Fatal("expected WriteConfig lock OpenFile error")
+	}
+	if err := UpdateConfig(filepath.Join(lockBlockDir, "client.json"), FileConfig{Hub: "https://hub.example"}); err == nil {
+		t.Fatal("expected UpdateConfig lock OpenFile error")
+	}
+	origLock := configFileLock
+	t.Cleanup(func() { configFileLock = origLock })
+	configFileLock = func(*os.File) error { return errors.New("flock failed") }
+	if err := WriteConfig(cfgPath, FileConfig{Hub: "https://hub.example"}); err == nil {
+		t.Fatal("expected WriteConfig lockConfigFile error")
+	}
+	if err := UpdateConfig(cfgPath, FileConfig{Hub: "https://hub.example"}); err == nil {
+		t.Fatal("expected UpdateConfig lockConfigFile error")
+	}
+	configFileLock = origLock
 
 	// Preserve true when untouched on disk.
 	if err := WriteConfig(cfgPath, FileConfig{Hub: "https://old.example", SessionSuccession: boolPtr(true)}); err != nil {
@@ -414,30 +441,41 @@ func TestUpdateConfigPreservesDisableOverStaleTrue(t *testing.T) {
 		t.Fatalf("invalid value not dropped cleanly: %s (%v)", raw, err)
 	}
 
-	// Concurrent owner disable (true -> false and true -> omitted) during beforeConfigRename always beats stale true.
+	// Exact race: atomic replacement with disable swapped in right after open (before rename) via CAS retry.
+	atomicSwapFile := func(target, body string) {
+		tmp := target + ".owner.tmp"
+		if err := os.WriteFile(tmp, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(tmp, target); err != nil {
+			t.Fatal(err)
+		}
+	}
 	for _, tc := range []struct {
 		name         string
 		ownerContent string
 		wantNil      bool
 	}{
-		{name: "explicit false wins", ownerContent: `{"hub_url":"https://old.example","session_succession":false}`, wantNil: false},
-		{name: "key removal wins", ownerContent: `{"hub_url":"https://old.example"}`, wantNil: true},
+		{name: "explicit false swapped after open", ownerContent: `{"hub_url":"https://old.example","session_succession":false}`, wantNil: false},
+		{name: "key removal swapped after open", ownerContent: `{"hub_url":"https://old.example"}`, wantNil: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if err := WriteConfig(cfgPath, FileConfig{Hub: "https://old.example", SessionSuccession: boolPtr(true)}); err != nil {
 				t.Fatal(err)
 			}
-			origBefore := beforeConfigRename
-			t.Cleanup(func() { beforeConfigRename = origBefore })
-			beforeConfigRename = func(p string) {
-				if err := os.WriteFile(p, []byte(tc.ownerContent), 0o600); err != nil {
-					t.Fatal(err)
+			origAfterStat := afterConfigStat
+			t.Cleanup(func() { afterConfigStat = origAfterStat })
+			swapped := false
+			afterConfigStat = func() {
+				if !swapped {
+					swapped = true
+					atomicSwapFile(cfgPath, tc.ownerContent)
 				}
 			}
 			if err := UpdateConfig(cfgPath, FileConfig{Hub: "https://updated.example"}); err != nil {
 				t.Fatal(err)
 			}
-			beforeConfigRename = origBefore
+			afterConfigStat = origAfterStat
 			var merged FileConfig
 			data, _ := os.ReadFile(cfgPath)
 			if err := json.Unmarshal(data, &merged); err != nil {
@@ -455,39 +493,53 @@ func TestUpdateConfigPreservesDisableOverStaleTrue(t *testing.T) {
 		})
 	}
 
-	// Initial stage failure and refresh-stage failure after concurrent disable.
-	origWrite := prepareConfigWrite
+	// Compare-and-swap transitions (absent->present, identical bytes atomically replaced, valid->corrupt) & abort after max retries.
 	origBefore := beforeConfigRename
-	t.Cleanup(func() {
-		prepareConfigWrite = origWrite
-		beforeConfigRename = origBefore
-	})
-	prepareConfigWrite = func(f *os.File) { _ = f.Close() }
-	if err := UpdateConfig(cfgPath, FileConfig{Hub: "https://fail.example"}); err == nil {
-		t.Fatal("expected initial stage failure")
-	}
-	prepareConfigWrite = origWrite
+	t.Cleanup(func() { beforeConfigRename = origBefore })
 
-	if err := WriteConfig(cfgPath, FileConfig{Hub: "https://old.example", SessionSuccession: boolPtr(true)}); err != nil {
-		t.Fatal(err)
-	}
-	writes := 0
-	prepareConfigWrite = func(f *os.File) {
-		writes++
-		if writes == 2 {
-			_ = f.Close()
+	absentRacePath := filepath.Join(dir, "absent-race.json")
+	swappedAbsent := false
+	beforeConfigRename = func(p string) {
+		if !swappedAbsent {
+			swappedAbsent = true
+			atomicSwapFile(p, `{"hub_url":"https://old.example","session_succession":false}`)
 		}
 	}
-	beforeConfigRename = func(p string) {
-		_ = os.WriteFile(p, []byte(`{"hub_url":"https://old.example","session_succession":false}`), 0o600)
+	if err := UpdateConfig(absentRacePath, FileConfig{Hub: "https://new.example"}); err != nil {
+		t.Fatal(err)
 	}
-	if err := UpdateConfig(cfgPath, FileConfig{Hub: "https://new.example"}); err == nil {
-		t.Fatal("expected refresh stage error")
+	var absCfg FileConfig
+	if data, err := os.ReadFile(absentRacePath); err != nil || json.Unmarshal(data, &absCfg) != nil || absCfg.SessionSuccession == nil || *absCfg.SessionSuccession {
+		t.Fatalf("absent->present CAS lost false: %s (%v)", data, err)
 	}
 
-	// Fresh config without existing file and rename failure cleanup.
+	// Same bytes replaced by new inode (non-same file identity) & persistent conflict -> ErrConfigChanged.
+	beforeConfigRename = func(p string) {
+		atomicSwapFile(p, `{"hub_url":"https://old.example","session_succession":false}`)
+	}
+	if err := UpdateConfig(absentRacePath, FileConfig{Hub: "https://abort.example"}); !errors.Is(err, ErrConfigChanged) {
+		t.Fatalf("persistent CAS swap = %v, want ErrConfigChanged", err)
+	}
+
+	// Stage failure and fresh config without existing file and rename failure cleanup.
+	origWrite := prepareConfigWrite
+	origCreateTemp := createConfigTemp
+	t.Cleanup(func() {
+		prepareConfigWrite = origWrite
+		createConfigTemp = origCreateTemp
+	})
+	createConfigTemp = func(string, string) (*os.File, error) { return nil, os.ErrPermission }
+	if err := UpdateConfig(cfgPath, FileConfig{Hub: "https://fail.example"}); err == nil {
+		t.Fatal("expected create temp failure")
+	}
+	createConfigTemp = origCreateTemp
+	prepareConfigWrite = func(f *os.File) { _ = f.Close() }
+	if err := UpdateConfig(cfgPath, FileConfig{Hub: "https://fail.example"}); err == nil {
+		t.Fatal("expected stage failure")
+	}
 	prepareConfigWrite = origWrite
 	beforeConfigRename = origBefore
+
 	freshPath := filepath.Join(dir, "fresh.json")
 	if err := UpdateConfig(freshPath, FileConfig{Hub: "https://fresh.example"}); err != nil {
 		t.Fatal(err)

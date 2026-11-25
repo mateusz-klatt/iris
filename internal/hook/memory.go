@@ -192,6 +192,14 @@ func (m fileMemory) Remember(client, session string, generation int) {
 	m.rememberDeadline(client, session, generation, time.Time{})
 }
 
+func rememberWithDeadline(m Memory, client, session string, generation int, deadline time.Time) {
+	if fm, ok := m.(fileMemory); ok {
+		fm.rememberDeadline(client, session, generation, deadline)
+		return
+	}
+	m.Remember(client, session, generation)
+}
+
 func (m fileMemory) rememberDeadline(client, session string, generation int, callerDeadline time.Time) {
 	m.rememberWithSuccession(client, session, generation, callerDeadline, false)
 }
@@ -850,10 +858,10 @@ func (m fileMemory) prune() error {
 }
 
 func (m fileMemory) pruneDeadline(callerDeadline time.Time) error {
-	return m.pruneWithSuccession(callerDeadline, false)
+	return m.pruneWithSuccession(callerDeadline, false, nil)
 }
 
-func (m fileMemory) pruneWithSuccession(callerDeadline time.Time, successionEnabled bool) error {
+func (m fileMemory) pruneWithSuccession(callerDeadline time.Time, successionEnabled bool, observe func(string)) error {
 	// What the directory cannot list, prune cannot judge, so it keeps it.
 	entries, _ := os.ReadDir(m.dir)
 	cutoff := m.clock()().Add(-memoryAge)
@@ -888,12 +896,17 @@ func (m fileMemory) pruneWithSuccession(callerDeadline time.Time, successionEnab
 			if errors.Is(markerErr, os.ErrDeadlineExceeded) {
 				return nil
 			}
-			if markerErr == nil && ended > 0 {
-				if expired {
-					_, _ = m.cleanupExpiredEnd(strings.TrimSuffix(path, ".ended"), ended, deadline, successionEnabled)
+			if markerErr != nil {
+				// ADR 039 keeps a damaged end marker in place and observes it for doctor.
+				if observe != nil {
+					observe(damagedGenerationObservation(path))
 				}
 				continue
 			}
+			if ended > 0 && expired {
+				_, _ = m.cleanupExpiredEnd(strings.TrimSuffix(path, ".ended"), ended, deadline, successionEnabled)
+			}
+			continue
 		}
 		if isExecutionFile(path) {
 			prefix := strings.TrimSuffix(path, ".execution")
@@ -905,6 +918,9 @@ func (m fileMemory) pruneWithSuccession(callerDeadline time.Time, successionEnab
 			}
 		}
 		if info, err := lstatSessionFile(path); err == nil && info.ModTime().Before(cutoff) {
+			if deadlineExpired(mono, deadline) {
+				return nil
+			}
 			_ = removeSessionFile(path)
 		}
 	}

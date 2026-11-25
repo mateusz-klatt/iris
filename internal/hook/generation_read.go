@@ -26,10 +26,14 @@ func deadlineExpired(now func() time.Time, deadline time.Time) bool {
 }
 
 func readRegularBoundedBytesDeadline(path string, limit int64, now func() time.Time, deadline time.Time) ([]byte, error) {
+	return readRegularBoundedBytesWithOpenDeadline(path, limit, now, deadline, generationFileOpen)
+}
+
+func readRegularBoundedBytesWithOpenDeadline(path string, limit int64, now func() time.Time, deadline time.Time, open func(string) (*os.File, error)) ([]byte, error) {
 	if deadlineExpired(now, deadline) {
 		return nil, os.ErrDeadlineExceeded
 	}
-	f, err := generationFileOpen(path)
+	f, err := open(path)
 	if err != nil {
 		return nil, err
 	}

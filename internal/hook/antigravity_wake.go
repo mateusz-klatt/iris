@@ -179,19 +179,39 @@ func writeAntigravityJSON(dir, target string, v any) error {
 func writeAntigravityJSONDeadline(dir, target string, v any, deadline time.Time, now func() time.Time) error {
 	// State structs hold only strings, ints and bools, so Marshal cannot fail.
 	raw, _ := json.Marshal(v)
+	if deadlineExpired(now, deadline) {
+		return os.ErrDeadlineExceeded
+	}
 	f, err := createAntigravityTemp(dir, ".tmp-*")
 	if err != nil {
 		return err
 	}
 	tmp := f.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmp)
+		}
+	}()
+	if deadlineExpired(now, deadline) {
+		_ = f.Close()
+		return os.ErrDeadlineExceeded
+	}
 	_, err = f.Write(append(raw, '\n'))
 	if err == nil {
+		if deadlineExpired(now, deadline) {
+			_ = f.Close()
+			return os.ErrDeadlineExceeded
+		}
 		err = syncAntigravityTemp(f)
 	}
 	if closeErr := f.Close(); err == nil {
 		err = closeErr
 	}
 	if err == nil {
+		if deadlineExpired(now, deadline) {
+			return os.ErrDeadlineExceeded
+		}
 		err = protectPath(tmp)
 	}
 	if err == nil {
@@ -202,11 +222,11 @@ func writeAntigravityJSONDeadline(dir, target string, v any, deadline time.Time,
 				err = renameAntigravityStateFile(tmp, target)
 			}
 		} else {
-			err = replaceSessionFileDeadline(tmp, target, deadline, false, now, nil)
+			err = replaceSessionFileDeadline(tmp, target, deadline, true, now, nil)
 		}
 	}
-	if err != nil {
-		_ = os.Remove(tmp)
+	if err == nil {
+		cleanup = false
 	}
 	return err
 }
@@ -659,11 +679,16 @@ func (r Runner) antigravityHook(ev Event, note func(string)) (Output, bool) {
 	}
 
 	m := antigravityHelpersMemory(configDir)
-	deadline := m.lockBudgetDeadline(time.Time{})
+	lockDeadline := m.lockBudgetDeadline(time.Time{})
+	writeBudget := antigravityHelperLockBudget
+	if r.Deadline > 0 && r.Deadline < writeBudget {
+		writeBudget = r.Deadline
+	}
+	writeDeadline := m.monoClock()().Add(writeBudget)
 	if err := m.directory(); err != nil {
 		return Output{}, false
 	}
-	unlock, err := m.lockDeadline(deadline)
+	unlock, err := m.lockDeadline(lockDeadline)
 	if err != nil {
 		return Output{}, false
 	}
@@ -768,7 +793,7 @@ func (r Runner) antigravityHook(ev Event, note func(string)) (Output, bool) {
 		}
 
 		if procDirty {
-			if err := writeAntigravityJSONDeadline(m.dir, antigravityProcFile(m.dir, anc.PID, anc.StartMS), procState, deadline, m.monoClock()); err != nil {
+			if err := writeAntigravityJSONDeadline(m.dir, antigravityProcFile(m.dir, anc.PID, anc.StartMS), procState, writeDeadline, m.monoClock()); err != nil {
 				// The current session and an arm marker live in this file. A failed replace
 				// leaves the previous contents in place. Stop must not ask again, and the
 				// hook still allows (D3). The failure is recorded once the lock is released,
@@ -778,7 +803,7 @@ func (r Runner) antigravityHook(ev Event, note func(string)) (Output, bool) {
 			}
 		}
 		if convDirty {
-			if err := writeAntigravityJSONDeadline(m.dir, antigravityConvFile(m.dir, ev.SessionID), convState, deadline, m.monoClock()); err != nil && persistErr == nil {
+			if err := writeAntigravityJSONDeadline(m.dir, antigravityConvFile(m.dir, ev.SessionID), convState, writeDeadline, m.monoClock()); err != nil && persistErr == nil {
 				persistErr = err
 			}
 		}
