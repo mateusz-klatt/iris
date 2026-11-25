@@ -876,8 +876,11 @@ Changes from the reference schema:
    budget ends before registration reaches the hub does not; the ADR 018 breaker only changes
    later hooks' scope. Plain binding lookups do not reattach on their own. A shim reattachment
    from memory never falls back to a generation-0 registration. After the
-   deadline or `SessionEnd`, a registering hook must obtain a new generation. The
-   [API recovery guidance](api.md#mcp-tools-answering-lost) lists the events and the binding-mode
+   deadline or `SessionEnd`, a registering hook must obtain a new generation. In ADR 038 stage 1a,
+   the hub also exposes `POST /v1/sessions/succeed` (with migration 029 provenance across `sessions`
+   and `succeed`, and startup refusal of reverted ADR 037 schemas before WAL or startup writes); no
+   client calls `succeed` yet and Choice A is deferred to stage 1b so v0.1.15 clients are unaffected.
+   The [API recovery guidance](api.md#mcp-tools-answering-lost) lists the events and the binding-mode
    limits.
 3. A claim has `origin` (`explicit` or `auto`) and an optional expiry instead of a mandatory
    renewed deadline.
@@ -1134,11 +1137,18 @@ Activation clears named `ConsoleSession` rows. Restoring a database can revive
 named credentials, grants and sessions. An older binary can restore earlier
 browser authority and must remain behind the rollback filter.
 
-The trust boundary is the OS user on a host, plus a token per host across hosts. The token
-separates users and hosts, nothing finer. Any process running as that user, including a hook
-from a repository the user trusted, can read it and act as any Execution. Agents under one user
-are not isolated from each other, and Iris does not claim otherwise. Inside that boundary Iris
-relies on leases, delimited bodies and text-free wake frames.
+The trust boundary is the OS user on a host; named host tokens (`HostToken.name`) let each host
+hold an independently revocable credential for audit and rate attribution, **not** cross-host
+isolation—the hub does not bind a bearer token's name to `Request.Host` or `Execution.host_id` on
+any session route (`sessions`, `bind`, `heartbeat`, `end`, `reconcile`, or `succeed`), so any valid
+owner or host token carries equal session authority across hosts (cross-host scoping would require a
+host-binding credential model). Any process running as that OS user, including a hook
+from a repository the user trusted, can read the bearer token and act as any Execution. Agents under one user
+are not isolated from each other, and Iris does not claim otherwise. Registration `source`,
+session and process identities, and succession proof fields (`prior_generation`, `prior_execution_id`)
+are self-declared evidence inside this shared bearer boundary: they prevent accidental races and stale
+clients, not an adversarial bearer holder. Inside that boundary Iris relies on leases, delimited bodies
+and text-free wake frames.
 
 - **Credentials.** The token is in a user-only file: mode 0600, and an owner-only DACL on Windows.
   Never in hook environments.
@@ -1563,7 +1573,29 @@ On `modernc.org/sqlite`, with real concurrency:
   host-token holder for that host's sessions and `source` is self-declared: this closes the fallback
   path of unmodified Iris clients and old or foreign non-hook clients, not a malicious host-token
   holder who can claim `hook` and already register sessions. If the 30-day retention sweep removes
-  the ended row, the guard has nothing left to check.
+  the ended row, the guard has nothing left to check. (Broader Choice A refusal of non-hook
+  generation-zero registrations over active or lost hook history is deferred to stage 1b.)
+- On the hub in ADR 038 stage 1a (`POST /v1/sessions/succeed`, unused by clients until stage 1b, with
+  Choice A deferred to stage 1b), succession creates or replays at most one live `G+1` child keyed
+  by exact `(prior_generation, prior_execution_id)` from a lost, hook-registered, non-superseded
+  predecessor strictly above `ended_through`, requiring matching process identity when supplied or
+  required by `single_session`. Like all session routes, `succeed` uses bearer authentication
+  without cross-host `HostToken.name`-to-`host` scoping (a valid host token can invoke `succeed` for
+  any host whose proof it presents; named tokens provide attribution only). Created children preserve
+  mailbox and repository context with zero
+  claims and `hook_seen_ms = 0`; replays arbitrate before `expire()`, skip expiry sweeps and stall
+  credit, enforce a strictly positive remaining lease, restrict replay to shim-succession (`shim` /
+  `shim_succession`) or eligible hook-registered (`hook` with `hook_seen_ms > 0`) children, and
+  return eligible live children without
+  renewing leases, updating `last_seen_ms` or `hook_seen_ms`, granting claims, emitting
+  `GenerationChange`, or emitting events, while recovering, ended, expired, superseded,
+  ordinary-registration, or diverged
+  children are refused (named bearer authentication still updates `HostToken.last_used_ms` and
+  `requests` separately). Migration 029 records `prior_execution_id`, `creation_source` and
+  `creation_proof` across `sessions` and `succeed`; `Store.Open` probes reverted ADR 037 schemas
+  (`WorktreeIdentity`, `Repository.auto_claim_scope`, or `user_version` 29/30 without
+  `prior_execution_id`) through a read-only VFS before opening writable handles, switching to WAL, or
+  running any startup writes, leaving main, `-wal`, and `-shm` bytes unchanged on refusal.
 - An orphaned heartbeat cannot preserve ownership. A second, unregistered session in one process
   cannot bind to the first. In id mode, a tool call that names its session binds only that
   session's Execution, never through a handle.

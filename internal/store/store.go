@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -20,6 +22,7 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite"
+	"modernc.org/sqlite/vfs"
 )
 
 //go:embed migrations/001.sql
@@ -106,6 +109,9 @@ var coordinationCursorSchema string
 //go:embed migrations/028.sql
 var leaseRenewedTickSchema string
 
+//go:embed migrations/029.sql
+var successionProvenanceSchema string
+
 // Clock separates lease ticks from persisted wall-clock expiries. Tick must be monotonic
 // within a Store's lifetime; client timestamps never participate in lease decisions.
 type Clock interface {
@@ -190,6 +196,8 @@ type transaction struct {
 	generationChange *GenerationChange
 	// A combined shell registration can fail after it inserts an Execution.
 	insertedExecution string
+	// replayed is set when t.succeed returns an already-committed G+1 Execution.
+	replayed bool
 }
 
 // exec runs a write that streams can observe. A commit in which an exec changed a row
@@ -270,13 +278,23 @@ func openDatabase(filename string, clock Clock, driverName string) (*Store, erro
 		unlockDatabase(lock)
 		return nil, err
 	}
-	db, err := openSQLite(driverName, abs, 1, "PRAGMA foreign_keys=ON", "PRAGMA journal_mode=WAL", "PRAGMA synchronous=FULL", "PRAGMA busy_timeout=5000", "PRAGMA temp_store=MEMORY")
+	// Probe reverted ADR 037 databases through a read-only VFS before opening a writable
+	// handle, so pending -wal frames are read without touching db, -wal, or -shm on refusal.
+	if err = probeRevertedADR037Schema(context.Background(), abs, driverName, newReadOnlyVFS); err != nil {
+		unlockDatabase(lock)
+		return nil, err
+	}
+	db, err := openSQLite(driverName, abs, 1, "PRAGMA foreign_keys=ON", "PRAGMA synchronous=FULL", "PRAGMA busy_timeout=5000", "PRAGMA temp_store=MEMORY")
 	if err != nil {
 		unlockDatabase(lock)
 		return nil, err
 	}
 	reads, stopReads := context.WithCancel(context.Background())
 	s := &Store{db: db, lock: lock, clock: clock, changed: make(chan struct{}), reads: reads, stopReads: stopReads}
+	if _, err = db.Exec("PRAGMA journal_mode=WAL"); err != nil {
+		_ = s.Close()
+		return nil, err
+	}
 	err = s.transact(context.Background(), func(t *transaction) error {
 		if _, err := t.exec(schema); err != nil {
 			return err
@@ -425,6 +443,11 @@ func openDatabase(filename string, clock Clock, driverName string) (*Store, erro
 				return err
 			}
 		}
+		if version < 29 {
+			if _, err := t.exec(successionProvenanceSchema); err != nil {
+				return err
+			}
+		}
 		// No shell baseline crosses a hub start. An older hub that ran in between could not keep
 		// a reduced one current (ADR 018), and one writes full ones without naming the checkout
 		// they came from, so they may be another checkout's (ADR 033). The first snapshot after a
@@ -507,6 +530,51 @@ func openSQLite(driverName, dsn string, maxConns int, pragmas ...string) (*sql.D
 		}
 	}
 	return db, nil
+}
+
+func newReadOnlyVFS(fsys fs.FS) (string, io.Closer, error) {
+	return vfs.New(fsys)
+}
+
+func probeRevertedADR037Schema(ctx context.Context, abs, driverName string, newVFS func(fs.FS) (string, io.Closer, error)) error {
+	dsn := "file:" + (&url.URL{Path: filepath.ToSlash(abs)}).EscapedPath() + "?immutable=1&_pragma=query_only(ON)&_pragma=busy_timeout(5000)&_pragma=temp_store(2)"
+	if _, err := os.Stat(abs + "-wal"); err == nil {
+		id, fsCloser, err := newVFS(os.DirFS(filepath.Dir(abs)))
+		if err != nil {
+			return err
+		}
+		defer func() { _ = fsCloser.Close() }()
+		dsn = "file:" + (&url.URL{Path: filepath.Base(abs)}).EscapedPath() + "?vfs=" + id + "&_pragma=locking_mode(EXCLUSIVE)&_pragma=query_only(ON)&_pragma=busy_timeout(5000)&_pragma=temp_store(2)"
+	}
+	db, err := openSQLite(driverName, dsn, 1)
+	if err != nil {
+		return err
+	}
+	err = rejectRevertedADR037Schema(ctx, db)
+	_ = db.Close()
+	return err
+}
+
+// rejectRevertedADR037Schema refuses databases from the reverted ADR 037 branch before any writes.
+func rejectRevertedADR037Schema(ctx context.Context, db *sql.DB) error {
+	var version int
+	if err := db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
+		return err
+	}
+	var worktreeIdentity, autoClaimScope, priorExecutionID int
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM sqlite_schema WHERE type='table' AND name='WorktreeIdentity'").Scan(&worktreeIdentity); err != nil {
+		return err
+	}
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM pragma_table_info('Repository') WHERE name='auto_claim_scope'").Scan(&autoClaimScope); err != nil {
+		return err
+	}
+	if err := db.QueryRowContext(ctx, "SELECT COUNT(*) FROM pragma_table_info('Execution') WHERE name='prior_execution_id'").Scan(&priorExecutionID); err != nil {
+		return err
+	}
+	if worktreeIdentity > 0 || autoClaimScope > 0 || ((version == 29 || version == 30) && priorExecutionID == 0) {
+		return fmt.Errorf("cannot open database with reverted ADR 037 schema (user_version=%d); restore the pre-ADR-037 backup", version)
+	}
+	return nil
 }
 
 // errStoreClosed is what a console read receives once Close has begun. The

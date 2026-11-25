@@ -54,16 +54,7 @@ func (t *transaction) generationChanged(previous, current execution, r Request) 
 			reason = "prior_lost"
 		}
 	}
-	source := r.Source
-	switch source {
-	case "hook", "shim", "watch", "mcp":
-	case "":
-		source = "legacy"
-	}
-	proof := "absent"
-	if r.RetryGeneration > 0 {
-		proof = "stale_retry"
-	}
+	_, source, proof := creationProvenance(previous, r)
 	t.generationChange = &GenerationChange{
 		ExecutionID: current.ID, PreviousExecutionID: previous.ID,
 		Generation: current.Generation, PreviousGeneration: previous.Generation,

@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-const schema26UnfilteredClaimAndDeliveryTriggers = removeLeaseRenewedTickSchema + `
+const schema26UnfilteredClaimAndDeliveryTriggers = "ALTER TABLE Execution DROP COLUMN lease_renewed_tick_ms;\n" + `
 DROP TRIGGER console_revision_claim_update;
 CREATE TRIGGER console_revision_claim_update AFTER UPDATE ON Claim BEGIN
  INSERT INTO ConsoleRepositoryChange SELECT OLD.repository_id UNION SELECT NEW.repository_id;
@@ -359,6 +359,9 @@ func TestMigration27FiltersClaimAndDeliveryConsoleCursors(t *testing.T) {
 		t.Fatal("schema-26 delivery trigger was not active")
 	}
 
+	if _, err := s.db.Exec(removeSuccessionProvenanceSchema); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -422,6 +425,9 @@ func TestMigration27RollsBackAtEveryStep(t *testing.T) {
 	call(t, s, "messages", Request{ExecutionID: a.ExecutionID, Generation: a.Generation, Key: "m1", To: []string{bName}, Body: "hi"})
 	call(t, s, "inbox", Request{ExecutionID: b.ExecutionID, Generation: b.Generation, Receipt: true})
 	if _, err := s.db.Exec(schema26UnfilteredClaimAndDeliveryTriggers); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.db.Exec(removeSuccessionProvenanceSchema); err != nil {
 		t.Fatal(err)
 	}
 	if err := s.Close(); err != nil {
@@ -548,6 +554,9 @@ func TestConsoleRevisionBurstFrameRateBeforeAndAfterMigration27(t *testing.T) {
 		t.Fatalf("unexpected schema-26 burst counts: total=%d claim=%d delivery=%d real=%d", beforeTotal, beforeClaim, beforeDelivery, beforeReal)
 	}
 
+	if _, err := s.db.Exec(removeSuccessionProvenanceSchema); err != nil {
+		t.Fatal(err)
+	}
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
 	}

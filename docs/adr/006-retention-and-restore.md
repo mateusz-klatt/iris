@@ -4,8 +4,9 @@ Status: accepted. The decisions below were made by `claude-holzera-iris` under t
 delegation, from a proposal by `claude-home-iris` (gap review D3). Implementation is planned, not
 done. Decision 7 is amended below, on 2026-11-13 (a restored copy runs on a new stream), on
 2026-11-22 (in-window reattachment by `iris mcp` and `iris watch`, and the restore generation floor),
-and on 2026-11-24 (a strict `ended_through` floor on every hook registration, and doctor's current
-end-marker scan).
+and on 2026-11-24 (morning: a strict `ended_through` floor on every hook registration and
+doctor's current end-marker scan; evening: ADR 038 stage 1a hub-side create-or-replay succession
+route, migration 029 provenance, and reverted ADR 037 schema startup refusal).
 
 ## Problem
 
@@ -175,8 +176,10 @@ generation or restore checks.
 - On a restored backup whose generation is older than the host's local generation memory,
   presenting the newer remembered generation is still refused with `lost` and never downgraded or
   retried with `generation = 0`, so restored authority is never granted.
-- Automatic post-120 s succession without a registering hook is deliberately out of scope here and
-  deferred to its own ADR.
+- Automatic post-120 s succession without a registering hook is outside this amendment's scope.
+  [ADR 038](038-process-activation-and-exact-proof-succession.md) stage 1a later adds the hub-side
+  `POST /v1/sessions/succeed` route and migration 029 provenance schema, unused by clients until
+  stage 1b (when client succession and Choice A ship), without changing these in-window rules.
 
 ## Addendum of 2026-11-22: the restore generation floor
 
@@ -379,3 +382,52 @@ an older hub treats a missing `highest_generation` as a refusal to retry, keeps 
 fails open for the edit. Doctor reports “hub predates restore floor” from that observation.
 An old hook that reports no `ended_through` floor cannot be protected server-side: the hub cannot
 infer that client's local marker. The full protection requires both the hub and clients to be upgraded.
+
+## Amendment of 2026-11-24: ADR 038 stage 1a hub succession route, migration 029, and reverted ADR 037 refusal
+
+[ADR 038](038-process-activation-and-exact-proof-succession.md) stage 1a deploys only the hub and
+schema side of exact-proof post-window succession. It is inert for v0.1.15 clients:
+
+- **Stage 1a scope (unused by clients; Choice A deferred to stage 1b):** No Iris client calls
+  `POST /v1/sessions/succeed` in stage 1a, and Choice A (`refuseProoflessRegistration`, which closes
+  proofless generation-zero non-hook registration over retained hook history) is explicitly deferred
+  to stage 1b so v0.1.15 shims and watches retain their existing behavior while the hub upgrades
+  first. Only the existing `ended`-session guard (`previous.State == "ended" && r.Source != "hook"`)
+  remains active on `POST /v1/sessions`.
+- **Hub create-or-replay route:** `POST /v1/sessions/succeed` validates bearer authentication,
+  `source == "shim"`, positive `prior_generation`, non-empty `prior_execution_id`, non-negative
+  `ended_through`, process identity (when supplied or required by `single_session`), `#417`
+  `/clear` supersession, and mailbox availability in one writer transaction:
+  - **Create `G+1`:** from the newest exact `lost` hook-registered Execution (`hook_seen_ms > 0`)
+    strictly above `ended_through`, inserts `G+1` with `prior_execution_id = ex_G`,
+    `creation_source = "shim"`, `creation_proof = "shim_succession"`, preserved mailbox and
+    repository context, zero claims, `hook_seen_ms = 0`, `heartbeat_mode = 1`, `lease_ms = 60000`,
+    one `changed` event, and a `GenerationChange` diagnostic.
+  - **Replay `G+1`:** arbitrates before running `expire()` and skips both expiry sweeps and stall
+    credit; if `G+1` exists with `prior_execution_id = ex_G`, `G` is `lost` and hook-registered,
+    both pass process and supersession checks, `ended_through < G`, and `G+1` is `active` in the
+    current boot epoch with `recovery_deadline IS NULL` and strictly positive remaining lease
+    (`lease_ms > 0`), returns `G+1` without renewing leases, updating `last_seen_ms` or
+    `hook_seen_ms`, granting claims, emitting `GenerationChange`, or emitting events. Recovering,
+    ended, expired, superseded, or diverged children are refused.
+- **Migration 029 and rollback requirement:** Migration `029` adds nullable columns
+  `prior_execution_id`, `creation_source`, and `creation_proof` plus partial index
+  `execution_prior` on `Execution`, recorded across both `sessions` and `succeed`. Genuine
+  databases at `user_version <= 28` upgrade cleanly to `29`. **Rolling back to a pre-029 hub
+  binary requires restoring the pre-deploy database backup** (taken before upgrading to migration
+  `029`, using `iris admin backup` / restore-marker procedure in Decision 7): an older binary from
+  schema `28` cannot safely operate on or revert a migrated `user_version = 29` database.
+- **Reverted ADR 037 schema refusal and recovery steps:** Before switching journal mode
+  (`PRAGMA journal_mode=WAL`) or performing any startup writes, `Store.Open` detects databases from
+  the reverted ADR 037 branch (`WorktreeIdentity` table, `Repository.auto_claim_scope` column, or
+  `user_version` `29`/`30` without `Execution.prior_execution_id`) and refuses to open with
+  `cannot open database with reverted ADR 037 schema (user_version=...); restore the pre-ADR-037 backup`,
+  leaving the database file and `-wal`/`-shm` sidecars untouched.
+  **Recovery steps:**
+  1. Keep `iris serve` stopped and verify the database path. Do not run manual `ALTER TABLE` or
+     `PRAGMA user_version` edits against the refused database.
+  2. Restore the pre-ADR-037 backup taken before that deployment (retaining its restore marker if
+     restoring an `iris admin backup` snapshot so `stream_id` rotates on startup).
+  3. Start `iris serve` and verify `/v1/status` and `iris doctor`.
+- **Trust boundary:** As under D13, predecessor proof fields are self-declared within the host-token
+  boundary and prevent accidental races rather than authenticating an adversarial host-token holder.

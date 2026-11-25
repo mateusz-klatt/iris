@@ -102,7 +102,7 @@ func TestAMarkedSchema24CopyMigratesAndRotatesOnce(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, q := range []string{"ALTER TABLE Execution DROP COLUMN lease_renewed_tick_ms", "DROP TABLE RestoreMarker", "PRAGMA user_version=24"} {
+	for _, q := range []string{removeSuccessionProvenanceSchema + "ALTER TABLE Execution DROP COLUMN lease_renewed_tick_ms", "DROP TABLE RestoreMarker", "PRAGMA user_version=24"} {
 		if _, err := raw.Exec(q); err != nil {
 			t.Fatal(err)
 		}

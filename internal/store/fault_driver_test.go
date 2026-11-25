@@ -10,6 +10,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	"modernc.org/sqlite"
 )
@@ -121,7 +122,7 @@ func installFaultDriver(t *testing.T, s *Store, file string) *storageFault {
 }
 
 func TestStorageFailuresRollBackAndRetry(t *testing.T) {
-	for _, op := range []string{"sessions", "session-resume", "session-resume-new-process", "session-resume-learns-root", "session-remote-learns-root", "session-checkout-continuity", "session-checkout-rewrite", "session-isolated", "heartbeat-recovery", "session-new-slot", "session-learns-root", "touch-cached", "touch-conflict", "claim-conflict", "check-known", "policy", "bind", "heartbeat", "end", "end-handover", "touch", "claim", "claim-reuse", "claim-cached", "release", "claims", "messages", "message-repo", "contact", "message-cached", "inbox", "ack", "ack-handled", "inbox-receipt", "receipt-sweep", "receipts", "read_body", "agents", "agents-all", "hooks_seen", "events", "events-reset", "status", "validate", "monitor_cursor", "check", "check-alias", "session-alias", "reconcile", "reconcile-release", "reconcile-session", "reconcile-scoped", "reconcile-scoped-compare", "reconcile-full-after-scoped", "reconcile-shared", "ui_overview", "ui_deliveries", "ui_threads", "ui_threads-human", "ui_thread", "ui_read", "ui_messages", "ui_messages-existing-human", "ui_messages-cached", "ui_messages-merged-cached", "ui_messages-retired-cached", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_events", "expire", "sweep", "forget", "forget-repository", "history", "thread", "read_message_body", "merge", "merge-dry-run", "unalias", "unalias-dry-run", "touch-files", "touch-files-known", "touch-files-conflict", "touch-files-cached", "release-foreign", "reconcile-foreign", "claim-files", "claim-files-reuse", "sessions-outside", "sessions-outside-known", "merge-outside", "merge-outside-dry-run"} {
+	for _, op := range []string{"sessions", "succeed", "succeed-replay", "session-resume", "session-resume-new-process", "session-resume-learns-root", "session-remote-learns-root", "session-checkout-continuity", "session-checkout-rewrite", "session-isolated", "heartbeat-recovery", "session-new-slot", "session-learns-root", "touch-cached", "touch-conflict", "claim-conflict", "check-known", "policy", "bind", "heartbeat", "end", "end-handover", "touch", "claim", "claim-reuse", "claim-cached", "release", "claims", "messages", "message-repo", "contact", "message-cached", "inbox", "ack", "ack-handled", "inbox-receipt", "receipt-sweep", "receipts", "read_body", "agents", "agents-all", "hooks_seen", "events", "events-reset", "status", "validate", "monitor_cursor", "check", "check-alias", "session-alias", "reconcile", "reconcile-release", "reconcile-session", "reconcile-scoped", "reconcile-scoped-compare", "reconcile-full-after-scoped", "reconcile-shared", "ui_overview", "ui_deliveries", "ui_threads", "ui_threads-human", "ui_thread", "ui_read", "ui_messages", "ui_messages-existing-human", "ui_messages-cached", "ui_messages-merged-cached", "ui_messages-retired-cached", "ui_revoke", "ui_doctor_get", "ui_doctor_put", "ui_events", "expire", "sweep", "forget", "forget-repository", "history", "thread", "read_message_body", "merge", "merge-dry-run", "unalias", "unalias-dry-run", "touch-files", "touch-files-known", "touch-files-conflict", "touch-files-cached", "release-foreign", "reconcile-foreign", "claim-files", "claim-files-reuse", "sessions-outside", "sessions-outside-known", "merge-outside", "merge-outside-dry-run"} {
 		t.Run(op, func(t *testing.T) {
 			s, clock, file := testStore(t)
 			a, ar := session(t, s, 1)
@@ -157,6 +158,17 @@ func TestStorageFailuresRollBackAndRetry(t *testing.T) {
 			switch op {
 			case "sessions":
 				r = Request{Client: "codex", Host: "new", SessionID: "new", Cwd: "/new", Worktree: "/new", RemoteURL: "https://new.example/repo.git"}
+			case "succeed", "succeed-replay":
+				route = "succeed"
+				if _, err := s.db.Exec("UPDATE Execution SET client_pid=42,client_pid_start_ms=100,single_session=1 WHERE id=?", a.ExecutionID); err != nil {
+					t.Fatal(err)
+				}
+				clock.advance(16 * time.Minute)
+				call(t, s, "expire", Request{})
+				r = Request{Client: "codex", Host: "host", SessionID: "1", Source: "shim", PriorGeneration: 1, PriorExecutionID: a.ExecutionID, ClientPID: 42, ClientPIDStartMS: 100}
+				if op == "succeed-replay" {
+					call(t, s, "succeed", r)
+				}
 			case "session-learns-root":
 				route = "sessions"
 				call(t, s, "sessions", Request{Client: "codex", Host: "late", SessionID: "late", Cwd: "/late", Worktree: "/late", RemoteURL: "https://late.example/late.git"})

@@ -106,7 +106,56 @@ Resume and reattachment preserve the generation. A new Execution after loss adva
 SessionEnd, only a generation-zero hook registration can advance it: every non-hook source, legacy
 empty included, gets `409 lost` regardless of `retry_generation`. If retention has removed the
 ended Execution, that state is no longer available to check. An older hub omits the detail, so an
-upgraded hook keeps its proof and skips the retry.
+upgraded hook keeps its proof and skips the retry. (Broader Choice A refusal of proofless non-hook
+generation-zero registration over non-ended hook history is deferred to ADR 038 stage 1b so stage 1a
+remains inert for v0.1.15 clients.)
+
+`POST /v1/sessions/succeed` is the versioned create-or-replay post-window succession route (ADR 038
+stage 1a, hub only — unused by any Iris client until stage 1b):
+
+```json
+{"client":"claude","session_id":"...","host":"...","source":"shim",
+ "prior_generation":1,"prior_execution_id":"ex_...","ended_through":0,
+ "client_pid":0,"client_pid_start_ms":0}
+```
+
+Both `prior_generation > 0` and non-empty `prior_execution_id` are required, `source` must be
+`"shim"`, and `ended_through` cannot be negative (`bad_request`). The route uses the same bearer
+token authentication as other session routes (named host tokens in `HostToken` are attribution
+labels and are not bound to `host` or `Execution.host_id`, so any valid owner or host token has
+equal session-route authority across hosts; see [Named host tokens](#named-host-tokens)), takes no
+checkout fields, and preserves the predecessor's Agent mailbox, repository (or outside-host context),
+worktree, branch, parent and repository-wide claim scope. Callers send any local end floor as
+`ended_through`; prior proof at or below it is refused with `409 lost` and
+`error.details.reason:"ended_through"`.
+
+In one writer transaction, the hub checks the newest retained Execution for `(host, client, session_id)`:
+- **Create `G+1`:** when `G` has `Generation == prior_generation`, `id == prior_execution_id`,
+  `state == "lost"`, `hook_seen_ms > 0`, matching process identity (when sent or required by
+  `single_session`), no newer `#417` hook session superseding a single-session or top-level Claude
+  process, and no active Execution already holding the mailbox, the hub inserts `G+1` with
+  `prior_execution_id = ex_G`, `creation_source = "shim"`, `creation_proof = "shim_succession"`,
+  `heartbeat_mode = 1`, zero claims, `hook_seen_ms = 0`, `lease_ms: 60000`, emits one `changed`
+  event, and logs a `GenerationChange` diagnostic (`source: "shim"`, `proof: "shim_succession"`).
+- **Replay `G+1`:** checked before the transaction's expiry sweep (`expire()`), when `G+1` already
+  exists with `prior_execution_id == prior_execution_id` and eligible creation provenance—either shim
+  succession (`creation_source = "shim"` and `creation_proof = "shim_succession"`) or an eligible
+  registering hook (`creation_source = "hook"` with `hook_seen_ms > 0`); ordinary `mcp`, `watch`,
+  `legacy`, or generation-zero `shim` registrations are refused—`G` is `lost` and hook-registered,
+  both satisfy process checks, no `#417` supersession occurred, `ended_through` is strictly below `G`
+  (and thus `G+1`), and `G+1` is still `active` in the current boot epoch with
+  `recovery_deadline IS NULL` and a strictly positive remaining lease (`lease_ms > 0`), the hub
+  returns that exact recorded `G+1` child with remaining `lease_ms` and performs no session or
+  domain DB writes (bearer authentication for a named host token still records `last_used_ms` and
+  `requests` on `HostToken` as on every authenticated request): replay runs neither the expiry sweep
+  nor stall credit and never renews the lease, updates `last_seen_ms` or `hook_seen_ms`, grants
+  claims, emits `GenerationChange`, or emits an event. A recovering, ended, expired, superseded,
+  ordinary-registration, or unrelated child is refused.
+
+These proof fields are self-declared and are not host-token-isolated across hosts: they prevent
+accidental races and stale retries inside the shared bearer-token boundary rather than authenticating
+an adversarial bearer holder or scoping requests by `HostToken.name`. No client invokes
+`POST /v1/sessions/succeed` in stage 1a; client-side succession and Choice A ship in stage 1b.
 
 An unexpired local `.ended` marker for generation G is sent as `ended_through:G` on ordinary,
 outside-git and combined shell registration, including SessionStart. A generation-zero request

@@ -32,9 +32,16 @@ func historicalStore(t *testing.T, version int) (*Store, *fakeClock, string) {
 			t.Fatal("could not build historical schema", err)
 		}
 	}
-	// Today's sessions code writes lease_renewed_tick_ms; migration tests drop it before reopening.
-	if _, err = db.Exec("ALTER TABLE Execution ADD COLUMN lease_renewed_tick_ms INTEGER NOT NULL DEFAULT 0"); err != nil {
-		t.Fatal(err)
+	// Today's sessions code writes lease_renewed_tick_ms and succession provenance; migration tests drop them before reopening.
+	for _, ddl := range []string{
+		"ALTER TABLE Execution ADD COLUMN lease_renewed_tick_ms INTEGER NOT NULL DEFAULT 0",
+		"ALTER TABLE Execution ADD COLUMN prior_execution_id TEXT",
+		"ALTER TABLE Execution ADD COLUMN creation_source TEXT",
+		"ALTER TABLE Execution ADD COLUMN creation_proof TEXT",
+	} {
+		if _, err = db.Exec(ddl); err != nil {
+			t.Fatal(err)
+		}
 	}
 	stream := newStreamID()
 	if _, err = db.Exec("INSERT INTO Meta VALUES(1,?,1)", stream); err != nil {
@@ -63,7 +70,7 @@ func TestFreshDatabaseHasVersion24WithoutImportLedgers(t *testing.T) {
 }
 
 // latestVersion is the schema version a store reaches when it opens: the last migration's.
-const latestVersion = 28
+const latestVersion = 29
 
 func assertImportRemoval(t *testing.T, db *sql.DB) {
 	t.Helper()
