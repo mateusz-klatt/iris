@@ -83,13 +83,24 @@ func TestAnActiveExecutionKeepsItsRecordAcrossKinds(t *testing.T) {
 	_, git := session(t, s, 1)
 	repo := git["repository_id"].(string)
 	before := aliasesOf(t, s, repo)
-	// The same session, now seen without a checkout, stays in its repository.
-	again := call(t, s, "sessions", Request{Client: "codex", Host: "host", SessionID: "1", Cwd: "/repo/w1", Source: "mcp"})
+	// Under Choice A, a non-hook generation-zero registration cannot attach to a hook session;
+	// a hook registration without a checkout (and an unhooked MCP session seen without one)
+	// keeps its active Execution in its repository without teaching aliases.
+	expectError(t, s, "sessions", Request{Client: "codex", Host: "host", SessionID: "1", Cwd: "/repo/w1", Source: "mcp"}, "lost")
+	again := call(t, s, "sessions", Request{Client: "codex", Host: "host", SessionID: "1", Cwd: "/repo/w1", Source: "hook"})
 	if again["repository_id"] != repo || again["execution_id"] != git["execution_id"] {
 		t.Fatalf("a repository's session moved: %v", again)
 	}
 	if got := aliasesOf(t, s, repo); !slices.Equal(got, before) {
 		t.Fatalf("an outside registration taught a repository: %v", got)
+	}
+	unhooked := call(t, s, "sessions", Request{Client: "codex", Host: "host", Cwd: "/repo/w1", Worktree: "/repo/w1", RemoteURL: "https://example.com/team/project.git", RootCommit: "root", SessionID: "unhooked", Source: "mcp"})
+	againMCP := call(t, s, "sessions", Request{Client: "codex", Host: "host", SessionID: "unhooked", Cwd: "/repo/w1", Source: "mcp"})
+	if againMCP["repository_id"] != repo || againMCP["execution_id"] != unhooked["execution_id"] {
+		t.Fatalf("an unhooked repository session moved: %v", againMCP)
+	}
+	if got := aliasesOf(t, s, repo); !slices.Equal(got, before) {
+		t.Fatalf("an unhooked outside registration taught a repository: %v", got)
 	}
 	_, out := outsideSession(t, s, "home", "o", "/home/u/tmp")
 	context := out["repository_id"].(string)

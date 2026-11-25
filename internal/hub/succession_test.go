@@ -361,7 +361,8 @@ func TestHTTPSucceedRouteAuthAndUnexpectedCallerFences(t *testing.T) {
 	}
 	assertInert(beforeSup, "superseded replay")
 
-	// 7. Choice A is deferred to stage 1b: existing v0.1.15 non-hook G=0 behavior after loss stays inert.
+	// 7. Choice A is enforced on stage-1b hubs: non-hook G=0 over lost hook history returns 409 lost,
+	// while genuine hookless D6 fallback still succeeds.
 	inert := do(http.MethodPost, "/v1/sessions", map[string]any{
 		"client": "codex", "host": "host", "session_id": "S-v15", "cwd": "/repo/w", "worktree": "/repo/w", "source": "hook",
 	}, hostToken, http.StatusOK)
@@ -369,11 +370,22 @@ func TestHTTPSucceedRouteAuthAndUnexpectedCallerFences(t *testing.T) {
 	if _, err := s.Call(t.Context(), "expire", store.Request{}); err != nil {
 		t.Fatal(err)
 	}
-	v15AfterLoss := do(http.MethodPost, "/v1/sessions", map[string]any{
+	beforeChoiceA := snapshot()
+	choiceARefused := do(http.MethodPost, "/v1/sessions", map[string]any{
 		"client": "codex", "host": "host", "session_id": "S-v15", "cwd": "/repo/w", "worktree": "/repo/w", "source": "mcp",
+	}, hostToken, http.StatusConflict)
+	choiceAErr := choiceARefused["error"].(map[string]any)
+	if choiceAErr["code"] != "lost" || choiceAErr["details"].(map[string]any)["highest_generation"] != float64(1) {
+		t.Fatalf("Choice A refusal over lost hook history: %+v", choiceARefused)
+	}
+	assertInert(beforeChoiceA, "Choice A over lost hook history")
+	_ = inert
+
+	noHook := do(http.MethodPost, "/v1/sessions", map[string]any{
+		"client": "codex", "host": "host", "session_id": "S-nohook", "cwd": "/repo/w", "worktree": "/repo/w", "source": "mcp",
 	}, hostToken, http.StatusOK)
-	if v15AfterLoss["generation"] != float64(2) || v15AfterLoss["execution_id"] == inert["execution_id"] {
-		t.Fatalf("stage 1a altered v0.1.15 non-hook loss registration: %+v", v15AfterLoss)
+	if noHook["generation"] != float64(1) {
+		t.Fatalf("genuine no-hook D6 fallback failed: %+v", noHook)
 	}
 
 	// 8. Restarting hub puts active executions in recovery; succeed refuses recovering predecessor.
@@ -794,4 +806,110 @@ func TestHTTPStage1bClassifiedRepliesAndCompatibilityGuards(t *testing.T) {
 		"generation": float64(2), "source": "watch", "succession_proof": true,
 	}, http.StatusOK)
 	assertHTTPClassified(t, watchHB, parentID, "shim", "shim_succession", true)
+}
+
+func TestHTTPChoiceAUpgradedHistoryAndSyntheticProcess(t *testing.T) {
+	clock := &generationClock{now: time.Unix(1800000000, 0)}
+	dbPath := filepath.Join(t.TempDir(), "choicea-http.db")
+	s, err := store.Open(dbPath, clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	h := New(s, "test-secret", []string{"127.0.0.1"})
+
+	do := func(path string, req map[string]any, want int) map[string]any {
+		t.Helper()
+		raw, err := json.Marshal(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1"+path, bytes.NewReader(raw))
+		r.Header.Set("Authorization", "Bearer test-secret")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%s status=%d want=%d body=%s", path, w.Code, want, w.Body.String())
+		}
+		var out map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+
+	assertLost := func(out map[string]any, wantHighest float64) {
+		t.Helper()
+		errObj := out["error"].(map[string]any)
+		if errObj["code"] != "lost" || errObj["details"].(map[string]any)["highest_generation"] != wantHighest {
+			t.Fatalf("unexpected Choice A error: %+v (want highest_generation=%v)", out, wantHighest)
+		}
+	}
+
+	// Upgraded G (hook, lost) + G+1 (unhooked MCP, live then lost) across all registration/shell routes.
+	g1 := do("/v1/sessions", map[string]any{
+		"client": "cursor", "host": "host", "session_id": "S-http-upg",
+		"cwd": "/repo/w", "worktree": "/repo/w", "source": "hook",
+		"client_pid": 90, "client_pid_start_ms": 990, "single_session": true,
+	}, http.StatusOK)
+	clock.advance(16 * time.Minute)
+	if _, err := s.Call(t.Context(), "expire", store.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	tick := clock.Tick()
+	rawDB, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := rawDB.Exec("PRAGMA busy_timeout=5000"); err != nil {
+		_ = rawDB.Close()
+		t.Fatal(err)
+	}
+	if _, err := rawDB.Exec(
+		`INSERT INTO Execution(id,agent_id,repository_id,host_id,client,session_id,generation,worktree,branch,boot_epoch,deadline_tick_ms,lease_renewed_tick_ms,state,client_pid,client_pid_start_ms,single_session,heartbeat_mode,hook_seen_ms,prior_execution_id,creation_source,creation_proof) VALUES('ex_http_g2',?,?,'host','cursor','S-http-upg',2,'/repo/w','main',(SELECT boot_epoch FROM Meta WHERE id=1),?,?,'active',90,990,1,1,0,?,'mcp','absent')`,
+		g1["agent"].(map[string]any)["id"], g1["repository_id"], tick+60000, tick, g1["execution_id"],
+	); err != nil {
+		_ = rawDB.Close()
+		t.Fatal(err)
+	}
+	if err := rawDB.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	checkAllRoutes := func(sessID string, wantHighest float64, pid, start int) {
+		t.Helper()
+		for _, path := range []string{"/v1/sessions", "/v1/sessions/outside", "/v1/shell/reconcile", "/v1/shell/scoped"} {
+			req := map[string]any{
+				"client": "cursor", "host": "host", "session_id": sessID,
+				"cwd": "/repo/w", "source": "mcp",
+				"client_pid": pid, "client_pid_start_ms": start, "single_session": true,
+			}
+			switch path {
+			case "/v1/sessions":
+				req["worktree"] = "/repo/w"
+			case "/v1/shell/reconcile":
+				req["worktree"] = "/repo/w"
+				req["kind"] = "before"
+				req["status"] = map[string]any{}
+			case "/v1/shell/scoped":
+				req["worktree"] = "/repo/w"
+				req["kind"] = "before"
+				req["status"] = map[string]any{}
+				req["scope"] = map[string]any{"mode": "dirty", "submodules": []string{"sub"}}
+			}
+			assertLost(do(path, req, http.StatusConflict), wantHighest)
+		}
+	}
+
+	// Attach path: live unhooked G+1 with retained G hook history.
+	checkAllRoutes("S-http-upg", 2, 90, 990)
+	// Synthetic process Choice A over same (host, cursor, 90, 990) pins highest_generation=0.
+	checkAllRoutes("mcp-90-990", 0, 90, 990)
+
+	// Expire G+1 to test insert path over lost unhooked G+1.
+	clock.advance(2 * time.Minute)
+	if _, err := s.Call(t.Context(), "expire", store.Request{}); err != nil {
+		t.Fatal(err)
+	}
+	checkAllRoutes("S-http-upg", 2, 90, 990)
 }

@@ -393,8 +393,10 @@ includes it to specify behavior during integration. There is no stage-1a-only re
 | Hub | v0.1.15 or any client without this protocol | v0.1.16 client with succession enabled |
 |---|---|---|
 | v0.1.15 hub | Existing behavior. | Ordinary binding and D9 recovery on the hub's original schema. The stage 1b route returns `not_found` before any mutation. |
-| Stage 1a on `main` (unreleased) | Ordinary paths with Choice A over retained history. No released client calls the stage 1a route. | Same ordinary paths. The stage 1b route returns `not_found` before any mutation. |
+| Stage 1a on `main` (unreleased) | Ordinary paths (`#408`'s `ended` guard active; Choice A deferred to stage 1b). No released client calls the stage 1a route. | Same ordinary paths. The stage 1b route returns `not_found` before any mutation. |
 | v0.1.16 hub with stage 1b | Ordinary paths with Choice A. Hookless succession children stay unavailable to older shims and watchers until a hook registers them. | Creates or replays with the predecessor's exact pair and renews admitted bindings. Ordinary paths remain available. |
+
+> **Erratum (2026-11-25):** The stage-1a cell above originally stated that stage 1a enforced Choice A over retained history. Actual stage 1a (`02ed40e`) deferred Choice A to stage 1b—as documented in [docs/architecture.md](../architecture.md)—even though [ADR 038](038-process-activation-and-exact-proof-succession.md#schema-and-compatibility) described Choice A as part of the target new hub. Stage 1b M1 kept Choice A deferred while shipping classified replies and `/v1/sessions/succeed/exact`; M2a enables hub-side Choice A enforcement over all retained hook history as part of the unreleased stage-1b rollout. M2a cannot distinguish a fresh Claude `--continue` MCP alias (`single_session: false` with no in-memory prior binding or loss record after the hooked session is already `lost` or `ended`) from a genuinely new native Rung-2 session on the same process; closing that alias gap moves to M2d resolver admission.
 
 The succession setting is an explicit opt-in, defaults to off and serves as a reversible
 kill switch. A release version never enables it. The owner enables succession, including

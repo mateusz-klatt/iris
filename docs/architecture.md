@@ -949,10 +949,27 @@ Changes from the reference schema:
    budget ends before registration reaches the hub does not; the ADR 018 breaker only changes
    later hooks' scope. Plain binding lookups do not reattach on their own. A shim reattachment
    from memory never falls back to a generation-0 registration. After the
-   deadline or `SessionEnd`, a registering hook must obtain a new generation. In ADR 038 stage 1a,
-   the hub also exposes `POST /v1/sessions/succeed` (with migration 029 provenance across `sessions`
-   and `succeed`, and startup refusal of reverted ADR 037 schemas before WAL or startup writes); no
-   client calls `succeed` yet and Choice A is deferred to stage 1b so v0.1.15 clients are unaffected.
+   deadline or `SessionEnd`, a registering hook must obtain a new generation. On the stage-1b hub
+   (with migration 029 provenance across `sessions` and `succeed`, startup refusal of reverted
+   ADR 037 schemas before WAL or startup writes, classified replies across session, outside,
+   bind and opt-in heartbeat responses, and compatibility guards isolating hookless
+   shim-succession children without `succession_proof:true`), the hub exposes
+   `POST /v1/sessions/succeed/exact` (while the removed stage-1a route `/v1/sessions/succeed`
+   returns `404 not_found` before any mutation) and enforces Choice A in registration: any
+   non-hook `generation: 0` attach or replacement on `/v1/sessions`, `/v1/sessions/outside`, or
+   session-addressed combined shell reconcile is refused with `409 lost` and session-scoped
+   `highest_generation` whenever any retained row (`active`, `lost`, or `ended`) for
+   `(host_id, client, session_id)`—or, when `client_pid > 0`, `client_pid_start_ms > 0`, and
+   either `single_session` holds or `session_id` is synthetic/process-derived `mcp-<pid>-<start_ms>`,
+   any retained row for `(host_id, client, client_pid, client_pid_start_ms)` (indexed by
+   migration 030's `execution_process_hook` partial index)—has `hook_seen_ms > 0`. Requests with a
+   distinct native `session_id` and `single_session: false` check same-session history only.
+   Consequently, the hub cannot distinguish a Claude `--continue` alias `session_id` from a
+   genuinely new native Rung-2 session in the same process: when a fresh MCP resolver first runs
+   after the hooked session is already `lost` or `ended` (with no in-memory binding or loss record),
+   registration under the alias succeeds as an active unhooked `generation: 1` row beside the
+   retained hook row. Genuine hookless D6 bootstrap and positive-generation D9 reattachment remain
+   intact; clients do not yet send `succeed` or `succession_proof` admission.
    The [API recovery guidance](api.md#mcp-tools-answering-lost) lists the events and the binding-mode
    limits.
 3. A claim has `origin` (`explicit` or `auto`) and an optional expiry instead of a mandatory
@@ -1653,15 +1670,28 @@ On `modernc.org/sqlite`, with real concurrency:
   neither renews nor creates an Execution at or below the strict floor. A damaged marker closes
   every hook registration locally while returning the client's allow output. An old hook that
   omits the floor cannot receive this server-side protection.
-- While the newest retained Execution is ended, no generation-zero registration from a non-hook
-  source, empty legacy source included, succeeds regardless of its retry floor. The hub trusts the
-  host-token holder for that host's sessions and `source` is self-declared: this closes the fallback
-  path of unmodified Iris clients and old or foreign non-hook clients, not a malicious host-token
-  holder who can claim `hook` and already register sessions. If the 30-day retention sweep removes
-  the ended row, the guard has nothing left to check. (Broader Choice A refusal of non-hook
-  generation-zero registrations over active or lost hook history is deferred to stage 1b.)
-- On the hub in ADR 038 stage 1a (`POST /v1/sessions/succeed`, unused by clients until stage 1b, with
-  Choice A deferred to stage 1b), succession creates or replays at most one live `G+1` child keyed
+- While the newest retained Execution is ended, or whenever any retained Execution (`active`,
+  `lost`, or `ended`) for `(host_id, client, session_id)`—or for `(host_id, client, client_pid,
+  client_pid_start_ms)` when `client_pid > 0`, `client_pid_start_ms > 0`, and either `single_session`
+  holds or `session_id` is synthetic/process-derived `mcp-<pid>-<start_ms>`—has `hook_seen_ms > 0`
+  (including when the active or newest retained row is an unhooked `mcp` or legacy generation,
+  indexed by migration 030's partial index `execution_process_hook`), no generation-zero registration
+  from a non-hook source, empty legacy source included, succeeds on `/v1/sessions`, `/v1/sessions/outside`,
+  or session-addressed combined shell reconcile regardless of its retry floor, returning `409 lost`
+  with session-scoped `highest_generation` (`0` when a synthetic session has only process history;
+  requests with a distinct native `session_id` and `single_session: false` check same-session history only).
+  The hub trusts the host-token holder for that host's sessions and `source` is self-declared: this
+  closes the proofless fallback path of unmodified Iris clients and old or foreign non-hook clients,
+  not a malicious host-token holder who can claim `hook` and already register sessions. Likewise,
+  the hub cannot tell a Claude `--continue` alias `session_id` apart from a genuinely new native
+  Rung-2 session in the same process when both send `single_session: false`, so a fresh MCP
+  resolver starting after the hooked session is already `lost` or `ended` (with no in-memory
+  binding or loss state) still registers an active unhooked `generation: 1` row under that alias ID.
+  Genuine no-hook D6 bootstrap (zero retained `hook_seen_ms > 0` rows) and positive-generation D9
+  reattachment remain intact; if retention sweeps all matching historical rows, the guard has
+  nothing left to check.
+- On the stage-1b hub (`POST /v1/sessions/succeed/exact`, while `/v1/sessions/succeed` returns `404
+  not_found` before any mutation), succession creates or replays at most one live `G+1` child keyed
   by exact `(prior_generation, prior_execution_id)` from a lost, hook-registered, non-superseded
   predecessor strictly above `ended_through`, requiring matching process identity when supplied or
   required by `single_session`. Like all session routes, `succeed` uses bearer authentication

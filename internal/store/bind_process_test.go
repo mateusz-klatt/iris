@@ -29,7 +29,7 @@ func TestTheClientProcessFindsItsTopLevelSession(t *testing.T) {
 	codex.Client = "codex"
 	expectError(t, s, "bind", codex, "unbound")
 	// A second live top-level session of the process is ambiguous, unless the asker excludes
-	// its own, as an MCP that had to register one does.
+	// its own, as an MCP that had to register one does (D6).
 	own := hook
 	own.SessionID, own.Source = "session-b", "mcp"
 	mine := call(t, s, "sessions", own)
@@ -39,6 +39,10 @@ func TestTheClientProcessFindsItsTopLevelSession(t *testing.T) {
 	if got := call(t, s, "bind", past); got["execution_id"] != top["execution_id"] {
 		t.Fatalf("bound %v past its own, the hook's is %v", got["execution_id"], top["execution_id"])
 	}
+	// Process-derived synthetic registration on that same process is refused by Choice A.
+	synth := hook
+	synth.SessionID, synth.Source = "mcp-4242-77", "mcp"
+	expectError(t, s, "sessions", synth, "lost")
 }
 
 // A session and its client process are looked up together (ADR 030), as Kimi's one-shot watcher

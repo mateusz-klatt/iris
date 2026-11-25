@@ -22,8 +22,9 @@ import (
 // These tests drive the generation-zero fallback through the real resolver and the real store.
 // After SessionEnd the session keeps <hash>.ended and no <hash>. An unbound Rung 2 shim or
 // watch must not obtain that same session's next generation. A Rung 3 shim that cannot see a
-// session id follows D6: it binds a live hook Execution for its process, and otherwise registers
-// mcp-<pid>-<start> without advancing the hook's session.
+// session id follows D6: it binds a live hook Execution for its process, registers mcp-<pid>-<start>
+// only when the process has zero retained hook history, and is refused by Choice A once hooks for
+// that process have reached the hub.
 
 func TestFloorBypassAfterSessionEndBlocksRung2AndWatch(t *testing.T) {
 	for _, tc := range []struct {
@@ -204,31 +205,271 @@ func TestFloorBypassRung3AfterEndDoesNotAdvanceTheHookSession(t *testing.T) {
 	b, err := r.Resolve(ctx, "")
 	requests := h.sessions()[before:]
 	rows = executionRows(t, h.file)
-	// D6 names this process as its own session when no live Execution matches it. The floor
-	// for that synthetic id is empty. The hook's session is a different id and stays ended.
+	// Under Choice A, Rung 3 synthetic mcp-<pid>-<start> registration over retained hook process
+	// history (even after SessionEnd) is refused with 409 lost and session-scoped highest_generation 0.
 	wantID := "mcp-42-100"
-	if err != nil || b.SessionID != wantID || b.Generation != 1 || b.Rung != 3 || !r.own {
-		t.Fatalf("rung 3 fallback after SessionEnd: bound=%+v own=%t err=%v\nrecall %v\nrequests %+v\nrows %+v", b, r.own, err, recalls, requests, rows)
+	if err == nil || b.ExecutionID != "" || !IsCode(err, "lost") {
+		t.Fatalf("rung 3 fallback after SessionEnd was not refused by Choice A: bound=%+v err=%v\nrecall %v\nrequests %+v\nrows %+v", b, err, recalls, requests, rows)
+	}
+	var hubErr *hubclient.Error
+	if !errors.As(err, &hubErr) {
+		t.Fatalf("Choice A refusal did not surface hub error: %v", err)
+	}
+	if highest, valid, present := hubErr.HighestGeneration(); !present || !valid || highest != 0 {
+		t.Fatalf("Choice A refusal highest_generation=(%d, valid=%t, present=%t), want 0", highest, valid, present)
 	}
 	if len(requests) != 1 || requests[0].SessionID != wantID || requests[0].Source != "mcp" || requests[0].Generation != 0 || requests[0].RetryGeneration != 0 {
 		t.Fatalf("synthetic registration: %+v", requests)
 	}
-	var hookRow, synthetic executionRow
-	for _, row := range rows {
-		switch row.session {
-		case "real-session":
-			hookRow = row
-		case wantID:
-			synthetic = row
-		}
-	}
-	if hookRow.id != endedID || hookRow.state != "ended" || hookRow.generation != 1 || synthetic.generation != 1 || synthetic.state != "active" || synthetic.hookSeen != 0 {
-		t.Fatalf("hook session was advanced or the synthetic execution is not its own generation 1: %+v", rows)
+	if len(rows) != 1 || rows[0].id != endedID || rows[0].session != "real-session" || rows[0].state != "ended" || rows[0].generation != 1 {
+		t.Fatalf("Choice A refusal mutated ended hook session or created synthetic row: %+v", rows)
 	}
 	for _, recall := range recalls {
 		if strings.Contains(recall, "real-session") {
 			t.Fatalf("fallback checked the hook session: %v", recalls)
 		}
+	}
+}
+
+func TestChoiceAFreshClaudeRung2AfterEndedAndContinueAliasEndToEnd(t *testing.T) {
+	t.Run("fresh native Claude Rung-2 binds at G1 after another session in same process ended", func(t *testing.T) {
+		ctx := t.Context()
+		h := newRestartableBindingHub(t)
+		cwd := t.TempDir()
+		token := filepath.Join(t.TempDir(), "hub.token")
+		if err := os.WriteFile(token, []byte("secret"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		anc := proc.Ancestor{PID: 42, StartMS: 100, Name: "claude"}
+		client := &hubclient.Client{Config: config{h.srv.URL}}
+
+		// Session S1 runs via hooks in process (42, 100) and ends via SessionEnd.
+		getenvS1 := func(key string) string {
+			if key == "IRIS_TOKEN_FILE" {
+				return token
+			}
+			return ""
+		}
+		payloadS1 := `{"session_id":"S1","cwd":` + quoteJSON(cwd) + `}`
+		for _, event := range []string{"SessionStart", "SessionEnd"} {
+			out := (hook.Runner{
+				ClientName: "claude", EventName: event, Stdin: strings.NewReader(payloadS1),
+				Hub: client, Getenv: getenvS1, Host: func() string { return "host" },
+				Ancestor: func() (proc.Ancestor, error) { return anc, nil },
+				Find:     func(string) (gitinfo.Repo, error) { return gitinfo.Repo{}, gitinfo.ErrNotRepo },
+			}).Run()
+			if fails, err := hook.ReadRecentFailures(token, 10); err != nil || len(fails) != 0 {
+				t.Fatalf("%s failures: %v %v\nstdout %s\nstderr %s", event, fails, err, out.Stdout, out.Stderr)
+			}
+		}
+
+		// A fresh native Claude Rung-2 session S2 in the same ancestor process has distinct
+		// native session_id "S2" and single_session=false; Choice A must allow D6 bootstrap at G=1.
+		sessions := hook.NewSessions(token)
+		r2 := &Resolver{
+			Hub: client, Client: "claude", Host: "host", CWD: cwd, Grace: 0,
+			Getenv: func(key string) string {
+				if key == "CLAUDE_CODE_SESSION_ID" {
+					return "S2"
+				}
+				return ""
+			},
+			Ancestor: func() (proc.Ancestor, error) { return anc, nil },
+			Recall:   sessions.RecallBindingGeneration,
+		}
+		before := len(h.sessions())
+		b, err := r2.Resolve(ctx, "")
+		requests := h.sessions()[before:]
+		if err != nil || b.Generation != 1 || b.Rung != 2 || b.SessionID != "S2" || !r2.own {
+			t.Fatalf("fresh native Claude Rung-2 failed after ended S1: bound=%+v own=%t err=%v requests=%+v", b, r2.own, err, requests)
+		}
+		if len(requests) != 1 || requests[0].SessionID != "S2" || requests[0].SingleSession || requests[0].Source != "mcp" {
+			t.Fatalf("unexpected Rung-2 registration request: %+v", requests)
+		}
+	})
+
+	for _, terminal := range []string{"lost", "ended"} {
+		t.Run("claude --continue alias stays refused after "+terminal, func(t *testing.T) {
+			ctx := t.Context()
+			h := newRestartableBindingHub(t)
+			cwd := t.TempDir()
+			token := filepath.Join(t.TempDir(), "hub.token")
+			if err := os.WriteFile(token, []byte("secret"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			anc := proc.Ancestor{PID: 42, StartMS: 100, Name: "claude"}
+			client := &hubclient.Client{Config: config{h.srv.URL}}
+			getenvHook := func(key string) string {
+				if key == "IRIS_TOKEN_FILE" {
+					return token
+				}
+				return ""
+			}
+			payload := `{"session_id":"S-continued","cwd":` + quoteJSON(cwd) + `}`
+			out := (hook.Runner{
+				ClientName: "claude", EventName: "SessionStart", Stdin: strings.NewReader(payload),
+				Hub: client, Getenv: getenvHook, Host: func() string { return "host" },
+				Ancestor: func() (proc.Ancestor, error) { return anc, nil },
+				Find:     func(string) (gitinfo.Repo, error) { return gitinfo.Repo{}, gitinfo.ErrNotRepo },
+			}).Run()
+			if fails, err := hook.ReadRecentFailures(token, 10); err != nil || len(fails) != 0 {
+				t.Fatalf("SessionStart failures: %v %v\nstdout %s\nstderr %s", fails, err, out.Stdout, out.Stderr)
+			}
+
+			// Under --continue, MCP starts with an alias CLAUDE_CODE_SESSION_ID != "S-continued".
+			// Resolver falls through Rung 2 to Rung 3 and binds "S-continued" with HookSeen=true.
+			sessions := hook.NewSessions(token)
+			r := &Resolver{
+				Hub: client, Client: "claude", Host: "host", CWD: cwd, Grace: 0,
+				Getenv: func(key string) string {
+					if key == "CLAUDE_CODE_SESSION_ID" {
+						return "S-continue-alias"
+					}
+					return ""
+				},
+				Ancestor: func() (proc.Ancestor, error) { return anc, nil },
+				Recall:   sessions.RecallBindingGeneration,
+			}
+			bound, err := r.Resolve(ctx, "")
+			if err != nil || bound.Rung != 3 || bound.SessionID != "S-continued" || !bound.HookSeen {
+				t.Fatalf("--continue alias did not bind S-continued via Rung 3: bound=%+v err=%v", bound, err)
+			}
+
+			if terminal == "ended" {
+				out = (hook.Runner{
+					ClientName: "claude", EventName: "SessionEnd", Stdin: strings.NewReader(payload),
+					Hub: client, Getenv: getenvHook, Host: func() string { return "host" },
+					Ancestor: func() (proc.Ancestor, error) { return anc, nil },
+					Find:     func(string) (gitinfo.Repo, error) { return gitinfo.Repo{}, gitinfo.ErrNotRepo },
+				}).Run()
+				if fails, err := hook.ReadRecentFailures(token, 10); err != nil || len(fails) != 0 {
+					t.Fatalf("SessionEnd failures: %v %v\nstdout %s\nstderr %s", fails, err, out.Stdout, out.Stderr)
+				}
+			} else {
+				h.clock.Advance(16 * time.Minute)
+				if _, err := h.store.Call(ctx, "expire", store.Request{}); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			// Even if the local proof directory were cleared, Rung-3-bound r.last + r.gone refuse
+			// fallback rather than registering the "S-continue-alias" env ID at generation 0.
+			before := len(h.sessions())
+			after, err := r.Resolve(ctx, "")
+			reqs := h.sessions()[before:]
+			if err == nil || after.ExecutionID != "" || !IsCode(err, "lost") || !r.Lost() {
+				t.Fatalf("--continue alias was not refused after %s: bound=%+v lost=%t err=%v reqs=%+v", terminal, after, r.Lost(), err, reqs)
+			}
+			for _, req := range reqs {
+				if req.SessionID == "S-continue-alias" || req.Generation == 0 {
+					t.Fatalf("--continue leaked alias/gen-0 registration after %s: %+v", terminal, reqs)
+				}
+			}
+			// Same-session proofless S-continued and synthetic mcp-42-100 on the process stay refused too.
+			for _, id := range []string{"S-continued", "mcp-42-100"} {
+				_, rerr := client.RegisterSession(ctx, hubclient.SessionRequest{
+					Client: "claude", Host: "host", SessionID: id, CWD: cwd,
+					Source: "mcp", ClientPID: anc.PID, ClientPIDStartMS: anc.StartMS,
+				})
+				if !IsCode(rerr, "lost") {
+					t.Fatalf("Choice A did not refuse %s after %s: %v", id, terminal, rerr)
+				}
+			}
+			rows := executionRows(t, h.file)
+			if len(rows) != 1 || rows[0].session != "S-continued" || rows[0].state != terminal {
+				t.Fatalf("Choice A mutated rows after %s: %+v", terminal, rows)
+			}
+		})
+	}
+}
+
+func TestKnownLimitFreshContinueAliasAfterTerminalHookRegisters(t *testing.T) {
+	// Known limit in M2a: a fresh Claude --continue resolver whose first Resolve runs after the
+	// real hook session is already lost or ended has empty r.last and r.gone. It falls through
+	// to orRegister and sends its distinct alias CLAUDE_CODE_SESSION_ID with single_session=false.
+	// Choice A skips the process-history EXISTS for distinct native session IDs with
+	// single_session=false so fresh native Rung-2 sessions can bootstrap, and the hub cannot tell
+	// such an alias apart from a new native session with this evidence alone. Fixed in ADR 039
+	// M2d resolver admission, where this assertion flips to refusal.
+	for _, terminal := range []string{"lost", "ended"} {
+		t.Run("fresh resolver registers alias G1 after "+terminal, func(t *testing.T) {
+			ctx := t.Context()
+			h := newRestartableBindingHub(t)
+			cwd := t.TempDir()
+			token := filepath.Join(t.TempDir(), "hub.token")
+			if err := os.WriteFile(token, []byte("secret"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			anc := proc.Ancestor{PID: 42, StartMS: 100, Name: "claude"}
+			client := &hubclient.Client{Config: config{h.srv.URL}}
+			getenvHook := func(key string) string {
+				if key == "IRIS_TOKEN_FILE" {
+					return token
+				}
+				return ""
+			}
+			payload := `{"session_id":"S-continued","cwd":` + quoteJSON(cwd) + `}`
+			runHook := func(event string) {
+				t.Helper()
+				out := (hook.Runner{
+					ClientName: "claude", EventName: event, Stdin: strings.NewReader(payload),
+					Hub: client, Getenv: getenvHook, Host: func() string { return "host" },
+					Ancestor: func() (proc.Ancestor, error) { return anc, nil },
+					Find:     func(string) (gitinfo.Repo, error) { return gitinfo.Repo{}, gitinfo.ErrNotRepo },
+				}).Run()
+				if fails, err := hook.ReadRecentFailures(token, 10); err != nil || len(fails) != 0 {
+					t.Fatalf("%s failures: %v %v\nstdout %s\nstderr %s", event, fails, err, out.Stdout, out.Stderr)
+				}
+			}
+			runHook("SessionStart")
+			if terminal == "ended" {
+				runHook("SessionEnd")
+			} else {
+				h.clock.Advance(16 * time.Minute)
+				if _, err := h.store.Call(ctx, "expire", store.Request{}); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			sessions := hook.NewSessions(token)
+			r := &Resolver{
+				Hub: client, Client: "claude", Host: "host", CWD: cwd, Grace: 0,
+				Getenv: func(key string) string {
+					if key == "CLAUDE_CODE_SESSION_ID" {
+						return "S-continue-alias"
+					}
+					return ""
+				},
+				Ancestor: func() (proc.Ancestor, error) { return anc, nil },
+				Recall:   sessions.RecallBindingGeneration,
+			}
+			before := len(h.sessions())
+			b, err := r.Resolve(ctx, "")
+			reqs := h.sessions()[before:]
+			if err != nil || b.Generation != 1 || b.Rung != 2 || b.SessionID != "S-continue-alias" || b.HookSeen || !r.own || r.Lost() {
+				t.Fatalf("expected alias G1 registration after %s: bound=%+v own=%t lost=%t err=%v reqs=%+v", terminal, b, r.own, r.Lost(), err, reqs)
+			}
+			if len(reqs) != 1 || reqs[0].SessionID != "S-continue-alias" || reqs[0].Generation != 0 || reqs[0].SingleSession || reqs[0].Source != "mcp" || reqs[0].ClientPID != anc.PID || reqs[0].ClientPIDStartMS != anc.StartMS {
+				t.Fatalf("unexpected registration request after %s: %+v", terminal, reqs)
+			}
+
+			rows := executionRows(t, h.file)
+			bySession := make(map[string]executionRow, len(rows))
+			for _, row := range rows {
+				bySession[row.session] = row
+			}
+			hookRow, okHook := bySession["S-continued"]
+			aliasRow, okAlias := bySession["S-continue-alias"]
+			if len(rows) != 2 || !okHook || !okAlias {
+				t.Fatalf("unexpected rows after %s: %+v", terminal, rows)
+			}
+			if hookRow.generation != 1 || hookRow.state != terminal || hookRow.hookSeen == 0 {
+				t.Fatalf("retained hook row mismatch after %s: %+v", terminal, hookRow)
+			}
+			if aliasRow.id != b.ExecutionID || aliasRow.generation != 1 || aliasRow.state != "active" || aliasRow.hookSeen != 0 {
+				t.Fatalf("alias row mismatch after %s: %+v", terminal, aliasRow)
+			}
+		})
 	}
 }
 

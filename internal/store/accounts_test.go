@@ -20,7 +20,9 @@ const consoleLegacyScryptHash = "scrypt$16384$8$1$AAAAAAAAAAAAAAAAAAAAAA$AAAAAAA
 // trigger names.
 const removeAttentionIdentitySchema = "DROP TRIGGER delivery_attention_seq;\nALTER TABLE Delivery DROP COLUMN attention_seq;\n"
 
-const removeSuccessionProvenanceSchema = "DROP INDEX IF EXISTS execution_prior;\nALTER TABLE Execution DROP COLUMN creation_proof;\nALTER TABLE Execution DROP COLUMN creation_source;\nALTER TABLE Execution DROP COLUMN prior_execution_id;\n"
+const removeProcessHookIndexSchema = "DROP INDEX IF EXISTS execution_process_hook;\n"
+
+const removeSuccessionProvenanceSchema = removeProcessHookIndexSchema + "DROP INDEX IF EXISTS execution_prior;\nALTER TABLE Execution DROP COLUMN creation_proof;\nALTER TABLE Execution DROP COLUMN creation_source;\nALTER TABLE Execution DROP COLUMN prior_execution_id;\n"
 
 // removeLeaseRenewedTickSchema undoes migrations 029 and 028 so older-version migration tests can reopen
 // and replay without duplicate-column errors.

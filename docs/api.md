@@ -121,11 +121,26 @@ It sends `generation:0` and `retry_generation:G`. A positive retry floor require
 retained history and the resulting binding to be at least G in the registration transaction.
 Resume and reattachment preserve the generation. A new Execution after loss advances it. After
 SessionEnd, only a generation-zero hook registration can advance it: every non-hook source, legacy
-empty included, gets `409 lost` regardless of `retry_generation`. If retention has removed the
-ended Execution, that state is no longer available to check. An older hub omits the detail, so an
-upgraded hook keeps its proof and skips the retry. (Broader Choice A refusal of proofless non-hook
-generation-zero registration over non-ended hook history remains deferred until client-side admission
-lands in M2 so stage 1b M1 remains inert for v0.1.15 clients.)
+empty included, gets `409 lost` regardless of `retry_generation`. Under Choice A (`ADR 035`,
+`ADR 039`), any non-hook (`mcp`, `shim`, `watch`, or legacy empty) `generation: 0` attach or
+replacement on `POST /v1/sessions`, `POST /v1/sessions/outside`, or session-addressed combined shell
+reconcile is also refused with `409 lost` and session-scoped `highest_generation` whenever ANY
+retained Execution (`active`, `lost`, or `ended`) for `(host, client, session_id)` has
+`hook_seen_ms > 0` (including when the active or newest row is an unhooked non-hook generation), or
+whenever `client_pid > 0` and `client_pid_start_ms > 0` and (`single_session` is true or
+`session_id` is synthetic/process-derived `mcp-<pid>-<start_ms>`) and ANY retained Execution
+(`active`, `lost`, or `ended`) for `(host, client, client_pid, client_pid_start_ms)` has
+`hook_seen_ms > 0` (returning `highest_generation: 0` when the synthetic session itself has no
+retained rows; requests carrying a distinct native `session_id` with `single_session: false` are
+checked only by the same-session rule). Because a registration carrying a distinct `session_id` and
+`single_session: false` gives the hub no way to distinguish a Claude `--continue` alias from a
+genuinely new native Rung-2 session on the same process, a fresh MCP resolver whose first resolve
+runs after the hooked session is already `lost` or `ended` holds no cached binding or loss state
+and still registers an active unhooked `generation: 1` row under that alias `session_id`. Genuine
+hookless D6 bootstrap (zero retained hook history
+for the session or applicable process) and positive-generation D9 reattachment stay intact. If retention has removed all matching historical rows, there is no
+retained state left to check. An older hub omits the detail, so an upgraded hook keeps its proof and
+skips the retry.
 
 `POST /v1/sessions/succeed/exact` is the ADR 039 stage 1b exact-proof succession route (calling the
 ADR 038 stage 1a create-or-replay transaction; unreleased route `POST /v1/sessions/succeed` from
@@ -172,9 +187,8 @@ In one writer transaction, the hub checks the newest retained Execution for `(ho
 
 These proof fields are self-declared and are not host-token-isolated across hosts: they prevent
 accidental races and stale retries inside the shared bearer-token boundary rather than authenticating
-an adversarial bearer holder or scoping requests by `HostToken.name`. `POST /v1/sessions/succeed/exact`
-and the stage 1b classified replies and compatibility guards ship first in M1; client-side admission
-and Choice A land in M2.
+an adversarial bearer holder or scoping requests by `HostToken.name`. `POST /v1/sessions/succeed/exact`, classified replies, compatibility guards, and hub-side Choice A
+enforcement are active on the stage-1b hub; client-side exact-proof admission is not yet enabled.
 
 An unexpired local `.ended` marker for generation G is sent as `ended_through:G` on ordinary,
 outside-git and combined shell registration, including SessionStart. A generation-zero request

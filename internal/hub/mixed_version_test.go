@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -456,7 +457,7 @@ func TestMixedVersionStage1bHubClientAndStoreMatrix(t *testing.T) {
 			return nil
 		}
 
-		// Ordinary v0.1.15 hook -> bind -> heartbeat -> expire -> Choice A mcp G=0 succeeds identically.
+		// Ordinary v0.1.15 hook -> bind -> heartbeat -> expire -> Choice A refuses mcp G=0.
 		first := doRaw("/v1/sessions", map[string]any{
 			"client": "codex", "host": "h", "session_id": "S-v15-ord", "cwd": "/w", "worktree": "/w", "source": "hook",
 		}, http.StatusOK)
@@ -472,13 +473,33 @@ func TestMixedVersionStage1bHubClientAndStoreMatrix(t *testing.T) {
 		if hb["lease_ms"] != float64(60000) {
 			t.Fatalf("unexpected heartbeat lease: %+v", hb)
 		}
-		// Extra classified JSON keys are ignored by v0.1.15 callers such as Choice A fallback.
+		// Stage-1b hub enforces Choice A: v0.1.15 non-hook G=0 over lost hook history returns 409 lost
+		// with highest_generation=1, while hook G=2 and genuine no-hook v0.1.15 fallback still succeed.
 		clock.Advance(16 * time.Minute)
-		fallback := doRaw("/v1/sessions", map[string]any{
+		c := &hubclient.Client{Config: mixedHubConfig{url: srv.URL, token: "secret"}}
+		err = c.Do(t.Context(), http.MethodPost, "/v1/sessions", map[string]any{
 			"client": "codex", "host": "h", "session_id": "S-v15-ord", "cwd": "/w", "worktree": "/w", "source": "mcp",
+		}, new(map[string]any))
+		var lostErr *hubclient.Error
+		if !errors.As(err, &lostErr) || lostErr.Code != "lost" {
+			t.Fatalf("expected Choice A lost over lost hook history, got %v", err)
+		}
+		if highest, valid, present := lostErr.HighestGeneration(); !present || !valid || highest != 1 {
+			t.Fatalf("Choice A highest_generation=(%d, valid=%t, present=%t), want 1", highest, valid, present)
+		}
+		hookNext := doRaw("/v1/sessions", map[string]any{
+			"client": "codex", "host": "h", "session_id": "S-v15-ord", "cwd": "/w", "worktree": "/w", "source": "hook",
 		}, http.StatusOK)
-		if fallback["generation"] != float64(2) || fallback["execution_id"] == first["execution_id"] {
-			t.Fatalf("Choice A deferred path broke for v0.1.15 client: %+v", fallback)
+		if hookNext["generation"] != float64(2) || hookNext["execution_id"] == first["execution_id"] {
+			t.Fatalf("hook G=2 after loss failed: %+v", hookNext)
+		}
+
+		// Extra classified JSON keys are ignored by v0.1.15 callers on genuine no-hook D6 fallback.
+		fallback := doRaw("/v1/sessions", map[string]any{
+			"client": "codex", "host": "h", "session_id": "S-v15-nohook", "cwd": "/w", "worktree": "/w", "source": "mcp",
+		}, http.StatusOK)
+		if fallback["generation"] != float64(1) {
+			t.Fatalf("genuine no-hook D6 fallback failed for v0.1.15 client: %+v", fallback)
 		}
 
 		// Verify JSON marshal round-trip of unknown future capability preserves existing decoder tolerance.

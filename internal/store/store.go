@@ -112,6 +112,9 @@ var leaseRenewedTickSchema string
 //go:embed migrations/029.sql
 var successionProvenanceSchema string
 
+//go:embed migrations/030.sql
+var processHookIndexSchema string
+
 // Clock separates lease ticks from persisted wall-clock expiries. Tick must be monotonic
 // within a Store's lifetime; client timestamps never participate in lease decisions.
 type Clock interface {
@@ -445,6 +448,11 @@ func openDatabase(filename string, clock Clock, driverName string) (*Store, erro
 		}
 		if version < 29 {
 			if _, err := t.exec(successionProvenanceSchema); err != nil {
+				return err
+			}
+		}
+		if version < 30 {
+			if _, err := t.exec(processHookIndexSchema); err != nil {
 				return err
 			}
 		}

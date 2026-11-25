@@ -18,6 +18,7 @@ invariants in section 5 are requirements. A change of direction goes in `docs/ad
 ```sh
 make test     # go vet and go test, without cgo
 make race     # go test -race, which needs a C toolchain on some platforms
+make compat   # builds pinned historical iris binaries via git worktree to verify compatibility; needs full git history
 make build    # the binary
 make fixtures # replays captured client payloads through the hook adapters
 make copilot-extension # Node tests of the Copilot CLI extension at 100% coverage; only this target needs Node
@@ -41,7 +42,8 @@ make refresh  # updates modules, packages, tool pins, action SHAs and image dige
 ## Before a pull request is ready
 
 Rebase on current `main` and run the full checks locally, where there are many cores: `make test`,
-`make race`, `make cov`, `make cov-check`, `make check-all` and `make fixtures`, plus the web tests for
+`make race`, `make cov`, `make cov-check`, `make check-all`, `make fixtures` and (for hub, store,
+migration or client compatibility changes) `make compat`, plus the web tests for
 a console change and `make copilot-extension` for a Copilot extension change. Report the commit and
 the result. GitHub CI is the safety net across platforms, not the place to find out that something
 fails.
