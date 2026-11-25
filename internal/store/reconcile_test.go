@@ -264,3 +264,127 @@ func TestAPathThatLeavesTheStatusReleasesItsAutoClaim(t *testing.T) {
 		t.Fatal("the session waiting for committed.txt was not woken")
 	}
 }
+
+// Replacing an auto claim during reconcile must evaluate waiter blocking after the replacement
+// claims are inserted in the same transaction: revoking src/old.go frees its reserve slot before
+// autoClaim runs, but a waiter on prefix src or a case-folded alias must not be woken when the
+// new claim still blocks it.
+func TestReconcileWakesWaitersOnlyAfterNewClaims(t *testing.T) {
+	countAvailable := func(t *testing.T, s *Store, r Request) int {
+		t.Helper()
+		n := 0
+		for _, e := range call(t, s, "events", Request{ExecutionID: r.ExecutionID, After: 0})["events"].([]map[string]any) {
+			if e["kind"] == "claim_available" {
+				n++
+			}
+		}
+		return n
+	}
+	countWaiters := func(t *testing.T, s *Store, execID, key, kind string) int {
+		t.Helper()
+		var n int
+		if err := s.db.QueryRow("SELECT COUNT(*) FROM Waiter WHERE execution_id=? AND path_key=? AND kind=?", execID, key, kind).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+
+	t.Run("prefix waiter stays blocked when old.go is replaced by new.go", func(t *testing.T) {
+		s, _, _ := testStore(t)
+		shell, _ := session(t, s, 1)
+		waiter, _ := session(t, s, 2)
+
+		shell.Kind, shell.Status = "before", map[string]string{}
+		call(t, s, "reconcile", shell)
+		shell.Kind, shell.Status = "after", map[string]string{"src/old.go": "??"}
+		call(t, s, "reconcile", shell)
+
+		expectError(t, s, "claim", claimRequest(waiter, "wait-prefix", "src", "prefix"), "conflict")
+		if got := countWaiters(t, s, waiter.ExecutionID, "src", "prefix"); got != 1 {
+			t.Fatalf("waiters before replacement = %d, want 1", got)
+		}
+
+		shell.Kind, shell.Status = "before", map[string]string{"src/old.go": "??"}
+		call(t, s, "reconcile", shell)
+		shell.Kind, shell.Status = "after", map[string]string{"src/new.go": "??"}
+		call(t, s, "reconcile", shell)
+
+		if _, held := liveAuto(t, s, shell.ExecutionID, "src/old.go"); held {
+			t.Fatal("src/old.go was not released")
+		}
+		if _, held := liveAuto(t, s, shell.ExecutionID, "src/new.go"); !held {
+			t.Fatal("src/new.go was not claimed")
+		}
+		if got := countAvailable(t, s, waiter); got != 0 {
+			t.Fatalf("emitted %d claim_available while prefix still blocked by src/new.go", got)
+		}
+		if got := countWaiters(t, s, waiter.ExecutionID, "src", "prefix"); got != 1 {
+			t.Fatalf("waiter was deleted while src/new.go still blocks src: count=%d", got)
+		}
+
+		// Control: releasing src/new.go without a blocking replacement really frees the prefix.
+		shell.Kind, shell.Status = "before", map[string]string{"src/new.go": "??"}
+		call(t, s, "reconcile", shell)
+		shell.Kind, shell.Status = "after", map[string]string{"other/a.go": "??"}
+		call(t, s, "reconcile", shell)
+
+		if _, held := liveAuto(t, s, shell.ExecutionID, "src/new.go"); held {
+			t.Fatal("src/new.go was not released")
+		}
+		if got := countAvailable(t, s, waiter); got != 1 {
+			t.Fatalf("claim_available after freeing prefix = %d, want 1", got)
+		}
+		if got := countWaiters(t, s, waiter.ExecutionID, "src", "prefix"); got != 0 {
+			t.Fatalf("waiter remained after prefix became free: count=%d", got)
+		}
+	})
+
+	t.Run("case-folded exact-path alias keeps waiter blocked", func(t *testing.T) {
+		s, _, _ := testStore(t)
+		shell, _ := session(t, s, 1)
+		waiter, _ := session(t, s, 2)
+
+		shell.Kind, shell.Status = "before", map[string]string{}
+		call(t, s, "reconcile", shell)
+		shell.Kind, shell.Status = "after", map[string]string{"src/File.go": "??"}
+		call(t, s, "reconcile", shell)
+
+		if got := call(t, s, "touch", touchRequest(waiter, "wait-alias", "src/FILE.GO")); got["action"] != "deny" {
+			t.Fatalf("touch on case alias = %v, want deny", got)
+		}
+		if got := countWaiters(t, s, waiter.ExecutionID, "src/file.go", "exact"); got != 1 {
+			t.Fatalf("waiters before alias replacement = %d, want 1", got)
+		}
+
+		shell.Kind, shell.Status = "before", map[string]string{"src/File.go": "??"}
+		call(t, s, "reconcile", shell)
+		shell.Kind, shell.Status = "after", map[string]string{"src/file.go": "??"}
+		call(t, s, "reconcile", shell)
+
+		if _, held := liveAuto(t, s, shell.ExecutionID, "src/File.go"); held {
+			t.Fatal("src/File.go was not released")
+		}
+		if _, held := liveAuto(t, s, shell.ExecutionID, "src/file.go"); !held {
+			t.Fatal("src/file.go was not claimed")
+		}
+		if got := countAvailable(t, s, waiter); got != 0 {
+			t.Fatalf("emitted %d claim_available while case-folded alias still held", got)
+		}
+		if got := countWaiters(t, s, waiter.ExecutionID, "src/file.go", "exact"); got != 1 {
+			t.Fatalf("waiter was deleted while case-folded alias still held: count=%d", got)
+		}
+
+		// Control: removing the alias frees the path and wakes the waiter.
+		shell.Kind, shell.Status = "before", map[string]string{"src/file.go": "??"}
+		call(t, s, "reconcile", shell)
+		shell.Kind, shell.Status = "after", map[string]string{}
+		call(t, s, "reconcile", shell)
+
+		if got := countAvailable(t, s, waiter); got != 1 {
+			t.Fatalf("claim_available after freeing alias = %d, want 1", got)
+		}
+		if got := countWaiters(t, s, waiter.ExecutionID, "src/file.go", "exact"); got != 0 {
+			t.Fatalf("waiter remained after alias became free: count=%d", got)
+		}
+	})
+}

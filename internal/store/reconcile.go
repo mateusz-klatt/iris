@@ -110,10 +110,11 @@ func (t *transaction) reconcileChanges(e execution, r Request) (map[string]any, 
 		return nil, err
 	}
 	// An auto claim means this session has uncommitted changes at its path (D10). One whose path
-	// left the status was committed, stashed or restored, so it is released before counting live
-	// claims below, and its waiters are woken as by a release. Explicit claims, and every other
-	// session's, stay.
-	if err = t.releaseLeft(e, left); err != nil {
+	// left the status was committed, stashed or restored, so it is revoked before counting live
+	// claims below, while waiter wake-up waits until after autoClaim inserts any replacement
+	// claims in the same transaction. Explicit claims, and every other session's, stay.
+	released, err := t.revokeLeft(e, left)
+	if err != nil {
 		return nil, err
 	}
 	// A write a shell or Codex's js tool made is claimed for this session afterwards, as an edit
@@ -122,6 +123,11 @@ func (t *transaction) reconcileChanges(e execution, r Request) (map[string]any, 
 	claimed, skipped, err := t.autoClaim(e, changed)
 	if err != nil {
 		return nil, err
+	}
+	if released {
+		if err = t.released(e.Repo, e.ID); err != nil {
+			return nil, err
+		}
 	}
 	out["claimed"] = claimed
 	if skipped > 0 {
@@ -188,19 +194,20 @@ const (
 	skipReasonClaimReserve = "claim_reserve"
 )
 
-// releaseLeft releases e's own auto claims on paths that left its status. Both ends of a staged
-// rename stay in the status, so neither is released before the rename is committed.
-func (t *transaction) releaseLeft(e execution, paths []string) error {
+// revokeLeft revokes e's own auto claims on paths that left its status without waking waiters
+// yet; callers call t.released after autoClaim inserts any replacement claims. Both ends of a
+// staged rename stay in the status, so neither is revoked before the rename is committed.
+func (t *transaction) revokeLeft(e execution, paths []string) (bool, error) {
 	if len(paths) == 0 {
-		return nil
+		return false, nil
 	}
 	policy, _, err := t.policy(e.Repo)
 	if err != nil {
-		return err
+		return false, err
 	}
 	cs, err := t.claimRows(e.Repo)
 	if err != nil {
-		return err
+		return false, err
 	}
 	now := t.s.clock.Now().UnixMilli()
 	released := false
@@ -211,15 +218,12 @@ func (t *transaction) releaseLeft(e execution, paths []string) error {
 				continue
 			}
 			if _, err = t.exec("UPDATE Claim SET revoked_ms=? WHERE fence=? AND revoked_ms IS NULL", now, c.Fence); err != nil {
-				return err
+				return false, err
 			}
 			released = true
 		}
 	}
-	if !released {
-		return nil
-	}
-	return t.released(e.Repo, e.ID)
+	return released, nil
 }
 
 // autoClaim gives e an automatic claim on each path no other Execution holds, as touch does,
