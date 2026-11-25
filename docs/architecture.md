@@ -960,8 +960,10 @@ Changes from the reference schema:
    session-addressed combined shell reconcile is refused with `409 lost` and session-scoped
    `highest_generation` whenever any retained row (`active`, `lost`, or `ended`) for
    `(host_id, client, session_id)`—or, when `client_pid > 0`, `client_pid_start_ms > 0`, and
-   either `single_session` holds or `client` is `"claude"`, any retained row for
-   `(host_id, client, client_pid, client_pid_start_ms)`—has `hook_seen_ms > 0`. Genuine
+   either `single_session` holds or `session_id` is synthetic/process-derived `mcp-<pid>-<start_ms>`,
+   any retained row for `(host_id, client, client_pid, client_pid_start_ms)` (indexed by
+   migration 030's `execution_process_hook` partial index)—has `hook_seen_ms > 0`. Requests with a
+   distinct native `session_id` and `single_session: false` check same-session history only. Genuine
    hookless D6 bootstrap and positive-generation D9 reattachment remain intact; clients do not
    yet send `succeed` or `succession_proof` admission.
    The [API recovery guidance](api.md#mcp-tools-answering-lost) lists the events and the binding-mode
@@ -1667,11 +1669,13 @@ On `modernc.org/sqlite`, with real concurrency:
 - While the newest retained Execution is ended, or whenever any retained Execution (`active`,
   `lost`, or `ended`) for `(host_id, client, session_id)`—or for `(host_id, client, client_pid,
   client_pid_start_ms)` when `client_pid > 0`, `client_pid_start_ms > 0`, and either `single_session`
-  holds or `client` is `"claude"`—has `hook_seen_ms > 0` (including when the active or newest
-  retained row is an unhooked `mcp` or legacy generation), no generation-zero registration from a
-  non-hook source, empty legacy source included, succeeds on `/v1/sessions`, `/v1/sessions/outside`,
+  holds or `session_id` is synthetic/process-derived `mcp-<pid>-<start_ms>`—has `hook_seen_ms > 0`
+  (including when the active or newest retained row is an unhooked `mcp` or legacy generation,
+  indexed by migration 030's partial index `execution_process_hook`), no generation-zero registration
+  from a non-hook source, empty legacy source included, succeeds on `/v1/sessions`, `/v1/sessions/outside`,
   or session-addressed combined shell reconcile regardless of its retry floor, returning `409 lost`
-  with session-scoped `highest_generation` (`0` when a synthetic session has only process history).
+  with session-scoped `highest_generation` (`0` when a synthetic session has only process history;
+  requests with a distinct native `session_id` and `single_session: false` check same-session history only).
   The hub trusts the host-token holder for that host's sessions and `source` is self-declared: this
   closes the proofless fallback path of unmodified Iris clients and old or foreign non-hook clients,
   not a malicious host-token holder who can claim `hook` and already register sessions. Genuine

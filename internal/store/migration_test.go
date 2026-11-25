@@ -64,6 +64,7 @@ func TestOpenLatestSchemaLeavesTablesUnchanged(t *testing.T) {
 		reducedShellSchema, attentionIdentitySchema, attentionHighWaterSQL, attentionNewestEventSQL,
 		removeConsoleImportSchema, restoreMarkerSchema, presenceCursorSchema,
 		coordinationCursorSchema, leaseRenewedTickSchema, successionProvenanceSchema,
+		processHookIndexSchema,
 	}
 	for i, migration := range migrations {
 		if _, err = db.Exec(migration); err != nil {
@@ -71,10 +72,11 @@ func TestOpenLatestSchemaLeavesTablesUnchanged(t *testing.T) {
 		}
 	}
 	var version int
-	if err = db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 29 {
+	if err = db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != 30 {
 		t.Fatalf("schema user_version=%d, err=%v", version, err)
 	}
 	before := databaseTables(t, db)
+	beforeIndexes := databaseIndexes(t, db)
 	if err = db.Close(); err != nil {
 		t.Fatal(err)
 	}
@@ -84,33 +86,44 @@ func TestOpenLatestSchemaLeavesTablesUnchanged(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer func() { _ = s.Close() }()
-	if err = s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != latestVersion || latestVersion != 29 {
+	if err = s.db.QueryRow("PRAGMA user_version").Scan(&version); err != nil || version != latestVersion || latestVersion != 30 {
 		t.Fatalf("opened user_version=%d, latest=%d, err=%v", version, latestVersion, err)
 	}
 	if after := databaseTables(t, s.db); !slices.Equal(after, before) {
 		t.Fatalf("Open changed latest schema tables\nbefore: %q\nafter:  %q", before, after)
 	}
+	if afterIndexes := databaseIndexes(t, s.db); !slices.Equal(afterIndexes, beforeIndexes) {
+		t.Fatalf("Open changed latest schema indexes\nbefore: %q\nafter:  %q", beforeIndexes, afterIndexes)
+	}
 }
 
 func databaseTables(t *testing.T, db *sql.DB) []string {
+	return databaseSchemaObjects(t, db, "table")
+}
+
+func databaseIndexes(t *testing.T, db *sql.DB) []string {
+	return databaseSchemaObjects(t, db, "index")
+}
+
+func databaseSchemaObjects(t *testing.T, db *sql.DB, kind string) []string {
 	t.Helper()
-	rows, err := db.Query("SELECT name,sql FROM sqlite_schema WHERE type='table' ORDER BY name")
+	rows, err := db.Query("SELECT name,COALESCE(sql,'') FROM sqlite_schema WHERE type=? ORDER BY name", kind)
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = rows.Close() }()
-	var tables []string
+	var objects []string
 	for rows.Next() {
 		var name, definition string
 		if err := rows.Scan(&name, &definition); err != nil {
 			t.Fatal(err)
 		}
-		tables = append(tables, name+"\x00"+definition)
+		objects = append(objects, name+"\x00"+definition)
 	}
 	if err := rows.Err(); err != nil {
 		t.Fatal(err)
 	}
-	return tables
+	return objects
 }
 
 func TestOpenRejectsInvalidFilesystemAndSchema(t *testing.T) {
@@ -217,6 +230,70 @@ func TestMigration029AddsSuccessionProvenanceAndRollsBack(t *testing.T) {
 	}
 }
 
+func TestMigration030AddsProcessHookIndexAndRollsBack(t *testing.T) {
+	s, clock, file := testStore(t)
+	first := call(t, s, "sessions", Request{
+		Client: "cursor", Host: "host", SessionID: "S-30", Cwd: "/repo/w", Worktree: "/repo/w",
+		Source: "hook", ClientPID: 42, ClientPIDStartMS: 100, SingleSession: true,
+	})
+	if _, err := s.db.Exec(removeProcessHookIndexSchema + "PRAGMA user_version=29"); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	s.lock = nil
+
+	f := &storageFault{discover: true}
+	name := registerFaultDriver(f)
+	if failed, err := openDatabase(file, clock, name); !errors.Is(err, errStorageFault) {
+		if failed != nil {
+			_ = failed.Close()
+		}
+		t.Fatal("discovery", err)
+	}
+	trace := append([]string(nil), f.trace...)
+	f.discover = false
+	if !strings.Contains(strings.Join(trace, "\n"), "execution_process_hook") {
+		t.Fatalf("migration 030 missing from fault trace: %v", trace)
+	}
+	for i, label := range trace {
+		f.count, f.at, f.trace = 0, i+1, nil
+		failed, err := openDatabase(file, clock, name)
+		f.at = 0
+		if !errors.Is(err, errStorageFault) {
+			if failed != nil {
+				_ = failed.Close()
+			}
+			t.Fatalf("fault %d %s: %v", i+1, label, err)
+		}
+		raw, err := sql.Open("sqlite", file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var version, idx int
+		if err = raw.QueryRow("SELECT (SELECT user_version FROM pragma_user_version),(SELECT COUNT(*) FROM sqlite_schema WHERE type='index' AND name='execution_process_hook')").Scan(&version, &idx); err != nil || version != 29 || idx != 0 {
+			_ = raw.Close()
+			t.Fatalf("fault %d %s changed version/index: version=%d idx=%d err=%v", i+1, label, version, idx, err)
+		}
+		_ = raw.Close()
+	}
+
+	retried, err := openDatabase(file, clock, name)
+	if err != nil {
+		t.Fatal("migration 030 retry failed", err)
+	}
+	defer func() { _ = retried.Close() }()
+	var version, idx int
+	if err = retried.db.QueryRow("SELECT (SELECT user_version FROM pragma_user_version),(SELECT COUNT(*) FROM sqlite_schema WHERE type='index' AND name='execution_process_hook')").Scan(&version, &idx); err != nil || version != latestVersion || idx != 1 {
+		t.Fatalf("version=%d want=%d idx=%d err=%v", version, latestVersion, idx, err)
+	}
+	var gotPID, gotStart, gotSeen int64
+	if err = retried.db.QueryRow("SELECT client_pid,client_pid_start_ms,hook_seen_ms FROM Execution WHERE id=?", first["execution_id"]).Scan(&gotPID, &gotStart, &gotSeen); err != nil || gotPID != 42 || gotStart != 100 || gotSeen == 0 {
+		t.Fatalf("migrated existing row altered: pid=%d start=%d hook_seen=%d err=%v", gotPID, gotStart, gotSeen, err)
+	}
+}
+
 const adr037Migration029SQL = `
 ALTER TABLE Repository ADD COLUMN auto_claim_scope TEXT NOT NULL DEFAULT 'repository' CHECK(auto_claim_scope IN ('repository','worktree'));
 ALTER TABLE Execution ADD COLUMN worktree_key TEXT;
@@ -255,7 +332,7 @@ var v28Schemas = []string{
 
 func TestRefusesRevertedADR037DatabaseWithoutWritesAndUpgrades028(t *testing.T) {
 	// Genuine v028 upgrade still succeeds cleanly alongside ADR 037 refusal tests.
-	t.Run("genuine v28 upgrades to 29", func(t *testing.T) {
+	t.Run("genuine v28 upgrades to 30", func(t *testing.T) {
 		file := filepath.Join(t.TempDir(), "v28.db")
 		db, err := sql.Open("sqlite", file)
 		if err != nil {
@@ -274,9 +351,9 @@ func TestRefusesRevertedADR037DatabaseWithoutWritesAndUpgrades028(t *testing.T) 
 			t.Fatalf("v28 upgrade failed: %v", err)
 		}
 		defer func() { _ = s.Close() }()
-		var version, priorCol int
-		if err := s.db.QueryRow("SELECT (SELECT user_version FROM pragma_user_version),(SELECT COUNT(*) FROM pragma_table_info('Execution') WHERE name='prior_execution_id')").Scan(&version, &priorCol); err != nil || version != latestVersion || priorCol != 1 {
-			t.Fatalf("v28 did not reach v%d with prior_execution_id: version=%d priorCol=%d err=%v", latestVersion, version, priorCol, err)
+		var version, priorCol, procIdx int
+		if err := s.db.QueryRow("SELECT (SELECT user_version FROM pragma_user_version),(SELECT COUNT(*) FROM pragma_table_info('Execution') WHERE name='prior_execution_id'),(SELECT COUNT(*) FROM sqlite_schema WHERE type='index' AND name='execution_process_hook')").Scan(&version, &priorCol, &procIdx); err != nil || version != latestVersion || priorCol != 1 || procIdx != 1 {
+			t.Fatalf("v28 did not reach v%d with prior_execution_id and execution_process_hook: version=%d priorCol=%d procIdx=%d err=%v", latestVersion, version, priorCol, procIdx, err)
 		}
 	})
 

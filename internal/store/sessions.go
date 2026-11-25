@@ -8,6 +8,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -444,19 +445,28 @@ func endedThroughRefusal(message string) error {
 	return &Error{Code: "lost", Message: message, Details: map[string]any{"reason": "ended_through"}}
 }
 
+const (
+	choiceASessionExistsSQL = "SELECT EXISTS(SELECT 1 FROM Execution WHERE host_id=? AND client=? AND session_id=? AND hook_seen_ms>0)"
+	choiceAProcessExistsSQL = "SELECT EXISTS(SELECT 1 FROM Execution WHERE host_id=? AND client=? AND client_pid=? AND client_pid_start_ms=? AND hook_seen_ms>0)"
+)
+
+func isProcessDerivedSessionID(r Request) bool {
+	return r.SessionID == "mcp-"+strconv.FormatInt(r.ClientPID, 10)+"-"+strconv.FormatInt(r.ClientPIDStartMS, 10)
+}
+
 // refuseChoiceA enforces ADR 035/039 Choice A over all retained hook history so a non-hook
-// generation-zero registration cannot attach to or replace a session (or applicable process)
+// generation-zero registration cannot attach to or replace a session (or process-scoped session)
 // after any hook has reached the hub.
 func (t *transaction) refuseChoiceA(r Request) error {
 	var seen bool
-	if err := t.row("SELECT EXISTS(SELECT 1 FROM Execution WHERE host_id=? AND client=? AND session_id=? AND hook_seen_ms>0)", r.Host, r.Client, r.SessionID).Scan(&seen); err != nil {
+	if err := t.row(choiceASessionExistsSQL, r.Host, r.Client, r.SessionID).Scan(&seen); err != nil {
 		return err
 	}
 	if seen {
 		return fail("lost", "non-hook generation-zero registration cannot attach to or succeed a hook-registered session")
 	}
-	if r.ClientPID > 0 && r.ClientPIDStartMS > 0 && (r.SingleSession || r.Client == "claude") {
-		if err := t.row("SELECT EXISTS(SELECT 1 FROM Execution WHERE host_id=? AND client=? AND client_pid=? AND client_pid_start_ms=? AND hook_seen_ms>0)", r.Host, r.Client, r.ClientPID, r.ClientPIDStartMS).Scan(&seen); err != nil {
+	if r.ClientPID > 0 && r.ClientPIDStartMS > 0 && (r.SingleSession || isProcessDerivedSessionID(r)) {
+		if err := t.row(choiceAProcessExistsSQL, r.Host, r.Client, r.ClientPID, r.ClientPIDStartMS).Scan(&seen); err != nil {
 			return err
 		}
 		if seen {

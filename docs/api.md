@@ -127,12 +127,13 @@ replacement on `POST /v1/sessions`, `POST /v1/sessions/outside`, or session-addr
 reconcile is also refused with `409 lost` and session-scoped `highest_generation` whenever ANY
 retained Execution (`active`, `lost`, or `ended`) for `(host, client, session_id)` has
 `hook_seen_ms > 0` (including when the active or newest row is an unhooked non-hook generation), or
-whenever `client_pid > 0` and `client_pid_start_ms > 0` and (`single_session` is true or `client`
-is `"claude"`) and ANY retained Execution (`active`, `lost`, or `ended`) for
-`(host, client, client_pid, client_pid_start_ms)` has `hook_seen_ms > 0` (returning
-`highest_generation: 0` when the synthetic session itself has no retained rows). Genuine hookless
-D6 bootstrap (zero retained hook history for the session or process) and positive-generation D9
-reattachment stay intact. If retention has removed all matching historical rows, there is no
+whenever `client_pid > 0` and `client_pid_start_ms > 0` and (`single_session` is true or
+`session_id` is synthetic/process-derived `mcp-<pid>-<start_ms>`) and ANY retained Execution
+(`active`, `lost`, or `ended`) for `(host, client, client_pid, client_pid_start_ms)` has
+`hook_seen_ms > 0` (returning `highest_generation: 0` when the synthetic session itself has no
+retained rows; requests carrying a distinct native `session_id` with `single_session: false` are
+checked only by the same-session rule). Genuine hookless D6 bootstrap (zero retained hook history
+for the session or applicable process) and positive-generation D9 reattachment stay intact. If retention has removed all matching historical rows, there is no
 retained state left to check. An older hub omits the detail, so an upgraded hook keeps its proof and
 skips the retry.
 

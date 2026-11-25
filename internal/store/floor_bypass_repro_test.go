@@ -324,7 +324,14 @@ func TestChoiceAProcessHistoryAndHighestGenerationPinning(t *testing.T) {
 		})
 
 		// Different PID, reused PID with different start_ms, different client, different host,
-		// and multiplexed (single_session=false, non-claude) all remain allowed for D6 fallback.
+		// multiplexed (single_session=false), and a distinct native Claude Rung-2 session ID
+		// with single_session=false after another session ended all remain allowed for D6 bootstrap.
+		claudeEnded := call(t, s, "sessions", Request{
+			Client: "claude", Host: "host", SessionID: "claude-ended-s1",
+			Cwd: "/repo/w", Worktree: "/repo/w", Source: "hook",
+			ClientPID: 800, ClientPIDStartMS: 8800, SingleSession: false,
+		})
+		call(t, s, "end", Request{ExecutionID: claudeEnded["execution_id"].(string), Generation: 1})
 		for _, tc := range []struct {
 			name string
 			req  Request
@@ -334,10 +341,22 @@ func TestChoiceAProcessHistoryAndHighestGenerationPinning(t *testing.T) {
 			{"different client", Request{Client: "kimi", Host: "host", SessionID: "mcp-kimi", Cwd: "/repo/w", Worktree: "/repo/w", Source: "mcp", ClientPID: pid, ClientPIDStartMS: start, SingleSession: true}},
 			{"different host", Request{Client: "cursor", Host: "other-host", SessionID: "mcp-other-host", Cwd: "/repo/w", Worktree: "/repo/w", Source: "mcp", ClientPID: pid, ClientPIDStartMS: start, SingleSession: true}},
 			{"multiplexed codex", Request{Client: "codex", Host: "host", SessionID: "codex-multi", Cwd: "/repo/w", Worktree: "/repo/w", Source: "mcp", ClientPID: pid, ClientPIDStartMS: start, SingleSession: false}},
+			{"distinct native claude rung 2 after ended", Request{Client: "claude", Host: "host", SessionID: "claude-fresh-s2", Cwd: "/repo/w", Worktree: "/repo/w", Source: "mcp", ClientPID: 800, ClientPIDStartMS: 8800, SingleSession: false}},
 		} {
 			got := call(t, s, "sessions", tc.req)
 			if got["generation"] != int64(1) {
 				t.Fatalf("%s unexpected generation: %+v", tc.name, got)
+			}
+		}
+		// While synthetic mcp-<pid>-<start> and SingleSession=true on that Claude process remain refused.
+		for _, refused := range []Request{
+			{Client: "claude", Host: "host", SessionID: "mcp-800-8800", Cwd: "/repo/w", Worktree: "/repo/w", Source: "mcp", ClientPID: 800, ClientPIDStartMS: 8800, SingleSession: false},
+			{Client: "claude", Host: "host", SessionID: "claude-r3-s", Cwd: "/repo/w", Worktree: "/repo/w", Source: "mcp", ClientPID: 800, ClientPIDStartMS: 8800, SingleSession: true},
+		} {
+			if out, err := s.Call(t.Context(), "sessions", refused); out != nil {
+				t.Fatalf("expected process Choice A refusal for %+v, got %+v", refused, out)
+			} else {
+				assertRegistrationLost(t, err, 0)
 			}
 		}
 

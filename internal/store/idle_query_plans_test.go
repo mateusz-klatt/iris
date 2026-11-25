@@ -121,3 +121,68 @@ func TestIdleCoordinationPlansAvoidScanningHistoricalRows(t *testing.T) {
 		})
 	}
 }
+
+func TestChoiceAExistsUsesPartialAndSessionIndexes(t *testing.T) {
+	for _, history := range []int{200, 2000} {
+		t.Run(fmt.Sprint(history), func(t *testing.T) {
+			s, clock, _ := testStore(t)
+			first := call(t, s, "sessions", Request{
+				Client: "cursor", Host: "host", SessionID: "real-plan",
+				Cwd: "/repo/w", Worktree: "/repo/w", Branch: "main", Source: "hook",
+				ClientPID: 42, ClientPIDStartMS: 100, SingleSession: true,
+			})
+			agent := first["agent"].(map[string]any)["id"].(string)
+			repo := first["repository_id"].(string)
+			tx, err := s.db.Begin()
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = tx.Rollback() }()
+			for i := range history {
+				ex := fmt.Sprint("plan-ca-", i)
+				hookSeen := int64(0)
+				if i%2 == 0 {
+					hookSeen = clock.Now().UnixMilli()
+				}
+				if _, err := tx.Exec(
+					`INSERT INTO Execution(id,agent_id,repository_id,host_id,client,session_id,generation,worktree,branch,boot_epoch,deadline_tick_ms,lease_renewed_tick_ms,state,client_pid,client_pid_start_ms,single_session,hook_seen_ms) VALUES(?,?,?,'host','cursor',?,1,'/repo/w','old',1,0,0,'ended',?,?,1,?)`,
+					ex, agent, repo, ex, int64(1000+i), int64(2000+i), hookSeen,
+				); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := tx.Commit(); err != nil {
+				t.Fatal(err)
+			}
+			for _, tc := range []struct {
+				name, sql, wantIndex string
+				args                 []any
+			}{
+				{
+					name:      "process Choice A EXISTS",
+					sql:       choiceAProcessExistsSQL,
+					args:      []any{"host", "cursor", int64(42), int64(100)},
+					wantIndex: "execution_process_hook",
+				},
+				{
+					name:      "session Choice A EXISTS",
+					sql:       choiceASessionExistsSQL,
+					args:      []any{"host", "cursor", "real-plan"},
+					wantIndex: "sqlite_autoindex_Execution_2",
+				},
+			} {
+				details := queryPlan(t, s, tc.sql, tc.args...)
+				plan := strings.Join(details, "; ")
+				t.Logf("%s with %d historical rows: %s", tc.name, history, plan)
+				if !strings.Contains(plan, tc.wantIndex) {
+					t.Errorf("%s does not use %s: %s", tc.name, tc.wantIndex, plan)
+				}
+				for _, detail := range details {
+					if detail == "SCAN Execution" {
+						t.Errorf("%s scans history: %s", tc.name, plan)
+					}
+				}
+			}
+		})
+	}
+}

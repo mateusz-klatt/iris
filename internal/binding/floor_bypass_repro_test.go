@@ -231,6 +231,158 @@ func TestFloorBypassRung3AfterEndDoesNotAdvanceTheHookSession(t *testing.T) {
 	}
 }
 
+func TestChoiceAFreshClaudeRung2AfterEndedAndContinueAliasEndToEnd(t *testing.T) {
+	t.Run("fresh native Claude Rung-2 binds at G1 after another session in same process ended", func(t *testing.T) {
+		ctx := t.Context()
+		h := newRestartableBindingHub(t)
+		cwd := t.TempDir()
+		token := filepath.Join(t.TempDir(), "hub.token")
+		if err := os.WriteFile(token, []byte("secret"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		anc := proc.Ancestor{PID: 42, StartMS: 100, Name: "claude"}
+		client := &hubclient.Client{Config: config{h.srv.URL}}
+
+		// Session S1 runs via hooks in process (42, 100) and ends via SessionEnd.
+		getenvS1 := func(key string) string {
+			if key == "IRIS_TOKEN_FILE" {
+				return token
+			}
+			return ""
+		}
+		payloadS1 := `{"session_id":"S1","cwd":` + quoteJSON(cwd) + `}`
+		for _, event := range []string{"SessionStart", "SessionEnd"} {
+			out := (hook.Runner{
+				ClientName: "claude", EventName: event, Stdin: strings.NewReader(payloadS1),
+				Hub: client, Getenv: getenvS1, Host: func() string { return "host" },
+				Ancestor: func() (proc.Ancestor, error) { return anc, nil },
+				Find:     func(string) (gitinfo.Repo, error) { return gitinfo.Repo{}, gitinfo.ErrNotRepo },
+			}).Run()
+			if fails, err := hook.ReadRecentFailures(token, 10); err != nil || len(fails) != 0 {
+				t.Fatalf("%s failures: %v %v\nstdout %s\nstderr %s", event, fails, err, out.Stdout, out.Stderr)
+			}
+		}
+
+		// A fresh native Claude Rung-2 session S2 in the same ancestor process has distinct
+		// native session_id "S2" and single_session=false; Choice A must allow D6 bootstrap at G=1.
+		sessions := hook.NewSessions(token)
+		r2 := &Resolver{
+			Hub: client, Client: "claude", Host: "host", CWD: cwd, Grace: 0,
+			Getenv: func(key string) string {
+				if key == "CLAUDE_CODE_SESSION_ID" {
+					return "S2"
+				}
+				return ""
+			},
+			Ancestor: func() (proc.Ancestor, error) { return anc, nil },
+			Recall:   sessions.RecallBindingGeneration,
+		}
+		before := len(h.sessions())
+		b, err := r2.Resolve(ctx, "")
+		requests := h.sessions()[before:]
+		if err != nil || b.Generation != 1 || b.Rung != 2 || b.SessionID != "S2" || !r2.own {
+			t.Fatalf("fresh native Claude Rung-2 failed after ended S1: bound=%+v own=%t err=%v requests=%+v", b, r2.own, err, requests)
+		}
+		if len(requests) != 1 || requests[0].SessionID != "S2" || requests[0].SingleSession || requests[0].Source != "mcp" {
+			t.Fatalf("unexpected Rung-2 registration request: %+v", requests)
+		}
+	})
+
+	for _, terminal := range []string{"lost", "ended"} {
+		t.Run("claude --continue alias stays refused after "+terminal, func(t *testing.T) {
+			ctx := t.Context()
+			h := newRestartableBindingHub(t)
+			cwd := t.TempDir()
+			token := filepath.Join(t.TempDir(), "hub.token")
+			if err := os.WriteFile(token, []byte("secret"), 0o600); err != nil {
+				t.Fatal(err)
+			}
+			anc := proc.Ancestor{PID: 42, StartMS: 100, Name: "claude"}
+			client := &hubclient.Client{Config: config{h.srv.URL}}
+			getenvHook := func(key string) string {
+				if key == "IRIS_TOKEN_FILE" {
+					return token
+				}
+				return ""
+			}
+			payload := `{"session_id":"S-continued","cwd":` + quoteJSON(cwd) + `}`
+			out := (hook.Runner{
+				ClientName: "claude", EventName: "SessionStart", Stdin: strings.NewReader(payload),
+				Hub: client, Getenv: getenvHook, Host: func() string { return "host" },
+				Ancestor: func() (proc.Ancestor, error) { return anc, nil },
+				Find:     func(string) (gitinfo.Repo, error) { return gitinfo.Repo{}, gitinfo.ErrNotRepo },
+			}).Run()
+			if fails, err := hook.ReadRecentFailures(token, 10); err != nil || len(fails) != 0 {
+				t.Fatalf("SessionStart failures: %v %v\nstdout %s\nstderr %s", fails, err, out.Stdout, out.Stderr)
+			}
+
+			// Under --continue, MCP starts with an alias CLAUDE_CODE_SESSION_ID != "S-continued".
+			// Resolver falls through Rung 2 to Rung 3 and binds "S-continued" with HookSeen=true.
+			sessions := hook.NewSessions(token)
+			r := &Resolver{
+				Hub: client, Client: "claude", Host: "host", CWD: cwd, Grace: 0,
+				Getenv: func(key string) string {
+					if key == "CLAUDE_CODE_SESSION_ID" {
+						return "S-continue-alias"
+					}
+					return ""
+				},
+				Ancestor: func() (proc.Ancestor, error) { return anc, nil },
+				Recall:   sessions.RecallBindingGeneration,
+			}
+			bound, err := r.Resolve(ctx, "")
+			if err != nil || bound.Rung != 3 || bound.SessionID != "S-continued" || !bound.HookSeen {
+				t.Fatalf("--continue alias did not bind S-continued via Rung 3: bound=%+v err=%v", bound, err)
+			}
+
+			if terminal == "ended" {
+				out = (hook.Runner{
+					ClientName: "claude", EventName: "SessionEnd", Stdin: strings.NewReader(payload),
+					Hub: client, Getenv: getenvHook, Host: func() string { return "host" },
+					Ancestor: func() (proc.Ancestor, error) { return anc, nil },
+					Find:     func(string) (gitinfo.Repo, error) { return gitinfo.Repo{}, gitinfo.ErrNotRepo },
+				}).Run()
+				if fails, err := hook.ReadRecentFailures(token, 10); err != nil || len(fails) != 0 {
+					t.Fatalf("SessionEnd failures: %v %v\nstdout %s\nstderr %s", fails, err, out.Stdout, out.Stderr)
+				}
+			} else {
+				h.clock.Advance(16 * time.Minute)
+				if _, err := h.store.Call(ctx, "expire", store.Request{}); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			// Even if the local proof directory were cleared, Rung-3-bound r.last + r.gone refuse
+			// fallback rather than registering the "S-continue-alias" env ID at generation 0.
+			before := len(h.sessions())
+			after, err := r.Resolve(ctx, "")
+			reqs := h.sessions()[before:]
+			if err == nil || after.ExecutionID != "" || !IsCode(err, "lost") || !r.Lost() {
+				t.Fatalf("--continue alias was not refused after %s: bound=%+v lost=%t err=%v reqs=%+v", terminal, after, r.Lost(), err, reqs)
+			}
+			for _, req := range reqs {
+				if req.SessionID == "S-continue-alias" || req.Generation == 0 {
+					t.Fatalf("--continue leaked alias/gen-0 registration after %s: %+v", terminal, reqs)
+				}
+			}
+			// Same-session proofless S-continued and synthetic mcp-42-100 on the process stay refused too.
+			for _, id := range []string{"S-continued", "mcp-42-100"} {
+				_, rerr := client.RegisterSession(ctx, hubclient.SessionRequest{
+					Client: "claude", Host: "host", SessionID: id, CWD: cwd,
+					Source: "mcp", ClientPID: anc.PID, ClientPIDStartMS: anc.StartMS,
+				})
+				if !IsCode(rerr, "lost") {
+					t.Fatalf("Choice A did not refuse %s after %s: %v", id, terminal, rerr)
+				}
+			}
+			rows := executionRows(t, h.file)
+			if len(rows) != 1 || rows[0].session != "S-continued" || rows[0].state != terminal {
+				t.Fatalf("Choice A mutated rows after %s: %+v", terminal, rows)
+			}
+		})
+	}
+}
+
 func TestFloorBypassRetainedProofBlocksALostSession(t *testing.T) {
 	ctx := t.Context()
 	h := newRestartableBindingHub(t)
