@@ -17,7 +17,7 @@ const antigravityRenameAttempts = sessionFileRenameAttempts
 
 type antigravityRenameInfo = sessionRenameInfo
 
-var renameAntigravityStateFile = replaceSessionFile
+var renameAntigravityStateFile func(oldpath, newpath string) error
 
 func replaceAntigravityState(oldpath, newpath string, posix, classic func(string, string) error, pause func(time.Duration)) error {
 	return replaceSessionFileWithRetry(oldpath, newpath, posix, classic, pause)

@@ -231,6 +231,8 @@ func (s *stateStore) snapshot() (stateSnapshot, error) {
 	if err := s.protect(); err != nil {
 		return stateSnapshot{}, err
 	}
+	// Codex wake runs inside iris mcp outside the D3 hook path, so snapshot() and replace()
+	// intentionally take separate 1-second session-lock budgets separated by temp preparation.
 	unlock, err := s.sessions.Lock(time.Second)
 	if err != nil {
 		return stateSnapshot{}, err
@@ -330,6 +332,7 @@ func (s *stateStore) replace(expected stateSnapshot, next document, compareTold 
 		return result, err
 	}
 	defer func() { _ = s.io.remove(name) }()
+	// Second 1-second session-lock budget for this wake stateStore operation (separate from hook D3 50 ms budget).
 	unlock, err := s.sessions.Lock(time.Second)
 	if err != nil {
 		return result, err
