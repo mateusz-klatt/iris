@@ -13,10 +13,10 @@ why. Failure to save optional evidence leaves the ordinary claim check in place.
 governs a confirmed end.
 A local check cannot undo work the hub already committed or protect against someone who can
 rewrite the local files. Stage 1b adds a route and reply fields, uses migration 029 from stage 1a,
-and takes an estimated 5–8 engineering days. The owner activates it after upgrading the writers
-that share the sessions directory. Rolling back a hub with live or recovering hookless
-succession children requires a rollback build that understands their provenance or a backup
-restore.
+and takes an estimated 5–8 engineering days. The owner decides when to enable succession after
+verification and the upgrade of local writers. Rolling back a hub with live or recovering
+hookless succession children requires a rollback build that understands their provenance or a
+backup restore.
 
 Amends [ADR 038](038-process-activation-and-exact-proof-succession.md) for the stage 1
 session-ID shim and registering hooks. It applies D3, D6, D8, D9, D13 and section 5 of the
@@ -46,11 +46,12 @@ to admit. Hook admission and optional evidence writes have separate outcomes.
 - **Exact pair.** A positive generation and its Execution ID for one native session. The
   **predecessor** is the Execution from which succession starts, with generation G and
   Execution ID P. Its exact pair is `(G, P)`. The **child** has generation G+1.
-- **Generation file.** The existing file that stores a generation as an integer.
+- **Generation file.** The existing `<hash>` file that stores a generation as an integer.
 - **Exact record.** The file `<hash>.execution` that stores an exact pair and its origin. A
   shim-origin record also stores the predecessor's exact pair. **Exact proof** is the evidence
-  the exact record supplies for the pair. **Publication** is a protected atomic replacement of
-  the exact record. The record is committed locally once the replacement succeeds.
+  the exact record supplies for the pair.
+- **Publication.** Writing the generation file or the exact record. A protected atomic
+  replacement commits the exact record locally once it succeeds.
 - **End marker and end floor.** A valid `.ended` file holds the end floor. A generation must be
   strictly above that cutoff to pass the local end check.
 - **Generation floor.** The minimum generation that can pass the generation check. It is the
@@ -58,7 +59,8 @@ to admit. Hook admission and optional evidence writes have separate outcomes.
   Equality passes this check, subject to the separate Execution ID and end checks.
 - **Candidate and admission.** A candidate is a binding from the hub awaiting the client's
   checks. Admission makes the reply usable after those checks pass. A **veto** stops the
-  current attempt from using the reply, publishing an exact record or cleaning up evidence.
+  current attempt from using the reply, writing either the generation file or the exact
+  record, or cleaning up evidence.
 - **Hookless succession child.** A child created by shim succession whose hub row has yet to
   record a registering hook.
 - **Eligible shim.** A shim on one of the native session-ID paths listed in
@@ -98,7 +100,7 @@ when it rechecks the reply, rechecks before a dependent request or sends the D9 
 
 To publish the child's exact record, the shim uses a compare-and-swap. It checks the
 predecessor when preparing the first request, before each retry and immediately before
-publication. At each point the conditions under the sessions lock are the same.
+replacing the exact record. At each point the conditions under the sessions lock are the same.
 
 1. The exact record still holds the submitted predecessor's exact pair `(G, P)`.
 2. The generation file is absent or its value is at most G.
@@ -112,11 +114,12 @@ record, the shim can admit the child without rewriting the record. The child's e
 and lineage must match, the end and process checks must pass, and the generation floor must
 be at most G+1.
 
-The shim publishes the child's exact record before writing the generation file. A failed
-replacement of the exact record preserves the predecessor's record. A failed write of the
-generation file leaves the published exact record intact. A registering hook can update the
-generation file if writing the exact record fails. Writers preserve an exact record at a
-higher generation or at the same generation with a different Execution ID.
+The shim writes the child's exact record before writing the generation file. A veto prevents
+either write. A failed replacement of the exact record preserves the predecessor's record.
+A failed write of the generation file leaves the published exact record intact. Once the
+registration reply passes admission, the hook can update the generation file if writing the
+exact record fails. Writers preserve an exact record at a higher generation or at the same
+generation with a different Execution ID.
 
 The resolver retains the predecessor's exact pair across retries and refreshes. A fresh
 shim can use a surviving exact record. An exact pair held only in memory cannot recreate a
@@ -148,8 +151,11 @@ call that has already begun or guarantee acquisition under contention.
 
 ### Exact record lifecycle
 
-The SessionEnd hook calls Forget after the hub confirms the end of the requested exact pair.
-Forget is part of that hook and uses its D3 deadline and the sessions lock budget.
+The SessionEnd hook registers under D9. Registration can use the generation file alone or
+proceed with neither file where D9 permits generation zero. The hook then requests the
+**exact end** using the Execution ID and generation returned by registration. The hook calls
+Forget after the hub confirms the end. Forget uses the hook's D3 deadline and the sessions
+lock budget.
 
 1. Under the sessions lock, read and write the end marker with an end floor that can only
    increase. Do this even if pruning removed the generation file and the exact record.
@@ -296,12 +302,12 @@ reduced git status before reconcile. The hook retains the end and generation flo
 used in the attempt. The checks apply to any publication or cleanup that could make the
 reply usable.
 
-| Outcome under the sessions lock | Publish an exact record? | Send dependent requests? | Hook output and doctor |
+| Outcome under the sessions lock | Write either the generation file or the exact record? | Send dependent requests? | Hook output and doctor |
 |---|---|---|---|
 | Confirmed end floor at or above the returned generation | No | No | D9's deliberate pre-tool ended refusal or post-shell warning. |
 | Damaged evidence, reply below the generation floor, or a reply with the same generation and different Execution ID from the exact record | No | No | Valid D3 allow. Record the reason for refusing the reply or the damaged path. |
 | Mandatory check misses its lock or time budget | No | No | Valid D3 allow. If edit or shell protection was skipped, record a D3 failure in `session` or `shell session`. Doctor grades it `silent` and warns that edits may have gone unclaimed. |
-| Reply admitted, optional write fails or runs out of time | Any successful publication stands | Yes, within the remaining budget | Record a write observation. The ordinary claim check still applies. A genuine Touch conflict can deny the edit and hub errors follow the client's D3 policy. The observation alone does not give a `silent` grade. |
+| Reply admitted, optional write fails or runs out of time | Any successful write stands | Yes, within the remaining budget | Record a write observation. The ordinary claim check still applies. A genuine Touch conflict can deny the edit and hub errors follow the client's D3 policy. The observation alone does not give a `silent` grade. |
 | Reply admitted, writes succeed | Yes | Yes, within the remaining budget | The ordinary result. |
 
 The rows describe the individual outcomes. Both damaged evidence and a missed mandatory
@@ -312,9 +318,10 @@ ADR 038 says a failed evidence write still emits the normal allow. Here a mandat
 failure that prevents the ordinary check follows D3. An optional write failure after
 admission leaves the ordinary decision in place. A failed exact record write supplies no
 new exact proof. A failed generation file write leaves any published exact record intact.
-SessionEnd keeps its check for the end of the requested exact pair. The reply check in a
-combined reconcile runs after the hub has received the snapshot. A local veto can suppress
-publication and use of that reply. It cannot undo work already committed on the hub.
+SessionEnd keeps its exact end semantics. The reply check in a combined reconcile runs
+after the hub has received the snapshot. A local veto prevents use of that reply and writes
+to either the generation file or the exact record. It cannot undo work already committed on
+the hub.
 
 ### Trade-offs
 
@@ -387,24 +394,18 @@ includes it to specify behavior during integration. There is no stage-1a-only re
 | Stage 1a on `main` (unreleased) | Ordinary paths with Choice A over retained history. No released client calls the stage 1a route. | Same ordinary paths. The stage 1b route returns `not_found` before any mutation. |
 | v0.1.16 hub with stage 1b | Ordinary paths with Choice A. Hookless succession children stay unavailable to older shims and watchers until a hook registers them. | Creates or replays with the predecessor's exact pair and renews admitted bindings. Ordinary paths remain available. |
 
-**Owner activation.** The table describes wire compatibility. The owner switches on
-succession through an explicit deployment cutover for a sessions directory. The owner
-authorizes the cutover after the verification matrix passes and every process that writes
-or prunes the directory uses the stage 1b lifecycle.
+The table describes wire compatibility. Enable writing and using exact records only after
+every process that writes or prunes the shared sessions directory uses the stage 1b
+lifecycle. Older writers use the D9 generation file and can retire an end marker
+independently of the exact record. Restart old shims and replace old hook or watcher entry
+points before enabling stage 1b on shared state. Older clients can remain in use with a
+separate sessions directory. A local rollback needs state from before activation or a
+separate sessions directory.
 
-1. Restart the old shims that use the directory with the stage 1b version.
-2. Replace the old hook and watcher entry points that use the directory.
-3. Confirm every writer and pruner is upgraded, then activate writing and using exact
-   records and enable session-ID succession for the directory.
-
-Until the owner makes that cutover, clients use the generation file as in D9. Older writers
-can retire an end marker independently of the exact record. Older clients can remain in use
-with a separate sessions directory. A local rollback needs state from before activation or
-a separate sessions directory.
-
-A hub without the stage 1b guard cannot safely serve a database with live or recovering
-hookless succession children. A pre-029 hub cannot interpret or preserve the new lineage.
-Use a provenance-aware rollback build or restore the pre-migration backup under
+A release version alone never enables succession. A hub without the stage 1b guard cannot
+safely serve a database with live or recovering hookless succession children. A pre-029 hub
+cannot interpret or preserve the new lineage. Use a provenance-aware rollback build or
+restore the pre-migration backup under
 [ADR 006](006-retention-and-restore.md), accepting the loss of changes after the backup.
 Wire compatibility gives no guarantee about opening a later database in place.
 
@@ -451,6 +452,7 @@ authenticate a native event against someone who can forge it or rewrite the exac
 
 ## Open questions
 
+- Which mechanism should the owner choose for enabling session-ID succession?
 - Should the owner add a repair or later retry for a hub-confirmed SessionEnd whose local
   end marker write fails? The hook currently records the failure and leaves the local
   evidence in place. A later write has no guarantee.
@@ -460,7 +462,8 @@ authenticate a native event against someone who can forge it or rewrite the exac
   warning and D3's allow needs a decision.
 - Should the owner specify new MCP error mapping for a `succeed` refusal on a first bind or
   for refusals other than a confirmed loss? The resolver keeps its existing binding rules,
-  and a tick has no MCP response.
+  and a tick has no MCP response. The resolver must never forward an older hub's raw
+  `404 not_found` for the stage 1b route to an MCP caller.
 
 ## Deterministic verification
 
@@ -472,19 +475,19 @@ and local evidence, claims, lease renewal time, events and generation changes as
 |---|---|
 | Dropped replies after hub commit | Drop both replies after the hub creates G+1. Bind returns G+1 while the predecessor's exact record remains. The next eligible call or tick sends `succeed` with `(G, P)`, publishes the returned exact pair and admits the child. Use surviving and fresh shims and plain and Codex root call paths. Assert one child and one creation event. Replay leaves the lease unchanged. |
 | Competing writers | Pause two shims after preparing the request with `(G, P)`. Release a shim or eligible hook winner first. Move publication before the loser's lookup, during reattachment and during its request. The loser admits only the same child when its checks pass. Try an identical installed exact pair and the same generation with a different Execution ID. |
-| Generation file ahead of the predecessor | Leave the exact record at `(G, P)` and raise only the generation file to G+1, first with an older writer and then with a hook whose exact record write fails. Present a delayed same-lineage G+1 reply for a different child after a fork or restore. Advance the generation file before preparation, before retry and between dispatch and the swap. Assert no new exact record or shim heartbeat. Prune the higher generation file after the attempt has read it and check that the veto persists. Independently publish the matching child's exact record and check that the child can pass admission without a rewrite. |
-| Pruning before the swap | Remove the exact record under the lock after preparation, with and without the generation file. Let the hub commit, then resume the swap. Assert no replacement record or heartbeat. Prune only the generation file and verify the retained exact record can still advance. Restart with neither file. A session, process or handle lookup of the live hookless succession child fails admission. A healthy legacy binding still works with both files absent. A genuine hook restores the ordinary path. |
+| Generation file ahead of the predecessor | Leave the exact record at `(G, P)` and raise only the generation file to G+1, first with an older writer and then with a hook whose exact record write fails. Present a delayed same-lineage G+1 reply for a different child after a fork or restore. Advance the generation file before preparation, before retry and between dispatch and the swap. Assert the vetoed shim writes neither file and sends no heartbeat. Prune the higher generation file after the attempt has read it and check that the veto persists. Independently publish the matching child's exact record and check that the child can pass admission without a rewrite. |
+| Pruning before the swap | Remove the exact record under the lock after preparation, with and without the generation file. Let the hub commit, then resume the swap. Assert the vetoed shim writes neither file and sends no heartbeat. Prune only the generation file and verify the retained exact record can still advance. Restart with neither file. A session, process or handle lookup of the live hookless succession child fails admission. A healthy legacy binding still works with both files absent. A genuine hook restores the ordinary path. |
 | Interrupted publication | Fault the exact record replacement and, separately, the generation file write. Restart after each fault. An older writer updating only the generation file cannot certify the child. A published exact record survives failure of the generation file write. Run the next hook with the generation file absent and behind. It sends the positive generation in the exact record for ordinary and combined registration, with the effective end floor. A higher published generation or the same generation with a different Execution ID vetoes a delayed reply. |
 | Windows sessions lock deadline | Use two session IDs sharing the sessions lock and a fake monotonic clock. Spend most of A's time on acquisition and the first replacement. Inject a sharing violation on the second and separately make the POSIX form report unsupported at the deadline. Assert no optional retry sleep, fallback after the deadline or new budget. B can take the released lock and complete its check. Run the sharing case with the actual destination held without delete sharing on native Windows. |
-| End marker changes after HTTP | Pause after the early reply check and before admission under the lock. Set the end floor to the predecessor or returned generation, or replace the end marker with malformed data, a dangling link or a non-regular or unreadable entry. Assert no shim adoption or publication. A damaged end marker gives valid D3 allow, the end marker observation and no dependent request. A confirmed end gives D9's refusal or warning. A strictly lower end floor permits publication. Cover both orders of SessionEnd and publication. |
-| Exact record and expired end marker | Confirm SessionEnd with the generation file absent or newer than the ended exact pair. Try the inverse generations and a shim-origin record whose predecessor is vetoed. Assert the hook writes the end marker first. At the retention boundary, run the sweep and on-demand cleanup with distinct modification times and each file absent in turn. Inject end marker write failure, read or removal failure, and interruption between removals. When the end marker was written, assert that every surviving entry it vetoes stays unusable. Preserve newer evidence that passes the end check. |
+| End marker changes after HTTP | Pause after the early reply check and before admission under the lock. Set the end floor to the predecessor or returned generation, or replace the end marker with malformed data, a dangling link or a non-regular or unreadable entry. Assert no shim adoption on a veto and no write to either the generation file or the exact record by a vetoed shim or hook. A damaged end marker gives valid D3 allow, the end marker observation and no dependent request. A confirmed end gives D9's refusal or warning. A strictly lower end floor permits publication. Cover both orders of SessionEnd and publication. |
+| Exact record and expired end marker | Confirm SessionEnd with the generation file absent or newer than the exact record for the ended Execution. Try the inverse generations and a shim-origin record whose predecessor is vetoed. Assert the hook writes the end marker first. At the retention boundary, run the sweep and on-demand cleanup with distinct modification times and each file absent in turn. Inject end marker write failure, read or removal failure, and interruption between removals. When the end marker was written, assert that every surviving entry it vetoes stays unusable. Preserve newer evidence that passes the end check. |
 | Damaged exact record before dispatch | Damage the exact record while discovery or status is paused. Exercise SessionStart, ordinary and outside registration, a D9 retry after its initial refusal, and full and reduced combined shell registration. Require a local path observation, valid bounded D3 allow and zero registration or reconcile requests after the barrier. Repeat with a missing exact record and healthy generation file to verify legacy recovery. |
 | Intervening checkout or shell work | Pause in `fileGroups` after registration and in split full and reduced git status before reconcile. Advance or damage the end marker, or damage the exact record, during the pause. Resume after the earlier admission. Require a fresh locked check and zero dependent requests. Confirmed end gives D9's refusal or warning. Damage gives D3 allow and an observation. |
-| Optional hook write failure | Fail publication after admission. Check normal allow and a real conflict on both Touch paths, plus authoritative 409 retry refusals where supported and malformed or transport failures. Check adapter encoding and the write observation, with no `silent` grade from that observation alone. Separately force a mandatory lock miss during edit or shell admission. Require bounded allow, no dependent request, a D3 failure and `silent`. Also veto a reply with the same generation and a different Execution ID. A combined reconcile may already have committed. |
+| Optional hook write failure | Fail replacement of the exact record after admission. Check normal allow and a real conflict on both Touch paths, plus authoritative 409 retry refusals where supported and malformed or transport failures. Check adapter encoding and the write observation, with no `silent` grade from that observation alone. Separately force a mandatory lock miss during edit or shell admission. Require bounded allow, no dependent request, a D3 failure and `silent`. Also veto a reply with the same generation and a different Execution ID. A combined reconcile may already have committed. |
 | Eligibility and boot recovery | Try ended, expired, recovering, superseded, restored-lower and same-generation fork cases. An eligible Rung 2 shim can reattach the same recovering child from its current exact record. Set the end floor at the predecessor, restart hub and shim, and assert no heartbeat. Replay cannot renew a recovering child whose exact record is absent. A hookless succession child cannot start another hop. Exercise dead parent, cross-load, watcher, wake, active override, handles and Codex foreign and sub-agent paths. |
 | Rung 3 process check and legacy hook state | Try Rung 3 recovery with an exact record and with only a generation file, including a refresh that finds a recovering row. Vary matching process identity, omitted tuple, different PID and the same PID with a different start time. Assert no heartbeat by Execution ID in place of registration and no renewal or resume from a failed check. Against v0.1.15 omit `hook_seen` on Rung 2 reattachment by heartbeat. Follow with bind replies that confirm `hook_seen:true`, omit it, set it false or name a different exact pair. Only an affirmative bind for the matching pair admits the hook-registered binding. |
 | Codex wake and primary `whoami` | Give the Codex root an admitted hookless succession child. Assert `Primary()` and `StartIfPrimary()` refuse it, with no worker or `HookSeen` probe. Register a hook and refresh the same child, then check wake eligibility. On the live admitted pair, MCP `whoami` sends one resolver heartbeat with shim source and opt-in. Inject a wrong exact pair, invalid provenance, a late local end or a concurrent binding replacement. No stale reply reaches MCP or the cache. Lookup-only `whoami` sends no heartbeat. |
-| Versions and fallback | Run all six hub and client combinations, including the unreleased stage 1a hub. Test missing or inconsistent provenance from a capable hub and zero mutation on either stage's unsupported route. On live and recovering hookless succession children, test legacy bind and all heartbeat sources with and without opt-in. Only `shim` with opt-in renews. Prune the predecessor on the hub and check that non-hook registration cannot renew the child or replace it after loss. Check ordinary recovery, D6 fallback, Choice A, owner activation on a shared sessions directory, pre-029 backup rollback and startup refusal for the ADR 037 worktree-claim schema. |
+| Versions and fallback | Run all six hub and client combinations, including the unreleased stage 1a hub. Test missing or inconsistent provenance from a capable hub and zero mutation on either stage's unsupported route. Assert that an older hub's raw `404 not_found` on the stage 1b route stays out of the MCP tool response. On live and recovering hookless succession children, test legacy bind and all heartbeat sources with and without opt-in. Only `shim` with opt-in renews. Prune the predecessor on the hub and check that non-hook registration cannot renew the child or replace it after loss. Check ordinary recovery, D6 fallback, Choice A, the shared-directory upgrade prerequisite, pre-029 backup rollback and startup refusal for the ADR 037 worktree-claim schema. |
 
 ## Effort and sequencing
 
@@ -493,13 +496,13 @@ and local evidence, claims, lease renewal time, events and generation changes as
    Verify mixed-version requests with the real handlers and migration 029. Estimate
    1–2 engineering days.
 3. Land resolver admission and replay, wake and MCP renewal checks, and the exact record
-   lifecycle. The owner activates session-ID succession after verification and the upgrade of
-   local writers. Estimate 2–3 engineering days plus 2–3 days for the deterministic matrix,
-   native Windows, fixture replay and repository checks. The stage 1b total is 5–8
-   engineering days.
+   lifecycle. Enable session-ID succession after the matrix passes and local session-file
+   writers have been upgraded. The owner decides when to take that step. Estimate 2–3
+   engineering days plus 2–3 days for the deterministic matrix, native Windows, fixture
+   replay and repository checks. The stage 1b total is 5–8 engineering days.
 4. Sequence process-bound activation and durable fallback cutover with ADR 036 as specified in
    ADR 038. Stage 1b supplies no process activation witness.
 
-Before activation, run `make test`, `make race`, `make cov`, `make cov-check`,
+Before enabling the implementation, run `make test`, `make race`, `make cov`, `make cov-check`,
 `make check-all` and `make fixtures`. Use the native Windows session-file tests for sharing
 and replacement behavior.
