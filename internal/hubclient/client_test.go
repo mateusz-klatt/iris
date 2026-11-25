@@ -259,6 +259,7 @@ func TestTooLargeLimitDetails(t *testing.T) {
 	}{
 		{name: "claim limit", body: `{"error":{"code":"too_large","message":"maximum 500 live claims","details":{"limit":"claim_limit"}}}`, want: LimitClaim},
 		{name: "request body limit", body: `{"error":{"code":"too_large","message":"body exceeds limit","details":{"limit":"request_body_limit"}}}`, want: LimitRequestBody},
+		{name: "large details decoded during request", body: fmt.Sprintf(`{"error":{"code":"too_large","message":"too large","details":{"limit":"claim_limit","pad":%q}}}`, strings.Repeat("x", 256<<10)), want: LimitClaim},
 		{name: "older hub no details", body: `{"error":{"code":"too_large","message":"too large"}}`, want: ""},
 		{name: "empty details", body: `{"error":{"code":"too_large","message":"too large","details":{}}}`, want: ""},
 		{name: "unrecognized limit", body: `{"error":{"code":"too_large","message":"too large","details":{"limit":"other_limit"}}}`, want: ""},
@@ -280,23 +281,30 @@ func TestTooLargeLimitDetails(t *testing.T) {
 			if got := hubErr.Limit(); got != tc.want {
 				t.Fatalf("Limit() = %q, want %q", got, tc.want)
 			}
-		})
-	}
-	for _, tc := range []struct {
-		name    string
-		details any
-		want    string
-	}{
-		{name: "programmatic claim limit", details: map[string]any{"limit": LimitClaim}, want: LimitClaim},
-		{name: "programmatic body limit", details: map[string]any{"limit": LimitRequestBody}, want: LimitRequestBody},
-		{name: "programmatic unknown", details: map[string]any{"limit": "other"}, want: ""},
-		{name: "nil details", details: nil, want: ""},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			err := &Error{Code: "too_large", Details: tc.details}
-			if got := err.Limit(); got != tc.want {
-				t.Fatalf("Limit() = %q, want %q", got, tc.want)
+			// Mutating Details afterwards proves Limit() reads the pre-decoded field and never parses JSON.
+			hubErr.Details = json.RawMessage(`{"limit":"request_body_limit"}`)
+			if tc.want != LimitRequestBody && hubErr.Limit() != tc.want {
+				t.Fatalf("Limit() re-parsed mutated Details: got %q, want %q", hubErr.Limit(), tc.want)
+			}
+			hubErr.Details = json.RawMessage(`{invalid`)
+			if got := hubErr.Limit(); got != tc.want {
+				t.Fatalf("Limit() failed on broken Details after decode: got %q, want %q", got, tc.want)
 			}
 		})
+	}
+	// Errors not decoded from a too_large envelope parse nothing in Limit().
+	if got := (&Error{Code: "too_large", Details: json.RawMessage(`{"limit":"claim_limit"}`)}).Limit(); got != "" {
+		t.Fatalf("undecoded Error.Limit() = %q, want empty", got)
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadRequest)
+		_, _ = w.Write([]byte(`{"error":{"code":"bad_request","message":"bad","details":{"limit":"claim_limit"}}}`))
+	}))
+	defer srv.Close()
+	c := &Client{Config: staticConfig{url: srv.URL, token: "tok"}}
+	_, err := c.Touch(context.Background(), TouchRequest{ExecutionID: "ex_1", Generation: 1, ToolCallID: "t1", Paths: []string{"a.go"}})
+	var badErr *Error
+	if !errors.As(err, &badErr) || badErr.Limit() != "" {
+		t.Fatalf("non-too_large Error.Limit() = %v, want empty", err)
 	}
 }

@@ -1071,7 +1071,9 @@ facts: a full status started with at least half the budget left; it had not pass
 cap; it was still running when the reconcile's own deadline passed; and the hook itself had not
 been cancelled. A status that passes the 48 KiB stdout cap stops reading and records
 `git status output exceeds cap` in `hook-failures.log` instead of tripping the breaker or
-recording a bare `*exec.ExitError`. A git that has just exited while its output is still being read can trip it
+recording a bare `*exec.ExitError`; if the reconcile deadline passes first, that deadline takes
+precedence and records `shell reconciliation passed its deadline` while still leaving the
+breaker untripped. A git that has just exited while its output is still being read can trip it
 falsely. The breaker then suggests reduced scope for a minute, doubled after each full attempt
 that fails again, up to ten minutes, and a full status that succeeds resets it. With hooks
 running at once, this schedule is only approximate. A hook takes the suggestion only when its hub

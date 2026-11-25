@@ -5,12 +5,25 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"syscall"
 	"testing"
 
 	"github.com/mateusz-klatt/iris/internal/gitinfo"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 )
+
+func decodedHubError(t *testing.T, body string) error {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusRequestEntityTooLarge)
+		_, _ = w.Write([]byte(body))
+	}))
+	defer srv.Close()
+	c := &hubclient.Client{Config: hubURL(srv.URL)}
+	return c.Do(context.Background(), http.MethodPost, "/v1/claims/touch", nil, nil)
+}
 
 // Every text failureText writes maps to a category of its own, so a reader that trusts only
 // FailureCategory still tells the failures apart.
@@ -38,9 +51,9 @@ func TestFailureCategoryKnowsWhatFailureTextWrites(t *testing.T) {
 		mismatch:                         "invalid JSON field type",
 		&hubclient.Error{Code: "lost"}:   "hub request failed: lost",
 		&hubclient.Error{Code: "teapot"}: "hub request failed",
-		&hubclient.Error{Code: "too_large", Details: json.RawMessage(`{"limit":"claim_limit"}`)}:        "hub request failed: too_large (claim_limit)",
-		&hubclient.Error{Code: "too_large", Details: json.RawMessage(`{"limit":"request_body_limit"}`)}: "hub request failed: too_large (request_body_limit)",
-		&hubclient.Error{Code: "too_large"}:   "hub request failed: too_large (unknown)",
+		decodedHubError(t, `{"error":{"code":"too_large","details":{"limit":"claim_limit"}}}`):        "hub request failed: too_large (claim_limit)",
+		decodedHubError(t, `{"error":{"code":"too_large","details":{"limit":"request_body_limit"}}}`): "hub request failed: too_large (request_body_limit)",
+		decodedHubError(t, `{"error":{"code":"too_large"}}`):                                          "hub request failed: too_large (unknown)",
 		gitinfo.ErrStatusTooLarge:             failStatusTooLarge,
 		syscall.Errno(2):                      syscall.Errno(2).Error(),
 		io.ErrUnexpectedEOF:                   "incomplete hook input or hub response",
