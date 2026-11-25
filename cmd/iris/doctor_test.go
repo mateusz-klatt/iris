@@ -281,11 +281,23 @@ func TestDoctorShowsLocalGenerationRecoveryAndKeepsBundlePathsPrivate(t *testing
 			t.Fatal(err)
 		}
 	}
-	sessions.ObserveBindingRefusal(client, "ended", true)
-	sessions.ObserveBindingRefusal(client, "live", false)
-	hook.Observer(os.Getenv, client)(hook.RestoreFloorRefused + " at " + paths[hook.RestoreFloorRefused])
-	if _, _, err := sessions.RecallBindingGeneration(client, "damaged"); !errors.Is(err, hook.ErrInvalidGeneration) {
-		t.Fatalf("damaged marker must prevent binding: %v", err)
+	var observedLog bytes.Buffer
+	for _, tc := range cases {
+		entry, err := json.Marshal(hook.Failure{
+			Time: time.Now().UTC(), Client: client, Event: "test", Stage: "observed",
+			Error: tc.category + " at " + paths[tc.category],
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+		observedLog.Write(entry)
+		observedLog.WriteByte('\n')
+	}
+	if err := os.WriteFile(filepath.Join(home, "hook-observed.log"), observedLog.Bytes(), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := hook.ReadGeneration(paths[hook.DamagedGenerationProof]); !errors.Is(err, hook.ErrInvalidGeneration) {
+		t.Fatalf("damaged marker must be rejected: %v", err)
 	}
 
 	hub := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
