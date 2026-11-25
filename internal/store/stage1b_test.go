@@ -436,4 +436,80 @@ func TestStage1bCompatibilityGuardsAndHookUnlock(t *testing.T) {
 		}
 		assertClassifiedReply(t, next, firstID, "mcp", "absent", false)
 	})
+
+	t.Run("standalone touch and execution-addressed reconcile never unlock hookless child", func(t *testing.T) {
+		s, clock, _ := testStore(t)
+		parent := call(t, s, "sessions", Request{
+			Client: "codex", Host: "host", SessionID: "S-touch-guard",
+			Cwd: "/repo/w", Worktree: "/repo/w", Branch: "main", Source: "hook",
+		})
+		parentID := parent["execution_id"].(string)
+		clock.advance(16 * time.Minute)
+		call(t, s, "expire", Request{})
+
+		child := call(t, s, "succeed", Request{
+			Client: "codex", Host: "host", SessionID: "S-touch-guard", Source: "shim",
+			PriorGeneration: 1, PriorExecutionID: parentID,
+		})
+		childID := child["execution_id"].(string)
+		childRef := Request{ExecutionID: childID, Generation: 2}
+
+		call(t, s, "touch", touchRequest(childRef, "tc_touch", "a.go"))
+		call(t, s, "touch_files", filesTouch(childRef, "tc_files", ClaimGroup{
+			Worktree: "/repo/w", Paths: []string{"b.go"},
+		}))
+		call(t, s, "reconcile", full(childRef, "before", map[string]string{}))
+		call(t, s, "reconcile_scoped", reduced(childRef, "before", map[string]string{}, "lib"))
+
+		if seen := readHookSeenMS(t, s, childID); seen != 0 {
+			t.Fatalf("hook_seen_ms=%d after touch/reconcile, want 0", seen)
+		}
+		expectError(t, s, "bind", Request{Client: "codex", Host: "host", Execution: childID}, "lost")
+		expectError(t, s, "heartbeat", Request{ExecutionID: childID, Generation: 2, Source: "watch"}, "lost")
+
+		// Expiring the still-hookless child does NOT make it eligible for another succession hop.
+		clock.advance(2 * time.Minute)
+		call(t, s, "expire", Request{})
+		out, err := s.Call(t.Context(), "succeed", Request{
+			Client: "codex", Host: "host", SessionID: "S-touch-guard", Source: "shim",
+			PriorGeneration: 2, PriorExecutionID: childID,
+		})
+		if out != nil {
+			t.Fatalf("succeed accepted hookless child unlocked by touch/reconcile: %+v", out)
+		}
+		assertRegistrationLost(t, err, 2)
+
+		// Contrast: session-addressed shell reconcile refuses source="mcp", while source="hook"
+		// registers the hookless child cleanly and sets hook_seen_ms.
+		s2, clock2, _ := testStore(t)
+		p2 := call(t, s2, "sessions", Request{
+			Client: "codex", Host: "host", SessionID: "S-shell-hook",
+			Cwd: "/repo/w", Worktree: "/repo/w", Branch: "main", Source: "hook",
+		})
+		clock2.advance(16 * time.Minute)
+		call(t, s2, "expire", Request{})
+		c2 := call(t, s2, "succeed", Request{
+			Client: "codex", Host: "host", SessionID: "S-shell-hook", Source: "shim",
+			PriorGeneration: 1, PriorExecutionID: p2["execution_id"].(string),
+		})
+		c2ID := c2["execution_id"].(string)
+
+		nonHookShell := full(Request{Client: "codex", Host: "host", SessionID: "S-shell-hook", Cwd: "/repo/w", Worktree: "/repo/w", Source: "mcp"}, "before", map[string]string{})
+		if out, err := s2.Call(t.Context(), "reconcile", nonHookShell); out != nil {
+			t.Fatalf("non-hook session reconcile attached: %+v", out)
+		} else {
+			assertRegistrationLost(t, err, 2)
+		}
+		if readHookSeenMS(t, s2, c2ID) != 0 {
+			t.Fatal("non-hook shell reconcile set hook_seen_ms")
+		}
+
+		hookShell := nonHookShell
+		hookShell.Source = "hook"
+		shellOut := call(t, s2, "reconcile", hookShell)
+		sess := shellOut["session"].(map[string]any)
+		if sess["execution_id"] != c2ID || readHookSeenMS(t, s2, c2ID) == 0 {
+			t.Fatalf("hook session reconcile failed to unlock child: out=%+v hook_seen=%d", shellOut, readHookSeenMS(t, s2, c2ID))
+		}
+	})
 }

@@ -193,14 +193,18 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 			}
 			_, err = t.exec("UPDATE Execution SET last_seen_ms=? WHERE id=?", t.s.clock.Now().UnixMilli(), ex)
 		}
-		// Only hooks register with source hook, claim automatically or reconcile a shell, so
-		// these say when this client's hooks last reached the hub. A heartbeat does not.
+		// Only a registering hook establishes initial hook reachability for a hookless shim
+		// succession child; standalone touch or execution-addressed reconcile cannot unlock it (ADR 039).
 		if err == nil && (operation == "touch" || operation == "touch_files" || operation == "reconcile" || operation == "reconcile_scoped" || (registers && r.Source == "hook")) {
 			ex := r.ExecutionID
 			if registers {
 				ex, _ = out["execution_id"].(string)
 			}
-			_, err = t.exec("UPDATE Execution SET hook_seen_ms=? WHERE id=?", t.s.clock.Now().UnixMilli(), ex)
+			hookSQL := "UPDATE Execution SET hook_seen_ms=? WHERE id=? AND NOT (creation_source='shim' AND creation_proof='shim_succession' AND hook_seen_ms=0)"
+			if (registers || registersShell) && r.Source == "hook" {
+				hookSQL = "UPDATE Execution SET hook_seen_ms=? WHERE id=?"
+			}
+			_, err = t.exec(hookSQL, t.s.clock.Now().UnixMilli(), ex)
 		}
 		if err == nil {
 			switch operation {
