@@ -222,6 +222,33 @@ or a slow network. Such entries leave the row `ok` with a `degraded` note. More 
 status refuses it, so doctor sends such a hub the row as `silent`, with a detail starting `slow:`,
 and that is how its console shows it.
 
+Keep dependency and cache directories (such as virtualenvs, package caches, and test caches)
+outside the git checkout or listed in `.gitignore`. Unignored files created by a shell step appear
+in `git status`, so a bulk install can exhaust the claim reserve below or push `git status` past its
+48 KiB stdout cap (`git status output exceeds cap`, which fails open and grades the client `silent`).
+
+An Execution may hold at most 500 live claims (`claim_limit`). Post-shell reconciliation stops
+adding new automatic claims at 400 live claims, keeping 100 slots in reserve (`claim_reserve`) for
+pre-edit touches and explicit claims so later file edits keep getting protected. Once that ceiling
+is reached, reconcile still keeps its snapshot, checks conflicts, renews claims the session already
+holds, and releases claims that left `git status` in the same transaction; any remaining new paths
+beyond the 400-claim reserve are left unclaimed, and the hook warns the model with the claimed and
+unclaimed counts. The hook records the allowlisted `claim_reserve` reason and the skipped path
+count in `hook-observed.log` (not `hook-failures.log`), so the client row keeps its status and
+`iris doctor` does not exit 1. Doctor prints the event count under `observed in 24 h:` alongside
+the total skipped path count, names the `claim_reserve` reserve as the reason, and advises moving
+dependency or cache directories outside the checkout or into `.gitignore`. If pre-edit touches or
+explicit claims later fill all 500 slots, the hub refuses new grants with `too_large`
+(`claim_limit`), the hook fails open and records it in `hook-failures.log`, and doctor marks the
+client `silent` (exit 1).
+
+Keeping dependency and cache directories out of `git status` is advice, not enforcement: Iris
+cannot stop a tool from writing unignored files into the checkout. Paths left unclaimed beyond the
+400-claim reserve are not protected by automatic shell claims against another agent's edits (though
+`iris guard` still checks staged paths at commit time), a large multi-file touch or enough explicit
+claims can still hit the 500 hard cap, and the reserve cannot recover a `git status` run that
+exceeded the 48 KiB output cap before reaching the hub.
+
 When it is a full `git status` that keeps running past the budget, the hook records a hint for that
 worktree to use a reduced scope for a while (ADR 018). A reduced status leaves tracked edits inside
 submodules out, so the rest of the worktree can be reconciled again, if the hub takes reduced

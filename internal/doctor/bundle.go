@@ -131,6 +131,9 @@ func bareVersion(text string) string {
 // observationKind keeps an observation's kind and drops what follows it, a tool name or a
 // client, which comes from the client: "unknown tool view" is "unknown tool".
 func observationKind(text string) string {
+	if kind, _, ok := hook.ParseReconcileSkipped(text); ok {
+		return kind
+	}
 	for _, kind := range []string{"unknown tool", "cross-load", binding.ObservedClientMismatch, binding.ObservedTwoSessions, binding.ObservedUnusable, binding.ObservedRebound, hook.RestoreFloorRefused, hook.DamagedGenerationProof, hook.EndedGenerationRefused, hook.BindingGenerationRefused} {
 		if strings.HasPrefix(text, kind) {
 			return kind

@@ -308,3 +308,30 @@ func TestTooLargeLimitDetails(t *testing.T) {
 		t.Fatalf("non-too_large Error.Limit() = %v, want empty", err)
 	}
 }
+
+func TestCheckResponseSkipReason(t *testing.T) {
+	for _, tc := range []struct {
+		name, body, wantReason string
+		wantSkipped            int
+	}{
+		{name: "claim reserve", body: `{"message":"Shell edit detected.","conflicts":[],"skipped":12,"skip_reason":"claim_reserve"}`, wantSkipped: 12, wantReason: SkipReasonClaimReserve},
+		{name: "omitted reason", body: `{"message":"Shell edit detected.","conflicts":[],"skipped":4}`, wantSkipped: 4, wantReason: ""},
+		{name: "unrecognized reason", body: `{"message":"Shell edit detected.","conflicts":[],"skipped":4,"skip_reason":"SECRET"}`, wantSkipped: 4, wantReason: ""},
+		{name: "no skipped", body: `{"message":"","conflicts":[]}`, wantSkipped: 0, wantReason: ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			defer srv.Close()
+			c := &Client{Config: staticConfig{url: srv.URL, token: "tok"}}
+			resp, err := c.Reconcile(context.Background(), ReconcileRequest{ExecutionID: "ex_1", Generation: 1, Kind: "after", Status: map[string]string{}})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if resp.Skipped != tc.wantSkipped || resp.AllowlistedSkipReason() != tc.wantReason {
+				t.Fatalf("got skipped=%d reason=%q, want skipped=%d reason=%q", resp.Skipped, resp.AllowlistedSkipReason(), tc.wantSkipped, tc.wantReason)
+			}
+		})
+	}
+}

@@ -1032,7 +1032,10 @@ only records it. Multiple live Executions in the same host/worktree suppress
 warnings and clear their baselines. Status strings are observations, never commands. Every
 successful answer on this route and on `POST /v1/shell/scoped` carries the `attention` block
 described under `POST /v1/sessions`. The planned shell hook change will use it to announce new
-attention as an edit hook does (ADR 017).
+attention as an edit hook does (ADR 017). When automatic shell claims reach the 400-claim
+reconcile ceiling (reserving 100 of the 500 live-claim slots for pre-edit touches and explicit
+claims), the response also carries `skipped` (the count of new claimable paths left unclaimed) and
+`skip_reason` set to `"claim_reserve"`.
 
 Instead of `execution_id`, a reconcile may carry the session's registration fields, those of
 `POST /v1/sessions` with `session_id` and the remembered `generation`. The hub then registers
@@ -1071,8 +1074,12 @@ Every route accepts at most 64 KiB of request body, including chunked bodies and
 that do not consume JSON. Oversized requests return 413 (`too_large`) with
 `error.details.limit` set to `"request_body_limit"`. An Execution may hold at most 500 live
 claims; a grant exceeding that limit fails atomically with `too_large` and `error.details.limit`
-set to `"claim_limit"`, while touching existing claims is allowed. Older hubs omit
-`details.limit`. The HTTP server has a 10-second
+set to `"claim_limit"`, while touching existing claims is allowed. Automatic shell claims during
+reconciliation stop at 400 live claims per Execution, leaving 100 slots in reserve for pre-edit
+touches and explicit claims; when a shell command produces more new claimable paths than that
+remaining headroom, reconcile commits atomically up to 400, leaves the excess unclaimed, and
+returns `skipped` and `skip_reason` (`"claim_reserve"`) instead of failing with `too_large`.
+Older hubs omit `details.limit` and `skip_reason`. The HTTP server has a 10-second
 read timeout, a 5-second header timeout and a 60-second idle timeout; upgraded sockets
 are independent of these deadlines.
 

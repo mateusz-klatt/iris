@@ -3,8 +3,10 @@ package hook
 import (
 	"context"
 	"errors"
+	"fmt"
 	"net"
 	neturl "net/url"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -154,6 +156,9 @@ func (r Runner) reconcile(ctx context.Context, ev Event, state *runState) Output
 			done <- settle(err, r.failOpen(state, ev, err, allow))
 			return
 		}
+		if out.Skipped > 0 {
+			state.observe(reconcileSkippedObservation(out.AllowlistedSkipReason(), out.Skipped))
+		}
 		// After a command, the answer's attention is said as an edit's is (ADR 017, decision 6).
 		note := ""
 		if ev.Kind == KindPostTool && out.Attention != nil && carriesToolContext(ev.Client) {
@@ -287,3 +292,41 @@ const shellRefused = "Iris: the hub restarted and this session cannot prove it i
 
 // shellRecovering is the warning after a shell call that could not be checked during recovery.
 const shellRecovering = "Iris: the hub restarted and this session cannot prove it is the same one yet, so the changes this command made were not checked or claimed. Other agents cannot see them until the session reattaches."
+
+const (
+	// ReconcileSkippedClaimReserve is the observation kind recorded when shell reconcile
+	// leaves changed paths unclaimed to preserve live-claim headroom for edits.
+	ReconcileSkippedClaimReserve = "shell reconcile skipped (" + hubclient.SkipReasonClaimReserve + ")"
+	// ReconcileSkippedUnknown is the observation kind recorded when shell reconcile skips
+	// paths without a recognized allowlisted reason.
+	ReconcileSkippedUnknown = "shell reconcile skipped (unknown)"
+)
+
+func reconcileSkippedObservation(reason string, skipped int) string {
+	kind := ReconcileSkippedUnknown
+	if reason == hubclient.SkipReasonClaimReserve {
+		kind = ReconcileSkippedClaimReserve
+	}
+	return fmt.Sprintf("%s: %d path(s)", kind, skipped)
+}
+
+// ParseReconcileSkipped parses an observation recorded by shell reconcile when it skipped
+// claiming paths. It returns the allowlisted kind, skipped path count, and true on match.
+func ParseReconcileSkipped(text string) (kind string, skipped int, ok bool) {
+	for _, candidate := range []string{ReconcileSkippedClaimReserve, ReconcileSkippedUnknown} {
+		rest, matched := strings.CutPrefix(text, candidate+": ")
+		if !matched {
+			continue
+		}
+		rawCount, suffixOK := strings.CutSuffix(rest, " path(s)")
+		if !suffixOK {
+			continue
+		}
+		n, err := strconv.Atoi(rawCount)
+		if err != nil || n <= 0 {
+			continue
+		}
+		return candidate, n, true
+	}
+	return "", 0, false
+}

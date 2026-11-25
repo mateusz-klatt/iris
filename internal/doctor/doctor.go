@@ -492,6 +492,7 @@ func applyFailuresFrom(ctx context.Context, res *Result, tokenFile, fallbackToke
 	degraded := map[string]int{}
 	skipped := map[string]int{}
 	observed := map[string]map[string]int{}
+	reconcileSkipped := map[string]map[string]int{}
 	proofDamage := map[string]map[string]int{}
 	markerDamage := map[string]map[string]string{}
 	markerClients := map[string]string{}
@@ -520,21 +521,30 @@ func applyFailuresFrom(ctx context.Context, res *Result, tokenFile, fallbackToke
 				observed[name] = map[string]int{}
 			}
 			note := entry.Error
-			if kind, path, ok := observedLocalPath(note); ok {
+			switch kind, count, ok := hook.ParseReconcileSkipped(note); {
+			case ok:
 				note = kind
-				display := localObservationDisplay(kind, path)
-				if proofDamage[name] == nil {
-					proofDamage[name] = map[string]int{}
+				if reconcileSkipped[name] == nil {
+					reconcileSkipped[name] = map[string]int{}
 				}
-				proofDamage[name][display]++
-				if kind == hook.DamagedGenerationProof {
-					if strings.HasSuffix(path, ".ended") {
-						if markerDamage[name] == nil {
-							markerDamage[name] = map[string]string{}
+				reconcileSkipped[name][kind] += count
+			default:
+				if kind, path, ok := observedLocalPath(note); ok {
+					note = kind
+					display := localObservationDisplay(kind, path)
+					if proofDamage[name] == nil {
+						proofDamage[name] = map[string]int{}
+					}
+					proofDamage[name][display]++
+					if kind == hook.DamagedGenerationProof {
+						if strings.HasSuffix(path, ".ended") {
+							if markerDamage[name] == nil {
+								markerDamage[name] = map[string]string{}
+							}
+							markerDamage[name][display] = path
+						} else {
+							otherDamage[name] = true
 						}
-						markerDamage[name][display] = path
-					} else {
-						otherDamage[name] = true
 					}
 				}
 			}
@@ -602,6 +612,12 @@ func applyFailuresFrom(ctx context.Context, res *Result, tokenFile, fallbackToke
 		}
 		if seen := observed[row.Client]; len(seen) > 0 {
 			row.Detail = joinDetail(row.Detail, "observed in 24 h: "+observedText(seen))
+			if n := reconcileSkipped[row.Client][hook.ReconcileSkippedClaimReserve]; n > 0 {
+				row.Detail = joinDetail(row.Detail, fmt.Sprintf("shell reconcile skipped %d path(s) due to the %s reserve (keeping headroom up to 500 live claims for edits and explicit claims); move dependency or cache directories outside the checkout or add them to .gitignore", n, hubclient.SkipReasonClaimReserve))
+			}
+			if n := reconcileSkipped[row.Client][hook.ReconcileSkippedUnknown]; n > 0 {
+				row.Detail = joinDetail(row.Detail, fmt.Sprintf("shell reconcile skipped %d path(s) for an unrecognized reason", n))
+			}
 			if seen[hook.RestoreFloorRefused]+seen[hook.RestoreFloorHubTooOld] > 0 {
 				row.Detail = joinDetail(row.Detail, "the hook kept its generation proof and left the session unregistered. Edits may have gone unclaimed. Verify the configured hub and its restore history, or start a new client session")
 			}

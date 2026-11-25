@@ -119,8 +119,10 @@ Hard rules for `iris hook`, because failure semantics differ between clients:
    `hub request failed: too_large (request_body_limit)`, or `hub request failed: too_large (unknown)`
    when omitted or unrecognized), and a `git status` aborted at its stdout cap records the fixed
    reason `git status output exceeds cap` rather than a bare child exit error (`*exec.ExitError`).
-   Unknown tools and
-   cross-loads are not failures, but doctor reports them too, from `hook-observed.log` (gap review
+   Unknown tools,
+   cross-loads, and shell reconcile skips at the `claim_reserve` headroom ceiling (`shell reconcile
+   skipped (claim_reserve): <count> path(s)`, or `unknown` when omitted or unrecognized) are not
+   failures, but doctor reports them too, from `hook-observed.log` (gap review
    C4), using the same relocated-plus-default merge. Neither is a session-file operation a hook
    skipped, such as a told state its lock budget kept it from writing: the hook's allow or deny is
    unaffected, and doctor counts them beside the row's status (ADR 017).
@@ -1041,6 +1043,18 @@ git's business, not a claim's. This happens only at the session's next shell rec
 made outside the session, or an edit-tool claim on a path no shell command ever saw dirty,
 keeps its claim until it expires.
 
+Each Execution is capped at 500 live claims (`claim_limit`). Pre-edit touches (`POST /v1/claims/touch`
+and `POST /v1/claims/touch/files`) and explicit claims (`POST /v1/claims` and `POST /v1/claims/files`)
+may use all 500 slots; touching or upgrading already-held paths needs no new slot. Post-shell
+reconciliation stops adding new automatic claims at 400 live claims (`claim_reserve`), reserving 100
+slots of headroom so ordinary file edits and explicit claims keep succeeding after a bulk shell
+step, while continuing to renew already-held paths, release paths that left status, and report
+foreign conflicts atomically in the same transaction. Paths skipped beyond the reserve are left
+unclaimed and reported by `skipped` and allowlisted `skip_reason` (`claim_reserve`). Keeping
+dependency and cache directories outside the checkout or in `.gitignore` is advice, not enforcement;
+paths beyond the reserve are unclaimed until touched, explicitly claimed, or staged and checked by
+`iris guard`.
+
 `claim.ignore` lists paths that never take an auto claim and only warn: by default lockfiles such
 as `go.sum`, `package-lock.json`, `pnpm-lock.yaml` and `Cargo.lock`, changelogs, and generated
 output. An `explicit` claim still applies to them.
@@ -1642,7 +1656,10 @@ was measured, the tool was unknown to Iris, so its writes went unreconciled and 
 
 On `modernc.org/sqlite`, with real concurrency:
 
-- Of concurrent overlapping grants, exactly one wins. A multi-path grant is all or nothing.
+- Of concurrent overlapping grants, exactly one wins. A multi-path touch grant is all or nothing up
+  to 500 live claims per Execution; post-shell reconciliation stops adding new automatic claims at
+  400 live claims (keeping 100 slots in reserve for edits and explicit claims) and commits the
+  claimed subset, renewals, releases, and baseline atomically in one transaction.
 - Prefix, case-folding and rename boundaries hold across worktrees.
 - A self-touch reuses a claim and never downgrades an `explicit` one. A replayed tool call does
   not extend an expiry.

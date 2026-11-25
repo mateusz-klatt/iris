@@ -198,3 +198,48 @@ func TestSlowIsSentAsIsAndAsSilentToAnOlderHub(t *testing.T) {
 		t.Fatal("a report without slow reads as slow")
 	}
 }
+
+func TestReconcileReserveObservationIsReportedAndStaysOK(t *testing.T) {
+	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
+	token := filepath.Join(t.TempDir(), "hub.token")
+	obsLine := func(client, text string) string {
+		return fmt.Sprintf(`{"time":%q,"client":%q,"event":"PostToolUse","stage":"observed","error":%q}`+"\n",
+			now.Add(-time.Hour).Format(time.RFC3339), client, text)
+	}
+	log := obsLine(integrate.Claude, "shell reconcile skipped (claim_reserve): 120 path(s)") +
+		obsLine(integrate.Claude, "shell reconcile skipped (claim_reserve): 5 path(s)") +
+		obsLine(integrate.Codex, "shell reconcile skipped (unknown): 7 path(s)")
+	if err := os.WriteFile(filepath.Join(filepath.Dir(token), "hook-observed.log"), []byte(log), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res := Result{
+		HubUp: true, TokenOK: true,
+		Report: Report{Clients: []ClientReport{
+			{Client: integrate.Claude, Status: StatusOK},
+			{Client: integrate.Codex, Status: StatusOK},
+		}},
+	}
+	if err := applyFailures(&res, token, now); err != nil {
+		t.Fatal(err)
+	}
+	if res.ExitCode() != 0 {
+		t.Fatalf("reserve observation should not fail doctor: exit %d\n%s", res.ExitCode(), res.Format())
+	}
+	claude := res.Report.Clients[0]
+	for _, want := range []string{
+		"observed in 24 h: shell reconcile skipped (claim_reserve) (2)",
+		"shell reconcile skipped 125 path(s) due to the claim_reserve reserve",
+		".gitignore",
+	} {
+		if !strings.Contains(claude.Detail, want) {
+			t.Fatalf("claude detail missing %q: %s", want, claude.Detail)
+		}
+	}
+	codex := res.Report.Clients[1]
+	if codex.Status != StatusOK || !strings.Contains(codex.Detail, "shell reconcile skipped 7 path(s) for an unrecognized reason") {
+		t.Fatalf("codex = %+v", codex)
+	}
+	if formatted := res.Format(); !strings.Contains(formatted, "125 path(s) due to the claim_reserve reserve") {
+		t.Fatalf("formatted report missing reserve detail:\n%s", formatted)
+	}
+}

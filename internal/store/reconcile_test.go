@@ -99,21 +99,89 @@ func TestReconciliationClaimsWhatTheSessionWrote(t *testing.T) {
 
 func TestReconciliationRespectsTheClaimLimit(t *testing.T) {
 	s, _, _ := testStore(t)
-	shell, _ := session(t, s, 1)
+	holder, _ := session(t, s, 1)
+	shell, joined := session(t, s, 2)
+	repo := joined["repository_id"].(string)
+	call(t, s, "claim", claimRequest(holder, "held", "held.txt", "exact"))
+
+	// Seed an existing auto claim that stays (renewed) and one that leaves (released),
+	// so the test proves the reserve skip keeps the rest of reconcile atomic.
+	call(t, s, "touch", touchRequest(shell, "seed", "kept.txt", "leaving.txt"))
 	shell.Kind = "before"
-	shell.Status = map[string]string{}
+	shell.Status = map[string]string{"kept.txt": " M", "leaving.txt": " M"}
 	call(t, s, "reconcile", shell)
+
 	shell.Kind = "after"
-	shell.Status = map[string]string{}
-	for i := range 501 {
+	shell.Status = map[string]string{"kept.txt": "M ", "held.txt": " M"}
+	// kept.txt already uses 1 slot and leaving.txt frees 1 slot, so 399 of 405 fresh paths fit
+	// before reaching reconcileMaxClaims (400), leaving 6 skipped.
+	for i := range reconcileMaxClaims + 5 {
 		shell.Status[fmt.Sprintf("f%03d", i)] = "??"
 	}
-	// One command can change more files than the limit: claim up to it, keep the reconcile
-	// answer, and say what was left, rather than fail and lose the conflict warning.
 	out := call(t, s, "reconcile", shell)
 	claimed, _ := out["claimed"].([]string)
-	if len(claimed) != 500 || !strings.Contains(out["message"].(string), "left 1 unclaimed") {
-		t.Fatalf("%d claimed, message %q", len(claimed), out["message"])
+	if len(claimed) != reconcileMaxClaims || out["skipped"] != 6 || out["skip_reason"] != skipReasonClaimReserve {
+		t.Fatalf("claimed=%d skipped=%v reason=%v msg=%q", len(claimed), out["skipped"], out["skip_reason"], out["message"])
+	}
+	msg := out["message"].(string)
+	if !strings.Contains(msg, "left 6 unclaimed") || !strings.Contains(msg, "held.txt") {
+		t.Fatalf("message missing skip count or conflict warning: %q", msg)
+	}
+	if _, stillHeld := liveAuto(t, s, shell.ExecutionID, "leaving.txt"); stillHeld {
+		t.Fatal("leaving.txt auto claim was not released atomically")
+	}
+
+	// Headroom up to maxClaims (500) remains available for pre-edit touches.
+	if got := call(t, s, "touch", touchRequest(shell, "post-shell-edit", "edit-after.go")); got["action"] != "allow" {
+		t.Fatalf("pre-edit touch failed after reconcile reserve: %v", got)
+	}
+
+	// Explicit claims can use the remaining headroom all the way up to 500.
+	for i := range reconcileReserve - 1 {
+		call(t, s, "claim", claimRequest(shell, fmt.Sprintf("exp-%03d", i), fmt.Sprintf("explicit-%03d", i), "exact"))
+	}
+	// The 500 hard cap still refuses new grants with too_large (claim_limit).
+	expectTooLargeLimit(t, s, "claim", claimRequest(shell, "over-claim", "over-claim.go", "exact"), "claim_limit")
+	expectTooLargeLimit(t, s, "touch", touchRequest(shell, "over-touch", "over-touch.go"), "claim_limit")
+
+	// Existing claims can still be touched, and a further shell reconcile skips new paths atomically.
+	if got := call(t, s, "touch", touchRequest(shell, "reuse-edit", "edit-after.go")); got["action"] != "allow" {
+		t.Fatalf("reusing held claim at 500 failed: %v", got)
+	}
+	shell.Kind = "before"
+	call(t, s, "reconcile", shell)
+	shell.Kind = "after"
+	shell.Status["new-at-cap-a.go"] = "??"
+	shell.Status["new-at-cap-b.go"] = "??"
+	atCap := call(t, s, "reconcile", shell)
+	if atCap["skipped"] != 2 || atCap["skip_reason"] != skipReasonClaimReserve {
+		t.Fatalf("atCap skipped=%v reason=%v", atCap["skipped"], atCap["skip_reason"])
+	}
+	rows := call(t, s, "claims", Request{RepositoryID: repo})["claims"].([]map[string]any)
+	// holder holds 1 explicit claim; shell holds maxClaims (500).
+	if len(rows) != maxClaims+1 {
+		t.Fatalf("claims count = %d, want %d", len(rows), maxClaims+1)
+	}
+}
+
+func TestScopedReconciliationRespectsReserve(t *testing.T) {
+	s, _, _ := testStore(t)
+	shell, _ := session(t, s, 1)
+	call(t, s, "reconcile_scoped", Request{
+		ExecutionID: shell.ExecutionID, Generation: shell.Generation,
+		Kind: "before", Status: map[string]string{}, Scope: &ShellScope{Mode: "dirty"},
+	})
+	status := map[string]string{}
+	for i := range reconcileMaxClaims + 10 {
+		status[fmt.Sprintf("s%03d", i)] = "??"
+	}
+	out := call(t, s, "reconcile_scoped", Request{
+		ExecutionID: shell.ExecutionID, Generation: shell.Generation,
+		Kind: "after", Status: status, Scope: &ShellScope{Mode: "dirty"},
+	})
+	claimed, _ := out["claimed"].([]string)
+	if len(claimed) != reconcileMaxClaims || out["skipped"] != 10 || out["skip_reason"] != skipReasonClaimReserve {
+		t.Fatalf("scoped claimed=%d skipped=%v reason=%v", len(claimed), out["skipped"], out["skip_reason"])
 	}
 }
 
@@ -195,4 +263,128 @@ func TestAPathThatLeavesTheStatusReleasesItsAutoClaim(t *testing.T) {
 	if available() != before+1 {
 		t.Fatal("the session waiting for committed.txt was not woken")
 	}
+}
+
+// Replacing an auto claim during reconcile must evaluate waiter blocking after the replacement
+// claims are inserted in the same transaction: revoking src/old.go frees its reserve slot before
+// autoClaim runs, but a waiter on prefix src or a case-folded alias must not be woken when the
+// new claim still blocks it.
+func TestReconcileWakesWaitersOnlyAfterNewClaims(t *testing.T) {
+	countAvailable := func(t *testing.T, s *Store, r Request) int {
+		t.Helper()
+		n := 0
+		for _, e := range call(t, s, "events", Request{ExecutionID: r.ExecutionID, After: 0})["events"].([]map[string]any) {
+			if e["kind"] == "claim_available" {
+				n++
+			}
+		}
+		return n
+	}
+	countWaiters := func(t *testing.T, s *Store, execID, key, kind string) int {
+		t.Helper()
+		var n int
+		if err := s.db.QueryRow("SELECT COUNT(*) FROM Waiter WHERE execution_id=? AND path_key=? AND kind=?", execID, key, kind).Scan(&n); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+
+	t.Run("prefix waiter stays blocked when old.go is replaced by new.go", func(t *testing.T) {
+		s, _, _ := testStore(t)
+		shell, _ := session(t, s, 1)
+		waiter, _ := session(t, s, 2)
+
+		shell.Kind, shell.Status = "before", map[string]string{}
+		call(t, s, "reconcile", shell)
+		shell.Kind, shell.Status = "after", map[string]string{"src/old.go": "??"}
+		call(t, s, "reconcile", shell)
+
+		expectError(t, s, "claim", claimRequest(waiter, "wait-prefix", "src", "prefix"), "conflict")
+		if got := countWaiters(t, s, waiter.ExecutionID, "src", "prefix"); got != 1 {
+			t.Fatalf("waiters before replacement = %d, want 1", got)
+		}
+
+		shell.Kind, shell.Status = "before", map[string]string{"src/old.go": "??"}
+		call(t, s, "reconcile", shell)
+		shell.Kind, shell.Status = "after", map[string]string{"src/new.go": "??"}
+		call(t, s, "reconcile", shell)
+
+		if _, held := liveAuto(t, s, shell.ExecutionID, "src/old.go"); held {
+			t.Fatal("src/old.go was not released")
+		}
+		if _, held := liveAuto(t, s, shell.ExecutionID, "src/new.go"); !held {
+			t.Fatal("src/new.go was not claimed")
+		}
+		if got := countAvailable(t, s, waiter); got != 0 {
+			t.Fatalf("emitted %d claim_available while prefix still blocked by src/new.go", got)
+		}
+		if got := countWaiters(t, s, waiter.ExecutionID, "src", "prefix"); got != 1 {
+			t.Fatalf("waiter was deleted while src/new.go still blocks src: count=%d", got)
+		}
+
+		// Control: releasing src/new.go without a blocking replacement really frees the prefix.
+		shell.Kind, shell.Status = "before", map[string]string{"src/new.go": "??"}
+		call(t, s, "reconcile", shell)
+		shell.Kind, shell.Status = "after", map[string]string{"other/a.go": "??"}
+		call(t, s, "reconcile", shell)
+
+		if _, held := liveAuto(t, s, shell.ExecutionID, "src/new.go"); held {
+			t.Fatal("src/new.go was not released")
+		}
+		if got := countAvailable(t, s, waiter); got != 1 {
+			t.Fatalf("claim_available after freeing prefix = %d, want 1", got)
+		}
+		if got := countWaiters(t, s, waiter.ExecutionID, "src", "prefix"); got != 0 {
+			t.Fatalf("waiter remained after prefix became free: count=%d", got)
+		}
+	})
+
+	t.Run("case-folded exact-path alias keeps waiter blocked", func(t *testing.T) {
+		s, _, _ := testStore(t)
+		shell, _ := session(t, s, 1)
+		waiter, _ := session(t, s, 2)
+
+		shell.Kind, shell.Status = "before", map[string]string{}
+		call(t, s, "reconcile", shell)
+		shell.Kind, shell.Status = "after", map[string]string{"src/File.go": "??"}
+		call(t, s, "reconcile", shell)
+
+		if got := call(t, s, "touch", touchRequest(waiter, "wait-alias", "src/FILE.GO")); got["action"] != "deny" {
+			t.Fatalf("touch on case alias = %v, want deny", got)
+		}
+		if got := countWaiters(t, s, waiter.ExecutionID, "src/file.go", "exact"); got != 1 {
+			t.Fatalf("waiters before alias replacement = %d, want 1", got)
+		}
+
+		shell.Kind, shell.Status = "before", map[string]string{"src/File.go": "??"}
+		call(t, s, "reconcile", shell)
+		shell.Kind, shell.Status = "after", map[string]string{"src/file.go": "??"}
+		call(t, s, "reconcile", shell)
+
+		if _, held := liveAuto(t, s, shell.ExecutionID, "src/File.go"); held {
+			t.Fatal("src/File.go was not released")
+		}
+		if _, held := liveAuto(t, s, shell.ExecutionID, "src/file.go"); !held {
+			t.Fatal("src/file.go was not claimed")
+		}
+		if got := countAvailable(t, s, waiter); got != 0 {
+			t.Fatalf("emitted %d claim_available while case-folded alias still held", got)
+		}
+		if got := countWaiters(t, s, waiter.ExecutionID, "src/file.go", "exact"); got != 1 {
+			t.Fatalf("waiter was deleted while case-folded alias still held: count=%d", got)
+		}
+
+		// Control: removing the alias frees the path and wakes the waiter.
+		shell.Kind, shell.Status = "before", map[string]string{"src/file.go": "??"}
+		call(t, s, "reconcile", shell)
+		shell.Kind, shell.Status = "after", map[string]string{}
+		call(t, s, "reconcile", shell)
+
+		if got := countAvailable(t, s, waiter); got != 1 {
+			t.Fatalf("claim_available after freeing alias = %d, want 1", got)
+		}
+		if got := countWaiters(t, s, waiter.ExecutionID, "src/file.go", "exact"); got != 0 {
+			t.Fatalf("waiter remained after alias became free: count=%d", got)
+		}
+	})
 }
