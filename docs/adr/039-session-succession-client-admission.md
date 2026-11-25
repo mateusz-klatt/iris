@@ -1,8 +1,8 @@
 # ADR 039: Admit session successors only from exact local proof
 
 Status: accepted by the owner on 2026-11-25, with implementation of stage 1b to follow. The
-questions in "Open questions" remain the owner's to decide before stage 1b ships. Until the
-stage 1b implementation merges, `main` keeps today's client behaviour.
+owner decided the four open questions on 2026-11-25. Until the stage 1b implementation
+merges, `main` keeps today's client behaviour.
 
 **In short.** The hub can create a successor Execution even when the shim never receives the
 reply. The hub labels shim-created successors so the client can distinguish a child that still
@@ -11,14 +11,15 @@ shim-created child that has yet to receive a hook requires a local record of its
 Execution ID. With the predecessor's record still usable, the shim can repeat the original
 request and the hub decides which child to return. Without either record, the child waits for
 a registering hook. A failed mandatory check follows D3's allow rule and the hook records
-why. Failure to save optional evidence leaves the ordinary claim check in place. D9 still
-governs a confirmed end.
+why, even when the same attempt independently confirms an end. Failure to save optional
+evidence leaves the ordinary claim check in place. D9 governs a confirmed end when the
+other mandatory checks complete and the evidence is undamaged.
 A local check cannot undo work the hub already committed or protect against someone who can
 rewrite the local files. Stage 1b adds a route and reply fields, uses migration 029 from stage 1a,
-and takes an estimated 5–8 engineering days. The owner decides when to enable succession after
-verification and the upgrade of local writers. Rolling back a hub with live or recovering
-hookless succession children requires a rollback build that understands their provenance or a
-backup restore.
+and takes an estimated 5–8 engineering days. Succession defaults to off and the owner
+enables it explicitly after verification and the upgrade of local writers. Rolling back a
+hub with live or recovering hookless succession children requires a rollback build that
+understands their provenance or a backup restore.
 
 Amends [ADR 038](038-process-activation-and-exact-proof-succession.md) for the stage 1
 session-ID shim and registering hooks. It applies D3, D6, D8, D9, D13 and section 5 of the
@@ -171,8 +172,9 @@ lock budget.
 4. If removal fails, keep the end marker effective and record the failed cleanup.
 
 A failed end marker write leaves any previous end floor in place. If there was no end
-marker, the hub-confirmed end has no new local end floor. This design schedules no later
-write for that end and the hub-confirmed end still stands.
+marker, the hub-confirmed end has no new local end floor. The hook records the write
+failure as an observation for `iris doctor` and leaves the existing local evidence in
+place. There is no repair or retry after the hook attempt. The hub-confirmed end stands.
 
 The 30-day age allows the idle sweep or a hook to clean up a valid end marker. The end floor
 still applies until cleanup succeeds. Whether cleanup runs during the sweep or before
@@ -194,9 +196,9 @@ handles and wake or watch lookups. The resolver uses admitted replies to set `Bo
 handover or heartbeat, and update remembered evidence. Recovery can also start from an
 exact record that was already published.
 
-The eligible paths are a Rung 2 shim for the session it runs in and a Codex id-mode root for
-its own session. Both recheck that the parent is alive and verify any required process
-tuple before dispatch and before admission.
+With the succession setting enabled, the eligible paths are a Rung 2 shim for the session
+it runs in and a Codex id-mode root for its own session. Both recheck that the parent is
+alive and verify any required process tuple before dispatch and before admission.
 
 Rung 3, Codex sub-agents, foreign-session lookups, watch and wake helpers, active
 `IRIS_EXECUTION` overrides and explicit-handle calls cannot attempt succession or use a
@@ -220,13 +222,12 @@ the resolver from reusing that Execution.
 **Retrying.** The plain shim's call and tick and the Codex root's call use the same internal
 transition to replay. Before each bounded `succeed` request, including a transport retry, the
 resolver rechecks identity, parent, local evidence and the end and process checks. An unrelated
-`lost`, authentication or transport error cannot select another predecessor. After a refused
-`succeed` request, existing D9 binding errors still apply. A plain shim with a confirmed
-lost binding returns `lost` while it waits to bind or reattach. A Codex id-mode call with
-no usable lookup returns `unbound`. Local generation refusal can return `lost`. The
-ordinary tick returns no MCP tool result, lookup-only callers send no `succeed` request,
-and the replay transition stays internal. See [Open questions](#open-questions) for any
-additional mapping of `succeed` refusals.
+`lost`, authentication or transport error cannot select another predecessor. A `succeed`
+refusal uses only the existing D9 binding errors. Confirmed loss and local generation vetoes
+map to `lost`. A first bind or Codex id-mode lookup with no usable binding maps to `unbound`
+under the existing lookup rules. These rules also map an older hub's raw `404 not_found`
+for the stage 1b route. The ordinary tick returns no MCP tool result, lookup-only callers
+send no `succeed` request, and the replay transition stays internal.
 
 **Accepting replies.** A `succeed` reply must name the same session and the immediate child of
 the submitted predecessor's exact pair, with consistent provenance. The resolver must pass
@@ -306,15 +307,12 @@ reply usable.
 
 | Outcome under the sessions lock | Write either the generation file or the exact record? | Send dependent requests? | Hook output and doctor |
 |---|---|---|---|
-| Confirmed end floor at or above the returned generation | No | No | D9's deliberate pre-tool ended refusal or post-shell warning. |
+| Confirmed end floor at or above the returned generation, with undamaged evidence and all other mandatory checks complete | No | No | D9's deliberate pre-tool ended refusal or post-shell warning. |
+| Independently confirmed end in the same attempt as damaged evidence or an incomplete mandatory check | No | No | Valid D3 allow. Record the damage or incomplete check as an observation. Doctor grades it `silent` if edit or shell protection did not complete. |
 | Damaged evidence, reply below the generation floor, or a reply with the same generation and different Execution ID from the exact record | No | No | Valid D3 allow. Record the reason for refusing the reply or the damaged path. |
 | Mandatory check misses its lock or time budget | No | No | Valid D3 allow. If edit or shell protection was skipped, record a D3 failure in `session` or `shell session`. Doctor grades it `silent` and warns that edits may have gone unclaimed. |
 | Reply admitted, optional write fails or runs out of time | Any successful write stands | Yes, within the remaining budget | Record a write observation. The ordinary claim check still applies. A genuine Touch conflict can deny the edit and hub errors follow the client's D3 policy. The observation alone does not give a `silent` grade. |
 | Reply admitted, writes succeed | Yes | Yes, within the remaining budget | The ordinary result. |
-
-The rows describe the individual outcomes. Both damaged evidence and a missed mandatory
-check allow under D3. The output for an independently confirmed end combined with another
-mandatory failure is listed under [Open questions](#open-questions).
 
 ADR 038 says a failed evidence write still emits the normal allow. Here a mandatory
 failure that prevents the ordinary check follows D3. An optional write failure after
@@ -369,12 +367,14 @@ with the same predecessor's exact pair, source, process fields and `ended_throug
 returns classified replies even when no earlier bind succeeded. The separate route keeps
 an earlier bind reply from serving as evidence about which hub handles the mutating
 request. The shim uses only the stage 1b route for `succeed`. An older or stage-1a-only hub
-returns `not_found` before a mutation, and a stage 1b hub returns `not_found` for the stage 1a
-route before any mutation. Neither response leads to ordinary registration as a substitute.
+returns `404 not_found` before a mutation, and a stage 1b hub returns `not_found` for the
+stage 1a route before any mutation. Neither response leads to ordinary registration as a
+substitute. MCP callers receive the existing D9 `lost` or `unbound` result as applicable.
 
-The stage 1b shim sends `succession_proof:true` on bind and its own heartbeat. Opt-in
-identifies the protocol. Exact proof still comes from the local exact record. The hub
-applies these guards before returning or renewing a hookless succession child.
+With succession enabled, the stage 1b shim sends `succession_proof:true` on bind and its
+own heartbeat. Opt-in identifies the protocol. Exact proof still comes from the local exact
+record. The hub applies these guards before returning or renewing a hookless succession
+child.
 
 | Request | Hub handling |
 |---|---|
@@ -390,24 +390,24 @@ healthy fallback bindings and D9 in-window recovery keep their wire contracts.
 Stage 1a is an unreleased intermediate state on `main` until stage 1b lands. The table
 includes it to specify behavior during integration. There is no stage-1a-only release.
 
-| Hub | v0.1.15 or any client without this protocol | v0.1.16 client with stage 1b |
+| Hub | v0.1.15 or any client without this protocol | v0.1.16 client with succession enabled |
 |---|---|---|
 | v0.1.15 hub | Existing behavior. | Ordinary binding and D9 recovery on the hub's original schema. The stage 1b route returns `not_found` before any mutation. |
 | Stage 1a on `main` (unreleased) | Ordinary paths with Choice A over retained history. No released client calls the stage 1a route. | Same ordinary paths. The stage 1b route returns `not_found` before any mutation. |
 | v0.1.16 hub with stage 1b | Ordinary paths with Choice A. Hookless succession children stay unavailable to older shims and watchers until a hook registers them. | Creates or replays with the predecessor's exact pair and renews admitted bindings. Ordinary paths remain available. |
 
-The table describes wire compatibility. Enable writing and using exact records only after
-every process that writes or prunes the shared sessions directory uses the stage 1b
-lifecycle. Older writers use the D9 generation file and can retire an end marker
-independently of the exact record. Restart old shims and replace old hook or watcher entry
-points before enabling stage 1b on shared state. Older clients can remain in use with a
-separate sessions directory. A local rollback needs state from before activation or a
-separate sessions directory.
+The succession setting is an explicit opt-in, defaults to off and serves as a reversible
+kill switch. A release version never enables it. The owner enables succession, including
+writing and using exact records, only after every process that writes or prunes the shared
+sessions directory uses the stage 1b lifecycle. Older writers use the D9 generation file
+and can retire an end marker independently of the exact record. Restart old shims and
+replace old hook or watcher entry points before enabling succession on shared state. Older
+clients can remain in use with a separate sessions directory. A local rollback needs state
+from before activation or a separate sessions directory.
 
-A release version alone never enables succession. A hub without the stage 1b guard cannot
-safely serve a database with live or recovering hookless succession children. A pre-029 hub
-cannot interpret or preserve the new lineage. Use a provenance-aware rollback build or
-restore the pre-migration backup under
+A hub without the stage 1b guard cannot safely serve a database with live or recovering
+hookless succession children. A pre-029 hub cannot interpret or preserve the new lineage.
+Use a provenance-aware rollback build or restore the pre-migration backup under
 [ADR 006](006-retention-and-restore.md), accepting the loss of changes after the backup.
 Wire compatibility gives no guarantee about opening a later database in place.
 
@@ -417,10 +417,10 @@ Wire compatibility gives no guarantee about opening a later database in place.
    exact record. A missing file, a generation file value, a bind reply or a failed
    compare-and-swap supplies no exact proof. A registering hook alone establishes hook
    reachability.
-2. While the predecessor's exact record remains usable, discovery of an immediate child
-   with matching lineage and no matching exact record leads to `succeed`. A dropped reply
-   does not advance the local record or consume the retry. A generation file above the
-   predecessor's generation vetoes publication from that predecessor.
+2. With succession enabled and the predecessor's exact record still usable, discovery of
+   an immediate child with matching lineage and no matching exact record leads to `succeed`.
+   A dropped reply does not advance the local record or consume the retry. A generation
+   file above the predecessor's generation vetoes publication from that predecessor.
 3. End marker checks, publication, SessionEnd and pruning use the same lock. Damage vetoes
    the attempt even if an earlier check saw no end marker. The shim replays or adopts only
    when both the predecessor and child are strictly above the end floor. An expired end
@@ -433,9 +433,11 @@ Wire compatibility gives no guarantee about opening a later database in place.
    the renewal reply before returning it to primary `whoami`. Codex wake also requires
    affirmative hub `hook_seen` for that exact pair.
 6. Hooks use D3's deadline and return valid adapter output. A local write failure alone
-   cannot deny an edit. A confirmed end or an authoritative claim decision retains its
-   existing behavior. Each hold of the sessions lock has one deadline. HTTP runs outside
-   that lock.
+   cannot deny an edit. A confirmed end follows D9 when the evidence is undamaged and the
+   other mandatory checks complete. Damage or an incomplete mandatory check in the same
+   attempt gives D3 allow and still vetoes publication and dependent requests. An
+   authoritative claim decision retains its existing behavior. Each hold of the sessions
+   lock has one deadline. HTTP runs outside that lock.
 
 ## Limits
 
@@ -452,21 +454,6 @@ mutation or detect an end that neither side records. D13 trusts the host token h
 its own host and the OS user for its local files. Provenance and protocol opt-in cannot
 authenticate a native event against someone who can forge it or rewrite the exact record.
 
-## Open questions
-
-- Which mechanism should the owner choose for enabling session-ID succession?
-- Should the owner add a repair or later retry for a hub-confirmed SessionEnd whose local
-  end marker write fails? The hook currently records the failure and leaves the local
-  evidence in place. A later write has no guarantee.
-- Which hook output takes precedence when the end is independently confirmed and the same
-  attempt also sees damaged evidence or cannot complete another mandatory check? Each
-  outcome vetoes publication and dependent requests. Choosing between D9's refusal or
-  warning and D3's allow needs a decision.
-- Should the owner specify new MCP error mapping for a `succeed` refusal on a first bind or
-  for refusals other than a confirmed loss? The resolver keeps its existing binding rules,
-  and a tick has no MCP response. The resolver must never forward an older hub's raw
-  `404 not_found` for the stage 1b route to an MCP caller.
-
 ## Deterministic verification
 
 Use fake hub time, request barriers and injected read, write and lock outcomes. Run the
@@ -481,15 +468,15 @@ and local evidence, claims, lease renewal time, events and generation changes as
 | Pruning before the swap | Remove the exact record under the lock after preparation, with and without the generation file. Let the hub commit, then resume the swap. Assert the vetoed shim writes neither file and sends no heartbeat. Prune only the generation file and verify the retained exact record can still advance. Restart with neither file. A session, process or handle lookup of the live hookless succession child fails admission. A healthy legacy binding still works with both files absent. A genuine hook restores the ordinary path. |
 | Interrupted publication | Fault the exact record replacement and, separately, the generation file write. Restart after each fault. An older writer updating only the generation file cannot certify the child. A published exact record survives failure of the generation file write. Run the next hook with the generation file absent and behind. It sends the positive generation in the exact record for ordinary and combined registration, with the effective end floor. A higher published generation or the same generation with a different Execution ID vetoes a delayed reply. |
 | Windows sessions lock deadline | Use two session IDs sharing the sessions lock and a fake monotonic clock. Spend most of A's time on acquisition and the first replacement. Inject a sharing violation on the second and separately make the POSIX form report unsupported at the deadline. Assert no optional retry sleep, fallback after the deadline or new budget. B can take the released lock and complete its check. Run the sharing case with the actual destination held without delete sharing on native Windows. |
-| End marker changes after HTTP | Pause after the early reply check and before admission under the lock. Set the end floor to the predecessor or returned generation, or replace the end marker with malformed data, a dangling link or a non-regular or unreadable entry. Assert no shim adoption on a veto and no write to either the generation file or the exact record by a vetoed shim or hook. A damaged end marker gives valid D3 allow, the end marker observation and no dependent request. A confirmed end gives D9's refusal or warning. A strictly lower end floor permits publication. Cover both orders of SessionEnd and publication. |
-| Exact record and expired end marker | Confirm SessionEnd with the generation file absent or newer than the exact record for the ended Execution. Try the inverse generations and a shim-origin record whose predecessor is vetoed. Assert the hook writes the end marker first. At the retention boundary, run the sweep and on-demand cleanup with distinct modification times and each file absent in turn. Inject end marker write failure, read or removal failure, and interruption between removals. When the end marker was written, assert that every surviving entry it vetoes stays unusable. Preserve newer evidence that passes the end check. |
+| End marker changes after HTTP | Pause after the early reply check and before admission under the lock. Set the end floor to the predecessor or returned generation, or replace the end marker with malformed data, a dangling link or a non-regular or unreadable entry. Assert no shim adoption on a veto and no write to either the generation file or the exact record by a vetoed shim or hook. A damaged end marker gives valid D3 allow, the end marker observation and no dependent request. A confirmed end with undamaged evidence and all other mandatory checks complete gives D9's refusal or warning. A strictly lower end floor permits publication. Cover both orders of SessionEnd and publication. |
+| Exact record and expired end marker | Confirm SessionEnd with the generation file absent or newer than the exact record for the ended Execution. Try the inverse generations and a shim-origin record whose predecessor is vetoed. Assert the hook writes the end marker first. At the retention boundary, run the sweep and on-demand cleanup with distinct modification times and each file absent in turn. Inject end marker write failure, read or removal failure, and interruption between removals. If the end marker write fails, assert a doctor observation, preservation of the local evidence and no repair or later retry. When the end marker was written, assert that every surviving entry it vetoes stays unusable. Preserve newer evidence that passes the end check. |
 | Damaged exact record before dispatch | Damage the exact record while discovery or status is paused. Exercise SessionStart, ordinary and outside registration, a D9 retry after its initial refusal, and full and reduced combined shell registration. Require a local path observation, valid bounded D3 allow and zero registration or reconcile requests after the barrier. Repeat with a missing exact record and healthy generation file to verify legacy recovery. |
-| Intervening checkout or shell work | Pause in `fileGroups` after registration and in split full and reduced git status before reconcile. Advance or damage the end marker, or damage the exact record, during the pause. Resume after the earlier admission. Require a fresh locked check and zero dependent requests. Confirmed end gives D9's refusal or warning. Damage gives D3 allow and an observation. |
+| Intervening checkout or shell work | Pause in `fileGroups` after registration and in split full and reduced git status before reconcile. Advance or damage the end marker, or damage the exact record, during the pause. Resume after the earlier admission. Require a fresh locked check and zero dependent requests. Confirmed end alone gives D9's refusal or warning. Damage gives D3 allow and an observation. In separate runs, independently confirm the end and inject damaged evidence or a mandatory check that misses its lock or time budget in the same attempt. Require valid D3 allow and the observation, with grade `silent` if edit or shell protection did not complete. Assert that neither file is published and no dependent request is sent. |
 | Optional hook write failure | Fail replacement of the exact record after admission. Check normal allow and a real conflict on both Touch paths, plus authoritative 409 retry refusals where supported and malformed or transport failures. Check adapter encoding and the write observation, with no `silent` grade from that observation alone. Separately force a mandatory lock miss during edit or shell admission. Require bounded allow, no dependent request, a D3 failure and `silent`. Also veto a reply with the same generation and a different Execution ID. A combined reconcile may already have committed. |
 | Eligibility and boot recovery | Try ended, expired, recovering, superseded, restored-lower and same-generation fork cases. An eligible Rung 2 shim can reattach the same recovering child from its current exact record. Set the end floor at the predecessor, restart hub and shim, and assert no heartbeat. Replay cannot renew a recovering child whose exact record is absent. A hookless succession child cannot start another hop. Exercise dead parent, cross-load, watcher, wake, active override, handles and Codex foreign and sub-agent paths. |
 | Rung 3 process check and legacy hook state | Try Rung 3 recovery with an exact record and with only a generation file, including a refresh that finds a recovering row. Vary matching process identity, omitted tuple, different PID and the same PID with a different start time. Assert no heartbeat by Execution ID in place of registration and no renewal or resume from a failed check. Against v0.1.15 omit `hook_seen` on Rung 2 reattachment by heartbeat. Follow with bind replies that confirm `hook_seen:true`, omit it, set it false or name a different exact pair. Only an affirmative bind for the matching pair admits the hook-registered binding. |
 | Codex wake and primary `whoami` | Give the Codex root an admitted hookless succession child. Assert `Primary()` and `StartIfPrimary()` refuse it, with no worker or `HookSeen` probe. Register a hook and refresh the same child, then check wake eligibility. On the live admitted pair, MCP `whoami` sends one resolver heartbeat with shim source and opt-in. Inject a wrong exact pair, invalid provenance, a late local end or a concurrent binding replacement. No stale reply reaches MCP or the cache. Lookup-only `whoami` sends no heartbeat. |
-| Versions and fallback | Run all six hub and client combinations, including the unreleased stage 1a hub. Test missing or inconsistent provenance from a capable hub and zero mutation on either stage's unsupported route. Assert that an older hub's raw `404 not_found` on the stage 1b route stays out of the MCP tool response. On live and recovering hookless succession children, test legacy bind and all heartbeat sources with and without opt-in. Only `shim` with opt-in renews. Prune the predecessor on the hub and check that non-hook registration cannot renew the child or replace it after loss. Check ordinary recovery, D6 fallback, Choice A, the shared-directory upgrade prerequisite, pre-029 backup rollback and startup refusal for the ADR 037 worktree-claim schema. |
+| Versions and fallback | Run all six hub and client combinations, including the unreleased stage 1a hub. Verify that the setting defaults to off regardless of release version. Upgrade every writer and pruner of the shared sessions directory before opting in, then verify that turning the setting off disables succession again. Test missing or inconsistent provenance from a capable hub and zero mutation on either stage's unsupported route. Assert D9 `lost` for a confirmed loss or local generation veto and `unbound` for a first bind without a usable binding. Exercise an older hub's raw `404 not_found` on the stage 1b route during first bind and lost-binding recovery. Assert that callers receive only the applicable D9 error and that ticks emit no MCP result. On live and recovering hookless succession children, test legacy bind and all heartbeat sources with and without opt-in. Only `shim` with opt-in renews. Prune the predecessor on the hub and check that non-hook registration cannot renew the child or replace it after loss. Check ordinary recovery, D6 fallback, Choice A, pre-029 backup rollback and startup refusal for the ADR 037 worktree-claim schema. |
 
 ## Effort and sequencing
 
@@ -497,11 +484,12 @@ and local evidence, claims, lease renewal time, events and generation changes as
 2. In stage 1b, first land the classified replies, compatibility guard and stage 1b route.
    Verify mixed-version requests with the real handlers and migration 029. Estimate
    1–2 engineering days.
-3. Land resolver admission and replay, wake and MCP renewal checks, and the exact record
-   lifecycle. Enable session-ID succession after the matrix passes and local session-file
-   writers have been upgraded. The owner decides when to take that step. Estimate 2–3
-   engineering days plus 2–3 days for the deterministic matrix, native Windows, fixture
-   replay and repository checks. The stage 1b total is 5–8 engineering days.
+3. Land resolver admission and replay, wake and MCP renewal checks, the exact record
+   lifecycle and the default-off succession setting. The owner enables succession after
+   the matrix passes and every process writing or pruning the shared sessions directory
+   has been upgraded. Estimate 2–3 engineering days plus 2–3 days for the deterministic
+   matrix, native Windows, fixture replay and repository checks. The stage 1b total is
+   5–8 engineering days.
 4. Sequence process-bound activation and durable fallback cutover with ADR 036 as specified in
    ADR 038. Stage 1b supplies no process activation witness.
 
