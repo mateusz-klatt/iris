@@ -664,10 +664,15 @@ the public session cookie is Secure, HttpOnly and SameSite=Strict.
 
 Every client command resolves environment, then client.json, then defaults. Discovery
 looks beside IRIS_TOKEN_FILE if it is set, otherwise beside the platform's default
-Iris hub.token (os.UserConfigDir/iris). The file contains hub_url and token_file;
-relative token_file paths are relative to client.json. An environment override wins
+Iris hub.token (os.UserConfigDir/iris). The file contains `hub_url`, `token_file`, and optionally `session_succession` (default `false`);
+relative `token_file` paths are relative to `client.json`. An environment override wins
 per field. GUI and IDE sessions read the saved file without shell-profile exports.
-Malformed files fail explicitly; hooks still follow their fail-open contract.
+Malformed files fail explicitly; hooks still follow their fail-open contract, while bad or
+stalled `session_succession` reads fail off without invalidating `hub_url` or `token_file`.
+`iris setup` never sets `session_succession` unless asked to change it, re-reading any
+existing setting immediately before rename under lock-serialized compare-and-swap (with a
+microsecond residual window against an un-locked external replacement); a `client.json`
+disable wins on every later read.
 
 After cutover, check unauthenticated /v1/status returns only {"status":"ok"}, doctor
 authenticates, UI login sets the secure cookie, and an idle monitor remains connected

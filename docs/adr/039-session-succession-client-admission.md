@@ -455,6 +455,9 @@ race a request in flight. Hub order governs what commits. The client cannot roll
 mutation or detect an end that neither side records. D13 trusts the host token holder for
 its own host and the OS user for its local files. Provenance and protocol opt-in cannot
 authenticate a native event against someone who can forge it or rewrite the exact record.
+When `iris setup` updates `client.json` without changing `session_succession`, an un-locked
+external replacement has a microsecond residual window right before rename; a `client.json`
+disable wins on every later read.
 
 ## Deterministic verification
 

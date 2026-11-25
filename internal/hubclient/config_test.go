@@ -520,6 +520,31 @@ func TestUpdateConfigPreservesDisableOverStaleTrue(t *testing.T) {
 	if err := UpdateConfig(absentRacePath, FileConfig{Hub: "https://abort.example"}); !errors.Is(err, ErrConfigChanged) {
 		t.Fatalf("persistent CAS swap = %v, want ErrConfigChanged", err)
 	}
+	beforeConfigRename = origBefore
+
+	// Exact race: owner false swapped in right after the CAS compare before os.Rename.
+	if err := WriteConfig(cfgPath, FileConfig{Hub: "https://old.example", SessionSuccession: boolPtr(true)}); err != nil {
+		t.Fatal(err)
+	}
+	origAfterCompare := afterConfigCompare
+	t.Cleanup(func() { afterConfigCompare = origAfterCompare })
+	swappedAfterCompare := false
+	afterConfigCompare = func(p string) {
+		if !swappedAfterCompare {
+			swappedAfterCompare = true
+			atomicSwapFile(p, `{"hub_url":"https://old.example","session_succession":false}`)
+		}
+	}
+	if err := UpdateConfig(cfgPath, FileConfig{Hub: "https://after-compare.example", TokenFile: "hub.token"}); err != nil {
+		t.Fatal(err)
+	}
+	afterConfigCompare = origAfterCompare
+	var afterCompareCfg FileConfig
+	if data, err := os.ReadFile(cfgPath); err != nil || json.Unmarshal(data, &afterCompareCfg) != nil ||
+		afterCompareCfg.Hub != "https://after-compare.example" ||
+		afterCompareCfg.SessionSuccession == nil || *afterCompareCfg.SessionSuccession {
+		t.Fatalf("after-compare CAS race lost owner false: %s (%v)", data, err)
+	}
 
 	// Stage failure and fresh config without existing file and rename failure cleanup.
 	origWrite := prepareConfigWrite

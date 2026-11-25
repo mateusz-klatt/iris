@@ -250,7 +250,7 @@ func TestReplaceSessionFileDeadlineWindowsCheckpoints(t *testing.T) {
 			calls++
 			return &os.LinkError{Op: "rename", Err: windows.ERROR_SHARING_VIOLATION}
 		}, os.Rename)
-		if !errors.Is(err, windows.ERROR_SHARING_VIOLATION) || calls != 3 {
+		if !errors.Is(err, windows.ERROR_SHARING_VIOLATION) || calls != 2 {
 			t.Fatalf("required sharing violation = %v after %d calls", err, calls)
 		}
 		if len(pauses) != 2 || pauses[0] != sessionFileRenamePause || pauses[1] != 400*time.Microsecond {

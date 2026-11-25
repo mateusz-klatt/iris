@@ -244,6 +244,7 @@ var (
 	prepareConfigClose = func(*os.File) {}
 	createConfigTemp   = os.CreateTemp
 	beforeConfigRename = func(string) {}
+	afterConfigCompare = func(string) {}
 	configStat         = statRegularConfig
 	configOpen         = openRegularConfig
 	configFileLock     = lockConfigFile
@@ -440,8 +441,9 @@ func WriteConfig(path string, f FileConfig) error {
 }
 
 // UpdateConfig performs a lock-serialized compare-and-swap update of Hub and TokenFile while
-// preserving whatever valid session_succession is on disk at commit time. If the on-disk config
-// changes between opening and renaming (e.g., an external atomic replacement with false), it
+// preserving whatever valid session_succession is on disk immediately before rename. When
+// SessionSuccession is nil, setup takes it from the on-disk re-read rather than setting it. If the
+// on-disk config changes before rename (e.g., an external atomic replacement with false), it
 // retries against the new disk state or aborts with ErrConfigChanged without writing stale true.
 func UpdateConfig(path string, f FileConfig) error {
 	if err := ValidateURL(f.Hub); err != nil {
@@ -468,6 +470,12 @@ func UpdateConfig(path string, f FileConfig) error {
 		beforeConfigRename(path)
 		after := readConfigSnapshot(path)
 		if !sameConfigSnapshot(before, after) {
+			_ = os.Remove(name)
+			continue
+		}
+		afterConfigCompare(path)
+		latest := readConfigSnapshot(path)
+		if !sameConfigSnapshot(after, latest) {
 			_ = os.Remove(name)
 			continue
 		}
