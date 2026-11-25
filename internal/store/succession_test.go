@@ -273,6 +273,25 @@ func TestSucceedReplaysShimAndHookWinnersWithoutSideEffects(t *testing.T) {
 			t.Fatalf("hook-winner replay mutated state")
 		}
 	})
+
+	t.Run("combined shell hook winner", func(t *testing.T) {
+		s, clock, _ := testStore(t)
+		reg := Request{Client: "codex", Host: "host", SessionID: "S", Cwd: "/repo/w", Worktree: "/repo/w"}
+		req, _ := successionFixture(t, s, clock, reg)
+		shellHook := reg
+		shellHook.Source, shellHook.Kind, shellHook.Status = "hook", "before", map[string]string{}
+		out := call(t, s, "reconcile", shellHook)
+		childID := out["session"].(map[string]any)["execution_id"].(string)
+
+		clock.advance(5 * time.Second)
+		replay, err := s.Call(t.Context(), "succeed", req)
+		if err != nil {
+			t.Fatalf("combined shell hook-winner replay: %v", err)
+		}
+		if replay["execution_id"] != childID || replay["generation"] != int64(2) {
+			t.Fatalf("unexpected shell hook-winner replay: %+v", replay)
+		}
+	})
 }
 
 func TestSucceedRecoveryBoundaryAndSuccessorStallCredit(t *testing.T) {
@@ -755,5 +774,55 @@ func TestSucceedReplayIsolatesSweepStallCreditAndRefusesExpiredChild(t *testing.
 				t.Fatalf("refused replay modified child deadline: %d -> %d", beforeDeadline, after.deadline)
 			}
 		}
+	})
+}
+
+func TestSucceedRefusesOrdinaryRegistrationReplayProvenances(t *testing.T) {
+	for _, tc := range []struct {
+		name       string
+		source     string
+		retryGen   int64
+		touchAfter bool
+	}{
+		{"mcp absent", "mcp", 0, false},
+		{"mcp stale_retry", "mcp", 1, false},
+		{"mcp touched later by hook", "mcp", 0, true},
+		{"watch", "watch", 0, false},
+		{"legacy empty source", "", 0, false},
+		{"ordinary generation-zero shim", "shim", 0, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, clock, _ := testStore(t)
+			base := Request{Client: "codex", Host: "host", SessionID: "S", Cwd: "/repo/w", Worktree: "/repo/w", Branch: "main"}
+			req, _ := successionFixture(t, s, clock, base)
+			reg := base
+			reg.Source = tc.source
+			reg.RetryGeneration = tc.retryGen
+			child := call(t, s, "sessions", reg)
+			if tc.touchAfter {
+				call(t, s, "touch", touchRequest(Request{ExecutionID: child["execution_id"].(string), Generation: 2}, "tc_1", "a.go"))
+			}
+			var observed bool
+			ctx := WithGenerationObserver(t.Context(), func(GenerationChange) { observed = true })
+			before := databaseState(t, s)
+			out, err := s.Call(ctx, "succeed", req)
+			if out != nil || observed || databaseState(t, s) != before {
+				t.Fatalf("ordinary registration %q replayed or mutated state: out=%+v observed=%t err=%v", tc.name, out, observed, err)
+			}
+			assertRegistrationLost(t, err, 2)
+		})
+	}
+
+	t.Run("hook source without hook_seen_ms", func(t *testing.T) {
+		s, clock, _ := testStore(t)
+		base := Request{Client: "codex", Host: "host", SessionID: "S", Cwd: "/repo/w", Worktree: "/repo/w", Branch: "main"}
+		req, _ := successionFixture(t, s, clock, base)
+		reg := base
+		reg.Source = "hook"
+		child := call(t, s, "sessions", reg)
+		if _, err := s.db.Exec("UPDATE Execution SET hook_seen_ms=0 WHERE id=?", child["execution_id"]); err != nil {
+			t.Fatal(err)
+		}
+		refuseSuccession(t, s, req, 2)
 	})
 }

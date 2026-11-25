@@ -3,9 +3,13 @@ package store
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
+	"io"
+	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -238,6 +242,17 @@ ALTER TABLE Event ADD COLUMN repository_id TEXT;
 PRAGMA user_version=30;
 `
 
+var v28Schemas = []string{
+	schema, threadsSchema, namesSchema, shellSchema, tokensSchema, pathKeySchema,
+	waiterSchema, attentionSchema, contactSchema, watchSeenSchema, receiptsSchema,
+	hookSeenSchema, retentionSchema, hostReportSchema, worktreeAliasSchema,
+	receiptDueSchema, consoleAccountsSchema, consoleRevisionSchema,
+	consoleOwnerActionsSchema, consoleAssignmentImportSchema, idleExpirySchema,
+	reducedShellSchema, attentionIdentitySchema, attentionHighWaterSQL, attentionNewestEventSQL,
+	removeConsoleImportSchema, restoreMarkerSchema, presenceCursorSchema,
+	coordinationCursorSchema, leaseRenewedTickSchema,
+}
+
 func TestRefusesRevertedADR037DatabaseWithoutWritesAndUpgrades028(t *testing.T) {
 	// Genuine v028 upgrade still succeeds cleanly alongside ADR 037 refusal tests.
 	t.Run("genuine v28 upgrades to 29", func(t *testing.T) {
@@ -246,16 +261,7 @@ func TestRefusesRevertedADR037DatabaseWithoutWritesAndUpgrades028(t *testing.T) 
 		if err != nil {
 			t.Fatal(err)
 		}
-		for i, q := range []string{
-			schema, threadsSchema, namesSchema, shellSchema, tokensSchema, pathKeySchema,
-			waiterSchema, attentionSchema, contactSchema, watchSeenSchema, receiptsSchema,
-			hookSeenSchema, retentionSchema, hostReportSchema, worktreeAliasSchema,
-			receiptDueSchema, consoleAccountsSchema, consoleRevisionSchema,
-			consoleOwnerActionsSchema, consoleAssignmentImportSchema, idleExpirySchema,
-			reducedShellSchema, attentionIdentitySchema, attentionHighWaterSQL, attentionNewestEventSQL,
-			removeConsoleImportSchema, restoreMarkerSchema, presenceCursorSchema,
-			coordinationCursorSchema, leaseRenewedTickSchema,
-		} {
+		for i, q := range v28Schemas {
 			if _, err := db.Exec(q); err != nil {
 				t.Fatalf("v28 migration %d: %v", i+1, err)
 			}
@@ -331,4 +337,156 @@ func TestRefusesRevertedADR037DatabaseWithoutWritesAndUpgrades028(t *testing.T) 
 			}
 		})
 	}
+}
+
+const (
+	envADR037WALCrashDB   = "IRIS_TEST_ADR037_WAL_CRASH_DB"
+	envADR037WALCrashMode = "IRIS_TEST_ADR037_WAL_CRASH_MODE"
+)
+
+func TestADR037WALCrashHelper(t *testing.T) {
+	file := os.Getenv(envADR037WALCrashDB)
+	if file == "" {
+		return
+	}
+	db, err := sql.Open("sqlite", file)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
+		t.Fatal(err)
+	}
+	for i, q := range v28Schemas {
+		if _, err := db.Exec(q); err != nil {
+			t.Fatalf("v28 migration %d: %v", i+1, err)
+		}
+	}
+	if _, err := db.Exec(`INSERT INTO Repository(id,name,root_commit) VALUES('rp_crash','repo','root')`); err != nil {
+		t.Fatal(err)
+	}
+	mode := os.Getenv(envADR037WALCrashMode)
+	if mode != "wal_only_029" {
+		if _, err := db.Exec(adr037Migration029SQL); err != nil {
+			t.Fatal(err)
+		}
+		if mode == "migrated_030" {
+			if _, err := db.Exec(adr037Migration030SQL); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if _, err := db.Exec("PRAGMA wal_checkpoint(TRUNCATE)"); err != nil {
+		t.Fatal(err)
+	}
+	if mode == "wal_only_029" {
+		if _, err := db.Exec(adr037Migration029SQL); err != nil {
+			t.Fatal(err)
+		}
+	} else {
+		if _, err := db.Exec(`INSERT INTO WorktreeIdentity(host_id,worktree_id,worktree_key) VALUES('host','wt1','wk_crash')`); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Exit without closing so SQLite leaves pending WAL frames and -shm sidecars on disk.
+	os.Exit(0)
+}
+
+func TestRefusesRevertedADR037WALUncleanShutdownPreservesBytes(t *testing.T) {
+	hashFile := func(path string) [sha256.Size]byte {
+		t.Helper()
+		raw, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatalf("read %s: %v", path, err)
+		}
+		if len(raw) == 0 {
+			t.Fatalf("expected non-empty %s", path)
+		}
+		return sha256.Sum256(raw)
+	}
+
+	for _, mode := range []string{"wal_only_029", "migrated_029", "migrated_030"} {
+		t.Run(mode, func(t *testing.T) {
+			file := filepath.Join(t.TempDir(), mode+".db")
+			cmd := exec.Command(os.Args[0], "-test.run=^TestADR037WALCrashHelper$")
+			cmd.Env = append(os.Environ(), envADR037WALCrashDB+"="+file, envADR037WALCrashMode+"="+mode)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("wal crash helper %s: %v\n%s", mode, err, out)
+			}
+
+			paths := []string{file, file + "-wal", file + "-shm"}
+			before := make(map[string][sha256.Size]byte, len(paths))
+			for _, p := range paths {
+				before[p] = hashFile(p)
+			}
+
+			opened, err := Open(file, nil)
+			if err == nil {
+				_ = opened.Close()
+				t.Fatalf("opened reverted ADR 037 WAL database in mode %s", mode)
+			}
+			if !strings.Contains(err.Error(), "reverted ADR 037") || !strings.Contains(err.Error(), "pre-ADR-037 backup") {
+				t.Fatalf("unexpected refusal error: %v", err)
+			}
+
+			for _, p := range paths {
+				after := hashFile(p)
+				if after != before[p] {
+					t.Fatalf("refused Open modified %s: before=%x after=%x", p, before[p], after)
+				}
+			}
+		})
+	}
+
+	t.Run("cleanly closed WAL leaves main unchanged and creates no sidecars", func(t *testing.T) {
+		file := filepath.Join(t.TempDir(), "clean-wal-029.db")
+		db, err := sql.Open("sqlite", file)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err := db.Exec("PRAGMA journal_mode=WAL"); err != nil {
+			t.Fatal(err)
+		}
+		for i, q := range v28Schemas {
+			if _, err := db.Exec(q); err != nil {
+				t.Fatalf("v28 migration %d: %v", i+1, err)
+			}
+		}
+		if _, err := db.Exec(adr037Migration029SQL); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.Close(); err != nil {
+			t.Fatal(err)
+		}
+		before := hashFile(file)
+		opened, err := Open(file, nil)
+		if err == nil {
+			_ = opened.Close()
+			t.Fatal("opened cleanly closed reverted ADR 037 WAL database")
+		}
+		if after := hashFile(file); after != before {
+			t.Fatalf("refused Open modified clean WAL main db: before=%x after=%x", before, after)
+		}
+		for _, suffix := range []string{"-wal", "-shm"} {
+			if _, err := os.Stat(file + suffix); !errors.Is(err, os.ErrNotExist) {
+				t.Fatalf("refused Open created %s on clean WAL DB: %v", suffix, err)
+			}
+		}
+	})
+
+	t.Run("probe VFS failure returns error", func(t *testing.T) {
+		wantErr := errors.New("vfs registration unavailable")
+		file := filepath.Join(t.TempDir(), "probe.db")
+		if err := os.WriteFile(file, nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file+"-wal", nil, 0600); err != nil {
+			t.Fatal(err)
+		}
+		err := probeRevertedADR037Schema(context.Background(), file, "sqlite", func(fs.FS) (string, io.Closer, error) {
+			return "", nil, wantErr
+		})
+		if !errors.Is(err, wantErr) {
+			t.Fatalf("got %v want %v", err, wantErr)
+		}
+	})
 }

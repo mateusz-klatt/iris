@@ -134,6 +134,11 @@ func (t *transaction) replaySuccession(latest execution, r Request) (map[string]
 	if !latest.PriorExecutionID.Valid || latest.PriorExecutionID.String != prev.ID {
 		return nil, fail("lost", "child Execution does not descend from this predecessor")
 	}
+	shimChild := latest.CreationSource.String == "shim" && latest.CreationProof.String == "shim_succession"
+	hookChild := latest.CreationSource.String == "hook" && latest.HookSeenMS > 0
+	if !shimChild && !hookChild {
+		return nil, fail("lost", "child Execution was not created by eligible succession or hook registration")
+	}
 	if latest.AgentID != prev.AgentID || latest.Repo != prev.Repo {
 		return nil, fail("lost", "child Execution changed mailbox or repository")
 	}

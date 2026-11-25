@@ -401,3 +401,96 @@ func TestHTTPSucceedRouteAuthAndUnexpectedCallerFences(t *testing.T) {
 	}
 	assertInert(beforeRec, "recovering predecessor")
 }
+
+// TestHTTPSucceedRouteTwoValidHostTokens exercises POST /v1/sessions/succeed with two distinct
+// valid host tokens, verifying cross-host proof fencing and documenting that named HostToken
+// records give attribution rather than host-to-host credential isolation (see docs/api.md).
+func TestHTTPSucceedRouteTwoValidHostTokens(t *testing.T) {
+	clock := &generationClock{now: time.Unix(1800000000, 0)}
+	s, err := store.Open(filepath.Join(t.TempDir(), "hub.db"), clock)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	h := New(s, "owner-secret", []string{"127.0.0.1"})
+
+	do := func(path string, req map[string]any, token string, want int) map[string]any {
+		t.Helper()
+		var body *bytes.Reader
+		if req != nil {
+			raw, err := json.Marshal(req)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body = bytes.NewReader(raw)
+		} else {
+			body = bytes.NewReader(nil)
+		}
+		r := httptest.NewRequest(http.MethodPost, "http://127.0.0.1"+path, body)
+		r.Header.Set("Authorization", "Bearer "+token)
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("%s status=%d want=%d body=%s", path, w.Code, want, w.Body.String())
+		}
+		var out map[string]any
+		if err := json.Unmarshal(w.Body.Bytes(), &out); err != nil {
+			t.Fatal(err)
+		}
+		return out
+	}
+
+	tokenA := do("/v1/tokens", map[string]any{"host": "host-a"}, "owner-secret", http.StatusOK)["token"].(string)
+	tokenB := do("/v1/tokens", map[string]any{"host": "host-b"}, "owner-secret", http.StatusOK)["token"].(string)
+
+	sessA := do("/v1/sessions", map[string]any{
+		"client": "codex", "host": "host-a", "session_id": "S-a", "cwd": "/repo/wa", "worktree": "/repo/wa", "source": "hook",
+	}, tokenA, http.StatusOK)
+	sessB := do("/v1/sessions", map[string]any{
+		"client": "codex", "host": "host-b", "session_id": "S-b", "cwd": "/repo/wb", "worktree": "/repo/wb", "source": "hook",
+	}, tokenB, http.StatusOK)
+
+	clock.advance(16 * time.Minute)
+	if _, err := s.Call(t.Context(), "expire", store.Request{}); err != nil {
+		t.Fatal(err)
+	}
+
+	// Token B cannot attach host-b to host-a's predecessor proof, and vice versa.
+	refusedAB := do("/v1/sessions/succeed", map[string]any{
+		"client": "codex", "host": "host-b", "session_id": "S-a", "source": "shim",
+		"prior_generation": float64(1), "prior_execution_id": sessA["execution_id"],
+	}, tokenB, http.StatusConflict)
+	if refusedAB["error"].(map[string]any)["code"] != "lost" {
+		t.Fatalf("expected 409 lost on cross-host mismatch: %+v", refusedAB)
+	}
+	refusedBA := do("/v1/sessions/succeed", map[string]any{
+		"client": "codex", "host": "host-a", "session_id": "S-b", "source": "shim",
+		"prior_generation": float64(1), "prior_execution_id": sessB["execution_id"],
+	}, tokenA, http.StatusConflict)
+	if refusedBA["error"].(map[string]any)["code"] != "lost" {
+		t.Fatalf("expected 409 lost on reverse cross-host mismatch: %+v", refusedBA)
+	}
+
+	// Token B succeeds cleanly for its own host-b session.
+	succB := do("/v1/sessions/succeed", map[string]any{
+		"client": "codex", "host": "host-b", "session_id": "S-b", "source": "shim",
+		"prior_generation": float64(1), "prior_execution_id": sessB["execution_id"],
+	}, tokenB, http.StatusOK)
+	if succB["generation"] != float64(2) {
+		t.Fatalf("unexpected token-B succession: %+v", succB)
+	}
+
+	// Today's HostToken model has no host-to-token binding on any session route (attribution only):
+	// token B presenting host-a's exact proof behaves the same as /v1/sessions and succeeds/replays.
+	succCross := do("/v1/sessions/succeed", map[string]any{
+		"client": "codex", "host": "host-a", "session_id": "S-a", "source": "shim",
+		"prior_generation": float64(1), "prior_execution_id": sessA["execution_id"],
+	}, tokenB, http.StatusOK)
+	replayedByA := do("/v1/sessions/succeed", map[string]any{
+		"client": "codex", "host": "host-a", "session_id": "S-a", "source": "shim",
+		"prior_generation": float64(1), "prior_execution_id": sessA["execution_id"],
+	}, tokenA, http.StatusOK)
+	if replayedByA["execution_id"] != succCross["execution_id"] {
+		t.Fatalf("replayed child changed across tokens: %+v vs %+v", succCross, replayedByA)
+	}
+}

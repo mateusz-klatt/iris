@@ -11,6 +11,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
+	"io/fs"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -20,6 +22,7 @@ import (
 	"time"
 
 	_ "modernc.org/sqlite"
+	"modernc.org/sqlite/vfs"
 )
 
 //go:embed migrations/001.sql
@@ -275,6 +278,12 @@ func openDatabase(filename string, clock Clock, driverName string) (*Store, erro
 		unlockDatabase(lock)
 		return nil, err
 	}
+	// Probe reverted ADR 037 databases through a read-only VFS before opening a writable
+	// handle, so pending -wal frames are read without touching db, -wal, or -shm on refusal.
+	if err = probeRevertedADR037Schema(context.Background(), abs, driverName, newReadOnlyVFS); err != nil {
+		unlockDatabase(lock)
+		return nil, err
+	}
 	db, err := openSQLite(driverName, abs, 1, "PRAGMA foreign_keys=ON", "PRAGMA synchronous=FULL", "PRAGMA busy_timeout=5000", "PRAGMA temp_store=MEMORY")
 	if err != nil {
 		unlockDatabase(lock)
@@ -282,12 +291,6 @@ func openDatabase(filename string, clock Clock, driverName string) (*Store, erro
 	}
 	reads, stopReads := context.WithCancel(context.Background())
 	s := &Store{db: db, lock: lock, clock: clock, changed: make(chan struct{}), reads: reads, stopReads: stopReads}
-	// Reject reverted ADR 037 databases (user_version 29/30 or ADR 037 columns/tables) before
-	// switching journal mode or running any startup writes.
-	if err = rejectRevertedADR037Schema(context.Background(), db); err != nil {
-		_ = s.Close()
-		return nil, err
-	}
 	if _, err = db.Exec("PRAGMA journal_mode=WAL"); err != nil {
 		_ = s.Close()
 		return nil, err
@@ -527,6 +530,29 @@ func openSQLite(driverName, dsn string, maxConns int, pragmas ...string) (*sql.D
 		}
 	}
 	return db, nil
+}
+
+func newReadOnlyVFS(fsys fs.FS) (string, io.Closer, error) {
+	return vfs.New(fsys)
+}
+
+func probeRevertedADR037Schema(ctx context.Context, abs, driverName string, newVFS func(fs.FS) (string, io.Closer, error)) error {
+	dsn := "file:" + (&url.URL{Path: filepath.ToSlash(abs)}).EscapedPath() + "?immutable=1&_pragma=query_only(ON)&_pragma=busy_timeout(5000)&_pragma=temp_store(2)"
+	if _, err := os.Stat(abs + "-wal"); err == nil {
+		id, fsCloser, err := newVFS(os.DirFS(filepath.Dir(abs)))
+		if err != nil {
+			return err
+		}
+		defer func() { _ = fsCloser.Close() }()
+		dsn = "file:" + (&url.URL{Path: filepath.Base(abs)}).EscapedPath() + "?vfs=" + id + "&_pragma=locking_mode(EXCLUSIVE)&_pragma=query_only(ON)&_pragma=busy_timeout(5000)&_pragma=temp_store(2)"
+	}
+	db, err := openSQLite(driverName, dsn, 1)
+	if err != nil {
+		return err
+	}
+	err = rejectRevertedADR037Schema(ctx, db)
+	_ = db.Close()
+	return err
 }
 
 // rejectRevertedADR037Schema refuses databases from the reverted ADR 037 branch before any writes.

@@ -1134,13 +1134,17 @@ Activation clears named `ConsoleSession` rows. Restoring a database can revive
 named credentials, grants and sessions. An older binary can restore earlier
 browser authority and must remain behind the rollback filter.
 
-The trust boundary is the OS user on a host, plus a token per host across hosts. The token
-separates users and hosts, nothing finer. Any process running as that user, including a hook
-from a repository the user trusted, can read it and act as any Execution. Agents under one user
+The trust boundary is the OS user on a host; named host tokens (`HostToken.name`) let each host
+hold an independently revocable credential for audit and rate attribution, **not** cross-host
+isolation—the hub does not bind a bearer token's name to `Request.Host` or `Execution.host_id` on
+any session route (`sessions`, `bind`, `heartbeat`, `end`, `reconcile`, or `succeed`), so any valid
+owner or host token carries equal session authority across hosts (cross-host scoping would require a
+host-binding credential model). Any process running as that OS user, including a hook
+from a repository the user trusted, can read the bearer token and act as any Execution. Agents under one user
 are not isolated from each other, and Iris does not claim otherwise. Registration `source`,
 session and process identities, and succession proof fields (`prior_generation`, `prior_execution_id`)
-are self-declared evidence inside this boundary: they prevent accidental races and stale clients,
-not an adversarial host-token holder. Inside that boundary Iris relies on leases, delimited bodies
+are self-declared evidence inside this shared bearer boundary: they prevent accidental races and stale
+clients, not an adversarial bearer holder. Inside that boundary Iris relies on leases, delimited bodies
 and text-free wake frames.
 
 - **Credentials.** The token is in a user-only file: mode 0600, and an owner-only DACL on Windows.
@@ -1572,15 +1576,23 @@ On `modernc.org/sqlite`, with real concurrency:
   Choice A deferred to stage 1b), succession creates or replays at most one live `G+1` child keyed
   by exact `(prior_generation, prior_execution_id)` from a lost, hook-registered, non-superseded
   predecessor strictly above `ended_through`, requiring matching process identity when supplied or
-  required by `single_session`. Created children preserve mailbox and repository context with zero
+  required by `single_session`. Like all session routes, `succeed` uses bearer authentication
+  without cross-host `HostToken.name`-to-`host` scoping (a valid host token can invoke `succeed` for
+  any host whose proof it presents; named tokens provide attribution only). Created children preserve
+  mailbox and repository context with zero
   claims and `hook_seen_ms = 0`; replays arbitrate before `expire()`, skip expiry sweeps and stall
-  credit, enforce a strictly positive remaining lease, and return eligible live children without
+  credit, enforce a strictly positive remaining lease, restrict replay to shim-succession (`shim` /
+  `shim_succession`) or eligible hook-registered (`hook` with `hook_seen_ms > 0`) children, and
+  return eligible live children without
   renewing leases, updating `last_seen_ms` or `hook_seen_ms`, granting claims, emitting
-  `GenerationChange`, or emitting events, while recovering, ended, expired, superseded or diverged
-  children are refused. Migration 029 records `prior_execution_id`, `creation_source` and
-  `creation_proof` across `sessions` and `succeed`; `Store.Open` refuses reverted ADR 037 schemas
+  `GenerationChange`, or emitting events, while recovering, ended, expired, superseded,
+  ordinary-registration, or diverged
+  children are refused (named bearer authentication still updates `HostToken.last_used_ms` and
+  `requests` separately). Migration 029 records `prior_execution_id`, `creation_source` and
+  `creation_proof` across `sessions` and `succeed`; `Store.Open` probes reverted ADR 037 schemas
   (`WorktreeIdentity`, `Repository.auto_claim_scope`, or `user_version` 29/30 without
-  `prior_execution_id`) before switching to WAL or running any startup writes.
+  `prior_execution_id`) through a read-only VFS before opening writable handles, switching to WAL, or
+  running any startup writes, leaving main, `-wal`, and `-shm` bytes unchanged on refusal.
 - An orphaned heartbeat cannot preserve ownership. A second, unregistered session in one process
   cannot bind to the first. In id mode, a tool call that names its session binds only that
   session's Execution, never through a handle.
