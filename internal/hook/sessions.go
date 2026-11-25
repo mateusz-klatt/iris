@@ -9,6 +9,7 @@ import (
 
 	"github.com/mateusz-klatt/iris/internal/config"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
+	"github.com/mateusz-klatt/iris/internal/sessionproof"
 )
 
 // WakeVersion is the wake document version the prompt hook can consume.
@@ -129,6 +130,12 @@ func (s *Sessions) RecallBindingGeneration(client, session string) (generation, 
 		s.observeBinding(client, damagedGenerationObservation(path))
 	}
 	return generation, endedThrough, err
+}
+
+// InspectEvidence reads the session's generation, exact record, and end marker under a single
+// bounded sessions lock without letting one damaged file hide confirmation of the others.
+func (s *Sessions) InspectEvidence(client, session string, deadline time.Time, successionEnabled, cleanExpired bool) (sessionproof.Snapshot, error) {
+	return s.memory.inspectEvidenceDeadline(client, session, deadline, successionEnabled, cleanExpired)
 }
 
 // ObserveBindingRefusal names the file that vetoed a binding or renewal in the local doctor report.

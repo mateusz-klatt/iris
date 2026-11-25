@@ -13,6 +13,7 @@ import (
 
 	"github.com/mateusz-klatt/iris/internal/config"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
+	"github.com/mateusz-klatt/iris/internal/sessionproof"
 )
 
 // Memory keeps the generation a hook last saw for a client session. After a hub restart a
@@ -181,7 +182,7 @@ func (m fileMemory) readEndMarkerDeadline(marker string, deadline time.Time) (ge
 	if deadlineExpired(mono, deadline) {
 		return 0, false, os.ErrDeadlineExceeded
 	}
-	info, statErr := os.Lstat(marker)
+	info, statErr := lstatSessionFile(marker)
 	return generation, statErr == nil && info.ModTime().Before(m.clock()().Add(-memoryAge)), nil
 }
 
@@ -192,6 +193,10 @@ func (m fileMemory) Remember(client, session string, generation int) {
 }
 
 func (m fileMemory) rememberDeadline(client, session string, generation int, callerDeadline time.Time) {
+	m.rememberWithSuccession(client, session, generation, callerDeadline, false)
+}
+
+func (m fileMemory) rememberWithSuccession(client, session string, generation int, callerDeadline time.Time, successionEnabled bool) {
 	if generation <= 0 {
 		return
 	}
@@ -226,19 +231,13 @@ func (m fileMemory) rememberDeadline(client, session string, generation int, cal
 		return
 	}
 	switch {
-	case expired && current <= ended:
-		// Clear stale proof before its veto, and clear the expired veto before
-		// publishing the accepted generation to lock-free binding readers.
-		if current > 0 {
-			if deadlineExpired(mono, deadline) || os.Remove(path) != nil {
-				return
+	case markerErr == nil && expired && current <= ended:
+		// Clear stale proof and exact evidence before their veto, and clear the expired veto
+		// before publishing the accepted generation to lock-free binding readers.
+		if cleaned, _ := m.cleanupExpiredEnd(path, ended, deadline, successionEnabled); cleaned {
+			if replaceSessionFileDeadline(tmp, path, deadline, false, mono, m.pause) == nil {
+				tmp = ""
 			}
-		}
-		if deadlineExpired(mono, deadline) || os.Remove(marker) != nil {
-			return
-		}
-		if replaceSessionFileDeadline(tmp, path, deadline, false, mono, m.pause) == nil {
-			tmp = ""
 		}
 	case generation > ended && generation >= current:
 		if replaceSessionFileDeadline(tmp, path, deadline, false, mono, m.pause) == nil {
@@ -257,6 +256,10 @@ func (m fileMemory) forget(client, session string, generation int) string {
 }
 
 func (m fileMemory) forgetDeadline(client, session string, generation int, callerDeadline time.Time) string {
+	return m.forgetEvidence(client, session, generation, callerDeadline, false)
+}
+
+func (m fileMemory) forgetEvidence(client, session string, generation int, callerDeadline time.Time, successionEnabled bool) string {
 	if generation <= 0 {
 		return ""
 	}
@@ -301,8 +304,25 @@ func (m fileMemory) forgetDeadline(client, session string, generation int, calle
 		return marker
 	}
 	tmp = ""
-	if current, readErr := readGenerationDeadline(path, mono, deadline); readErr == nil && current > 0 && current <= floor && !deadlineExpired(mono, deadline) {
-		_ = os.Remove(path)
+	current, err := readGenerationDeadline(path, mono, deadline)
+	if err != nil {
+		return ""
+	}
+	if current > 0 && current <= floor && !deadlineExpired(mono, deadline) {
+		_ = removeSessionFile(path)
+	}
+	execPath := executionPath(path)
+	if !successionEnabled {
+		if current <= floor && !deadlineExpired(mono, deadline) {
+			if _, lerr := lstatSessionFile(execPath); lerr == nil {
+				_ = removeSessionFile(execPath)
+			}
+		}
+		return ""
+	}
+	rec, state, recErr := readExactRecordDeadline(execPath, mono, deadline)
+	if recErr == nil && state == sessionproof.FileValid && recordEndedAt(rec, floor) && !deadlineExpired(mono, deadline) {
+		_ = removeSessionFile(execPath)
 	}
 	return ""
 }
@@ -830,6 +850,10 @@ func (m fileMemory) prune() error {
 }
 
 func (m fileMemory) pruneDeadline(callerDeadline time.Time) error {
+	return m.pruneWithSuccession(callerDeadline, false)
+}
+
+func (m fileMemory) pruneWithSuccession(callerDeadline time.Time, successionEnabled bool) error {
 	// What the directory cannot list, prune cannot judge, so it keeps it.
 	entries, _ := os.ReadDir(m.dir)
 	cutoff := m.clock()().Add(-memoryAge)
@@ -859,8 +883,29 @@ func (m fileMemory) pruneDeadline(callerDeadline time.Time) error {
 		if deadlineExpired(mono, deadline) {
 			return nil
 		}
-		if info, err := os.Lstat(path); err == nil && info.ModTime().Before(cutoff) {
-			_ = os.Remove(path)
+		if strings.HasSuffix(path, ".ended") {
+			ended, expired, markerErr := m.readEndMarkerDeadline(path, deadline)
+			if errors.Is(markerErr, os.ErrDeadlineExceeded) {
+				return nil
+			}
+			if markerErr == nil && ended > 0 {
+				if expired {
+					_, _ = m.cleanupExpiredEnd(strings.TrimSuffix(path, ".ended"), ended, deadline, successionEnabled)
+				}
+				continue
+			}
+		}
+		if isExecutionFile(path) {
+			prefix := strings.TrimSuffix(path, ".execution")
+			if hinfo, herr := lstatSessionFile(prefix); herr == nil && !hinfo.ModTime().Before(cutoff) {
+				continue
+			}
+			if _, eerr := lstatSessionFile(prefix + ".ended"); eerr == nil {
+				continue
+			}
+		}
+		if info, err := lstatSessionFile(path); err == nil && info.ModTime().Before(cutoff) {
+			_ = removeSessionFile(path)
 		}
 	}
 	return nil
