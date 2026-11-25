@@ -35,11 +35,13 @@ func (antigravityAdapter) Decode(eventName string, payload []byte) (Event, error
 		return Event{}, err
 	}
 	ev := Event{
-		Client:         ClientAntigravity,
-		Kind:           kindFrom(eventName, ""),
-		SessionID:      p.ConversationID,
-		Workspaces:     p.WorkspacePaths,
-		TranscriptPath: p.TranscriptPath,
+		Client:            ClientAntigravity,
+		Kind:              kindFrom(eventName, ""),
+		SessionID:         p.ConversationID,
+		ConversationID:    p.ConversationID,
+		NamespaceVerified: p.ConversationID != "",
+		Workspaces:        p.WorkspacePaths,
+		TranscriptPath:    p.TranscriptPath,
 	}
 	// The hook process runs in .agents/. The repository is workspacePaths.
 	if len(p.WorkspacePaths) > 0 {

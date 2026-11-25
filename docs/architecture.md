@@ -124,7 +124,42 @@ Hard rules for `iris hook`, because failure semantics differ between clients:
    C4), using the same relocated-plus-default merge. Neither is a session-file operation a hook
    skipped, such as a told state its lock budget kept it from writing: the hook's allow or deny is
    unaffected, and doctor counts them beside the row's status (ADR 017).
-7. A client that provides no tool call id gets one derived from a hash of the raw payload.
+7. A client that provides no tool call id gets one derived from a hash of the raw payload, spelled
+   `payload:<hex SHA-256>`. Before a claim touch, a verified client conversation namespaces either
+   that fallback or the supplied call ID. The hub's `tool_call_id` is the lowercase hex SHA-256 of a
+   fixed domain prefix `iris.hook.claim-retry.v1` plus NUL, followed by the client, conversation ID
+   and call ID, each encoded as its decimal byte length, a colon and its bytes. The raw conversation
+   ID therefore never appears in the retry key (its existing registration use is unchanged). The key
+   is stable across retries in one conversation, but differs between conversations even when the hub
+   gives them the same idle Agent slot and they reuse a positional or conversation-local call ID.
+   An event without a verified client conversation ID is **namespace unverified** and keeps today's
+   raw key, including the `payload:` fallback when that applies.
+
+   The canonical event's `ConversationID` is this client-owned identity, never an Iris Agent or
+   Execution ID. It is captured before any subagent-specific `SessionID` rewrite. The captured
+   contract behind that decision is:
+
+   | Client | Capture field | Per-conversation evidence in `internal/hook/testdata/` |
+   |---|---|---|
+   | Claude Code | `session_id` | `SessionStart` and `PreToolUse-write` / `PostToolUse-write` agree; the built-in-tool and Windows captures have different IDs. |
+   | Codex | `session_id` | `SessionStart` and the apply-patch pre/post captures agree; `SessionStart-resume` and `UserPromptSubmit-queued` share a different resumed conversation ID. |
+   | Copilot | `sessionId` | `sessionStart`, `preToolUse-apply_patch`, `postToolUse-apply_patch` and `sessionEnd` agree; `preToolUse-view` is a different captured conversation. |
+   | Cursor | `conversation_id`, equal to `session_id` | `sessionStart`, `preToolUse` and `sessionEnd` agree; the Claude-plugin pair and `stop` carry other conversation IDs. A mismatched or missing `conversation_id` is unverified. |
+   | Antigravity | `conversationId` | `pre_tool_use` and `post_tool_use` share both this ID and conversation-local `stepIdx` 3; the wake and stop captures include other conversation IDs. |
+   | Grok | `session_id`, equal to `sessionId` | `SessionStart` and `PreToolUse` / `PostToolUse` agree; the shell and subagent-parent captures have different IDs. |
+   | Kimi | `session_id` | `sessionstart`, `pre_tool_use_bash` and `posttooluse` agree; the real `/clear` capture `sessionstart_clear` has a new ID. Its `tool_call_id`, for example `Write_0_a89dd82f`, is positional. |
+
+   For Antigravity, `post_tool_use_wake` and `stop_continuation` share `conversationId`, and the Stop
+   names `executionNum` 1. The research log records continuation executions 0 through 4 in one run,
+   while A6 measures `conversationId` as stable within a session and across `--conversation` resume.
+   The saved `stop.json` (`executionNum` 0) is from a different conversation, so the captures do not
+   directly prove a same-conversation 0-to-1 transition. That limit is not hidden by treating the
+   per-execution `executionNum` or `ANTIGRAVITY_TRAJECTORY_ID` as the namespace.
+
+   A tool call already in flight across an Iris CLI upgrade gets a fresh namespaced key on its new
+   delivery. That is harmless: the new key is a new idempotent operation and takes or arbitrates its
+   claim normally rather than replaying the old operation. It does not extend exactly-once replay
+   across an upgrade.
 
 A hook is a new process, so every call starts with DNS, TCP and TLS. Against the public hub a lost
 packet on any of them outlasted the deadline, and the edit went through without a claim: 3.7% of

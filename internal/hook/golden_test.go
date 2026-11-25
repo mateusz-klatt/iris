@@ -48,8 +48,8 @@ func TestDecodeFixtures(t *testing.T) {
 		if err != nil {
 			t.Fatalf("%s: %v", rel, err)
 		}
-		if ev.Client != Canonical(client) || ev.Kind != want.kind || ev.SessionID != want.session {
-			t.Errorf("%s: client %s kind %s session %s", rel, ev.Client, ev.Kind, ev.SessionID)
+		if ev.Client != Canonical(client) || ev.Kind != want.kind || ev.SessionID != want.session || ev.ConversationID == "" || !ev.NamespaceVerified {
+			t.Errorf("%s: client %s kind %s session %s namespace verified %v", rel, ev.Client, ev.Kind, ev.SessionID, ev.NamespaceVerified)
 		}
 		if ev.ParentSessionID != want.parent || ev.CWD != want.cwd {
 			t.Errorf("%s: parent %q cwd %q", rel, ev.ParentSessionID, ev.CWD)

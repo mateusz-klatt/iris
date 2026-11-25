@@ -27,13 +27,15 @@ func (cursorAdapter) Decode(eventName string, payload []byte) (Event, error) {
 		spec = compact(p.HookEventName)
 	}
 	ev := Event{
-		Client:     ClientCursor,
-		Kind:       kindFrom(spec, ""),
-		SessionID:  first(p.SessionID, p.ConversationID),
-		CWD:        p.CWD,
-		Workspaces: p.WorkspaceRoots,
-		ToolCallID: p.ToolUseID,
-		LoopCount:  p.LoopCount,
+		Client:            ClientCursor,
+		Kind:              kindFrom(spec, ""),
+		SessionID:         first(p.SessionID, p.ConversationID),
+		ConversationID:    p.ConversationID,
+		NamespaceVerified: p.ConversationID != "" && (p.SessionID == "" || p.SessionID == p.ConversationID),
+		CWD:               p.CWD,
+		Workspaces:        p.WorkspaceRoots,
+		ToolCallID:        p.ToolUseID,
+		LoopCount:         p.LoopCount,
 	}
 	if ev.CWD == "" && len(p.WorkspaceRoots) > 0 {
 		ev.CWD = p.WorkspaceRoots[0]

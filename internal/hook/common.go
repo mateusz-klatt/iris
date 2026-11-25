@@ -41,11 +41,13 @@ func decodeCommon(client Client, eventName string, payload []byte) (Event, error
 		return Event{}, err
 	}
 	ev := Event{
-		Client:     client,
-		Kind:       kindFrom(eventName, first(p.HookEvent, p.HookEventCamel)),
-		SessionID:  first(p.SessionID, p.SessionIDCamel),
-		CWD:        p.CWD,
-		ToolCallID: first(p.ToolUseID, p.ToolUseCamel, p.ToolCallID),
+		Client:            client,
+		Kind:              kindFrom(eventName, first(p.HookEvent, p.HookEventCamel)),
+		SessionID:         first(p.SessionID, p.SessionIDCamel),
+		ConversationID:    first(p.SessionID, p.SessionIDCamel),
+		NamespaceVerified: p.SessionID != "" && (p.SessionIDCamel == "" || p.SessionIDCamel == p.SessionID),
+		CWD:               p.CWD,
+		ToolCallID:        first(p.ToolUseID, p.ToolUseCamel, p.ToolCallID),
 	}
 	if name := first(p.ToolName, p.ToolNameCamel); name != "" {
 		raw := p.ToolInput

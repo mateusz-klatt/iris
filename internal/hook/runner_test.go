@@ -190,6 +190,7 @@ func TestEndToEndFakeHub(t *testing.T) {
 			if c == ClientAntigravity {
 				wantCall = "1"
 			}
+			wantCall = namespaceToolCallID(Event{Client: c, ConversationID: "s1", ToolCallID: wantCall, NamespaceVerified: true})
 			if touch["execution_id"] != "ex_1" || touch["tool_call_id"] != wantCall {
 				t.Fatalf("touch %#v", touch)
 			}
@@ -379,7 +380,7 @@ func editPayload(c Client, root string) string {
 	case ClientCopilot:
 		return fmt.Sprintf(`{"sessionId":"s1","cwd":%q,"toolName":"apply_patch","toolArgs":%q}`, root, "*** Begin Patch\n*** Add File: src/a.go\n+x\n*** End Patch\n")
 	case ClientCursor:
-		return fmt.Sprintf(`{"session_id":"s1","cwd":%q,"workspace_roots":[%q],"hook_event_name":"preToolUse","tool_name":"Write","tool_input":{"file_path":%q},"tool_use_id":"t1"}`, root, root, file)
+		return fmt.Sprintf(`{"session_id":"s1","conversation_id":"s1","cwd":%q,"workspace_roots":[%q],"hook_event_name":"preToolUse","tool_name":"Write","tool_input":{"file_path":%q},"tool_use_id":"t1"}`, root, root, file)
 	case ClientAntigravity:
 		return fmt.Sprintf(`{"conversationId":"s1","workspacePaths":[%q],"stepIdx":1,"toolCall":{"name":"write_file","args":{"Path":%q}}}`, root, file)
 	case ClientKimi:

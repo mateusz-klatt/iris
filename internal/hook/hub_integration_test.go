@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"io"
+	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
@@ -11,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/mateusz-klatt/iris/internal/hub"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
@@ -139,6 +142,168 @@ func TestCapturedEditsAgainstRealHub(t *testing.T) {
 						t.Fatalf("successful hook logged failures: %+v %v", failures, err)
 					}
 				})
+			}
+		})
+	}
+}
+
+func TestTouchRetryKeysAreNamespacedPerConversation(t *testing.T) {
+	cases := []struct {
+		client                Client
+		fixture, event, field string
+		call, path            string
+	}{
+		{client: ClientAntigravity, fixture: "antigravity/pre_tool_use.json", event: "pre_tool_use", field: "conversationId", call: "3", path: "test_edit.txt"},
+		{client: ClientKimi, fixture: "kimi/pre_tool_use_write_denied.json", event: "PreToolUse", field: "session_id", call: "Write_0_a89dd82f", path: "deny-me.txt"},
+	}
+	for _, tc := range cases {
+		t.Run(string(tc.client), func(t *testing.T) {
+			root := t.TempDir()
+			cmd := exec.Command("git", "init", "--initial-branch=main", root)
+			if output, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("git init: %v: %s", err, output)
+			}
+			if err := os.WriteFile(filepath.Join(root, tc.path), []byte("before\n"), 0600); err != nil {
+				t.Fatal(err)
+			}
+			capturedRaw, err := os.ReadFile(filepath.Join("testdata", tc.fixture))
+			if err != nil {
+				t.Fatal(err)
+			}
+			captured, err := Decode(tc.client, tc.event, capturedRaw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if captured.ToolCallID != tc.call {
+				t.Fatalf("captured tool call ID = %q, want %q", captured.ToolCallID, tc.call)
+			}
+			payload := func(conversation string) []byte {
+				var value any
+				if err := json.Unmarshal(capturedRaw, &value); err != nil {
+					t.Fatal(err)
+				}
+				value = rewriteCapturedPaths(value, captured.CWD, filepath.ToSlash(root))
+				value.(map[string]any)[tc.field] = conversation
+				raw, err := json.Marshal(value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return raw
+			}
+
+			database, err := store.Open(filepath.Join(t.TempDir(), "hub.db"), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = database.Close() }()
+			keys := make(chan string, 4)
+			var realHub http.Handler
+			server := httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.Method == http.MethodPost && (r.URL.Path == "/v1/claims/touch" || r.URL.Path == "/v1/claims/touch/files") {
+					raw, err := io.ReadAll(r.Body)
+					if err != nil {
+						t.Errorf("read touch: %v", err)
+						http.Error(w, "read failed", http.StatusBadRequest)
+						return
+					}
+					var request struct {
+						ToolCallID string `json:"tool_call_id"`
+					}
+					if err := json.Unmarshal(raw, &request); err != nil {
+						t.Errorf("decode touch: %v", err)
+						http.Error(w, "decode failed", http.StatusBadRequest)
+						return
+					}
+					keys <- request.ToolCallID
+					r.Body = io.NopCloser(bytes.NewReader(raw))
+				}
+				realHub.ServeHTTP(w, r)
+			}))
+			realHub = hub.New(database, "secret", []string{server.Listener.Addr().String()})
+			server.Start()
+			defer server.Close()
+			token := tokenFile(t)
+			getenv := func(key string) string {
+				switch key {
+				case "IRIS_TOKEN_FILE":
+					return token
+				case "IRIS_HUB_URL":
+					return server.URL
+				}
+				return ""
+			}
+			client := &hubclient.Client{Config: hubclient.EnvConfig{Getenv: getenv}}
+			runHook := func(raw []byte) Output {
+				return Runner{
+					ClientName: string(tc.client), EventName: tc.event, Stdin: bytes.NewReader(raw),
+					Getenv: getenv, Hub: client, Host: func() string { return "testhost" },
+					Ancestor: func() (proc.Ancestor, error) { return proc.Ancestor{}, nil },
+					after:    never, logAfter: never,
+				}.Run()
+			}
+			nextKey := func() string {
+				t.Helper()
+				select {
+				case key := <-keys:
+					return key
+				case <-time.After(10 * time.Second):
+					t.Fatal("real hub did not receive a touch")
+					return ""
+				}
+			}
+			ctx := context.Background()
+			bind := func(conversation string) hubclient.SessionResponse {
+				t.Helper()
+				var bound hubclient.SessionResponse
+				if err := client.Do(ctx, http.MethodPost, "/v1/bind", map[string]any{
+					"client": tc.client, "host": "testhost", "session_id": conversation,
+				}, &bound); err != nil {
+					t.Fatal(err)
+				}
+				return bound
+			}
+			assertGranted := func(bound hubclient.SessionResponse) {
+				t.Helper()
+				var listed struct {
+					Claims []struct{ Path, Origin string }
+				}
+				if err := client.Do(ctx, http.MethodGet, "/v1/claims?repository_id="+url.QueryEscape(bound.RepositoryID), nil, &listed); err != nil {
+					t.Fatal(err)
+				}
+				if len(listed.Claims) != 1 || listed.Claims[0].Path != tc.path || listed.Claims[0].Origin != "auto" {
+					t.Fatalf("claims after grant = %+v", listed.Claims)
+				}
+			}
+
+			conversations := []string{"conversation-one", "conversation-two"}
+			gotKeys := make([]string, 0, len(conversations))
+			var reusedAgent string
+			for i, conversation := range conversations {
+				raw := payload(conversation)
+				assertAllow(t, tc.client, runHook(raw))
+				firstKey := nextKey()
+				wantKey := namespaceToolCallID(Event{Client: tc.client, ConversationID: conversation, ToolCallID: tc.call, NamespaceVerified: true})
+				if firstKey != wantKey || len(firstKey) != 64 || strings.Contains(firstKey, conversation) {
+					t.Fatalf("touch key = %q, want %q", firstKey, wantKey)
+				}
+				assertAllow(t, tc.client, runHook(raw))
+				if retryKey := nextKey(); retryKey != firstKey {
+					t.Fatalf("same-conversation retry key = %q, first = %q", retryKey, firstKey)
+				}
+				gotKeys = append(gotKeys, firstKey)
+				bound := bind(conversation)
+				assertGranted(bound)
+				if i == 0 {
+					reusedAgent = bound.Agent.ID
+					if err := client.EndExecution(ctx, bound.ExecutionID, bound.Generation); err != nil {
+						t.Fatal(err)
+					}
+				} else if bound.Agent.ID != reusedAgent {
+					t.Fatalf("second Agent = %q, want reused %q", bound.Agent.ID, reusedAgent)
+				}
+			}
+			if gotKeys[0] == gotKeys[1] {
+				t.Fatalf("two conversations reused key %q", gotKeys[0])
 			}
 		})
 	}
