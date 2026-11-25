@@ -21,6 +21,14 @@ var ErrNotFound = errors.New("no ancestor process")
 // not be opened from its running image.
 var ErrExecutableDeleted = errors.New("process executable was deleted")
 
+type grokEvidence uint8
+
+const (
+	grokUnchecked grokEvidence = iota
+	grokAbsent
+	grokMatched
+)
+
 // Ancestor is the process a hook records at session start.
 // Exe and Launcher are the executable path and a launcher argv entry when the OS provided them.
 // Either may be empty: macOS can refuse kern.procargs2, and Windows does not read a command line
@@ -32,6 +40,7 @@ type Ancestor struct {
 	StartMS  int64 // Unix epoch milliseconds, 0 when the OS does not say
 	Exe      string
 	Launcher string
+	grok     grokEvidence
 }
 
 // Snapshot is one process as seen by the walk.
@@ -42,6 +51,7 @@ type Snapshot struct {
 	StartMS  int64
 	Exe      string
 	Launcher string
+	grok     grokEvidence
 }
 
 // Lookup returns one live process using the same platform evidence as the ancestor walk.
@@ -246,6 +256,9 @@ func NearestFrom(self int, get func(int) (Snapshot, bool), getenv func(string) s
 				cp := p
 				fallback = &cp
 			}
+			if p.grok == grokUnchecked && AgentAlias(p.Name) {
+				_, p.grok = evidenceClientResolved(p)
+			}
 			// A resolved alias is a client. An unresolved agent is still a boundary:
 			// walking through it bound the wrong session.
 			if _, known := ClientNameOf(p, getenv); known || AgentAlias(p.Name) {
@@ -309,17 +322,31 @@ func ClientNameOf(s Snapshot, getenv func(string) string) (string, bool) {
 // or symlink resolving there at the agent alias stays Grok regardless of argv, while Cursor's
 // index.js launcher counts only when the executable is node or unknown. A bare agent is not a client.
 func evidenceClient(s Snapshot) (string, bool) {
+	client, _ := evidenceClientResolved(s)
+	return client, client != ""
+}
+
+func evidenceClientResolved(s Snapshot) (string, grokEvidence) {
 	exe := cleanExe(s.Exe)
-	if AgentAlias(s.Name) && grokExecutable(exe) {
-		return "grok", true
+	ev := s.grok
+	if AgentAlias(s.Name) {
+		if ev == grokUnchecked {
+			ev = grokAbsent
+			if grokExecutable(exe) {
+				ev = grokMatched
+			}
+		}
+		if ev == grokMatched {
+			return "grok", ev
+		}
 	}
 	if cursorExecutable(exe) {
-		return "cursor", true
+		return "cursor", ev
 	}
 	if (exe == "" || baseName(exe) == "node") && cursorIndex(s.Launcher) {
-		return "cursor", true
+		return "cursor", ev
 	}
-	return "", false
+	return "", ev
 }
 
 func cleanExe(exe string) string {
@@ -360,6 +387,9 @@ func cursorVersionParts(p string, index bool) bool {
 	return false
 }
 
+// evalSymlinks resolves symlinks in an executable path. Tests replace it.
+var evalSymlinks = filepath.EvalSymlinks
+
 var grokDownloadBinary = regexp.MustCompile(`^grok-[0-9][0-9a-z.-]*-[a-z]+-[a-z0-9_]+$`)
 
 func grokExecutable(exe string) bool {
@@ -369,7 +399,7 @@ func grokExecutable(exe string) bool {
 	if grokBinAgent(exe) || grokDownloadPath(exe) {
 		return true
 	}
-	resolved, err := filepath.EvalSymlinks(exe)
+	resolved, err := evalSymlinks(exe)
 	if err != nil {
 		return false
 	}
@@ -384,16 +414,12 @@ func grokBinAgent(exe string) bool {
 
 func grokDownloadPath(exe string) bool {
 	parts := pathParts(exe)
-	base := strings.TrimSuffix(parts[len(parts)-1], ".exe")
-	if !grokDownloadBinary.MatchString(base) {
+	n := len(parts)
+	if n < 3 || parts[n-3] != ".grok" || parts[n-2] != "downloads" {
 		return false
 	}
-	for i := 0; i+2 < len(parts); i++ {
-		if parts[i] == ".grok" && parts[i+1] == "downloads" {
-			return true
-		}
-	}
-	return false
+	base := strings.TrimSuffix(parts[n-1], ".exe")
+	return grokDownloadBinary.MatchString(base)
 }
 
 func launcherArg(args []string) string {
@@ -408,52 +434,68 @@ func launcherArg(args []string) string {
 // resolveVisibleName retitles a generic alias, or Cursor's node, when evidence
 // names a client. A process that already carries a client name keeps it.
 func resolveVisibleName(name, exe, launcher string) string {
+	visible, _ := resolveVisible(name, exe, launcher)
+	return visible
+}
+
+func resolveVisible(name, exe, launcher string) (string, grokEvidence) {
 	if _, named := ClientName(name); named {
-		return name
+		return name, grokAbsent
 	}
-	client, known := evidenceClient(Snapshot{Name: name, Exe: exe, Launcher: launcher})
-	if !known {
-		return name
+	client, ev := evidenceClientResolved(Snapshot{Name: name, Exe: exe, Launcher: launcher})
+	if client == "" {
+		return name, ev
 	}
 	if client == "cursor" {
-		return "cursor-agent"
+		return "cursor-agent", ev
 	}
-	return client
+	return client, ev
 }
 
 // commandIdentity is Linux's view of a process: argv[0] when it has one, otherwise
 // the kernel comm, retitled when the executable or a launcher argument resolves an alias.
 func commandIdentity(comm, argv0, exe string, args []string) (name, cleaned, launcher string) {
+	name, cleaned, launcher, _ = resolveCommandIdentity(comm, argv0, exe, args)
+	return name, cleaned, launcher
+}
+
+func resolveCommandIdentity(comm, argv0, exe string, args []string) (name, cleaned, launcher string, ev grokEvidence) {
 	name = comm
 	if argv0 != "" {
 		name = argv0
 	}
 	cleaned = cleanExe(exe)
 	launcher = launcherArg(args)
-	name = resolveVisibleName(name, cleaned, launcher)
-	return name, cleaned, launcher
+	name, ev = resolveVisible(name, cleaned, launcher)
+	return name, cleaned, launcher, ev
 }
 
 // promotedProcessName is macOS's view. p_comm stays in place unless argv[0] names a
 // client or the executable resolves an alias. An unidentified agent is kept as "agent"
 // so the walk does not continue through p_comm "node".
 func promotedProcessName(comm, argv0, exe, launcher string) string {
+	name, _ := resolvePromotedProcessName(comm, argv0, exe, launcher)
+	return name
+}
+
+func resolvePromotedProcessName(comm, argv0, exe, launcher string) (string, grokEvidence) {
 	// A title that is already a client stays that title. Evidence is applied
 	// afterwards, so a path that only looks like a client is not reduced to its basename.
 	if _, named := ClientName(argv0); named {
-		return baseName(argv0)
+		return baseName(argv0), grokAbsent
 	}
 	subject := argv0
 	if subject == "" {
 		subject = comm
 	}
-	if resolved := resolveVisibleName(subject, exe, launcher); resolved != subject {
-		return resolved
+	resolved, ev := resolveVisible(subject, exe, launcher)
+	if resolved != subject {
+		return resolved, ev
 	}
 	if AgentAlias(argv0) {
-		return "agent"
+		return "agent", ev
 	}
-	return comm
+	return comm, ev
 }
 
 // ClientName maps a client process's executable name to Iris's client name.

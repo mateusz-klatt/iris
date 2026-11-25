@@ -33,8 +33,8 @@ func lookupOS(pid int) (Snapshot, bool) {
 		argv0 = args[0]
 	}
 	exe, _ := os.Readlink("/proc/" + strconv.Itoa(pid) + "/exe")
-	name, exe, launcher := commandIdentity(comm, argv0, exe, args)
-	return Snapshot{PID: pid, PPID: ppid, Name: name, StartMS: start, Exe: exe, Launcher: launcher}, true
+	name, exe, launcher, ev := resolveCommandIdentity(comm, argv0, exe, args)
+	return Snapshot{PID: pid, PPID: ppid, Name: name, StartMS: start, Exe: exe, Launcher: launcher, grok: ev}, true
 }
 
 func executableOS(pid int, _ Snapshot) (string, error) {

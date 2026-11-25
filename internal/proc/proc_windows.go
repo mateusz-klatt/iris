@@ -41,12 +41,14 @@ func lookupOS(pid int) (Snapshot, bool) {
 	// so an index.js launcher argument is invisible; an agent image with no Cursor
 	// or Grok path stays an unidentified boundary.
 	image := imageName(h)
+	visible, ev := resolveVisible(image, image, "")
 	return Snapshot{
 		PID:     pid,
 		PPID:    int(info.InheritedFromUniqueProcessId),
-		Name:    resolveVisibleName(image, image, ""),
+		Name:    visible,
 		Exe:     image,
 		StartMS: created.Nanoseconds() / 1e6,
+		grok:    ev,
 	}, true
 }
 

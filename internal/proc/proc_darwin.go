@@ -28,11 +28,11 @@ func lookupOS(pid int) (Snapshot, bool) {
 	}
 	ms := k.Proc.P_starttime.Sec*1000 + int64(k.Proc.P_starttime.Usec)/1000
 	comm := string(name)
-	visible, exe, launcher := comm, "", ""
+	visible, exe, launcher, ev := comm, "", "", grokAbsent
 	// kern.procargs2 is the executable path plus argv. There is no separate exe link.
 	// A refused buffer leaves p_comm, so a node whose arguments cannot be read is not guessed.
 	if raw, err := unix.SysctlRaw("kern.procargs2", pid); err == nil {
-		visible, exe, launcher = identityFromProcargs(comm, raw)
+		visible, exe, launcher, ev = resolveIdentityFromProcargs(comm, raw)
 	}
 	return Snapshot{
 		PID:      pid,
@@ -41,6 +41,7 @@ func lookupOS(pid int) (Snapshot, bool) {
 		StartMS:  ms,
 		Exe:      exe,
 		Launcher: launcher,
+		grok:     ev,
 	}, true
 }
 
@@ -51,13 +52,19 @@ func lookupOS(pid int) (Snapshot, bool) {
 // full path), while index.js may follow node flags such as --use-system-ca. A login shell's
 // argv[0] is "-zsh", so anything that is not a client or that alias keeps p_comm.
 func identityFromProcargs(comm string, raw []byte) (name, exe, launcher string) {
+	name, exe, launcher, _ = resolveIdentityFromProcargs(comm, raw)
+	return name, exe, launcher
+}
+
+func resolveIdentityFromProcargs(comm string, raw []byte) (name, exe, launcher string, ev grokEvidence) {
 	exe = executablePath(raw)
 	argv0 := ""
 	if args, err := procargsArgs(raw); err == nil {
 		argv0 = args[0]
 		launcher = launcherArg(args)
 	}
-	return promotedProcessName(comm, argv0, exe, launcher), exe, launcher
+	name, ev = resolvePromotedProcessName(comm, argv0, exe, launcher)
+	return name, exe, launcher, ev
 }
 
 func executableOS(pid int, _ Snapshot) (string, error) {

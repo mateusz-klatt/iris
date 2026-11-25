@@ -220,6 +220,10 @@ func TestAgentAliasEvidence(t *testing.T) {
 			visible: "agent", promoted: "agent", comm: "grok-wrapper",
 		},
 		{
+			name: "agent under nested .grok/downloads/cache is not grok", snap: Snapshot{Name: "agent", Exe: "/home/user/.grok/downloads/cache/grok-1.0.92-linux-x86_64"},
+			visible: "agent", promoted: "agent", comm: "grok-1.0.92-lin",
+		},
+		{
 			name: "non-agent named grok-wrapper is not grok", snap: Snapshot{Name: "grok-wrapper", Exe: "/usr/local/bin/grok-wrapper"},
 			visible: "grok-wrapper", promoted: "grok-wrapper", comm: "grok-wrapper",
 		},
@@ -375,6 +379,7 @@ func TestAgentAliasEvidence(t *testing.T) {
 		"",
 		"/home/user/.grok-backup/downloads/grok-1.0.92-linux-x86_64",
 		"/opt/grok-1.0.92-linux-x86_64",
+		"/home/user/.grok/downloads/cache/grok-1.0.92-linux-x86_64",
 		"/home/user/.grok/downloads/grok-wrapper",
 		"/home/user/.grok/bin/other",
 		"/home/user/.grok/downloads",
@@ -396,8 +401,9 @@ func TestAgentAliasEvidence(t *testing.T) {
 func TestAgentAliasExternalSymlinkToGrokDownloads(t *testing.T) {
 	home := t.TempDir()
 	downloads := filepath.Join(home, ".grok", "downloads")
+	nestedDownloads := filepath.Join(downloads, "cache")
 	localBin := filepath.Join(home, ".local", "bin")
-	if err := os.MkdirAll(downloads, 0o755); err != nil {
+	if err := os.MkdirAll(nestedDownloads, 0o755); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.MkdirAll(localBin, 0o755); err != nil {
@@ -405,6 +411,10 @@ func TestAgentAliasExternalSymlinkToGrokDownloads(t *testing.T) {
 	}
 	grokTarget := filepath.Join(downloads, "grok-1.0.92-macos-x86_64")
 	if err := os.WriteFile(grokTarget, []byte("bin"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	nestedTarget := filepath.Join(nestedDownloads, "grok-1.0.92-linux-x86_64")
+	if err := os.WriteFile(nestedTarget, []byte("bin"), 0o755); err != nil {
 		t.Fatal(err)
 	}
 	unrelatedTarget := filepath.Join(home, "unrelated-tool")
@@ -416,6 +426,10 @@ func TestAgentAliasExternalSymlinkToGrokDownloads(t *testing.T) {
 		if runtime.GOOS == "windows" {
 			t.Skipf("symlink creation unavailable: %v", err)
 		}
+		t.Fatal(err)
+	}
+	nestedLink := filepath.Join(localBin, "nested-agent")
+	if err := os.Symlink(nestedTarget, nestedLink); err != nil {
 		t.Fatal(err)
 	}
 	otherLink := filepath.Join(localBin, "other-agent")
@@ -431,8 +445,89 @@ func TestAgentAliasExternalSymlinkToGrokDownloads(t *testing.T) {
 	if client, known := ClientNameOf(Snapshot{Name: "grok-wrapper", Exe: grokLink}, nil); known || client != "" {
 		t.Fatalf("non-agent using symlink was relabeled: %q %v", client, known)
 	}
+	if client, known := ClientNameOf(Snapshot{Name: "agent", Exe: nestedLink}, nil); known || client != "" {
+		t.Fatalf("symlink to nested .grok/downloads/cache became %q %v", client, known)
+	}
 	if client, known := ClientNameOf(Snapshot{Name: "agent", Exe: otherLink}, nil); known || client != "" {
 		t.Fatalf("external symlink to non-grok target became %q %v", client, known)
+	}
+}
+
+func TestAgentSleepHelper(t *testing.T) {
+	if os.Getenv("IRIS_PROC_AGENT_SLEEP") == "1" {
+		time.Sleep(time.Minute)
+	}
+}
+
+func TestAgentExeResolvesOnceAcrossHookSteps(t *testing.T) {
+	agentName := "agent"
+	if runtime.GOOS == "windows" {
+		agentName = "agent.exe"
+	}
+	agentBin := filepath.Join(t.TempDir(), agentName)
+	self, err := os.ReadFile(os.Args[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(agentBin, self, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(agentBin, "-test.run=^TestAgentSleepHelper$")
+	cmd.Env = append(os.Environ(), "IRIS_PROC_AGENT_SLEEP=1")
+	if err := cmd.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = cmd.Process.Kill()
+		_ = cmd.Wait()
+	})
+	var calls int
+	orig := evalSymlinks
+	t.Cleanup(func() { evalSymlinks = orig })
+	evalSymlinks = func(p string) (string, error) {
+		calls++
+		return orig(p)
+	}
+	get := func(pid int) (Snapshot, bool) {
+		if pid == 999999 {
+			return Snapshot{PID: 999999, PPID: cmd.Process.Pid, Name: "iris"}, true
+		}
+		return lookupOS(pid)
+	}
+	// Step 1+2: nearest walks through lookupOS and NearestFrom on the live agent process.
+	anc, err := nearest(999999, get, nil)
+	if err != nil || anc.PID != cmd.Process.Pid {
+		t.Fatalf("nearest = %+v, %v", anc, err)
+	}
+	// Step 3: hook crossLoad converts Ancestor back to Snapshot and classifies it.
+	if client, known := ClientNameOf(Snapshot(anc), nil); known || !AgentAlias(anc.Name) {
+		t.Fatalf("agent classification = %q %v %q", client, known, anc.Name)
+	}
+	if calls != 1 {
+		t.Fatalf("evalSymlinks called %d times across OS lookup + walk + hook classification, want 1", calls)
+	}
+
+	// EvalSymlinks failure caches grokAbsent and also runs once.
+	calls = 0
+	evalSymlinks = func(string) (string, error) {
+		calls++
+		return "", errors.New("broken link")
+	}
+	getBroken := func(pid int) (Snapshot, bool) {
+		if pid == 999999 {
+			return Snapshot{PID: 999999, PPID: 18, Name: "iris"}, true
+		}
+		return Snapshot{PID: 18, PPID: 1, Name: "agent", Exe: "/tmp/unrelated/agent"}, pid == 18
+	}
+	anc, err = nearest(999999, getBroken, nil)
+	if err != nil || anc.PID != 18 {
+		t.Fatalf("broken nearest = %+v, %v", anc, err)
+	}
+	if client, known := ClientNameOf(Snapshot(anc), nil); known || client != "" {
+		t.Fatalf("broken EvalSymlinks became %q %v", client, known)
+	}
+	if calls != 1 {
+		t.Fatalf("broken evalSymlinks called %d times, want 1", calls)
 	}
 }
 
