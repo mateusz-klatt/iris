@@ -304,24 +304,21 @@ func ClientNameOf(s Snapshot, getenv func(string) string) (string, bool) {
 }
 
 // evidenceClient reads the executable and one launcher argument.
-// Grok's versioned binary and Cursor's node launcher are identified here;
-// a bare agent is not a client.
+// Positive executable evidence wins: Grok's versioned binary or an observed .grok
+// executable stays Grok regardless of argv, while Cursor's index.js launcher counts
+// only when the executable is node or unknown. A bare agent is not a client.
 func evidenceClient(s Snapshot) (string, bool) {
-	exe := evidencePath(s)
-	if cursorExecutable(exe) || cursorIndex(s.Launcher) {
-		return "cursor", true
-	}
+	exe := cleanExe(s.Exe)
 	if grokBinary(exe) || (AgentAlias(s.Name) && underDotGrok(exe)) {
 		return "grok", true
 	}
-	return "", false
-}
-
-func evidencePath(s Snapshot) string {
-	if exe := cleanExe(s.Exe); exe != "" {
-		return exe
+	if cursorExecutable(exe) {
+		return "cursor", true
 	}
-	return cleanExe(s.Name)
+	if (exe == "" || baseName(exe) == "node") && cursorIndex(s.Launcher) {
+		return "cursor", true
+	}
+	return "", false
 }
 
 func cleanExe(exe string) string {

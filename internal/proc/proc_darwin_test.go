@@ -59,25 +59,31 @@ func TestLookupNamesAClientFromItsFirstArgument(t *testing.T) {
 	}
 }
 
-func TestFirstArgumentReadsTheProcargsLayout(t *testing.T) {
+func TestProcargsLayoutReadsValidatedArguments(t *testing.T) {
 	for name, tc := range map[string]struct {
-		raw  string
-		exe  string
-		want string
+		raw   string
+		exe   string
+		argv0 string
+		valid bool
 	}{
-		"padded":    {"\x02\x00\x00\x00/path/2.1.319\x00\x00\x00\x00claude\x00--flag\x00", "/path/2.1.319", "claude"},
-		"unpadded":  {"\x01\x00\x00\x00/bin/sh\x00sh\x00", "/bin/sh", "sh"},
-		"no end":    {"\x01\x00\x00\x00/bin/sh\x00sh", "/bin/sh", "sh"},
-		"path only": {"\x00\x00\x00\x00/bin/sh\x00", "/bin/sh", ""},
-		"cut path":  {"\x01\x00\x00\x00/bin", "", ""},
-		"short":     {"\x01\x00", "", ""},
-		"empty":     {"", "", ""},
+		"padded":    {"\x02\x00\x00\x00/path/2.1.319\x00\x00\x00\x00claude\x00--flag\x00", "/path/2.1.319", "claude", true},
+		"unpadded":  {"\x01\x00\x00\x00/bin/sh\x00sh\x00", "/bin/sh", "sh", true},
+		"no end":    {"\x01\x00\x00\x00/bin/sh\x00agent", "/bin/sh", "", false},
+		"argc zero": {"\x00\x00\x00\x00/bin/sh\x00\x00agent\x00", "/bin/sh", "", false},
+		"path only": {"\x00\x00\x00\x00/bin/sh\x00", "/bin/sh", "", false},
+		"cut path":  {"\x01\x00\x00\x00/bin", "", "", false},
+		"short":     {"\x01\x00", "", "", false},
+		"empty":     {"", "", "", false},
 	} {
 		if got := executablePath([]byte(tc.raw)); got != tc.exe {
 			t.Fatalf("%s exe: %q, want %q", name, got, tc.exe)
 		}
-		if got := firstArgument([]byte(tc.raw)); got != tc.want {
-			t.Fatalf("%s: %q, want %q", name, got, tc.want)
+		args, err := procargsArgs([]byte(tc.raw))
+		if tc.valid && (err != nil || len(args) == 0 || args[0] != tc.argv0) {
+			t.Fatalf("%s args: %v %v, want %q", name, args, err, tc.argv0)
+		}
+		if !tc.valid && err == nil {
+			t.Fatalf("%s args: unexpected success %v", name, args)
 		}
 	}
 }
@@ -112,13 +118,23 @@ func TestProcessNamePromotesTheAgentAlias(t *testing.T) {
 	if unknownName != "agent" || unknownExe != "/bin/sleep" {
 		t.Fatalf("unidentified agent: %q %q", unknownName, unknownExe)
 	}
-	// A buffer with a count but no terminated argument still yields the executable.
-	// The missing launcher is not guessed.
-	cut := procargsBuffer("/bin/sh", "sh")
-	cut = cut[:len(cut)-1]
-	kept, keptExe, keptLauncher := identityFromProcargs("sleep", cut)
+	// Unterminated argv[0] or argc == 0 keeps p_comm rather than promoting an unvalidated "agent",
+	// while keeping the executable path when it is independently valid.
+	unterminated := procargsBuffer("/bin/sh", "agent")
+	unterminated = unterminated[:len(unterminated)-1]
+	kept, keptExe, keptLauncher := identityFromProcargs("sleep", unterminated)
 	if kept != "sleep" || keptExe != "/bin/sh" || keptLauncher != "" {
-		t.Fatalf("short argument list: %q %q %q", kept, keptExe, keptLauncher)
+		t.Fatalf("unterminated argv[0]: %q %q %q", kept, keptExe, keptLauncher)
+	}
+	zeroArgc := append([]byte{0, 0, 0, 0}, "/bin/sh\x00\x00agent\x00"...)
+	kept, keptExe, keptLauncher = identityFromProcargs("sleep", zeroArgc)
+	if kept != "sleep" || keptExe != "/bin/sh" || keptLauncher != "" {
+		t.Fatalf("argc zero with agent: %q %q %q", kept, keptExe, keptLauncher)
+	}
+	zeroWithCursorNode := append([]byte{0, 0, 0, 0}, append([]byte(node), "\x00agent\x00"...)...)
+	kept, keptExe, keptLauncher = identityFromProcargs("node", zeroWithCursorNode)
+	if kept != "cursor-agent" || keptExe != node || keptLauncher != "" {
+		t.Fatalf("argc zero with valid cursor exe: %q %q %q", kept, keptExe, keptLauncher)
 	}
 	tree := map[int]Snapshot{
 		10: {PID: 10, PPID: 9, Name: "iris"},

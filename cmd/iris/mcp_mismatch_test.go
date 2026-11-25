@@ -92,6 +92,10 @@ func TestCrossLoadedMCPStaysUpButOnlyAnswersClientMismatch(t *testing.T) {
 			if tc.markers {
 				t.Setenv("CURSOR_PROJECT_DIR", "/scratch/project")
 				t.Setenv("CURSOR_VERSION", "2026.11.22-e9042b2")
+			} else {
+				t.Setenv("CURSOR_PROJECT_DIR", "")
+				t.Setenv("CURSOR_VERSION", "")
+				t.Setenv("CURSOR_CONVERSATION_ID", "")
 			}
 			original := mcpAncestor
 			t.Cleanup(func() { mcpAncestor = original })
@@ -154,6 +158,9 @@ func TestUnidentifiedAgentMCPAssignsNoClient(t *testing.T) {
 	token, requests := mcpWakeTrap(t)
 	t.Setenv("CLAUDE_CODE_SESSION_ID", "inherited-from-an-outer-claude")
 	t.Setenv("IRIS_EXECUTION", "ex_inherited")
+	t.Setenv("CURSOR_PROJECT_DIR", "")
+	t.Setenv("CURSOR_VERSION", "")
+	t.Setenv("CURSOR_CONVERSATION_ID", "")
 	original := mcpAncestor
 	t.Cleanup(func() { mcpAncestor = original })
 	mcpAncestor = func(string) func() (proc.Ancestor, error) {

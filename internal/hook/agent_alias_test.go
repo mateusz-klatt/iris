@@ -41,6 +41,7 @@ func TestUnidentifiedAgentHookAssignsNoClient(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		name, client, event, payload string
+		extra                        map[string]string
 		allow                        Client
 	}{
 		{
@@ -54,6 +55,26 @@ func TestUnidentifiedAgentHookAssignsNoClient(t *testing.T) {
 		{
 			name: "decoded cursor hook", client: "cursor", event: "sessionStart", allow: ClientCursor,
 			payload: `{"session_id":"s1","hook_event_name":"sessionStart","workspace_roots":["/workspace/project"]}`,
+		},
+		{
+			name: "unrelated agent with matching session env", client: "grok", event: "SessionStart", allow: ClientGrok,
+			payload: `{"session_id":"s1","cwd":"` + root + `","hook_event_name":"SessionStart"}`,
+			extra:   map[string]string{"GROK_SESSION_ID": "s1"},
+		},
+		{
+			name: "unrelated agent with antigravity session env", client: "claude", event: "PreToolUse", allow: ClientClaude,
+			payload: editPayload(ClientClaude, root),
+			extra:   map[string]string{"ANTIGRAVITY_CONVERSATION_ID": "s1"},
+		},
+		{
+			name: "unrelated agent with cursor marker pair", client: "cursor", event: "sessionStart", allow: ClientCursor,
+			payload: `{"session_id":"s1","hook_event_name":"sessionStart","workspace_roots":["/workspace/project"]}`,
+			extra:   map[string]string{"CURSOR_PROJECT_DIR": "/project", "CURSOR_VERSION": "2026.11.22"},
+		},
+		{
+			name: "unrelated agent as grok with cursor marker pair", client: "grok", event: "SessionStart", allow: ClientGrok,
+			payload: `{"session_id":"s1","cwd":"` + root + `","hook_event_name":"SessionStart"}`,
+			extra:   map[string]string{"CURSOR_PROJECT_DIR": "/project", "CURSOR_VERSION": "2026.11.22"},
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -70,7 +91,7 @@ func TestUnidentifiedAgentHookAssignsNoClient(t *testing.T) {
 					if key == "CLAUDE_CODE_SESSION_ID" {
 						return "inherited-parent-claude"
 					}
-					return ""
+					return tc.extra[key]
 				},
 				Ancestor: ancestor,
 				Hub:      &countingHub{fn: func() { calls++ }},
@@ -96,8 +117,60 @@ func TestUnidentifiedAgentHookAssignsNoClient(t *testing.T) {
 		},
 		Ancestor: ancestor,
 	}).crossLoad("s1", ClientCursor)
-	if cross || runner != "" {
+	if !cross || runner != "" {
 		t.Fatalf("Cursor markers on an unresolved agent: runner %q cross %v", runner, cross)
+	}
+}
+
+func TestGrokAgentAliasCrossLoadedClaudeHook(t *testing.T) {
+	root := gitRepo(t)
+	for _, tc := range []struct {
+		name string
+		exe  string
+		env  map[string]string
+	}{
+		{
+			name: "versioned grok binary without GROK_SESSION_ID",
+			exe:  "/home/user/.grok/downloads/grok-1.0.92-linux-x86_64",
+		},
+		{
+			name: ".grok symlink exe with inherited cursor markers and no GROK_SESSION_ID",
+			exe:  "/Users/user/.grok/bin/agent",
+			env:  map[string]string{"CURSOR_PROJECT_DIR": "/outer/cursor", "CURSOR_VERSION": "2026.11.22-e9042b2"},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			token := failureEnv(t)("IRIS_TOKEN_FILE")
+			calls := 0
+			out := Runner{
+				ClientName: "claude",
+				EventName:  "PreToolUse",
+				Stdin:      strings.NewReader(editPayload(ClientClaude, root)),
+				Getenv: func(key string) string {
+					if key == "IRIS_TOKEN_FILE" {
+						return token
+					}
+					if key == "CLAUDE_CODE_SESSION_ID" {
+						return "inherited-parent-claude"
+					}
+					return tc.env[key]
+				},
+				Ancestor: func() (proc.Ancestor, error) {
+					return proc.Ancestor{PID: 4242, StartMS: 1700000000000, Name: "agent", Exe: tc.exe}, nil
+				},
+				Hub:      &countingHub{fn: func() { calls++ }},
+				after:    never,
+				logAfter: never,
+			}.Run()
+			assertAllow(t, ClientGrok, out)
+			if calls != 0 {
+				t.Fatalf("cross-loaded grok agent made %d hub calls", calls)
+			}
+			got := observedOnly(t, token)
+			if got.Error != crossLoadText(ClientGrok) {
+				t.Fatalf("%+v", got)
+			}
+		})
 	}
 }
 

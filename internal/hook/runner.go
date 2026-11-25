@@ -652,6 +652,17 @@ var sessionEnv = map[Client]string{
 
 func (r Runner) crossLoad(sessionID string, requested Client) (Client, bool) {
 	getenv := r.Getenv
+	process := r.ancestor()
+	var markerEnv func(string) string
+	if requested == ClientClaude {
+		markerEnv = getenv
+	}
+	ancestor, hasAncestor := proc.ClientNameOf(proc.Snapshot(process), markerEnv)
+	// An agent alias that no executable or marker rule identified stops here before any
+	// session variable can match, so it never borrows another session from the environment.
+	if !hasAncestor && proc.AgentAlias(process.Name) {
+		return "", true
+	}
 	var found []Client
 	if getenv != nil && sessionID != "" {
 		for _, c := range []Client{ClientGrok, ClientCopilot, ClientCursor, ClientAntigravity} {
@@ -668,18 +679,11 @@ func (r Runner) crossLoad(sessionID string, requested Client) (Client, bool) {
 	if len(found) > 0 {
 		return found[0], true
 	}
-	process := r.ancestor()
-	ancestor, hasAncestor := proc.ClientNameOf(proc.Snapshot(process), getenv)
 	if hasAncestor && Client(ancestor) == requested {
 		return "", false
 	}
-	if requested != ClientCursor && hasAncestor && Client(ancestor) == ClientCursor {
-		return ClientCursor, true
-	}
-	// ClientNameOf has already applied Cursor's markers and any executable evidence.
-	// An agent that is still anonymous is a boundary, not a client.
-	if !hasAncestor && proc.AgentAlias(process.Name) {
-		return "", true
+	if hasAncestor && (Client(ancestor) == ClientCursor || Client(ancestor) == ClientGrok) {
+		return Client(ancestor), true
 	}
 	// Cursor 2026.11.22 omits CURSOR_CONVERSATION_ID from cross-loaded Claude hooks. For a Claude
 	// hook the pair counts only with no recognized client ancestor, so a real Claude nested in

@@ -52,8 +52,9 @@ func lookupOS(pid int) (Snapshot, bool) {
 // argv[0] is "-zsh", so anything that is not a client or that alias keeps p_comm.
 func identityFromProcargs(comm string, raw []byte) (name, exe, launcher string) {
 	exe = executablePath(raw)
-	argv0 := firstArgument(raw)
+	argv0 := ""
 	if args, err := procargsArgs(raw); err == nil {
+		argv0 = args[0]
 		launcher = launcherArg(args)
 	}
 	return promotedProcessName(comm, argv0, exe, launcher), exe, launcher
@@ -125,14 +126,6 @@ func executablePath(raw []byte) string {
 		return ""
 	}
 	return exe
-}
-
-// firstArgument reads argv[0] from a kern.procargs2 buffer: a 32-bit argument count, the
-// executable path, NUL padding, then the arguments.
-func firstArgument(raw []byte) string {
-	_, _, rest := cutProcargs(raw)
-	arg, _, _ := bytes.Cut(bytes.TrimLeft(rest, "\x00"), []byte{0})
-	return string(arg)
 }
 
 func cutProcargs(raw []byte) (exe string, complete bool, rest []byte) {

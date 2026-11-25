@@ -184,7 +184,7 @@ func TestCheckClientKeepsNativeAndUnknownAncestorsUsable(t *testing.T) {
 	t.Run("native Grok under its own agent alias binds as grok", func(t *testing.T) {
 		h := &scriptedHub{}
 		env := map[string]string{"GROK_SESSION_ID": "native-grok"}
-		r := resolverFor(t, h, "grok", env, proc.Ancestor{PID: 42, StartMS: 7, Name: "/home/user/.grok/bin/agent"})
+		r := resolverFor(t, h, "grok", env, proc.Ancestor{PID: 42, StartMS: 7, Name: "/home/user/.grok/bin/agent", Exe: "/home/user/.grok/bin/agent"})
 		if r.CheckClient() {
 			t.Fatal("native Grok under its agent alias was refused as another client")
 		}
@@ -202,7 +202,7 @@ func TestCheckClientKeepsNativeAndUnknownAncestorsUsable(t *testing.T) {
 			"CURSOR_PROJECT_DIR": "/outer/cursor/project",
 			"CURSOR_VERSION":     "2026.11.22-e9042b2",
 		}
-		r := resolverFor(t, h, "grok", env, proc.Ancestor{PID: 42, StartMS: 7, Name: "/home/user/.grok/bin/agent"})
+		r := resolverFor(t, h, "grok", env, proc.Ancestor{PID: 42, StartMS: 7, Name: "/home/user/.grok/bin/agent", Exe: "/home/user/.grok/bin/agent"})
 		if r.CheckClient() {
 			t.Fatal("inherited Cursor markers refused native Grok as a cross-loaded Cursor shim")
 		}

@@ -150,8 +150,16 @@ func TestLookupReadsThisProcess(t *testing.T) {
 }
 
 func TestLookupReadsCursorLauncherEvidenceAndLeavesAnUnknownAgent(t *testing.T) {
+	nodeBin := filepath.Join(t.TempDir(), "node")
+	self, err := os.ReadFile(os.Args[0])
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(nodeBin, self, 0o700); err != nil {
+		t.Fatal(err)
+	}
 	index := "/home/user/.local/share/cursor-agent/versions/2026.11.22-e9042b2/index.js"
-	cursor := exec.Command(os.Args[0], "-test.run=^TestProcDeletedExeChild$", "--", "--use-system-ca", index)
+	cursor := exec.Command(nodeBin, "-test.run=^TestProcDeletedExeChild$", "--", "--use-system-ca", index)
 	cursor.Args[0] = "/Users/user/.local/bin/agent"
 	cursor.Env = append(os.Environ(), "IRIS_PROC_DELETED_MODE=sleep")
 	if err := cursor.Start(); err != nil {
@@ -160,6 +168,16 @@ func TestLookupReadsCursorLauncherEvidenceAndLeavesAnUnknownAgent(t *testing.T) 
 	t.Cleanup(func() {
 		_ = cursor.Process.Kill()
 		_ = cursor.Wait()
+	})
+	otherWithIndex := exec.Command(os.Args[0], "-test.run=^TestProcDeletedExeChild$", "--", "--use-system-ca", index)
+	otherWithIndex.Args[0] = "/Users/user/.local/bin/agent"
+	otherWithIndex.Env = append(os.Environ(), "IRIS_PROC_DELETED_MODE=sleep")
+	if err := otherWithIndex.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = otherWithIndex.Process.Kill()
+		_ = otherWithIndex.Wait()
 	})
 	unknown := exec.Command(os.Args[0], "-test.run=^TestProcDeletedExeChild$")
 	unknown.Args[0] = "agent"
@@ -172,27 +190,36 @@ func TestLookupReadsCursorLauncherEvidenceAndLeavesAnUnknownAgent(t *testing.T) 
 		_ = unknown.Wait()
 	})
 	deadline := time.Now().Add(5 * time.Second)
-	var foundCursor, foundUnknown Snapshot
+	var foundCursor, foundOther, foundUnknown Snapshot
 	for {
 		if s, ok := lookupOS(cursor.Process.Pid); ok && s.Launcher == index {
 			foundCursor = s
 		}
+		if s, ok := lookupOS(otherWithIndex.Process.Pid); ok && s.Launcher == index {
+			foundOther = s
+		}
 		if s, ok := lookupOS(unknown.Process.Pid); ok && s.Name == "agent" {
 			foundUnknown = s
 		}
-		if foundCursor.PID != 0 && foundUnknown.PID != 0 {
+		if foundCursor.PID != 0 && foundOther.PID != 0 && foundUnknown.PID != 0 {
 			break
 		}
 		if time.Now().After(deadline) {
-			t.Fatalf("cursor %+v unknown %+v", foundCursor, foundUnknown)
+			t.Fatalf("cursor %+v other %+v unknown %+v", foundCursor, foundOther, foundUnknown)
 		}
 		time.Sleep(time.Millisecond)
 	}
-	if foundCursor.Name != "cursor-agent" || foundCursor.Exe == "" {
+	if foundCursor.Name != "cursor-agent" || foundCursor.Exe != nodeBin {
 		t.Fatalf("cursor launcher %+v", foundCursor)
 	}
 	if client, ok := ClientNameOf(foundCursor, nil); !ok || client != "cursor" {
 		t.Fatalf("cursor client %q %v", client, ok)
+	}
+	if foundOther.Name != "/Users/user/.local/bin/agent" || foundOther.Exe == "" {
+		t.Fatalf("non-node binary with index.js changed name: %+v", foundOther)
+	}
+	if client, ok := ClientNameOf(foundOther, nil); ok {
+		t.Fatalf("non-node binary with index.js became %s", client)
 	}
 	if foundUnknown.Name != "agent" || foundUnknown.Launcher != "" {
 		t.Fatalf("unknown agent %+v", foundUnknown)

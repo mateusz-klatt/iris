@@ -188,8 +188,24 @@ func TestAgentAliasEvidence(t *testing.T) {
 			client: "grok", known: true, visible: "grok", promoted: "grok", comm: "agent",
 		},
 		{
-			name: "grok symlink path under .grok", snap: Snapshot{Name: "/home/user/.grok/bin/agent"},
+			name: "unreadable exe with .grok argv0 stays unidentified", snap: Snapshot{Name: "/home/user/.grok/bin/agent"},
+			visible: "/home/user/.grok/bin/agent", promoted: "agent", comm: "node",
+		},
+		{
+			name: "grok executable beats cursor index.js launcher", snap: Snapshot{Name: "agent", Exe: grokExe, Launcher: cursorIndex},
 			client: "grok", known: true, visible: "grok", promoted: "grok", comm: "node",
+		},
+		{
+			name: "grok .grok exe beats cursor index.js launcher", snap: Snapshot{Name: "agent", Exe: "/Users/user/.grok/bin/agent", Launcher: cursorIndex},
+			client: "grok", known: true, visible: "grok", promoted: "grok", comm: "agent",
+		},
+		{
+			name: "incompatible binary with cursor index.js stays unidentified", snap: Snapshot{Name: "/Users/user/.local/bin/agent", Exe: "/tmp/proc.test", Launcher: cursorIndex},
+			visible: "/Users/user/.local/bin/agent", promoted: "agent", comm: "proc.test",
+		},
+		{
+			name: "unreadable exe with cursor index.js launcher", snap: Snapshot{Name: "agent", Launcher: cursorIndex},
+			client: "cursor", known: true, visible: "cursor-agent", promoted: "cursor-agent", comm: "node",
 		},
 		{
 			name: "windows grok image", snap: Snapshot{Name: windowsGrok, Exe: windowsGrok},
