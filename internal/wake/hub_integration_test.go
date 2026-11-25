@@ -10,16 +10,20 @@ import (
 	"net/http/httptest"
 	"net/url"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/coder/websocket"
 	"github.com/mateusz-klatt/iris/internal/binding"
+	"github.com/mateusz-klatt/iris/internal/hook"
 	"github.com/mateusz-klatt/iris/internal/hub"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
+	"github.com/mateusz-klatt/iris/internal/proc"
 	"github.com/mateusz-klatt/iris/internal/store"
 )
 
@@ -303,5 +307,181 @@ func TestHubSourceRealHubRejectsStaleGenerationAndClosesCanceledReads(t *testing
 		}
 		cancel()
 		conn.Close()
+	}
+}
+
+type blockingWakeCommands struct {
+	entered chan struct{}
+	release chan struct{}
+	ctxErr  atomic.Value
+}
+
+func (c *blockingWakeCommands) check(context.Context, string) (binaryInfo, string, bool) {
+	return binaryInfo{Path: "/usr/bin/codex", Version: "0.167.0", ClientVersion: "0.167.0"}, "", false
+}
+
+func (c *blockingWakeCommands) idle(context.Context, string) (bool, string) {
+	return true, ""
+}
+
+func (c *blockingWakeCommands) queue(ctx context.Context, _, _ string, start func(func() error) (bool, error)) commandAnswer {
+	started, err := start(func() error { return nil })
+	if !started || err != nil {
+		return commandAnswer{answer: "failed", detail: "queue start failed"}
+	}
+	select {
+	case c.entered <- struct{}{}:
+	default:
+	}
+	select {
+	case <-c.release:
+		return commandAnswer{answer: "submitted", started: true}
+	case <-ctx.Done():
+		c.ctxErr.Store(ctx.Err().Error())
+		return commandAnswer{answer: "unknown", detail: "Codex queue command exceeded its bound", started: true}
+	}
+}
+
+// TestWakeRunnerTargetStaysStableAcrossBindAndHeartbeat pins the v0.1.16 release blocker fix:
+// un-opted bind and heartbeat replies return identical v0.1.15 capabilities so wake.Runner's
+// full WakeTarget comparison never sees a spurious mismatch and never cancels an in-flight wake.
+func TestWakeRunnerTargetStaysStableAcrossBindAndHeartbeat(t *testing.T) {
+	f := newIntegrationHub(t)
+
+	// Verify Antigravity Rung-3 LookupWake -> Heartbeat stability as well.
+	const agySession = "11111111-2222-3333-4444-555555555555"
+	agyRes := binding.NewAntigravityWake(f.client, agySession, proc.Ancestor{PID: 551, StartMS: 5501, Name: "agy"})
+	agyRes.Host = "wake-integration-host"
+	if _, err := f.client.RegisterSession(t.Context(), hubclient.SessionRequest{
+		Client: "antigravity", SessionID: agySession, Host: "wake-integration-host", CWD: "/repo/agy",
+		Worktree: "/repo/agy", RemoteURL: "https://example.com/wake-integration.git", RootCommit: "root",
+		Source: "hook", ClientPID: 551, ClientPIDStartMS: 5501, SingleSession: true,
+	}); err != nil {
+		t.Fatal(err)
+	}
+	agyBefore, ok := agyRes.LookupWake(t.Context())
+	if !ok {
+		t.Fatal("expected Antigravity wake target from LookupWake")
+	}
+	if !slices.Equal(agyBefore.Bound.Capabilities.List(), []string{"shell_scope", "file_claims"}) {
+		t.Fatalf("Antigravity bind capabilities=%v, want [shell_scope file_claims]", agyBefore.Bound.Capabilities.List())
+	}
+	if err := agyRes.Heartbeat(t.Context(), "shim"); err != nil {
+		t.Fatal(err)
+	}
+	agyAfter, ok := agyRes.Primary()
+	if !ok || agyAfter != agyBefore {
+		t.Fatalf("Antigravity WakeTarget changed across bind and heartbeat:\nbefore=%+v\nafter =%+v", agyBefore, agyAfter)
+	}
+
+	// Exercise the real Codex wake.Runner + binding.Resolver path with an in-flight queue command.
+	const codexSession = "008521c3-8831-4be9-8895-0ce68ac753c0"
+	cwd := t.TempDir()
+	if _, err := f.client.RegisterSession(t.Context(), hubclient.SessionRequest{
+		Client: "codex", SessionID: codexSession, Host: "wake-integration-host", CWD: cwd,
+		Worktree: cwd, RemoteURL: "https://example.com/wake-integration.git", RootCommit: "root",
+		Source: "hook",
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sender := f.register(t, "wake-stability-sender", "codex", "hook")
+
+	res := &binding.Resolver{
+		Hub:    f.client,
+		Client: "codex",
+		Host:   "wake-integration-host",
+		CWD:    cwd,
+		Getenv: func(string) string { return "" },
+		Grace:  10 * time.Millisecond,
+	}
+	if _, primary, err := res.ResolveCall(t.Context(), "", codexSession, codexSession); err != nil || !primary {
+		t.Fatalf("ResolveCall failed: primary=%t err=%v", primary, err)
+	}
+	targetBefore, ok := res.Primary()
+	if !ok {
+		t.Fatal("expected Codex primary WakeTarget after bind")
+	}
+	if !slices.Equal(targetBefore.Bound.Capabilities.List(), []string{"shell_scope", "file_claims"}) {
+		t.Fatalf("Codex bind capabilities=%v, want [shell_scope file_claims]", targetBefore.Bound.Capabilities.List())
+	}
+
+	tokenFile := filepath.Join(t.TempDir(), "hub.token")
+	sessions := hook.NewSessions(tokenFile)
+	cmds := &blockingWakeCommands{
+		entered: make(chan struct{}, 4),
+		release: make(chan struct{}),
+	}
+	var eligibleCount, unknownObs atomic.Int64
+	runner := newRunner(res, sessions, func() string { return "0.167.0" }, func(obs string) {
+		switch obs {
+		case "wake_root_eligible":
+			eligibleCount.Add(1)
+		case "wake_unknown":
+			unknownObs.Add(1)
+		}
+	}, cmds)
+	runner.targetPoll = 5 * time.Millisecond
+	runner.settle = 5 * time.Millisecond
+	runner.filePoll = 5 * time.Millisecond
+	runner.reconnectBase = 5 * time.Millisecond
+	runner.reconnectMax = 20 * time.Millisecond
+
+	runCtx, cancelRun := context.WithCancel(context.Background())
+	runDone := make(chan struct{})
+	go func() {
+		defer close(runDone)
+		runner.Run(runCtx)
+	}()
+	defer func() {
+		cancelRun()
+		<-runDone
+	}()
+
+	f.send(t, sender, targetBefore, "wake-stability-msg")
+
+	select {
+	case <-cmds.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("timed out waiting for wake queue command to enter")
+	}
+
+	// Heartbeat mid-flight while Runner.Run is polling Primary(); full WakeTarget must not change.
+	if err := res.Heartbeat(t.Context(), "shim"); err != nil {
+		t.Fatal(err)
+	}
+	targetAfter, ok := res.Primary()
+	if !ok || targetAfter != targetBefore {
+		t.Fatalf("Codex WakeTarget changed across bind and heartbeat:\nbefore=%+v\nafter =%+v", targetBefore, targetAfter)
+	}
+	time.Sleep(35 * time.Millisecond)
+	close(cmds.release)
+
+	state := newClientStateStore(sessions, "codex", codexSession)
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		snap, err := state.snapshot()
+		if err == nil && len(snap.Document.Attempts) > 0 {
+			ans := snap.Document.Attempts[0].Answer
+			if ans == "unknown" {
+				t.Fatalf("wake attempt recorded unknown after heartbeat: %+v", snap.Document.Attempts[0])
+			}
+			if ans == "submitted" {
+				break
+			}
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	snap, err := state.snapshot()
+	if err != nil || len(snap.Document.Attempts) != 1 || snap.Document.Attempts[0].Answer != "submitted" {
+		t.Fatalf("unexpected wake attempts after bind+heartbeat: err=%v doc=%+v", err, snap.Document)
+	}
+	if v := cmds.ctxErr.Load(); v != nil {
+		t.Fatalf("in-flight queue context was cancelled: %v", v)
+	}
+	if got := eligibleCount.Load(); got != 1 {
+		t.Fatalf("wake runner restarted across bind and heartbeat: wake_root_eligible=%d, want 1", got)
+	}
+	if got := unknownObs.Load(); got != 0 {
+		t.Fatalf("unexpected wake_unknown observations: %d", got)
 	}
 }

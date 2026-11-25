@@ -18,20 +18,28 @@ type ShellScope struct {
 // maxScopeSubmodules bounds a scope's paths, as maxClaims bounds an Execution's claims.
 const maxScopeSubmodules = 500
 
-// legacyCapabilities is the pre-stage-1b capability set returned on un-opted heartbeats so old
-// clients continue decoding byte-compatible replies (ADR 039).
+// legacyCapabilities is the pre-stage-1b capability set returned on un-opted session, combined
+// shell, bind, and heartbeat replies so old clients continue decoding byte-compatible replies (ADR 039).
 func legacyCapabilities() []string {
 	return []string{"shell_scope", "file_claims"}
 }
 
-// shellCapabilities is what a registration, bind, or opted-in heartbeat answer names: a hook sends
-// a reduced snapshot only to a hub that names shell_scope, and only on the scoped route, which an
-// older hub refuses (ADR 018 decision 3). It sends a grouped touch only to a hub that names
-// file_claims, on the grouped route, which an older hub refuses too (ADR 033). A stage 1b hub
-// also names succession_proof for classified replies and POST /v1/sessions/succeed/exact (ADR 039).
+// shellCapabilities is what an opted-in (succession_proof:true) or POST /v1/sessions/succeed/exact
+// reply names: a hook sends a reduced snapshot only to a hub that names shell_scope, and only on
+// the scoped route, which an older hub refuses (ADR 018 decision 3). It sends a grouped touch
+// only to a hub that names file_claims, on the grouped route, which an older hub refuses too
+// (ADR 033). A stage 1b hub adds succession_proof for classified replies and
+// POST /v1/sessions/succeed/exact only when opted in or on the stage 1b exact route (ADR 039).
 // Each answer gets its own slice.
 func shellCapabilities() []string {
 	return []string{"shell_scope", "file_claims", "succession_proof"}
+}
+
+func capabilities(successionProof bool) []string {
+	if successionProof {
+		return shellCapabilities()
+	}
+	return legacyCapabilities()
 }
 
 // validScope checks a reduced snapshot's scope. The mode is the only one a reduced status runs

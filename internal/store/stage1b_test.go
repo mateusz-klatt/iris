@@ -17,20 +17,28 @@ func readHookSeenMS(t *testing.T, s *Store, id string) int64 {
 	return seen
 }
 
-func assertLegacyHeartbeatReply(t *testing.T, reply map[string]any) {
+func assertLegacyReply(t *testing.T, reply map[string]any, expectHookSeen bool) {
 	t.Helper()
 	caps, ok := reply["capabilities"].([]string)
 	if !ok {
 		t.Fatalf("capabilities type=%T value=%#v, want []string", reply["capabilities"], reply["capabilities"])
 	}
 	if !slices.Equal(caps, []string{"shell_scope", "file_claims"}) {
-		t.Fatalf("un-opted heartbeat capabilities=%v, want legacy [shell_scope file_claims]", caps)
+		t.Fatalf("un-opted capabilities=%v, want legacy [shell_scope file_claims]", caps)
 	}
-	for _, key := range []string{"prior_execution_id", "creation_source", "creation_proof", "hook_seen"} {
+	for _, key := range []string{"prior_execution_id", "creation_source", "creation_proof"} {
 		if _, exists := reply[key]; exists {
-			t.Fatalf("un-opted heartbeat leaked stage 1b key %q: %+v", key, reply)
+			t.Fatalf("un-opted reply leaked stage 1b key %q: %+v", key, reply)
 		}
 	}
+	if _, exists := reply["hook_seen"]; exists != expectHookSeen {
+		t.Fatalf("un-opted reply hook_seen presence=%t want=%t: %+v", exists, expectHookSeen, reply)
+	}
+}
+
+func assertLegacyHeartbeatReply(t *testing.T, reply map[string]any) {
+	t.Helper()
+	assertLegacyReply(t, reply, false)
 }
 
 func assertClassifiedReply(t *testing.T, reply map[string]any, wantPrior, wantSource, wantProof any, wantHookSeen bool) {
@@ -66,22 +74,33 @@ func assertClassifiedReply(t *testing.T, reply map[string]any, wantPrior, wantSo
 func TestStage1bClassifiedRepliesAcrossRoutesAndMigratedRows(t *testing.T) {
 	s, clock, dbPath := testStore(t)
 
-	// 1. Initial hook registration in git repo and outside git.
-	hookReg := call(t, s, "sessions", Request{
+	// 1. Initial hook registration in git repo and outside git: un-opted stays legacy; opted emits classification.
+	hookRegUnopted := call(t, s, "sessions", Request{
 		Client: "claude", Host: "host", SessionID: "S-cls",
 		Cwd: "/repo/w", Worktree: "/repo/w", Branch: "main", Source: "hook",
 		ClientPID: 501, ClientPIDStartMS: 9001,
 	})
+	assertLegacyReply(t, hookRegUnopted, false)
+	hookReg := call(t, s, "sessions", Request{
+		Client: "claude", Host: "host", SessionID: "S-cls",
+		Cwd: "/repo/w", Worktree: "/repo/w", Branch: "main", Source: "hook",
+		ClientPID: 501, ClientPIDStartMS: 9001, SuccessionProof: true,
+	})
 	hookID := hookReg["execution_id"].(string)
 	assertClassifiedReply(t, hookReg, nil, "hook", "initial", true)
 
-	outsideReg := call(t, s, "sessions_outside", Request{
+	outsideRegUnopted := call(t, s, "sessions_outside", Request{
 		Client: "codex", Host: "host", SessionID: "S-out",
 		Cwd: "/tmp/outside", Source: "hook",
 	})
+	assertLegacyReply(t, outsideRegUnopted, false)
+	outsideReg := call(t, s, "sessions_outside", Request{
+		Client: "codex", Host: "host", SessionID: "S-out",
+		Cwd: "/tmp/outside", Source: "hook", SuccessionProof: true,
+	})
 	assertClassifiedReply(t, outsideReg, nil, "hook", "initial", true)
 
-	// 2. All four bind modes carry classified candidate fields.
+	// 2. All four bind modes stay legacy un-opted and carry classified candidate fields when opted in.
 	single := call(t, s, "sessions", Request{
 		Client: "codex", Host: "host", SessionID: "S-comb",
 		Cwd: "/repo/w", Worktree: "/repo/w", Branch: "main", Source: "hook",
@@ -98,7 +117,11 @@ func TestStage1bClassifiedRepliesAcrossRoutesAndMigratedRows(t *testing.T) {
 		{"combined", Request{Client: "codex", Host: "host", SessionID: "S-comb", ClientPID: 601, ClientPIDStartMS: 9601}},
 	} {
 		t.Run("bind/"+tc.name, func(t *testing.T) {
-			b := call(t, s, "bind", tc.req)
+			unopted := call(t, s, "bind", tc.req)
+			assertLegacyReply(t, unopted, true)
+			optedReq := tc.req
+			optedReq.SuccessionProof = true
+			b := call(t, s, "bind", optedReq)
 			assertClassifiedReply(t, b, nil, "hook", "initial", true)
 		})
 	}
@@ -201,6 +224,9 @@ func TestStage1bClassifiedRepliesAcrossRoutesAndMigratedRows(t *testing.T) {
 		{Client: "codex", Host: "host", ClientPID: 701, ClientPIDStartMS: 9701},
 		{Client: "codex", Host: "host", SessionID: "S-leg", ClientPID: 701, ClientPIDStartMS: 9701},
 	} {
+		unopted := call(t, upgraded, "bind", req)
+		assertLegacyReply(t, unopted, true)
+		req.SuccessionProof = true
 		b := call(t, upgraded, "bind", req)
 		assertClassifiedReply(t, b, nil, nil, nil, true)
 	}
@@ -293,7 +319,7 @@ func TestStage1bCompatibilityGuardsAndHookUnlock(t *testing.T) {
 		hookAttach := call(t, s, "sessions", Request{
 			Client: "claude", Host: "host", SessionID: "S-bind",
 			Cwd: "/repo/w", Worktree: "/repo/w", Branch: "main", Source: "hook",
-			ClientPID: 101, ClientPIDStartMS: 1001,
+			ClientPID: 101, ClientPIDStartMS: 1001, SuccessionProof: true,
 		})
 		if hookAttach["execution_id"] != childID || hookAttach["generation"] != int64(2) {
 			t.Fatalf("hook created wrong row: %+v", hookAttach)
@@ -307,6 +333,9 @@ func TestStage1bCompatibilityGuardsAndHookUnlock(t *testing.T) {
 			{Client: "claude", Host: "host", SessionID: "S-bind"},
 			{Client: "claude", Host: "host", ClientPID: 101, ClientPIDStartMS: 1001},
 		} {
+			unopted := call(t, s, "bind", req)
+			assertLegacyReply(t, unopted, true)
+			req.SuccessionProof = true
 			b := call(t, s, "bind", req)
 			assertClassifiedReply(t, b, parentID, "shim", "shim_succession", true)
 		}
@@ -395,6 +424,7 @@ func TestStage1bCompatibilityGuardsAndHookUnlock(t *testing.T) {
 		hookRec := call(t, s, "sessions", Request{
 			Client: "codex", Host: "host", SessionID: "S-rec-g",
 			Cwd: "/repo/w", Worktree: "/repo/w", Branch: "main", Source: "hook", Generation: 2,
+			SuccessionProof: true,
 		})
 		assertClassifiedReply(t, hookRec, parentID, "shim", "shim_succession", true)
 	})
@@ -441,6 +471,7 @@ func TestStage1bCompatibilityGuardsAndHookUnlock(t *testing.T) {
 		// A genuine hook G=0 registration still succeeds at G=3.
 		hookNext := call(t, s, "sessions_outside", Request{
 			Client: "codex", Host: "host", SessionID: "S-prune", Cwd: "/tmp/out", Source: "hook",
+			SuccessionProof: true,
 		})
 		if hookNext["generation"] != int64(3) || hookNext["execution_id"] == childID {
 			t.Fatalf("expected hook G=3 after lost hookless child: %+v", hookNext)
@@ -465,7 +496,7 @@ func TestStage1bCompatibilityGuardsAndHookUnlock(t *testing.T) {
 		if next["generation"] != int64(2) || next["execution_id"] == firstID {
 			t.Fatalf("Choice A altered ordinary v0.1.15 non-hook G=0 behavior: %+v", next)
 		}
-		assertClassifiedReply(t, next, firstID, "mcp", "absent", false)
+		assertLegacyReply(t, next, false)
 	})
 
 	t.Run("standalone touch and execution-addressed reconcile never unlock hookless child", func(t *testing.T) {
@@ -634,7 +665,9 @@ func TestMigratedOrdinaryNullProvenanceTouchAndReconcileSetHookSeen(t *testing.T
 			if after := readHookSeenMS(t, upgraded, tc.id); after == 0 {
 				t.Fatalf("%s failed to set hook_seen_ms on migrated NULL-provenance row", tc.name)
 			}
-			b := call(t, upgraded, "bind", Request{Client: "codex", Host: "host", Execution: tc.id})
+			unoptedBind := call(t, upgraded, "bind", Request{Client: "codex", Host: "host", Execution: tc.id})
+			assertLegacyReply(t, unoptedBind, true)
+			b := call(t, upgraded, "bind", Request{Client: "codex", Host: "host", Execution: tc.id, SuccessionProof: true})
 			assertClassifiedReply(t, b, nil, nil, nil, true)
 		})
 	}

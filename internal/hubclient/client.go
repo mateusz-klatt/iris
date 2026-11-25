@@ -35,6 +35,7 @@ type SessionRequest struct {
 	ClientPIDStartMS int64  `json:"client_pid_start_ms"`
 	SingleSession    bool   `json:"single_session"`
 	Source           string `json:"source"`
+	SuccessionProof  bool   `json:"succession_proof,omitempty"`
 }
 
 // SessionResponse is the registration result.

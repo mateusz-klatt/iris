@@ -250,7 +250,7 @@ func TestTheScopedRouteRegistersAndReconcilesInOneCall(t *testing.T) {
 	register := Request{Client: "codex", Host: "host", Cwd: "/repo/w1", Worktree: "/repo/w1", RemoteURL: "https://example.com/team/project.git", RootCommit: "root", SessionID: "1", Source: "hook"}
 	out := call(t, s, "reconcile_scoped", reduced(register, "before", map[string]string{}, "lib"))
 	answer := out["session"].(map[string]any)
-	if !reflect.DeepEqual(answer["capabilities"], []string{"shell_scope", "file_claims", "succession_proof"}) {
+	if !reflect.DeepEqual(answer["capabilities"], []string{"shell_scope", "file_claims"}) {
 		t.Fatalf("answer: %v", answer)
 	}
 	var seen int64
@@ -260,5 +260,13 @@ func TestTheScopedRouteRegistersAndReconcilesInOneCall(t *testing.T) {
 	var scope string
 	if err := s.db.QueryRow("SELECT scope_json FROM ReducedShellSnapshot WHERE execution_id=?", answer["execution_id"]).Scan(&scope); err != nil || scope != `{"mode":"dirty","submodules":["lib"]}` {
 		t.Fatalf("stored scope %q: %v", scope, err)
+	}
+	opted := register
+	opted.SessionID = "2"
+	opted.Cwd, opted.Worktree = "/repo/w2", "/repo/w2"
+	opted.SuccessionProof = true
+	optedOut := call(t, s, "reconcile_scoped", reduced(opted, "before", map[string]string{}, "lib"))
+	if !reflect.DeepEqual(optedOut["session"].(map[string]any)["capabilities"], []string{"shell_scope", "file_claims", "succession_proof"}) {
+		t.Fatalf("opted answer: %v", optedOut["session"])
 	}
 }

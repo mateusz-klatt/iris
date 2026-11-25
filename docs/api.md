@@ -48,7 +48,7 @@ Registration `source` is exactly `hook`, `mcp`, `shim` or `watch`. An empty or o
 valid as a legacy non-hook source; any other value gets `bad_request`. `retry_generation` and
 `ended_through` must not be negative.
 
-Response:
+Response (without `"succession_proof":true`):
 
 ```json
 {"execution_id":"ex_...","generation":1,"handle":"ex_...","repository_id":"rp_...",
@@ -56,19 +56,26 @@ Response:
  "peers":[{"name":"...","client":"...","state":"active","worktree":"...","branch":"..."}],
  "claims":[{"fence":1,"path":"...","kind":"exact","holder":"...","origin":"auto",
             "expires_at":"..."}],
- "capabilities":["shell_scope","file_claims","succession_proof"],
- "prior_execution_id":null,"creation_source":"hook","creation_proof":"initial","hook_seen":true,
- "unread":0,
+ "capabilities":["shell_scope","file_claims"],"unread":0,
  "attention":{"unread":0,"available":0,"monitored":false,"identity":null,"high_water":17}}
 ```
+
+With `"succession_proof":true` (and on `POST /v1/sessions/succeed/exact`), `capabilities`
+adds `"succession_proof"` (`["shell_scope","file_claims","succession_proof"]`) and the reply
+includes explicit classification metadata (`"prior_execution_id":null,"creation_source":"hook","creation_proof":"initial","hook_seen":true`).
 
 `capabilities` names what this hub accepts beyond the rest of version one. `shell_scope` means
 that it takes reduced shell snapshots on `POST /v1/shell/scoped` (below). `file_claims` means
 that it takes grouped file touches on `POST /v1/claims/touch/files` (below). `succession_proof`
-means that it returns explicit classification metadata (`prior_execution_id`, `creation_source`,
-`creation_proof`, `hook_seen`) and accepts `POST /v1/sessions/succeed/exact` plus
-`succession_proof:true` opt-in on bind and heartbeat (ADR 039). A hook sends reduced shell
-snapshots only to a hub whose last registration answer named `shell_scope`.
+means that the hub accepts `POST /v1/sessions/succeed/exact` and `"succession_proof":true`
+opt-in across `POST /v1/sessions`, `POST /v1/sessions/outside`, combined shell reconcile,
+`POST /v1/bind`, and heartbeat, returning explicit classification metadata (`prior_execution_id`,
+`creation_source`, `creation_proof`, `hook_seen`) and advertising `succession_proof` in
+`capabilities` only when the request sets `"succession_proof":true` or on
+`POST /v1/sessions/succeed/exact` (ADR 039). Un-opted replies keep the v0.1.15 capability set
+`["shell_scope","file_claims"]` and omit the new classification fields so unmodified v0.1.15
+wake targets remain identical across bind and heartbeat. A hook sends reduced shell snapshots
+only to a hub whose last registration answer named `shell_scope`.
 
 `attention` is what is pending for the session. `unread` counts its mail that still needs a wake,
 `available` counts the paths freed for this Execution, and `monitored` says its `iris watch` beat
@@ -196,15 +203,18 @@ the session needs a new generation.
  "client_pid":123,"client_pid_start_ms":1793917887311,"cwd":"..."}
 ```
 
-It returns `{"execution_id":"...","generation":1,"agent":{...},"session_id":"...","capabilities":["shell_scope","file_claims","succession_proof"],"prior_execution_id":null,"creation_source":"hook","creation_proof":"initial","hook_seen":true}`,
-`unbound`, `ambiguous`, or `lost` for an explicit Execution that is unusable. The returned
+Without `"succession_proof":true`, it returns `{"execution_id":"...","generation":1,"agent":{...},"session_id":"...","capabilities":["shell_scope","file_claims"],"hook_seen":true}`
+(byte-compatible with v0.1.15, omitting `prior_execution_id`, `creation_source`, `creation_proof`,
+and `succession_proof`); with `"succession_proof":true`, it returns
+`{"execution_id":"...","generation":1,"agent":{...},"session_id":"...","capabilities":["shell_scope","file_claims","succession_proof"],"prior_execution_id":null,"creation_source":"hook","creation_proof":"initial","hook_seen":true}`,
+or `unbound`, `ambiguous`, or `lost` for an explicit Execution that is unusable. The returned
 `session_id` is the native session registered by the hook; an older hub may omit it, in which case
 Kimi's native wake stays disarmed. Binding only looks up a usable Execution; it does not reattach
 one. A lookup by session id excludes recovering Executions, so Codex id mode without a cached
 binding answers `unbound` during recovery. `hook_seen` says whether any hook has reached the hub
-for that Execution; Codex and Kimi wake require it to be true. `prior_execution_id`,
-`creation_source`, and `creation_proof` are explicit JSON strings or JSON `null` (when absent on
-initial or pre-migration-029 rows).
+for that Execution; Codex and Kimi wake require it to be true. When `"succession_proof":true` is set,
+`prior_execution_id`, `creation_source`, and `creation_proof` are explicit JSON strings or JSON
+`null` (when absent on initial or pre-migration-029 rows).
 
 A matching live hookless shim-succession child (`creation_source:"shim"`,
 `creation_proof:"shim_succession"`, `hook_seen:false`) returns `lost` on `POST /v1/bind` (including
@@ -1015,7 +1025,8 @@ Instead of `execution_id`, a reconcile may carry the session's registration fiel
 the session exactly as `POST /v1/sessions` would, recovery proof included, and reconciles for
 the Execution it gives, in one transaction. A shell hook therefore makes one round trip instead
 of two. The response adds
-`"session":{"execution_id":"ex_...","generation":4,"capabilities":["shell_scope"]}`, whose
+`"session":{"execution_id":"ex_...","generation":4,"capabilities":["shell_scope","file_claims"]}`
+(adding `"succession_proof"` only when the request sets `"succession_proof":true`), whose
 generation the hook remembers as its next proof. A hub from before this form answers it with an
 error, and the hook then registers and reconciles in two calls.
 

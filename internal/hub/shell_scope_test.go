@@ -45,7 +45,7 @@ func TestReducedSnapshotsHaveARouteOfTheirOwn(t *testing.T) {
 	registration := func() map[string]any {
 		return map[string]any{"client": "codex", "session_id": "one", "host": "host", "cwd": "/repo", "worktree": "/repo", "remote_url": "https://example.com/team/project.git", "source": "hook", "kind": "before", "status": map[string]string{}}
 	}
-	capabilities := []any{"shell_scope", "file_claims", "succession_proof"}
+	capabilities := []any{"shell_scope", "file_claims"}
 	if got := post("/v1/sessions", registration(), http.StatusOK)["capabilities"]; !reflect.DeepEqual(got, capabilities) {
 		t.Fatalf("registration answer: %v", got)
 	}
@@ -54,6 +54,21 @@ func TestReducedSnapshotsHaveARouteOfTheirOwn(t *testing.T) {
 	session := post("/v1/shell/scoped", scoped, http.StatusOK)["session"].(map[string]any)
 	if !reflect.DeepEqual(session["capabilities"], capabilities) {
 		t.Fatalf("scoped answer: %v", session)
+	}
+	optedCaps := []any{"shell_scope", "file_claims", "succession_proof"}
+	opted := registration()
+	opted["session_id"] = "two"
+	opted["succession_proof"] = true
+	if got := post("/v1/sessions", opted, http.StatusOK)["capabilities"]; !reflect.DeepEqual(got, optedCaps) {
+		t.Fatalf("opted registration answer: %v", got)
+	}
+	optedScoped := registration()
+	optedScoped["session_id"] = "two"
+	optedScoped["succession_proof"] = true
+	optedScoped["scope"] = map[string]any{"mode": "dirty", "submodules": []string{"lib"}}
+	optedSession := post("/v1/shell/scoped", optedScoped, http.StatusOK)["session"].(map[string]any)
+	if !reflect.DeepEqual(optedSession["capabilities"], optedCaps) {
+		t.Fatalf("opted scoped answer: %v", optedSession)
 	}
 	post("/v1/shell/reconcile", scoped, http.StatusBadRequest)
 	post("/v1/shell/scoped", registration(), http.StatusBadRequest)

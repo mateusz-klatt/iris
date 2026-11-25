@@ -163,7 +163,7 @@ func (s *Store) Call(ctx context.Context, operation string, r Request) (map[stri
 		case "validate":
 			var e execution
 			e, err = t.live(r.ExecutionID, r.Generation)
-			out = bound(e)
+			out = baseBound(e, legacyCapabilities())
 		case "status":
 			counts := map[string]int{}
 			for _, table := range []string{"Agent", "Execution", "Claim", "Message", "Delivery"} {
