@@ -1,6 +1,7 @@
 package hook
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -8,6 +9,8 @@ import (
 	"sync"
 	"testing"
 	"time"
+
+	"github.com/mateusz-klatt/iris/internal/hubclient"
 )
 
 func runBounded(t *testing.T, r Runner) Output {
@@ -25,7 +28,7 @@ func runBounded(t *testing.T, r Runner) Output {
 	}
 }
 
-func TestTouchRetryRefusalDeniesAndObserves(t *testing.T) {
+func TestTouchRetryRefusalDecisionsAndObservations(t *testing.T) {
 	const hubSecret = "SECRET HUB MESSAGE"
 	type wantOutput struct {
 		stdout, stderr string
@@ -121,7 +124,14 @@ func TestTouchRetryRefusalDeniesAndObserves(t *testing.T) {
 						t.Fatalf("touch paths = %v, want [%s]", gotPaths, route.wantPath)
 					}
 
-					want := wantFor(c, tc.wantReason)
+					deny := c == ClientClaude || c == ClientCodex || c == ClientGrok
+					var want wantOutput
+					if deny {
+						want = wantFor(c, tc.wantReason)
+					} else {
+						allow := FallbackAllow(c)
+						want = wantOutput{stdout: string(allow.Stdout), stderr: string(allow.Stderr), exit: allow.Exit}
+					}
 					if out.Exit != want.exit || string(out.Stdout) != want.stdout || string(out.Stderr) != want.stderr {
 						t.Fatalf("got stdout=%q stderr=%q exit=%d; want stdout=%q stderr=%q exit=%d",
 							out.Stdout, out.Stderr, out.Exit, want.stdout, want.stderr, want.exit)
@@ -130,12 +140,27 @@ func TestTouchRetryRefusalDeniesAndObserves(t *testing.T) {
 						t.Fatalf("hub message leaked: stdout=%q stderr=%q", out.Stdout, out.Stderr)
 					}
 
-					obs := observedOnly(t, token)
-					if !obs.Observed() || obs.Degraded() || obs.Error != tc.wantObs || obs.Client != string(c) || obs.Event != "PreToolUse" {
-						t.Fatalf("unexpected observation %+v", obs)
+					if deny {
+						obs := observedOnly(t, token)
+						if !obs.Observed() || obs.Degraded() || obs.Error != tc.wantObs || obs.Client != string(c) || obs.Event != "PreToolUse" {
+							t.Fatalf("unexpected observation %+v", obs)
+						}
+						if strings.Contains(obs.Error, hubSecret) {
+							t.Fatalf("hub message leaked to observation: %+v", obs)
+						}
+						return
 					}
-					if strings.Contains(obs.Error, hubSecret) {
-						t.Fatalf("hub message leaked to observation: %+v", obs)
+					failure := waitForFailure(t, token)
+					if failure.Stage != "touch" || failure.Error != "hub request failed: "+tc.code || strings.Contains(failure.Error, hubSecret) {
+						t.Fatalf("unexpected failure %+v", failure)
+					}
+					observations, err := ReadRecentObservations(token, 10)
+					if err != nil || len(observations) != 1 {
+						t.Fatalf("observations = %+v, err = %v", observations, err)
+					}
+					obs := observations[0]
+					if !obs.Observed() || obs.Degraded() || obs.Error != tc.wantObs || obs.Client != string(c) || obs.Event != "PreToolUse" || strings.Contains(obs.Error, hubSecret) {
+						t.Fatalf("unexpected observation %+v", obs)
 					}
 				})
 			}
@@ -148,12 +173,11 @@ func TestTouchRefusalWithUnverifiedNamespace(t *testing.T) {
 	for _, tc := range []struct {
 		name, code string
 		missing    bool
-		deny       bool
 	}{
 		{name: "key_reused/mismatched", code: "key_reused"},
 		{name: "key_reused/missing", code: "key_reused", missing: true},
-		{name: "lost/mismatched", code: "lost", deny: true},
-		{name: "lost/missing", code: "lost", missing: true, deny: true},
+		{name: "lost/mismatched", code: "lost"},
+		{name: "lost/missing", code: "lost", missing: true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -170,41 +194,59 @@ func TestTouchRefusalWithUnverifiedNamespace(t *testing.T) {
 			}))
 			t.Cleanup(srv.Close)
 
-			payload := editPayload(ClientCursor, gitRepo(t))
+			payload := editPayload(ClientClaude, gitRepo(t))
 			if tc.missing {
-				payload = strings.Replace(payload, `,"conversation_id":"s1"`, "", 1)
+				payload = strings.Replace(payload, `"session_id":"s1"`, `"sessionId":"s1"`, 1)
 			} else {
-				payload = strings.Replace(payload, `"conversation_id":"s1"`, `"conversation_id":"different"`, 1)
+				payload = strings.Replace(payload, `"session_id":"s1"`, `"session_id":"s1","sessionId":"different"`, 1)
 			}
-			r := editRunner(t, ClientCursor, srv.URL)
+			r := editRunner(t, ClientClaude, srv.URL)
 			r.Stdin = strings.NewReader(payload)
 			token := r.Getenv("IRIS_TOKEN_FILE")
 			out := runBounded(t, r)
+			assertAllow(t, ClientClaude, out)
 			if strings.Contains(string(out.Stdout), hubSecret) || strings.Contains(string(out.Stderr), hubSecret) {
 				t.Fatalf("hub message leaked: stdout=%q stderr=%q", out.Stdout, out.Stderr)
 			}
-			if tc.deny {
-				want := Encode(Event{Client: ClientCursor, Kind: KindPreTool}, Decision{Action: ActionDeny, Reason: touchLostRefused})
-				if out.Exit != want.Exit || string(out.Stdout) != string(want.Stdout) || string(out.Stderr) != string(want.Stderr) {
-					t.Fatalf("lost output stdout=%q stderr=%q exit=%d, want %q and exit %d", out.Stdout, out.Stderr, out.Exit, want.Stdout, want.Exit)
-				}
-				obs := observedOnly(t, token)
-				if obs.Error != obsTouchLost || strings.Contains(obs.Error, hubSecret) {
-					t.Fatalf("observation = %+v", obs)
-				}
-				return
-			}
-
-			assertAllow(t, ClientCursor, out)
 			failure := waitForFailure(t, token)
-			if failure.Stage != "touch" || failure.Error != "hub request failed: key_reused" || strings.Contains(failure.Error, hubSecret) {
+			if failure.Stage != "touch" || failure.Error != "hub request failed: "+tc.code || strings.Contains(failure.Error, hubSecret) {
 				t.Fatalf("failure = %+v", failure)
 			}
+			wantObs := obsTouchKeyReused
+			if tc.code == "lost" {
+				wantObs = obsTouchLost
+			}
 			observations, err := ReadRecentObservations(token, 10)
-			if err != nil || len(observations) != 1 || observations[0].Error != obsTouchKeyReused || strings.Contains(observations[0].Error, hubSecret) {
+			if err != nil || len(observations) != 1 || observations[0].Error != wantObs || strings.Contains(observations[0].Error, hubSecret) {
 				t.Fatalf("observations = %+v, err = %v", observations, err)
 			}
 		})
+	}
+}
+
+func TestTouchRefusalUnknownClientFailsOpen(t *testing.T) {
+	const hubSecret = "SECRET HUB MESSAGE"
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		_, _ = fmt.Fprintf(w, `{"error":{"code":%q,"message":%q}}`, strings.TrimPrefix(r.URL.Path, "/"), hubSecret)
+	}))
+	t.Cleanup(srv.Close)
+	client := &hubclient.Client{Config: hubURL(srv.URL)}
+	for _, c := range []Client{Client("future"), Client("")} {
+		if idsUniquePerOccurrence(c) {
+			t.Fatalf("idsUniquePerOccurrence(%q) = true", c)
+		}
+	}
+	for _, tc := range []struct{ code, wantObs string }{
+		{code: "key_reused", wantObs: obsTouchKeyReused},
+		{code: "lost", wantObs: obsTouchLost},
+	} {
+		err := client.Do(context.Background(), http.MethodPost, "/"+tc.code, map[string]any{}, nil)
+		ev := Event{Client: Client("future"), ConversationID: "conversation", NamespaceVerified: true}
+		reason, observation, deny := touchRefusal(ev, err)
+		if deny || reason != "" || observation != tc.wantObs || strings.Contains(observation, hubSecret) {
+			t.Fatalf("touchRefusal(%s) = reason %q observation %q deny %v", tc.code, reason, observation, deny)
+		}
 	}
 }
 

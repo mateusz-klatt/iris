@@ -308,15 +308,19 @@ conflict in any group grants nothing. `granted`, `ignored` and each conflict nam
 The action is the strictest policy among the repositories that had a conflict. A retry with the
 same `tool_call_id` returns the first answer while its grants are still held, as for a plain touch.
 When `POST /v1/claims/touch` or `POST /v1/claims/touch/files` answers HTTP 409 with `error.code`
-`lost` (Execution liveness or generation invalid, or cached grant expired or released), `iris hook`
-denies the edit for every client with a fixed reason and records `pre-edit claim refused (lost)`.
-HTTP 409 `key_reused` (same `tool_call_id`, different request) denies with a fixed reason and the
-observation `pre-edit claim refused (key_reused)` only when the hook has the verified client
-conversation namespace described in D3. A namespace-unverified event keeps its raw key and fails open
-on `key_reused`, because it may be another conversation's legitimate call; the failure and the same
-fixed observation are recorded. No hub message text enters a fixed reason or observation. Other errors
-(including 5xx responses, bare or malformed 409s, 409 `conflict`, transport errors and deadlines, and
-401 `unauthorized`) still fail open.
+`key_reused` (same `tool_call_id`, different request) or `lost` (Execution liveness or generation
+invalid, or cached grant expired or released), `iris hook` denies only when the event has both the
+verified client conversation namespace described in D3 and per-occurrence-unique tool-call IDs.
+That allowlist contains Claude Code, Codex and Grok and defaults to false for every other or future
+client. All other authoritative-refusal cases retain v0.1.14's fail-open and record the failure plus
+the fixed observation `pre-edit claim refused (key_reused)` or `pre-edit claim refused (lost)`.
+Kimi repeats provider IDs after `/undo` or full compaction because its active-history-only deduplication
+cannot see the old occurrence. Antigravity cannot prove `stepIdx` uniqueness within a conversation
+across continuation, rewind or an `executionNum` restart. Denying those clients needs a per-occurrence
+identity (ADR 039 territory). Deliberate denies use fixed reasons, and neither reasons nor observations
+contain hub message text. Registration-stage `lost` is unchanged. Other errors (including 5xx responses,
+bare or malformed 409s, 409 `conflict`, transport errors and deadlines, and 401 `unauthorized`) still
+fail open.
 
 A shell reconcile names the checkout its status was taken in, with `worktree`, `worktree_id`,
 `remote_url` and `root_commit`. A status from a checkout other than the Execution's is not

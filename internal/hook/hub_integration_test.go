@@ -574,3 +574,165 @@ func TestTouchReplayRefusalAgainstRealHub(t *testing.T) {
 		t.Fatalf("fresh conflict changed observations = %+v %v", observations, err)
 	}
 }
+
+func TestRepeatedToolCallIDsFailOpenAgainstRealHub(t *testing.T) {
+	cases := []struct {
+		name           string
+		client         Client
+		fixture, event string
+		idField        string
+		id             any
+		path           string
+	}{
+		{
+			name: "kimi_undo", client: ClientKimi, fixture: "kimi/pre_tool_use_write_denied.json", event: "PreToolUse",
+			idField: "tool_call_id", id: "write_0", path: "deny-me.txt",
+		},
+		{
+			name: "antigravity_repeated_step", client: ClientAntigravity, fixture: "antigravity/pre_tool_use.json", event: "pre_tool_use",
+			idField: "stepIdx", id: 3, path: "test_edit.txt",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			cmd := exec.Command("git", "init", "--initial-branch=main", root)
+			if output, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("git init: %v: %s", err, output)
+			}
+			for _, name := range []string{tc.path, "other.txt"} {
+				if err := os.WriteFile(filepath.Join(root, name), []byte("before\n"), 0600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			capturedRaw, err := os.ReadFile(filepath.Join("testdata", tc.fixture))
+			if err != nil {
+				t.Fatal(err)
+			}
+			captured, err := Decode(tc.client, tc.event, capturedRaw)
+			if err != nil {
+				t.Fatal(err)
+			}
+			payload := func(path string) []byte {
+				var value any
+				if err := json.Unmarshal(capturedRaw, &value); err != nil {
+					t.Fatal(err)
+				}
+				value = rewriteCapturedPaths(value, captured.CWD, filepath.ToSlash(root))
+				value.(map[string]any)[tc.idField] = tc.id
+				if path != "" {
+					value = rewriteCapturedPaths(value, tc.path, path)
+				}
+				raw, err := json.Marshal(value)
+				if err != nil {
+					t.Fatal(err)
+				}
+				return raw
+			}
+			origRaw := payload("")
+			changedRaw := payload("other.txt")
+
+			database, err := store.Open(filepath.Join(t.TempDir(), "hub.db"), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = database.Close() }()
+			server := httptest.NewUnstartedServer(nil)
+			server.Config.Handler = hub.New(database, "secret", []string{server.Listener.Addr().String()})
+			server.Start()
+			defer server.Close()
+			token := tokenFile(t)
+			getenv := func(key string) string {
+				switch key {
+				case "IRIS_TOKEN_FILE":
+					return token
+				case "IRIS_HUB_URL":
+					return server.URL
+				}
+				return ""
+			}
+			client := &hubclient.Client{Config: hubclient.EnvConfig{Getenv: getenv}}
+			runHook := func(raw []byte) Output {
+				return Runner{
+					ClientName: string(tc.client), EventName: tc.event, Stdin: bytes.NewReader(raw),
+					Getenv: getenv, Hub: client, Host: func() string { return "testhost" },
+					Ancestor: func() (proc.Ancestor, error) { return proc.Ancestor{}, nil },
+					after:    never, logAfter: never,
+				}.Run()
+			}
+			assertFailOpen := func(out Output, code, observation string, count int) {
+				t.Helper()
+				want := FallbackAllow(tc.client)
+				if out.Exit != want.Exit || string(out.Stdout) != string(want.Stdout) || string(out.Stderr) != string(want.Stderr) {
+					t.Fatalf("%s output stdout=%q stderr=%q exit=%d, want allow %q", code, out.Stdout, out.Stderr, out.Exit, want.Stdout)
+				}
+				failures, err := ReadRecentFailures(token, 10)
+				if err != nil || len(failures) != count {
+					t.Fatalf("failures after %s = %+v, err = %v", code, failures, err)
+				}
+				failure := failures[len(failures)-1]
+				if failure.Stage != "touch" || failure.Error != "hub request failed: "+code {
+					t.Fatalf("failure after %s = %+v", code, failure)
+				}
+				observations, err := ReadRecentObservations(token, 10)
+				if err != nil || len(observations) != count || observations[len(observations)-1].Error != observation {
+					t.Fatalf("observations after %s = %+v, err = %v", code, observations, err)
+				}
+			}
+
+			out := runHook(origRaw)
+			assertAllow(t, tc.client, out)
+			ctx := context.Background()
+			var bound struct {
+				ExecutionID  string `json:"execution_id"`
+				Generation   int    `json:"generation"`
+				RepositoryID string `json:"repository_id"`
+			}
+			if err := client.Do(ctx, http.MethodPost, "/v1/bind", map[string]any{
+				"client": tc.client, "host": "testhost", "session_id": captured.SessionID,
+			}, &bound); err != nil {
+				t.Fatal(err)
+			}
+			listClaims := func() []struct {
+				Fence  int64  `json:"fence"`
+				Path   string `json:"path"`
+				Origin string `json:"origin"`
+			} {
+				t.Helper()
+				var listed struct {
+					Claims []struct {
+						Fence  int64  `json:"fence"`
+						Path   string `json:"path"`
+						Origin string `json:"origin"`
+					} `json:"claims"`
+				}
+				if err := client.Do(ctx, http.MethodGet, "/v1/claims?repository_id="+url.QueryEscape(bound.RepositoryID), nil, &listed); err != nil {
+					t.Fatal(err)
+				}
+				return listed.Claims
+			}
+			claims := listClaims()
+			if len(claims) != 1 || claims[0].Path != tc.path || claims[0].Origin != "auto" {
+				t.Fatalf("claims after grant = %+v", claims)
+			}
+			grantFence := claims[0].Fence
+
+			out = runHook(changedRaw)
+			assertFailOpen(out, "key_reused", obsTouchKeyReused, 1)
+			if claims := listClaims(); len(claims) != 1 || claims[0].Fence != grantFence || claims[0].Path != tc.path {
+				t.Fatalf("claims after changed path = %+v", claims)
+			}
+
+			if err := client.Do(ctx, http.MethodPost, "/v1/claims/release", map[string]any{
+				"execution_id": bound.ExecutionID, "generation": bound.Generation, "fence": grantFence,
+			}, nil); err != nil {
+				t.Fatal(err)
+			}
+			out = runHook(origRaw)
+			assertFailOpen(out, "lost", obsTouchLost, 2)
+			if claims := listClaims(); len(claims) != 0 {
+				t.Fatalf("claims after released replay = %+v", claims)
+			}
+		})
+	}
+}

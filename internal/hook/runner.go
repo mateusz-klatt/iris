@@ -406,21 +406,42 @@ const (
 	obsTouchLost          = "pre-edit claim refused (lost)"
 )
 
-// touchRefusal recognizes an authoritative HTTP 409 claim refusal without echoing hub text.
-// A verified namespace distinguishes a changed retry from another conversation's raw key; without
-// it key_reused fails open with its observation. Lost denies regardless. Other errors fail open.
+// idsUniquePerOccurrence reports whether a tool-call ID identifies one occurrence even after
+// undo, rewind or compaction. The default is false; conversation namespacing alone cannot prove it.
+//
+// Client      | Unique | Evidence
+// Claude      | true   | Captures pair Pre/PostToolUse toolu_ IDs and use fresh random IDs per call; provider randomness is not an active-history position.
+// Codex       | true   | Captures pair pre/post exec-<uuid> IDs and use a fresh UUID per call; compaction retains session identity, not call IDs.
+// Copilot     | false  | Captures have no call ID; sessionId + millisecond timestamp + payload do not prove that byte-identical distinct occurrences cannot repeat.
+// Cursor      | false  | The fixture's tool_use_id is scrubbed to <SESSION_OR_TOOL_ID>; its shape and reuse across rewind/compaction are unverified.
+// Antigravity | false  | Captures show conversation-local stepIdx; uniqueness across continuation, rewind or executionNum restart is unverified.
+// Grok        | true   | Captures pair pre/post call-<uuid>-n IDs and use fresh UUIDs per provider call, not positions rebuilt from active history.
+// Kimi        | false  | Positional/provider IDs repeat after undo or full compaction; Kimi 2.7.3 deduplicates only against active history.
+func idsUniquePerOccurrence(c Client) bool {
+	switch c {
+	case ClientClaude, ClientCodex, ClientGrok:
+		return true
+	default:
+		return false
+	}
+}
+
+// touchRefusal recognizes an authoritative HTTP 409 claim refusal without echoing hub text. Both
+// key_reused and lost deny only with a verified namespace and occurrence-unique IDs; every other
+// case fails open with the fixed observation. Registration-stage lost handling is separate.
 func touchRefusal(ev Event, err error) (reason, observation string, deny bool) {
 	switch hubclient.ConflictCode(err) {
 	case "key_reused":
-		if !ev.NamespaceVerified || ev.ConversationID == "" {
-			return "", obsTouchKeyReused, false
-		}
-		return touchKeyReusedRefused, obsTouchKeyReused, true
+		reason, observation = touchKeyReusedRefused, obsTouchKeyReused
 	case "lost":
-		return touchLostRefused, obsTouchLost, true
+		reason, observation = touchLostRefused, obsTouchLost
 	default:
 		return "", "", false
 	}
+	if !ev.NamespaceVerified || ev.ConversationID == "" || !idsUniquePerOccurrence(ev.Client) {
+		return "", observation, false
+	}
+	return reason, observation, true
 }
 
 // checkRestoreFloor distinguishes a refused retry from recovery without proof. The latter

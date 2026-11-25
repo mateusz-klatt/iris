@@ -82,15 +82,21 @@ Hard rules for `iris hook`, because failure semantics differ between clients:
 
 1. Everything is caught. A failure of any kind produces that client's valid allow output. A damaged
    local generation file or `.ended` marker closes registration but also returns allow; a confirmed
-   ended generation keeps D9's deliberate pre-tool refusal. An authoritative HTTP 409 `lost` from
-   claim touch (when the Execution or cached grant is no longer current) denies the edit for every
-   client. HTTP 409 `key_reused` (when the same tool call ID carries a different request) denies only
-   with the verified conversation namespace from rule 7. An unverified raw key can belong to another
-   conversation, so that answer keeps fail-open and records the failure plus the fixed observation
-   `pre-edit claim refused (key_reused)`. Deliberate refusals use fixed reasons, and their observations
-   are `pre-edit claim refused (key_reused)` or `pre-edit claim refused (lost)`, never hub text. Network
-   errors, deadlines, 5xx responses, bare or malformed 409s, 409 `conflict`, and 401 `unauthorized`
-   keep fail-open.
+   ended generation keeps D9's deliberate pre-tool refusal. An authoritative HTTP 409 from claim
+   touch denies the edit only when both the conversation namespace from rule 7 is verified and the
+   client mints a per-occurrence-unique tool-call ID, including after undo, rewind and compaction.
+   The allowlist is Claude Code, Codex and Grok; its default is false for every other or future client.
+   Both `key_reused` (same ID, different request) and `lost` (Execution/generation or cached grant no
+   longer current) use this gate. Every unverified or non-unique case keeps v0.1.14's fail-open and
+   records the failure plus `pre-edit claim refused (key_reused)` or `pre-edit claim refused (lost)`.
+   In particular, Kimi can repeat a provider ID after `/undo` or full compaction because its 2.7.3
+   normalizer deduplicates only active history, and Antigravity `stepIdx` reuse within one conversation
+   across continuation, rewind or an `executionNum` restart is unverified. Their cached `lost` can
+   belong to an earlier occurrence just as `key_reused` can. A future deny for them needs a genuine
+   per-occurrence identity (ADR 039 territory), not conversation namespacing alone. Deliberate refusals
+   use fixed reasons and observations, never hub text. Registration-stage `lost` and D9's recovery
+   refusal are unchanged. Network errors, deadlines, 5xx responses, bare or malformed 409s, 409
+   `conflict`, and 401 `unauthorized` keep fail-open.
 2. The exit code is non-zero only for a deliberate deny on a client whose contract requires it.
 3. A 1.5 s internal deadline ends the hook's work, followed by up to 50 ms for best-effort failure
    logging before the allow output is written (about 1.55 s total); the client-side timeout is set
@@ -140,7 +146,9 @@ Hard rules for `iris hook`, because failure semantics differ between clients:
    ID therefore never appears in the retry key (its existing registration use is unchanged). The key
    is stable across retries in one conversation, but differs between conversations even when the hub
    gives them the same idle Agent slot and they reuse a positional or conversation-local call ID.
-   An event without a verified client conversation ID is **namespace unverified** and keeps today's
+   It cannot distinguish two occurrences that reuse one ID within a conversation; rule 1 therefore
+   also requires per-occurrence uniqueness before denying. An event without a verified client
+   conversation ID is **namespace unverified** and keeps today's
    raw key, including the `payload:` fallback when that applies.
 
    The canonical event's `ConversationID` is this client-owned identity, never an Iris Agent or
