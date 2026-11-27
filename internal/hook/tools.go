@@ -44,6 +44,19 @@ func classifyTool(client Client, name string, mcp bool) (ToolClass, bool) {
 			return ClassOther, false
 		}
 	}
+	if client == ClientGrok {
+		switch low {
+		case "read_file", "list_dir":
+			return ClassRead, false
+		case "search_tool":
+			return ClassOther, false
+		}
+		// Grok uses server__tool for MCP dispatch, as shown by iris__send in
+		// testdata/grok/PostToolUse-iris__send.json and the catalog in PostToolUse-search_tool.json.
+		if server, tool, ok := strings.Cut(low, "__"); ok && server != "" && tool != "" {
+			return ClassMCP, false
+		}
+	}
 	switch low {
 	case "write", "edit", "multiedit", "notebookedit", "apply_patch", "write_file", "edit_file",
 		"search_replace", "hashline_edit", "delete", "delete_file", "move_file", "strreplace", "str_replace":
@@ -106,6 +119,9 @@ func applyTool(ev *Event, name string, raw json.RawMessage, mcp bool) {
 		return
 	}
 	ev.Paths, ev.RenameFrom, ev.RenameTo = pathsFromMap(name, m)
+	if ev.Client == ClientGrok && ev.ToolClass == ClassRead && strings.EqualFold(name, "list_dir") {
+		ev.Paths = dedupe(append(ev.Paths, mapString(m, "target_directory")))
+	}
 }
 
 func parseRaw(raw json.RawMessage) (map[string]any, string, bool) {

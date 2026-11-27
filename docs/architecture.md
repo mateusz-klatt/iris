@@ -1651,6 +1651,17 @@ was measured, the tool was unknown to Iris, so its writes went unreconciled and 
   tools; all were recorded on 2026-11-25. FetchURL's saved `output_path` appears in `tool_output`, not its input arguments,
   and is not treated as an edit path. These aliases apply only to their capturing client: a
   same-named tool from another client remains unknown and observed.
+- Grok 1.0.92 captures on macOS back these hook classifications.
+
+  | Tool | Class | Capture evidence |
+  |---|---|---|
+  | `read_file` | Read | Path in `target_file` |
+  | `list_dir` | Read | Path in `target_directory` |
+  | `search_tool` | Other | Returns MCP tool schemas |
+  | `<server>__<tool>` | MCP dispatch | `iris__send` names server `iris` and tool `send` |
+
+  These rules apply only to Grok. Both parts of an MCP dispatch name must be nonempty. The hook
+  allows these pre- and post-tool events without contacting the hub or observing an unknown tool.
 - Claude Code's Monitor is reconciled like a shell, but its PostToolUse arrives at launch:
   measured on 2.1.319, 590 ms after the call, carrying only the task id, while the command ran
   on. A file its command writes later is not reconciled or claimed, and the same holds for Bash
