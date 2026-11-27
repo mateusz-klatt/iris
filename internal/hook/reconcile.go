@@ -100,7 +100,10 @@ func (r Runner) reconcile(ctx context.Context, ev Event, state *runState) Output
 		}
 		defer close(recorded)
 		r.settlingAt(true)
-		if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		if mstage, merr := state.mandatoryStatus(context.DeadlineExceeded); merr != nil {
+			state.at(mstage)
+			err = merr
+		} else if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 			err = hookFailure(shellOverBudget)
 		}
 		return state.fail(err, out)
@@ -182,7 +185,12 @@ func (r Runner) reconcile(ctx context.Context, ev Event, state *runState) Output
 		// return path does not wait for git to exit, so the hook keeps its deadline unless a start
 		// stalls.
 		git.Stop()
-		out = settle(hookFailure(shellOverBudget), allow)
+		var timeoutErr error = hookFailure(shellOverBudget)
+		if mstage, merr := state.mandatoryStatus(context.DeadlineExceeded); merr != nil {
+			state.at(mstage)
+			timeoutErr = merr
+		}
+		out = settle(timeoutErr, allow)
 	}
 	r.tripIfSlow(parent, ctx, budget, state, run)
 	return out
@@ -219,6 +227,7 @@ func shellPhase(ev Event) string {
 func (r Runner) shellFull(ctx context.Context, hub shellHub, ev Event, repo gitinfo.Repo, state *runState, run *shellRun, phase string) (out hubclient.CheckResponse, fromGit bool, err error) {
 	run.setFull()
 	var taken map[string]string
+	attempt := r.newRegistrationAttempt(ctx, state, ev, "shell session")
 	if combined, ok := hub.(sessionShellHub); ok {
 		state.at("shell status")
 		if taken, err = r.status(ctx, repo.Worktree, gitinfo.FullScope, &run.attempt); err != nil {
@@ -226,15 +235,15 @@ func (r Runner) shellFull(ctx context.Context, hub shellHub, ev Event, repo giti
 		}
 		r.fullSucceeded(state, repo)
 		state.at("shell session")
-		out, err = r.reconcileSession(ctx, state, combined, ev, repo, phase, taken)
+		out, err = r.reconcileSessionWithAttempt(ctx, state, combined, ev, repo, phase, taken, attempt)
 		// A lost answer may also be an older hub's to a request with no Execution, so the
-		// separate calls decide; they handle a real loss as an edit does.
-		if err == nil || (!hubclient.IsCode(err, "lost") && !hubclient.IsCode(err, "bad_request") && !hubclient.IsCode(err, "not_found")) {
+		// separate calls decide; they handle a real loss as an edit does. A local veto never falls back.
+		if err == nil || attempt.vetoed || (!hubclient.IsCode(err, "lost") && !hubclient.IsCode(err, "bad_request") && !hubclient.IsCode(err, "not_found")) {
 			return out, false, err
 		}
 	}
 	state.at("shell session")
-	sess, err := r.register(ctx, state, ev, repo)
+	sess, _, err := r.registerWithAttempt(ctx, state, ev, repo, "shell session", attempt)
 	if err != nil {
 		return out, false, err
 	}
@@ -245,11 +254,17 @@ func (r Runner) shellFull(ctx context.Context, hub shellHub, ev Event, repo giti
 		}
 		r.fullSucceeded(state, repo)
 	}
-	state.at("shell reconcile")
-	if err = checkEndedRegistration(state, ev, r.memory(), 0, sess.Generation, false, nil); err != nil {
-		return out, false, err
+	if ok, admitErr := r.finalAdmitAndPublish(ctx, attempt); !ok {
+		return out, false, admitErr
 	}
+	r.learnScope(sess.Capabilities)
+	state.at("shell reconcile")
 	out, err = hub.Reconcile(ctx, reconcileRequest(sess.ExecutionID, sess.Generation, phase, taken, repo))
+	if err == nil {
+		if err = checkEndedRegistration(state, ev, r.memory(), attempt.endedFloor, sess.Generation, false, nil); err != nil {
+			return out, false, err
+		}
+	}
 	return out, false, err
 }
 
@@ -257,34 +272,45 @@ func (r Runner) shellFull(ctx context.Context, hub shellHub, ev Event, repo giti
 // the session's next proof, as a registration's is, and so is whether the hub takes reduced
 // snapshots.
 func (r Runner) reconcileSession(ctx context.Context, state *runState, hub sessionShellHub, ev Event, repo gitinfo.Repo, phase string, snapshot map[string]string) (hubclient.CheckResponse, error) {
+	return r.reconcileSessionWithAttempt(ctx, state, hub, ev, repo, phase, snapshot, nil)
+}
+
+func (r Runner) reconcileSessionWithAttempt(ctx context.Context, state *runState, hub sessionShellHub, ev Event, repo gitinfo.Repo, phase string, snapshot map[string]string, attempt *registrationAttempt) (hubclient.CheckResponse, error) {
+	if attempt == nil {
+		attempt = r.newRegistrationAttempt(ctx, state, ev, "shell session")
+	}
 	req := hubclient.ShellSessionRequest{SessionRequest: r.sessionReq(ev, repo), Kind: phase, Status: snapshot}
-	m := r.memory()
-	generation, endedThrough, err := registrationProof(state, ev, m, 0)
+	req.SuccessionProof = attempt.successionEnabled
+	generation, endedThrough, err := attempt.preInspect(ctx, 0)
 	if err != nil {
 		return hubclient.CheckResponse{}, err
 	}
+	attempt.sentGen = generation
 	req.Generation = generation
 	req.EndedThrough = endedThrough
+	if req.Generation <= endedThrough {
+		req.Generation = 0
+	}
 	if req.Generation == 0 {
-		req.RetryGeneration = endedThrough
+		req.RetryGeneration = max(attempt.genFloor, endedThrough)
 	}
 	res, err := hub.ReconcileSession(ctx, req)
-	err = checkEndedRegistration(state, ev, m, endedThrough, res.Session.Generation, req.Generation == 0, err)
-	r.answered(ctx, m, ev, res, err)
-	return res.CheckResponse, checkRestoreFloor(state, ev, m, req.Generation, err)
+	_, err = attempt.admitReply(ctx, res.Session, err, req.Generation == 0, false)
+	if !attempt.vetoed {
+		err = checkRestoreFloor(state, ev, attempt.mem, req.Generation, err)
+	}
+	if err != nil {
+		return hubclient.CheckResponse{}, err
+	}
+	if ok, admitErr := r.finalAdmitAndPublish(ctx, attempt); !ok {
+		return hubclient.CheckResponse{}, admitErr
+	}
+	r.answered(ctx, ev, res)
+	return res.CheckResponse, nil
 }
 
-// answered keeps what a one-call answer says: the session's next proof, and whether the hub
-// takes reduced snapshots.
-func (r Runner) answered(ctx context.Context, m Memory, ev Event, res hubclient.ShellResponse, err error) {
-	if err != nil {
-		return
-	}
-	if m != nil && res.Session.Generation > 0 {
-		deadline, _ := ctx.Deadline()
-		// M2b keeps session_succession OFF in hooks: only lock wait is capped by deadline.
-		rememberWithDeadline(m, string(ev.Client), ev.SessionID, res.Session.Generation, deadline)
-	}
+// answered keeps what a one-call answer says: whether the hub takes reduced snapshots.
+func (r Runner) answered(_ context.Context, _ Event, res hubclient.ShellResponse) {
 	r.learnScope(res.Session.Capabilities)
 }
 
