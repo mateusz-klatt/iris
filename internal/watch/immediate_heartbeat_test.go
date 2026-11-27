@@ -547,7 +547,12 @@ func TestWatchHeartbeatsImmediatelyOnResetAndNeverRevivesTerminal(t *testing.T) 
 		assertWatchHeartbeatBeforeBind(t, h.recorded(), ex2ID)
 		stop()
 		if !exited {
-			runErr = <-done
+			// runCtx has no deadline of its own, so a Runner that ignores stop fails here by name.
+			select {
+			case runErr = <-done:
+			case <-time.After(30 * time.Second):
+				t.Fatal("watch did not return within 30s of stop")
+			}
 		}
 		if runErr != ErrLost {
 			t.Fatalf("expected ErrLost, got %v", runErr)
