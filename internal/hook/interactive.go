@@ -297,19 +297,29 @@ func kimiShorts(group string, args []string, i int) (clientMode, int) {
 // --output-format value is an error. -- ends the options. A positional word that is not a
 // subcommand is a prompt, so the session stays one that is interactive only on a terminal.
 //
-// The running process is not that parser's argv. A live WSL session's cmdline was
-// `cursor-agent --use-system-ca <version>/index.js --resume`. The CLI rejects --use-system-ca,
-// and --use-system-ca --help exits 0 because the wrapper accepts it. The grammar therefore
-// treats --use-system-ca as a boolean. A positional path is not a subcommand.
+// The process argv includes Node launcher flags before the CLI arguments. A live 2026.11.13
+// WSL session had `--use-system-ca <version>/index.js --resume`. The 2026.11.22 sh launcher
+// can also prefix `--disable-sigusr1`, as captured on macOS. Both flags belong to Node and
+// are recognized only before the versioned launcher script.
 var (
-	cursorBools    = set("use-system-ca", "stream-partial-output", "plan", "force", "yolo", "auto-review", "approve-mcps", "trust", "list-models", "skip-worktree-setup", "help", "version", "continue")
+	cursorBools    = set("stream-partial-output", "plan", "force", "yolo", "auto-review", "approve-mcps", "trust", "list-models", "skip-worktree-setup", "help", "version", "continue")
 	cursorValues   = set("api-key", "header", "endpoint", "output-format", "mode", "model", "sandbox", "workspace", "add-dir", "plugin-dir", "worktree-base")
 	cursorOptional = set("resume", "worktree")
 	cursorCommands = set("persist", "install-shell-integration", "uninstall-shell-integration", "login", "logout", "mcp", "plugin", "worker", "status", "whoami", "models", "team", "bedrock", "about", "update", "create-chat", "generate-rule", "rule", "agent", "ls", "resume", "help")
 )
 
 func cursorMode(args []string) clientMode {
-	for i := 1; i < len(args); i++ {
+	i := 1
+	for i < len(args) && (args[i] == "--disable-sigusr1" || args[i] == "--use-system-ca") {
+		i++
+	}
+	if i > 1 {
+		if i == len(args) || !cursorLauncherScript(args[i]) {
+			return modeUnknown
+		}
+		i++
+	}
+	for ; i < len(args); i++ {
 		a := args[i]
 		switch {
 		case a == "--":
@@ -348,6 +358,18 @@ func cursorMode(args []string) clientMode {
 		}
 	}
 	return modeInput
+}
+
+// The launchers use versions/<version>/index.js. Check those path components so a bare
+// index.js prompt or another option ending in that path cannot validate a Node prefix.
+func cursorLauncherScript(arg string) bool {
+	parts := strings.Split(strings.ReplaceAll(arg, `\`, "/"), "/")
+	n := len(parts)
+	if n < 3 || strings.HasPrefix(arg, "-") || parts[n-3] != "versions" || parts[n-1] != "index.js" {
+		return false
+	}
+	version := parts[n-2]
+	return version != "" && version != "." && version != ".."
 }
 
 func cursorShorts(group string, args []string, i int) (clientMode, int) {

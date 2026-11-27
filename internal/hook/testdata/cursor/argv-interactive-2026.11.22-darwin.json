@@ -1,0 +1,8 @@
+[
+  "/Users/user/.local/bin/cursor-agent",
+  "--disable-sigusr1",
+  "--use-system-ca",
+  "/Users/user/.local/share/cursor-agent/versions/2026.11.22-e9042b2/index.js",
+  "--trust",
+  "Reply with exactly the word PING and nothing else. Do not use tools."
+]

@@ -108,3 +108,6 @@ macOS and Windows are on by default without a live check of their own. The follo
 Cursor's own `stop` output, with no delivery path that differs by system. The interactive check
 the systems share fails closed: arguments that cannot be read or that Iris does not know give no
 follow-up. Whether the follow-up works on macOS and Windows is not measured.
+
+The 2026.11.22 sh launcher adds `--disable-sigusr1` by default, which prevented Iris from
+arming the Stop follow-up for those macOS sessions before this fix ([#467](https://github.com/mateusz-klatt/iris/issues/467)).
