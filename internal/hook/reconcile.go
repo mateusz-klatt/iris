@@ -261,7 +261,7 @@ func (r Runner) shellFull(ctx context.Context, hub shellHub, ev Event, repo giti
 	state.at("shell reconcile")
 	out, err = hub.Reconcile(ctx, reconcileRequest(sess.ExecutionID, sess.Generation, phase, taken, repo))
 	if err == nil {
-		if err = checkEndedRegistration(state, ev, r.memory(), attempt.endedFloor, sess.Generation, false, nil); err != nil {
+		if err = checkEndedRegistration(state, ev, r.memory(), attempt.endedFloor, sess.Generation); err != nil {
 			return out, false, err
 		}
 	}

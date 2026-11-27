@@ -183,11 +183,7 @@ func (m fileMemory) Remember(client, session string, generation int) {
 	m.rememberWithSuccession(client, session, generation, time.Time{}, false)
 }
 
-func rememberWithDeadline(m Memory, client, session string, generation int, deadline time.Time) {
-	if fm, ok := m.(fileMemory); ok {
-		fm.rememberWithSuccession(client, session, generation, deadline, false)
-		return
-	}
+func rememberWithDeadline(m Memory, client, session string, generation int, _ time.Time) {
 	m.Remember(client, session, generation)
 }
 

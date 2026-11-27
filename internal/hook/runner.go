@@ -484,10 +484,10 @@ func refuseRestoreFloor(state *runState, ev Event, m Memory, generation int, not
 	return errRestoreFloor
 }
 
-func checkEndedRegistration(state *runState, ev Event, m Memory, sentEndedThrough, generation int, proofless bool, err error) error {
+func checkEndedRegistration(state *runState, ev Event, m Memory, sentEndedThrough, generation int) error {
 	files, ok := m.(fileMemory)
 	if !ok {
-		return err
+		return nil
 	}
 	marker := endedMarkerPath(files.name(string(ev.Client), ev.SessionID))
 	ended, expired, rerr := files.readEndMarker(marker)
@@ -499,13 +499,11 @@ func checkEndedRegistration(state *runState, ev Event, m Memory, sentEndedThroug
 		ended = 0
 	}
 	ended = max(ended, sentEndedThrough)
-	var hubErr *hubclient.Error
-	strictFloorRefusal := proofless && sentEndedThrough > 0 && errors.As(err, &hubErr) && hubErr.Code == "lost" && hubErr.IsEndedThroughRefusal(sentEndedThrough)
-	if ended > 0 && (err == nil && generation <= ended || strictFloorRefusal) {
+	if ended > 0 && generation <= ended {
 		state.observe(endedProof(marker).Error())
 		return errEndedGeneration
 	}
-	return err
+	return nil
 }
 
 // register attaches a hook to its Execution, validates admission, and publishes local evidence.

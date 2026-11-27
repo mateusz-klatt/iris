@@ -316,7 +316,7 @@ func (r Runner) shellReduced(ctx context.Context, hub scopedShellHub, plain shel
 			state.at("shell reconcile")
 			out, err = plain.Reconcile(ctx, reconcileRequest(s.ExecutionID, s.Generation, phase, taken, repo))
 			if err == nil {
-				if err = checkEndedRegistration(state, ev, r.memory(), attempt.endedFloor, s.Generation, false, nil); err != nil {
+				if err = checkEndedRegistration(state, ev, r.memory(), attempt.endedFloor, s.Generation); err != nil {
 					return out, false, err
 				}
 			}
@@ -354,7 +354,7 @@ func (r Runner) shellReduced(ctx context.Context, hub scopedShellHub, plain shel
 		state.at("shell reconcile")
 		out, err = hub.ReconcileScoped(ctx, hubclient.ScopedRequest{ReconcileRequest: reconcileRequest(sess.ExecutionID, sess.Generation, phase, taken, repo), Scope: scope})
 		if err == nil {
-			if err = checkEndedRegistration(state, ev, r.memory(), attempt.endedFloor, sess.Generation, false, nil); err != nil {
+			if err = checkEndedRegistration(state, ev, r.memory(), attempt.endedFloor, sess.Generation); err != nil {
 				return out, false, err
 			}
 		}

@@ -35,15 +35,14 @@ type registrationAttempt struct {
 	stage             string
 	successionEnabled bool
 
-	cleanedExpired   bool
-	hadDamagedBefore bool
-	confirmedEnd     bool
-	damaged          bool
-	vetoed           bool
-	retryUsed        bool
-	genFloor         int
-	endedFloor       int
-	sentGen          int
+	cleanedExpired bool
+	confirmedEnd   bool
+	damaged        bool
+	vetoed         bool
+	retryUsed      bool
+	genFloor       int
+	endedFloor     int
+	sentGen        int
 
 	admitted       bool
 	published      bool
@@ -91,18 +90,6 @@ func (a *registrationAttempt) damagedProofPath(snap sessionproof.Snapshot, prefi
 		return prefix
 	}
 	return ""
-}
-
-func readEndMarkerAndCleanOFF(files fileMemory, prefix, endedPath string, deadline time.Time) (ended int, damaged, confirmed bool) {
-	val, expired, err := files.readEndMarker(endedPath)
-	if err != nil {
-		return 0, true, false
-	}
-	if expired {
-		_, _ = files.cleanupExpiredEnd(prefix, val, deadline, false)
-		return 0, false, false
-	}
-	return val, false, val > 0
 }
 
 func (a *registrationAttempt) preInspect(ctx context.Context, retained int) (generation, endedThrough int, err error) {
@@ -192,25 +179,20 @@ func (a *registrationAttempt) preInspectOFF(ctx context.Context, retained int) (
 	cleanExpired := !a.cleanedExpired
 	a.cleanedExpired = true
 
-	var endDamaged bool
-	var confirmed bool
-	if cleanExpired {
-		endedThrough, endDamaged, confirmed = readEndMarkerAndCleanOFF(a.files, prefix, endedPath, lockDeadlineFromCtx(ctx))
-	} else {
-		val, expired, rerr := a.files.readEndMarker(endedPath)
-		if rerr != nil {
-			endDamaged = true
-		} else if !expired && val > 0 {
-			endedThrough, confirmed = val, true
-		}
-	}
-	if endDamaged {
+	endedThrough, expired, endErr := a.files.readEndMarker(endedPath)
+	if endErr != nil {
 		a.state.observe(damagedGenerationObservation(endedPath))
 		a.damaged = true
 		a.recordLocalVeto()
 		return 0, 0, errDamagedEndMarker
 	}
-	if confirmed {
+	if expired {
+		if cleanExpired {
+			_, _ = a.files.cleanupExpiredEnd(prefix, endedThrough, lockDeadlineFromCtx(ctx), false)
+		}
+		endedThrough = 0
+	}
+	if endedThrough > 0 {
 		a.endedFloor = max(a.endedFloor, endedThrough)
 		a.confirmedEnd = true
 	}
@@ -246,7 +228,6 @@ func (a *registrationAttempt) preInspectOFF(ctx context.Context, retained int) (
 		note := RestoreFloorRefused
 		if errors.Is(err, ErrInvalidGeneration) {
 			note = damagedGenerationObservation(prefix)
-			a.hadDamagedBefore = true
 		}
 		if retained > 0 {
 			a.recordLocalVeto()
@@ -259,7 +240,7 @@ func (a *registrationAttempt) preInspectOFF(ctx context.Context, retained int) (
 	return max(retained, generation), a.endedFloor, nil
 }
 
-func (a *registrationAttempt) recheckEndedOnHubError(ctx context.Context, generation int, proofless bool, err error) error {
+func (a *registrationAttempt) recheckEndedOnHubError(ctx context.Context, proofless bool, err error) error {
 	if !a.hasFiles {
 		return err
 	}
@@ -278,8 +259,7 @@ func (a *registrationAttempt) recheckEndedOnHubError(ctx context.Context, genera
 			a.confirmedEnd = true
 		}
 		var hubErr *hubclient.Error
-		strictFloorRefusal := proofless && a.endedFloor > 0 && errors.As(err, &hubErr) && hubErr.Code == "lost" && hubErr.IsEndedThroughRefusal(a.endedFloor)
-		if a.endedFloor > 0 && (err == nil && generation <= a.endedFloor || strictFloorRefusal) {
+		if proofless && a.endedFloor > 0 && errors.As(err, &hubErr) && hubErr.Code == "lost" && hubErr.IsEndedThroughRefusal(a.endedFloor) {
 			a.state.observe(endedProof(endedPath).Error())
 			a.recordLocalVeto()
 			return errEndedGeneration
@@ -326,8 +306,7 @@ func (a *registrationAttempt) recheckEndedOnHubError(ctx context.Context, genera
 	}
 
 	var hubErr *hubclient.Error
-	strictFloorRefusal := proofless && a.endedFloor > 0 && errors.As(err, &hubErr) && hubErr.Code == "lost" && hubErr.IsEndedThroughRefusal(a.endedFloor)
-	if strictFloorRefusal || (a.endedFloor > 0 && err == nil && generation <= a.endedFloor) {
+	if proofless && a.endedFloor > 0 && errors.As(err, &hubErr) && hubErr.Code == "lost" && hubErr.IsEndedThroughRefusal(a.endedFloor) {
 		a.state.observe(endedProof(endedPath).Error())
 		a.recordLocalVeto()
 		return errEndedGeneration
@@ -339,7 +318,7 @@ func (a *registrationAttempt) recheckEndedOnHubError(ctx context.Context, genera
 // and monotonic invocation floors without writing any local evidence files.
 func (a *registrationAttempt) admitReply(ctx context.Context, sess hubclient.SessionResponse, err error, proofless, allowRetry bool) (retry bool, outErr error) {
 	if err != nil {
-		checkedErr := a.recheckEndedOnHubError(ctx, sess.Generation, proofless, err)
+		checkedErr := a.recheckEndedOnHubError(ctx, proofless, err)
 		if allowRetry && !a.vetoed && !a.retryUsed && hubclient.IsCode(checkedErr, "lost") && a.sentGen > 0 && a.ev.Kind != KindSessionEnd {
 			return true, checkedErr
 		}
@@ -412,7 +391,7 @@ func (r Runner) finalAdmitAndPublish(ctx context.Context, a *registrationAttempt
 	}
 	callerDeadline := lockDeadlineFromCtx(ctx)
 	if !a.hasFiles {
-		rememberWithDeadline(a.mem, a.client, a.session, a.admittedGen, callerDeadline)
+		a.mem.Remember(a.client, a.session, a.admittedGen)
 		a.published = true
 		return true, nil
 	}
@@ -453,11 +432,9 @@ func (a *registrationAttempt) finalInspectOFF(callerDeadline time.Time) error {
 			a.state.failMandatory(errDamagedAfterEnd)
 			return errDamagedAfterEnd
 		}
-		if !a.hadDamagedBefore {
-			a.damaged = true
-			a.recordLocalVeto()
-			return refuseRestoreFloor(a.state, a.ev, a.mem, 0, damagedGenerationObservation(prefix))
-		}
+		a.damaged = true
+		a.recordLocalVeto()
+		return refuseRestoreFloor(a.state, a.ev, a.mem, 0, damagedGenerationObservation(prefix))
 	}
 	if a.endedFloor > 0 && a.admittedGen <= a.endedFloor {
 		a.state.observe(endedProof(endedPath).Error())

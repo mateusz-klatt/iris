@@ -532,29 +532,50 @@ func TestFreshRegistrationLockContentionWatchdogAndSettleON(t *testing.T) {
 		root := gitRepo(t)
 		getenv := failureEnv(t)
 		m := sessionsFor(getenv)
-		// Hold lock without calling lock inside test? Hold lock longer than watchdog channel.
+
+		now := time.Now()
+		var clock atomic.Int64
+		clock.Store(now.UnixNano())
+		var once sync.Once
+		entered := make(chan struct{})
+		releasePause := make(chan struct{})
+		var pauseOnce sync.Once
+		unpause := func() { pauseOnce.Do(func() { close(releasePause) }) }
+		defer unpause()
+		m.mono = func() time.Time { return time.Unix(0, clock.Load()) }
+		m.pause = func(time.Duration) {
+			once.Do(func() { close(entered) })
+			<-releasePause
+			clock.Store(now.Add(time.Second).UnixNano())
+		}
+
 		release, err := m.lock(time.Second)
 		if err != nil {
 			t.Fatal(err)
 		}
-		defer release()
+		releaseOnce := sync.OnceFunc(release)
+		defer releaseOnce()
 
-		// Deterministic after channel fires while inspectEvidenceDeadline holds Wait inside .lock.
+		// Fire outer watchdog only once preInspectON is paused inside mandatory .lock read.
 		fire := make(chan time.Time, 1)
 		go func() {
-			time.Sleep(15 * time.Millisecond)
-			fire <- time.Now()
+			<-entered
+			fire <- now
 		}()
 		h := &m2cHub{}
 		out := Runner{
-			ClientName: "claude", EventName: "SessionStart",
-			Stdin: strings.NewReader(`{"session_id":"s1","cwd":` + quote(root) + `,"hook_event_name":"SessionStart"}`),
+			ClientName: "claude", EventName: "PreToolUse",
+			// Write skips toldRevision so preInspectON is the first .lock acquirer and enters mandatoryActive.
+			Stdin: strings.NewReader(fmt.Sprintf(`{"session_id":"s1","cwd":%q,"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":%q,"content":"x"}}`, root, filepath.Join(root, "a.go"))),
 			Hub:   h, Memory: m, Getenv: getenv,
 			SuccessionEnabled: func(context.Context) bool { return true },
-			Deadline:          500 * time.Millisecond,
+			Now:               m.mono,
+			Deadline:          time.Second,
 			after:             func(time.Duration) <-chan time.Time { return fire },
 			logAfter:          never,
 		}.Run()
+		unpause()
+		releaseOnce()
 		assertAllow(t, ClientClaude, out)
 		fails, err := ReadRecentFailures(getenv("IRIS_TOKEN_FILE"), 10)
 		if err != nil || len(fails) == 0 || fails[0].Stage != "session" || fails[0].Degraded() || fails[0].Error != "hook deadline exceeded" {
@@ -830,6 +851,910 @@ func TestCombinedToSplitFallbackAndLocalVetoStopsRewriteAndRetry(t *testing.T) {
 		}
 		if _, err := os.Stat(m.name("claude", "s1")); !errors.Is(err, os.ErrNotExist) {
 			t.Fatalf("local veto allowed restore-floor rewrite of <hash>: %v", err)
+		}
+	})
+}
+
+type m2cCustomMem struct {
+	gen        int
+	err        error
+	remembered int
+}
+
+func (m *m2cCustomMem) RecallGeneration(string, string) (int, error) { return m.gen, m.err }
+func (m *m2cCustomMem) Remember(_, _ string, gen int)                { m.remembered = gen }
+func (m *m2cCustomMem) Forget(string, string, int)                   {}
+
+func TestSuccessionAdmissionEdgeCasesAndMemoryBehaviors(t *testing.T) {
+	t.Run("non-fileMemory handles RecallGeneration error and generation propagation", func(t *testing.T) {
+		root := gitRepo(t)
+		getenv := failureEnv(t)
+
+		errMem := &m2cCustomMem{err: ErrInvalidGeneration}
+		h := &m2cHub{}
+		out := Runner{
+			ClientName: "claude", EventName: "SessionStart",
+			Stdin: strings.NewReader(`{"session_id":"s1","cwd":` + quote(root) + `,"hook_event_name":"SessionStart"}`),
+			Hub:   h, Memory: errMem, Getenv: getenv,
+			SuccessionEnabled: func(context.Context) bool { return true },
+			after:             never, logAfter: never,
+		}.Run()
+		if out.Exit != 0 || len(h.trace) != 0 {
+			t.Fatalf("expected non-fileMemory RecallGeneration err to veto hub calls: out=%+v trace=%v", out, h.trace)
+		}
+
+		okMem := &m2cCustomMem{gen: 2}
+		h2 := &m2cHub{
+			regFunc: func(context.Context, hubclient.SessionRequest) (hubclient.SessionResponse, error) {
+				return m2cClassifiedSession(m2cExecID(2), 2, m2cExecID(1), "hook", "stale_retry", true), nil
+			},
+		}
+		Runner{
+			ClientName: "claude", EventName: "Prompt",
+			Stdin: strings.NewReader(`{"session_id":"s1","cwd":` + quote(root) + `,"hook_event_name":"UserPromptSubmit","prompt":"hi"}`),
+			Hub:   h2, Memory: okMem, Getenv: getenv,
+			SuccessionEnabled: func(context.Context) bool { return true },
+			after:             never, logAfter: never,
+		}.Run()
+		if len(h2.regReqs) != 1 || h2.regReqs[0].Generation != 2 || okMem.remembered != 2 {
+			t.Fatalf("non-fileMemory regReqs=%+v remembered=%d", h2.regReqs, okMem.remembered)
+		}
+	})
+
+	t.Run("preInspectON deadline after ended, damaged .ended, and ended session handling", func(t *testing.T) {
+		origOpen := generationFileOpen
+		t.Cleanup(func() { generationFileOpen = origOpen })
+
+		// 1) Valid .ended=2 read, then generation read hits deadline inside inspectEvidenceDeadline.
+		root := gitRepo(t)
+		getenv := failureEnv(t)
+		m := sessionsFor(getenv)
+		now := time.Now()
+		var clock atomic.Int64
+		clock.Store(now.UnixNano())
+		m.now = func() time.Time { return time.Unix(0, clock.Load()) }
+		m.mono = m.now
+		prefix := m.name("claude", "s1")
+		if err := m.directory(); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(endedMarkerPath(prefix), []byte("2\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(prefix, []byte("2\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		generationFileOpen = func(path string) (*os.File, error) {
+			if path == prefix {
+				clock.Store(now.Add(time.Hour).UnixNano())
+			}
+			return OpenGenerationFile(path)
+		}
+		h := &m2cHub{}
+		out := Runner{
+			ClientName: "claude", EventName: "SessionStart",
+			Stdin: strings.NewReader(`{"session_id":"s1","cwd":` + quote(root) + `,"hook_event_name":"SessionStart"}`),
+			Hub:   h, Memory: m, Getenv: getenv, SuccessionEnabled: func(context.Context) bool { return true },
+			Now: m.mono, Deadline: time.Second, after: never, logAfter: never,
+		}.Run()
+		assertAllow(t, ClientClaude, out)
+		if len(h.trace) != 0 {
+			t.Fatalf("expected zero RPCs on inspect deadline, got %v", h.trace)
+		}
+		if fails, _ := ReadRecentFailures(getenv("IRIS_TOKEN_FILE"), 10); len(fails) == 0 || fails[0].Degraded() {
+			t.Fatalf("expected silent mandatory failure, got %+v", fails)
+		}
+
+		// 2) Damaged .ended in preInspectON vetoes without calling hub.
+		generationFileOpen = origOpen
+		getenv2 := failureEnv(t)
+		m2 := sessionsFor(getenv2)
+		if err := m2.directory(); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(endedMarkerPath(m2.name("claude", "s1")), []byte("bad\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		h2 := &m2cHub{}
+		Runner{
+			ClientName: "claude", EventName: "Prompt",
+			Stdin: strings.NewReader(`{"session_id":"s1","cwd":` + quote(root) + `,"hook_event_name":"UserPromptSubmit","prompt":"hi"}`),
+			Hub:   h2, Memory: m2, Getenv: getenv2, SuccessionEnabled: func(context.Context) bool { return true },
+			after: never, logAfter: never,
+		}.Run()
+		if len(h2.trace) != 0 {
+			t.Fatalf("damaged .ended preInspectON called hub: %v", h2.trace)
+		}
+		if obs, _ := ReadRecentObservations(getenv2("IRIS_TOKEN_FILE"), 10); len(obs) == 0 {
+			t.Fatal("expected DamagedGenerationProof observation for damaged .ended")
+		}
+
+		// 3) Active .ended=2 + <hash>=2: SessionStart allowed with EndedThrough=2, Prompt refused locally.
+		getenv3 := failureEnv(t)
+		m3 := sessionsFor(getenv3)
+		m3.Remember("claude", "s1", 2)
+		m3.Forget("claude", "s1", 2)
+		if err := os.WriteFile(m3.name("claude", "s1"), []byte("2\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		h3 := &m2cHub{
+			regFunc: func(context.Context, hubclient.SessionRequest) (hubclient.SessionResponse, error) {
+				return m2cClassifiedSession(m2cExecID(3), 3, "", "hook", "initial", true), nil
+			},
+		}
+		Runner{
+			ClientName: "claude", EventName: "SessionStart",
+			Stdin: strings.NewReader(`{"session_id":"s1","cwd":` + quote(root) + `,"hook_event_name":"SessionStart"}`),
+			Hub:   h3, Memory: m3, Getenv: getenv3, SuccessionEnabled: func(context.Context) bool { return true },
+			after: never, logAfter: never,
+		}.Run()
+		if len(h3.regReqs) != 1 || h3.regReqs[0].Generation != 0 || h3.regReqs[0].EndedThrough != 2 {
+			t.Fatalf("SessionStart over ended=2 reqs=%+v", h3.regReqs)
+		}
+
+		getenv4 := failureEnv(t)
+		m4 := sessionsFor(getenv4)
+		m4.Remember("claude", "s1", 2)
+		m4.Forget("claude", "s1", 2)
+		if err := os.WriteFile(m4.name("claude", "s1"), []byte("2\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		h4 := &m2cHub{}
+		Runner{
+			ClientName: "claude", EventName: "Prompt",
+			Stdin: strings.NewReader(`{"session_id":"s1","cwd":` + quote(root) + `,"hook_event_name":"UserPromptSubmit","prompt":"hi"}`),
+			Hub:   h4, Memory: m4, Getenv: getenv4, SuccessionEnabled: func(context.Context) bool { return true },
+			after: never, logAfter: never,
+		}.Run()
+		if len(h4.trace) != 0 {
+			t.Fatalf("ended Prompt called hub: %v", h4.trace)
+		}
+	})
+
+	t.Run("preInspectOFF, finalInspectOFF, and Remember expired cleanup / retainGeneration damage", func(t *testing.T) {
+		root := gitRepo(t)
+
+		// 1) D9 retry OFF when .ended becomes damaged during try 1 stops retry cleanly.
+		getenv := failureEnv(t)
+		m := sessionsFor(getenv)
+		m.Remember("claude", "s1", 2)
+		h := &m2cHub{
+			regFunc: func(context.Context, hubclient.SessionRequest) (hubclient.SessionResponse, error) {
+				_ = os.WriteFile(endedMarkerPath(m.name("claude", "s1")), []byte("bad\n"), 0o600)
+				return hubclient.SessionResponse{}, &hubclient.Error{Code: "lost", Details: json.RawMessage(`{"highest_generation":2}`)}
+			},
+		}
+		Runner{
+			ClientName: "claude", EventName: "SessionStart",
+			Stdin: strings.NewReader(`{"session_id":"s1","cwd":` + quote(root) + `,"hook_event_name":"SessionStart"}`),
+			Hub:   h, Memory: m, Getenv: getenv, SuccessionEnabled: func(context.Context) bool { return false },
+			after: never, logAfter: never,
+		}.Run()
+		if len(h.trace) != 1 {
+			t.Fatalf("expected damaged .ended during D9 OFF retry to stop retry, got %v", h.trace)
+		}
+
+		// 1b) D9 retry OFF when <hash> becomes damaged during try 1 hits preInspectOFF + retainGeneration(proofErr != nil).
+		ge1b := failureEnv(t)
+		m1b := sessionsFor(ge1b)
+		m1b.Remember("claude", "s1", 2)
+		h1b := &m2cHub{
+			regFunc: func(context.Context, hubclient.SessionRequest) (hubclient.SessionResponse, error) {
+				if err := os.WriteFile(m1b.name("claude", "s1"), []byte("bad\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return hubclient.SessionResponse{}, &hubclient.Error{Code: "lost", Details: json.RawMessage(`{"highest_generation":2}`)}
+			},
+		}
+		Runner{
+			ClientName: "claude", EventName: "SessionStart",
+			Stdin: strings.NewReader(`{"session_id":"s1","cwd":` + quote(root) + `,"hook_event_name":"SessionStart"}`),
+			Hub:   h1b, Memory: m1b, Getenv: ge1b, SuccessionEnabled: func(context.Context) bool { return false },
+			after: never, logAfter: never,
+		}.Run()
+		if len(h1b.trace) != 1 {
+			t.Fatalf("expected damaged <hash> on D9 retry to stop retry, got %v", h1b.trace)
+		}
+		if raw, err := os.ReadFile(m1b.name("claude", "s1")); err != nil || string(raw) != "bad\n" {
+			t.Fatalf("retainGeneration overwrote damaged proof: %q err=%v", raw, err)
+		}
+
+		// 1c) Combined shell OFF returning lost below sentGen while <hash> became damaged preserves damaged proof in retainGeneration.
+		ge1c := failureEnv(t)
+		m1c := sessionsFor(ge1c)
+		m1c.Remember("claude", "s1", 2)
+		h1c := m2cCombinedHub{&m2cHub{
+			combinedFn: func(context.Context, hubclient.ShellSessionRequest) (hubclient.ShellResponse, error) {
+				if err := os.WriteFile(m1c.name("claude", "s1"), []byte("bad\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				return hubclient.ShellResponse{}, &hubclient.Error{Code: "lost", Details: json.RawMessage(`{"highest_generation":1}`)}
+			},
+		}}
+		out1c := Runner{
+			ClientName: "claude", EventName: "PreToolUse",
+			Stdin: strings.NewReader(fmt.Sprintf(`{"session_id":"s1","cwd":%q,"tool_name":"Bash","tool_input":{"command":"echo hi"}}`, root)),
+			Hub:   h1c, Memory: m1c, Getenv: ge1c, SuccessionEnabled: func(context.Context) bool { return false },
+			Find: func(string) (gitinfo.Repo, error) { return gitinfo.Repo{Worktree: root}, nil },
+			Status: func(context.Context, string, gitinfo.Scope, *gitinfo.Attempt) (map[string]string, error) {
+				return map[string]string{}, nil
+			},
+			ShellDeadline: time.Second, after: never, logAfter: never,
+		}.Run()
+		assertAllow(t, ClientClaude, out1c)
+		if raw, err := os.ReadFile(m1c.name("claude", "s1")); err != nil || string(raw) != "bad\n" {
+			t.Fatalf("checkRestoreFloor retainGeneration overwrote damaged proof: %q err=%v", raw, err)
+		}
+
+		// 2) Row 2 OFF in preInspectOFF (confirmed .ended=2 + damaged <hash> -> silent + allow + zero RPCs).
+		getenv2 := failureEnv(t)
+		m2 := sessionsFor(getenv2)
+		if err := m2.directory(); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(endedMarkerPath(m2.name("claude", "s1")), []byte("2\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(m2.name("claude", "s1"), []byte("bad\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		h2 := &m2cHub{}
+		out2 := Runner{
+			ClientName: "claude", EventName: "SessionStart",
+			Stdin: strings.NewReader(`{"session_id":"s1","cwd":` + quote(root) + `,"hook_event_name":"SessionStart"}`),
+			Hub:   h2, Memory: m2, Getenv: getenv2, SuccessionEnabled: func(context.Context) bool { return false },
+			after: never, logAfter: never,
+		}.Run()
+		assertAllow(t, ClientClaude, out2)
+		if len(h2.trace) != 0 {
+			t.Fatalf("Row 2 OFF called hub: %v", h2.trace)
+		}
+		if fails, _ := ReadRecentFailures(getenv2("IRIS_TOKEN_FILE"), 10); len(fails) == 0 || fails[0].Degraded() {
+			t.Fatalf("Row 2 OFF must grade silent, got %+v", fails)
+		}
+
+		// 3) Pre-end damaged <hash> under OFF exercises preInspectOFF + retainGeneration proofErr != nil.
+		getenv3 := failureEnv(t)
+		m3 := sessionsFor(getenv3)
+		if err := m3.directory(); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(m3.name("claude", "s1"), []byte("bad\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		h3 := &m2cHub{}
+		Runner{
+			ClientName: "claude", EventName: "SessionStart",
+			Stdin: strings.NewReader(`{"session_id":"s1","cwd":` + quote(root) + `,"hook_event_name":"SessionStart"}`),
+			Hub:   h3, Memory: m3, Getenv: getenv3, SuccessionEnabled: func(context.Context) bool { return false },
+			after: never, logAfter: never,
+		}.Run()
+		if len(h3.trace) != 0 {
+			t.Fatalf("damaged <hash> OFF called hub: %v", h3.trace)
+		}
+		if obs, _ := ReadRecentObservations(getenv3("IRIS_TOKEN_FILE"), 10); len(obs) == 0 {
+			t.Fatal("expected DamagedGenerationProof observation")
+		}
+
+		// 4) finalInspectOFF Row 2, non-ended damaged <hash>, and admittedGen < genFloor via fileGroups.
+		parent := t.TempDir()
+		mainDir := filepath.Join(parent, "main")
+		sibDir := filepath.Join(parent, "sib")
+		for _, d := range []string{mainDir, sibDir} {
+			if err := os.MkdirAll(filepath.Join(d, ".git"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		for _, tc := range []struct {
+			name     string
+			mutate   func(m fileMemory)
+			wantDeny bool
+			wantSil  bool
+		}{
+			{
+				name: "Row 2 in finalInspectOFF",
+				mutate: func(mf fileMemory) {
+					mf.Forget("claude", "s1", 2)
+					_ = os.WriteFile(mf.name("claude", "s1"), []byte("bad\n"), 0o600)
+				},
+				wantSil: true,
+			},
+			{
+				name: "damaged <hash> without .ended in finalInspectOFF",
+				mutate: func(mf fileMemory) {
+					_ = os.WriteFile(mf.name("claude", "s1"), []byte("bad\n"), 0o600)
+				},
+			},
+			{
+				name: "higher <hash>=5 after gen=3 in finalInspectOFF",
+				mutate: func(mf fileMemory) {
+					mf.Remember("claude", "s1", 5)
+				},
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				ge := failureEnv(t)
+				mf := sessionsFor(ge)
+				mf.Remember("claude", "s1", 3)
+				ht := &m2cHub{
+					regFunc: func(context.Context, hubclient.SessionRequest) (hubclient.SessionResponse, error) {
+						return hubclient.SessionResponse{ExecutionID: m2cExecID(10), Generation: 3, Capabilities: []string{"shell_scope", "file_claims"}}, nil
+					},
+				}
+				Runner{
+					ClientName: "claude", EventName: "PreToolUse",
+					Stdin: strings.NewReader(fmt.Sprintf(`{"session_id":"s1","cwd":%q,"hook_event_name":"PreToolUse","tool_name":"move_file","tool_input":{"rename_from":%q,"rename_to":%q}}`, mainDir, filepath.Join(mainDir, "a.go"), filepath.Join(sibDir, "b.go"))),
+					Hub:   ht, Memory: mf, Getenv: ge, SuccessionEnabled: func(context.Context) bool { return false },
+					after: never, logAfter: never,
+					Find: func(dir string) (gitinfo.Repo, error) {
+						if dir == sibDir || strings.HasPrefix(dir, sibDir) {
+							tc.mutate(mf)
+							gd := filepath.Join(sibDir, ".git")
+							return gitinfo.Repo{Worktree: sibDir, GitDir: gd, CommonDir: gd, WorktreeID: "2:2"}, nil
+						}
+						gd := filepath.Join(mainDir, ".git")
+						return gitinfo.Repo{Worktree: mainDir, GitDir: gd, CommonDir: gd, WorktreeID: "1:1"}, nil
+					},
+				}.Run()
+				if len(ht.trace) != 1 {
+					t.Fatalf("%s: TouchFiles must not run after finalInspectOFF veto: %v", tc.name, ht.trace)
+				}
+				if tc.wantSil {
+					if fails, _ := ReadRecentFailures(ge("IRIS_TOKEN_FILE"), 10); len(fails) == 0 || fails[0].Degraded() {
+						t.Fatalf("%s: expected silent failure, got %+v", tc.name, fails)
+					}
+				}
+			})
+		}
+
+		// 5) Direct Remember replaces expired .ended marker when current <= ended.
+		ge5 := failureEnv(t)
+		mf5 := sessionsFor(ge5)
+		old := time.Now().Add(-memoryAge - time.Hour)
+		if err := mf5.directory(); err != nil {
+			t.Fatal(err)
+		}
+		p5 := mf5.name("claude", "s1")
+		if err := os.WriteFile(p5, []byte("2\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(endedMarkerPath(p5), []byte("3\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(endedMarkerPath(p5), old, old); err != nil {
+			t.Fatal(err)
+		}
+		mf5.Remember("claude", "s1", 4)
+		if got := mf5.Recall("claude", "s1"); got != 4 {
+			t.Fatalf("Remember over expired .ended wrote %d, want 4", got)
+		}
+	})
+
+	t.Run("recheckEndedOnHubError ON paths cover deadline, damage, Row 2, and strictFloorRefusal", func(t *testing.T) {
+		root := gitRepo(t)
+		origOpen := generationFileOpen
+		t.Cleanup(func() { generationFileOpen = origOpen })
+
+		// 1) Deadline after reading valid .ended=2 on hub error.
+		ge1 := failureEnv(t)
+		mf1 := sessionsFor(ge1)
+		now := time.Now()
+		var clock atomic.Int64
+		clock.Store(now.UnixNano())
+		mf1.now = func() time.Time { return time.Unix(0, clock.Load()) }
+		mf1.mono = mf1.now
+		mf1.Remember("claude", "s1", 2)
+		if err := os.WriteFile(endedMarkerPath(mf1.name("claude", "s1")), []byte("2\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// Remove <hash> before preInspect? Wait: during SessionStart with valid .ended=2 and no <hash>, SessionStart sends to hub,
+		// and during hub error we re-open <hash> inside recheckEndedOnHubError (2nd open of .ended / <hash>).
+		_ = os.Remove(mf1.name("claude", "s1"))
+		if err := os.WriteFile(mf1.name("claude", "s1"), []byte("3\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		reads := 0
+		generationFileOpen = func(path string) (*os.File, error) {
+			if path == mf1.name("claude", "s1") {
+				reads++
+				if reads == 2 {
+					clock.Store(now.Add(time.Hour).UnixNano())
+				}
+			}
+			return OpenGenerationFile(path)
+		}
+		h1 := &m2cHub{
+			regFunc: func(context.Context, hubclient.SessionRequest) (hubclient.SessionResponse, error) {
+				return hubclient.SessionResponse{}, &hubclient.Error{Code: "unavailable", Message: "down"}
+			},
+		}
+		Runner{
+			ClientName: "claude", EventName: "SessionStart",
+			Stdin: strings.NewReader(`{"session_id":"s1","cwd":` + quote(root) + `,"hook_event_name":"SessionStart"}`),
+			Hub:   h1, Memory: mf1, Getenv: ge1, SuccessionEnabled: func(context.Context) bool { return true },
+			Now: mf1.mono, Deadline: time.Second, after: never, logAfter: never,
+		}.Run()
+		generationFileOpen = origOpen
+		if fails, _ := ReadRecentFailures(ge1("IRIS_TOKEN_FILE"), 10); len(fails) == 0 || fails[0].Degraded() {
+			t.Fatalf("expected silent deadline in recheckEndedOnHubError, got %+v", fails)
+		}
+
+		// 2) Damaged .ended, damaged proof without end, and Row 2 damaged proof during hub error.
+		for _, tc := range []struct {
+			name    string
+			mutate  func(mf fileMemory)
+			wantSil bool
+		}{
+			{
+				name: "damaged .ended on hub error",
+				mutate: func(mf fileMemory) {
+					_ = os.WriteFile(endedMarkerPath(mf.name("claude", "s1")), []byte("bad\n"), 0o600)
+				},
+			},
+			{
+				name: "damaged <hash> without .ended on hub error",
+				mutate: func(mf fileMemory) {
+					_ = os.WriteFile(mf.name("claude", "s1"), []byte("bad\n"), 0o600)
+				},
+			},
+			{
+				name: "Row 2 damaged <hash> plus .ended on hub error",
+				mutate: func(mf fileMemory) {
+					mf.Forget("claude", "s1", 2)
+					_ = os.WriteFile(mf.name("claude", "s1"), []byte("bad\n"), 0o600)
+				},
+				wantSil: true,
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				ge := failureEnv(t)
+				mf := sessionsFor(ge)
+				mf.Remember("claude", "s1", 3)
+				h := &m2cHub{
+					regFunc: func(context.Context, hubclient.SessionRequest) (hubclient.SessionResponse, error) {
+						tc.mutate(mf)
+						return hubclient.SessionResponse{}, &hubclient.Error{Code: "lost", Details: json.RawMessage(`{"highest_generation":3}`)}
+					},
+				}
+				Runner{
+					ClientName: "claude", EventName: "Prompt",
+					Stdin: strings.NewReader(`{"session_id":"s1","cwd":` + quote(root) + `,"hook_event_name":"UserPromptSubmit","prompt":"hi"}`),
+					Hub:   h, Memory: mf, Getenv: ge, SuccessionEnabled: func(context.Context) bool { return true },
+					after: never, logAfter: never,
+				}.Run()
+				if len(h.trace) != 1 {
+					t.Fatalf("%s: expected local veto to stop retry, got %v", tc.name, h.trace)
+				}
+				if tc.wantSil {
+					if fails, _ := ReadRecentFailures(ge("IRIS_TOKEN_FILE"), 10); len(fails) == 0 || fails[0].Degraded() {
+						t.Fatalf("%s: expected silent failure, got %+v", tc.name, fails)
+					}
+				}
+			})
+		}
+
+		// 3) strictFloorRefusal under ON: proofless SessionStart over ended=2 receives lost highest_generation=1.
+		ge3 := failureEnv(t)
+		mf3 := sessionsFor(ge3)
+		mf3.Remember("claude", "s1", 2)
+		mf3.Forget("claude", "s1", 2)
+		_ = os.Remove(mf3.name("claude", "s1"))
+		h3 := &m2cHub{
+			regFunc: func(context.Context, hubclient.SessionRequest) (hubclient.SessionResponse, error) {
+				return hubclient.SessionResponse{}, &hubclient.Error{Code: "lost", Details: json.RawMessage(`{"highest_generation":1}`)}
+			},
+		}
+		Runner{
+			ClientName: "claude", EventName: "SessionStart",
+			Stdin: strings.NewReader(`{"session_id":"s1","cwd":` + quote(root) + `,"hook_event_name":"SessionStart"}`),
+			Hub:   h3, Memory: mf3, Getenv: ge3, SuccessionEnabled: func(context.Context) bool { return true },
+			after: never, logAfter: never,
+		}.Run()
+		if len(h3.trace) != 1 {
+			t.Fatalf("strictFloorRefusal trace=%v", h3.trace)
+		}
+		if obs, _ := ReadRecentObservations(ge3("IRIS_TOKEN_FILE"), 10); len(obs) == 0 {
+			t.Fatal("expected ended observation on strictFloorRefusal")
+		}
+	})
+
+	t.Run("finalInspectAndPublishON and writeEvidenceFile deadline, conflict, downgrade, and shim ended branches", func(t *testing.T) {
+		parent := t.TempDir()
+		mainDir := filepath.Join(parent, "main")
+		sibDir := filepath.Join(parent, "sib")
+		for _, d := range []string{mainDir, sibDir} {
+			if err := os.MkdirAll(filepath.Join(d, ".git"), 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		origGenOpen := generationFileOpen
+		origExactOpen := exactRecordOpen
+		t.Cleanup(func() {
+			generationFileOpen = origGenOpen
+			exactRecordOpen = origExactOpen
+		})
+
+		// 1) CandidateShimSuccession where PriorGeneration=2 ended via Forget(2) before finalAdmitAndPublish.
+		geShim := failureEnv(t)
+		mfShim := sessionsFor(geShim)
+		mfShim.Remember("claude", "s1", 3)
+		m2cWriteExact(t, mfShim, "claude", "s1", sessionproof.Record{
+			Version:          sessionproof.FormatVersion,
+			Origin:           sessionproof.OriginShim,
+			Generation:       3,
+			ExecutionID:      m2cExecID(21),
+			PriorExecutionID: m2cExecID(20),
+			PriorGeneration:  2,
+		})
+		hShim := &m2cHub{
+			regFunc: func(context.Context, hubclient.SessionRequest) (hubclient.SessionResponse, error) {
+				return m2cClassifiedSession(m2cExecID(21), 3, m2cExecID(20), "shim", "shim_succession", true), nil
+			},
+		}
+		outShim := Runner{
+			ClientName: "claude", EventName: "PreToolUse",
+			Stdin: strings.NewReader(fmt.Sprintf(`{"session_id":"s1","cwd":%q,"hook_event_name":"PreToolUse","tool_name":"move_file","tool_input":{"rename_from":%q,"rename_to":%q}}`, mainDir, filepath.Join(mainDir, "a.go"), filepath.Join(sibDir, "b.go"))),
+			Hub:   hShim, Memory: mfShim, Getenv: geShim, SuccessionEnabled: func(context.Context) bool { return true },
+			after: never, logAfter: never,
+			Find: func(dir string) (gitinfo.Repo, error) {
+				if dir == sibDir || strings.HasPrefix(dir, sibDir) {
+					mfShim.Forget("claude", "s1", 2)
+					gd := filepath.Join(sibDir, ".git")
+					return gitinfo.Repo{Worktree: sibDir, GitDir: gd, CommonDir: gd, WorktreeID: "2:2"}, nil
+				}
+				gd := filepath.Join(mainDir, ".git")
+				return gitinfo.Repo{Worktree: mainDir, GitDir: gd, CommonDir: gd, WorktreeID: "1:1"}, nil
+			},
+		}.Run()
+		if len(hShim.trace) != 1 || !strings.Contains(string(outShim.Stdout), string(ActionDeny)) {
+			t.Fatalf("shim recordEndedAt must veto and deny: trace=%v out=%s", hShim.trace, outShim.Stdout)
+		}
+
+		// 2) Intervening mutations in finalInspectAndPublishON: conflicting .execution, damaged .ended, Row 2, damaged <hash>, and genFloor downgrade.
+		for _, tc := range []struct {
+			name    string
+			reply   hubclient.SessionResponse
+			mutate  func(mf fileMemory)
+			wantSil bool
+		}{
+			{
+				name:  "non-shim conflicting exact record in finalInspectAndPublishON",
+				reply: m2cClassifiedSession(m2cExecID(30), 3, m2cExecID(29), "hook", "stale_retry", true),
+				mutate: func(mf fileMemory) {
+					m2cWriteExact(t, mf, "claude", "s1", sessionproof.Record{Version: 1, Origin: sessionproof.OriginHook, Generation: 3, ExecutionID: m2cExecID(31)})
+				},
+				wantSil: true,
+			},
+			{
+				name:  "damaged .ended in finalInspectAndPublishON",
+				reply: m2cClassifiedSession(m2cExecID(30), 3, m2cExecID(29), "hook", "stale_retry", true),
+				mutate: func(mf fileMemory) {
+					_ = os.WriteFile(endedMarkerPath(mf.name("claude", "s1")), []byte("bad\n"), 0o600)
+				},
+			},
+			{
+				name:  "Row 2 damaged <hash> plus .ended in finalInspectAndPublishON",
+				reply: m2cClassifiedSession(m2cExecID(30), 3, m2cExecID(29), "hook", "stale_retry", true),
+				mutate: func(mf fileMemory) {
+					mf.Forget("claude", "s1", 2)
+					_ = os.WriteFile(mf.name("claude", "s1"), []byte("bad\n"), 0o600)
+				},
+				wantSil: true,
+			},
+			{
+				name:  "damaged <hash> without .ended in finalInspectAndPublishON",
+				reply: m2cClassifiedSession(m2cExecID(30), 3, m2cExecID(29), "hook", "stale_retry", true),
+				mutate: func(mf fileMemory) {
+					_ = os.WriteFile(mf.name("claude", "s1"), []byte("bad\n"), 0o600)
+				},
+			},
+			{
+				name:  "higher <hash>=5 after admitted gen=3 in finalInspectAndPublishON",
+				reply: m2cClassifiedSession(m2cExecID(30), 3, m2cExecID(29), "hook", "stale_retry", true),
+				mutate: func(mf fileMemory) {
+					mf.Remember("claude", "s1", 5)
+				},
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				ge := failureEnv(t)
+				mf := sessionsFor(ge)
+				mf.Remember("claude", "s1", 3)
+				h := &m2cHub{
+					regFunc: func(context.Context, hubclient.SessionRequest) (hubclient.SessionResponse, error) {
+						return tc.reply, nil
+					},
+				}
+				Runner{
+					ClientName: "claude", EventName: "PreToolUse",
+					Stdin: strings.NewReader(fmt.Sprintf(`{"session_id":"s1","cwd":%q,"hook_event_name":"PreToolUse","tool_name":"move_file","tool_input":{"rename_from":%q,"rename_to":%q}}`, mainDir, filepath.Join(mainDir, "a.go"), filepath.Join(sibDir, "b.go"))),
+					Hub:   h, Memory: mf, Getenv: ge, SuccessionEnabled: func(context.Context) bool { return true },
+					after: never, logAfter: never,
+					Find: func(dir string) (gitinfo.Repo, error) {
+						if dir == sibDir || strings.HasPrefix(dir, sibDir) {
+							tc.mutate(mf)
+							gd := filepath.Join(sibDir, ".git")
+							return gitinfo.Repo{Worktree: sibDir, GitDir: gd, CommonDir: gd, WorktreeID: "2:2"}, nil
+						}
+						gd := filepath.Join(mainDir, ".git")
+						return gitinfo.Repo{Worktree: mainDir, GitDir: gd, CommonDir: gd, WorktreeID: "1:1"}, nil
+					},
+				}.Run()
+				if len(h.trace) != 1 {
+					t.Fatalf("%s: TouchFiles ran unexpectedly: %v", tc.name, h.trace)
+				}
+				if tc.wantSil {
+					if fails, _ := ReadRecentFailures(ge("IRIS_TOKEN_FILE"), 10); len(fails) == 0 || fails[0].Degraded() {
+						t.Fatalf("%s: expected silent failure, got %+v", tc.name, fails)
+					}
+				}
+			})
+		}
+
+		// 3) Deadlines inside finalInspectAndPublishON (lock, .ended, <hash>, .execution) and writeEvidenceFile replaceSessionFileDeadline.
+		for _, step := range []string{"lock", "ended", "gen", "exec", "replace"} {
+			t.Run("finalInspectON_deadline_"+step, func(t *testing.T) {
+				generationFileOpen = origGenOpen
+				exactRecordOpen = origExactOpen
+				ge := failureEnv(t)
+				mf := sessionsFor(ge)
+				now := time.Now()
+				var clock atomic.Int64
+				clock.Store(now.UnixNano())
+				mf.now = func() time.Time { return time.Unix(0, clock.Load()) }
+				mf.mono = mf.now
+				if err := mf.directory(); err != nil {
+					t.Fatal(err)
+				}
+				prefix := mf.name("claude", "s1")
+				mf.Remember("claude", "s1", 2)
+				if err := os.WriteFile(endedMarkerPath(prefix), []byte("1\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				m2cWriteExact(t, mf, "claude", "s1", sessionproof.Record{Version: 1, Origin: sessionproof.OriginHook, Generation: 2, ExecutionID: m2cExecID(39)})
+
+				var relOnce func()
+				var releasePause chan struct{}
+				endedOpens, genOpens, exactOpens := 0, 0, 0
+				switch step {
+				case "lock":
+					releasePause = make(chan struct{})
+					mf.pause = func(time.Duration) {
+						clock.Store(now.Add(time.Hour).UnixNano())
+					}
+				case "ended":
+					generationFileOpen = func(path string) (*os.File, error) {
+						if strings.HasSuffix(path, ".ended") {
+							endedOpens++
+							if endedOpens == 2 {
+								clock.Store(now.Add(time.Hour).UnixNano())
+							}
+						}
+						return OpenGenerationFile(path)
+					}
+				case "gen":
+					generationFileOpen = func(path string) (*os.File, error) {
+						if path == prefix {
+							genOpens++
+							if genOpens == 2 {
+								clock.Store(now.Add(time.Hour).UnixNano())
+							}
+						}
+						return OpenGenerationFile(path)
+					}
+				case "exec":
+					exactRecordOpen = func(path string, expected exactRecordID) (*os.File, error) {
+						exactOpens++
+						if exactOpens == 2 {
+							clock.Store(now.Add(time.Hour).UnixNano())
+						}
+						return origExactOpen(path, expected)
+					}
+				case "replace":
+					mf.restrict = func(p string) error {
+						if p != mf.dir {
+							clock.Store(now.Add(time.Hour).UnixNano())
+						}
+						return nil
+					}
+				}
+				h := &m2cHub{
+					regFunc: func(context.Context, hubclient.SessionRequest) (hubclient.SessionResponse, error) {
+						return m2cClassifiedSession(m2cExecID(40), 3, m2cExecID(39), "hook", "stale_retry", true), nil
+					},
+				}
+				out := Runner{
+					ClientName: "claude", EventName: "PreToolUse",
+					Stdin: strings.NewReader(fmt.Sprintf(`{"session_id":"s1","cwd":%q,"hook_event_name":"PreToolUse","tool_name":"move_file","tool_input":{"rename_from":%q,"rename_to":%q}}`, mainDir, filepath.Join(mainDir, "a.go"), filepath.Join(sibDir, "b.go"))),
+					Hub:   h, Memory: mf, Getenv: ge, SuccessionEnabled: func(context.Context) bool { return true },
+					Now: mf.mono, Deadline: time.Second, after: never, logAfter: never,
+					Find: func(dir string) (gitinfo.Repo, error) {
+						if step == "lock" && (dir == sibDir || strings.HasPrefix(dir, sibDir)) {
+							rel, err := mf.lock(time.Second)
+							if err != nil {
+								t.Fatal(err)
+							}
+							relOnce = sync.OnceFunc(rel)
+						}
+						if dir == sibDir || strings.HasPrefix(dir, sibDir) {
+							gd := filepath.Join(sibDir, ".git")
+							return gitinfo.Repo{Worktree: sibDir, GitDir: gd, CommonDir: gd, WorktreeID: "2:2"}, nil
+						}
+						gd := filepath.Join(mainDir, ".git")
+						return gitinfo.Repo{Worktree: mainDir, GitDir: gd, CommonDir: gd, WorktreeID: "1:1"}, nil
+					},
+				}.Run()
+				if releasePause != nil {
+					close(releasePause)
+				}
+				if relOnce != nil {
+					relOnce()
+				}
+				assertAllow(t, ClientClaude, out)
+				if step == "replace" {
+					if !slices.Contains(h.trace, fmt.Sprintf("touch_files:id=%s:gen=3", m2cExecID(40))) {
+						t.Fatalf("optional replace failure must not block TouchFiles: %v", h.trace)
+					}
+					if obs, _ := ReadRecentObservations(ge("IRIS_TOKEN_FILE"), 10); len(obs) == 0 {
+						t.Fatal("expected SessionEvidenceWriteFailed on replace deadline overrun")
+					}
+				} else {
+					if len(h.trace) != 1 {
+						t.Fatalf("%s: expected mandatory deadline veto before TouchFiles, got %v", step, h.trace)
+					}
+					if fails, _ := ReadRecentFailures(ge("IRIS_TOKEN_FILE"), 10); len(fails) == 0 || fails[0].Degraded() {
+						t.Fatalf("%s: expected silent failure, got %+v", step, fails)
+					}
+				}
+			})
+		}
+	})
+
+	t.Run("runner Prompt, SessionEnd, OutsideGit Edit, CursorStop finalAdmit vetos, and shell checkEndedRegistration", func(t *testing.T) {
+		root := gitRepo(t)
+
+		// 1) KindPrompt vetoed in finalAdmitAndPublish.
+		geP := failureEnv(t)
+		mfP := sessionsFor(geP)
+		Runner{
+			ClientName: "claude", EventName: "Prompt",
+			Stdin: strings.NewReader(`{"session_id":"s1","cwd":` + quote(root) + `,"hook_event_name":"UserPromptSubmit","prompt":"hi"}`),
+			Hub: &m2cHub{regFunc: func(context.Context, hubclient.SessionRequest) (hubclient.SessionResponse, error) {
+				mfP.Forget("claude", "s1", 1)
+				return m2cClassifiedSession(m2cExecID(1), 1, "", "hook", "initial", true), nil
+			}},
+			Memory: mfP, Getenv: geP, SuccessionEnabled: func(context.Context) bool { return true },
+			after: never, logAfter: never,
+		}.Run()
+		if obs, _ := ReadRecentObservations(geP("IRIS_TOKEN_FILE"), 10); len(obs) == 0 {
+			t.Fatal("expected Prompt veto observation")
+		}
+
+		// 2) KindSessionEnd vetoed in finalAdmitAndPublish before EndExecution.
+		geE := failureEnv(t)
+		mfE := sessionsFor(geE)
+		hE := &m2cHub{regFunc: func(context.Context, hubclient.SessionRequest) (hubclient.SessionResponse, error) {
+			mfE.Forget("claude", "s1", 1)
+			return m2cClassifiedSession(m2cExecID(1), 1, "", "hook", "initial", true), nil
+		}}
+		Runner{
+			ClientName: "claude", EventName: "SessionEnd",
+			Stdin: strings.NewReader(`{"session_id":"s1","cwd":` + quote(root) + `,"hook_event_name":"SessionEnd"}`),
+			Hub:   hE, Memory: mfE, Getenv: geE, SuccessionEnabled: func(context.Context) bool { return true },
+			after: never, logAfter: never,
+		}.Run()
+		if len(hE.trace) != 1 {
+			t.Fatalf("expected SessionEnd veto before EndExecution, got %v", hE.trace)
+		}
+
+		// 3) OutsideGit Edit vetoed in finalAdmitAndPublish (both errEndedGeneration Deny and non-ended veto Allow).
+		for _, endedVeto := range []bool{true, false} {
+			geO := failureEnv(t)
+			mfO := sessionsFor(geO)
+			if err := mfO.directory(); err != nil {
+				t.Fatal(err)
+			}
+			hO := &m2cHub{regFunc: func(context.Context, hubclient.SessionRequest) (hubclient.SessionResponse, error) {
+				if endedVeto {
+					mfO.Forget("claude", "s1", 1)
+				} else if err := os.WriteFile(endedMarkerPath(mfO.name("claude", "s1")), []byte("bad\n"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+				resp := m2cClassifiedSession(m2cExecID(1), 1, "", "hook", "initial", true)
+				resp.OutsideGit = true
+				return resp, nil
+			}}
+			outO := Runner{
+				ClientName: "claude", EventName: "PreToolUse",
+				Stdin: strings.NewReader(fmt.Sprintf(`{"session_id":"s1","cwd":%q,"hook_event_name":"PreToolUse","tool_name":"Write","tool_input":{"file_path":%q,"content":"x"}}`, root, filepath.Join(root, "a.go"))),
+				Hub:   hO, Memory: mfO, Getenv: geO, SuccessionEnabled: func(context.Context) bool { return true },
+				after: never, logAfter: never,
+			}.Run()
+			if endedVeto && !strings.Contains(string(outO.Stdout), string(ActionDeny)) {
+				t.Fatalf("expected OutsideGit ended veto to Deny, got %s", outO.Stdout)
+			}
+			if !endedVeto {
+				assertAllow(t, ClientClaude, outO)
+				if obs, _ := ReadRecentObservations(geO("IRIS_TOKEN_FILE"), 10); len(obs) == 0 {
+					t.Fatal("expected OutsideGit damaged .ended observation")
+				}
+			}
+		}
+
+		// 4) CursorStop calls r.register(...) -> vetoed in finalAdmitAndPublish.
+		interactiveCursor(t)
+		geC := failureEnv(t)
+		mfC := sessionsFor(geC)
+		Runner{
+			ClientName: "cursor", EventName: "stop",
+			Stdin: strings.NewReader(cursorStopPayload(root, 0)),
+			Hub: &m2cHub{regFunc: func(context.Context, hubclient.SessionRequest) (hubclient.SessionResponse, error) {
+				mfC.Forget("cursor", "s", 1)
+				return m2cClassifiedSession(m2cExecID(1), 1, "", "hook", "initial", true), nil
+			}},
+			Memory: mfC, Getenv: geC, Ancestor: cursorAncestor,
+			SuccessionEnabled: func(context.Context) bool { return true },
+			after:             never, logAfter: never,
+		}.Run()
+		if obs, _ := ReadRecentObservations(geC("IRIS_TOKEN_FILE"), 10); len(obs) == 0 {
+			t.Fatal("expected CursorStop finalAdmit veto observation")
+		}
+
+		// 5) shell checkEndedRegistration (valid, expired, damaged) and combined ReconcileSession finalAdmit veto.
+		for _, mode := range []string{"valid_ended", "expired_ended", "damaged_ended", "combined_veto"} {
+			t.Run(mode, func(t *testing.T) {
+				geS := failureEnv(t)
+				mfS := sessionsFor(geS)
+				mHub := &m2cHub{}
+				var hub Hub = mHub
+				switch mode {
+				case "valid_ended":
+					mHub.reconcileFn = func(context.Context, hubclient.ReconcileRequest) (hubclient.CheckResponse, error) {
+						mfS.Forget("claude", "s1", 1)
+						return hubclient.CheckResponse{}, nil
+					}
+				case "expired_ended":
+					mHub.reconcileFn = func(context.Context, hubclient.ReconcileRequest) (hubclient.CheckResponse, error) {
+						mfS.Forget("claude", "s1", 1)
+						old := time.Now().Add(-memoryAge - time.Hour)
+						_ = os.Chtimes(endedMarkerPath(mfS.name("claude", "s1")), old, old)
+						return hubclient.CheckResponse{}, nil
+					}
+				case "damaged_ended":
+					mHub.reconcileFn = func(context.Context, hubclient.ReconcileRequest) (hubclient.CheckResponse, error) {
+						_ = os.WriteFile(endedMarkerPath(mfS.name("claude", "s1")), []byte("bad\n"), 0o600)
+						return hubclient.CheckResponse{}, nil
+					}
+				case "combined_veto":
+					mHub.combinedFn = func(context.Context, hubclient.ShellSessionRequest) (hubclient.ShellResponse, error) {
+						mfS.Forget("claude", "s1", 1)
+						return hubclient.ShellResponse{Session: m2cClassifiedSession(m2cExecID(1), 1, "", "hook", "initial", true)}, nil
+					}
+					hub = m2cCombinedHub{mHub}
+				}
+				outS := Runner{
+					ClientName: "claude", EventName: "PreToolUse",
+					Stdin: strings.NewReader(fmt.Sprintf(`{"session_id":"s1","cwd":%q,"tool_name":"Bash","tool_input":{"command":"echo hi"}}`, root)),
+					Hub:   hub, Memory: mfS, Getenv: geS, SuccessionEnabled: func(context.Context) bool { return true },
+					Find: func(string) (gitinfo.Repo, error) { return gitinfo.Repo{Worktree: root}, nil },
+					Status: func(context.Context, string, gitinfo.Scope, *gitinfo.Attempt) (map[string]string, error) {
+						return map[string]string{}, nil
+					},
+					ShellDeadline: time.Second, after: never, logAfter: never,
+				}.Run()
+				if (mode == "valid_ended" || mode == "combined_veto") && !strings.Contains(string(outS.Stdout), string(ActionDeny)) {
+					t.Fatalf("%s: expected PreToolUse Deny, got %s", mode, outS.Stdout)
+				}
+				if mode == "expired_ended" {
+					assertAllow(t, ClientClaude, outS)
+				}
+				if mode == "damaged_ended" {
+					assertAllow(t, ClientClaude, outS)
+					if obs, _ := ReadRecentObservations(geS("IRIS_TOKEN_FILE"), 10); len(obs) == 0 {
+						t.Fatal("expected DamagedGenerationProof observation")
+					}
+				}
+			})
 		}
 	})
 }

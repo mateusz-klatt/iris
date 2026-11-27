@@ -162,3 +162,70 @@ func TestUnixOptionalEvidenceWriteFailuresAndReducedRepairCarry(t *testing.T) {
 		}
 	})
 }
+
+func TestUnixShellEndedChecksAndScopedVetos(t *testing.T) {
+	t.Run("plain Reconcile and ReconcileScoped checkEndedRegistration and combined veto branches", func(t *testing.T) {
+		for _, mode := range []string{"plain_ended", "scoped_ended", "combined_unusable_no_fallback", "combined_post_veto", "repair_final_veto"} {
+			t.Run(mode, func(t *testing.T) {
+				f := newScopeFixture(t)
+				f.reduced(time.Minute)
+				h := &m2cScopedCombinedHub{&m2cHub{}}
+				switch mode {
+				case "plain_ended":
+					h.regFunc = func(context.Context, hubclient.SessionRequest) (hubclient.SessionResponse, error) {
+						return m2cClassifiedSession(m2cExecID(90), 1, "", "hook", "initial", true, "file_claims", hubclient.SuccessionProofCapability), nil
+					}
+					h.reconcileFn = func(context.Context, hubclient.ReconcileRequest) (hubclient.CheckResponse, error) {
+						f.m.Forget("claude", "s", 1)
+						return hubclient.CheckResponse{}, nil
+					}
+				case "scoped_ended":
+					h.regFunc = func(context.Context, hubclient.SessionRequest) (hubclient.SessionResponse, error) {
+						return m2cClassifiedSession(m2cExecID(91), 1, "", "hook", "initial", true), nil
+					}
+					h.scopedFn = func(context.Context, hubclient.ScopedRequest) (hubclient.CheckResponse, error) {
+						f.m.Forget("claude", "s", 1)
+						return hubclient.CheckResponse{}, nil
+					}
+				case "combined_unusable_no_fallback":
+					f.warm()
+					h.scopedCombFn = func(context.Context, hubclient.ScopedSessionRequest) (hubclient.ShellResponse, error) {
+						return hubclient.ShellResponse{Session: hubclient.SessionResponse{ExecutionID: m2cExecID(92), Generation: 1, Capabilities: []string{"shell_scope", "file_claims", hubclient.SuccessionProofCapability}}}, nil
+					}
+				case "combined_post_veto":
+					f.warm()
+					h.scopedCombFn = func(context.Context, hubclient.ScopedSessionRequest) (hubclient.ShellResponse, error) {
+						f.m.Forget("claude", "s", 1)
+						return hubclient.ShellResponse{Session: m2cClassifiedSession(m2cExecID(93), 1, "", "hook", "initial", true)}, nil
+					}
+				case "repair_final_veto":
+					f.warm()
+					h.scopedCombFn = func(context.Context, hubclient.ScopedSessionRequest) (hubclient.ShellResponse, error) {
+						return hubclient.ShellResponse{}, &hubclient.Error{Code: "lost"}
+					}
+					h.regFunc = func(context.Context, hubclient.SessionRequest) (hubclient.SessionResponse, error) {
+						f.m.Forget("claude", "s", 1)
+						return m2cClassifiedSession(m2cExecID(94), 1, "", "hook", "initial", true), nil
+					}
+				}
+				f.r.Hub = h
+				f.r.Status = func(context.Context, string, gitinfo.Scope, *gitinfo.Attempt) (map[string]string, error) {
+					return map[string]string{}, nil
+				}
+				f.r.SuccessionEnabled = func(context.Context) bool { return true }
+				f.r.ShellDeadline = time.Second
+				out := f.r.reconcile(context.Background(), f.ev, &runState{})
+				if mode == "combined_unusable_no_fallback" {
+					assertAllow(t, ClientClaude, out)
+					if len(h.trace) != 1 || !strings.HasPrefix(h.trace[0], "reconcile_scoped_session") {
+						t.Fatalf("%s fell back unexpectedly: %v", mode, h.trace)
+					}
+					return
+				}
+				if !strings.Contains(string(out.Stdout), string(ActionDeny)) {
+					t.Fatalf("%s: expected PreToolUse Deny after ended veto, got %s trace=%v", mode, out.Stdout, h.trace)
+				}
+			})
+		}
+	})
+}
