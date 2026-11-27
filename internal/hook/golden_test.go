@@ -36,6 +36,10 @@ func TestDecodeFixtures(t *testing.T) {
 			t.Fatalf("unexpected path %s", rel)
 		}
 		client, file := parts[0], parts[1]
+		// TestCursorModeReadsCapturedDarwinArgs replays the process argv capture.
+		if client == "cursor" && file == cursorDarwinArgvFixture {
+			return nil
+		}
 		want, ok := fixtureWant[client+"/"+file]
 		if !ok {
 			t.Fatalf("no expectation for %s", rel)

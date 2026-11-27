@@ -5,11 +5,17 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 	"github.com/mateusz-klatt/iris/internal/proc"
+)
+
+const (
+	cursorDarwinArgvFixture = "argv-interactive-2026.11.22-darwin.json"
+	cursorTestScript        = "/home/user/.local/share/cursor-agent/versions/2026.11.22-e9042b2/index.js"
 )
 
 func TestCursorPrintModeGetsNoFollowUp(t *testing.T) {
@@ -80,6 +86,75 @@ func TestCursorModeReadsTheMeasuredGrammar(t *testing.T) {
 	}
 }
 
+func TestCursorModeReadsCapturedDarwinArgs(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join("testdata", "cursor", cursorDarwinArgvFixture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var args []string
+	if err := json.Unmarshal(data, &args); err != nil {
+		t.Fatal(err)
+	}
+	if got := cursorMode(args); got != modeInput {
+		t.Fatalf("cursorMode(%q) = %v, want modeInput", args, got)
+	}
+}
+
+func TestCursorModeReadsLauncherPrefixes(t *testing.T) {
+	for _, tc := range []struct {
+		name  string
+		flags []string
+	}{
+		{"both", []string{"--disable-sigusr1", "--use-system-ca"}},
+		{"system CA only", []string{"--use-system-ca"}},
+		{"SIGUSR1 only", []string{"--disable-sigusr1"}},
+		{"neither", nil},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			resume := slices.Concat([]string{"cursor-agent"}, tc.flags, []string{cursorTestScript, "--resume"})
+			if got := cursorMode(resume); got != modeInput {
+				t.Errorf("cursorMode(%q) = %v, want modeInput", resume, got)
+			}
+			print := slices.Concat([]string{"cursor-agent"}, tc.flags, []string{cursorTestScript, "-p", "PING"})
+			if got := cursorMode(print); got != modePrint {
+				t.Errorf("cursorMode(%q) = %v, want modePrint", print, got)
+			}
+		})
+	}
+	windows := []string{"node.exe", `C:\Users\user\cursor-agent\versions\2026.11.22-e9042b2\index.js`, "-p", "PING"}
+	if got := cursorMode(windows); got != modePrint {
+		t.Errorf("cursorMode(%q) = %v, want modePrint", windows, got)
+	}
+	windowsWithFlag := slices.Concat(windows[:1], []string{"--use-system-ca"}, windows[1:])
+	if got := cursorMode(windowsWithFlag); got != modePrint {
+		t.Errorf("cursorMode(%q) = %v, want modePrint", windowsWithFlag, got)
+	}
+}
+
+func TestCursorModeRejectsMisplacedLauncherFlags(t *testing.T) {
+	for _, flags := range [][]string{
+		{"--disable-sigusr1"},
+		{"--use-system-ca"},
+		{cursorTestScript, "--disable-sigusr1"},
+		{cursorTestScript, "--use-system-ca"},
+		{"--trust", "--disable-sigusr1", cursorTestScript},
+		{"--disable-sigusr1", "--unknown", cursorTestScript},
+		{"--disable-sigusr1", "--unknown=" + cursorTestScript},
+		{"--disable-sigusr1=true", cursorTestScript},
+		{"--disable-sigusr1", "index.js"},
+		{"--disable-sigusr1", "/tmp/cache/release/index.js"},
+		{"--disable-sigusr1", "/tmp/versions//index.js"},
+		{"--disable-sigusr1", "/tmp/versions/./index.js"},
+		{"--disable-sigusr1", "/tmp/versions/../index.js"},
+		{"--disable-sigusr1", "/tmp/versions/release/other.js"},
+	} {
+		args := append([]string{"cursor-agent"}, flags...)
+		if got := cursorMode(args); got != modeUnknown {
+			t.Errorf("cursorMode(%q) = %v, want modeUnknown", args, got)
+		}
+	}
+}
+
 func TestCapturedCursorStopIsTheFirstTurn(t *testing.T) {
 	payload, err := os.ReadFile(filepath.Join("testdata", "cursor", "stop.json"))
 	if err != nil {
@@ -124,7 +199,7 @@ func cursorAncestor() (proc.Ancestor, error) {
 
 func interactiveCursor(t *testing.T) {
 	t.Helper()
-	readAs(t, []string{"cursor-agent", "--use-system-ca", "/versions/index.js", "--resume"}, nil, true, nil)
+	readAs(t, []string{"cursor-agent", "--disable-sigusr1", "--use-system-ca", cursorTestScript, "--resume"}, nil, true, nil)
 }
 
 func TestCursorStopFollowsANewerIdentityOnceAndNeverAFollowUp(t *testing.T) {
