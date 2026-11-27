@@ -249,13 +249,12 @@ func TestSessionSuccessionBoundedReloadRejectsStallsAndSpecialFiles(t *testing.T
 	if (Resolved{ConfigFile: "/nonexistent"}).SuccessionEnabledContext(cancelled) {
 		t.Fatal("cancelled context enabled succession")
 	}
-	if runtime.GOOS != "windows" {
-		emptyHomeEnv := EnvConfig{Getenv: func(string) string { return "" }}
-		t.Setenv("HOME", "")
-		t.Setenv("XDG_CONFIG_HOME", "")
-		if emptyHomeEnv.SuccessionEnabled() {
-			t.Fatal("empty BaseTokenPath enabled succession")
-		}
+	emptyHomeEnv := EnvConfig{Getenv: func(string) string { return "" }}
+	t.Setenv("HOME", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("AppData", "")
+	if emptyHomeEnv.SuccessionEnabled() {
+		t.Fatal("empty BaseTokenPath enabled succession")
 	}
 
 	dir := t.TempDir()

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/mateusz-klatt/iris/internal/sessionproof"
@@ -138,5 +139,83 @@ func TestWindowsSessionPathAbsentAndParentFileDamaged(t *testing.T) {
 	}
 	if !sessionPathAbsent(missingLeaf, pathErr) {
 		t.Fatal("missing ancestors to volume root did not grade absent")
+	}
+}
+
+func TestReadExactRecordDeadlineWindowsOpenRacesAndDamage(t *testing.T) {
+	dir := t.TempDir()
+	raw, err := sessionproof.EncodeRecord(sessionproof.Record{
+		Version:     sessionproof.FormatVersion,
+		Origin:      sessionproof.OriginHook,
+		Generation:  4,
+		ExecutionID: testExecutionID("f"),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Open-time ErrNotExist race where Lstat finds a directory (non-absent) grades FileDamaged.
+	vanishDir := filepath.Join(dir, "vanish-dir.execution")
+	if err := os.WriteFile(vanishDir, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	origOpen := exactRecordOpen
+	t.Cleanup(func() { exactRecordOpen = origOpen })
+	exactRecordOpen = func(p string, _ exactRecordID) (*os.File, error) {
+		_ = os.Remove(p)
+		if mkErr := os.Mkdir(p, 0o700); mkErr != nil {
+			t.Fatal(mkErr)
+		}
+		return nil, os.ErrNotExist
+	}
+	if _, st, err := readExactRecordDeadline(vanishDir, nil, timeZero); st != sessionproof.FileDamaged || !errors.Is(err, sessionproof.ErrInvalidRecord) {
+		t.Fatalf("open ErrNotExist directory race = (%v, %v), want FileDamaged/ErrInvalidRecord", st, err)
+	}
+	exactRecordOpen = origOpen
+
+	// Real NTFS file swapped between statExactRecordFile and openExactRecordFile grades FileDamaged.
+	realExec := filepath.Join(dir, "swap.execution")
+	otherExec := filepath.Join(dir, "other.execution")
+	if err := os.WriteFile(realExec, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(otherExec, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	origCreate := winExactRecordCreateFile
+	t.Cleanup(func() { winExactRecordCreateFile = origCreate })
+	swapped := false
+	winExactRecordCreateFile = func(name *uint16, access, share uint32, sa *windows.SecurityAttributes, disp, flags uint32, tmpl windows.Handle) (windows.Handle, error) {
+		if !swapped && flags == windows.FILE_ATTRIBUTE_NORMAL|windows.FILE_FLAG_OPEN_REPARSE_POINT {
+			swapped = true
+			if rerr := os.Rename(otherExec, realExec); rerr != nil {
+				t.Fatal(rerr)
+			}
+		}
+		return origCreate(name, access, share, sa, disp, flags, tmpl)
+	}
+	if _, st, err := readExactRecordDeadline(realExec, nil, timeZero); st != sessionproof.FileDamaged || !errors.Is(err, sessionproof.ErrInvalidRecord) {
+		t.Fatalf("swapped file identity = (%v, %v), want FileDamaged/ErrInvalidRecord", st, err)
+	}
+	winExactRecordCreateFile = origCreate
+
+	// Open-time ERROR_ACCESS_DENIED and over-limit (4096-byte) regular file both grade FileDamaged.
+	winExactRecordCreateFile = func(name *uint16, access, share uint32, sa *windows.SecurityAttributes, disp, flags uint32, tmpl windows.Handle) (windows.Handle, error) {
+		if flags == windows.FILE_ATTRIBUTE_NORMAL|windows.FILE_FLAG_OPEN_REPARSE_POINT {
+			return 0, windows.ERROR_ACCESS_DENIED
+		}
+		return origCreate(name, access, share, sa, disp, flags, tmpl)
+	}
+	if _, st, err := readExactRecordDeadline(realExec, nil, timeZero); st != sessionproof.FileDamaged || !errors.Is(err, sessionproof.ErrInvalidRecord) || !strings.Contains(err.Error(), windows.ERROR_ACCESS_DENIED.Error()) {
+		t.Fatalf("open ERROR_ACCESS_DENIED = (%v, %v), want FileDamaged wrapping ErrInvalidRecord + Access is denied", st, err)
+	}
+	winExactRecordCreateFile = origCreate
+
+	oversized := filepath.Join(dir, "oversized.execution")
+	if err := os.WriteFile(oversized, make([]byte, sessionproof.RecordReadLimit), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, st, err := readExactRecordDeadline(oversized, nil, timeZero); st != sessionproof.FileDamaged || !errors.Is(err, sessionproof.ErrInvalidRecord) {
+		t.Fatalf("oversized exact record = (%v, %v), want FileDamaged/ErrInvalidRecord", st, err)
 	}
 }
