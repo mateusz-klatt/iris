@@ -516,7 +516,7 @@ func applyFailuresFrom(ctx context.Context, res *Result, tokenFile, fallbackToke
 			continue
 		}
 		if entry.Observed() {
-			// Not a failure: the hook worked, but saw something doctor should say (C4).
+			// Observations give context. A separate failure entry grades a fail-open.
 			if observed[name] == nil {
 				observed[name] = map[string]int{}
 			}
@@ -620,6 +620,9 @@ func applyFailuresFrom(ctx context.Context, res *Result, tokenFile, fallbackToke
 			}
 			if seen[hook.RestoreFloorRefused]+seen[hook.RestoreFloorHubTooOld] > 0 {
 				row.Detail = joinDetail(row.Detail, "the hook kept its generation proof and left the session unregistered. Edits may have gone unclaimed. Verify the configured hub and its restore history, or start a new client session")
+			}
+			if seen[hook.SessionsLockTimeout] > 0 {
+				row.Detail = joinDetail(row.Detail, "the hook could not finish registration because the sessions directory lock stayed busy. If timeouts recur, try running fewer concurrent client sessions that share the directory")
 			}
 			if seen[hook.EndedGenerationRefused]+seen[hook.BindingGenerationRefused] > 0 || otherDamage[row.Client] {
 				row.Detail = joinDetail(row.Detail, "start a new client session to obtain fresh proof. To resume this session, verify the configured hub and its session history before archiving any named file. Keep the end marker while it protects against a backup of the ended session")

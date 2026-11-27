@@ -214,6 +214,9 @@ delay an attention note, a wake's consumption or the cleanup of session files (A
 keeps its status and adds "skipped in 24 h: …" with the count, and `iris doctor` does not exit 1
 for them.
 
+When the hook times out waiting for the lock to read registration proof, it fails open, and doctor
+shows `sessions_lock_timeout` with advice about concurrent sessions sharing the directory.
+
 A shell command whose reconciliation ran past its budget is graded differently. The budget is 1 s,
 or 300 ms when the hub runs on the same machine. The hook still worked; that command's changes only
 went unclaimed, because `git status` or the hub was slow: a big or cold worktree, a loaded machine
