@@ -63,6 +63,8 @@ func runMCP(args []string) error {
 	config := hubclient.NewConfig()
 	resolver := binding.New(&hubclient.Client{Config: config}, *client)
 	resolver.Ancestor = mcpAncestor(*client)
+	resolver.SuccessionEnabled = config.SuccessionEnabledContext
+	resolver.ParentAlive = parent.Alive
 	// What a tool call's ids show goes to the log doctor reads, within a hook's small budget.
 	// Pin the resolved token path so long-lived observations never re-read client.json.
 	observeEnv := map[string]string{"IRIS_TOKEN_FILE": config.TokenFile}
@@ -93,6 +95,7 @@ func bindingSessions(resolver *binding.Resolver, config hubclient.Resolved) (*ho
 		return nil, err
 	}
 	sessions := hook.NewSessions(tokenPath)
+	resolver.Evidence = sessions
 	resolver.Recall = sessions.RecallBindingGeneration
 	resolver.ObserveBindingRefusal = sessions.ObserveBindingRefusal
 	return sessions, nil

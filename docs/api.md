@@ -202,13 +202,11 @@ a separate follow-up call. A combined shell reconcile runs on the hub before the
 an older hub can commit before the client discards a vetoed reply. An old hook that omits the floor
 cannot be protected server-side.
 
-A shim or `iris watch` that retains the binding reattaches by heartbeat: a heartbeat with the
-current generation does the same work during the recovery window and returns the same response.
-This can keep an idle session attached without a hook. A shim binds on its first tool call;
-without a binding it has no generation to send. A heartbeat that confirms loss drops that
-binding and never renews that Execution again. Codex id-mode sub-agent and foreign-session
-lookups keep no binding and renew nothing. After the window the heartbeat returns `lost`, and
-the session needs a new generation.
+A shim or `iris watch` that retains the binding can reattach by heartbeat with the current
+generation during the recovery window. An opted process-bound shim uses registration with
+its client process tuple. This can keep an idle session attached without a hook. A heartbeat
+that confirms loss drops that binding. Codex id-mode sub-agent and foreign-session lookups
+keep no binding and renew nothing. After the window the session needs a new generation.
 
 `POST /v1/bind` resolves a stdio MCP process to an Execution, following D6.
 
@@ -256,6 +254,13 @@ omitting `hook_seen` and provenance so v0.1.15 resolvers retain their existing D
 resumed only when the heartbeat sends both `"source":"shim"` and `"succession_proof":true`; `hook`
 and `watch` heartbeats cannot satisfy that check and return `lost`.
 
+An opted shim that bound by client process sends `?process_bound=true` with its heartbeat.
+The hub renews a live Execution and refuses recovery with `409 lost`. The shim reattaches via
+`POST /v1/sessions?process_bound=true` with a positive generation, `source:"shim"` and the
+client process tuple. The hub checks hook registration, the tuple and retained supersession
+history before renewing or resuming the Execution. Both shim and hub need this protocol
+support for the process check to apply across a restart.
+
 `POST /v1/executions/{id}/end` is a best-effort end of session. It takes `{"generation":1}`. With
 `"hand_over":"ex_..."` it first moves the Execution's agent's unacknowledged deliveries to the agent
 of that live Execution and wakes it, each moved delivery asking for attention again. A message the
@@ -285,9 +290,9 @@ accept the remembered generation before the persisted 120 s recovery deadline:
 | A prompt on Claude Code, Codex, Copilot or Kimi; Antigravity's `PreInvocation` | Registers with remembered proof. Cursor and Grok prompts do not register. |
 | A recognized pre-edit hook with paths inside the worktree | Registers before touching the paths. The edit is refused if recovery proof is missing. |
 | A shell reconcile | Can register with proof. A command is not a reliable recovery action: a budget spent before registration reaches the hub leaves the session recovering. Registration may already have succeeded before a later timeout. ADR 018's breaker changes later hooks' scope; it does not register in the background. |
-| A heartbeat from a shim or `iris watch` retaining the binding | Reattaches with its generation on periodic ticks, immediately on an MCP tool-call refresh after `lost`, and immediately on `iris watch` reconnect or `reset`. Codex id-mode sub-agent lookups never renew. |
+| A heartbeat from a shim or `iris watch` retaining the binding | Can reattach with its generation on periodic ticks, tool-call refresh, and watch reconnect or reset. An opted process-bound shim reattaches by positive-generation registration after the hub refuses recovery. Codex id-mode sub-agent lookups never renew. |
 | An unbound shim's heartbeat tick (ADR 027) | Looks the session up as a call without a handle would, and if `unbound` may send a reattach-only registration (`source: "shim"`, `generation > 0`) from hook generation memory for a positively identified, hook-registered session. It never registers with `generation = 0`, never binds by a handle and never binds one found lost. Not for Codex, a process in id mode or `iris watch`. |
-| Another MCP call | A bound shim immediately heartbeats on a `lost` refresh and retries `/v1/bind`. An unbound shim (including a Codex id-mode root, excluding sub-agents) may reattach a recovering, hook-registered session using hook generation memory (`generation > 0`), never falling back to `generation = 0` on missing, malformed or mismatched memory. Primary `whoami` also heartbeats after a successful bind. |
+| Another MCP call | A bound shim responds to a `lost` refresh by renewing and confirming the pair, or by registering with a process tuple for an opted process binding. An unbound shim, including a Codex id-mode root, may reattach a recovering hook-registered session using positive-generation hook evidence. Recovery refusals stop the attempt. Primary `whoami` renews the resolved pair after a successful bind. |
 | Waiting past the deadline or `SessionEnd` | Loses or ends the old Execution and its reservations. `ended` stays terminal; neither `iris mcp` nor `iris watch` can revive an expired or ended generation. A later registering hook must obtain a new generation. |
 
 Resume the session owning the Execution to fire its enabled `SessionStart` hook, or submit a

@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/mateusz-klatt/iris/internal/hubclient"
+	"github.com/mateusz-klatt/iris/internal/sessionproof"
 )
 
 // In the runs measured on Codex 0.167.0, each tool call named its session in _meta.sessionId and
@@ -133,9 +134,9 @@ func (r *Resolver) overrideOrDecide(ctx context.Context, session, thread string)
 	if r.decided.Load() == nil {
 		r.mu.Lock()
 		defer r.mu.Unlock()
-		if ex := r.Getenv("IRIS_EXECUTION"); ex != "" && !r.gone[ex] {
+		if ex := r.Getenv("IRIS_EXECUTION"); ex != "" && !r.wasLostHeld(ex) {
 			b, err := r.bindOverrideHeld(ctx, ex)
-			if !r.gone[ex] {
+			if !r.wasLostHeld(ex) {
 				return b, true, err
 			}
 		}
@@ -149,12 +150,12 @@ func (r *Resolver) bindOverrideHeld(ctx context.Context, ex string) (Bound, erro
 	if r.bound.ExecutionID == ex {
 		return r.refresh(ctx)
 	}
-	var b Bound
-	if err := r.Hub.Do(ctx, "POST", "/v1/bind", map[string]any{"execution": ex, "client": r.Client, "host": r.Host, "cwd": r.CWD}, &b); err != nil {
+	opted := r.successionEnabled(ctx)
+	b, err := r.requestCandidate(ctx, map[string]any{"execution": ex, "client": r.Client, "host": r.Host, "cwd": r.CWD}, "", 1, opted)
+	if err != nil {
 		return Bound{}, err
 	}
-	b.Rung = 1
-	if err := r.checkGenerationHeld(b); err != nil {
+	if err := r.admitHeld(ctx, b, false, opted, sessionproof.Snapshot{}); err != nil {
 		return Bound{}, err
 	}
 	r.keepHeld(b)
@@ -179,7 +180,7 @@ func (r *Resolver) sessionBinding(ctx context.Context, session string) (b Bound,
 			return b, false, err
 		}
 	}
-	first := len(r.gone) == 0
+	first := !r.lost && len(r.gone) == 0 && len(r.legacyGone) == 0
 	if first && r.since.IsZero() {
 		r.since = time.Now()
 	}
@@ -200,7 +201,7 @@ func (r *Resolver) sessionBinding(ctx context.Context, session string) (b Bound,
 		return Bound{}, first, errUnusable
 	case err != nil:
 		return Bound{}, false, err
-	case r.gone[b.ExecutionID]:
+	case r.wasLostHeld(b.ExecutionID):
 		return Bound{}, false, errUnusable
 	}
 	r.keepHeld(b)
@@ -208,18 +209,10 @@ func (r *Resolver) sessionBinding(ctx context.Context, session string) (b Bound,
 }
 
 func (r *Resolver) bySessionOrReattachHeld(ctx context.Context, session string) (Bound, error) {
-	b, err := r.bySession(ctx, session)
-	if err == nil {
-		if b.SessionID == "" {
-			b.SessionID = session
-		}
-		if err := r.checkGenerationHeld(b); err != nil {
-			return Bound{}, err
-		}
-		return b, nil
-	}
-	if IsCode(err, "unbound") {
-		if rb, attempted, rerr := r.reattachByMemoryHeld(ctx, session, 2); attempted {
+	opted := r.successionEnabled(ctx)
+	b, before, err := r.bindSession(ctx, session, r.processGenerationHeld(session), true, true, opted)
+	if tryMemoryRecovery(err, opted) {
+		if rb, attempted, rerr := r.reattachByMemoryHeld(ctx, session, 2, before); attempted {
 			return rb, rerr
 		}
 	}
@@ -230,28 +223,38 @@ func (r *Resolver) bySessionOrReattachHeld(ctx context.Context, session string) 
 // behind a first bind's grace period. It keeps nothing and renews nothing. A lookup respects the
 // session's end marker and, for the native session, the hook's live proof.
 func (r *Resolver) lookup(ctx context.Context, session, nativeSession string) (Bound, error) {
-	b, err := r.bySession(ctx, session)
+	b, _, err := r.bindSession(ctx, session, 0, session == nativeSession, false, r.successionEnabled(ctx))
 	if unusableAnswer(err) {
 		r.noteUnusable()
 		err = errUnusable
 	}
+	return b, err
+}
+
+func (r *Resolver) bindSession(ctx context.Context, session string, retained int, own, allowHookless, opted bool) (Bound, sessionproof.Snapshot, error) {
+	var before sessionproof.Snapshot
+	if opted {
+		var err error
+		before, err = r.inspectEvidence(ctx, session, true)
+		if err != nil {
+			return Bound{}, before, err
+		}
+	}
+	b, err := r.bySession(ctx, session, opted)
 	if err != nil {
-		return Bound{}, err
+		return Bound{}, before, err
 	}
-	if err := r.checkGeneration(session, b.Generation, 0, session == nativeSession); err != nil {
-		return Bound{}, err
+	if err := r.admitCandidate(ctx, b, retained, own, allowHookless, opted, before); err != nil {
+		return Bound{}, before, err
 	}
-	return b, nil
+	return b, before, nil
 }
 
 // bySession asks the hub for the one usable Execution of session on this host: active, of the
 // hub's current boot, not recovering and within its lease. It only looks and changes nothing at
 // the hub. A session's id is the session-id rung, 2, which other clients reach through a variable.
-func (r *Resolver) bySession(ctx context.Context, session string) (Bound, error) {
-	var b Bound
-	err := r.Hub.Do(ctx, "POST", "/v1/bind", map[string]any{"client": r.Client, "host": r.Host, "cwd": r.CWD, "session_id": session}, &b)
-	b.Rung = 2
-	return b, err
+func (r *Resolver) bySession(ctx context.Context, session string, opted bool) (Bound, error) {
+	return r.requestCandidate(ctx, map[string]any{"client": r.Client, "host": r.Host, "cwd": r.CWD, "session_id": session}, session, 2, opted)
 }
 
 // unusableAnswer is a lookup's answer that no single usable Execution has the session.

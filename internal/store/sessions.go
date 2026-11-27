@@ -55,14 +55,17 @@ type Request struct {
 	Exclude string `json:"exclude"`
 	// HandOver names the Execution that ending this one hands its unacknowledged mail to: the
 	// session's hook's, when an MCP ends the Execution it had to register itself.
-	HandOver    string   `json:"hand_over"`
-	ExecutionID string   `json:"execution_id"`
-	Generation  int64    `json:"generation"`
-	Key         string   `json:"key"`
-	ToolCallID  string   `json:"tool_call_id"`
-	Paths       []string `json:"paths"`
-	RenameFrom  string   `json:"rename_from"`
-	RenameTo    string   `json:"rename_to"`
+	HandOver    string `json:"hand_over"`
+	ExecutionID string `json:"execution_id"`
+	Generation  int64  `json:"generation"`
+	// ProcessBound asks the hub to avoid heartbeat recovery and check process
+	// supersession during positive-generation shim registration.
+	ProcessBound bool     `json:"-"`
+	Key          string   `json:"key"`
+	ToolCallID   string   `json:"tool_call_id"`
+	Paths        []string `json:"paths"`
+	RenameFrom   string   `json:"rename_from"`
+	RenameTo     string   `json:"rename_to"`
 	// Groups are a grouped touch's paths by the checkout each file lies in (ADR 033). It is left
 	// out of every other request, so their retry hashes stay as before.
 	Groups []ClaimGroup `json:"groups,omitempty"`
@@ -524,8 +527,14 @@ func (t *transaction) register(r Request, outside bool) (map[string]any, error) 
 			if e.HookSeenMS == 0 {
 				return nil, fail("lost", "reattach requires a hook-registered session")
 			}
-			if (r.ClientPID != 0 || r.ClientPIDStartMS != 0) && (e.PID != r.ClientPID || e.PIDStart != r.ClientPIDStartMS) {
+			if r.ProcessBound && (r.ClientPID <= 0 || r.ClientPIDStartMS <= 0) ||
+				(r.ClientPID != 0 || r.ClientPIDStartMS != 0) && (e.PID != r.ClientPID || e.PIDStart != r.ClientPIDStartMS) {
 				return nil, fail("lost", "session belongs to another client process")
+			}
+			if r.ProcessBound {
+				if err := t.checkProcessSuperseded(e); err != nil {
+					return nil, err
+				}
 			}
 		}
 		// A hook reports the checkout of the event it saw, which can be another repository: a
@@ -790,7 +799,7 @@ func (t *transaction) heartbeat(r Request) (map[string]any, error) {
 		return nil, err
 	}
 	if err == nil && e.State == "active" && e.Recovery.Valid && e.Generation == r.Generation {
-		if r.SuccessionProof && e.Single && e.Client != "codex" && !isHooklessSuccessionChild(e) {
+		if r.SuccessionProof && (r.ProcessBound || e.Single && e.Client != "codex" && !isHooklessSuccessionChild(e)) {
 			return nil, fail("lost", "process-bound recovery requires positive-generation shim registration")
 		}
 		if err := allowHooklessHeartbeat(e, r); err != nil {

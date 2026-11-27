@@ -6,6 +6,7 @@ import (
 
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 	"github.com/mateusz-klatt/iris/internal/proc"
+	"github.com/mateusz-klatt/iris/internal/sessionproof"
 )
 
 // WakeTarget is the positive session binding a native wake may follow. SessionID keeps
@@ -53,16 +54,15 @@ func (r *Resolver) lookupAntigravityWakeHeld(ctx context.Context) (Bound, error)
 	if a.PID <= 0 || a.StartMS <= 0 || !proc.SingleSession(a, "antigravity") {
 		return Bound{}, errUnusable
 	}
-	var b Bound
-	err := r.Hub.Do(ctx, "POST", "/v1/bind", map[string]any{
+	b, err := r.requestCandidate(ctx, map[string]any{
 		"client":              "antigravity",
 		"host":                r.Host,
 		"cwd":                 r.CWD,
 		"client_pid":          a.PID,
 		"client_pid_start_ms": a.StartMS,
-	}, &b)
+	}, "", 3, false)
 	if IsCode(err, "ambiguous") {
-		b, err = r.bySession(ctx, r.wakeSession)
+		b, err = r.bySession(ctx, r.wakeSession, false)
 	}
 	if err != nil {
 		return Bound{}, err
@@ -71,7 +71,7 @@ func (r *Resolver) lookupAntigravityWakeHeld(ctx context.Context) (Bound, error)
 		return Bound{}, errUnusable
 	}
 	b.Rung = 3
-	if err := r.checkGenerationHeld(b); err != nil {
+	if err := r.admitHeld(ctx, b, false, false, sessionproof.Snapshot{}); err != nil {
 		return Bound{}, err
 	}
 	return b, nil
@@ -108,10 +108,10 @@ func (r *Resolver) StartIfPrimary(expected WakeTarget, start func() error) (bool
 func (r *Resolver) primaryHeld() (WakeTarget, bool) {
 	m := r.decided.Load()
 	if r.Host == "" || r.bound.ExecutionID == "" || r.bound.Generation <= 0 ||
-		r.lost || r.gone[r.bound.ExecutionID] || r.checkGenerationHeld(r.bound) != nil {
+		r.lost || r.wasLostHeld(r.bound.ExecutionID) {
 		return WakeTarget{}, false
 	}
-	if ex := r.Getenv("IRIS_EXECUTION"); ex != "" && !r.gone[ex] {
+	if ex := r.Getenv("IRIS_EXECUTION"); ex != "" && !r.wasLostHeld(ex) {
 		return WakeTarget{}, false
 	}
 	switch r.Client {
@@ -119,9 +119,16 @@ func (r *Resolver) primaryHeld() (WakeTarget, bool) {
 		if m == nil || m.mode != root || r.bound.Rung != 2 {
 			return WakeTarget{}, false
 		}
+		ctx := context.Background()
+		opted := r.successionEnabled(ctx)
+		if (opted || r.bound.Classified) && !r.bound.HookSeen ||
+			r.admitHeld(ctx, r.bound, false, opted, sessionproof.Snapshot{}) != nil {
+			return WakeTarget{}, false
+		}
 		return WakeTarget{SessionID: m.session, Bound: r.bound, Host: r.Host}, true
 	case "antigravity":
-		if m == nil || m.mode != legacy || r.wakeSession == "" || r.own || r.bound.Rung != 3 || r.bound.SessionID != r.wakeSession {
+		if m == nil || m.mode != legacy || r.wakeSession == "" || r.own || r.bound.Rung != 3 || r.bound.SessionID != r.wakeSession ||
+			r.admitHeld(context.Background(), r.bound, false, false, sessionproof.Snapshot{}) != nil {
 			return WakeTarget{}, false
 		}
 		return WakeTarget{SessionID: r.wakeSession, Bound: r.bound, Host: r.Host, Client: "antigravity"}, true

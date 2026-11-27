@@ -970,12 +970,13 @@ Changes from the reference schema:
    any retained row for `(host_id, client, client_pid, client_pid_start_ms)` (indexed by
    migration 030's `execution_process_hook` partial index)—has `hook_seen_ms > 0`. Requests with a
    distinct native `session_id` and `single_session: false` check same-session history only.
-   Consequently, the hub cannot distinguish a Claude `--continue` alias `session_id` from a
-   genuinely new native Rung-2 session in the same process: when a fresh MCP resolver first runs
-   after the hooked session is already `lost` or `ended` (with no in-memory binding or loss record),
-   registration under the alias succeeds as an active unhooked `generation: 1` row beside the
-   retained hook row. Genuine hookless D6 bootstrap and positive-generation D9 reattachment remain
-   intact; clients do not yet send `succeed` or `succession_proof` admission.
+   With succession off, a fresh Claude `--continue` shim can use a distinct native-looking
+   session alias after its hooked session is lost or ended. An opted Claude shim with a verified
+   process tuple uses the process-scoped D6 fallback, so Choice A checks the retained hook row.
+   Genuine hookless D6 bootstrap and positive-generation D9 reattachment remain available.
+   Opted shims admit a hookless succession child only against matching local shim lineage.
+   A recovering opted Rung-3 binding reattaches by positive-generation registration with its
+   process tuple.
    The [API recovery guidance](api.md#mcp-tools-answering-lost) lists the events and the binding-mode
    limits.
 3. A claim has `origin` (`explicit` or `auto`) and an optional expiry instead of a mandatory
@@ -1714,11 +1715,12 @@ On `modernc.org/sqlite`, with real concurrency:
   requests with a distinct native `session_id` and `single_session: false` check same-session history only).
   The hub trusts the host-token holder for that host's sessions and `source` is self-declared: this
   closes the proofless fallback path of unmodified Iris clients and old or foreign non-hook clients,
-  not a malicious host-token holder who can claim `hook` and already register sessions. Likewise,
-  the hub cannot tell a Claude `--continue` alias `session_id` apart from a genuinely new native
-  Rung-2 session in the same process when both send `single_session: false`, so a fresh MCP
-  resolver starting after the hooked session is already `lost` or `ended` (with no in-memory
-  binding or loss state) still registers an active unhooked `generation: 1` row under that alias ID.
+  not a malicious host-token holder who can claim `hook` and already register sessions. The hub
+  treats a Claude `--continue` alias `session_id` as a new native Rung-2 session when registration
+  sends `single_session: false`. With succession off, a fresh MCP resolver can still register an
+  unhooked `generation: 1` row under that alias after the hook's session is `lost` or `ended`.
+  A fresh Claude resolver with succession enabled and a positive process tuple uses a
+  process-scoped fallback so Choice A checks retained hook history for that process too.
   Genuine no-hook D6 bootstrap (zero retained `hook_seen_ms > 0` rows) and positive-generation D9
   reattachment remain intact; if retention sweeps all matching historical rows, the guard has
   nothing left to check.

@@ -661,7 +661,7 @@ func TestLookupOnlyWakeRejectsLowerProcessGeneration(t *testing.T) {
 	if !ok || first.Bound.Generation != 3 {
 		t.Fatalf("wake initial binding: %v, %+v", ok, first)
 	}
-	r.markLostHeld(first.Bound)
+	r.markLostHeld(first.Bound, false)
 	gen = 1
 	if next, ok := r.LookupWake(ctx); ok || next != (WakeTarget{}) {
 		t.Fatalf("wake bound a lower restored generation: %v, %+v", ok, next)

@@ -57,7 +57,7 @@ func TestARegistrationKeepsTheWorktreeAndCapabilities(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	r := &Resolver{Hub: &hubclient.Client{Config: config{srv.URL}}, Client: "codex", Host: "host", CWD: "/src/app"}
-	b, err := r.register(context.Background(), "s", proc.Ancestor{PID: 1, StartMS: 2}, true, 3)
+	b, err := r.register(context.Background(), "s", proc.Ancestor{PID: 1, StartMS: 2}, true, 3, false)
 	if err != nil || b.Worktree != "/src/app" || !reflect.DeepEqual(b.Capabilities.List(), []string{"shell_scope", "file_claims"}) {
 		t.Fatalf("%+v %v", b, err)
 	}

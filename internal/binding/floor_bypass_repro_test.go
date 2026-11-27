@@ -1,6 +1,7 @@
 package binding
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"errors"
@@ -383,16 +384,11 @@ func TestChoiceAFreshClaudeRung2AfterEndedAndContinueAliasEndToEnd(t *testing.T)
 	}
 }
 
-func TestKnownLimitFreshContinueAliasAfterTerminalHookRegisters(t *testing.T) {
-	// Known limit in M2a: a fresh Claude --continue resolver whose first Resolve runs after the
-	// real hook session is already lost or ended has empty r.last and r.gone. It falls through
-	// to orRegister and sends its distinct alias CLAUDE_CODE_SESSION_ID with single_session=false.
-	// Choice A skips the process-history EXISTS for distinct native session IDs with
-	// single_session=false so fresh native Rung-2 sessions can bootstrap, and the hub cannot tell
-	// such an alias apart from a new native session with this evidence alone. Fixed in ADR 039
-	// M2d resolver admission, where this assertion flips to refusal.
+func TestFreshContinueAliasAfterTerminalHookIsRefused(t *testing.T) {
+	// Claude --continue can pass a different session ID to the shim. A fresh shim with
+	// succession enabled uses process-scoped fallback, so Choice A sees the retained hook.
 	for _, terminal := range []string{"lost", "ended"} {
-		t.Run("fresh resolver registers alias G1 after "+terminal, func(t *testing.T) {
+		t.Run(terminal, func(t *testing.T) {
 			ctx := t.Context()
 			h := newRestartableBindingHub(t)
 			cwd := t.TempDir()
@@ -440,34 +436,25 @@ func TestKnownLimitFreshContinueAliasAfterTerminalHookRegisters(t *testing.T) {
 					}
 					return ""
 				},
-				Ancestor: func() (proc.Ancestor, error) { return anc, nil },
-				Recall:   sessions.RecallBindingGeneration,
+				Ancestor:          func() (proc.Ancestor, error) { return anc, nil },
+				Recall:            sessions.RecallBindingGeneration,
+				Evidence:          sessions,
+				SuccessionEnabled: func(context.Context) bool { return true },
+				ParentAlive:       func() bool { return true },
 			}
 			before := len(h.sessions())
 			b, err := r.Resolve(ctx, "")
 			reqs := h.sessions()[before:]
-			if err != nil || b.Generation != 1 || b.Rung != 2 || b.SessionID != "S-continue-alias" || b.HookSeen || !r.own || r.Lost() {
-				t.Fatalf("expected alias G1 registration after %s: bound=%+v own=%t lost=%t err=%v reqs=%+v", terminal, b, r.own, r.Lost(), err, reqs)
+			if !IsCode(err, "lost") || b != (Bound{}) || r.own || len(r.gone) != 0 {
+				t.Fatalf("fresh alias was not refused after %s: bound=%+v own=%t gone=%v err=%v reqs=%+v", terminal, b, r.own, r.gone, err, reqs)
 			}
-			if len(reqs) != 1 || reqs[0].SessionID != "S-continue-alias" || reqs[0].Generation != 0 || reqs[0].SingleSession || reqs[0].Source != "mcp" || reqs[0].ClientPID != anc.PID || reqs[0].ClientPIDStartMS != anc.StartMS {
-				t.Fatalf("unexpected registration request after %s: %+v", terminal, reqs)
+			if len(reqs) != 1 || reqs[0].SessionID != "mcp-42-100" || reqs[0].Generation != 0 || !reqs[0].SingleSession || reqs[0].Source != "mcp" || reqs[0].ClientPID != anc.PID || reqs[0].ClientPIDStartMS != anc.StartMS {
+				t.Fatalf("fallback after %s did not use process identity: %+v", terminal, reqs)
 			}
 
 			rows := executionRows(t, h.file)
-			bySession := make(map[string]executionRow, len(rows))
-			for _, row := range rows {
-				bySession[row.session] = row
-			}
-			hookRow, okHook := bySession["S-continued"]
-			aliasRow, okAlias := bySession["S-continue-alias"]
-			if len(rows) != 2 || !okHook || !okAlias {
-				t.Fatalf("unexpected rows after %s: %+v", terminal, rows)
-			}
-			if hookRow.generation != 1 || hookRow.state != terminal || hookRow.hookSeen == 0 {
-				t.Fatalf("retained hook row mismatch after %s: %+v", terminal, hookRow)
-			}
-			if aliasRow.id != b.ExecutionID || aliasRow.generation != 1 || aliasRow.state != "active" || aliasRow.hookSeen != 0 {
-				t.Fatalf("alias row mismatch after %s: %+v", terminal, aliasRow)
+			if len(rows) != 1 || rows[0].session != "S-continued" || rows[0].generation != 1 || rows[0].state != terminal || rows[0].hookSeen == 0 {
+				t.Fatalf("alias fallback changed retained executions after %s: %+v", terminal, rows)
 			}
 		})
 	}

@@ -38,7 +38,7 @@ const wantLostMessage = "This call's Execution or cached claim is not usable. " 
 	"Hooks need hub access and the remembered generation. " +
 	"A shell command is not a reliable remedy: a reconcile that times out before registration " +
 	"reaches the hub does not reattach. " +
-	"An MCP tool retry with a retained binding heartbeats immediately to reattach inside the 120 s window. " +
+	"An MCP tool retry with a retained binding attempts to reattach immediately inside the 120 s window. " +
 	"An unbound shim can reattach a positively identified, hook-registered session inside that window using the hook's remembered generation, never with generation 0. " +
 	"Without matching proof, or after the window or SessionEnd, the shim cannot reattach. " +
 	"Codex id-mode sub-agents never renew or reattach the Execution. " +

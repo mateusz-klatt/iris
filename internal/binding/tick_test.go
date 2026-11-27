@@ -524,7 +524,7 @@ func TestAHeartbeatAfterALookupStillDecides(t *testing.T) {
 		r.Observe = func(text string) { seen = append(seen, text) }
 		stop := maintain(t, r, "shim")
 		time.Sleep(21 * time.Second)
-		if !r.Lost() || boundNow(r).ExecutionID != "" || !r.gone["ex_1"] {
+		if !r.Lost() || boundNow(r).ExecutionID != "" || !r.wasLostHeld("ex_1") || len(r.gone) != 0 {
 			t.Fatalf("a lost heartbeat after a lookup: lost %v, bound %+v", r.Lost(), boundNow(r))
 		}
 		time.Sleep(20 * time.Second)
@@ -815,7 +815,7 @@ func TestAShimRebindsTheHooksNextGenerationAfterALoss(t *testing.T) {
 		stop = maintain(t, r, "shim") // The host wakes, and the same process carries on.
 		time.Sleep(41 * time.Second)
 		stop()
-		if r.bound.ExecutionID != second["execution_id"] || r.bound.Generation != 2 || r.Lost() || !r.gone[first["execution_id"].(string)] {
+		if r.bound.ExecutionID != second["execution_id"] || r.bound.Generation != 2 || r.Lost() || !r.wasLostHeld(first["execution_id"].(string)) || len(r.gone) != 0 {
 			t.Fatalf("bound %+v, lost %v, gone %v", r.bound, r.Lost(), r.gone)
 		}
 		if !slices.Equal(seen, []string{ObservedRebound}) {

@@ -76,10 +76,52 @@ func TestOptedHeartbeatRecoversWithoutProcessTuple(t *testing.T) {
 			s = restart(t, s, file, clock)
 			expectError(t, s, "validate", hb, "lost")
 
+			// The same row can bind through a native session or through its process.
+			// A process-bound shim explicitly limits its heartbeat to live renewal.
+			hb.ProcessBound = true
+			before := databaseState(t, s)
+			expectError(t, s, "heartbeat", hb, "lost")
+			if databaseState(t, s) != before {
+				t.Fatal("live-only heartbeat resumed a recovering row")
+			}
+
+			hb.ProcessBound = false
 			resumed := call(t, s, "heartbeat", hb)
 			assertHeartbeatResumed(t, s, hb, resumed)
 			assertClassifiedReply(t, resumed, nil, "hook", "initial", true)
+
+			hb.ProcessBound = true
+			live := call(t, s, "heartbeat", hb)
+			if live["execution_id"] != hb.ExecutionID || live["generation"] != hb.Generation || live["lease_ms"] != int64(60000) {
+				t.Fatalf("live-only heartbeat could not renew a live row: %+v", live)
+			}
 		})
+	}
+}
+
+func TestProcessBoundRegistrationRefusesSupersededProcessSession(t *testing.T) {
+	s, clock, file := testStore(t)
+	req := Request{Client: "claude", Host: "host", Cwd: "/repo/w", Worktree: "/repo/w", SessionID: "older",
+		Source: "hook", ClientPID: 201, ClientPIDStartMS: 2001}
+	original := call(t, s, "sessions", req)
+	newerReq := req
+	newerReq.SessionID = "newer"
+	newer := call(t, s, "sessions", newerReq)
+	call(t, s, "end", Request{ExecutionID: newer["execution_id"].(string), Generation: 1})
+	s = restart(t, s, file, clock)
+	req.Source, req.Generation, req.ProcessBound = "shim", 1, true
+	before := databaseState(t, s)
+	out, err := s.Call(t.Context(), "sessions", req)
+	var lost *Error
+	if out != nil || !errors.As(err, &lost) || lost.Code != "lost" || lost.Message != "a newer hook session superseded this client process session" {
+		t.Fatalf("superseded recovery = (%+v, %v)", out, err)
+	}
+	if databaseState(t, s) != before {
+		t.Fatal("supersession refusal changed database state")
+	}
+	req.ProcessBound = false
+	if recovered := call(t, s, "sessions", req); recovered["execution_id"] != original["execution_id"] {
+		t.Fatalf("legacy recovery changed identity: %+v", recovered)
 	}
 }
 

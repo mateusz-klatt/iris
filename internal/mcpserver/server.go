@@ -186,7 +186,7 @@ const lostMessage = "This call's Execution or cached claim is not usable. " +
 	"Hooks need hub access and the remembered generation. " +
 	"A shell command is not a reliable remedy: a reconcile that times out before registration " +
 	"reaches the hub does not reattach. " +
-	"An MCP tool retry with a retained binding heartbeats immediately to reattach inside the 120 s window. " +
+	"An MCP tool retry with a retained binding attempts to reattach immediately inside the 120 s window. " +
 	"An unbound shim can reattach a positively identified, hook-registered session inside that window using the hook's remembered generation, never with generation 0. " +
 	"Without matching proof, or after the window or SessionEnd, the shim cannot reattach. " +
 	"Codex id-mode sub-agents never renew or reattach the Execution. " +
@@ -219,19 +219,11 @@ const receiptDeadline = 2 * time.Second
 func call(ctx context.Context, resolver *binding.Resolver, b binding.Bound, primary bool, name string, in Input) (map[string]any, error) {
 	h := resolver.Hub
 	if name == "whoami" {
-		// Prove liveness and use the hub's current binding after a repository
-		// merge. Legacy lease-only replies leave the resolved binding intact.
-		// Only this process's own binding is renewed: a shim's heartbeat puts an
-		// Execution on a 60-second lease that only its maintainer keeps.
+		// A shim's heartbeat puts an Execution on a 60-second lease, so
+		// renew only the binding its own maintainer keeps.
 		if primary {
-			if err := resolver.CheckHeartbeatGeneration(b); err != nil {
-				return nil, err
-			}
-			renewed := b
-			if err := h.Do(ctx, "POST", "/v1/executions/"+url.PathEscape(b.ExecutionID)+"/heartbeat", map[string]any{"generation": b.Generation, "source": "shim"}, &renewed); err != nil {
-				return nil, err
-			}
-			if err := resolver.CheckHeartbeatGeneration(b); err != nil {
+			renewed, err := resolver.RenewPrimary(ctx, b)
+			if err != nil {
 				return nil, err
 			}
 			b = renewed

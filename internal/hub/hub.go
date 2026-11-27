@@ -260,6 +260,9 @@ func (h *Hub) api(w http.ResponseWriter, r *http.Request, operation string) {
 	if operation == "heartbeat" || operation == "end" {
 		req.ExecutionID = r.PathValue("id")
 	}
+	if operation == "heartbeat" || operation == "sessions" {
+		req.ProcessBound = r.URL.Query().Get("process_bound") == "true"
+	}
 	if operation == "ack" || operation == "receipts" || operation == "read_body" || operation == "read_message_body" || operation == "thread" {
 		req.Key = r.PathValue("id")
 	}

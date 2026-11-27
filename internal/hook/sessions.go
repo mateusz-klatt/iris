@@ -140,9 +140,22 @@ func (s *Sessions) InspectEvidence(client, session string, deadline time.Time, s
 
 // ObserveBindingRefusal names the file that vetoed a binding or renewal in the local doctor report.
 func (s *Sessions) ObserveBindingRefusal(client, session string, ended bool) {
-	path := s.memory.name(client, session)
 	if ended {
-		s.observeBinding(client, endedProof(path+".ended").Error())
+		s.ObserveRefusal(client, session, ".ended", false)
+		return
+	}
+	s.ObserveRefusal(client, session, "", false)
+}
+
+// ObserveRefusal records the session evidence file that refused binding or renewal.
+func (s *Sessions) ObserveRefusal(client, session, suffix string, damaged bool) {
+	path := s.memory.name(client, session) + suffix
+	if damaged {
+		s.observeBinding(client, damagedGenerationObservation(path))
+		return
+	}
+	if suffix == ".ended" {
+		s.observeBinding(client, endedProof(path).Error())
 		return
 	}
 	s.observeBinding(client, BindingGenerationRefused+" at "+path)
