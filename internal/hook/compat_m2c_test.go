@@ -75,6 +75,13 @@ func compatRepoRoot(t *testing.T) string {
 
 func compatBuildBinary(t *testing.T, root string, ref compatHistoricalRef) string {
 	t.Helper()
+	wt, removeWT := compatHistoricalWorktree(t, root, ref)
+	defer removeWT()
+	return compatBuildIris(t, wt, ref.name)
+}
+
+func compatHistoricalWorktree(t *testing.T, root string, ref compatHistoricalRef) (string, func()) {
+	t.Helper()
 	wt := filepath.Join(t.TempDir(), "wt-"+ref.name)
 	var removeOnce sync.Once
 	removeWT := func() {
@@ -83,17 +90,34 @@ func compatBuildBinary(t *testing.T, root string, ref compatHistoricalRef) strin
 		})
 	}
 	t.Cleanup(removeWT)
-	defer removeWT()
 
 	if out, err := exec.Command("git", "-C", root, "worktree", "add", "--detach", wt, ref.commit).CombinedOutput(); err != nil {
 		t.Fatalf("git worktree add %s (%s): %v\n%s", ref.name, ref.commit, err, out)
 	}
-	bin := filepath.Join(t.TempDir(), "iris-"+ref.name)
+	return wt, removeWT
+}
+
+func compatBuildCurrentBinary(t *testing.T) string {
+	t.Helper()
+	return compatBuildIris(t, compatRepoRoot(t), "current")
+}
+
+func compatBuildIris(t *testing.T, dir, name string) string {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "iris-"+name)
 	if runtime.GOOS == "windows" {
 		bin += ".exe"
 	}
 	cmd := exec.Command("go", "build", "-modcacherw", "-buildvcs=false", "-trimpath", "-o", bin, "./cmd/iris")
-	cmd.Dir = wt
+	cmd.Dir = dir
+	cmd.Env = compatGoEnv()
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("build iris %s: %v\n%s", name, err, out)
+	}
+	return bin
+}
+
+func compatGoEnv() []string {
 	env := make([]string, 0, len(os.Environ())+3)
 	for _, kv := range os.Environ() {
 		if !strings.HasPrefix(kv, "CGO_ENABLED=") && !strings.HasPrefix(kv, "GOMODCACHE=") && !strings.HasPrefix(kv, "GOPATH=") {
@@ -108,11 +132,7 @@ func compatBuildBinary(t *testing.T, root string, ref compatHistoricalRef) strin
 	if compatHostGoModCache != "" {
 		env = append(env, "GOMODCACHE="+compatHostGoModCache)
 	}
-	cmd.Env = append(env, "CGO_ENABLED=0")
-	if out, err := cmd.CombinedOutput(); err != nil {
-		t.Fatalf("build historical iris %s (%s): %v\n%s", ref.name, ref.commit, err, out)
-	}
-	return bin
+	return append(env, "CGO_ENABLED=0")
 }
 
 type liveCompatHub struct {
@@ -123,7 +143,11 @@ type liveCompatHub struct {
 
 func startLiveCompatHub(t *testing.T, bin string) *liveCompatHub {
 	t.Helper()
-	hubDir := t.TempDir()
+	return startLiveCompatHubAt(t, bin, t.TempDir())
+}
+
+func startLiveCompatHubAt(t *testing.T, bin, hubDir string) *liveCompatHub {
+	t.Helper()
 	dbPath := filepath.Join(hubDir, "iris.db")
 	tokenPath := filepath.Join(hubDir, "hub.token")
 	cmd := exec.Command(bin, "serve", "--listen", "127.0.0.1:0", "--allowed-hosts", "historical.iris.test", "--db", dbPath, "--token-file", tokenPath)
