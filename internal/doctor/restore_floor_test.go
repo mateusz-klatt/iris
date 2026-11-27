@@ -127,6 +127,59 @@ func TestDoctorExplainsWhyAHookDidNotRetryRegistration(t *testing.T) {
 	}
 }
 
+func TestDoctorDistinguishesRegistrationLockTimeoutFromRestoreFloorRefusal(t *testing.T) {
+	const lockAdvice = "try running fewer concurrent client sessions that share the directory"
+	const restoreAdvice = "Verify the configured hub and its restore history, or start a new client session"
+	for _, tc := range []struct {
+		observation, failure, advice, otherAdvice string
+	}{
+		{"sessions_lock_timeout", hook.ErrSessionsLocked.Error(), lockAdvice, restoreAdvice},
+		{hook.RestoreFloorRefused, hook.RestoreFloorRefused, restoreAdvice, lockAdvice},
+	} {
+		t.Run(tc.observation, func(t *testing.T) {
+			now := time.Now()
+			dir := t.TempDir()
+			token := filepath.Join(dir, "hub.token")
+			for _, entry := range []struct {
+				file, stage, text string
+			}{
+				{"hook-failures.log", "session", tc.failure},
+				{"hook-observed.log", "observed", tc.observation},
+			} {
+				log, err := json.Marshal(hook.Failure{
+					Time: now, Client: "claude", Event: "PreToolUse", Stage: entry.stage, Error: entry.text,
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(filepath.Join(dir, entry.file), append(log, '\n'), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+			res := Result{tokenFile: token, HubUp: true, TokenOK: true, Report: Report{
+				Clients: []ClientReport{{Client: "claude", Status: StatusOK}},
+			}}
+			if err := applyFailures(&res, token, now); err != nil {
+				t.Fatal(err)
+			}
+			if row := res.Report.Clients[0]; row.Status != StatusSilent || res.ExitCode() != 1 {
+				t.Errorf("client row = %+v, exit = %d, want silent and exit 1", row, res.ExitCode())
+			}
+			report := res.Format()
+			if !strings.Contains(report, tc.observation+" (1)") || !strings.Contains(report, tc.advice) ||
+				!strings.Contains(report, "hook failed open in the last 24 h; edits may have gone unclaimed") ||
+				strings.Contains(report, tc.otherAdvice) {
+				t.Errorf("doctor report:\n%s", report)
+			}
+			bundle := NewBundle(res, "test", now)
+			want := BundleCount{Client: "claude", Stage: "observed", Category: tc.observation, Count: 1}
+			if len(bundle.Observations) != 1 || bundle.Observations[0] != want {
+				t.Errorf("bundle observations = %+v, want %+v", bundle.Observations, want)
+			}
+		})
+	}
+}
+
 func TestDamagedProofDiagnosticEscapesControlCharacters(t *testing.T) {
 	now := time.Now()
 	dir := t.TempDir()

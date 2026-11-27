@@ -134,7 +134,7 @@ func observationKind(text string) string {
 	if kind, _, ok := hook.ParseReconcileSkipped(text); ok {
 		return kind
 	}
-	for _, kind := range []string{"unknown tool", "cross-load", binding.ObservedClientMismatch, binding.ObservedTwoSessions, binding.ObservedUnusable, binding.ObservedRebound, hook.RestoreFloorRefused, hook.DamagedGenerationProof, hook.EndedGenerationRefused, hook.BindingGenerationRefused, hook.SessionEvidenceWriteFailed} {
+	for _, kind := range []string{"unknown tool", "cross-load", binding.ObservedClientMismatch, binding.ObservedTwoSessions, binding.ObservedUnusable, binding.ObservedRebound, hook.RestoreFloorRefused, hook.SessionsLockTimeout, hook.DamagedGenerationProof, hook.EndedGenerationRefused, hook.BindingGenerationRefused, hook.SessionEvidenceWriteFailed} {
 		if strings.HasPrefix(text, kind) {
 			return kind
 		}

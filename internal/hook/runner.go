@@ -37,6 +37,9 @@ const RestoreFloorRefused = "restore_floor_refused"
 // RestoreFloorHubTooOld records a refusal whose answer omitted the generation detail.
 const RestoreFloorHubTooOld = RestoreFloorRefused + ": hub predates restore floor"
 
+// SessionsLockTimeout records a registration that could not read proof within the lock budget.
+const SessionsLockTimeout = "sessions_lock_timeout"
+
 const errRestoreFloor hookFailure = RestoreFloorRefused
 
 var errEndedGeneration = errors.New("remembered session generation has ended")
@@ -452,6 +455,10 @@ func registrationProof(state *runState, ev Event, m Memory, retained int) (gener
 		// A request already sent can use the proof it saw only as its generation-zero
 		// retry floor. Preserve it for refusal diagnostics.
 		return max(retained, generation), endedThrough, nil
+	}
+	if errors.Is(err, failSessionsLock) {
+		state.observe(SessionsLockTimeout)
+		return 0, 0, failSessionsLock
 	}
 	if err != nil {
 		note := RestoreFloorRefused

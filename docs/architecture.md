@@ -825,6 +825,8 @@ Changes from the reference schema:
    the resulting binding against G inside registration. The check covers outside-git and
    combined shell registration. If the retry is unsafe, the hook keeps G, records
    `restore_floor_refused` for doctor, and fails open without claiming or reconciling the edit.
+   If reading registration proof times out waiting for the sessions directory lock, the hook
+   records `sessions_lock_timeout` for doctor and fails open without using that proof.
    The proofless-edit denial during recovery still applies. An unreadable or malformed
    generation file, including a dangling symlink, also fails open before registration. An
    unreadable or malformed `.ended` marker likewise stops every ordinary, combined shell or

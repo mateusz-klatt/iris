@@ -672,6 +672,40 @@ func writePayload(root, session, file string) string {
 	return `{"session_id":` + quote(session) + `,"cwd":` + quote(root) + `,"hook_event_name":"PreToolUse","tool_name":"Write","tool_use_id":"t-` + file + `","tool_input":{"file_path":` + quote(filepath.Join(root, file)) + `}}`
 }
 
+func TestRegistrationWithSessionsLockTimeoutFailsOpen(t *testing.T) {
+	root := gitRepo(t)
+	env := failureEnv(t)
+	m := sessionsFor(env)
+	m.Remember("claude", "s", 3)
+	unlock, err := m.lock(hookLockBudget)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+
+	var calls int
+	out := Runner{
+		ClientName: "claude", EventName: "PreToolUse",
+		Stdin: strings.NewReader(writePayload(root, "s", "a.go")), Getenv: env,
+		Hub: countingHub{fn: func() { calls++ }}, after: never, logAfter: never,
+	}.Run()
+	want := FallbackAllow(ClientClaude)
+	if out.Exit != want.Exit || string(out.Stdout) != string(want.Stdout) || string(out.Stderr) != string(want.Stderr) {
+		t.Errorf("hook output %+v, want fallback allow %+v", out, want)
+	}
+	if calls != 0 {
+		t.Errorf("the hook made %d hub calls while it could not take the lock", calls)
+	}
+	token := env("IRIS_TOKEN_FILE")
+	notes, err := ReadRecentObservations(token, 10)
+	if err != nil || len(notes) != 1 || notes[0].Error != "sessions_lock_timeout" {
+		t.Errorf("observations = %+v, %v, want only sessions_lock_timeout", notes, err)
+	}
+	if failure := waitForFailure(t, token); failure.Stage != "session" || failure.Error != failSessionsLock.Error() {
+		t.Errorf("failure = %+v, want a session lock timeout at the session stage", failure)
+	}
+}
+
 func runWith(h Hub, m Memory, event, payload string) Output {
 	return Runner{ClientName: "claude", EventName: event, Stdin: strings.NewReader(payload), Hub: h, Getenv: func(string) string { return "" }, Memory: m, after: never}.Run()
 }
