@@ -176,7 +176,7 @@ func TestCandidateAdmissionRefusesEvidenceLockContentionAndNamesDamage(t *testin
 	if err := r.admitCandidate(t.Context(), b, 0, true, true, true, sessionproof.Snapshot{}); !errors.Is(err, errMalformedGeneration) {
 		t.Fatalf("admitted with damaged exact record: %v", err)
 	}
-	assertBindingObservation(t, token, hook.DamagedGenerationProof+" at "+prefix+".execution")
+	assertBindingObservation(t, token, "claude", hook.DamagedGenerationProof+" at "+prefix+".execution")
 	if err := r.admitCandidate(t.Context(), b, 0, true, true, false, sessionproof.Snapshot{}); err != nil {
 		t.Fatalf("disabled succession vetoed damaged exact record: %v", err)
 	}

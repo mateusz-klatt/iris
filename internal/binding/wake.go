@@ -19,6 +19,38 @@ type WakeTarget struct {
 	Client    string
 }
 
+// HookWakeBinding requires the hub's confirmation that it matched the session
+// and process together, as well as positive hook evidence.
+func HookWakeBinding(candidate hubclient.Candidate, session string) (Bound, error) {
+	b, err := boundFromCandidate(candidate, session, 3)
+	if err != nil || candidate.Match != "process_session" || !b.HookSeen {
+		return Bound{}, errInvalidCandidate
+	}
+	return b, nil
+}
+
+// MergeWakeHeartbeat confirms that the reply renews the pinned hook binding.
+func MergeWakeHeartbeat(b Bound, candidate hubclient.Candidate) (Bound, error) {
+	fresh, err := mergeCandidate(b, candidate)
+	if err != nil || !fresh.HookSeen {
+		return Bound{}, errInvalidCandidate
+	}
+	return fresh, nil
+}
+
+// RegisterProcessWake reattaches a positive-generation process binding. The
+// caller checks its local generation evidence and process before using the reply.
+func RegisterProcessWake(ctx context.Context, h *hubclient.Client, req hubclient.SessionRequest) (Bound, error) {
+	if req.Generation <= 0 {
+		return Bound{}, errGenerationFloor
+	}
+	var resp hubclient.SessionResponse
+	if err := postProcessBound(ctx, h, "/v1/sessions", req, &resp); err != nil {
+		return Bound{}, err
+	}
+	return shimRecoveryBinding(resp, req, 3)
+}
+
 // NewAntigravityWake constructs a lookup-only Resolver for a detached Antigravity wake
 // helper. It never reads IRIS_EXECUTION or registers a fallback Execution, and binds only
 // to the hook-registered Execution of ancestor whose session_id equals session.
@@ -46,7 +78,7 @@ func (r *Resolver) LookupWake(ctx context.Context) (WakeTarget, bool) {
 	if r.wakeSession != "" {
 		r.lookupHeld(ctx)
 	}
-	return r.primaryHeld()
+	return r.primaryHeld(ctx)
 }
 
 func (r *Resolver) lookupAntigravityWakeHeld(ctx context.Context) (Bound, error) {
@@ -54,15 +86,20 @@ func (r *Resolver) lookupAntigravityWakeHeld(ctx context.Context) (Bound, error)
 	if a.PID <= 0 || a.StartMS <= 0 || !proc.SingleSession(a, "antigravity") {
 		return Bound{}, errUnusable
 	}
+	opted := r.successionEnabled(ctx)
 	b, err := r.requestCandidate(ctx, map[string]any{
 		"client":              "antigravity",
 		"host":                r.Host,
 		"cwd":                 r.CWD,
 		"client_pid":          a.PID,
 		"client_pid_start_ms": a.StartMS,
-	}, "", 3, false)
+	}, "", 3, opted)
 	if IsCode(err, "ambiguous") {
-		b, err = r.bySession(ctx, r.wakeSession, false)
+		if opted {
+			b, err = r.matchAntigravityProcess(ctx, a)
+		} else {
+			b, err = r.bySession(ctx, r.wakeSession, false)
+		}
 	}
 	if err != nil {
 		return Bound{}, err
@@ -71,10 +108,23 @@ func (r *Resolver) lookupAntigravityWakeHeld(ctx context.Context) (Bound, error)
 		return Bound{}, errUnusable
 	}
 	b.Rung = 3
-	if err := r.admitHeld(ctx, b, false, false, sessionproof.Snapshot{}); err != nil {
+	if err := r.admitHeld(ctx, b, false, opted, sessionproof.Snapshot{}); err != nil {
 		return Bound{}, err
 	}
 	return b, nil
+}
+
+// matchAntigravityProcess keeps the tuple in the disambiguating lookup so a
+// conversation that moved to another process cannot arm this helper.
+func (r *Resolver) matchAntigravityProcess(ctx context.Context, a proc.Ancestor) (Bound, error) {
+	candidate, err := r.Hub.Bind(ctx, hubclient.BindRequest{
+		Client: r.Client, Host: r.Host, Cwd: r.CWD, SessionID: r.wakeSession,
+		ClientPID: int64(a.PID), ClientPIDStartMS: a.StartMS, SuccessionProof: true,
+	})
+	if err != nil {
+		return Bound{}, err
+	}
+	return HookWakeBinding(candidate, r.wakeSession)
 }
 
 // Primary snapshots this process's current native session binding. It does no lookup
@@ -82,7 +132,7 @@ func (r *Resolver) lookupAntigravityWakeHeld(ctx context.Context) (Bound, error)
 func (r *Resolver) Primary() (WakeTarget, bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	return r.primaryHeld()
+	return r.primaryHeld(context.Background())
 }
 
 // StartIfPrimary admits and starts a native operation in the same hold that checks
@@ -93,7 +143,7 @@ func (r *Resolver) Primary() (WakeTarget, bool) {
 func (r *Resolver) StartIfPrimary(expected WakeTarget, start func() error) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	current, ok := r.primaryHeld()
+	current, ok := r.primaryHeld(context.Background())
 	if !ok || current != expected {
 		return false, nil
 	}
@@ -105,7 +155,7 @@ func (r *Resolver) StartIfPrimary(expected WakeTarget, start func() error) (bool
 
 // primaryHeld reads only positive cached evidence, with mu held. A binding decision
 // alone is insufficient: the resolver must also retain the live hook-registered session.
-func (r *Resolver) primaryHeld() (WakeTarget, bool) {
+func (r *Resolver) primaryHeld(ctx context.Context) (WakeTarget, bool) {
 	m := r.decided.Load()
 	if r.Host == "" || r.bound.ExecutionID == "" || r.bound.Generation <= 0 ||
 		r.lost || r.wasLostHeld(r.bound.ExecutionID) {
@@ -119,7 +169,6 @@ func (r *Resolver) primaryHeld() (WakeTarget, bool) {
 		if m == nil || m.mode != root || r.bound.Rung != 2 {
 			return WakeTarget{}, false
 		}
-		ctx := context.Background()
 		opted := r.successionEnabled(ctx)
 		if (opted || r.bound.Classified) && !r.bound.HookSeen ||
 			r.admitHeld(ctx, r.bound, false, opted, sessionproof.Snapshot{}) != nil {
@@ -128,7 +177,7 @@ func (r *Resolver) primaryHeld() (WakeTarget, bool) {
 		return WakeTarget{SessionID: m.session, Bound: r.bound, Host: r.Host}, true
 	case "antigravity":
 		if m == nil || m.mode != legacy || r.wakeSession == "" || r.own || r.bound.Rung != 3 || r.bound.SessionID != r.wakeSession ||
-			r.admitHeld(context.Background(), r.bound, false, false, sessionproof.Snapshot{}) != nil {
+			r.admitHeld(ctx, r.bound, false, r.successionEnabled(ctx), sessionproof.Snapshot{}) != nil {
 			return WakeTarget{}, false
 		}
 		return WakeTarget{SessionID: r.wakeSession, Bound: r.bound, Host: r.Host, Client: "antigravity"}, true

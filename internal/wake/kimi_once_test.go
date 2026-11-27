@@ -85,7 +85,7 @@ func (h *onceFake) log() []string {
 	return slices.Clone(h.calls)
 }
 
-func (h *onceFake) kimiBind(ctx context.Context, host, cwd, session string, pid int, startMS int64) (binding.Bound, error) {
+func (h *onceFake) kimiBind(ctx context.Context, host, cwd, session string, pid int, startMS int64, _ ...bool) (binding.Bound, error) {
 	h.record("bind")
 	if h.onBind != nil {
 		h.onBind()
@@ -152,6 +152,16 @@ func (h *onceFake) heartbeat(_ context.Context, target binding.WakeTarget) error
 		return beat()
 	}
 	return nil
+}
+
+func (h *onceFake) optedHeartbeat(context.Context, binding.WakeTarget) (hubclient.Candidate, error) {
+	h.t.Error("legacy watcher sent an opted heartbeat")
+	return hubclient.Candidate{}, errors.New("unexpected opted heartbeat")
+}
+
+func (h *onceFake) reattach(context.Context, hubclient.SessionRequest) (binding.Bound, error) {
+	h.t.Error("legacy watcher attempted to reattach")
+	return binding.Bound{}, errors.New("unexpected reattachment")
 }
 
 func (h *onceFake) checkpoint(_ context.Context, _ binding.WakeTarget, cursor int64) error {

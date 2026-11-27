@@ -114,7 +114,7 @@ func TestFloorBypassAfterSessionEndBlocksRung2AndWatch(t *testing.T) {
 				if !errors.Is(err, errMalformedGeneration) || len(requests) != 0 {
 					t.Fatalf("damaged marker did not block locally: err=%v requests=%+v", err, requests)
 				}
-				assertBindingObservation(t, token, hook.DamagedGenerationProof+" at "+markerPath)
+				assertBindingObservation(t, token, "claude", hook.DamagedGenerationProof+" at "+markerPath)
 			default:
 				if !errors.Is(err, errGenerationFloor) || len(requests) != 0 {
 					t.Fatalf("%s did not stop at the local veto: err=%v requests=%+v", tc.mode, err, requests)
@@ -599,7 +599,7 @@ func sessionEndMarkerPath(t *testing.T, dir string) string {
 	return ""
 }
 
-func assertBindingObservation(t *testing.T, token, want string) {
+func assertBindingObservation(t *testing.T, token, client, want string) {
 	t.Helper()
 	deadline := time.Now().Add(time.Second)
 	for {
@@ -608,7 +608,7 @@ func assertBindingObservation(t *testing.T, token, want string) {
 			t.Fatal(err)
 		}
 		if len(notes) > 0 {
-			if len(notes) != 1 || notes[0].Client != "claude" || notes[0].Event != "bind" || notes[0].Error != want {
+			if len(notes) != 1 || notes[0].Client != client || notes[0].Event != "bind" || notes[0].Error != want {
 				t.Fatalf("binding observations: %+v, want %q", notes, want)
 			}
 			return

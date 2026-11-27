@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
 	"strings"
 	"sync"
@@ -604,13 +603,24 @@ func (r *Resolver) registerRecoveryHeld(ctx context.Context, req hubclient.Sessi
 	var resp hubclient.SessionResponse
 	var err error
 	if opted && rung == 3 {
-		err = r.Hub.Do(ctx, "POST", "/v1/sessions?process_bound=true", req, &resp)
+		err = postProcessBound(ctx, r.Hub, "/v1/sessions", req, &resp)
 	} else {
 		resp, err = r.Hub.RegisterSession(ctx, req)
 	}
 	if err != nil {
 		return Bound{}, err
 	}
+	b, err := shimRecoveryBinding(resp, req, rung)
+	if err != nil {
+		return Bound{}, err
+	}
+	if err := r.admitHeld(ctx, b, false, opted, before); err != nil {
+		return Bound{}, err
+	}
+	return b, nil
+}
+
+func shimRecoveryBinding(resp hubclient.SessionResponse, req hubclient.SessionRequest, rung int) (Bound, error) {
 	b, err := boundFromCandidate(resp.Candidate(), req.SessionID, rung)
 	if err != nil {
 		return Bound{}, err
@@ -622,9 +632,6 @@ func (r *Resolver) registerRecoveryHeld(ctx context.Context, req hubclient.Sessi
 	}
 	if !b.HookSeen || b.Generation != req.Generation {
 		return Bound{}, errInvalidCandidate
-	}
-	if err := r.admitHeld(ctx, b, false, opted, before); err != nil {
-		return Bound{}, err
 	}
 	return b, nil
 }
@@ -672,8 +679,7 @@ func (r *Resolver) reattachRecordedHeld(ctx context.Context, session string, sna
 // reattachRung3Held never uses a heartbeat to resume a recovering process binding.
 func (r *Resolver) reattachRung3Held(ctx context.Context, b Bound, before sessionproof.Snapshot) (Bound, error) {
 	ancestor := r.ancestor()
-	if r.Evidence == nil || !b.HookSeen || b.SessionID == "" || ancestor.PID <= 0 || ancestor.StartMS <= 0 ||
-		r.ParentAlive != nil && !r.ParentAlive() {
+	if r.Evidence == nil || !b.HookSeen || b.SessionID == "" || ancestor.PID <= 0 || ancestor.StartMS <= 0 {
 		return Bound{}, errLost
 	}
 	snap, err := r.inspectEvidence(ctx, b.SessionID, true)
@@ -705,6 +711,9 @@ func (r *Resolver) reattachRung3Held(ctx context.Context, b Bound, before sessio
 	req := hubclient.SessionRequest{
 		Client: r.Client, SessionID: b.SessionID, Host: r.Host, CWD: r.CWD, Generation: gen,
 		Source: "shim", EndedThrough: ended, ClientPID: ancestor.PID, ClientPIDStartMS: ancestor.StartMS,
+	}
+	if r.ParentAlive != nil && !r.ParentAlive() {
+		return Bound{}, errLost
 	}
 	fresh, err := r.registerRecoveryHeld(ctx, req, 3, true, proof)
 	if err != nil {
@@ -993,12 +1002,7 @@ func (r *Resolver) Heartbeat(ctx context.Context, source string) error {
 func (r *Resolver) sendHeartbeat(ctx context.Context, b Bound, source string, opted bool) (hubclient.Candidate, error) {
 	req := hubclient.HeartbeatRequest{Generation: b.Generation, Source: source, SuccessionProof: opted}
 	if opted && b.Rung == 3 {
-		// The same hook row can bind by session ID or by process. Tell the hub
-		// this renewal is process-bound without changing the heartbeat body.
-		var candidate hubclient.Candidate
-		path := "/v1/executions/" + url.PathEscape(b.ExecutionID) + "/heartbeat?process_bound=true"
-		err := r.Hub.Do(ctx, "POST", path, req, &candidate)
-		return candidate, err
+		return SendProcessHeartbeat(ctx, r.Hub, b.ExecutionID, req)
 	}
 	return r.Hub.Heartbeat(ctx, b.ExecutionID, req)
 }

@@ -419,6 +419,22 @@ func TestRung3ResolverRechecksParentAfterRegistration(t *testing.T) {
 	f.requireReattach(t, 1, http.StatusOK)
 }
 
+func TestRung3ResolverSkipsRegistrationWhenParentExitsDuringHeartbeat(t *testing.T) {
+	f := newRung3RecoveryFixture(t, true)
+	f.hub.restart(t)
+	alive := true
+	f.resolver.ParentAlive = func() bool { return alive }
+	observeResolverResponse(f.resolver.Hub.HTTP, func(_ *http.Request, res *http.Response) {
+		if res.StatusCode == http.StatusConflict {
+			alive = false
+		}
+	})
+	if err := f.resolver.Heartbeat(t.Context(), "shim"); !IsCode(err, "lost") || len(f.requests) != 1 || len(f.resolver.gone) != 0 {
+		t.Fatalf("parent exit triggered recovery or confirmed loss: %v, requests=%+v, gone=%v", err, f.requests, f.resolver.gone)
+	}
+	f.requireHeartbeat(t, 0, rung3OnHeartbeat, http.StatusConflict)
+}
+
 func TestRung3LateHeartbeatLeavesNewSelectionAlone(t *testing.T) {
 	f := newRung3RecoveryFixture(t, true)
 	f.hub.restart(t)

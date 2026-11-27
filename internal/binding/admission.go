@@ -97,6 +97,9 @@ func (r *Resolver) checkCandidate(b Bound, retained int, ownSession, allowHookle
 		}
 		return r.refuseBindingGeneration(b.SessionID, liveVeto, endedVeto)
 	}
+	if r.wakeSession != "" && (opted || b.Classified) && !b.HookSeen {
+		return errGenerationFloor
+	}
 	hookless := b.Class.IsHooklessSuccession()
 	if hookless && (!opted || !allowHookless || r.ParentAlive == nil || !r.ParentAlive()) {
 		return errGenerationFloor

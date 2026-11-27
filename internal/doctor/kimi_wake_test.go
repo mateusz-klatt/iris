@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mateusz-klatt/iris/internal/hook"
 	"github.com/mateusz-klatt/iris/internal/integrate"
 	"github.com/mateusz-klatt/iris/internal/kimiwake"
 	"github.com/mateusz-klatt/iris/internal/proc"
@@ -129,5 +130,39 @@ func TestKimiWakeReportListsEachSession(t *testing.T) {
 	}
 	if lines := kimiWakeReport(integrate.Layout{}, now); len(lines) != 2 || lines[1] != "watcher records unreadable" {
 		t.Fatalf("broken records: %q", lines)
+	}
+}
+
+func TestDoctorNamesDamagedKimiWakeProofAndRecovery(t *testing.T) {
+	layout := emptyLayout(t)
+	token := filepath.Join(layout.Home, "hub.token")
+	if err := os.WriteFile(token, []byte("test-token\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	sessions := hook.NewSessions(token)
+	if err := sessions.Protect(); err != nil {
+		t.Fatal(err)
+	}
+	const session = "kimi-wake-damaged-proof"
+	proof := filepath.Join(sessions.Dir(), filepath.Base(sessions.WakePath(integrate.Kimi, session))+".execution")
+	if err := os.WriteFile(proof, []byte("{broken"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	// Write the same observation a Kimi watcher leaves when its exact proof vetoes wake.
+	sessions.ObserveRefusal(integrate.Kimi, session, ".execution", true)
+
+	res, upload := runEndedMarkerDoctorWithOptions(t, layout, Options{TokenFile: token}, time.Now())
+	report := res.Format()
+	for _, want := range []string{
+		hook.DamagedGenerationProof + " at " + proof,
+		"start a new client session to obtain fresh proof",
+		"verify the configured hub and its session history before archiving any named file",
+	} {
+		if !strings.Contains(report, want) {
+			t.Errorf("doctor output omitted %q:\n%s", want, report)
+		}
+	}
+	if res.ExitCode() != 0 || strings.Contains(upload, filepath.Base(proof)) {
+		t.Fatalf("wake observation should leave doctor healthy and the path local:\n%s\n%s", report, upload)
 	}
 }
