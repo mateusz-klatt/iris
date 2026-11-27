@@ -2,6 +2,7 @@ package hook
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -656,7 +657,7 @@ func (r Runner) antigravityAncestor() (proc.Ancestor, bool) {
 // antigravityHook keeps the wake helper's state and, at a Stop that ends an idle turn, asks the
 // model to start the helper. Only an interactive session is asked (ADR 031); for any other, note
 // gets the reason, and no request is recorded.
-func (r Runner) antigravityHook(ev Event, note func(string)) (Output, bool) {
+func (r Runner) antigravityHook(ctx context.Context, ev Event, note func(string)) (Output, bool) {
 	if ev.Client != ClientAntigravity || ev.SessionID == CanarySession || !validGrokSession(ev.SessionID) {
 		return Output{}, false
 	}
@@ -679,16 +680,11 @@ func (r Runner) antigravityHook(ev Event, note func(string)) (Output, bool) {
 	}
 
 	m := antigravityHelpersMemory(configDir)
-	writeBudget := antigravityHelperLockBudget
-	if r.Deadline > 0 && r.Deadline < writeBudget {
-		writeBudget = r.Deadline
-	}
-	writeDeadline := m.monoClock()().Add(writeBudget)
+	writeDeadline := lockDeadlineFromCtx(ctx)
 	if err := m.directory(); err != nil {
 		return Output{}, false
 	}
-	// Keep v0.1.15's acquisition-only 50 ms lock budget for helper state; writeDeadline bounds
-	// slow syncs separately against Runner.Deadline.
+	// Keep v0.1.15's acquisition-only lock budget. The outer hook deadline bounds the writes.
 	unlock, err := m.lockAcquire(acquireOnly(hookLockBudget))
 	if err != nil {
 		return Output{}, false

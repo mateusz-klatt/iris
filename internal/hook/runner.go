@@ -200,7 +200,7 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 	if ev.Client == ClientAntigravity {
 		state.at("antigravity")
 	}
-	if out, ok := r.antigravityHook(ev, state.observe); ok {
+	if out, ok := r.antigravityHook(ctx, ev, state.observe); ok {
 		return r.finish(state, ev, out)
 	}
 	if ev.Client == ClientCodex && ev.Kind == KindPrompt {

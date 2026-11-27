@@ -629,6 +629,50 @@ func TestAntigravityStopGatesAndFailOpen(t *testing.T) {
 	}
 }
 
+func TestAntigravityStopArmsAfterSlowSuccessfulSync(t *testing.T) {
+	configDir, tokenPath, getenv := agyTestEnv(t)
+	enableAgyWake(t, configDir)
+	asInteractive(t)
+	const pid, startMS, session = 5500, int64(77000), "conv-slow-sync"
+	originalSync := syncAntigravityTemp
+	t.Cleanup(func() { syncAntigravityTemp = originalSync })
+	var synced bool
+	syncAntigravityTemp = func(f *os.File) error {
+		if !synced {
+			synced = true
+			time.Sleep(antigravityHelperLockBudget + 50*time.Millisecond)
+		}
+		return originalSync(f)
+	}
+
+	out := (Runner{
+		ClientName: "antigravity",
+		EventName:  "Stop",
+		Stdin: agyJSON(t, map[string]any{
+			"conversationId":    session,
+			"fullyIdle":         true,
+			"terminationReason": "NO_TOOL_CALL",
+			"executionNum":      0,
+		}),
+		Getenv: getenv,
+		Ancestor: func() (proc.Ancestor, error) {
+			return proc.Ancestor{PID: pid, StartMS: startMS, Name: "agy"}, nil
+		},
+		IrisPath: func() string { return "/usr/local/bin/iris" },
+	}).Run()
+	if out.Exit != 0 || len(out.Stderr) != 0 || !strings.Contains(string(out.Stdout), `"decision":"continue"`) ||
+		!strings.Contains(string(out.Stdout), `watch --client antigravity --wake`) {
+		t.Fatalf("Stop did not arm within its deadline: exit=%d stdout=%q stderr=%q", out.Exit, out.Stdout, out.Stderr)
+	}
+	state, ok := readAntigravityProcFile(antigravityProcFile(filepath.Join(configDir, antigravityHelperDirName), pid, startMS))
+	if !ok || state.CurrentSessionID != session || state.Helper == nil || state.Helper.Status != "arm_requested" || state.Helper.SessionID != session {
+		t.Fatalf("Stop did not persist the arm request: %+v, read=%v", state, ok)
+	}
+	if failures, err := ReadRecentFailures(tokenPath, 10); err != nil || len(failures) != 0 {
+		t.Fatalf("slow successful sync recorded hook failures: %+v, %v", failures, err)
+	}
+}
+
 func TestAntigravityArmingLifecycleSupersededSessionsAndRearm(t *testing.T) {
 	configDir, _, getenv := agyTestEnv(t)
 	enableAgyWake(t, configDir)
