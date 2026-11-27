@@ -784,13 +784,15 @@ func (t *transaction) heartbeat(r Request) (map[string]any, error) {
 		return nil, fail("bad_request", "unknown heartbeat source")
 	}
 	strong := r.Source != "hook"
-	// A shim knows its Execution and generation but not always a session id, and an idle
-	// session fires no hook. Its heartbeat is therefore what reattaches it after a restart.
+	// A shim can reattach an idle session after a restart using its cached Execution and generation.
 	e, err := scanExecution(t.row(executionSelect+"WHERE e.id=?", r.ExecutionID))
 	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return nil, err
 	}
 	if err == nil && e.State == "active" && e.Recovery.Valid && e.Generation == r.Generation {
+		if r.SuccessionProof && e.Single && e.Client != "codex" && !isHooklessSuccessionChild(e) {
+			return nil, fail("lost", "process-bound recovery requires positive-generation shim registration")
+		}
 		if err := allowHooklessHeartbeat(e, r); err != nil {
 			return nil, err
 		}
