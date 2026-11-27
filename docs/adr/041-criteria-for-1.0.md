@@ -1,6 +1,6 @@
 # ADR 041: Criteria for Iris 1.0
 
-Status: accepted by the owner on 2026-11-27, together with live, billable client measurements in batches.
+Status: accepted by the owner on 2026-11-27, together with live, billable client measurements in batches. The owner confirmed criterion 6's scope the same day: client integrations only, with distribution and service checks tracked separately.
 
 **In short.** Iris stays at 0.x until all six criteria below hold. 1.0.0 is a promise that clients and operators can rely on the hub's contract and its rollback path. These criteria are the minimum evidence for that promise.
 
