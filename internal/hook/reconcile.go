@@ -270,18 +270,20 @@ func (r Runner) reconcileSession(ctx context.Context, state *runState, hub sessi
 	}
 	res, err := hub.ReconcileSession(ctx, req)
 	err = checkEndedRegistration(state, ev, m, endedThrough, res.Session.Generation, req.Generation == 0, err)
-	r.answered(m, ev, res, err)
+	r.answered(ctx, m, ev, res, err)
 	return res.CheckResponse, checkRestoreFloor(state, ev, m, req.Generation, err)
 }
 
 // answered keeps what a one-call answer says: the session's next proof, and whether the hub
 // takes reduced snapshots.
-func (r Runner) answered(m Memory, ev Event, res hubclient.ShellResponse, err error) {
+func (r Runner) answered(ctx context.Context, m Memory, ev Event, res hubclient.ShellResponse, err error) {
 	if err != nil {
 		return
 	}
 	if m != nil && res.Session.Generation > 0 {
-		m.Remember(string(ev.Client), ev.SessionID, res.Session.Generation)
+		deadline, _ := ctx.Deadline()
+		// M2b keeps session_succession OFF in hooks: only lock wait is capped by deadline.
+		rememberWithDeadline(m, string(ev.Client), ev.SessionID, res.Session.Generation, deadline)
 	}
 	r.learnScope(res.Session.Capabilities)
 }

@@ -17,6 +17,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -101,9 +102,13 @@ type agyTestHarness struct {
 	agyStartMS int64
 	selfExe    string
 
-	mu       sync.Mutex
-	lsCalls  []fakeLSRequest
-	nextResp func(fakeLSRequest) fakeLSResponse
+	mu         sync.Mutex
+	lsCalls    []fakeLSRequest
+	lsNotify   chan fakeLSRequest
+	lsRelease  <-chan struct{}
+	onHubStart func(string)
+	onHubDone  func(string)
+	nextResp   func(fakeLSRequest) fakeLSResponse
 }
 
 func newAgyTestHarness(t *testing.T, convID string) *agyTestHarness {
@@ -120,17 +125,11 @@ func newAgyTestHarness(t *testing.T, convID string) *agyTestHarness {
 	t.Cleanup(func() { _ = s.Close() })
 
 	hubSrv := httptest.NewUnstartedServer(nil)
-	hubSrv.Config.Handler = hub.New(s, "secret-hub-token", []string{hubSrv.Listener.Addr().String()})
-	hubSrv.Start()
 	t.Cleanup(hubSrv.Close)
 	t.Cleanup(hubclient.HTTPClient().CloseIdleConnections)
 
 	tokenPath := filepath.Join(configDir, "hub.token")
 	if err := os.WriteFile(tokenPath, []byte("secret-hub-token\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	clientJSON, _ := json.Marshal(map[string]string{"hub_url": hubSrv.URL})
-	if err := os.WriteFile(filepath.Join(configDir, "client.json"), append(clientJSON, '\n'), 0o600); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(hook.AntigravityWakePath(configDir), []byte("on\n"), 0o600); err != nil {
@@ -141,9 +140,29 @@ func newAgyTestHarness(t *testing.T, convID string) *agyTestHarness {
 		t:         t,
 		configDir: configDir,
 		tokenPath: tokenPath,
-		hubURL:    hubSrv.URL,
 		store:     s,
 		hubSrv:    hubSrv,
+		lsNotify:  make(chan fakeLSRequest, 16),
+	}
+	baseHub := hub.New(s, "secret-hub-token", []string{hubSrv.Listener.Addr().String()})
+	hubSrv.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.mu.Lock()
+		onStart := h.onHubStart
+		onDone := h.onHubDone
+		h.mu.Unlock()
+		if onStart != nil {
+			onStart(r.URL.Path)
+		}
+		baseHub.ServeHTTP(w, r)
+		if onDone != nil {
+			onDone(r.URL.Path)
+		}
+	})
+	hubSrv.Start()
+	h.hubURL = hubSrv.URL
+	clientJSON, _ := json.Marshal(map[string]string{"hub_url": h.hubURL})
+	if err := os.WriteFile(filepath.Join(configDir, "client.json"), append(clientJSON, '\n'), 0o600); err != nil {
+		t.Fatal(err)
 	}
 	h.nextResp = func(req fakeLSRequest) fakeLSResponse {
 		recipient := ""
@@ -173,7 +192,15 @@ func newAgyTestHarness(t *testing.T, convID string) *agyTestHarness {
 			h.mu.Lock()
 			h.lsCalls = append(h.lsCalls, req)
 			resp := h.nextResp(req)
+			releaseCh := h.lsRelease
 			h.mu.Unlock()
+			select {
+			case h.lsNotify <- req:
+			default:
+			}
+			if releaseCh != nil {
+				<-releaseCh
+			}
 			_ = json.NewEncoder(w).Encode(resp)
 		})},
 	}
@@ -736,8 +763,16 @@ func TestAntigravityChildHandshakeValidationSpoofRejectionAndEndToEndWakeAndCont
 		"fullyIdle":          true,
 		"terminationReason":  "NO_TOOL_CALL",
 	})
+	if st, ok := hook.ReadAntigravityConvState(h.configDir, convID); !ok || !st.Idle {
+		t.Fatalf("Stop hook did not record idle state: ok=%v st=%+v", ok, st)
+	}
+
+	var fakeNow atomic.Int64
+	fakeNow.Store(1_700_000_000_000)
 
 	opts := h.baseOptions(convID, secret)
+	opts.handshakeTimeout = 5 * time.Second
+	opts.now = func() time.Time { return time.UnixMilli(fakeNow.Load()) }
 	baseEnv := opts.getenv
 	opts.getenv = func(k string) string {
 		if k == antigravityHelperEnv {
@@ -746,12 +781,63 @@ func TestAntigravityChildHandshakeValidationSpoofRejectionAndEndToEndWakeAndCont
 		return baseEnv(k)
 	}
 
+	lsRelease := make(chan struct{})
+	var releaseOnce sync.Once
+	releaseLS := func() { releaseOnce.Do(func() { close(lsRelease) }) }
+	defer releaseLS()
+	var bound, lsReleased atomic.Bool
+	streamReady := make(chan struct{}, 1)
+	guardConsumed := make(chan struct{}, 1)
+	h.mu.Lock()
+	h.lsRelease = lsRelease
+	h.onHubDone = func(path string) {
+		if path == "/v1/bind" {
+			bound.Store(true)
+		}
+	}
+	h.onHubStart = func(path string) {
+		switch path {
+		case "/v1/watch":
+			if bound.Load() {
+				select {
+				case streamReady <- struct{}{}:
+				default:
+				}
+			}
+		case "/v1/events":
+			if lsReleased.Load() {
+				guards, err := Inspect(h.tokenPath)
+				if err == nil && len(guards) == 1 && !guards[0].Outstanding && guards[0].Outcome == "submitted" && guards[0].ConsumedMS > 0 && guards[0].Slot0 == 2 {
+					select {
+					case guardConsumed <- struct{}{}:
+					default:
+					}
+				}
+			}
+		}
+	}
+	h.mu.Unlock()
+	defer func() {
+		h.mu.Lock()
+		h.onHubStart, h.onHubDone, h.lsRelease = nil, nil, nil
+		h.mu.Unlock()
+	}()
+
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	childDone := make(chan error, 1)
 	go func() {
 		childDone <- runAntigravity(ctx, opts)
 	}()
+
+	// Wait explicitly for the child's /v1/bind and /v1/events/stream handshake before sending mail.
+	select {
+	case <-streamReady:
+	case err := <-childDone:
+		t.Fatalf("antigravity child exited before stream ready: %v", err)
+	case <-time.After(15 * time.Second):
+		t.Fatal("timed out waiting for antigravity child stream handshake")
+	}
 
 	// Register a peer agent in the same repository and send a message to the Antigravity agent!
 	peerReg, err := h.store.Call(context.Background(), "sessions", store.Request{
@@ -798,20 +884,14 @@ func TestAntigravityChildHandshakeValidationSpoofRejectionAndEndToEndWakeAndCont
 		t.Fatal(err)
 	}
 
-	// Wait for the helper to execute <agy-exe> agentapi send-message <convID> <wakePrompt>!
+	// Wait deterministically for the helper's send-message POST (or immediate failure if child exits).
 	var wakeCall fakeLSRequest
-	deadline := time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		h.mu.Lock()
-		n := len(h.lsCalls)
-		if n > 0 {
-			wakeCall = h.lsCalls[0]
-		}
-		h.mu.Unlock()
-		if len(wakeCall.Args) > 0 {
-			break
-		}
-		time.Sleep(10 * time.Millisecond)
+	select {
+	case wakeCall = <-h.lsNotify:
+	case err := <-childDone:
+		t.Fatalf("antigravity child exited before wake send: %v", err)
+	case <-time.After(15 * time.Second):
+		t.Fatal("timed out waiting for antigravity send-message call")
 	}
 	if len(wakeCall.Args) != 4 || wakeCall.Args[0] != "agentapi" || wakeCall.Args[1] != "send-message" || wakeCall.Args[2] != convID {
 		t.Fatalf("unexpected send-message args: %v", wakeCall.Args)
@@ -848,21 +928,22 @@ func TestAntigravityChildHandshakeValidationSpoofRejectionAndEndToEndWakeAndCont
 		t.Fatal(err)
 	}
 	_ = f.Close()
+	fakeNow.Add(10)
+	lsReleased.Store(true)
+	releaseLS()
 
-	// Wait for helper continuation passes to consume the outstanding guard!
-	consumed := false
-	deadline = time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		guards, err := Inspect(h.tokenPath)
-		if err == nil && len(guards) == 1 && !guards[0].Outstanding && guards[0].Outcome == "submitted" && guards[0].ConsumedMS > 0 && guards[0].Slot0 == 2 {
-			consumed = true
-			break
-		}
-		time.Sleep(15 * time.Millisecond)
-	}
-	if !consumed {
+	// Wait via explicit post-consumption attention notification instead of sleeping/polling.
+	select {
+	case <-guardConsumed:
+	case err := <-childDone:
+		t.Fatalf("antigravity child exited before consuming guard: %v", err)
+	case <-time.After(15 * time.Second):
 		guards, _ := Inspect(h.tokenPath)
 		t.Fatalf("helper continuation scanner did not consume guard: %+v", guards)
+	}
+	guards, err := Inspect(h.tokenPath)
+	if err != nil || len(guards) != 1 || guards[0].Outstanding || guards[0].Outcome != "submitted" || guards[0].ConsumedMS <= 0 || guards[0].Slot0 != 2 {
+		t.Fatalf("unexpected guard state after consumption (%v): %+v", err, guards)
 	}
 
 	// Now simulate /clear switching current_session_id to a new conversation:

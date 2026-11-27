@@ -13,6 +13,7 @@ import (
 
 	"github.com/mateusz-klatt/iris/internal/config"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
+	"github.com/mateusz-klatt/iris/internal/sessionproof"
 )
 
 // Memory keeps the generation a hook last saw for a client session. After a hub restart a
@@ -28,7 +29,7 @@ type Memory interface {
 
 // memoryAge is how long an untouched entry survives, including the marker left when a
 // session ends normally.
-const memoryAge = 30 * 24 * time.Hour
+const memoryAge = 30 * time.Hour * 24
 
 type endedProof string
 
@@ -44,7 +45,39 @@ func (p damagedEndMarker) Error() string { return damagedGenerationObservation(s
 type fileMemory struct {
 	dir      string
 	now      func() time.Time
+	mono     func() time.Time
 	restrict func(string) error
+	pause    func(time.Duration)
+}
+
+func (m fileMemory) clock() func() time.Time {
+	if m.now != nil {
+		return m.now
+	}
+	return time.Now
+}
+
+func (m fileMemory) monoClock() func() time.Time {
+	if m.mono != nil {
+		return m.mono
+	}
+	return time.Now
+}
+
+func (m fileMemory) sleep(d time.Duration) {
+	if m.pause != nil {
+		m.pause(d)
+		return
+	}
+	time.Sleep(d)
+}
+
+func (m fileMemory) lockBudgetDeadline(callerDeadline time.Time) time.Time {
+	limit := m.monoClock()().Add(hookLockBudget)
+	if !callerDeadline.IsZero() && callerDeadline.Before(limit) {
+		return callerDeadline
+	}
+	return limit
 }
 
 func (m fileMemory) name(client, session string) string {
@@ -63,10 +96,20 @@ func (m fileMemory) read(path string) string {
 }
 
 func readGeneration(path string) (int, error) {
-	raw, err := readGenerationBytes(path)
+	return readGenerationDeadline(path, nil, time.Time{})
+}
+
+func readGenerationDeadline(path string, now func() time.Time, deadline time.Time) (int, error) {
+	raw, err := readRegularBoundedBytesDeadline(path, GenerationReadLimit, now, deadline)
+	if errors.Is(err, os.ErrDeadlineExceeded) {
+		return 0, err
+	}
 	if errors.Is(err, os.ErrNotExist) {
+		if deadlineExpired(now, deadline) {
+			return 0, os.ErrDeadlineExceeded
+		}
 		// A dangling link occupies the generation path even if its target is missing.
-		if _, err := os.Lstat(path); errors.Is(err, os.ErrNotExist) {
+		if _, lerr := lstatSessionFile(path); sessionPathAbsent(path, lerr) {
 			return 0, nil
 		}
 	}
@@ -82,6 +125,7 @@ func readGeneration(path string) (int, error) {
 
 // RecallGeneration keeps known proof fresh before a request can race idle pruning. Absent proof
 // needs no lock, so unrelated session-file work cannot suppress a fresh SessionStart.
+// Non-succession (v0.1.15) read: lock uses acquireOnly(hookLockBudget) with no hold deadline.
 func (m fileMemory) RecallGeneration(client, session string) (int, error) {
 	path := m.name(client, session)
 	generation, readErr := readGeneration(path)
@@ -117,39 +161,90 @@ func (m fileMemory) RecallGeneration(client, session string) (int, error) {
 
 // readEndMarker reads the marker and reports whether it has aged past local retention.
 func (m fileMemory) readEndMarker(marker string) (generation int, expired bool, err error) {
-	generation, err = readGeneration(marker)
+	return m.readEndMarkerDeadline(marker, time.Time{})
+}
+
+func (m fileMemory) readEndMarkerDeadline(marker string, deadline time.Time) (generation int, expired bool, err error) {
+	mono := m.monoClock()
+	generation, err = readGenerationDeadline(marker, mono, deadline)
 	if generation == 0 {
 		return 0, false, err
 	}
-	info, statErr := os.Lstat(marker)
-	return generation, statErr == nil && info.ModTime().Before(m.now().Add(-memoryAge)), nil
+	if deadlineExpired(mono, deadline) {
+		return 0, false, os.ErrDeadlineExceeded
+	}
+	info, statErr := lstatSessionFile(marker)
+	return generation, statErr == nil && info.ModTime().Before(m.clock()().Add(-memoryAge)), nil
 }
 
 // Remember keeps newer live proof and ignores replies for a generation another hook ended.
 // An accepted registration can replace an expired marker even if a sweep missed it.
 func (m fileMemory) Remember(client, session string, generation int) {
+	m.rememberWithSuccession(client, session, generation, time.Time{}, false)
+}
+
+func rememberWithDeadline(m Memory, client, session string, generation int, deadline time.Time) {
+	if fm, ok := m.(fileMemory); ok {
+		fm.rememberWithSuccession(client, session, generation, deadline, false)
+		return
+	}
+	m.Remember(client, session, generation)
+}
+
+func (m fileMemory) rememberWithSuccession(client, session string, generation int, callerDeadline time.Time, successionEnabled bool) {
+	if generation <= 0 {
+		return
+	}
+	// M2 succession-evidence holds when session_succession is ON use ADR 039's fullHold deadline;
+	// when OFF, keep v0.1.15's acquisition-only budget (no post-lock hold deadline).
+	mode := m.lockModeForSuccession(callerDeadline, successionEnabled)
+	holdDeadline := mode.holdDeadline
+	mono := m.monoClock()
 	if err := m.directory(); err != nil {
 		return
 	}
-	_ = m.underLock(func() {
-		path := m.name(client, session)
-		marker := path + ".ended"
-		ended, expired, _ := m.readEndMarker(marker)
-		current, err := readGeneration(path)
-		if err != nil || generation <= 0 {
-			return
+	tmp, err := prepareSessionFile(m.dir, strconv.Itoa(generation), m.restrict)
+	if err != nil {
+		return
+	}
+	defer func() {
+		if tmp != "" {
+			_ = os.Remove(tmp)
 		}
-		switch {
-		case expired && current <= ended:
-			// Clear stale proof before its veto, and clear the expired veto before
-			// publishing the accepted generation to lock-free binding readers.
-			if (current == 0 || os.Remove(path) == nil) && os.Remove(marker) == nil {
-				_ = m.replace(path, strconv.Itoa(generation))
+	}()
+	unlock, err := m.lockAcquire(mode)
+	if err != nil {
+		return
+	}
+	defer unlock()
+
+	path := m.name(client, session)
+	marker := path + ".ended"
+	ended, expired, markerErr := m.readEndMarkerDeadline(marker, holdDeadline)
+	if errors.Is(markerErr, os.ErrDeadlineExceeded) {
+		return
+	}
+	current, err := readGenerationDeadline(path, mono, holdDeadline)
+	if err != nil {
+		return
+	}
+	// Under OFF (zero holdDeadline), optional=false preserves v0.1.15's fresh per-rename retry.
+	// Under ON (non-zero holdDeadline), ADR 039 treats <hash> publication as optional (no retry sleep).
+	requiredRename := holdDeadline.IsZero()
+	switch {
+	case markerErr == nil && expired && current <= ended:
+		// Clear stale proof and exact evidence before their veto, and clear the expired veto
+		// before publishing the accepted generation to lock-free binding readers.
+		if cleaned, _ := m.cleanupExpiredEnd(path, ended, holdDeadline, successionEnabled); cleaned {
+			if replaceSessionFileDeadline(tmp, path, holdDeadline, requiredRename, mono, m.pause) == nil {
+				tmp = ""
 			}
-		case generation > ended && generation >= current:
-			_ = m.replace(path, strconv.Itoa(generation))
 		}
-	})
+	case generation > ended && generation >= current:
+		if replaceSessionFileDeadline(tmp, path, holdDeadline, requiredRename, mono, m.pause) == nil {
+			tmp = ""
+		}
+	}
 }
 
 // Forget removes proof at or below the generation that successfully ended.
@@ -158,35 +253,78 @@ func (m fileMemory) Forget(client, session string, generation int) {
 }
 
 func (m fileMemory) forget(client, session string, generation int) string {
+	return m.forgetEvidence(client, session, generation, time.Time{}, false)
+}
+
+func (m fileMemory) forgetEvidence(client, session string, generation int, callerDeadline time.Time, successionEnabled bool) string {
+	if generation <= 0 {
+		return ""
+	}
 	path := m.name(client, session)
 	// The marker is the path doctor can name when the end is not recorded. A missed lock
 	// never enters the callback, so the path has to be known out here.
 	marker := path + ".ended"
-	var damaged string
-	err := m.underLock(func() {
-		if generation <= 0 {
-			return
-		}
-		// Record the end first, even if pruning already removed the proof. The same lock
-		// prevents a delayed refusal from treating a cleared file as merely pruned.
-		ended, readErr := readGeneration(marker)
-		if readErr != nil {
-			damaged = marker
-			return
-		}
-		if m.replace(marker, strconv.Itoa(max(ended, generation))) != nil {
-			// The proof stays: deleting it would forget the generation with no record of the end.
-			damaged = marker
-			return
-		}
-		if current, readErr := readGeneration(path); readErr == nil && current <= generation {
-			_ = os.Remove(path)
-		}
-	})
-	if err != nil && generation > 0 {
+	// M2 succession-evidence retirement when session_succession is ON uses ADR 039's fullHold
+	// deadline; when OFF, keep v0.1.15's acquisition-only budget with no hold deadline.
+	mode := m.lockModeForSuccession(callerDeadline, successionEnabled)
+	holdDeadline := mode.holdDeadline
+	mono := m.monoClock()
+	if err := m.directory(); err != nil {
 		return marker
 	}
-	return damaged
+	tmp, err := prepareSessionFile(m.dir, strconv.Itoa(generation), m.restrict)
+	if err != nil {
+		return marker
+	}
+	defer func() {
+		if tmp != "" {
+			_ = os.Remove(tmp)
+		}
+	}()
+	unlock, err := m.lockAcquire(mode)
+	if err != nil {
+		return marker
+	}
+	defer unlock()
+
+	// Record the end first, even if pruning already removed the proof. The same lock
+	// prevents a delayed refusal from treating a cleared file as merely pruned.
+	ended, readErr := readGenerationDeadline(marker, mono, holdDeadline)
+	if readErr != nil {
+		return marker
+	}
+	floor := max(ended, generation)
+	if floor != generation {
+		if deadlineExpired(mono, holdDeadline) || writePreparedSessionFile(tmp, strconv.Itoa(floor)) != nil {
+			return marker
+		}
+	}
+	if replaceSessionFileDeadline(tmp, marker, holdDeadline, true, mono, m.pause) != nil {
+		// The proof stays: deleting it would forget the generation with no record of the end.
+		return marker
+	}
+	tmp = ""
+	current, err := readGenerationDeadline(path, mono, holdDeadline)
+	if err != nil {
+		return ""
+	}
+	if current > 0 && current <= floor && !deadlineExpired(mono, holdDeadline) {
+		_ = removeSessionFile(path)
+	}
+	execPath := executionPath(path)
+	if !successionEnabled {
+		if current <= floor {
+			if _, lerr := lstatSessionFile(execPath); lerr == nil {
+				_ = removeSessionFile(execPath)
+			}
+		}
+		return ""
+	}
+	rec, state, recErr := readExactRecordDeadline(execPath, mono, holdDeadline)
+	if recErr == nil && state == sessionproof.FileValid && recordEndedAt(rec, floor) && !deadlineExpired(mono, holdDeadline) {
+		_ = removeSessionFile(execPath)
+	}
+	return ""
 }
 
 // endMarker is the .ended path a refusal should name. Path is set when the marker
@@ -201,6 +339,9 @@ type endMarker struct {
 // entry may be recreated, and a successful end rules out that generation and earlier ones.
 // The marker is read even when proof is present, so a later refusal can name it; that read
 // does not change whether proof is restored, touched or left alone.
+// retainGeneration restores proof that pruning removed after it was read (v0.1.15 semantics:
+// acquireOnly(hookLockBudget), no hold deadline). Only an absent proof is rewritten: a read
+// failure stays damaged, and an older one yields to the newer session.
 func (m fileMemory) retainGeneration(client, session string, generation int) endMarker {
 	var marker endMarker
 	_ = m.underLock(func() {
@@ -232,7 +373,7 @@ func (m fileMemory) retainGeneration(client, session string, generation int) end
 }
 
 func (m fileMemory) touchGeneration(path string) {
-	now := m.now()
+	now := m.clock()()
 	_ = os.Chtimes(path, now, now)
 }
 
@@ -242,16 +383,70 @@ func (m fileMemory) touchGeneration(path string) {
 // once and never pruned, renamed or replaced, so every process locks the same file.
 const sessionsLock = ".lock"
 
-// hookLockBudget is how long a hook tries for the lock. Nobody holds it across a network call or
-// while a client runs, or while the directory is protected; a hold is file reads and writes only.
+// hookLockBudget is how long a hook tries for the lock (and bounds a full succession-evidence
+// hold when session_succession is ON). Nobody holds it across a network call or while a client
+// runs, or while the directory is protected; a hold is file reads and writes only.
 const hookLockBudget = 50 * time.Millisecond
 
 // lockRetry is the pause between two tries for the lock.
 const lockRetry = 2 * time.Millisecond
 
-// lock takes the sessions directory's lock within budget and returns its release. A lock held
-// past the budget is failSessionsLock, and the caller then reads and writes nothing.
+// lockHoldMode separates v0.1.15's acquisition-only budget from ADR 039's full-hold monotonic
+// deadline:
+//   - acquireOnly (zero holdDeadline): attention/told writers, wake writers, prune, retainGeneration,
+//     and all OFF-mode evidence operations bound only lock acquisition (starting at tryLockFile)
+//     and hold no post-lock deadline.
+//   - fullHold (non-zero holdDeadline): only M2 succession-evidence operations under ON share one
+//     monotonic min(caller, now+50ms) deadline across acquisition, reads, replacements (including
+//     Windows CreateFile/SetFileInformationByHandle/MoveFileEx step checks), and cleanup.
+type lockHoldMode struct {
+	acquireBudget time.Duration
+	tryOnce       bool
+	holdDeadline  time.Time
+}
+
+func acquireOnly(budget time.Duration) lockHoldMode {
+	return lockHoldMode{acquireBudget: budget, tryOnce: budget <= 0}
+}
+
+func (m fileMemory) acquireOnlyWithCaller(callerDeadline time.Time) lockHoldMode {
+	budget := hookLockBudget
+	if !callerDeadline.IsZero() {
+		rem := callerDeadline.Sub(m.monoClock()())
+		if rem < budget {
+			budget = max(rem, 0)
+		}
+	}
+	return acquireOnly(budget)
+}
+
+func (m fileMemory) fullHold(callerDeadline time.Time) lockHoldMode {
+	return lockHoldMode{holdDeadline: m.lockBudgetDeadline(callerDeadline)}
+}
+
+func (m fileMemory) lockModeForSuccession(callerDeadline time.Time, successionEnabled bool) lockHoldMode {
+	if successionEnabled {
+		return m.fullHold(callerDeadline)
+	}
+	return m.acquireOnlyWithCaller(callerDeadline)
+}
+
+// lock takes the sessions directory's lock within budget (acquireOnly) and returns its release.
+// A lock held past the budget is failSessionsLock, and the caller then reads and writes nothing.
 func (m fileMemory) lock(budget time.Duration) (func(), error) {
+	return m.lockAcquire(acquireOnly(budget))
+}
+
+func (m fileMemory) lockDeadline(deadline time.Time) (func(), error) {
+	return m.lockAcquire(lockHoldMode{holdDeadline: deadline})
+}
+
+func (m fileMemory) lockAcquire(mode lockHoldMode) (func(), error) {
+	now := m.monoClock()
+	fullHold := !mode.holdDeadline.IsZero()
+	if fullHold && deadlineExpired(now, mode.holdDeadline) {
+		return nil, failSessionsLock
+	}
 	// A caller that writes protects the directory before it takes the lock: that costs Windows
 	// time in proportion to the files in it, about 80 ms for a thousand sessions' files, because
 	// Windows applies the directory's inheritable protection to each. The lock file holds nothing,
@@ -261,10 +456,17 @@ func (m fileMemory) lock(budget time.Duration) (func(), error) {
 			return nil, err
 		}
 	}
+	if fullHold && deadlineExpired(now, mode.holdDeadline) {
+		return nil, failSessionsLock
+	}
 	path := filepath.Join(m.dir, sessionsLock)
 	f, err := os.OpenFile(path, os.O_RDWR|os.O_CREATE, 0o600)
 	if err != nil {
 		return nil, err
+	}
+	if fullHold && deadlineExpired(now, mode.holdDeadline) {
+		_ = f.Close()
+		return nil, failSessionsLock
 	}
 	// A restrictive Unix umask can create this file without owner read/write access. Restore
 	// those bits through the open descriptor before locking, so later hooks can reopen it.
@@ -272,18 +474,33 @@ func (m fileMemory) lock(budget time.Duration) (func(), error) {
 		_ = f.Close()
 		return nil, err
 	}
-	deadline := time.Now().Add(budget)
-	for tryLockFile(f) != nil {
-		if !time.Now().Before(deadline) {
+	acqDeadline := mode.holdDeadline
+	if !fullHold {
+		acqDeadline = now().Add(mode.acquireBudget)
+	}
+	for {
+		if fullHold && deadlineExpired(now, acqDeadline) {
 			_ = f.Close()
 			return nil, failSessionsLock
 		}
-		time.Sleep(lockRetry)
+		if tryLockFile(f) == nil {
+			break
+		}
+		if mode.tryOnce {
+			_ = f.Close()
+			return nil, failSessionsLock
+		}
+		rem := acqDeadline.Sub(now())
+		if rem <= 0 {
+			_ = f.Close()
+			return nil, failSessionsLock
+		}
+		m.sleep(min(lockRetry, rem))
 	}
 	// An Iris from before ADR 017 on the same host prunes any file untouched for 30 days, and a
 	// .lock it removed would leave two hooks locking two files. Each lock keeps the file young.
-	now := time.Now()
-	_ = os.Chtimes(path, now, now)
+	ts := m.clock()()
+	_ = os.Chtimes(path, ts, ts)
 	return func() {
 		unlockFile(f)
 		_ = f.Close()
@@ -363,15 +580,21 @@ func (m fileMemory) counts(client, session string) string {
 	return m.name(client, session) + ".attention"
 }
 
+// toldRevision uses acquireOnly(hookLockBudget) (v0.1.15 semantics, no post-lock hold deadline).
 func (m fileMemory) toldRevision(client, session string) (int64, error) {
 	rev := fromReplay
-	err := m.underLock(func() { rev = parseTold(m.read(m.counts(client, session))).Rev })
+	err := m.underLock(func() {
+		rev = parseTold(m.read(m.counts(client, session))).Rev
+	})
 	return rev, err
 }
 
-// underLock runs f under the lock, or returns the error from taking it.
 func (m fileMemory) underLock(f func()) error {
-	unlock, err := m.lock(hookLockBudget)
+	return m.underLockMode(acquireOnly(hookLockBudget), f)
+}
+
+func (m fileMemory) underLockMode(mode lockHoldMode, f func()) error {
+	unlock, err := m.lockAcquire(mode)
 	if err != nil {
 		return err
 	}
@@ -380,13 +603,14 @@ func (m fileMemory) underLock(f func()) error {
 	return nil
 }
 
+// updateAttention uses acquireOnly(hookLockBudget) (v0.1.15 semantics, no hold deadline).
 func (m fileMemory) updateAttention(client, session string, f func(*toldState) bool) error {
 	// The directory is protected before the lock: on Windows that costs time in proportion to the
 	// files in it, and the lock is held only for a few small reads and writes.
 	if err := m.directory(); err != nil {
 		return err
 	}
-	unlock, err := m.lock(hookLockBudget)
+	unlock, err := m.lockAcquire(acquireOnly(hookLockBudget))
 	if err != nil {
 		return err
 	}
@@ -399,13 +623,14 @@ func (m fileMemory) updateAttention(client, session string, f func(*toldState) b
 	return m.replace(path, t.line())
 }
 
+// forgetAttention uses acquireOnly(hookLockBudget) (v0.1.15 semantics, no hold deadline).
 func (m fileMemory) forgetAttention(client, session string) error {
-	unlock, err := m.lock(hookLockBudget)
+	unlock, err := m.lockAcquire(acquireOnly(hookLockBudget))
 	if err != nil {
 		return err
 	}
 	defer unlock()
-	_ = os.Remove(m.counts(client, session))
+	_ = removeSessionFile(m.counts(client, session))
 	return nil
 }
 
@@ -493,6 +718,14 @@ func (d wakeDoc) awaits(prompt string) bool {
 // Without a wake file it does nothing and takes no lock. Any other prompt takes the lock for one
 // read of the wake file; only a match protects the directory, outside the lock, and then takes
 // the lock again to read and write. With a wake file it cannot read, it does nothing.
+// consumeWake marks the newest attempt consumed when prompt is its whole message: the prompt
+// hook of the wake's own turn. A prompt that differs from the whole message, even by one byte,
+// matches nothing, and so does one that only contains the token. The match routes and does not
+// authenticate: a person who typed the exact message would consume the wake too (ADR 017).
+// Without a wake file it does nothing and takes no lock. Any other prompt takes the lock for one
+// read of the wake file; only a match protects the directory, outside the lock, and then takes
+// the lock again to read and write. With a wake file it cannot read, it does nothing.
+// Uses acquireOnly(hookLockBudget) per phase (v0.1.15 semantics, no hold deadline).
 func (m fileMemory) consumeWake(client, session, prompt string) error {
 	path := m.wakePath(client, session)
 	if _, err := os.Stat(path); err != nil {
@@ -509,7 +742,7 @@ func (m fileMemory) consumeWake(client, session, prompt string) error {
 	if err := m.directory(); err != nil {
 		return err
 	}
-	unlock, err := m.lock(hookLockBudget)
+	unlock, err := m.lockAcquire(acquireOnly(hookLockBudget))
 	if err != nil {
 		return err
 	}
@@ -518,7 +751,7 @@ func (m fileMemory) consumeWake(client, session, prompt string) error {
 	if !ok || !d.awaits(prompt) {
 		return nil // the file is unusable now or no longer awaits this prompt
 	}
-	now := m.now()
+	now := m.clock()()
 	d.attempts[len(d.attempts)-1]["consumed_ms"] = json.RawMessage(strconv.FormatInt(now.UnixMilli(), 10))
 	d.forget(now.Add(-memoryAge))
 	return m.replace(path, d.encode())
@@ -555,25 +788,15 @@ func (m fileMemory) write(path, body string) error {
 }
 
 // replace is write in a directory already made and protected, for a caller that protected it
-// before taking the lock.
+// before taking the lock. Uses v0.1.15's fresh per-rename retry budget (zero hold deadline).
 func (m fileMemory) replace(path, body string) error {
-	f, err := os.CreateTemp(m.dir, ".tmp-*")
+	tmp, err := prepareSessionFile(m.dir, body, m.restrict)
 	if err != nil {
 		return err
 	}
-	_, err = f.WriteString(strings.TrimRight(body, "\n") + "\n")
-	if closeErr := f.Close(); err == nil {
-		err = closeErr
-	}
-	// The file is protected before it gets its name, so it is never readable as an entry.
-	if err == nil {
-		err = m.restrict(f.Name())
-	}
-	if err == nil {
-		err = replaceSessionFile(f.Name(), path)
-	}
+	err = replaceSessionFileDeadline(tmp, path, time.Time{}, true, m.monoClock(), m.pause)
 	if err != nil {
-		_ = os.Remove(f.Name())
+		_ = os.Remove(tmp)
 	}
 	return err
 }
@@ -588,11 +811,15 @@ const pruneLimit = 64
 // them. It never removes the lock, and it neither lists nor removes the wake files (ADR 017,
 // decision 3). It lists and judges the entries before it takes the lock, and judges each stale
 // one again under it, since a hook may have written it meanwhile, so the lock is held only for
-// rechecks and removals.
+// rechecks and removals. Uses acquireOnly(hookLockBudget) under v0.1.15/OFF semantics.
 func (m fileMemory) prune() error {
+	return m.pruneWithSuccession(time.Time{}, false, nil)
+}
+
+func (m fileMemory) pruneWithSuccession(callerDeadline time.Time, successionEnabled bool, observe func(string)) error {
 	// What the directory cannot list, prune cannot judge, so it keeps it.
 	entries, _ := os.ReadDir(m.dir)
-	cutoff := m.now().Add(-memoryAge)
+	cutoff := m.clock()().Add(-memoryAge)
 	var stale []string
 	for _, e := range entries {
 		if len(stale) == pruneLimit {
@@ -608,14 +835,51 @@ func (m fileMemory) prune() error {
 	if len(stale) == 0 {
 		return nil
 	}
-	unlock, err := m.lock(hookLockBudget)
+	// ADR 039 fullHold covers succession-evidence pruning when session_succession is ON;
+	// when OFF, keep v0.1.15's acquisition-only budget so pruning all pruneLimit entries completes.
+	mode := m.lockModeForSuccession(callerDeadline, successionEnabled)
+	holdDeadline := mode.holdDeadline
+	mono := m.monoClock()
+	unlock, err := m.lockAcquire(mode)
 	if err != nil {
 		return err
 	}
 	defer unlock()
 	for _, path := range stale {
-		if info, err := os.Lstat(path); err == nil && info.ModTime().Before(cutoff) {
-			_ = os.Remove(path)
+		if deadlineExpired(mono, holdDeadline) {
+			return nil
+		}
+		if strings.HasSuffix(path, ".ended") {
+			ended, expired, markerErr := m.readEndMarkerDeadline(path, holdDeadline)
+			if errors.Is(markerErr, os.ErrDeadlineExceeded) {
+				return nil
+			}
+			if markerErr != nil {
+				// ADR 039 keeps a damaged end marker in place and observes it for doctor.
+				if observe != nil {
+					observe(damagedGenerationObservation(path))
+				}
+				continue
+			}
+			if ended > 0 && expired {
+				_, _ = m.cleanupExpiredEnd(strings.TrimSuffix(path, ".ended"), ended, holdDeadline, successionEnabled)
+			}
+			continue
+		}
+		if isExecutionFile(path) {
+			prefix := strings.TrimSuffix(path, ".execution")
+			if hinfo, herr := lstatSessionFile(prefix); herr == nil && !hinfo.ModTime().Before(cutoff) {
+				continue
+			}
+			if _, eerr := lstatSessionFile(prefix + ".ended"); eerr == nil {
+				continue
+			}
+		}
+		if info, err := lstatSessionFile(path); err == nil && info.ModTime().Before(cutoff) {
+			if deadlineExpired(mono, holdDeadline) {
+				return nil
+			}
+			_ = removeSessionFile(path)
 		}
 	}
 	return nil

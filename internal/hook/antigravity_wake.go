@@ -173,28 +173,60 @@ func ReadAntigravityConvState(configDir, sessionID string) (AntigravityConvState
 }
 
 func writeAntigravityJSON(dir, target string, v any) error {
+	return writeAntigravityJSONDeadline(dir, target, v, time.Time{}, time.Now)
+}
+
+func writeAntigravityJSONDeadline(dir, target string, v any, deadline time.Time, now func() time.Time) error {
 	// State structs hold only strings, ints and bools, so Marshal cannot fail.
 	raw, _ := json.Marshal(v)
+	if deadlineExpired(now, deadline) {
+		return os.ErrDeadlineExceeded
+	}
 	f, err := createAntigravityTemp(dir, ".tmp-*")
 	if err != nil {
 		return err
 	}
 	tmp := f.Name()
+	cleanup := true
+	defer func() {
+		if cleanup {
+			_ = os.Remove(tmp)
+		}
+	}()
+	if deadlineExpired(now, deadline) {
+		_ = f.Close()
+		return os.ErrDeadlineExceeded
+	}
 	_, err = f.Write(append(raw, '\n'))
 	if err == nil {
+		if deadlineExpired(now, deadline) {
+			_ = f.Close()
+			return os.ErrDeadlineExceeded
+		}
 		err = syncAntigravityTemp(f)
 	}
 	if closeErr := f.Close(); err == nil {
 		err = closeErr
 	}
 	if err == nil {
+		if deadlineExpired(now, deadline) {
+			return os.ErrDeadlineExceeded
+		}
 		err = protectPath(tmp)
 	}
 	if err == nil {
-		err = renameAntigravityStateFile(tmp, target)
+		if renameAntigravityStateFile != nil {
+			if deadlineExpired(now, deadline) {
+				err = os.ErrDeadlineExceeded
+			} else {
+				err = renameAntigravityStateFile(tmp, target)
+			}
+		} else {
+			err = replaceSessionFileDeadline(tmp, target, deadline, true, now, nil)
+		}
 	}
-	if err != nil {
-		_ = os.Remove(tmp)
+	if err == nil {
+		cleanup = false
 	}
 	return err
 }
@@ -238,7 +270,8 @@ func PublishAntigravityHelper(configDir string, owner AntigravityHelperOwner, lo
 	if err := m.directory(); err != nil {
 		return false, err
 	}
-	unlock, err := m.lock(antigravityHelperLockBudget)
+	// Helper lifecycle writes keep an acquisition-only lock budget (no post-lock hold deadline).
+	unlock, err := m.lockAcquire(acquireOnly(antigravityHelperLockBudget))
 	if err != nil {
 		return false, err
 	}
@@ -286,7 +319,8 @@ func FailAntigravityHelper(configDir string, agyPID int, agyStartMS int64, sessi
 	if err := m.directory(); err != nil {
 		return err
 	}
-	unlock, err := m.lock(antigravityHelperLockBudget)
+	// Helper lifecycle writes keep an acquisition-only lock budget (no post-lock hold deadline).
+	unlock, err := m.lockAcquire(acquireOnly(antigravityHelperLockBudget))
 	if err != nil {
 		return err
 	}
@@ -335,7 +369,8 @@ func CleanupAntigravityHelper(configDir string, owner AntigravityHelperOwner) er
 	if _, err := os.Stat(m.dir); err != nil {
 		return nil
 	}
-	unlock, err := m.lock(antigravityHelperLockBudget)
+	// Helper cleanup keeps an acquisition-only lock budget (no post-lock hold deadline).
+	unlock, err := m.lockAcquire(acquireOnly(antigravityHelperLockBudget))
 	if err != nil {
 		return err
 	}
@@ -393,7 +428,8 @@ func StopAntigravityWakeHelpers(configDir string) error {
 			firstErr = err
 		}
 	}
-	unlock, err := m.lock(antigravityHelperLockBudget)
+	// Helper teardown keeps an acquisition-only lock budget (no post-lock hold deadline).
+	unlock, err := m.lockAcquire(acquireOnly(antigravityHelperLockBudget))
 	if err != nil {
 		if firstErr != nil {
 			return firstErr
@@ -643,10 +679,17 @@ func (r Runner) antigravityHook(ev Event, note func(string)) (Output, bool) {
 	}
 
 	m := antigravityHelpersMemory(configDir)
+	writeBudget := antigravityHelperLockBudget
+	if r.Deadline > 0 && r.Deadline < writeBudget {
+		writeBudget = r.Deadline
+	}
+	writeDeadline := m.monoClock()().Add(writeBudget)
 	if err := m.directory(); err != nil {
 		return Output{}, false
 	}
-	unlock, err := m.lock(hookLockBudget)
+	// Keep v0.1.15's acquisition-only 50 ms lock budget for helper state; writeDeadline bounds
+	// slow syncs separately against Runner.Deadline.
+	unlock, err := m.lockAcquire(acquireOnly(hookLockBudget))
 	if err != nil {
 		return Output{}, false
 	}
@@ -751,7 +794,7 @@ func (r Runner) antigravityHook(ev Event, note func(string)) (Output, bool) {
 		}
 
 		if procDirty {
-			if err := writeAntigravityJSON(m.dir, antigravityProcFile(m.dir, anc.PID, anc.StartMS), procState); err != nil {
+			if err := writeAntigravityJSONDeadline(m.dir, antigravityProcFile(m.dir, anc.PID, anc.StartMS), procState, writeDeadline, m.monoClock()); err != nil {
 				// The current session and an arm marker live in this file. A failed replace
 				// leaves the previous contents in place. Stop must not ask again, and the
 				// hook still allows (D3). The failure is recorded once the lock is released,
@@ -761,7 +804,7 @@ func (r Runner) antigravityHook(ev Event, note func(string)) (Output, bool) {
 			}
 		}
 		if convDirty {
-			if err := writeAntigravityJSON(m.dir, antigravityConvFile(m.dir, ev.SessionID), convState); err != nil && persistErr == nil {
+			if err := writeAntigravityJSONDeadline(m.dir, antigravityConvFile(m.dir, ev.SessionID), convState, writeDeadline, m.monoClock()); err != nil && persistErr == nil {
 				persistErr = err
 			}
 		}
@@ -979,6 +1022,7 @@ func ScanAntigravityWakeSession(s *Sessions, sessionID, transcriptHint string, n
 	if err := s.Protect(); err != nil {
 		return false, false, err
 	}
+	// Wake cursor/consumption updates keep v0.1.15's acquisition-only lock budget (no hold deadline).
 	unlock, err := s.Lock(budget)
 	if err != nil {
 		return false, false, err

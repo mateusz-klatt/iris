@@ -313,3 +313,10 @@ is still one object on stdout. The codes are:
 
 The token is never printed. A user name or password written into the hub URL is removed from `hub`
 and from every message.
+
+`client.json` beside `hub.token` also holds the optional `session_succession` boolean, which defaults
+to `false`. `iris setup` leaves that key untouched unless told to change it, reading the current
+on-disk value right before replacing `client.json` via lock-serialized compare-and-swap. Because an
+atomic file swap by another process cannot be serialized without the lock, a residual window of
+microseconds remains right before rename; even then, disabling `session_succession` in `client.json`
+wins on every later read.

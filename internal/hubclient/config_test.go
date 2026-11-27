@@ -1,8 +1,13 @@
 package hubclient
 
 import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -146,5 +151,429 @@ func TestBaseAndEnvTokenPathSkipClientConfig(t *testing.T) {
 	})
 	if err != nil || got != token {
 		t.Fatalf("BoundedTokenPath(stalled) = (%q, %v), want (%q, nil)", got, err, token)
+	}
+}
+
+func TestSessionSuccessionDefaultsOffAndParsesIndependently(t *testing.T) {
+	dir := t.TempDir()
+	token := filepath.Join(dir, "hub.token")
+	if err := os.WriteFile(token, []byte("tok-secret\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfgPath := filepath.Join(dir, "client.json")
+	e := EnvConfig{DefaultTokenFile: token, Getenv: func(string) string { return "" }}
+
+	// Missing client.json defaults OFF.
+	r := e.Load()
+	if r.SuccessionEnabled() || e.SuccessionEnabled() {
+		t.Fatal("missing client.json enabled session_succession")
+	}
+
+	// Omitted session_succession preserves byte-identical JSON without the key.
+	if err := WriteConfig(cfgPath, FileConfig{Hub: "https://hub.example", TokenFile: "hub.token"}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if bytes.Contains(raw, []byte("session_succession")) {
+		t.Fatalf("omitted session_succession wrote key: %s", raw)
+	}
+
+	// Invalid session_succession values fail OFF without invalidating HubURL or Token.
+	for _, bad := range []string{`"true"`, `1`, `null`, `{}`, `[]`} {
+		body := `{"hub_url":"https://hub.example","token_file":"hub.token","session_succession":` + bad + `}`
+		if err := os.WriteFile(cfgPath, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		loaded := e.Load()
+		if loaded.ConfigErr() != nil {
+			t.Fatalf("bad session_succession (%s) poisoned ConfigErr: %v", bad, loaded.ConfigErr())
+		}
+		if loaded.HubURL() != "https://hub.example" {
+			t.Fatalf("bad session_succession (%s) broke HubURL: %q", bad, loaded.HubURL())
+		}
+		if gotTok, terr := loaded.Token(); terr != nil || gotTok != "tok-secret" {
+			t.Fatalf("bad session_succession (%s) broke Token: (%q, %v)", bad, gotTok, terr)
+		}
+		if loaded.SuccessionEnabled() || e.SuccessionEnabled() {
+			t.Fatalf("bad session_succession (%s) enabled succession", bad)
+		}
+	}
+
+	// Non-object JSON fails parseSessionSuccession OFF cleanly.
+	if err := os.WriteFile(cfgPath, []byte(`["not-an-object"]`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if e.SuccessionEnabled() {
+		t.Fatal("array JSON enabled succession")
+	}
+
+	// Dynamic reload on the same Resolved reflects true <-> false <-> omitted without process restart.
+	if err := os.WriteFile(cfgPath, []byte(`{"hub_url":"https://hub.example","session_succession":false}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r = e.Load()
+	if r.SuccessionEnabled() {
+		t.Fatal("explicit false enabled succession")
+	}
+	if err := os.WriteFile(cfgPath, []byte(`{"hub_url":"https://hub.example","session_succession":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if !r.SuccessionEnabled() {
+		t.Fatal("dynamic reload missed session_succession: true")
+	}
+	if !e.SuccessionEnabled() {
+		t.Fatal("EnvConfig.SuccessionEnabled missed session_succession: true")
+	}
+	if err := os.WriteFile(cfgPath, []byte(`{"hub_url":"https://hub.example"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if r.SuccessionEnabled() {
+		t.Fatal("dynamic reload stayed ON after key removal")
+	}
+}
+
+func TestSessionSuccessionBoundedReloadRejectsStallsAndSpecialFiles(t *testing.T) {
+	// Empty ConfigFile, nil context, cancelled context, and failed BaseTokenPath all fail OFF.
+	if (Resolved{}).SuccessionEnabled() {
+		t.Fatal("empty Resolved enabled succession")
+	}
+	//nolint:staticcheck // Deliberately testing nil context defensive fail-OFF handling.
+	if (Resolved{ConfigFile: "/nonexistent"}).SuccessionEnabledContext(nil) {
+		t.Fatal("nil context enabled succession")
+	}
+	cancelled, cancel := context.WithCancel(context.Background())
+	cancel()
+	if (Resolved{ConfigFile: "/nonexistent"}).SuccessionEnabledContext(cancelled) {
+		t.Fatal("cancelled context enabled succession")
+	}
+	emptyHomeEnv := EnvConfig{Getenv: func(string) string { return "" }}
+	t.Setenv("HOME", "")
+	t.Setenv("XDG_CONFIG_HOME", "")
+	t.Setenv("AppData", "")
+	if emptyHomeEnv.SuccessionEnabled() {
+		t.Fatal("empty BaseTokenPath enabled succession")
+	}
+
+	dir := t.TempDir()
+	token := filepath.Join(dir, "hub.token")
+	cfgPath := filepath.Join(dir, "client.json")
+
+	// Stalled ReadFile fails OFF within bounded deadline.
+	entered := make(chan struct{})
+	release := make(chan struct{})
+	done := make(chan struct{})
+	t.Cleanup(func() {
+		close(release)
+		<-done
+	})
+	stalledEnv := EnvConfig{
+		DefaultTokenFile: token,
+		Getenv:           func(string) string { return "" },
+		ReadFile: func(string) ([]byte, error) {
+			defer close(done)
+			close(entered)
+			<-release
+			return []byte(`{"session_succession":true}`), nil
+		},
+	}
+	ctx, cancelTimeout := context.WithTimeout(context.Background(), 15*time.Millisecond)
+	defer cancelTimeout()
+	go func() {
+		<-entered
+	}()
+	if stalledEnv.SuccessionEnabledContext(ctx) {
+		t.Fatal("stalled config enabled succession")
+	}
+
+	// Oversized custom ReadFile response is rejected OFF.
+	oversizedEnv := EnvConfig{
+		DefaultTokenFile: token,
+		Getenv:           func(string) string { return "" },
+		ReadFile: func(string) ([]byte, error) {
+			return append([]byte(`{"session_succession":true,"pad":"`), bytes.Repeat([]byte("a"), maxConfigBytes)...), nil
+		},
+	}
+	if oversizedEnv.SuccessionEnabled() {
+		t.Fatal("oversized config enabled succession")
+	}
+
+	// Oversized regular file on disk and non-regular files (FIFO / symlink) fail OFF.
+	big := append([]byte(`{"session_succession":true,"pad":"`), bytes.Repeat([]byte("a"), maxConfigBytes)...)
+	if err := os.WriteFile(cfgPath, append(big, `"}`...), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e := EnvConfig{DefaultTokenFile: token, Getenv: func(string) string { return "" }}
+	if e.SuccessionEnabled() {
+		t.Fatal("oversized disk file enabled succession")
+	}
+
+	if runtime.GOOS != "windows" {
+		realCfg := filepath.Join(dir, "real.json")
+		if err := os.WriteFile(realCfg, []byte(`{"session_succession":true}`), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		_ = os.Remove(cfgPath)
+		if err := os.Symlink(realCfg, cfgPath); err != nil {
+			t.Fatal(err)
+		}
+		if e.SuccessionEnabled() {
+			t.Fatal("symlink client.json enabled succession")
+		}
+		_ = os.Remove(cfgPath)
+	}
+
+	// Internal regular-file boundary failures in readBoundedRegularConfig.
+	if err := os.WriteFile(cfgPath, []byte(`{"session_succession":true}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	origOpen := configOpen
+	origAfter := afterConfigStat
+	t.Cleanup(func() {
+		configOpen = origOpen
+		afterConfigStat = origAfter
+	})
+	configOpen = func(string, configFileID) (*os.File, configFileID, error) {
+		return nil, configFileID{}, os.ErrPermission
+	}
+	if e.SuccessionEnabled() {
+		t.Fatal("configOpen error enabled succession")
+	}
+	configOpen = func(p string, expected configFileID) (*os.File, configFileID, error) {
+		f, err := os.Open(p)
+		if err == nil {
+			_ = f.Close()
+		}
+		return f, expected, err
+	}
+	if e.SuccessionEnabled() {
+		t.Fatal("Stat error on closed fd enabled succession")
+	}
+	configOpen = func(_ string, expected configFileID) (*os.File, configFileID, error) {
+		f, err := os.Open(dir)
+		return f, expected, err
+	}
+	if e.SuccessionEnabled() {
+		t.Fatal("directory handle from configOpen enabled succession")
+	}
+	configOpen = func(p string, expected configFileID) (*os.File, configFileID, error) {
+		f, err := os.OpenFile(p, os.O_WRONLY, 0)
+		return f, expected, err
+	}
+	if e.SuccessionEnabled() {
+		t.Fatal("write-only fd enabled succession")
+	}
+	configOpen = origOpen
+	afterConfigStat = func() {
+		_ = os.WriteFile(cfgPath, append([]byte(`{"session_succession":true,"pad":"`), append(bytes.Repeat([]byte("a"), maxConfigBytes), `"}`...)...), 0o600)
+	}
+	if e.SuccessionEnabled() {
+		t.Fatal("grown >64KiB file after Stat enabled succession")
+	}
+}
+
+func TestUpdateConfigPreservesDisableOverStaleTrue(t *testing.T) {
+	dir := t.TempDir()
+	cfgPath := filepath.Join(dir, "client.json")
+
+	// Validation, privateDir, and lock errors on WriteConfig & UpdateConfig.
+	if err := UpdateConfig(cfgPath, FileConfig{Hub: "http://example.com"}); err == nil {
+		t.Fatal("expected ValidateURL error")
+	}
+	fileParent := filepath.Join(dir, "not-a-dir")
+	if err := os.WriteFile(fileParent, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateConfig(filepath.Join(fileParent, "client.json"), FileConfig{Hub: "https://hub.example"}); err == nil {
+		t.Fatal("expected privateDir error")
+	}
+	lockBlockDir := filepath.Join(dir, "lock-block")
+	if err := os.MkdirAll(filepath.Join(lockBlockDir, "client.json.lock"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := WriteConfig(filepath.Join(lockBlockDir, "client.json"), FileConfig{Hub: "https://hub.example"}); err == nil {
+		t.Fatal("expected WriteConfig lock OpenFile error")
+	}
+	if err := UpdateConfig(filepath.Join(lockBlockDir, "client.json"), FileConfig{Hub: "https://hub.example"}); err == nil {
+		t.Fatal("expected UpdateConfig lock OpenFile error")
+	}
+	origLock := configFileLock
+	t.Cleanup(func() { configFileLock = origLock })
+	configFileLock = func(*os.File) error { return errors.New("flock failed") }
+	if err := WriteConfig(cfgPath, FileConfig{Hub: "https://hub.example"}); err == nil {
+		t.Fatal("expected WriteConfig lockConfigFile error")
+	}
+	if err := UpdateConfig(cfgPath, FileConfig{Hub: "https://hub.example"}); err == nil {
+		t.Fatal("expected UpdateConfig lockConfigFile error")
+	}
+	configFileLock = origLock
+
+	// Preserve true when untouched on disk.
+	if err := WriteConfig(cfgPath, FileConfig{Hub: "https://old.example", SessionSuccession: boolPtr(true)}); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateConfig(cfgPath, FileConfig{Hub: "https://new.example", TokenFile: "hub.token"}); err != nil {
+		t.Fatal(err)
+	}
+	raw, err := os.ReadFile(cfgPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got FileConfig
+	if err := json.Unmarshal(raw, &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Hub != "https://new.example" || got.SessionSuccession == nil || !*got.SessionSuccession {
+		t.Fatalf("UpdateConfig failed to preserve true: %+v (%s)", got, raw)
+	}
+
+	// Invalid on-disk value is dropped cleanly.
+	if err := os.WriteFile(cfgPath, []byte(`{"hub_url":"https://old.example","session_succession":"bad"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateConfig(cfgPath, FileConfig{Hub: "https://new.example"}); err != nil {
+		t.Fatal(err)
+	}
+	if raw, err = os.ReadFile(cfgPath); err != nil || bytes.Contains(raw, []byte("session_succession")) {
+		t.Fatalf("invalid value not dropped cleanly: %s (%v)", raw, err)
+	}
+
+	// Exact race: atomic replacement with disable swapped in after open/read (before staging/rename) via CAS retry.
+	atomicSwapFile := func(t *testing.T, target, body string) {
+		t.Helper()
+		tmp := target + ".owner.tmp"
+		if err := os.WriteFile(tmp, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Rename(tmp, target); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for _, tc := range []struct {
+		name         string
+		ownerContent string
+		wantNil      bool
+	}{
+		{name: "explicit false swapped after open", ownerContent: `{"hub_url":"https://old.example","session_succession":false}`, wantNil: false},
+		{name: "key removal swapped after open", ownerContent: `{"hub_url":"https://old.example"}`, wantNil: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if err := WriteConfig(cfgPath, FileConfig{Hub: "https://old.example", SessionSuccession: boolPtr(true)}); err != nil {
+				t.Fatal(err)
+			}
+			origAfterRead := afterConfigRead
+			t.Cleanup(func() { afterConfigRead = origAfterRead })
+			swapped := false
+			afterConfigRead = func(p string) {
+				if !swapped {
+					swapped = true
+					atomicSwapFile(t, p, tc.ownerContent)
+				}
+			}
+			if err := UpdateConfig(cfgPath, FileConfig{Hub: "https://updated.example"}); err != nil {
+				t.Fatal(err)
+			}
+			afterConfigRead = origAfterRead
+			var merged FileConfig
+			data, _ := os.ReadFile(cfgPath)
+			if err := json.Unmarshal(data, &merged); err != nil {
+				t.Fatal(err)
+			}
+			if merged.Hub != "https://updated.example" {
+				t.Fatalf("hub not updated: %+v", merged)
+			}
+			if tc.wantNil && merged.SessionSuccession != nil {
+				t.Fatalf("expected nil session_succession, got %v", *merged.SessionSuccession)
+			}
+			if !tc.wantNil && (merged.SessionSuccession == nil || *merged.SessionSuccession) {
+				t.Fatalf("expected explicit false, got %v", merged.SessionSuccession)
+			}
+		})
+	}
+
+	// Compare-and-swap transitions (absent->present, identical bytes atomically replaced, valid->corrupt) & abort after max retries.
+	origBefore := beforeConfigRename
+	t.Cleanup(func() { beforeConfigRename = origBefore })
+
+	absentRacePath := filepath.Join(dir, "absent-race.json")
+	swappedAbsent := false
+	beforeConfigRename = func(p string) {
+		if !swappedAbsent {
+			swappedAbsent = true
+			atomicSwapFile(t, p, `{"hub_url":"https://old.example","session_succession":false}`)
+		}
+	}
+	if err := UpdateConfig(absentRacePath, FileConfig{Hub: "https://new.example"}); err != nil {
+		t.Fatal(err)
+	}
+	var absCfg FileConfig
+	if data, err := os.ReadFile(absentRacePath); err != nil || json.Unmarshal(data, &absCfg) != nil || absCfg.SessionSuccession == nil || *absCfg.SessionSuccession {
+		t.Fatalf("absent->present CAS lost false: %s (%v)", data, err)
+	}
+
+	// Same bytes replaced by new inode (non-same file identity) & persistent conflict -> ErrConfigChanged.
+	beforeConfigRename = func(p string) {
+		atomicSwapFile(t, p, `{"hub_url":"https://old.example","session_succession":false}`)
+	}
+	if err := UpdateConfig(absentRacePath, FileConfig{Hub: "https://abort.example"}); !errors.Is(err, ErrConfigChanged) {
+		t.Fatalf("persistent CAS swap = %v, want ErrConfigChanged", err)
+	}
+	beforeConfigRename = origBefore
+
+	// Exact race: owner false swapped in right after the CAS compare before os.Rename.
+	if err := WriteConfig(cfgPath, FileConfig{Hub: "https://old.example", SessionSuccession: boolPtr(true)}); err != nil {
+		t.Fatal(err)
+	}
+	origAfterCompare := afterConfigCompare
+	t.Cleanup(func() { afterConfigCompare = origAfterCompare })
+	swappedAfterCompare := false
+	afterConfigCompare = func(p string) {
+		if !swappedAfterCompare {
+			swappedAfterCompare = true
+			atomicSwapFile(t, p, `{"hub_url":"https://old.example","session_succession":false}`)
+		}
+	}
+	if err := UpdateConfig(cfgPath, FileConfig{Hub: "https://after-compare.example", TokenFile: "hub.token"}); err != nil {
+		t.Fatal(err)
+	}
+	afterConfigCompare = origAfterCompare
+	var afterCompareCfg FileConfig
+	if data, err := os.ReadFile(cfgPath); err != nil || json.Unmarshal(data, &afterCompareCfg) != nil ||
+		afterCompareCfg.Hub != "https://after-compare.example" ||
+		afterCompareCfg.SessionSuccession == nil || *afterCompareCfg.SessionSuccession {
+		t.Fatalf("after-compare CAS race lost owner false: %s (%v)", data, err)
+	}
+
+	// Stage failure and fresh config without existing file and rename failure cleanup.
+	origWrite := prepareConfigWrite
+	origCreateTemp := createConfigTemp
+	t.Cleanup(func() {
+		prepareConfigWrite = origWrite
+		createConfigTemp = origCreateTemp
+	})
+	createConfigTemp = func(string, string) (*os.File, error) { return nil, os.ErrPermission }
+	if err := UpdateConfig(cfgPath, FileConfig{Hub: "https://fail.example"}); err == nil {
+		t.Fatal("expected create temp failure")
+	}
+	createConfigTemp = origCreateTemp
+	prepareConfigWrite = func(f *os.File) { _ = f.Close() }
+	if err := UpdateConfig(cfgPath, FileConfig{Hub: "https://fail.example"}); err == nil {
+		t.Fatal("expected stage failure")
+	}
+	prepareConfigWrite = origWrite
+	beforeConfigRename = origBefore
+
+	freshPath := filepath.Join(dir, "fresh.json")
+	if err := UpdateConfig(freshPath, FileConfig{Hub: "https://fresh.example"}); err != nil {
+		t.Fatal(err)
+	}
+	dirTarget := filepath.Join(dir, "dir-target")
+	if err := os.MkdirAll(filepath.Join(dirTarget, "keep"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateConfig(dirTarget, FileConfig{Hub: "https://fresh.example"}); err == nil {
+		t.Fatal("expected rename failure when target is a directory")
 	}
 }

@@ -134,9 +134,12 @@ child's exact record.
 
 ### Sessions lock budget
 
-The client sets one monotonic deadline before requesting the sessions lock. It uses the
-earlier of the caller's deadline and 50 ms from entry. Acquisition, reads, file replacements
-and cleanup in that hold share the deadline. The admission reads and checks are mandatory.
+For succession-evidence holds when succession is enabled, the client sets one monotonic deadline
+before requesting the sessions lock. It uses the earlier of the caller's deadline and 50 ms from
+entry. Acquisition, reads, file replacements and cleanup in that hold share the deadline. The
+single deadline covers succession-evidence holds only; other `.lock` writers (attention, told,
+wake, prune and `retainGeneration`) and OFF-mode operations keep v0.1.15's acquisition-only
+budget with no hold deadline. The admission reads and checks are mandatory.
 After a hub-confirmed end, writing the end marker is required before removing the evidence
 it vetoes. Writing the exact record and generation file is optional for an admitted hook's
 current operation. The client prepares protected temporary files before taking the lock and
@@ -438,8 +441,9 @@ Wire compatibility gives no guarantee about opening a later database in place.
    cannot deny an edit. A confirmed end follows D9 when the evidence is undamaged and the
    other mandatory checks complete. Damage or an incomplete mandatory check in the same
    attempt gives D3 allow and still vetoes publication and dependent requests. An
-   authoritative claim decision retains its existing behavior. Each hold of the sessions
-   lock has one deadline. HTTP runs outside that lock.
+   authoritative claim decision retains its existing behavior. The single deadline covers
+   succession-evidence holds only; other `.lock` writers keep v0.1.15's acquisition-only budget.
+   HTTP runs outside that lock.
 
 ## Limits
 
@@ -455,6 +459,9 @@ race a request in flight. Hub order governs what commits. The client cannot roll
 mutation or detect an end that neither side records. D13 trusts the host token holder for
 its own host and the OS user for its local files. Provenance and protocol opt-in cannot
 authenticate a native event against someone who can forge it or rewrite the exact record.
+When `iris setup` updates `client.json` without changing `session_succession`, an un-locked
+external replacement has a microsecond residual window right before rename; a `client.json`
+disable wins on every later read.
 
 ## Deterministic verification
 

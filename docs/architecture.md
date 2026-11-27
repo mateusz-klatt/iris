@@ -888,7 +888,9 @@ Changes from the reference schema:
    that replacement fail. On Windows versions or volumes without POSIX rename, the helper falls back
    to MoveFileEx, where any held handle can still block replacement. Access-denied and
    sharing-violation retries stay within the existing 50 ms session-lock budget and attempt cap;
-   the deadline is checked before every attempt, the MoveFileEx fallback included. On SessionEnd's
+   the deadline is checked before every attempt, the MoveFileEx fallback included (the single
+   deadline covers succession-evidence holds only; other `.lock` writers keep v0.1.15's
+   acquisition-only budget and per-rename retry). On SessionEnd's
    marker-write path, a failure after the bounded retries records the existing damaged-marker
    observation, preserves live proof and still returns valid hook output. Ordinary proof publication
    still discards write errors and adds no observation. Other systems keep `os.Rename`. Registration
@@ -1728,6 +1730,8 @@ On `modernc.org/sqlite`, with real concurrency:
   (`WorktreeIdentity`, `Repository.auto_claim_scope`, or `user_version` 29/30 without
   `prior_execution_id`) through a read-only VFS before opening writable handles, switching to WAL, or
   running any startup writes, leaving main, `-wal`, and `-shm` bytes unchanged on refusal.
+- In ADR 039 M2, the single deadline covers succession-evidence holds only; other `.lock` writers
+  keep v0.1.15's acquisition-only budget.
 - An orphaned heartbeat cannot preserve ownership. A second, unregistered session in one process
   cannot bind to the first. In id mode, a tool call that names its session binds only that
   session's Execution, never through a handle.

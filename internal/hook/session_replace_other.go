@@ -2,8 +2,14 @@
 
 package hook
 
-import "os"
+import (
+	"os"
+	"time"
+)
 
-func replaceSessionFile(oldpath, newpath string) error {
+func replaceSessionFileDeadline(oldpath, newpath string, deadline time.Time, _ bool, now func() time.Time, _ func(time.Duration)) error {
+	if deadlineExpired(now, deadline) {
+		return os.ErrDeadlineExceeded
+	}
 	return os.Rename(oldpath, newpath)
 }

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/mateusz-klatt/iris/internal/hook"
 	"github.com/mateusz-klatt/iris/internal/integrate"
 )
 
@@ -119,6 +120,9 @@ func TestABundleCarriesNoSecretOnlyStatesAndCounts(t *testing.T) {
 func TestAnUnknownValueKeepsNoText(t *testing.T) {
 	if got := observationKind("something new about secret_name"); got != "other" {
 		t.Fatalf("observation %q", got)
+	}
+	if got := observationKind(hook.SessionEvidenceWriteFailed + ": /Users/alice/secret"); got != hook.SessionEvidenceWriteFailed {
+		t.Fatalf("observation %q, want %q", got, hook.SessionEvidenceWriteFailed)
 	}
 	b := NewBundle(Result{HubSource: "flag --hub https://secret.example", Guard: "secret state: /Users/alice/repo"}, "v1", time.Now())
 	if b.Hub.Source != "other" || b.Guard != "other" {

@@ -383,7 +383,7 @@ func (r Runner) reconcileScopedSession(ctx context.Context, state *runState, hub
 	}
 	res, err := hub.ReconcileScopedSession(ctx, req)
 	err = checkEndedRegistration(state, ev, m, endedThrough, res.Session.Generation, req.Generation == 0, err)
-	r.answered(m, ev, res, err)
+	r.answered(ctx, m, ev, res, err)
 	return res.CheckResponse, checkRestoreFloor(state, ev, m, req.Generation, err)
 }
 
