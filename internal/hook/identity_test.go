@@ -1061,6 +1061,55 @@ func TestASessionStartWithTheLockHeldStillStarts(t *testing.T) {
 	}
 }
 
+func TestSessionStartWithLockContendedDuringPruneStillStarts(t *testing.T) {
+	root := gitRepo(t)
+	env := failureEnv(t)
+	m := sessionsFor(env)
+	stale := m.name("codex", "long gone")
+	if err := m.write(stale, "1"); err != nil {
+		t.Fatal(err)
+	}
+	old := time.Now().Add(-memoryAge - time.Hour)
+	if err := os.Chtimes(stale, old, old); err != nil {
+		t.Fatal(err)
+	}
+	var release func()
+	defer func() {
+		if release != nil {
+			release()
+		}
+	}()
+	hub := &m2cHub{
+		regFunc: func(context.Context, hubclient.SessionRequest) (hubclient.SessionResponse, error) {
+			var err error
+			release, err = m.lock(hookLockBudget)
+			if err != nil {
+				return hubclient.SessionResponse{}, err
+			}
+			return hubclient.SessionResponse{
+				ExecutionID: m2cExecID(50), SessionID: "s", Generation: 1, Worktree: "/repo",
+			}, nil
+		},
+	}
+	start := `{"session_id":"s","cwd":` + quote(root) + `,"hook_event_name":"SessionStart"}`
+	out := Runner{ClientName: "claude", EventName: "SessionStart", Stdin: strings.NewReader(start), Hub: hub, Getenv: env, after: never, logAfter: never}.Run()
+	if out.Exit != 0 || !strings.Contains(string(out.Stdout), "Iris handle: "+m2cExecID(50)) {
+		t.Fatalf("exit %d: %s", out.Exit, out.Stdout)
+	}
+	entries, err := ReadRecentFailures(env("IRIS_TOKEN_FILE"), 10)
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("expected prune and attention session-files lock failures, got %+v err=%v", entries, err)
+	}
+	for _, e := range entries {
+		if e.Stage != stageSessionFiles || e.Error != string(failSessionsLock) {
+			t.Fatalf("expected session-files lock failure, got %+v", e)
+		}
+	}
+	if _, err := os.Stat(stale); err != nil {
+		t.Fatalf("pruned without the lock: %v", err)
+	}
+}
+
 // Pruning lists the sessions directory before it takes the lock, which other hooks wait at most
 // hookLockBudget for. This measures a pruning of a thousand sessions, two files each, none stale.
 func BenchmarkPruningAThousandSessions(b *testing.B) {

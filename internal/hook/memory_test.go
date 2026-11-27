@@ -195,6 +195,24 @@ func TestEndMarkerVetoesDelayedRegistrationReplies(t *testing.T) {
 	if got, err := m.RecallGeneration("claude", "s"); got != 4 || err != nil {
 		t.Fatalf("newer hook registration proof = G%d, %v", got, err)
 	}
+
+	m.Remember("claude", "recall-ended", 2)
+	m.Forget("claude", "recall-ended", 2)
+	if err := os.WriteFile(m.name("claude", "recall-ended"), []byte("2\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var endedErr endedProof
+	if _, err := m.RecallGeneration("claude", "recall-ended"); !errors.As(err, &endedErr) {
+		t.Fatalf("RecallGeneration on ended proof = %v, want endedProof", err)
+	}
+	marker := m.name("claude", "recall-ended") + ".ended"
+	if err := os.WriteFile(marker, []byte("corrupt\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var damagedErr damagedEndMarker
+	if _, err := m.RecallGeneration("claude", "recall-ended"); !errors.As(err, &damagedErr) || damagedErr.Error() != damagedGenerationObservation(marker) {
+		t.Fatalf("RecallGeneration on damaged .ended = %v, want damagedEndMarker", err)
+	}
 }
 
 func TestForgetKeepsProofWhenEndMarkerCannotBeRecorded(t *testing.T) {

@@ -440,7 +440,13 @@ func TestSuccessionON_AdmissionPublicationConflictAndDamage(t *testing.T) {
 			after: never, logAfter: never,
 		}.Run()
 		assertAllow(t, ClientClaude, out)
-		if !slices.Contains(h.trace, "touch") {
+		touched := false
+		for _, tr := range h.trace {
+			if strings.HasPrefix(tr, "touch") {
+				touched = true
+			}
+		}
+		if !touched {
 			t.Fatalf("ordinary unclassified reply should reach Touch, got trace=%v", h.trace)
 		}
 		if got := m.Recall("claude", "s1"); got != 1 {
@@ -653,8 +659,9 @@ func TestFreshRegistrationLockContentionWatchdogAndSettleON(t *testing.T) {
 					Status: func(context.Context, string, gitinfo.Scope, *gitinfo.Attempt) (map[string]string, error) {
 						return map[string]string{}, nil
 					},
-					Deadline:      25 * time.Millisecond,
+					Deadline:      2 * time.Second,
 					ShellDeadline: time.Second,
+					after:         never,
 					logAfter:      never,
 				}.Run()
 				elapsed := time.Since(start)

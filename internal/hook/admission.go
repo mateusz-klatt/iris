@@ -125,7 +125,7 @@ func (a *registrationAttempt) preInspect(ctx context.Context, retained int) (gen
 	}
 
 	a.state.enterMandatory(a.stage)
-	snap, inspectErr := a.files.inspectEvidenceDeadline(a.client, a.session, lockDeadlineFromCtx(ctx), a.successionEnabled, cleanExpired)
+	snap, inspectErr := a.files.inspectEvidenceWithTouch(a.client, a.session, lockDeadlineFromCtx(ctx), a.successionEnabled, cleanExpired, true)
 	if inspectErr != nil {
 		if snap.EndedState == sessionproof.FileValid {
 			a.endedFloor = max(a.endedFloor, snap.Ended)
