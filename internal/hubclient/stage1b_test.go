@@ -358,3 +358,68 @@ func TestStage1bClientMethods(t *testing.T) {
 		t.Fatalf("unexpected worktree: %+v", cand)
 	}
 }
+
+func TestShellResponseSessionCandidateClassification(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		switch r.URL.Path {
+		case "/v1/shell/reconcile":
+			var req ShellSessionRequest
+			if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+				t.Fatal(err)
+			}
+			if !req.SuccessionProof {
+				_, _ = w.Write([]byte(`{"message":"","session":{"execution_id":"ex_u","generation":1,"capabilities":["shell_scope","file_claims"]}}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"message":"","session":{"execution_id":"ex_c","session_id":"S1","generation":2,"worktree":"/w","outside_git":false,"prior_execution_id":"ex_p","creation_source":"shim","creation_proof":"shim_succession","hook_seen":true,"capabilities":["shell_scope","file_claims","succession_proof"]}}`))
+		case "/v1/shell/scoped":
+			// Incomplete M1 3-key reply advertising succession_proof without hook_seen must fail Classify.
+			_, _ = w.Write([]byte(`{"message":"","session":{"execution_id":"ex_m1","generation":2,"prior_execution_id":"ex_p","creation_source":"shim","creation_proof":"shim_succession","capabilities":["shell_scope","file_claims","succession_proof"]}}`))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	c := &Client{Config: staticConfig{url: srv.URL, token: "tok"}}
+	opted, err := c.ReconcileSession(t.Context(), ShellSessionRequest{
+		SessionRequest: SessionRequest{Client: "codex", Host: "h", SessionID: "S1", Source: "hook", SuccessionProof: true},
+		Kind:           "before", Status: map[string]string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cls, err := opted.Session.Candidate().Classify()
+	if err != nil || cls.Kind != CandidateShimSuccession || !cls.HookSeen {
+		t.Fatalf("opted ShellResponse classify=%+v err=%v", cls, err)
+	}
+	if opted.Session.SessionID != "S1" || opted.Session.Worktree != "/w" || opted.Session.OutsideGit {
+		t.Fatalf("unexpected decoded session metadata: %+v", opted.Session)
+	}
+
+	unopted, err := c.ReconcileSession(t.Context(), ShellSessionRequest{
+		SessionRequest: SessionRequest{Client: "codex", Host: "h", SessionID: "S1", Source: "hook"},
+		Kind:           "before", Status: map[string]string{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cls, err := unopted.Session.Candidate().Classify(); err != nil || cls.Kind != CandidateUnclassified {
+		t.Fatalf("unopted ShellResponse classify=%+v err=%v", cls, err)
+	}
+
+	m1Reply, err := c.ReconcileScopedSession(t.Context(), ScopedSessionRequest{
+		ShellSessionRequest: ShellSessionRequest{
+			SessionRequest: SessionRequest{Client: "codex", Host: "h", SessionID: "S1", Source: "hook", SuccessionProof: true},
+			Kind:           "before", Status: map[string]string{},
+		},
+		Scope: Scope{Mode: "dirty"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := m1Reply.Session.Candidate().Classify(); err == nil {
+		t.Fatal("expected Classify error for incomplete M1 3-key combined shell reply")
+	}
+}

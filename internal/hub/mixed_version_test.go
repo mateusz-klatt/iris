@@ -707,6 +707,13 @@ func TestHTTPUnoptedRoutesExactV0115GoldenBytes(t *testing.T) {
 		if !ok || len(caps) != 3 || caps[0] != "shell_scope" || caps[1] != "file_claims" || caps[2] != "succession_proof" {
 			t.Fatalf("%s opted capabilities=%#v, want [shell_scope file_claims succession_proof]", path, target["capabilities"])
 		}
+		if nestedSession {
+			for _, key := range []string{"session_id", "worktree", "prior_execution_id", "creation_source", "creation_proof", "hook_seen"} {
+				if _, ok := target[key]; !ok {
+					t.Fatalf("%s opted session missing %q: %+v", path, key, target)
+				}
+			}
+		}
 	}
 
 	// 1. POST /v1/sessions (inside repo)

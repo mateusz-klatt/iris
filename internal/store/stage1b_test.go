@@ -703,3 +703,63 @@ func TestMigratedOrdinaryNullProvenanceTouchAndReconcileSetHookSeen(t *testing.T
 		})
 	}
 }
+
+func TestShellSessionSuccessionProofEmitsBoundAndPreservesHookSeen(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		op   string
+	}{
+		{name: "reconcile", op: "reconcile"},
+		{name: "reconcile_scoped", op: "reconcile_scoped"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			s, clock, _ := testStore(t)
+			parent := call(t, s, "sessions", Request{
+				Client: "claude", Host: "host", Cwd: "/repo/w", Worktree: "/repo/w",
+				RemoteURL: "https://example.com/team/project.git", RootCommit: "root",
+				SessionID: "S-comb", Source: "hook", SuccessionProof: true,
+			})
+			parentID := parent["execution_id"].(string)
+			clock.advance(16 * time.Minute)
+			call(t, s, "expire", Request{})
+
+			child := call(t, s, "succeed", Request{
+				Client: "claude", Host: "host", SessionID: "S-comb", Source: "shim",
+				PriorGeneration: 1, PriorExecutionID: parentID, SuccessionProof: true,
+			})
+			childID := child["execution_id"].(string)
+
+			req := Request{
+				Client: "claude", Host: "host", Cwd: "/repo/w", Worktree: "/repo/w",
+				RemoteURL: "https://example.com/team/project.git", RootCommit: "root",
+				SessionID: "S-comb", Source: "hook", Kind: "before",
+				Status: map[string]string{}, SuccessionProof: true,
+			}
+			if tc.op == "reconcile_scoped" {
+				req.Scope = &ShellScope{Mode: "dirty", Submodules: []string{"sub"}}
+			}
+			clock.advance(time.Second)
+			out := call(t, s, tc.op, req)
+			sess := out["session"].(map[string]any)
+			assertClassifiedReply(t, sess, parentID, "shim", "shim_succession", true)
+			if sess["execution_id"] != childID || sess["session_id"] != "S-comb" || sess["worktree"] != "/repo/w" || sess["outside_git"] != nil {
+				t.Fatalf("unexpected shell session bound fields: %+v", sess)
+			}
+			caps, _ := sess["capabilities"].([]string)
+			if !slices.Equal(caps, []string{"shell_scope", "file_claims", "succession_proof"}) {
+				t.Fatalf("capabilities=%#v, want [shell_scope file_claims succession_proof]", sess["capabilities"])
+			}
+			if seen := readHookSeenMS(t, s, childID); seen == 0 {
+				t.Fatalf("expected hook_seen_ms > 0 for %s", childID)
+			}
+
+			// Un-opted sibling session stays legacy-shaped without classification keys.
+			unopted := req
+			unopted.SessionID = "S-unopted"
+			unopted.Cwd, unopted.Worktree = "/repo/w2", "/repo/w2"
+			unopted.SuccessionProof = false
+			unoptedOut := call(t, s, tc.op, unopted)
+			assertLegacyReply(t, unoptedOut["session"].(map[string]any), false)
+		})
+	}
+}

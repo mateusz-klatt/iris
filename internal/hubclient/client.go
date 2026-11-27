@@ -549,11 +549,7 @@ type ShellSessionRequest struct {
 // hook remembers as its next proof.
 type ShellResponse struct {
 	CheckResponse
-	Session struct {
-		ExecutionID  string   `json:"execution_id"`
-		Generation   int      `json:"generation"`
-		Capabilities []string `json:"capabilities"`
-	} `json:"session"`
+	Session SessionResponse `json:"session"`
 }
 
 func (c *Client) ReconcileSession(ctx context.Context, req ShellSessionRequest) (ShellResponse, error) {
