@@ -110,4 +110,4 @@ the systems share fails closed: arguments that cannot be read or that Iris does 
 follow-up. Whether the follow-up works on macOS and Windows is not measured.
 
 The 2026.11.22 sh launcher adds `--disable-sigusr1` by default, which prevented Iris from
-arming the Stop follow-up for those macOS sessions before this fix ([#467](https://github.com/mateusz-klatt/iris/issues/467)).
+arming the Stop follow-up for those macOS sessions before this fix. Linux sessions on the same sh launcher are expected to be affected the same way, which is not measured; the Windows PowerShell launcher passes no Node flags ([#467](https://github.com/mateusz-klatt/iris/issues/467)).
