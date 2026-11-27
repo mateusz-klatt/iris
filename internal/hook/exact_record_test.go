@@ -808,17 +808,18 @@ func TestExactRecordDeadlineCheckpointsAnd60msAntigravitySync(t *testing.T) {
 			t.Fatalf("60ms sync dropped Stop idle update: ok=%v conv=%+v", ok, conv)
 		}
 
-		// Shorter Runner.Deadline caps Antigravity write budget below 1s.
+		// A short outer deadline leaves no time to replace the file after sync.
 		const convShort = "e28a6164-6409-4810-b8ee-df8202a16a0d"
 		stopShort := `{"conversationId":"` + convShort + `","executionNum":0,"continuationActive":false,"fullyIdle":true,"terminationReason":"NO_TOOL_CALL","workspacePaths":["/repo"]}`
 		syncAntigravityTemp = func(f *os.File) error {
 			time.Sleep(35 * time.Millisecond)
 			return origSync(f)
 		}
+		ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+		defer cancel()
 		_ = (Runner{
 			ClientName:      "antigravity",
 			EventName:       "Stop",
-			Deadline:        20 * time.Millisecond,
 			Stdin:           strings.NewReader(stopShort),
 			PinnedConfigDir: func() (string, error) { return filepath.Dir(tokenPath), nil },
 			Getenv: func(k string) string {
@@ -828,8 +829,7 @@ func TestExactRecordDeadlineCheckpointsAnd60msAntigravitySync(t *testing.T) {
 				return ""
 			},
 			Ancestor: func() (proc.Ancestor, error) { return proc.Ancestor{}, errors.New("no agy") },
-			after:    func(time.Duration) <-chan time.Time { return nil },
-		}).Run()
+		}).execute(ctx, &runState{})
 		if convShortState, ok := ReadAntigravityConvState(filepath.Dir(tokenPath), convShort); ok && convShortState.Idle {
 			t.Fatalf("20ms capped writeBudget recorded idle update past 35ms sync: %+v", convShortState)
 		}

@@ -64,6 +64,7 @@ func runWatch(args []string) error {
 	config := hubclient.NewConfig()
 	resolver := binding.New(&hubclient.Client{Config: config}, *client)
 	resolver.HeartbeatSource = "watch"
+	// Plain watch uses the legacy binding protocol with local generation and end checks.
 	_, _ = bindingSessions(resolver, config)
 	// The monitor shell does not inherit GROK_SESSION_ID. The hook wrote it beside the grok
 	// process. A variable that is already set is left alone.

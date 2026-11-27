@@ -4,12 +4,14 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/mateusz-klatt/iris/internal/hook"
 	"github.com/mateusz-klatt/iris/internal/hub"
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 	"github.com/mateusz-klatt/iris/internal/proc"
@@ -255,5 +257,71 @@ func TestAntigravityWakeMaintainDoesNotHeartbeatWhenStaleDuringLookup(t *testing
 	}
 	if got := heartbeats.Load(); got != 0 {
 		t.Fatalf("stale session sent %d heartbeats after /v1/bind", got)
+	}
+}
+
+func TestOptedAntigravityWakeDisambiguatesTheProcessAndRechecksProof(t *testing.T) {
+	live := newLiveHub(t)
+	sessions, proof, token := bindingEvidenceFilesFor(t, "antigravity")
+	const session = "native"
+	ancestor := proc.Ancestor{PID: 42, StartMS: 100, Name: "agy"}
+	newWake := func() *Resolver {
+		r := NewAntigravityWake(live.client(), session, ancestor)
+		r.Host, r.CWD = "host", t.TempDir()
+		r.Evidence = sessions
+		r.SuccessionEnabled = func(context.Context) bool { return true }
+		return r
+	}
+	r := newWake()
+	req := store.Request{
+		Client: "antigravity", Host: r.Host, Cwd: r.CWD, SessionID: session,
+		Source: "mcp", ClientPID: 42, ClientPIDStartMS: 100, SingleSession: true,
+	}
+	var generation int64
+	live.hook(t, &generation, req)
+	if target, ok := r.LookupWake(t.Context()); ok {
+		t.Fatalf("hookless fallback armed wake: %+v", target)
+	}
+	req.Source = "hook"
+	registered := live.hook(t, &generation, req)
+	for _, other := range []string{"other-one", "other-two"} {
+		fallback := req
+		fallback.SessionID = other
+		var unset int64
+		live.hook(t, &unset, fallback)
+	}
+	target, ok := r.LookupWake(t.Context())
+	if !ok || !target.Bound.HookSeen || target.Bound.ExecutionID != registered["execution_id"] {
+		t.Fatalf("ambiguous process did not resolve its hooked conversation: %+v, %t", target, ok)
+	}
+	writeBindingEvidence(t, proof+".execution", "corrupt")
+	started, err := r.StartIfPrimary(target, func() error { t.Fatal("damaged exact record armed wake"); return nil })
+	if started || err != nil || r.Lost() {
+		t.Fatalf("damaged proof should disarm without confirmed loss: started=%t, lost=%t, err=%v", started, r.Lost(), err)
+	}
+	assertBindingObservation(t, token, "antigravity", hook.DamagedGenerationProof+" at "+proof+".execution")
+	if err := os.Remove(proof + ".execution"); err != nil {
+		t.Fatal(err)
+	}
+
+	req.ClientPID, req.ClientPIDStartMS = 55, 200
+	live.hook(t, &generation, req)
+	if target, ok := newWake().LookupWake(t.Context()); ok {
+		t.Fatalf("ambiguous process bound a conversation that moved: %+v", target)
+	}
+}
+
+func TestOptedAntigravityWakeRequiresProofOfCombinedMatch(t *testing.T) {
+	h := &tickHub{reply: func(_ *http.Request, req map[string]any) (int, any) {
+		if req["session_id"] == nil {
+			return refused("ambiguous")
+		}
+		// An older hub can look up a session without applying the tuple.
+		return http.StatusOK, map[string]any{"execution_id": "ex_session", "generation": 1, "session_id": "native", "hook_seen": true}
+	}}
+	r := NewAntigravityWake(h.client(), "native", proc.Ancestor{PID: 42, StartMS: 100, Name: "agy"})
+	r.SuccessionEnabled = func(context.Context) bool { return true }
+	if target, ok := r.LookupWake(t.Context()); ok {
+		t.Fatalf("unverified combined bind armed wake: %+v", target)
 	}
 }

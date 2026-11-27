@@ -22,4 +22,11 @@ func TestObserveBindingRefusalNamesTheVetoingFile(t *testing.T) {
 		path := s.memory.name("claude", "s")
 		assertRecallObservation(t, token, BindingGenerationRefused+" at "+path) // gitleaks:allow (a test observation token and path, not a credential)
 	})
+	t.Run("damaged exact record", func(t *testing.T) {
+		token := filepath.Join(t.TempDir(), "hub.token")
+		s := NewSessions(token)
+		s.ObserveRefusal("claude", "s", ".execution", true)
+		path := s.memory.name("claude", "s") + ".execution"
+		assertRecallObservation(t, token, DamagedGenerationProof+" at "+path) // gitleaks:allow (a test observation token and path, not a credential)
+	})
 }

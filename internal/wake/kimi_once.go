@@ -14,6 +14,7 @@ import (
 	"github.com/mateusz-klatt/iris/internal/hubclient"
 	"github.com/mateusz-klatt/iris/internal/kimiwake"
 	"github.com/mateusz-klatt/iris/internal/proc"
+	"github.com/mateusz-klatt/iris/internal/sessionproof"
 )
 
 // Outcome is how Kimi's one-shot watcher ended (ADR 030). Its value is the process exit status, which
@@ -63,10 +64,12 @@ var latchFor = map[Outcome]string{Disabled: kimiwake.LatchDisabled, Failed: kimi
 
 // onceHub is the hub the watcher reads, an interface so tests replace it.
 type onceHub interface {
-	kimiBind(ctx context.Context, host, cwd, session string, pid int, startMS int64) (binding.Bound, error)
+	kimiBind(ctx context.Context, host, cwd, session string, pid int, startMS int64, opted ...bool) (binding.Bound, error)
 	Attention(ctx context.Context, target binding.WakeTarget, after int64, stream string) (attentionRead, error)
 	Connect(ctx context.Context, target binding.WakeTarget, after int64, stream string) (eventConnection, error)
 	heartbeat(ctx context.Context, target binding.WakeTarget) error
+	optedHeartbeat(ctx context.Context, target binding.WakeTarget) (hubclient.Candidate, error)
+	reattach(ctx context.Context, req hubclient.SessionRequest) (binding.Bound, error)
 	checkpoint(ctx context.Context, target binding.WakeTarget, cursor int64) error
 }
 
@@ -76,15 +79,16 @@ type kimiOnce struct {
 	store    *kimiwake.Store
 	sessions *hook.Sessions
 	// mapped reads the session a Kimi process runs now, under the state's lock.
-	mapped  func(pid int, startMS int64) (string, bool, error)
-	told    func(session string) (hook.ToldSnapshot, error)
-	nearest func() (proc.Ancestor, error)
-	alive   func(pid int, startMS int64) bool
-	self    kimiwake.Attempt
-	host    string
-	cwd     string
-	out     io.Writer
-	now     func() time.Time
+	mapped            func(pid int, startMS int64) (string, bool, error)
+	told              func(session string) (hook.ToldSnapshot, error)
+	nearest           func() (proc.Ancestor, error)
+	alive             func(pid int, startMS int64) bool
+	successionEnabled func(context.Context) bool
+	self              kimiwake.Attempt
+	host              string
+	cwd               string
+	out               io.Writer
+	now               func() time.Time
 }
 
 // RunKimiOnce runs Kimi's one-shot watcher until it ends (ADR 030), and returns how. The hub
@@ -138,8 +142,9 @@ func newKimiOnce(out io.Writer, load func() (hubclient.Resolved, string, error),
 			p, ok := lookup(pid)
 			return ok && startMS > 0 && p.StartMS == startMS
 		},
-		self: kimiwake.Attempt{PID: self.PID, StartMS: self.StartMS, ID: attemptID()},
-		host: host, cwd: cwd, out: out, now: time.Now,
+		successionEnabled: resolved.SuccessionEnabledContext,
+		self:              kimiwake.Attempt{PID: self.PID, StartMS: self.StartMS, ID: attemptID()},
+		host:              host, cwd: cwd, out: out, now: time.Now,
 	}, true
 }
 
@@ -274,10 +279,176 @@ func (o *onceRun) staleGeneration(generation int) (bool, error) {
 	return false, nil
 }
 
+var (
+	errKimiProofLost      = &hubclient.Error{Code: "lost", Message: "the Kimi wake proof no longer admits this binding"}
+	errKimiMappingUnclear = errors.New("the Kimi wake process mapping could not be confirmed")
+)
+
+// wakeProof checks all files in one bounded hold. Legacy file damage and an
+// incomplete read are retryable, while damage to exact proof is terminal.
+func (o *onceRun) wakeProof(ctx context.Context) (sessionproof.Snapshot, error) {
+	deadline, _ := ctx.Deadline()
+	snap, err := o.w.sessions.InspectEvidence("kimi", o.key.Session, deadline, true, false)
+	if err != nil {
+		return snap, err
+	}
+	if snap.RecordState == sessionproof.FileDamaged {
+		o.w.sessions.ObserveRefusal("kimi", o.key.Session, ".execution", true)
+		return snap, errKimiProofLost
+	}
+	for _, file := range []struct {
+		state  sessionproof.FileState
+		suffix string
+	}{
+		{snap.GenerationState, ""},
+		{snap.EndedState, ".ended"},
+	} {
+		if file.state == sessionproof.FileDamaged {
+			o.w.sessions.ObserveRefusal("kimi", o.key.Session, file.suffix, true)
+			return snap, hook.ErrInvalidGeneration
+		}
+	}
+	return snap, nil
+}
+
+// admitWakeProof compares the chosen pair with the local end and generation floors
+// and any exact lineage. A newer generation never takes over a running watcher.
+func (o *onceRun) admitWakeProof(b binding.Bound, snap sessionproof.Snapshot) error {
+	switch {
+	case b.Generation <= snap.Ended:
+		o.w.sessions.ObserveBindingRefusal("kimi", o.key.Session, true)
+	case snap.RecordState == sessionproof.FileValid && (snap.Record.Generation > b.Generation ||
+		snap.Record.Generation == b.Generation && kimiLineageMismatch(b, snap.Record)):
+		o.w.sessions.ObserveRefusal("kimi", o.key.Session, ".execution", true)
+	case b.Generation < snap.Generation:
+		o.w.sessions.ObserveBindingRefusal("kimi", o.key.Session, false)
+	case snap.RecordState == sessionproof.FileValid && snap.Record.Generation == b.Generation &&
+		snap.Record.Origin == sessionproof.OriginShim && snap.Record.PriorGeneration <= snap.Ended:
+		o.w.sessions.ObserveBindingRefusal("kimi", o.key.Session, true)
+	default:
+		return nil
+	}
+	return errKimiProofLost
+}
+
+func kimiLineageMismatch(b binding.Bound, record sessionproof.Record) bool {
+	if b.ExecutionID != "" && record.ExecutionID != b.ExecutionID {
+		return true
+	}
+	if !b.Classified {
+		return false
+	}
+	if b.Class.Kind == hubclient.CandidateShimSuccession {
+		return record.Origin != sessionproof.OriginShim || record.PriorGeneration != b.Class.PriorGeneration || record.PriorExecutionID != b.Class.PriorExecutionID
+	}
+	return record.Origin == sessionproof.OriginShim
+}
+
+func (o *onceRun) checkWakeProof(ctx context.Context, b binding.Bound) (sessionproof.Snapshot, error) {
+	snap, err := o.wakeProof(ctx)
+	if err == nil {
+		err = o.admitWakeProof(b, snap)
+	}
+	return snap, err
+}
+
+func (o *onceRun) recoveryProcess() error {
+	_, stop, unsure := o.local()
+	if stop {
+		return errKimiProofLost
+	}
+	if unsure {
+		return errKimiMappingUnclear
+	}
+	return nil
+}
+
+// reattach can renew only the selected positive generation for the same live Kimi process.
+func (o *onceRun) reattach(ctx context.Context, b binding.Bound, proof sessionproof.Snapshot) (binding.Bound, error) {
+	if err := o.recoveryProcess(); err != nil {
+		return binding.Bound{}, err
+	}
+	call, cancel := context.WithTimeout(ctx, onceCall)
+	fresh, err := o.w.hub.reattach(call, hubclient.SessionRequest{
+		Client: "kimi", Host: o.w.host, CWD: o.w.cwd, SessionID: o.key.Session,
+		Generation: b.Generation, EndedThrough: proof.Ended, Source: "shim",
+		ClientPID: o.key.PID, ClientPIDStartMS: o.key.StartMS, SingleSession: true,
+	})
+	cancel()
+	if err != nil {
+		return binding.Bound{}, err
+	}
+	if err := o.recoveryProcess(); err != nil {
+		return binding.Bound{}, err
+	}
+	if !fresh.Classified {
+		fresh.Class, fresh.Classified = b.Class, b.Classified
+	}
+	if err := o.admitWakeProof(fresh, proof); err != nil {
+		return binding.Bound{}, err
+	}
+	if b.ExecutionID != "" && fresh.ExecutionID != b.ExecutionID {
+		return binding.Bound{}, errKimiProofLost
+	}
+	after, err := o.wakeProof(ctx)
+	if err != nil {
+		return binding.Bound{}, err
+	}
+	if proof.RecordState == sessionproof.FileValid && after.RecordState == sessionproof.FileValid &&
+		proof.Record.Generation == fresh.Generation && after.Record.Generation == fresh.Generation && proof.Record != after.Record {
+		o.w.sessions.ObserveRefusal("kimi", o.key.Session, ".execution", true)
+		return binding.Bound{}, errKimiProofLost
+	}
+	return fresh, o.admitWakeProof(fresh, after)
+}
+
+func (o *onceRun) renewOpted(ctx context.Context) error {
+	b := o.target.Bound
+	if _, err := o.checkWakeProof(ctx, b); err != nil {
+		return err
+	}
+	call, cancel := context.WithTimeout(ctx, onceCall)
+	candidate, heartbeatErr := o.w.hub.optedHeartbeat(call, o.target)
+	cancel()
+	proof, err := o.wakeProof(ctx)
+	if err != nil {
+		return err
+	}
+	var replyErr error
+	if heartbeatErr == nil {
+		var fresh binding.Bound
+		fresh, replyErr = binding.MergeWakeHeartbeat(b, candidate)
+		if replyErr == nil {
+			b = fresh
+		}
+	}
+	if err := o.admitWakeProof(b, proof); err != nil {
+		return err
+	}
+	if replyErr != nil {
+		return replyErr
+	}
+	if heartbeatErr != nil {
+		if !hubclient.IsCode(heartbeatErr, "lost") {
+			return heartbeatErr
+		}
+		b, err = o.reattach(ctx, b, proof)
+		if err != nil {
+			return err
+		}
+	}
+	o.target.Bound = b
+	return nil
+}
+
 // beat is the 20-second tick of every phase. A bound watcher checks proof before and after renewing
 // its pinned generation. A local veto or a lost heartbeat ends the watcher for that generation.
 func (o *onceRun) beat(ctx context.Context) (Outcome, bool) {
-	if o.bound {
+	if o.bound && o.w.successionEnabled(ctx) {
+		if hubclient.IsCode(o.renewOpted(ctx), "lost") {
+			return Lost, true
+		}
+	} else if o.bound {
 		generation := o.target.Bound.Generation
 		stale, err := o.staleGeneration(generation)
 		if stale {
@@ -315,9 +486,29 @@ func (o *onceRun) pause(ctx context.Context, tick *time.Ticker) (Outcome, bool) 
 	}
 }
 
-// bind looks up the hook-registered Execution of this process and session, and never registers
-// one. A refusal that a retry cannot change fails the watcher. An Execution not found may be
-// recovering after a hub restart, so unbound is retried for the hub's recovery window.
+// recoverUnbound resumes a Kimi watch started while its hook's Execution is recovering.
+// Only a positive generation above the end marker can authorize the request.
+func (o *onceRun) recoverUnbound(ctx context.Context, unbound error) (binding.Bound, error) {
+	proof, err := o.wakeProof(ctx)
+	if err != nil {
+		return binding.Bound{}, err
+	}
+	b := binding.Bound{Generation: proof.GenerationFloor()}
+	if b.Generation == 0 {
+		return binding.Bound{}, unbound
+	}
+	if proof.RecordState == sessionproof.FileValid && proof.Record.Generation == b.Generation {
+		b.ExecutionID = proof.Record.ExecutionID
+	}
+	if err := o.admitWakeProof(b, proof); err != nil {
+		return binding.Bound{}, err
+	}
+	return o.reattach(ctx, b, proof)
+}
+
+// bind looks up the hook-registered Execution of this process and session.
+// When opted in, an unbound lookup can resume that Execution from local proof.
+// Unbound without local proof is retried for the hub's recovery window.
 func (o *onceRun) bind(ctx context.Context, tick *time.Ticker) (Outcome, bool) {
 	o.delay = time.Second
 	start := o.w.now()
@@ -326,18 +517,30 @@ func (o *onceRun) bind(ctx context.Context, tick *time.Ticker) (Outcome, bool) {
 			return out, true
 		}
 		call, cancel := context.WithTimeout(ctx, onceCall)
-		b, err := o.w.hub.kimiBind(call, o.w.host, o.w.cwd, o.key.Session, o.key.PID, o.key.StartMS)
+		opted := o.w.successionEnabled(call)
+		b, err := o.w.hub.kimiBind(call, o.w.host, o.w.cwd, o.key.Session, o.key.PID, o.key.StartMS, opted)
 		cancel()
-		if err == nil {
+		if opted {
+			switch {
+			case err == nil:
+				_, err = o.checkWakeProof(ctx, b)
+			case hubclient.IsCode(err, "unbound"):
+				b, err = o.recoverUnbound(ctx, err)
+			}
+			if hubclient.IsCode(err, "lost") {
+				return Lost, true
+			}
+		} else if err == nil {
 			stale, proofErr := o.staleGeneration(b.Generation)
 			if stale {
 				return Lost, true
 			}
-			if proofErr == nil {
-				o.target = binding.WakeTarget{SessionID: o.key.Session, Bound: b, Host: o.w.host, Client: "kimi"}
-				o.bound = true
-				return 0, false
-			}
+			err = proofErr
+		}
+		if err == nil {
+			o.target = binding.WakeTarget{SessionID: o.key.Session, Bound: b, Host: o.w.host, Client: "kimi"}
+			o.bound = true
+			return 0, false
 		}
 		if errors.Is(err, errUnmatched) || hubclient.IsCode(err, "ambiguous") || hubclient.IsCode(err, "bad_request") ||
 			hubclient.IsCode(err, "unauthorized") || (hubclient.IsCode(err, "unbound") && o.w.now().Sub(start) >= onceUnbound) {
@@ -598,15 +801,22 @@ func (o *onceRun) decide(ctx context.Context) (Outcome, bool) {
 		o.until = due
 		return 0, false
 	}
+	var proofErr error
+	if o.w.successionEnabled(ctx) {
+		_, proofErr = o.checkWakeProof(ctx, o.target.Bound)
+	}
 	out, stop, unsure := o.local()
 	// The last blocking work is done: a stop or the end of the lifetime by now prints nothing.
 	if ctx.Err() != nil {
 		return o.ended(), true
 	}
+	if hubclient.IsCode(proofErr, "lost") {
+		return Lost, true
+	}
 	if stop {
 		return out, true
 	}
-	if unsure {
+	if unsure || proofErr != nil {
 		o.until = o.w.now().Add(onceCall)
 		return 0, false
 	}

@@ -165,7 +165,7 @@ func TestBaselinesDoNotCrossAStart(t *testing.T) {
 }
 
 // restart closes s and opens its file again, as a hub start does.
-func restart(t *testing.T, s *Store, file string, clock *fakeClock) *Store {
+func restart(t *testing.T, s *Store, file string, clock Clock) *Store {
 	t.Helper()
 	if err := s.Close(); err != nil {
 		t.Fatal(err)
