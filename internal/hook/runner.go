@@ -484,68 +484,6 @@ func refuseRestoreFloor(state *runState, ev Event, m Memory, generation int, not
 	return errRestoreFloor
 }
 
-func registrationProof(state *runState, ev Event, m Memory, retained int) (generation, endedThrough int, err error) {
-	if m == nil {
-		return retained, 0, nil
-	}
-	if files, ok := m.(fileMemory); ok {
-		endedThrough, err = sessionEndFloor(state, ev, files)
-		if err != nil {
-			return 0, 0, err
-		}
-	}
-	generation, err = m.RecallGeneration(string(ev.Client), ev.SessionID)
-	var damaged damagedEndMarker
-	if errors.As(err, &damaged) {
-		state.observe(damaged.Error())
-		return 0, 0, errDamagedEndMarker
-	}
-	var ended endedProof
-	if errors.As(err, &ended) {
-		if retained == 0 {
-			if ev.Kind == KindSessionStart {
-				return 0, endedThrough, nil
-			}
-			state.observe(ended.Error())
-			return 0, 0, errEndedGeneration
-		}
-		// A request already sent can use the proof it saw only as its generation-zero
-		// retry floor. Preserve it for refusal diagnostics.
-		return max(retained, generation), endedThrough, nil
-	}
-	if errors.Is(err, failSessionsLock) {
-		if files, ok := m.(fileMemory); ok && retained > 0 {
-			// Preserve the proof already sent if pruning removed it while the lock was held.
-			files.retainGeneration(string(ev.Client), ev.SessionID, retained)
-		}
-		state.observe(SessionsLockTimeout)
-		return 0, 0, failSessionsLock
-	}
-	if err != nil {
-		note := RestoreFloorRefused
-		if files, ok := m.(fileMemory); ok && errors.Is(err, ErrInvalidGeneration) {
-			note = damagedGenerationObservation(files.name(string(ev.Client), ev.SessionID))
-		}
-		return 0, 0, refuseRestoreFloor(state, ev, m, retained, note)
-	}
-	return max(retained, generation), endedThrough, nil
-}
-
-func sessionEndFloor(state *runState, ev Event, files fileMemory) (int, error) {
-	prefix := files.name(string(ev.Client), ev.SessionID)
-	marker := endedMarkerPath(prefix)
-	ended, expired, err := files.readEndMarker(marker)
-	if err != nil {
-		state.observe(damagedGenerationObservation(marker))
-		return 0, errDamagedEndMarker
-	}
-	if expired {
-		_, _ = files.cleanupExpiredEnd(prefix, ended, time.Time{}, false)
-		return 0, nil
-	}
-	return ended, nil
-}
-
 func checkEndedRegistration(state *runState, ev Event, m Memory, sentEndedThrough, generation int, proofless bool, err error) error {
 	files, ok := m.(fileMemory)
 	if !ok {

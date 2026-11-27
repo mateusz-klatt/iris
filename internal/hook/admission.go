@@ -60,15 +60,6 @@ func lockDeadlineFromCtx(ctx context.Context) time.Time {
 
 func endedMarkerPath(prefix string) string { return prefix + ".ended" }
 
-func (r Runner) resolveSuccession(ctx context.Context, state *runState) bool {
-	if enabled, ok := state.successionMode(); ok {
-		return enabled
-	}
-	enabled := r.SuccessionEnabled != nil && r.SuccessionEnabled(ctx)
-	state.setSuccessionMode(enabled)
-	return enabled
-}
-
 func (r Runner) newRegistrationAttempt(ctx context.Context, state *runState, ev Event, stage string) *registrationAttempt {
 	m := r.memory()
 	a := &registrationAttempt{
@@ -78,7 +69,7 @@ func (r Runner) newRegistrationAttempt(ctx context.Context, state *runState, ev 
 		client:            string(ev.Client),
 		session:           ev.SessionID,
 		stage:             stage,
-		successionEnabled: r.resolveSuccession(ctx, state),
+		successionEnabled: r.SuccessionEnabled != nil && r.SuccessionEnabled(ctx),
 	}
 	if files, ok := m.(fileMemory); ok {
 		a.files = files
@@ -415,9 +406,6 @@ func (a *registrationAttempt) admitReply(ctx context.Context, sess hubclient.Ses
 // finalAdmitAndPublish performs the final locked admission recheck immediately before a
 // dependent operation and only then publishes exact execution and generation evidence.
 func (r Runner) finalAdmitAndPublish(ctx context.Context, a *registrationAttempt) (bool, error) {
-	if !a.admitted || a.vetoed {
-		return false, errRestoreFloor
-	}
 	if a.mem == nil {
 		a.published = true
 		return true, nil
@@ -611,10 +599,10 @@ func (a *registrationAttempt) finalInspectAndPublishON(callerDeadline time.Time)
 			ExecutionID: a.executionID,
 		}
 		if recState != sessionproof.FileValid || rec != wantExec {
-			if body, err := sessionproof.EncodeRecord(wantExec); err != nil {
-				a.state.observe(SessionEvidenceWriteFailed + " at " + execPath)
-			} else if err := writeEvidenceFile(execPath, string(body), holdDeadline, a.files); err != nil {
-				a.state.observe(SessionEvidenceWriteFailed + " at " + execPath)
+			if body, err := sessionproof.EncodeRecord(wantExec); err == nil {
+				if err := writeEvidenceFile(execPath, string(body), holdDeadline, a.files); err != nil {
+					a.state.observe(SessionEvidenceWriteFailed + " at " + execPath)
+				}
 			}
 		}
 	}

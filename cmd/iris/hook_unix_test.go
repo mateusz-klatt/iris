@@ -5,6 +5,10 @@ package main
 import (
 	"bytes"
 	"context"
+	"encoding/json"
+	"io"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -300,4 +304,95 @@ func TestIntegrateDoesNotHangOnStalledClientConfig(t *testing.T) {
 	if gotCfg := readNames(cfgBase); !slices.Equal(gotCfg, beforeCfgBase) {
 		t.Fatalf("unexpected directories under config base after stalled integrate: got %v, want %v", gotCfg, beforeCfgBase)
 	}
+}
+
+func TestHookReadsClientJSONSuccessionToggleWithinRun(t *testing.T) {
+	root := t.TempDir()
+	for _, cmdArgs := range [][]string{
+		{"init", "-b", "main"},
+		{"config", "user.email", "test@example.com"},
+		{"config", "user.name", "Test"},
+		{"commit", "--allow-empty", "-m", "init"},
+	} {
+		c := exec.Command("git", append([]string{"-C", root}, cmdArgs...)...)
+		if out, err := c.CombinedOutput(); err != nil {
+			t.Fatalf("git %v: %v\n%s", cmdArgs, err, out)
+		}
+	}
+
+	t.Run("client.json session_succession true advertises succession_proof", func(t *testing.T) {
+		home := t.TempDir()
+		irisDir := filepath.Join(home, ".iris")
+		if err := os.MkdirAll(irisDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		var sawOptIn bool
+		var gotExecPath bool
+		tokenPath := filepath.Join(irisDir, "hub.token")
+		if err := os.WriteFile(tokenPath, []byte("tok\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		// Mock hub responds with classified SessionResponse so admission & exact publication succeed.
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/v1/sessions" {
+				raw, _ := io.ReadAll(r.Body)
+				sawOptIn = strings.Contains(string(raw), `"succession_proof":true`)
+				rawRoot, _ := json.Marshal(root)
+				_, _ = w.Write([]byte(`{"execution_id":"ex_00000000000000000000000000000001","session_id":"cli-s1","generation":1,"worktree":` + string(rawRoot) + `,"capabilities":["shell_scope","file_claims","succession_proof"],"prior_execution_id":null,"creation_source":"hook","creation_proof":"initial","hook_seen":true}`))
+				return
+			}
+			http.NotFound(w, r)
+		}))
+		defer srv.Close()
+		rawRoot, _ := json.Marshal(root)
+		rawHub, _ := json.Marshal(srv.URL)
+		cfg := `{"hub_url":` + string(rawHub) + `,"session_succession":true}`
+		if err := os.WriteFile(filepath.Join(irisDir, "client.json"), []byte(cfg), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		env := map[string]string{"HOME": home, "IRIS_TOKEN_FILE": tokenPath}
+		getenv := func(k string) string { return env[k] }
+
+		payload := `{"session_id":"cli-s1","cwd":` + string(rawRoot) + `,"hook_event_name":"SessionStart"}`
+		var outBuf, errBuf bytes.Buffer
+		code := runHookIO([]string{"--client", "claude", "--event", "SessionStart"}, strings.NewReader(payload), &outBuf, &errBuf, getenv, time.Second)
+		if code != 0 || !sawOptIn {
+			t.Fatalf("code=%d sawOptIn=%t stdout=%q stderr=%q", code, sawOptIn, outBuf.String(), errBuf.String())
+		}
+		entries, err := os.ReadDir(filepath.Join(irisDir, "sessions"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, e := range entries {
+			if strings.HasSuffix(e.Name(), ".execution") {
+				gotExecPath = true
+			}
+		}
+		if !gotExecPath {
+			t.Fatalf("expected .execution file in sessions dir, got %v", entries)
+		}
+	})
+
+	t.Run("corrupt client.json defaults to OFF and allows under D3", func(t *testing.T) {
+		home := t.TempDir()
+		irisDir := filepath.Join(home, ".iris")
+		if err := os.MkdirAll(irisDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		tokenPath := filepath.Join(irisDir, "hub.token")
+		if err := os.WriteFile(tokenPath, []byte("tok\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(irisDir, "client.json"), []byte("{not-json"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		rawRoot, _ := json.Marshal(root)
+		env := map[string]string{"HOME": home, "IRIS_TOKEN_FILE": tokenPath}
+		payload := `{"session_id":"cli-s2","cwd":` + string(rawRoot) + `,"hook_event_name":"SessionStart"}`
+		var outBuf, errBuf bytes.Buffer
+		code := runHookIO([]string{"--client", "claude", "--event", "SessionStart"}, strings.NewReader(payload), &outBuf, &errBuf, func(k string) string { return env[k] }, time.Second)
+		if code != 0 || !json.Valid(outBuf.Bytes()) {
+			t.Fatalf("expected D3 exit 0, got %d stdout=%q stderr=%q", code, outBuf.String(), errBuf.String())
+		}
+	})
 }

@@ -37,7 +37,7 @@ func (t *transaction) shellSession(r *Request) (map[string]any, error) {
 	if r.SuccessionProof {
 		out["session"] = sess
 	} else {
-		out["session"] = map[string]any{"execution_id": r.ExecutionID, "generation": r.Generation, "capabilities": capabilities(false)}
+		out["session"] = map[string]any{"execution_id": r.ExecutionID, "generation": r.Generation, "capabilities": legacyCapabilities()}
 	}
 	return out, t.event("", "", "changed", "")
 }

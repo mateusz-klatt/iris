@@ -337,7 +337,8 @@ func TestRegistrationProofRefusesMarkerDamagedWhileWaitingForLock(t *testing.T) 
 		finished := make(chan result, 1)
 		state := &runState{}
 		go func() {
-			generation, endedThrough, err := registrationProof(state, Event{Client: ClientClaude, SessionID: "s1", Kind: KindPrompt}, m, 0)
+			attempt := Runner{Memory: m}.newRegistrationAttempt(context.Background(), state, Event{Client: ClientClaude, SessionID: "s1", Kind: KindPrompt}, "session")
+			generation, endedThrough, err := attempt.preInspect(context.Background(), 0)
 			finished <- result{generation, endedThrough, err, state.observations()}
 		}()
 		synctest.Wait()

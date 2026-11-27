@@ -423,3 +423,45 @@ func TestShellResponseSessionCandidateClassification(t *testing.T) {
 		t.Fatal("expected Classify error for incomplete M1 3-key combined shell reply")
 	}
 }
+
+func TestV0115DecoderForwardCompatStage1BReplies(t *testing.T) {
+	// Pinned v0.1.15 response shapes (commit 6deecd0): extra bound(e) provenance fields from
+	// stage 1b replies must decode without error and preserve core fields.
+	type v0115SessionResponse struct {
+		ExecutionID  string   `json:"execution_id"`
+		SessionID    string   `json:"session_id"`
+		Generation   int      `json:"generation"`
+		Worktree     string   `json:"worktree"`
+		OutsideGit   bool     `json:"outside_git"`
+		Handle       string   `json:"handle"`
+		RepositoryID string   `json:"repository_id"`
+		Capabilities []string `json:"capabilities"`
+		LeaseMS      int64    `json:"lease_ms"`
+	}
+	type v0115ShellResponse struct {
+		CheckResponse
+		Session struct {
+			ExecutionID  string   `json:"execution_id"`
+			Generation   int      `json:"generation"`
+			Capabilities []string `json:"capabilities"`
+		} `json:"session"`
+	}
+
+	sessionJSON := `{"execution_id":"ex_00000000000000000000000000000001","session_id":"S1","generation":2,"worktree":"/repo/w","outside_git":false,"handle":"ex_00000000000000000000000000000001","repository_id":"rp_1","capabilities":["shell_scope","file_claims","succession_proof"],"lease_ms":60000,"prior_execution_id":"ex_00000000000000000000000000000000","creation_source":"shim","creation_proof":"shim_succession","hook_seen":true}`
+	var sess v0115SessionResponse
+	if err := json.Unmarshal([]byte(sessionJSON), &sess); err != nil {
+		t.Fatalf("v0.1.15 session decode failed: %v", err)
+	}
+	if sess.ExecutionID != "ex_00000000000000000000000000000001" || sess.Generation != 2 || sess.SessionID != "S1" || sess.LeaseMS != 60000 {
+		t.Fatalf("unexpected v0.1.15 session decode: %+v", sess)
+	}
+
+	combinedJSON := `{"message":"","conflicts":[],"session":` + sessionJSON + `}`
+	var sh v0115ShellResponse
+	if err := json.Unmarshal([]byte(combinedJSON), &sh); err != nil {
+		t.Fatalf("v0.1.15 combined shell decode failed: %v", err)
+	}
+	if sh.Session.ExecutionID != "ex_00000000000000000000000000000001" || sh.Session.Generation != 2 || len(sh.Session.Capabilities) != 3 {
+		t.Fatalf("unexpected v0.1.15 combined shell decode: %+v", sh)
+	}
+}

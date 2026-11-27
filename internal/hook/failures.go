@@ -208,13 +208,11 @@ type runState struct {
 	// observed holds what this run saw for doctor without failing; see Failure.Observed.
 	observed []string
 	// shape is the payload's shape when it could not be decoded; see Failure.Shape.
-	shape             *PayloadShape
-	mandatory         bool
-	mandatoryStage    string
-	mandatoryErr      error
-	localVeto         bool
-	successionChecked bool
-	succession        bool
+	shape          *PayloadShape
+	mandatory      bool
+	mandatoryStage string
+	mandatoryErr   error
+	localVeto      bool
 }
 
 func (s *runState) shaped(shape *PayloadShape) { s.mu.Lock(); s.shape = shape; s.mu.Unlock() }
@@ -279,17 +277,6 @@ func (s *runState) hasLocalVeto() bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.localVeto
-}
-func (s *runState) successionMode() (bool, bool) {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.succession, s.successionChecked
-}
-func (s *runState) setSuccessionMode(enabled bool) {
-	s.mu.Lock()
-	s.succession = enabled
-	s.successionChecked = true
-	s.mu.Unlock()
 }
 func (s *runState) fail(err error, out Output) Output {
 	if err == errEndedGeneration || err == errDamagedEndMarker || err == errLocalProofDamaged {
