@@ -82,6 +82,19 @@ func (a *registrationAttempt) recordLocalVeto() {
 	a.state.setLocalVeto()
 }
 
+func (a *registrationAttempt) failMandatoryInspect(err error, retained int) {
+	if errors.Is(err, failSessionsLock) {
+		if a.hasFiles && retained > 0 && !a.state.hasLocalVeto() {
+			// Preserve the proof already sent if pruning removed it while the lock was held.
+			a.files.retainGeneration(a.client, a.session, retained)
+		}
+		a.state.observe(SessionsLockTimeout)
+	}
+	a.recordLocalVeto()
+	a.state.failMandatory(err)
+	a.state.leaveMandatory()
+}
+
 func (a *registrationAttempt) damagedProofPath(snap sessionproof.Snapshot, prefix string) string {
 	if a.successionEnabled && snap.RecordState == sessionproof.FileDamaged {
 		return executionPath(prefix)
@@ -99,6 +112,11 @@ func (a *registrationAttempt) preInspect(ctx context.Context, retained int) (gen
 	if !a.hasFiles {
 		generation, err = a.mem.RecallGeneration(a.client, a.session)
 		if err != nil {
+			if errors.Is(err, failSessionsLock) {
+				a.state.enterMandatory(a.stage)
+				a.failMandatoryInspect(err, 0)
+				return 0, 0, err
+			}
 			a.recordLocalVeto()
 			return 0, 0, refuseRestoreFloor(a.state, a.ev, a.mem, retained, RestoreFloorRefused)
 		}
@@ -131,9 +149,7 @@ func (a *registrationAttempt) preInspect(ctx context.Context, retained int) (gen
 			a.endedFloor = max(a.endedFloor, snap.Ended)
 			a.confirmedEnd = true
 		}
-		a.recordLocalVeto()
-		a.state.failMandatory(inspectErr)
-		a.state.leaveMandatory()
+		a.failMandatoryInspect(inspectErr, retained)
 		return 0, a.endedFloor, inspectErr
 	}
 	a.state.leaveMandatory()
@@ -227,9 +243,7 @@ func (a *registrationAttempt) recheckEndedOnHubError(ctx context.Context, proofl
 			a.endedFloor = max(a.endedFloor, snap.Ended)
 			a.confirmedEnd = true
 		}
-		a.recordLocalVeto()
-		a.state.failMandatory(inspectErr)
-		a.state.leaveMandatory()
+		a.failMandatoryInspect(inspectErr, 0)
 		return inspectErr
 	}
 	a.state.leaveMandatory()
@@ -401,9 +415,7 @@ func (a *registrationAttempt) finalInspectAndPublishON(callerDeadline time.Time)
 	mode := a.files.fullHold(callerDeadline)
 	unlock, lockErr := a.files.lockAcquire(mode)
 	if lockErr != nil {
-		a.recordLocalVeto()
-		a.state.failMandatory(lockErr)
-		a.state.leaveMandatory()
+		a.failMandatoryInspect(lockErr, 0)
 		return false, lockErr
 	}
 	defer unlock()
@@ -420,9 +432,7 @@ func (a *registrationAttempt) finalInspectAndPublishON(callerDeadline time.Time)
 	case errors.Is(endErr, ErrInvalidGeneration):
 		endedState = sessionproof.FileDamaged
 	case endErr != nil:
-		a.recordLocalVeto()
-		a.state.failMandatory(endErr)
-		a.state.leaveMandatory()
+		a.failMandatoryInspect(endErr, 0)
 		return false, endErr
 	case !expired && ended > 0:
 		endedState = sessionproof.FileValid
@@ -436,9 +446,7 @@ func (a *registrationAttempt) finalInspectAndPublishON(callerDeadline time.Time)
 	case errors.Is(genErr, ErrInvalidGeneration):
 		genState = sessionproof.FileDamaged
 	case errors.Is(genErr, os.ErrDeadlineExceeded):
-		a.recordLocalVeto()
-		a.state.failMandatory(genErr)
-		a.state.leaveMandatory()
+		a.failMandatoryInspect(genErr, 0)
 		return false, genErr
 	case genErr == nil && gen > 0:
 		genState = sessionproof.FileValid
@@ -446,9 +454,7 @@ func (a *registrationAttempt) finalInspectAndPublishON(callerDeadline time.Time)
 
 	rec, recState, recErr := readExactRecordDeadline(execPath, mono, holdDeadline)
 	if errors.Is(recErr, os.ErrDeadlineExceeded) {
-		a.recordLocalVeto()
-		a.state.failMandatory(recErr)
-		a.state.leaveMandatory()
+		a.failMandatoryInspect(recErr, 0)
 		return false, recErr
 	}
 

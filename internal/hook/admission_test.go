@@ -1046,6 +1046,26 @@ func TestSuccessionAdmissionEdgeCasesAndMemoryBehaviors(t *testing.T) {
 			t.Fatalf("expected non-fileMemory RecallGeneration err to veto hub calls: out=%+v trace=%v", out, h.trace)
 		}
 
+		geLock := failureEnv(t)
+		lockMem := &m2cCustomMem{err: failSessionsLock}
+		hLock := &m2cHub{}
+		outLock := Runner{
+			ClientName: "claude", EventName: "SessionStart",
+			Stdin: strings.NewReader(`{"session_id":"s1","cwd":` + quote(root) + `,"hook_event_name":"SessionStart"}`),
+			Hub:   hLock, Memory: lockMem, Getenv: geLock,
+			SuccessionEnabled: func(context.Context) bool { return true },
+			after:             never, logAfter: never,
+		}.Run()
+		if outLock.Exit != 0 || len(hLock.trace) != 0 {
+			t.Fatalf("expected non-fileMemory failSessionsLock to allow without hub calls: out=%+v trace=%v", outLock, hLock.trace)
+		}
+		if obs, err := ReadRecentObservations(geLock("IRIS_TOKEN_FILE"), 10); err != nil || len(obs) != 1 || obs[0].Error != SessionsLockTimeout {
+			t.Fatalf("expected SessionsLockTimeout observation, got %+v err=%v", obs, err)
+		}
+		if fails, err := ReadRecentFailures(geLock("IRIS_TOKEN_FILE"), 10); err != nil || len(fails) != 1 || fails[0].Stage != "session" || fails[0].Error != string(failSessionsLock) {
+			t.Fatalf("expected session failSessionsLock failure, got %+v err=%v", fails, err)
+		}
+
 		okMem := &m2cCustomMem{gen: 2}
 		h2 := &m2cHub{
 			regFunc: func(context.Context, hubclient.SessionRequest) (hubclient.SessionResponse, error) {
@@ -2180,4 +2200,73 @@ func TestSuccessionON_FullHoldExcludesDirPrepButStillBoundsHeldSection(t *testin
 			t.Fatalf("forgetEvidence modified G1 despite slow held section: got G%d", got)
 		}
 	})
+}
+
+func TestOFFRememberPrepareFailureIsSilentLikeV0115(t *testing.T) {
+	root := gitRepo(t)
+	getenv := failureEnv(t)
+	base := sessionsFor(getenv)
+	base.Remember("claude", "s1", 2)
+
+	baseRestrict := base.restrict
+	var prepFailed atomic.Bool
+	m := fileMemory{
+		dir: base.dir,
+		now: time.Now,
+		restrict: func(p string) error {
+			if strings.HasPrefix(filepath.Base(p), ".tmp-") {
+				if raw, err := os.ReadFile(p); err == nil && strings.TrimSpace(string(raw)) == "3" {
+					prepFailed.Store(true)
+					return errors.New("temp prepare refused")
+				}
+			}
+			return baseRestrict(p)
+		},
+	}
+
+	h := &m2cHub{
+		regFunc: func(context.Context, hubclient.SessionRequest) (hubclient.SessionResponse, error) {
+			return hubclient.SessionResponse{
+				ExecutionID: m2cExecID(80), SessionID: "s1", Generation: 3, Worktree: "/repo",
+			}, nil
+		},
+	}
+	out := Runner{
+		ClientName: "claude", EventName: "PreToolUse",
+		Stdin: strings.NewReader(editPayload(ClientClaude, root)),
+		Hub:   h, Memory: m, Getenv: getenv,
+		SuccessionEnabled: func(context.Context) bool { return false },
+		after:             never, logAfter: never,
+	}.Run()
+	assertAllow(t, ClientClaude, out)
+	if !prepFailed.Load() {
+		t.Fatal("expected prepareSessionFile restrict seam to fail during OFF Remember")
+	}
+	if len(h.regReqs) != 1 || h.regReqs[0].Generation != 2 {
+		t.Fatalf("expected G2 registration request, got %+v", h.regReqs)
+	}
+	if got := base.Recall("claude", "s1"); got != 2 {
+		t.Fatalf("OFF prepare failure changed existing <hash>: got G%d, want G2", got)
+	}
+	if obs, err := ReadRecentObservations(getenv("IRIS_TOKEN_FILE"), 10); err != nil || len(obs) != 0 {
+		t.Fatalf("expected zero observations on OFF Remember prep failure, got %+v err=%v", obs, err)
+	}
+	if fails, err := ReadRecentFailures(getenv("IRIS_TOKEN_FILE"), 10); err != nil || len(fails) != 0 {
+		t.Fatalf("expected zero failures on OFF Remember prep failure, got %+v err=%v", fails, err)
+	}
+	entries, err := os.ReadDir(base.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	wantName := filepath.Base(base.name("claude", "s1"))
+	wantAttention := filepath.Base(base.counts("claude", "s1"))
+	for _, e := range entries {
+		name := e.Name()
+		if strings.HasPrefix(name, ".tmp-") || isExecutionFile(name) || strings.HasSuffix(name, ".ended") {
+			t.Fatalf("unexpected temporary/evidence artifact %q left in sessions dir", name)
+		}
+		if name != wantName && name != wantAttention && name != sessionsLock {
+			t.Fatalf("unexpected file %q in sessions dir", name)
+		}
+	}
 }
