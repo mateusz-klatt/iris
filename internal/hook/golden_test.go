@@ -282,6 +282,8 @@ const (
 	// the app-server daemon loaded, and the root of a session that spawned a sub-agent.
 	codexDaemonRoot   = "01a1c5fb-ea8a-7842-b3cd-68cb0e300fd9"
 	codexSubagentRoot = "01a1c616-e474-73a1-9c54-d71509806f1a"
+	// Captured from Grok 1.0.92 on macOS.
+	grokToolsSession = "01a21d18-53df-75a0-842d-ed847204cc80"
 )
 
 var fixtureWant = map[string]decoded{
@@ -392,8 +394,16 @@ var fixtureWant = map[string]decoded{
 	"cursor/claude-plugin-SessionStart.json": {kind: KindSessionStart, session: cursorPluginSession, cwd: cursorPluginRoot},
 	"cursor/stop.json":                       {kind: KindStop, session: "c07cffe8-203b-4517-8ece-6dd9f9c8f162", cwd: proj},
 
+	"grok/PostToolUse-iris__send.json":    {kind: KindPostTool, session: grokToolsSession, cwd: proj, tool: "iris__send", class: ClassMCP, call: "call-270eacc8-a682-4451-9795-1eab4250b5d2-3"},
+	"grok/PostToolUse-list_dir.json":      {kind: KindPostTool, session: grokToolsSession, cwd: proj, tool: "list_dir", class: ClassRead, paths: []string{"/workspace/project/docs/adr"}, call: "call-e7aebd4c-045a-42e7-aa20-cec6afea3f49-1"},
+	"grok/PostToolUse-read_file.json":     {kind: KindPostTool, session: grokToolsSession, cwd: proj, tool: "read_file", class: ClassRead, paths: []string{"/workspace/project/README.md"}, call: "call-e7aebd4c-045a-42e7-aa20-cec6afea3f49-0"},
+	"grok/PostToolUse-search_tool.json":   {kind: KindPostTool, session: grokToolsSession, cwd: proj, tool: "search_tool", class: ClassOther, call: "call-e7aebd4c-045a-42e7-aa20-cec6afea3f49-2"},
 	"grok/PostToolUse-shell.json":         {kind: KindPostTool, session: grokShell, cwd: proj, tool: "run_terminal_command", class: ClassShell, command: "printf 'shell-ok\\n'", call: "call-cb61fada-d57a-4dba-a5b2-ce48672c998c-1"},
 	"grok/PostToolUse.json":               {kind: KindPostTool, session: grokMain, cwd: proj, tool: "write", class: ClassEdit, paths: []string{"/workspace/project/note.txt"}, call: "call-1117010f-8145-4391-bd2d-ff25f95b0cc1-0"},
+	"grok/PreToolUse-iris__send.json":     {kind: KindPreTool, session: grokToolsSession, cwd: proj, tool: "iris__send", class: ClassMCP, call: "call-270eacc8-a682-4451-9795-1eab4250b5d2-3"},
+	"grok/PreToolUse-list_dir.json":       {kind: KindPreTool, session: grokToolsSession, cwd: proj, tool: "list_dir", class: ClassRead, paths: []string{"/workspace/project/docs/adr"}, call: "call-e7aebd4c-045a-42e7-aa20-cec6afea3f49-1"},
+	"grok/PreToolUse-read_file.json":      {kind: KindPreTool, session: grokToolsSession, cwd: proj, tool: "read_file", class: ClassRead, paths: []string{"/workspace/project/README.md"}, call: "call-e7aebd4c-045a-42e7-aa20-cec6afea3f49-0"},
+	"grok/PreToolUse-search_tool.json":    {kind: KindPreTool, session: grokToolsSession, cwd: proj, tool: "search_tool", class: ClassOther, call: "call-e7aebd4c-045a-42e7-aa20-cec6afea3f49-2"},
 	"grok/PreToolUse-shell.json":          {kind: KindPreTool, session: grokShell, cwd: proj, tool: "run_terminal_command", class: ClassShell, command: "printf 'shell-ok\\n'", call: "call-cb61fada-d57a-4dba-a5b2-ce48672c998c-1"},
 	"grok/PreToolUse-spawn_subagent.json": {kind: KindPreTool, session: grokParent, cwd: proj, tool: "spawn_subagent", class: ClassOther, call: "call-6bd1f14a-2df0-49c1-a6e9-8700e29d3b86-0"},
 	"grok/PreToolUse.json":                {kind: KindPreTool, session: grokMain, cwd: proj, tool: "write", class: ClassEdit, paths: []string{"/workspace/project/note.txt"}, call: "call-1117010f-8145-4391-bd2d-ff25f95b0cc1-0"},

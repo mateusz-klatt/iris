@@ -4,8 +4,11 @@ import (
 	"bytes"
 	"encoding/json"
 	"os"
+	"slices"
 	"strings"
 	"testing"
+
+	"github.com/mateusz-klatt/iris/internal/gitinfo"
 )
 
 // The built-in tools covered by this test were once logged as unknown on a real host and are
@@ -14,8 +17,9 @@ import (
 // {"namespace":"collaboration","name":"spawn_agent"}, which the hook sees as
 // "collaborationspawn_agent". Claude Code's names are backed by captures in testdata/claude from
 // 2.1.319 on Windows and 2.1.331 on Linux/WSL, which the golden test decodes. Antigravity 1.5.16
-// and Kimi Code 2.7.3 names are backed by Linux/WSL captures from 2026-11-25. No Codex payload
-// captures exist yet: Codex runs a new hook only after a person has trusted it.
+// and Kimi Code 2.7.3 names are backed by Linux/WSL captures from 2026-11-25. Grok's captures are
+// from 1.0.92 on macOS. No Codex payload captures exist yet: Codex runs a new hook only after a
+// person has trusted it.
 func TestBuiltinToolsAreKnown(t *testing.T) {
 	for client, tools := range map[Client]map[string]ToolClass{
 		ClientCodex: {
@@ -45,6 +49,14 @@ func TestBuiltinToolsAreKnown(t *testing.T) {
 		ClientKimi: {
 			"TodoList": ClassOther,
 			"FetchURL": ClassOther,
+		},
+		ClientGrok: {
+			"read_file":          ClassRead,
+			"list_dir":           ClassRead,
+			"search_tool":        ClassOther,
+			"iris__send":         ClassMCP,
+			"iris__claim":        ClassMCP,
+			"mcp__node_repl__js": ClassShell,
 		},
 	} {
 		for name, want := range tools {
@@ -147,6 +159,103 @@ func TestAntigravityAndKimiBuiltinsAllowWithoutObservation(t *testing.T) {
 				}
 			})
 		}
+	}
+}
+
+func TestGrokToolsAllowWithoutObservation(t *testing.T) {
+	for _, tool := range []string{"read_file", "list_dir", "search_tool", "iris__send"} {
+		for _, event := range []string{"PreToolUse", "PostToolUse"} {
+			name := event + "-" + tool
+			t.Run(name, func(t *testing.T) {
+				payload, err := os.ReadFile("testdata/grok/" + name + ".json")
+				if err != nil {
+					t.Fatal(err)
+				}
+				assertGrokToolAllows(t, event, payload)
+			})
+		}
+	}
+}
+
+func assertGrokToolAllows(t *testing.T, event string, payload []byte) {
+	t.Helper()
+	env := failureEnv(t)
+	calls := 0
+	out := Runner{
+		ClientName: "grok",
+		EventName:  event,
+		Stdin:      bytes.NewReader(payload),
+		Getenv:     env,
+		Hub:        &countingHub{fn: func() { calls++ }},
+		Ancestor:   grokAncestor(123, 456, "grok"),
+		Find: func(dir string) (gitinfo.Repo, error) {
+			return gitinfo.Repo{Worktree: dir}, nil
+		},
+		after:    never,
+		logAfter: never,
+	}.Run()
+	if string(out.Stdout) != "{}\n" || len(out.Stderr) != 0 || out.Exit != 0 || calls != 0 {
+		t.Fatalf("stdout %q, stderr %q, exit %d, hub calls %d", out.Stdout, out.Stderr, out.Exit, calls)
+	}
+	observations, err := ReadRecentObservations(env("IRIS_TOKEN_FILE"), 10)
+	if err != nil || len(observations) != 0 {
+		t.Fatalf("observations %v: %v", observations, err)
+	}
+}
+
+func TestGrokDispatchedToolMatchesOrdinaryMCP(t *testing.T) {
+	for _, event := range []string{"PreToolUse", "PostToolUse"} {
+		t.Run(event, func(t *testing.T) {
+			dispatched, err := os.ReadFile("testdata/grok/" + event + "-iris__send.json")
+			if err != nil {
+				t.Fatal(err)
+			}
+			ordinary := bytes.ReplaceAll(dispatched, []byte(`"iris__send"`), []byte(`"mcp__iris__send"`))
+			for _, tc := range []struct {
+				name    string
+				payload []byte
+			}{
+				{"iris__send", dispatched},
+				{"mcp__iris__send", ordinary},
+			} {
+				t.Run(tc.name, func(t *testing.T) {
+					ev, err := Decode(ClientGrok, event, tc.payload)
+					if err != nil {
+						t.Fatal(err)
+					}
+					if ev.ToolName != tc.name || ev.ToolClass != ClassMCP || ev.UnknownTool {
+						t.Fatalf("name %q class %q unknown %v", ev.ToolName, ev.ToolClass, ev.UnknownTool)
+					}
+					assertGrokToolAllows(t, event, tc.payload)
+				})
+			}
+		})
+	}
+}
+
+func TestGrokIncompleteDispatchNamesStayUnknown(t *testing.T) {
+	for _, name := range []string{"__send", "iris__"} {
+		if class, unknown := classifyTool(ClientGrok, name, false); class != ClassOther || !unknown {
+			t.Errorf("%s: class %q, unknown %v; want other and unknown", name, class, unknown)
+		}
+	}
+}
+
+func TestTargetDirectoryIsScopedToGrokListDir(t *testing.T) {
+	for _, tc := range []struct {
+		client Client
+		tool   string
+	}{
+		{ClientClaude, "list_dir"},
+		{ClientGrok, "read_file"},
+	} {
+		t.Run(string(tc.client)+"/"+tc.tool, func(t *testing.T) {
+			ev := Event{Client: tc.client}
+			applyTool(&ev, tc.tool, json.RawMessage(`{"target_directory":"/workspace/project/docs/adr"}`), false)
+			if len(ev.Paths) != 0 {
+				t.Fatalf("paths %q; want none", ev.Paths)
+			}
+		})
 	}
 }
 
@@ -272,19 +381,22 @@ func TestAntigravityCallMCPToolMatchesOrdinaryMCP(t *testing.T) {
 
 func TestCapturedToolNamesStayUnknownForOtherClients(t *testing.T) {
 	for _, tc := range []struct {
-		owner Client
-		tool  string
+		tool   string
+		owners []Client
 	}{
-		{ClientAntigravity, "read_file"},
-		{ClientAntigravity, "update_steps"},
-		{ClientAntigravity, "search_web"},
-		{ClientAntigravity, "call_mcp_tool"},
-		{ClientKimi, "TodoList"},
-		{ClientKimi, "FetchURL"},
+		{"read_file", []Client{ClientAntigravity, ClientGrok}},
+		{"update_steps", []Client{ClientAntigravity}},
+		{"search_web", []Client{ClientAntigravity}},
+		{"call_mcp_tool", []Client{ClientAntigravity}},
+		{"TodoList", []Client{ClientKimi}},
+		{"FetchURL", []Client{ClientKimi}},
+		{"list_dir", []Client{ClientGrok}},
+		{"search_tool", []Client{ClientGrok}},
+		{"iris__send", []Client{ClientGrok}},
 	} {
 		t.Run(tc.tool, func(t *testing.T) {
 			for _, client := range Clients {
-				if client == tc.owner {
+				if slices.Contains(tc.owners, client) {
 					continue
 				}
 				class, unknown := classifyTool(client, tc.tool, false)
