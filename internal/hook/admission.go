@@ -325,7 +325,7 @@ func (a *registrationAttempt) admitReply(ctx context.Context, sess hubclient.Ses
 		return false, checkedErr
 	}
 
-	if a.successionEnabled {
+	if hubclient.SuccessionProofCapable(sess.Capabilities) {
 		cand := sess.Candidate()
 		cls, classErr := cand.Classify()
 		if classErr != nil {
@@ -333,11 +333,6 @@ func (a *registrationAttempt) admitReply(ctx context.Context, sess hubclient.Ses
 			outErr = fmt.Errorf("%w: %v", errUnusableClassification, classErr)
 			a.state.failMandatory(outErr)
 			return false, outErr
-		}
-		if cls.Kind == hubclient.CandidateUnclassified {
-			a.recordLocalVeto()
-			a.state.failMandatory(errUnusableClassification)
-			return false, errUnusableClassification
 		}
 		if cls.Kind == hubclient.CandidateShimSuccession {
 			if !cls.HookSeen || sess.Generation < 2 || sessionproof.ValidateExecutionID(sess.ExecutionID) != nil ||
@@ -568,7 +563,7 @@ func (a *registrationAttempt) finalInspectAndPublishON(callerDeadline time.Time)
 
 	// Mandatory admission checks are complete. Optional evidence writes may fail
 	// without blocking dependent tool/session actions or grading silent.
-	if a.classification.Kind != hubclient.CandidateShimSuccession {
+	if a.classification.Kind != "" && a.classification.Kind != hubclient.CandidateShimSuccession {
 		wantExec := sessionproof.Record{
 			Version:     sessionproof.FormatVersion,
 			Origin:      sessionproof.OriginHook,

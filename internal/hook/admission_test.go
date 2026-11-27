@@ -331,7 +331,7 @@ func TestSuccessionON_AdmissionPublicationConflictAndDamage(t *testing.T) {
 		}
 	})
 
-	t.Run("rejects unusable M1 3-key, stage 1a unclassified, hookless shim, and conflicting exact record", func(t *testing.T) {
+	t.Run("rejects unusable M1 3-key, hookless shim, and conflicting exact record", func(t *testing.T) {
 		for _, tc := range []struct {
 			name     string
 			seedExec *sessionproof.Record
@@ -347,13 +347,6 @@ func TestSuccessionON_AdmissionPublicationConflictAndDamage(t *testing.T) {
 						CreationSource:   hubclient.NullableString{Known: true, Valid: true, Value: "hook"},
 						CreationProof:    hubclient.NullableString{Known: true, Valid: true, Value: "initial"},
 					},
-				},
-			},
-			{
-				name: "stage 1a unclassified reply",
-				reply: hubclient.SessionResponse{
-					ExecutionID: m2cExecID(31), SessionID: "s1", Generation: 1, Worktree: "/repo",
-					Capabilities: []string{"shell_scope", "file_claims"},
 				},
 			},
 			{
@@ -425,6 +418,80 @@ func TestSuccessionON_AdmissionPublicationConflictAndDamage(t *testing.T) {
 					t.Fatalf("expected non-degraded silent failure, got %+v err=%v", fails, err)
 				}
 			})
+		}
+	})
+
+	t.Run("admits stage 1a unclassified reply under ON without writing exact proof", func(t *testing.T) {
+		root := gitRepo(t)
+		getenv := failureEnv(t)
+		m := sessionsFor(getenv)
+		h := &m2cHub{
+			regFunc: func(context.Context, hubclient.SessionRequest) (hubclient.SessionResponse, error) {
+				return hubclient.SessionResponse{
+					ExecutionID: m2cExecID(31), SessionID: "s1", Generation: 1, Worktree: "/repo",
+					Capabilities: []string{"shell_scope", "file_claims"},
+				}, nil
+			},
+		}
+		out := Runner{
+			ClientName: "claude", EventName: "PreToolUse",
+			Stdin: strings.NewReader(editPayload(ClientClaude, root)),
+			Hub:   h, Memory: m, Getenv: getenv, SuccessionEnabled: func(context.Context) bool { return true },
+			after: never, logAfter: never,
+		}.Run()
+		assertAllow(t, ClientClaude, out)
+		if !slices.Contains(h.trace, "touch") {
+			t.Fatalf("ordinary unclassified reply should reach Touch, got trace=%v", h.trace)
+		}
+		if got := m.Recall("claude", "s1"); got != 1 {
+			t.Fatalf("ordinary unclassified reply wrote <hash>=%d, want 1", got)
+		}
+		if _, ok := m2cReadExact(t, m, "claude", "s1"); ok {
+			t.Fatal("ordinary unclassified reply must not write .execution")
+		}
+		if fails, err := ReadRecentFailures(getenv("IRIS_TOKEN_FILE"), 10); err != nil || len(fails) != 0 {
+			t.Fatalf("expected zero failures, got %+v err=%v", fails, err)
+		}
+	})
+
+	t.Run("OFF rejects M1 incomplete 3-key reply with zero writes", func(t *testing.T) {
+		root := gitRepo(t)
+		getenv := failureEnv(t)
+		m := sessionsFor(getenv)
+		h := &m2cHub{
+			regFunc: func(context.Context, hubclient.SessionRequest) (hubclient.SessionResponse, error) {
+				return hubclient.SessionResponse{
+					ExecutionID: m2cExecID(30), SessionID: "s1", Generation: 1, Worktree: "/repo",
+					Capabilities: []string{hubclient.SuccessionProofCapability},
+					Provenance: hubclient.Provenance{
+						PriorExecutionID: hubclient.NullableString{Known: true},
+						CreationSource:   hubclient.NullableString{Known: true, Valid: true, Value: "hook"},
+						CreationProof:    hubclient.NullableString{Known: true, Valid: true, Value: "initial"},
+					},
+				}, nil
+			},
+		}
+		out := Runner{
+			ClientName: "claude", EventName: "PreToolUse",
+			Stdin: strings.NewReader(editPayload(ClientClaude, root)),
+			Hub:   h, Memory: m, Getenv: getenv, SuccessionEnabled: func(context.Context) bool { return false },
+			after: never, logAfter: never,
+		}.Run()
+		assertAllow(t, ClientClaude, out)
+		for _, tr := range h.trace {
+			if strings.HasPrefix(tr, "touch") {
+				t.Fatalf("rejected M1 reply under OFF still touched files: %v", h.trace)
+			}
+		}
+		if got := m.Recall("claude", "s1"); got != 0 {
+			t.Fatalf("rejected M1 reply under OFF wrote <hash> G%d", got)
+		}
+		if _, ok := m2cReadExact(t, m, "claude", "s1"); ok {
+			t.Fatal("rejected M1 reply under OFF wrote .execution")
+		}
+		fails, err := ReadRecentFailures(getenv("IRIS_TOKEN_FILE"), 10)
+		if err != nil || len(fails) == 0 || fails[0].Degraded() {
+			t.Fatalf("expected non-degraded silent failure, got %+v err=%v", fails, err)
 		}
 	})
 
