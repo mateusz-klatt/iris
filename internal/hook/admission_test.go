@@ -609,6 +609,79 @@ func TestFreshRegistrationLockContentionWatchdogAndSettleON(t *testing.T) {
 		}
 	})
 
+	t.Run("OFF fresh SessionStart and PreToolUse lock contention hits acquireOnly and records silent", func(t *testing.T) {
+		for _, tc := range []struct {
+			name, event, payloadStage string
+			makePayload               func(string) string
+		}{
+			{
+				name: "SessionStart", event: "SessionStart", payloadStage: "session",
+				makePayload: func(r string) string {
+					return `{"session_id":"s1","cwd":` + quote(r) + `,"hook_event_name":"SessionStart"}`
+				},
+			},
+			{
+				name: "PreToolUse edit", event: "PreToolUse", payloadStage: "session",
+				makePayload: func(r string) string {
+					return editPayload(ClientClaude, r)
+				},
+			},
+			{
+				name: "PreToolUse shell", event: "PreToolUse", payloadStage: "shell session",
+				makePayload: func(r string) string {
+					return fmt.Sprintf(`{"session_id":"s1","cwd":%q,"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"echo hi"}}`, r)
+				},
+			},
+		} {
+			t.Run(tc.name, func(t *testing.T) {
+				root := gitRepo(t)
+				getenv := failureEnv(t)
+				m := sessionsFor(getenv)
+				release, err := m.lock(time.Second)
+				if err != nil {
+					t.Fatal(err)
+				}
+				defer release()
+
+				h := &m2cHub{}
+				start := time.Now()
+				out := Runner{
+					ClientName: "claude", EventName: tc.event,
+					Stdin: strings.NewReader(tc.makePayload(root)),
+					Hub:   h, Memory: m, Getenv: getenv,
+					Find: func(string) (gitinfo.Repo, error) { return gitinfo.Repo{Worktree: root}, nil },
+					Status: func(context.Context, string, gitinfo.Scope, *gitinfo.Attempt) (map[string]string, error) {
+						return map[string]string{}, nil
+					},
+					Deadline:      25 * time.Millisecond,
+					ShellDeadline: time.Second,
+					logAfter:      never,
+				}.Run()
+				elapsed := time.Since(start)
+				assertAllow(t, ClientClaude, out)
+				if elapsed > 200*time.Millisecond {
+					t.Fatalf("OFF lock wait ignored bounded budget: took %s", elapsed)
+				}
+				if len(h.trace) != 0 {
+					t.Fatalf("OFF lock-contended fresh registration called hub: %v", h.trace)
+				}
+				fails, err := ReadRecentFailures(getenv("IRIS_TOKEN_FILE"), 10)
+				if err != nil || len(fails) == 0 {
+					t.Fatalf("expected recorded failure, got %+v err=%v", fails, err)
+				}
+				matched := false
+				for _, f := range fails {
+					if f.Stage == tc.payloadStage && f.Error == string(failSessionsLock) && !f.Degraded() && !f.Skipped() {
+						matched = true
+					}
+				}
+				if !matched {
+					t.Fatalf("expected non-degraded silent failure at %q, got %+v", tc.payloadStage, fails)
+				}
+			})
+		}
+	})
+
 	t.Run("mandatoryActive watchdog firing first grades outcome silent", func(t *testing.T) {
 		root := gitRepo(t)
 		getenv := failureEnv(t)
@@ -1862,6 +1935,153 @@ func TestSuccessionAdmissionEdgeCasesAndMemoryBehaviors(t *testing.T) {
 					}
 				}
 			})
+		}
+	})
+}
+
+func TestOFFExpiredEndCleanupUnderLockAndKeepsFloorOnError(t *testing.T) {
+	t.Run("expired cleanup waits for lock holder before deleting .ended", func(t *testing.T) {
+		root := gitRepo(t)
+		getenv := failureEnv(t)
+		m := sessionsFor(getenv)
+		m.Remember("claude", "s1", 2)
+		m.Forget("claude", "s1", 2)
+		prefix := m.name("claude", "s1")
+		marker := endedMarkerPath(prefix)
+		if err := os.WriteFile(prefix, []byte("2\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		old := time.Now().Add(-memoryAge - time.Hour)
+		if err := os.Chtimes(marker, old, old); err != nil {
+			t.Fatal(err)
+		}
+
+		release, err := m.lock(time.Second)
+		if err != nil {
+			t.Fatal(err)
+		}
+		releaseOnce := sync.OnceFunc(release)
+		defer releaseOnce()
+
+		var sawContention atomic.Bool
+		contendedMem := m
+		contendedMem.pause = func(time.Duration) {
+			if sawContention.CompareAndSwap(false, true) {
+				if _, statErr := os.Stat(marker); statErr != nil {
+					t.Errorf("expired .ended was touched before lock acquired: %v", statErr)
+				}
+				releaseOnce()
+			}
+		}
+
+		h := &m2cHub{
+			regFunc: func(context.Context, hubclient.SessionRequest) (hubclient.SessionResponse, error) {
+				return hubclient.SessionResponse{
+					ExecutionID: m2cExecID(40), SessionID: "s1", Generation: 1, Worktree: "/repo",
+					Capabilities: []string{"shell_scope", "file_claims"},
+				}, nil
+			},
+		}
+		out := Runner{
+			ClientName: "claude", EventName: "PreToolUse",
+			Stdin:    strings.NewReader(editPayload(ClientClaude, root)),
+			Hub:      h,
+			Memory:   contendedMem,
+			Getenv:   getenv,
+			Deadline: 2 * time.Second,
+			after:    never,
+			logAfter: never,
+		}.Run()
+		assertAllow(t, ClientClaude, out)
+		if !sawContention.Load() {
+			t.Fatal("OFF expired cleanup did not contend on sessions lock")
+		}
+		if len(h.regReqs) != 1 || h.regReqs[0].EndedThrough != 0 || h.regReqs[0].Generation != 0 {
+			t.Fatalf("unexpected register reqs after locked cleanup: %+v", h.regReqs)
+		}
+		if _, statErr := os.Stat(marker); !errors.Is(statErr, os.ErrNotExist) {
+			t.Fatalf("expected cleaned .ended to be deleted under lock, stat err=%v", statErr)
+		}
+	})
+
+	t.Run("failed expired cleanup keeps ended floor", func(t *testing.T) {
+		root := gitRepo(t)
+		getenv := failureEnv(t)
+		m := sessionsFor(getenv)
+		m.Forget("claude", "s1", 2)
+		prefix := m.name("claude", "s1")
+		marker := endedMarkerPath(prefix)
+		old := time.Now().Add(-memoryAge - time.Hour)
+		if err := os.Chtimes(marker, old, old); err != nil {
+			t.Fatal(err)
+		}
+
+		origRemove := removeSessionFile
+		t.Cleanup(func() { removeSessionFile = origRemove })
+		removeSessionFile = func(p string) error {
+			if p == prefix || p == marker {
+				return errors.New("unlink blocked")
+			}
+			return origRemove(p)
+		}
+
+		h := &m2cHub{
+			regFunc: func(context.Context, hubclient.SessionRequest) (hubclient.SessionResponse, error) {
+				return hubclient.SessionResponse{
+					ExecutionID: m2cExecID(41), SessionID: "s1", Generation: 3, Worktree: "/repo",
+					Capabilities: []string{"shell_scope", "file_claims"},
+				}, nil
+			},
+		}
+		outStart := Runner{
+			ClientName: "claude", EventName: "SessionStart",
+			Stdin:    strings.NewReader(`{"session_id":"s1","cwd":` + quote(root) + `,"hook_event_name":"SessionStart"}`),
+			Hub:      h,
+			Memory:   m,
+			Getenv:   getenv,
+			after:    never,
+			logAfter: never,
+		}.Run()
+		if outStart.Exit != 0 || !strings.Contains(string(outStart.Stdout), m2cExecID(41)) {
+			t.Fatalf("expected admitted SessionStart output, got exit=%d out=%s", outStart.Exit, outStart.Stdout)
+		}
+		if len(h.regReqs) != 1 || h.regReqs[0].EndedThrough != 2 {
+			t.Fatalf("expected failed cleanup to preserve EndedThrough=2, got reqs=%+v", h.regReqs)
+		}
+
+		// With <hash>=2 preserved beside failing cleanup on expired .ended=2, PreToolUse must still deny locally.
+		gePre := failureEnv(t)
+		mPre := sessionsFor(gePre)
+		mPre.Forget("claude", "s1", 2)
+		prePrefix := mPre.name("claude", "s1")
+		preMarker := endedMarkerPath(prePrefix)
+		if err := os.WriteFile(prePrefix, []byte("2\n"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(preMarker, old, old); err != nil {
+			t.Fatal(err)
+		}
+		removeSessionFile = func(p string) error {
+			if p == prePrefix || p == preMarker {
+				return errors.New("unlink blocked")
+			}
+			return origRemove(p)
+		}
+		hPre := &m2cHub{}
+		outPre := Runner{
+			ClientName: "claude", EventName: "PreToolUse",
+			Stdin:    strings.NewReader(editPayload(ClientClaude, root)),
+			Hub:      hPre,
+			Memory:   mPre,
+			Getenv:   gePre,
+			after:    never,
+			logAfter: never,
+		}.Run()
+		if outPre.Exit != 0 || !strings.Contains(string(outPre.Stdout), string(ActionDeny)) {
+			t.Fatalf("expected PreToolUse Deny with kept floor, got %s", outPre.Stdout)
+		}
+		if len(hPre.trace) != 0 {
+			t.Fatalf("expected zero hub RPCs under kept end floor, got %v", hPre.trace)
 		}
 	})
 }

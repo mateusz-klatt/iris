@@ -108,14 +108,24 @@ func (a *registrationAttempt) preInspect(ctx context.Context, retained int) (gen
 		return max(retained, generation), 0, nil
 	}
 
-	if !a.successionEnabled {
-		return a.preInspectOFF(ctx, retained)
+	prefix := a.files.name(a.client, a.session)
+	endedPath := endedMarkerPath(prefix)
+	cleanExpired := !a.cleanedExpired
+	a.cleanedExpired = true
+
+	// Per §1 exception 3a, a fresh SessionStart or PreToolUse still inspects <hash> and .ended
+	// under one sessions lock when session_succession is OFF using acquireOnly (v0.1.15 acquisition
+	// budget). Other OFF events without local files keep skipping the lock when both are absent.
+	if !a.successionEnabled && a.ev.Kind != KindSessionStart && a.ev.Kind != KindPreTool {
+		if _, err := lstatSessionFile(prefix); sessionPathAbsent(prefix, err) {
+			if _, endErr := lstatSessionFile(endedPath); sessionPathAbsent(endedPath, endErr) {
+				return max(retained, a.genFloor), a.endedFloor, nil
+			}
+		}
 	}
 
 	a.state.enterMandatory(a.stage)
-	cleanExpired := !a.cleanedExpired
-	a.cleanedExpired = true
-	snap, inspectErr := a.files.inspectEvidenceDeadline(a.client, a.session, lockDeadlineFromCtx(ctx), true, cleanExpired)
+	snap, inspectErr := a.files.inspectEvidenceDeadline(a.client, a.session, lockDeadlineFromCtx(ctx), a.successionEnabled, cleanExpired)
 	if inspectErr != nil {
 		if snap.EndedState == sessionproof.FileValid {
 			a.endedFloor = max(a.endedFloor, snap.Ended)
@@ -128,8 +138,6 @@ func (a *registrationAttempt) preInspect(ctx context.Context, retained int) (gen
 	}
 	a.state.leaveMandatory()
 
-	prefix := a.files.name(a.client, a.session)
-	endedPath := endedMarkerPath(prefix)
 	switch snap.EndedState {
 	case sessionproof.FileDamaged:
 		a.state.observe(damagedGenerationObservation(endedPath))
@@ -147,13 +155,22 @@ func (a *registrationAttempt) preInspect(ctx context.Context, retained int) (gen
 	}
 
 	if damagedPath := a.damagedProofPath(snap, prefix); damagedPath != "" {
-		a.state.observe(damagedGenerationObservation(damagedPath))
+		note := damagedGenerationObservation(damagedPath)
 		a.damaged = true
-		a.recordLocalVeto()
 		if a.confirmedEnd {
+			a.state.observe(note)
+			a.recordLocalVeto()
 			a.state.failMandatory(errDamagedAfterEnd)
 			return 0, a.endedFloor, errDamagedAfterEnd
 		}
+		if !a.successionEnabled {
+			if retained > 0 {
+				a.recordLocalVeto()
+			}
+			return 0, 0, refuseRestoreFloor(a.state, a.ev, a.mem, retained, note)
+		}
+		a.state.observe(note)
+		a.recordLocalVeto()
 		return 0, a.endedFloor, errLocalProofDamaged
 	}
 
@@ -165,79 +182,15 @@ func (a *registrationAttempt) preInspect(ctx context.Context, retained int) (gen
 		if retained == 0 && a.ev.Kind == KindSessionStart {
 			return 0, a.endedFloor, nil
 		}
+		if !a.successionEnabled && retained > 0 {
+			return max(retained, candidateGen), a.endedFloor, nil
+		}
 		a.state.observe(endedProof(endedPath).Error())
 		a.recordLocalVeto()
 		return 0, a.endedFloor, errEndedGeneration
 	}
 
 	return max(candidateGen, retained), a.endedFloor, nil
-}
-
-func (a *registrationAttempt) preInspectOFF(ctx context.Context, retained int) (generation, endedThrough int, err error) {
-	prefix := a.files.name(a.client, a.session)
-	endedPath := endedMarkerPath(prefix)
-	cleanExpired := !a.cleanedExpired
-	a.cleanedExpired = true
-
-	endedThrough, expired, endErr := a.files.readEndMarker(endedPath)
-	if endErr != nil {
-		a.state.observe(damagedGenerationObservation(endedPath))
-		a.damaged = true
-		a.recordLocalVeto()
-		return 0, 0, errDamagedEndMarker
-	}
-	if expired {
-		if cleanExpired {
-			_, _ = a.files.cleanupExpiredEnd(prefix, endedThrough, lockDeadlineFromCtx(ctx), false)
-		}
-		endedThrough = 0
-	}
-	if endedThrough > 0 {
-		a.endedFloor = max(a.endedFloor, endedThrough)
-		a.confirmedEnd = true
-	}
-
-	generation, err = a.mem.RecallGeneration(a.client, a.session)
-	var damaged damagedEndMarker
-	if errors.As(err, &damaged) {
-		a.state.observe(damaged.Error())
-		a.damaged = true
-		a.recordLocalVeto()
-		return 0, 0, errDamagedEndMarker
-	}
-	var ended endedProof
-	if errors.As(err, &ended) {
-		if retained == 0 {
-			if a.ev.Kind == KindSessionStart {
-				return 0, a.endedFloor, nil
-			}
-			a.state.observe(ended.Error())
-			a.recordLocalVeto()
-			return 0, 0, errEndedGeneration
-		}
-		return max(retained, generation), a.endedFloor, nil
-	}
-	if err != nil {
-		if a.confirmedEnd && errors.Is(err, ErrInvalidGeneration) {
-			a.state.observe(damagedGenerationObservation(prefix))
-			a.damaged = true
-			a.recordLocalVeto()
-			a.state.failMandatory(errDamagedAfterEnd)
-			return 0, a.endedFloor, errDamagedAfterEnd
-		}
-		note := RestoreFloorRefused
-		if errors.Is(err, ErrInvalidGeneration) {
-			note = damagedGenerationObservation(prefix)
-		}
-		if retained > 0 {
-			a.recordLocalVeto()
-		}
-		return 0, 0, refuseRestoreFloor(a.state, a.ev, a.mem, retained, note)
-	}
-	if generation > a.genFloor {
-		a.genFloor = generation
-	}
-	return max(retained, generation), a.endedFloor, nil
 }
 
 func (a *registrationAttempt) recheckEndedOnHubError(ctx context.Context, proofless bool, err error) error {

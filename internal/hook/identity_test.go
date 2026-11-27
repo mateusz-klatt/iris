@@ -1020,8 +1020,9 @@ func TestSessionEndForgetsTheToldStateAndKeepsTheWake(t *testing.T) {
 	}
 }
 
-// A SessionStart that finds the lock held still starts the session. Its revision read, its
-// pruning and its told state are each recorded as not done.
+// Under ADR 039 §1 exception 3a, a fresh SessionStart that finds the sessions lock held still
+// fails open cleanly without calling the hub or pruning: toldRevision logs at stageSessionFiles
+// and fresh evidence inspection logs a non-degraded "session" failure (graded silent).
 func TestASessionStartWithTheLockHeldStillStarts(t *testing.T) {
 	root := gitRepo(t)
 	env := failureEnv(t)
@@ -1042,17 +1043,18 @@ func TestASessionStartWithTheLockHeldStillStarts(t *testing.T) {
 	start := `{"session_id":"s","cwd":` + quote(root) + `,"hook_event_name":"SessionStart"}`
 	calls := 0
 	out := Runner{ClientName: "claude", EventName: "SessionStart", Stdin: strings.NewReader(start), Hub: attentionHub{now: ptr(pending(1, 1, 0)), calls: &calls}, Getenv: env, after: never, logAfter: never}.Run()
-	if out.Exit != 0 || !strings.Contains(string(out.Stdout), "Iris handle") {
-		t.Fatalf("exit %d: %s", out.Exit, out.Stdout)
+	if out.Exit != 0 || string(out.Stdout) != string(FallbackAllow(ClientClaude).Stdout) || calls != 0 {
+		t.Fatalf("exit %d calls %d: %s", out.Exit, calls, out.Stdout)
 	}
 	entries, err := ReadRecentFailures(env("IRIS_TOKEN_FILE"), 10)
-	if err != nil || len(entries) != 3 {
-		t.Fatalf("the revision, the pruning and the told state were not all recorded: %+v %v", entries, err)
+	if err != nil || len(entries) != 2 {
+		t.Fatalf("expected toldRevision + mandatory session lock failures, got %+v %v", entries, err)
 	}
-	for _, e := range entries {
-		if e.Stage != stageSessionFiles || e.Error != string(failSessionsLock) {
-			t.Fatalf("recorded %+v", e)
-		}
+	if entries[0].Stage != stageSessionFiles || entries[0].Error != string(failSessionsLock) {
+		t.Fatalf("first recorded entry = %+v", entries[0])
+	}
+	if entries[1].Stage != "session" || entries[1].Error != string(failSessionsLock) || entries[1].Skipped() || entries[1].Degraded() {
+		t.Fatalf("second recorded entry = %+v", entries[1])
 	}
 	if _, err := os.Stat(stale); err != nil {
 		t.Fatalf("pruned without the lock: %v", err)
