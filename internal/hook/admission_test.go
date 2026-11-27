@@ -2085,3 +2085,92 @@ func TestOFFExpiredEndCleanupUnderLockAndKeepsFloorOnError(t *testing.T) {
 		}
 	})
 }
+
+func TestSuccessionON_FullHoldExcludesDirPrepButStillBoundsHeldSection(t *testing.T) {
+	t.Run("slow directory() and prepareSessionFile do not fail closed", func(t *testing.T) {
+		base := newFileMemory(t)
+		baseRestrict := base.restrict
+		var slowDir, slowTmp atomic.Bool
+		m := fileMemory{
+			dir: base.dir,
+			now: time.Now,
+			restrict: func(p string) error {
+				if p == base.dir && slowDir.CompareAndSwap(true, false) {
+					time.Sleep(hookLockBudget + 20*time.Millisecond)
+				} else if strings.HasPrefix(filepath.Base(p), ".tmp-") && slowTmp.CompareAndSwap(true, false) {
+					time.Sleep(hookLockBudget + 20*time.Millisecond)
+				}
+				return baseRestrict(p)
+			},
+		}
+
+		slowDir.Store(true)
+		slowTmp.Store(true)
+		m.rememberWithSuccession("claude", "s1", 2, time.Now().Add(DefaultDeadline), true)
+		if slowDir.Load() || slowTmp.Load() {
+			t.Fatalf("expected slow directory/tmp prep seams to run: dirPending=%t tmpPending=%t", slowDir.Load(), slowTmp.Load())
+		}
+		if got := base.Recall("claude", "s1"); got != 2 {
+			t.Fatalf("rememberWithSuccession failed closed on slow prep: got G%d, want G2", got)
+		}
+
+		slowDir.Store(true)
+		slowTmp.Store(true)
+		if failed := m.forgetEvidence("claude", "s1", 2, time.Now().Add(DefaultDeadline), true); failed != "" {
+			t.Fatalf("forgetEvidence failed closed on slow prep: failed=%q", failed)
+		}
+		if slowDir.Load() || slowTmp.Load() {
+			t.Fatalf("expected slow directory/tmp prep seams to run in forgetEvidence: dirPending=%t tmpPending=%t", slowDir.Load(), slowTmp.Load())
+		}
+		if got := base.Recall("claude", "s1"); got != 0 {
+			t.Fatalf("forgetEvidence left G%d behind", got)
+		}
+		if ended, err := readGeneration(endedMarkerPath(base.name("claude", "s1"))); err != nil || ended != 2 {
+			t.Fatalf("forgetEvidence did not record .ended=2: ended=%d err=%v", ended, err)
+		}
+	})
+
+	t.Run("slow held section still fails closed with real clock", func(t *testing.T) {
+		base := newFileMemory(t)
+		base.Remember("claude", "s1", 1)
+
+		origOpen := generationFileOpen
+		t.Cleanup(func() { generationFileOpen = origOpen })
+		var slowHeld atomic.Bool
+		generationFileOpen = func(p string) (*os.File, error) {
+			if slowHeld.CompareAndSwap(true, false) {
+				time.Sleep(hookLockBudget + 20*time.Millisecond)
+			}
+			return origOpen(p)
+		}
+
+		m := fileMemory{
+			dir:      base.dir,
+			now:      time.Now,
+			restrict: base.restrict,
+		}
+		slowHeld.Store(true)
+		m.rememberWithSuccession("claude", "s1", 2, time.Now().Add(DefaultDeadline), true)
+		if slowHeld.Load() {
+			t.Fatal("expected held-section seam to run in rememberWithSuccession")
+		}
+		if got := base.Recall("claude", "s1"); got != 1 {
+			t.Fatalf("rememberWithSuccession modified G1 despite slow held section exceeding 50ms: got G%d", got)
+		}
+
+		slowHeld.Store(true)
+		marker := endedMarkerPath(base.name("claude", "s1"))
+		if failed := m.forgetEvidence("claude", "s1", 2, time.Now().Add(DefaultDeadline), true); failed != marker {
+			t.Fatalf("forgetEvidence failed to fail closed on slow held section: failed=%q want=%q", failed, marker)
+		}
+		if slowHeld.Load() {
+			t.Fatal("expected held-section seam to run in forgetEvidence")
+		}
+		if _, err := os.Lstat(marker); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("forgetEvidence wrote .ended despite slow held section: err=%v", err)
+		}
+		if got := base.Recall("claude", "s1"); got != 1 {
+			t.Fatalf("forgetEvidence modified G1 despite slow held section: got G%d", got)
+		}
+	})
+}
