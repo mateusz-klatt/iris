@@ -457,6 +457,10 @@ func registrationProof(state *runState, ev Event, m Memory, retained int) (gener
 		return max(retained, generation), endedThrough, nil
 	}
 	if errors.Is(err, failSessionsLock) {
+		if files, ok := m.(fileMemory); ok && retained > 0 {
+			// Preserve the proof already sent if pruning removed it while the lock was held.
+			files.retainGeneration(string(ev.Client), ev.SessionID, retained)
+		}
 		state.observe(SessionsLockTimeout)
 		return 0, 0, failSessionsLock
 	}

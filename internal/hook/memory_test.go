@@ -14,6 +14,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/mateusz-klatt/iris/internal/config"
@@ -704,6 +705,63 @@ func TestRegistrationWithSessionsLockTimeoutFailsOpen(t *testing.T) {
 	if failure := waitForFailure(t, token); failure.Stage != "session" || failure.Error != failSessionsLock.Error() {
 		t.Errorf("failure = %+v, want a session lock timeout at the session stage", failure)
 	}
+}
+
+func TestRegistrationRetryWithSessionsLockTimeoutRestoresPrunedProof(t *testing.T) {
+	const generation = 3
+	r := editRunner(t, ClientClaude, "")
+	m := sessionsFor(r.Getenv)
+	m.Remember("claude", "s1", generation)
+
+	synctest.Test(t, func(t *testing.T) {
+		locked := make(chan func(), 1)
+		var sent []int
+		r.Hub = interceptedRegistration{Client: r.Hub.(*hubclient.Client), register: func(_ context.Context, req hubclient.SessionRequest) (hubclient.SessionResponse, error) {
+			sent = append(sent, req.Generation)
+			if len(sent) == 1 {
+				unlock, err := m.lock(hookLockBudget)
+				if err != nil {
+					t.Errorf("take the sessions lock after the first registration: %v", err)
+					return hubclient.SessionResponse{}, err
+				}
+				locked <- unlock
+			}
+			return hubclient.SessionResponse{}, lostWithHighest(generation)
+		}}
+		done := make(chan Output, 1)
+		go func() { done <- r.Run() }()
+		var unlock func()
+		select {
+		case unlock = <-locked:
+		case out := <-done:
+			t.Fatalf("hook returned before the hub took the lock: %+v", out)
+		}
+
+		// Once the retry has read proof and is waiting for the lock, simulate pruning
+		// under that lock. Release it after the read's budget, during retention's budget.
+		synctest.Wait()
+		pruneErr := os.Remove(m.name("claude", "s1"))
+		time.Sleep(hookLockBudget + lockRetry/2)
+		unlock()
+		if pruneErr != nil {
+			t.Fatal(pruneErr)
+		}
+
+		assertAllow(t, ClientClaude, <-done)
+		if !slices.Equal(sent, []int{generation}) {
+			t.Errorf("sent generations %v, want only the first request with G%d", sent, generation)
+		}
+		token := r.Getenv("IRIS_TOKEN_FILE")
+		if notes, err := ReadRecentObservations(token, 10); err != nil || len(notes) != 1 || notes[0].Error != "sessions_lock_timeout" {
+			t.Errorf("observations = %+v, %v, want only sessions_lock_timeout", notes, err)
+		}
+		if failure := waitForFailure(t, token); failure.Stage != "session" || failure.Error != failSessionsLock.Error() {
+			t.Errorf("failure = %+v, want a session lock timeout at the session stage", failure)
+		}
+		if got := m.Recall("claude", "s1"); got != generation {
+			t.Errorf("retained proof after pruning = G%d, want G%d", got, generation)
+		}
+	})
 }
 
 func runWith(h Hub, m Memory, event, payload string) Output {
