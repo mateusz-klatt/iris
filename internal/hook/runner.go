@@ -56,22 +56,23 @@ type Hub interface {
 // Runner executes one hook invocation.
 type Runner struct {
 	// Status, Gitlinks and IndexID stand in for gitinfo's in tests; nil means git itself.
-	Status          func(context.Context, string, gitinfo.Scope, *gitinfo.Attempt) (map[string]string, error)
-	Gitlinks        func(context.Context, string) ([]string, error)
-	IndexID         func(string) (gitinfo.IndexID, error)
-	Now             func() time.Time
-	ClientName      string
-	EventName       string
-	Stdin           io.Reader
-	Getenv          func(string) string
-	Hub             Hub
-	Find            func(dir string) (gitinfo.Repo, error)
-	Ancestor        func() (proc.Ancestor, error)
-	Host            func() string
-	GOOS            string
-	IrisPath        func() string
-	PinnedConfigDir func() (string, error)
-	Deadline        time.Duration
+	Status            func(context.Context, string, gitinfo.Scope, *gitinfo.Attempt) (map[string]string, error)
+	Gitlinks          func(context.Context, string) ([]string, error)
+	IndexID           func(string) (gitinfo.IndexID, error)
+	Now               func() time.Time
+	ClientName        string
+	EventName         string
+	Stdin             io.Reader
+	Getenv            func(string) string
+	Hub               Hub
+	Find              func(dir string) (gitinfo.Repo, error)
+	Ancestor          func() (proc.Ancestor, error)
+	Host              func() string
+	GOOS              string
+	IrisPath          func() string
+	PinnedConfigDir   func() (string, error)
+	Deadline          time.Duration
+	SuccessionEnabled func(context.Context) bool
 	// Memory keeps each session's generation between hook processes. Nil means a file
 	// beside the token.
 	Memory Memory
@@ -128,10 +129,20 @@ func (r Runner) Run() Output {
 		deadline = DefaultDeadline
 	}
 	after := r.after
+	var (
+		ctx    context.Context
+		cancel context.CancelFunc
+	)
 	if after == nil {
 		after = time.After
+		entryDeadline := time.Now().Add(deadline)
+		if r.Now == nil {
+			entryDeadline = r.now().Add(deadline)
+		}
+		ctx, cancel = context.WithDeadline(context.Background(), entryDeadline)
+	} else {
+		ctx, cancel = context.WithCancel(context.Background())
 	}
-	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	ch := make(chan Output, 1)
 	go func() {
@@ -151,8 +162,12 @@ func (r Runner) Run() Output {
 		return out
 	case <-after(deadline):
 		cancel()
-		failureStage, _ = state.snapshot()
-		failure = context.DeadlineExceeded
+		if mstage, merr := state.mandatoryStatus(context.DeadlineExceeded); merr != nil {
+			failureStage, failure = mstage, merr
+		} else {
+			failureStage, _ = state.snapshot()
+			failure = context.DeadlineExceeded
+		}
 		observations = state.observations()
 		return allow
 	}
@@ -226,12 +241,25 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		state.at("session")
 		// What the session was told is read before the hub answers; see attentionNote.
 		rev := r.toldRevision(ev)
-		sess, err := r.register(ctx, state, ev, repo)
+		sess, attempt, err := r.registerWithAttempt(ctx, state, ev, repo, "session", nil)
 		if errors.Is(err, errOlderHub) {
 			return r.finish(state, ev, Encode(ev, Decision{Action: ActionAllow}))
 		}
 		if err != nil {
 			return state.fail(err, r.failOpen(state, ev, err, allow))
+		}
+		if ok, admitErr := r.finalAdmitAndPublish(ctx, attempt); !ok {
+			return state.fail(admitErr, r.failOpen(state, ev, admitErr, allow))
+		}
+		r.learnScope(sess.Capabilities)
+		if ev.Kind == KindSessionStart {
+			if files, ok := r.memory().(fileMemory); ok {
+				if err := files.pruneWithSuccession(lockDeadlineFromCtx(ctx), attempt.successionEnabled, state.observe); err != nil {
+					r.recordFailure(stageSessionFiles, err, nil)
+				}
+			}
+			r.recordGrokSession(ev)
+			r.recordKimiSession(ev)
 		}
 		if ev.Kind == KindSubagentStart && ev.ParentSessionID == "" {
 			// A sub-agent that is its root session to Iris, as Claude Code's and Codex's are (ADR
@@ -253,13 +281,17 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		// One registration per user turn: idempotent, hedged, and within the deadline.
 		state.at("session")
 		rev := r.toldRevision(ev)
-		sess, err := r.register(ctx, state, ev, repo)
+		sess, attempt, err := r.registerWithAttempt(ctx, state, ev, repo, "session", nil)
 		if errors.Is(err, errOlderHub) {
 			return r.finish(state, ev, Encode(ev, Decision{Action: ActionAllow}))
 		}
 		if err != nil {
 			return state.fail(err, r.failOpen(state, ev, err, allow))
 		}
+		if ok, admitErr := r.finalAdmitAndPublish(ctx, attempt); !ok {
+			return state.fail(admitErr, r.failOpen(state, ev, admitErr, allow))
+		}
+		r.learnScope(sess.Capabilities)
 		// Kimi's one-shot watcher is asked for at a user prompt whose session the hub accepted
 		// (ADR 030): Kimi 2.6.1 never runs Stop hooks. The request is decided before the note,
 		// which records what the session was told. Were the deadline to pass while arming waits
@@ -274,13 +306,17 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		return r.cursorStop(ctx, state, ev, repo)
 	case KindSessionEnd:
 		state.at("session")
-		sess, err := r.register(ctx, state, ev, repo)
+		sess, attempt, err := r.registerWithAttempt(ctx, state, ev, repo, "session", nil)
 		if errors.Is(err, errOlderHub) {
 			return r.finish(state, ev, Encode(ev, Decision{Action: ActionAllow}))
 		}
 		if err != nil {
 			return state.fail(err, allow)
 		}
+		if ok, admitErr := r.finalAdmitAndPublish(ctx, attempt); !ok {
+			return state.fail(admitErr, allow)
+		}
+		r.learnScope(sess.Capabilities)
 		// Session end is a best-effort speed-up. A missed call still expires the lease.
 		state.at("end")
 		if err := r.Hub.EndExecution(ctx, sess.ExecutionID, sess.Generation); err != nil {
@@ -289,8 +325,12 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		r.forgetGrokSessionFile(ev)
 		if m := r.memory(); m != nil {
 			if files, ok := m.(fileMemory); ok {
-				if damaged := files.forget(string(ev.Client), ev.SessionID, sess.Generation); damaged != "" {
-					state.observe(damagedGenerationObservation(damaged))
+				if failed := files.forgetEvidence(string(ev.Client), ev.SessionID, sess.Generation, lockDeadlineFromCtx(ctx), attempt.successionEnabled); failed != "" {
+					if attempt.successionEnabled {
+						state.observe(SessionEvidenceWriteFailed + " at " + failed)
+					} else {
+						state.observe(damagedGenerationObservation(failed))
+					}
 				}
 			} else {
 				m.Forget(string(ev.Client), ev.SessionID, sess.Generation)
@@ -320,7 +360,7 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 		// Touch needs an execution id. The hook only has the client session id,
 		// so it reattaches through POST /v1/sessions, which is defined as idempotent.
 		state.at("session")
-		sess, err := r.register(ctx, state, ev, repo)
+		sess, attempt, err := r.registerWithAttempt(ctx, state, ev, repo, "session", nil)
 		if err == errEndedGeneration {
 			return r.finish(state, ev, Encode(ev, Decision{Action: ActionDeny, Reason: endedSessionRefused}))
 		}
@@ -333,17 +373,34 @@ func (r Runner) execute(ctx context.Context, state *runState) Output {
 			return state.fail(err, r.failOpen(state, ev, err, allow))
 		}
 		if sess.OutsideGit {
+			if ok, admitErr := r.finalAdmitAndPublish(ctx, attempt); !ok {
+				if admitErr == errEndedGeneration {
+					return r.finish(state, ev, Encode(ev, Decision{Action: ActionDeny, Reason: endedSessionRefused}))
+				}
+				return state.fail(admitErr, r.failOpen(state, ev, admitErr, allow))
+			}
+			r.learnScope(sess.Capabilities)
 			// The session began outside git and stays attached there, even after a git init:
 			// it takes no claim, so nothing is asked of the hub (ADR 034).
 			return r.finish(state, ev, Encode(ev, Decision{Action: ActionAllow}))
 		}
+		files, useFileClaims := r.Hub.(fileTouchHub)
+		useFileClaims = useFileClaims && hubclient.FileClaimsCapable(sess.Capabilities)
+		if useFileClaims && groups == nil {
+			// Each file is claimed in the repository of the checkout it lies in (ADR 033).
+			// Intervening fileGroups work runs before the final admission check & publication.
+			groups = r.fileGroups(repo, ev)
+		}
+		if ok, admitErr := r.finalAdmitAndPublish(ctx, attempt); !ok {
+			if admitErr == errEndedGeneration {
+				return r.finish(state, ev, Encode(ev, Decision{Action: ActionDeny, Reason: endedSessionRefused}))
+			}
+			return state.fail(admitErr, r.failOpen(state, ev, admitErr, allow))
+		}
+		r.learnScope(sess.Capabilities)
 		state.at("touch")
 		var touch hubclient.TouchResponse
-		if files, ok := r.Hub.(fileTouchHub); ok && hubclient.FileClaimsCapable(sess.Capabilities) {
-			// Each file is claimed in the repository of the checkout it lies in (ADR 033).
-			if groups == nil {
-				groups = r.fileGroups(repo, ev)
-			}
+		if useFileClaims {
 			touch, err = files.TouchFiles(ctx, hubclient.TouchFilesRequest{ExecutionID: sess.ExecutionID, Generation: sess.Generation, ToolCallID: ev.ToolCallID, Groups: groups})
 		} else if len(paths) == 0 {
 			// An older hub takes paths of the event's checkout only, and none of these is.
@@ -412,7 +469,7 @@ func checkRestoreFloor(state *runState, ev Event, m Memory, generation int, err 
 }
 
 func refuseRestoreFloor(state *runState, ev Event, m Memory, generation int, note string) error {
-	if files, ok := m.(fileMemory); ok && generation > 0 {
+	if files, ok := m.(fileMemory); ok && generation > 0 && !state.hasLocalVeto() {
 		marker := files.retainGeneration(string(ev.Client), ev.SessionID, generation)
 		if marker.Path != "" && (note == RestoreFloorRefused || note == RestoreFloorHubTooOld) {
 			note = note + " at " + marker.Path
@@ -475,13 +532,15 @@ func registrationProof(state *runState, ev Event, m Memory, retained int) (gener
 }
 
 func sessionEndFloor(state *runState, ev Event, files fileMemory) (int, error) {
-	marker := files.name(string(ev.Client), ev.SessionID) + ".ended"
+	prefix := files.name(string(ev.Client), ev.SessionID)
+	marker := endedMarkerPath(prefix)
 	ended, expired, err := files.readEndMarker(marker)
 	if err != nil {
 		state.observe(damagedGenerationObservation(marker))
 		return 0, errDamagedEndMarker
 	}
 	if expired {
+		_, _ = files.cleanupExpiredEnd(prefix, ended, time.Time{}, false)
 		return 0, nil
 	}
 	return ended, nil
@@ -492,37 +551,59 @@ func checkEndedRegistration(state *runState, ev Event, m Memory, sentEndedThroug
 	if !ok {
 		return err
 	}
-	ended, proofErr := sessionEndFloor(state, ev, files)
-	if proofErr != nil {
-		return proofErr
+	marker := endedMarkerPath(files.name(string(ev.Client), ev.SessionID))
+	ended, expired, rerr := files.readEndMarker(marker)
+	if rerr != nil {
+		state.observe(damagedGenerationObservation(marker))
+		return errDamagedEndMarker
+	}
+	if expired {
+		ended = 0
 	}
 	ended = max(ended, sentEndedThrough)
 	var hubErr *hubclient.Error
 	strictFloorRefusal := proofless && sentEndedThrough > 0 && errors.As(err, &hubErr) && hubErr.Code == "lost" && hubErr.IsEndedThroughRefusal(sentEndedThrough)
 	if ended > 0 && (err == nil && generation <= ended || strictFloorRefusal) {
-		state.observe(endedProof(files.name(string(ev.Client), ev.SessionID) + ".ended").Error())
+		state.observe(endedProof(marker).Error())
 		return errEndedGeneration
 	}
 	return err
 }
 
-// register attaches a hook to its Execution. It can retry stale proof once when the hub retains
-// at least that generation, which the retry carries as a floor. SessionEnd keeps exact proof to
-// avoid ending a newer Execution.
+// register attaches a hook to its Execution, validates admission, and publishes local evidence.
 func (r Runner) register(ctx context.Context, state *runState, ev Event, repo gitinfo.Repo) (hubclient.SessionResponse, error) {
-	m := r.memory()
-	req := r.sessionReq(ev, repo)
-	generation, sentEndedThrough, err := registrationProof(state, ev, m, 0)
+	sess, attempt, err := r.registerWithAttempt(ctx, state, ev, repo, "session", nil)
 	if err != nil {
 		return hubclient.SessionResponse{}, err
 	}
+	if ok, admitErr := r.finalAdmitAndPublish(ctx, attempt); !ok {
+		return hubclient.SessionResponse{}, admitErr
+	}
+	r.learnScope(sess.Capabilities)
+	return sess, nil
+}
+
+// registerWithAttempt attaches a hook to its Execution and validates the reply via admitReply
+// without writing local evidence files. Callers run finalAdmitAndPublish right before any
+// dependent RPC or local work.
+func (r Runner) registerWithAttempt(ctx context.Context, state *runState, ev Event, repo gitinfo.Repo, stage string, attempt *registrationAttempt) (hubclient.SessionResponse, *registrationAttempt, error) {
+	if attempt == nil {
+		attempt = r.newRegistrationAttempt(ctx, state, ev, stage)
+	}
+	req := r.sessionReq(ev, repo)
+	req.SuccessionProof = attempt.successionEnabled
+	generation, sentEndedThrough, err := attempt.preInspect(ctx, 0)
+	if err != nil {
+		return hubclient.SessionResponse{}, attempt, err
+	}
+	attempt.sentGen = generation
 	req.Generation = generation
 	req.EndedThrough = sentEndedThrough
 	if req.Generation <= sentEndedThrough {
 		req.Generation = 0
 	}
 	if req.Generation == 0 {
-		req.RetryGeneration = max(req.RetryGeneration, sentEndedThrough)
+		req.RetryGeneration = max(attempt.genFloor, sentEndedThrough)
 	}
 	send := r.Hub.RegisterSession
 	if repo.Worktree == "" {
@@ -530,62 +611,40 @@ func (r Runner) register(ctx context.Context, state *runState, ev Event, repo gi
 		// errOlderHub, and the event is allowed with nothing registered, as before.
 		outside, ok := r.Hub.(outsideHub)
 		if !ok {
-			return hubclient.SessionResponse{}, errOlderHub
+			return hubclient.SessionResponse{}, attempt, errOlderHub
 		}
 		send = outside.RegisterOutsideSession
 	}
 	sess, err := send(ctx, req)
-	if req.Generation > 0 && ev.Kind != KindSessionEnd && hubclient.IsCode(err, "lost") {
-		floor, endedThrough, proofErr := registrationProof(state, ev, m, req.Generation)
+	retry, err := attempt.admitReply(ctx, sess, err, req.Generation == 0, true)
+	if retry {
+		attempt.retryUsed = true
+		floor, endedThrough, proofErr := attempt.preInspect(ctx, req.Generation)
 		if proofErr != nil {
-			return hubclient.SessionResponse{}, proofErr
+			return hubclient.SessionResponse{}, attempt, proofErr
 		}
-		err = checkRestoreFloor(state, ev, m, floor, err)
-		if hubclient.IsCode(err, "lost") && ctx.Err() == nil {
-			req.RetryGeneration = floor
+		err = checkRestoreFloor(state, ev, attempt.mem, floor, err)
+		if hubclient.IsCode(err, "lost") && !attempt.vetoed && ctx.Err() == nil {
+			req.RetryGeneration = max(floor, attempt.genFloor)
 			req.Generation = 0
-			req.EndedThrough = max(req.EndedThrough, endedThrough)
+			req.EndedThrough = max(attempt.endedFloor, endedThrough)
 			req.RetryGeneration = max(req.RetryGeneration, req.EndedThrough)
-			sentEndedThrough = req.EndedThrough
 			sess, err = send(ctx, req)
-			floor, _, proofErr = registrationProof(state, ev, m, floor)
+			floor, _, proofErr = attempt.preInspect(ctx, floor)
 			if proofErr != nil {
-				return hubclient.SessionResponse{}, proofErr
+				return hubclient.SessionResponse{}, attempt, proofErr
 			}
-			err = checkRestoreFloor(state, ev, m, floor, err)
-			if err == nil && sess.Generation < floor {
-				err = refuseRestoreFloor(state, ev, m, floor, RestoreFloorRefused)
-			}
+			err = checkRestoreFloor(state, ev, attempt.mem, floor, err)
+			_, err = attempt.admitReply(ctx, sess, err, true, false)
 		}
 	}
 	if hubclient.OlderHub(err) && repo.Worktree == "" {
-		return hubclient.SessionResponse{}, errOlderHub
+		return hubclient.SessionResponse{}, attempt, errOlderHub
 	}
-	err = checkEndedRegistration(state, ev, m, sentEndedThrough, sess.Generation, req.Generation == 0, err)
-	if err == nil {
-		r.learnScope(sess.Capabilities)
+	if err != nil {
+		return hubclient.SessionResponse{}, attempt, err
 	}
-	if err == nil && m != nil {
-		deadline, _ := ctx.Deadline()
-		// M2b keeps session_succession OFF in production hooks: remember and prune use
-		// v0.1.15's acquisition-only budget (no hold deadline), capping only lock wait.
-		rememberWithDeadline(m, string(ev.Client), ev.SessionID, sess.Generation, deadline)
-		if ev.Kind == KindSessionStart {
-			if files, ok := m.(fileMemory); ok {
-				if err := files.pruneWithSuccession(deadline, false, state.observe); err != nil {
-					r.recordFailure(stageSessionFiles, err, nil)
-				}
-			}
-		}
-	}
-	// The pid file and the Kimi session map follow a hub acceptance. Neither is part of the
-	// sessions directory, so a failed write is not a session-files failure and must not mark the
-	// run skipped.
-	if err == nil && ev.Kind == KindSessionStart {
-		r.recordGrokSession(ev)
-		r.recordKimiSession(ev)
-	}
-	return sess, err
+	return sess, attempt, nil
 }
 
 func (r Runner) now() time.Time {
