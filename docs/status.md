@@ -170,6 +170,10 @@ Against the production hub, over TLS:
 
 ## Not done or not measured
 
+[ADR 041](adr/041-criteria-for-1.0.md) sets the criteria for 1.0. One of them is that every
+"not measured" client row is measured live on Linux, macOS and Windows, or marked unsupported
+there with the reason.
+
 - **Other clients on real hosts.** Codex has run with Claude in the bounded macOS and WSL
   shared-worktree experiments above; that does not validate every integration path. Cursor,
   Antigravity, Grok and Kimi do not have equivalent end-to-end evidence in this status record.
