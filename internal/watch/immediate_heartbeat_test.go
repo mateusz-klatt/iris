@@ -507,7 +507,9 @@ func TestWatchHeartbeatsImmediatelyOnResetAndNeverRevivesTerminal(t *testing.T) 
 			Getenv:          func(k string) string { return map[string]string{"IRIS_EXECUTION": ex2ID}[k] },
 			Ancestor:        func() (proc.Ancestor, error) { return proc.Ancestor{}, nil },
 		}
-		runCtx, stop := context.WithCancel(ctx)
+		// The Runner gets its own context: on a slow runner the setup, backup and restore above
+		// can use most of ctx's 15 s, and a Runner cancelled with it would never reconnect (#460).
+		runCtx, stop := context.WithCancel(context.Background())
 		defer stop()
 		output := &lines{}
 		done := make(chan error, 1)
@@ -521,7 +523,22 @@ func TestWatchHeartbeatsImmediatelyOnResetAndNeverRevivesTerminal(t *testing.T) 
 		}
 		h.startRecording()
 		h.restore(backupPath)
-		for deadline := time.Now().Add(5 * time.Second); !strings.Contains(output.String(), "Iris: notifications stopped:"); {
+		const stopped = "Iris: notifications stopped:"
+		var runErr error
+		exited := false
+		for deadline := time.Now().Add(5 * time.Second); !strings.Contains(output.String(), stopped); {
+			if !exited {
+				select {
+				case runErr = <-done:
+					exited = true
+					// A Runner that returned without the announcement names its own cause.
+					if !strings.Contains(output.String(), stopped) {
+						t.Fatalf("watch returned %v before announcing stopped on restored older generation: %q reqs=%+v", runErr, output.String(), h.recorded())
+					}
+					continue
+				default:
+				}
+			}
 			if time.Now().After(deadline) {
 				t.Fatalf("watch never announced stopped on restored older generation: %q reqs=%+v", output.String(), h.recorded())
 			}
@@ -529,8 +546,16 @@ func TestWatchHeartbeatsImmediatelyOnResetAndNeverRevivesTerminal(t *testing.T) 
 		}
 		assertWatchHeartbeatBeforeBind(t, h.recorded(), ex2ID)
 		stop()
-		if err := <-done; err != ErrLost {
-			t.Fatalf("expected ErrLost, got %v", err)
+		if !exited {
+			// runCtx has no deadline of its own, so a Runner that ignores stop fails here by name.
+			select {
+			case runErr = <-done:
+			case <-time.After(30 * time.Second):
+				t.Fatal("watch did not return within 30s of stop")
+			}
+		}
+		if runErr != ErrLost {
+			t.Fatalf("expected ErrLost, got %v", runErr)
 		}
 	})
 }
