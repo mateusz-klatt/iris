@@ -163,6 +163,76 @@ func TestLiveRunProvesEveryPart(t *testing.T) {
 	}
 }
 
+func TestRecorderCountsGroupedTouchesInTheScratchRepository(t *testing.T) {
+	for _, tc := range []struct {
+		name, action string
+		otherClient  bool
+		otherRepo    bool
+		claimed      bool
+	}{
+		{name: "allowed", action: "allow", claimed: true},
+		{name: "denied", action: "deny"},
+		{name: "other execution", action: "allow", otherClient: true},
+		{name: "same filename in another repository", action: "allow", otherRepo: true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			const marker = "https://example.invalid/iris-doctor-live/grouped.git"
+			worktree, h, err := setupScratch(t.TempDir(), marker)
+			if err != nil {
+				t.Fatal(err)
+			}
+			t.Cleanup(h.close)
+			t.Setenv("IRIS_HUB_URL", h.url)
+			t.Setenv("IRIS_TOKEN_FILE", h.tokenFile)
+			ctx := t.Context()
+			client := &hubclient.Client{Config: hubclient.NewConfig()}
+			register := func(name string) hubclient.SessionResponse {
+				t.Helper()
+				s, err := client.RegisterSession(ctx, hubclient.SessionRequest{
+					Client: name, SessionID: name, Host: "fake", CWD: worktree, Worktree: worktree, RemoteURL: marker, Source: "hook",
+				})
+				if err != nil {
+					t.Fatal(err)
+				}
+				return s
+			}
+			own := register(integrate.Claude)
+			if !hubclient.FileClaimsCapable(own.Capabilities) {
+				t.Fatalf("scratch hub capabilities %v lack file_claims", own.Capabilities)
+			}
+			execution := own
+			if tc.otherClient || tc.action == "deny" {
+				other := register(integrate.Grok)
+				if tc.otherClient {
+					execution = other
+				} else {
+					held, err := client.Touch(ctx, hubclient.TouchRequest{ExecutionID: other.ExecutionID, Generation: other.Generation, ToolCallID: "hold", Paths: []string{scratchFile}})
+					if err != nil || held.Action != "allow" {
+						t.Fatalf("holding the scratch file: %+v, %v", held, err)
+					}
+				}
+			}
+			groups := []hubclient.ClaimGroup{
+				{Worktree: filepath.Join(worktree, "nested"), RemoteURL: "https://example.invalid/nested.git", Paths: []string{scratchFile}},
+				{Worktree: worktree, RemoteURL: marker, Paths: []string{"other.txt"}},
+			}
+			if !tc.otherRepo {
+				groups[1].Paths = append(groups[1].Paths, scratchFile)
+			}
+			out, err := client.TouchFiles(ctx, hubclient.TouchFilesRequest{
+				ExecutionID: execution.ExecutionID, Generation: execution.Generation, ToolCallID: "edit", Groups: groups,
+			})
+			if err != nil || out.Action != tc.action {
+				t.Fatalf("grouped touch: %+v, %v, want %s", out, err, tc.action)
+			}
+			seen := h.rec.snapshot(marker, integrate.Claude)
+			if len(seen.executions) != 1 || seen.executions[0] != own.ExecutionID || seen.claimed != tc.claimed {
+				t.Fatalf("observed %+v, want execution %s and claimed %v", seen, own.ExecutionID, tc.claimed)
+			}
+		})
+	}
+}
+
 func TestLiveRunSaysWhichPartFailed(t *testing.T) {
 	for _, tc := range []struct {
 		mode                     string

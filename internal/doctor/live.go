@@ -354,14 +354,19 @@ type recorder struct {
 	next     http.Handler
 	mu       sync.Mutex
 	sessions []recordedSession
-	claims   []string
+	claims   []recordedClaim
 }
 
 type recordedSession struct{ client, remote, execution, repository string }
 
+// A legacy touch uses the Execution's repository and leaves repository empty here.
+type recordedClaim struct{ execution, repository, path string }
+
 func (rec *recorder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	route := r.Method + " " + r.URL.Path
-	if route != "POST /v1/sessions" && route != "POST /v1/claims/touch" {
+	switch route {
+	case "POST /v1/sessions", "POST /v1/claims/touch", "POST /v1/claims/touch/files":
+	default:
 		rec.next.ServeHTTP(w, r)
 		return
 	}
@@ -374,23 +379,40 @@ func (rec *recorder) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
-	if route == "POST /v1/sessions" {
+	switch route {
+	case "POST /v1/sessions":
 		var in hubclient.SessionRequest
 		var out hubclient.SessionResponse
 		_ = json.Unmarshal(body, &in)
 		_ = json.Unmarshal(cw.body.Bytes(), &out)
 		rec.sessions = append(rec.sessions, recordedSession{client: in.Client, remote: in.RemoteURL, execution: out.ExecutionID, repository: out.RepositoryID})
-		return
-	}
-	var in hubclient.TouchRequest
-	var out hubclient.TouchResponse
-	_ = json.Unmarshal(body, &in)
-	_ = json.Unmarshal(cw.body.Bytes(), &out)
-	if out.Action != "allow" {
-		return
-	}
-	for _, p := range in.Paths {
-		rec.claims = append(rec.claims, in.ExecutionID+" "+p)
+	case "POST /v1/claims/touch":
+		var in hubclient.TouchRequest
+		var out hubclient.TouchResponse
+		_ = json.Unmarshal(body, &in)
+		_ = json.Unmarshal(cw.body.Bytes(), &out)
+		if out.Action == "allow" {
+			for _, p := range in.Paths {
+				rec.claims = append(rec.claims, recordedClaim{execution: in.ExecutionID, path: p})
+			}
+		}
+	case "POST /v1/claims/touch/files":
+		var in hubclient.TouchFilesRequest
+		// Group paths are checkout-relative. Each grant carries the repository the hub resolved.
+		var out struct {
+			hubclient.TouchResponse
+			Granted []struct {
+				RepositoryID string `json:"repository_id"`
+				Path         string `json:"path"`
+			} `json:"granted"`
+		}
+		_ = json.Unmarshal(body, &in)
+		_ = json.Unmarshal(cw.body.Bytes(), &out)
+		if out.Action == "allow" {
+			for _, g := range out.Granted {
+				rec.claims = append(rec.claims, recordedClaim{execution: in.ExecutionID, repository: g.RepositoryID, path: g.Path})
+			}
+		}
 	}
 }
 
@@ -411,12 +433,10 @@ func (rec *recorder) snapshot(marker, client string) observed {
 		if sess.remote == marker && sess.client == client && sess.execution != "" {
 			s.executions = append(s.executions, sess.execution)
 			s.repositories = append(s.repositories, sess.repository)
-		}
-	}
-	for _, c := range rec.claims {
-		for _, e := range s.executions {
-			if c == e+" "+scratchFile {
-				s.claimed = true
+			for _, c := range rec.claims {
+				if c.execution == sess.execution && c.path == scratchFile && (c.repository == "" || c.repository == sess.repository) {
+					s.claimed = true
+				}
 			}
 		}
 	}
