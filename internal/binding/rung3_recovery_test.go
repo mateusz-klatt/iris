@@ -255,6 +255,28 @@ func TestRung3ResolverRestartRecoveryWire(t *testing.T) {
 	}
 }
 
+func TestOffProcessReattachmentMatchesV0115Wire(t *testing.T) {
+	f := newRung3RecoveryFixture(t, false)
+	f.hub.restart(t)
+	// v0.1.15 reattaches from generation memory with the registration tuple and
+	// renews the recovered binding with a plain heartbeat.
+	b, attempted, err := f.resolver.reattachByMemoryHeld(t.Context(), f.selection.SessionID, 3, sessionproof.Snapshot{})
+	if err != nil || !attempted || b.ExecutionID != f.selection.ExecutionID || b.Generation != 2 || !b.HookSeen {
+		t.Fatalf("reattachment = %+v, attempted %t, error %v", b, attempted, err)
+	}
+	f.resolver.keepHeld(b)
+	if err := f.resolver.Heartbeat(t.Context(), "shim"); err != nil {
+		t.Fatal(err)
+	}
+	want := resolverWireRequest{http.MethodPost, "/v1/sessions", fmt.Sprintf(
+		`{"common_dir":"","generation":2,"client":"cursor","session_id":"cursor-session","host":"host","cwd":%q,"worktree":"","worktree_id":"","remote_url":"","root_commit":"","branch":"","parent_session_id":"","client_pid":42,"client_pid_start_ms":100,"single_session":false,"source":"shim"}`,
+		f.resolver.CWD), http.StatusOK}
+	if len(f.requests) != 2 || f.requests[0] != want {
+		t.Fatalf("requests = %+v, want %+v followed by heartbeat", f.requests, want)
+	}
+	f.requireHeartbeat(t, 1, rung3OffHeartbeat, http.StatusOK)
+}
+
 func TestClaudeContinueRung3RestartRequiresProcessRegistration(t *testing.T) {
 	for _, changed := range []bool{false, true} {
 		t.Run(fmt.Sprintf("changed_tuple=%t", changed), func(t *testing.T) {

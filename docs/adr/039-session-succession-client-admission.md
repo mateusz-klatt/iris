@@ -416,6 +416,18 @@ Use a provenance-aware rollback build or restore the pre-migration backup under
 [ADR 006](006-retention-and-restore.md), accepting the loss of changes after the backup.
 Wire compatibility gives no guarantee about opening a later database in place.
 
+#### Process-bound recovery amendment (2026-11-27)
+
+With `session_succession` on, process-bound clients use `?process_bound=true` on
+`POST /v1/executions/{id}/heartbeat` and `POST /v1/sessions`. The query can only
+tighten the ordinary checks. An opted process heartbeat cannot resume a recovering
+Execution. Process-bound reattachment must supply the matching PID and start time,
+and a newer process session can veto it. With succession off, clients omit the query.
+
+Hubs before M2d ignore the query. Its recovery guard takes effect once the hub and
+every writer run Iris 0.1.18. Upgrade them, including processes that write or prune
+the shared sessions directory, before enabling succession there.
+
 ## Invariants
 
 1. The client uses or renews a hookless succession child only after admission against an
