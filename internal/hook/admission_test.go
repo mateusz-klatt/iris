@@ -202,6 +202,8 @@ func TestSuccessionON_AdmissionPublicationConflictAndDamage(t *testing.T) {
 		root := gitRepo(t)
 		getenv := failureEnv(t)
 		m := sessionsFor(getenv)
+		frozen := time.Unix(1_700_000_000, 0)
+		m.mono = func() time.Time { return frozen }
 		var events []string
 		m.pause = func(time.Duration) {}
 		// Intercept restrict only for tracking write order (.tmp-* inside sessionsDir -> target).
@@ -230,6 +232,8 @@ func TestSuccessionON_AdmissionPublicationConflictAndDamage(t *testing.T) {
 			ClientName: "claude", EventName: "SessionStart",
 			Stdin: strings.NewReader(`{"session_id":"s1","cwd":` + quote(root) + `,"hook_event_name":"SessionStart"}`),
 			Hub:   h, Memory: m, Getenv: getenv, SuccessionEnabled: func(context.Context) bool { return true },
+			Find:  func(string) (gitinfo.Repo, error) { return gitinfo.Repo{Worktree: root}, nil },
+			Now:   m.mono,
 			after: never, logAfter: never,
 		}
 		out := r.Run()
@@ -264,6 +268,8 @@ func TestSuccessionON_AdmissionPublicationConflictAndDamage(t *testing.T) {
 		root := gitRepo(t)
 		getenv := failureEnv(t)
 		m := sessionsFor(getenv)
+		frozen := time.Unix(1_700_000_000, 0)
+		m.mono = func() time.Time { return frozen }
 		// Seed shim_succession exact record at G2, no <hash> yet.
 		shimRec := sessionproof.Record{
 			Version: sessionproof.FormatVersion, Origin: sessionproof.OriginShim,
@@ -281,6 +287,8 @@ func TestSuccessionON_AdmissionPublicationConflictAndDamage(t *testing.T) {
 			ClientName: "claude", EventName: "SessionStart",
 			Stdin: strings.NewReader(`{"session_id":"s1","cwd":` + quote(root) + `,"hook_event_name":"SessionStart"}`),
 			Hub:   h, Memory: m, Getenv: getenv, SuccessionEnabled: func(context.Context) bool { return true },
+			Find:  func(string) (gitinfo.Repo, error) { return gitinfo.Repo{Worktree: root}, nil },
+			Now:   m.mono,
 			after: never, logAfter: never,
 		}.Run()
 		if out.Exit != 0 || !json.Valid(out.Stdout) {
@@ -311,6 +319,8 @@ func TestSuccessionON_AdmissionPublicationConflictAndDamage(t *testing.T) {
 			ClientName: "claude", EventName: "SessionStart",
 			Stdin: strings.NewReader(`{"session_id":"s2","cwd":` + quote(root) + `,"hook_event_name":"SessionStart"}`),
 			Hub:   h, Memory: m, Getenv: getenv, SuccessionEnabled: func(context.Context) bool { return true },
+			Find:  func(string) (gitinfo.Repo, error) { return gitinfo.Repo{Worktree: root}, nil },
+			Now:   m.mono,
 			after: never, logAfter: never,
 		}.Run()
 		if out2.Exit != 0 || !strings.Contains(string(out2.Stdout), m2cExecID(21)) {
@@ -464,7 +474,9 @@ func TestSuccessionON_AdmissionPublicationConflictAndDamage(t *testing.T) {
 			root := gitRepo(t)
 			getenv := failureEnv(t)
 			m := sessionsFor(getenv)
-			if err := os.MkdirAll(m.dir, 0o700); err != nil {
+			frozen := time.Unix(1_700_000_000, 0)
+			m.mono = func() time.Time { return frozen }
+			if err := m.directory(); err != nil {
 				t.Fatal(err)
 			}
 			target := m.name("claude", "s1")
@@ -479,6 +491,8 @@ func TestSuccessionON_AdmissionPublicationConflictAndDamage(t *testing.T) {
 				ClientName: "claude", EventName: "PreToolUse",
 				Stdin: strings.NewReader(editPayload(ClientClaude, root)),
 				Hub:   h, Memory: m, Getenv: getenv, SuccessionEnabled: func(context.Context) bool { return true },
+				Find:  func(string) (gitinfo.Repo, error) { return gitinfo.Repo{Worktree: root}, nil },
+				Now:   m.mono,
 				after: never, logAfter: never,
 			}.Run()
 			assertAllow(t, ClientClaude, out)
@@ -841,6 +855,8 @@ func TestCombinedToSplitFallbackAndLocalVetoStopsRewriteAndRetry(t *testing.T) {
 			ClientName: "claude", EventName: "SessionStart",
 			Stdin: strings.NewReader(`{"session_id":"s1","cwd":` + quote(root) + `,"hook_event_name":"SessionStart"}`),
 			Hub:   h, Memory: m, Getenv: getenv, SuccessionEnabled: func(context.Context) bool { return true },
+			Find:  func(string) (gitinfo.Repo, error) { return gitinfo.Repo{Worktree: root}, nil },
+			Now:   m.mono,
 			after: never, logAfter: never,
 		}.Run()
 		if out.Exit != 0 || !json.Valid(out.Stdout) {
@@ -990,6 +1006,30 @@ func TestSuccessionAdmissionEdgeCasesAndMemoryBehaviors(t *testing.T) {
 		}.Run()
 		if len(h3.regReqs) != 1 || h3.regReqs[0].Generation != 0 || h3.regReqs[0].EndedThrough != 2 {
 			t.Fatalf("SessionStart over ended=2 reqs=%+v", h3.regReqs)
+		}
+
+		// 3b) admitReply rejects hub returning generation <= active endedFloor.
+		geEndedReply := failureEnv(t)
+		mfEndedReply := sessionsFor(geEndedReply)
+		mfEndedReply.Remember("claude", "s1", 2)
+		mfEndedReply.Forget("claude", "s1", 2)
+		hEndedReply := &m2cHub{
+			regFunc: func(context.Context, hubclient.SessionRequest) (hubclient.SessionResponse, error) {
+				return m2cClassifiedSession(m2cExecID(3), 2, m2cExecID(2), "hook", "stale_retry", true), nil
+			},
+		}
+		Runner{
+			ClientName: "claude", EventName: "SessionStart",
+			Stdin: strings.NewReader(`{"session_id":"s1","cwd":` + quote(root) + `,"hook_event_name":"SessionStart"}`),
+			Hub:   hEndedReply, Memory: mfEndedReply, Getenv: geEndedReply, SuccessionEnabled: func(context.Context) bool { return true },
+			Find:  func(string) (gitinfo.Repo, error) { return gitinfo.Repo{Worktree: root}, nil },
+			after: never, logAfter: never,
+		}.Run()
+		if _, ok := m2cReadExact(t, mfEndedReply, "claude", "s1"); ok {
+			t.Fatal("ended-floor reply unexpectedly published exact record")
+		}
+		if obs, _ := ReadRecentObservations(geEndedReply("IRIS_TOKEN_FILE"), 10); len(obs) == 0 {
+			t.Fatal("expected ended observation when hub returned generation <= endedFloor")
 		}
 
 		getenv4 := failureEnv(t)
