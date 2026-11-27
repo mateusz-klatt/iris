@@ -427,7 +427,7 @@ func (a *registrationAttempt) finalInspectAndPublishON(callerDeadline time.Time)
 	execPath := executionPath(prefix)
 
 	ended, expired, endErr := a.files.readEndMarkerDeadline(endedPath, holdDeadline)
-	var endedState sessionproof.FileState = sessionproof.FileAbsent
+	endedState := sessionproof.FileAbsent
 	switch {
 	case errors.Is(endErr, ErrInvalidGeneration):
 		endedState = sessionproof.FileDamaged
@@ -441,7 +441,7 @@ func (a *registrationAttempt) finalInspectAndPublishON(callerDeadline time.Time)
 	}
 
 	gen, genErr := readGenerationDeadline(prefix, mono, holdDeadline)
-	var genState sessionproof.FileState = sessionproof.FileAbsent
+	genState := sessionproof.FileAbsent
 	switch {
 	case errors.Is(genErr, ErrInvalidGeneration):
 		genState = sessionproof.FileDamaged
