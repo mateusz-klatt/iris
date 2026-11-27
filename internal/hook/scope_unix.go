@@ -291,12 +291,13 @@ func (r Runner) shell(ctx context.Context, hub shellHub, ev Event, repo gitinfo.
 // call is never sent again on the plain route, which would read it as full.
 func (r Runner) shellReduced(ctx context.Context, hub scopedShellHub, plain shellHub, ev Event, repo gitinfo.Repo, state *runState, run *shellRun, phase string) (out hubclient.CheckResponse, fromGit bool, err error) {
 	m, _ := r.scopeMemory() // reducedDue found it
+	attempt := r.newRegistrationAttempt(ctx, state, ev, "shell session")
 	var sess *hubclient.SessionResponse
 	if !m.Capable(r.hubURL()) {
 		// Whether this hub takes a reduced snapshot is not known yet. One registration says,
 		// before anything is read; a worktree whose full status always times out learns it so.
 		state.at("shell session")
-		s, err := r.register(ctx, state, ev, repo)
+		s, _, err := r.registerWithAttempt(ctx, state, ev, repo, "shell session", attempt)
 		if err != nil {
 			return out, false, err
 		}
@@ -308,11 +309,17 @@ func (r Runner) shellReduced(ctx context.Context, hub scopedShellHub, plain shel
 				return out, true, err
 			}
 			r.fullSucceeded(state, repo)
-			state.at("shell reconcile")
-			if err = checkEndedRegistration(state, ev, r.memory(), 0, s.Generation, false, nil); err != nil {
-				return out, false, err
+			if ok, admitErr := r.finalAdmitAndPublish(ctx, attempt); !ok {
+				return out, false, admitErr
 			}
+			r.learnScope(s.Capabilities)
+			state.at("shell reconcile")
 			out, err = plain.Reconcile(ctx, reconcileRequest(s.ExecutionID, s.Generation, phase, taken, repo))
+			if err == nil {
+				if err = checkEndedRegistration(state, ev, r.memory(), attempt.endedFloor, s.Generation); err != nil {
+					return out, false, err
+				}
+			}
 			return out, false, err
 		}
 		sess = &s
@@ -340,29 +347,42 @@ func (r Runner) shellReduced(ctx context.Context, hub scopedShellHub, plain shel
 	// answers too_large, the snapshot is lost, and the reconcile fails open like any hub error.
 	scope := hubclient.Scope{Mode: "dirty", Submodules: set}
 	if sess != nil {
-		state.at("shell reconcile")
-		if err = checkEndedRegistration(state, ev, r.memory(), 0, sess.Generation, false, nil); err != nil {
-			return out, false, err
+		if ok, admitErr := r.finalAdmitAndPublish(ctx, attempt); !ok {
+			return out, false, admitErr
 		}
+		r.learnScope(sess.Capabilities)
+		state.at("shell reconcile")
 		out, err = hub.ReconcileScoped(ctx, hubclient.ScopedRequest{ReconcileRequest: reconcileRequest(sess.ExecutionID, sess.Generation, phase, taken, repo), Scope: scope})
+		if err == nil {
+			if err = checkEndedRegistration(state, ev, r.memory(), attempt.endedFloor, sess.Generation); err != nil {
+				return out, false, err
+			}
+		}
 	} else {
 		state.at("shell session")
-		out, err = r.reconcileScopedSession(ctx, state, hub, ev, repo, phase, taken, scope)
+		out, err = r.reconcileScopedSessionWithAttempt(ctx, state, hub, ev, repo, phase, taken, scope, attempt)
 	}
 	switch {
 	case err == nil:
 		return out, false, nil
+	case attempt.vetoed:
+		return out, false, err
 	case isOlderHub(err):
 		// The hub was rolled back or never had the route: forget the capability, send nothing.
 		m.SetCapable(r.hubURL(), false)
 		return out, false, err
 	case hubclient.IsCode(err, "lost"):
-		// The session's proof is repaired as a registration repairs it, and this snapshot is
-		// dropped; the next one compares with whatever baseline the Execution has.
+		// The session's proof is repaired as a registration repairs it, carrying the same floors
+		// and retry budget, and this snapshot is dropped.
 		state.at("shell session")
-		if _, err = r.register(ctx, state, ev, repo); err != nil {
-			return out, false, err
+		repairSess, _, rerr := r.registerWithAttempt(ctx, state, ev, repo, "shell session", attempt)
+		if rerr != nil {
+			return out, false, rerr
 		}
+		if ok, admitErr := r.finalAdmitAndPublish(ctx, attempt); !ok {
+			return out, false, admitErr
+		}
+		r.learnScope(repairSess.Capabilities)
 		return hubclient.CheckResponse{}, false, nil
 	}
 	return out, false, err
@@ -370,21 +390,41 @@ func (r Runner) shellReduced(ctx context.Context, hub scopedShellHub, plain shel
 
 // reconcileScopedSession is the one-call form of a reduced snapshot.
 func (r Runner) reconcileScopedSession(ctx context.Context, state *runState, hub scopedShellHub, ev Event, repo gitinfo.Repo, phase string, snapshot map[string]string, scope hubclient.Scope) (hubclient.CheckResponse, error) {
+	return r.reconcileScopedSessionWithAttempt(ctx, state, hub, ev, repo, phase, snapshot, scope, nil)
+}
+
+func (r Runner) reconcileScopedSessionWithAttempt(ctx context.Context, state *runState, hub scopedShellHub, ev Event, repo gitinfo.Repo, phase string, snapshot map[string]string, scope hubclient.Scope, attempt *registrationAttempt) (hubclient.CheckResponse, error) {
+	if attempt == nil {
+		attempt = r.newRegistrationAttempt(ctx, state, ev, "shell session")
+	}
 	req := hubclient.ScopedSessionRequest{ShellSessionRequest: hubclient.ShellSessionRequest{SessionRequest: r.sessionReq(ev, repo), Kind: phase, Status: snapshot}, Scope: scope}
-	m := r.memory()
-	generation, endedThrough, err := registrationProof(state, ev, m, 0)
+	req.SuccessionProof = attempt.successionEnabled
+	generation, endedThrough, err := attempt.preInspect(ctx, 0)
 	if err != nil {
 		return hubclient.CheckResponse{}, err
 	}
+	attempt.sentGen = generation
 	req.Generation = generation
 	req.EndedThrough = endedThrough
+	if req.Generation <= endedThrough {
+		req.Generation = 0
+	}
 	if req.Generation == 0 {
-		req.RetryGeneration = endedThrough
+		req.RetryGeneration = max(attempt.genFloor, endedThrough)
 	}
 	res, err := hub.ReconcileScopedSession(ctx, req)
-	err = checkEndedRegistration(state, ev, m, endedThrough, res.Session.Generation, req.Generation == 0, err)
-	r.answered(ctx, m, ev, res, err)
-	return res.CheckResponse, checkRestoreFloor(state, ev, m, req.Generation, err)
+	_, err = attempt.admitReply(ctx, res.Session, err, req.Generation == 0, false)
+	if !attempt.vetoed {
+		err = checkRestoreFloor(state, ev, attempt.mem, req.Generation, err)
+	}
+	if err != nil {
+		return hubclient.CheckResponse{}, err
+	}
+	if ok, admitErr := r.finalAdmitAndPublish(ctx, attempt); !ok {
+		return hubclient.CheckResponse{}, admitErr
+	}
+	r.answered(ctx, ev, res)
+	return res.CheckResponse, nil
 }
 
 // indexID and gitlinks read the index for a reduced snapshot, or the Runner's stand-ins.

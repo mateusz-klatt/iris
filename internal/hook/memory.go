@@ -183,11 +183,7 @@ func (m fileMemory) Remember(client, session string, generation int) {
 	m.rememberWithSuccession(client, session, generation, time.Time{}, false)
 }
 
-func rememberWithDeadline(m Memory, client, session string, generation int, deadline time.Time) {
-	if fm, ok := m.(fileMemory); ok {
-		fm.rememberWithSuccession(client, session, generation, deadline, false)
-		return
-	}
+func rememberWithDeadline(m Memory, client, session string, generation int, _ time.Time) {
 	m.Remember(client, session, generation)
 }
 
@@ -195,11 +191,6 @@ func (m fileMemory) rememberWithSuccession(client, session string, generation in
 	if generation <= 0 {
 		return
 	}
-	// M2 succession-evidence holds when session_succession is ON use ADR 039's fullHold deadline;
-	// when OFF, keep v0.1.15's acquisition-only budget (no post-lock hold deadline).
-	mode := m.lockModeForSuccession(callerDeadline, successionEnabled)
-	holdDeadline := mode.holdDeadline
-	mono := m.monoClock()
 	if err := m.directory(); err != nil {
 		return
 	}
@@ -212,6 +203,11 @@ func (m fileMemory) rememberWithSuccession(client, session string, generation in
 			_ = os.Remove(tmp)
 		}
 	}()
+	// ADR 039 fullHold (ON) and acquireOnly (OFF) start after m.directory() and prepareSessionFile
+	// so Windows ACL propagation over large session directories stays outside the lock hold budget.
+	mode := m.lockModeForSuccession(callerDeadline, successionEnabled)
+	holdDeadline := mode.holdDeadline
+	mono := m.monoClock()
 	unlock, err := m.lockAcquire(mode)
 	if err != nil {
 		return
@@ -264,11 +260,6 @@ func (m fileMemory) forgetEvidence(client, session string, generation int, calle
 	// The marker is the path doctor can name when the end is not recorded. A missed lock
 	// never enters the callback, so the path has to be known out here.
 	marker := path + ".ended"
-	// M2 succession-evidence retirement when session_succession is ON uses ADR 039's fullHold
-	// deadline; when OFF, keep v0.1.15's acquisition-only budget with no hold deadline.
-	mode := m.lockModeForSuccession(callerDeadline, successionEnabled)
-	holdDeadline := mode.holdDeadline
-	mono := m.monoClock()
 	if err := m.directory(); err != nil {
 		return marker
 	}
@@ -281,6 +272,11 @@ func (m fileMemory) forgetEvidence(client, session string, generation int, calle
 			_ = os.Remove(tmp)
 		}
 	}()
+	// ADR 039 fullHold (ON) and acquireOnly (OFF) start after m.directory() and prepareSessionFile
+	// so Windows ACL propagation over large session directories stays outside the lock hold budget.
+	mode := m.lockModeForSuccession(callerDeadline, successionEnabled)
+	holdDeadline := mode.holdDeadline
+	mono := m.monoClock()
 	unlock, err := m.lockAcquire(mode)
 	if err != nil {
 		return marker

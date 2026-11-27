@@ -208,7 +208,11 @@ type runState struct {
 	// observed holds what this run saw for doctor without failing; see Failure.Observed.
 	observed []string
 	// shape is the payload's shape when it could not be decoded; see Failure.Shape.
-	shape *PayloadShape
+	shape          *PayloadShape
+	mandatory      bool
+	mandatoryStage string
+	mandatoryErr   error
+	localVeto      bool
 }
 
 func (s *runState) shaped(shape *PayloadShape) { s.mu.Lock(); s.shape = shape; s.mu.Unlock() }
@@ -232,18 +236,65 @@ func (s *runState) observations() []string {
 func (s *runState) received(b []byte) { s.mu.Lock(); s.receipt = b; s.mu.Unlock() }
 
 func (s *runState) at(stage string) { s.mu.Lock(); s.stage = stage; s.mu.Unlock() }
+func (s *runState) enterMandatory(stage string) {
+	s.mu.Lock()
+	s.stage = stage
+	s.mandatory = true
+	s.mandatoryStage = stage
+	s.mu.Unlock()
+}
+func (s *runState) leaveMandatory() { s.mu.Lock(); s.mandatory = false; s.mu.Unlock() }
+func (s *runState) failMandatory(err error) {
+	s.mu.Lock()
+	s.mandatory = false
+	if s.mandatoryErr == nil {
+		s.mandatoryErr = err
+	}
+	if s.err == nil {
+		s.err = err
+	}
+	s.mu.Unlock()
+}
+func (s *runState) mandatoryStatus(timeoutErr error) (string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.mandatoryErr != nil {
+		return s.mandatoryStage, s.mandatoryErr
+	}
+	if s.mandatory {
+		s.mandatoryErr = timeoutErr
+		s.mandatory = false
+		s.stage = s.mandatoryStage
+		if s.err == nil {
+			s.err = timeoutErr
+		}
+		return s.mandatoryStage, timeoutErr
+	}
+	return "", nil
+}
+func (s *runState) setLocalVeto() { s.mu.Lock(); s.localVeto = true; s.mu.Unlock() }
+func (s *runState) hasLocalVeto() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.localVeto
+}
 func (s *runState) fail(err error, out Output) Output {
-	if err == errEndedGeneration || err == errDamagedEndMarker {
+	if err == errEndedGeneration || err == errDamagedEndMarker || err == errLocalProofDamaged {
 		return out // the local refusal already recorded a path in the observation log
 	}
 	s.mu.Lock()
-	s.err = err
+	if s.mandatoryErr == nil {
+		s.err = err
+	}
 	s.mu.Unlock()
 	return out
 }
 func (s *runState) snapshot() (string, error) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
+	if s.mandatoryErr != nil {
+		return s.mandatoryStage, s.mandatoryErr
+	}
 	return s.stage, s.err
 }
 func (s *runState) receiptLine() []byte { s.mu.Lock(); defer s.mu.Unlock(); return s.receipt }

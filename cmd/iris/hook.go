@@ -33,6 +33,7 @@ func runHookIO(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv 
 	if name == "" {
 		name = clientFromArgs(args)
 	}
+	cfg := hubclient.EnvConfig{Getenv: getenv}
 	out := hook.Runner{
 		ClientName: name,
 		EventName:  *event,
@@ -40,9 +41,10 @@ func runHookIO(args []string, stdin io.Reader, stdout, stderr io.Writer, getenv 
 		Getenv:     getenv,
 		// Load client.json inside Run. A stalled or panicking read must stay
 		// inside the deadline and the panic recovery, or the hook breaks D3.
-		Hub:           &hubclient.Client{Config: hubclient.EnvConfig{Getenv: getenv}, HTTP: hubclient.HedgedClient()},
-		Deadline:      deadline,
-		ShellDeadline: hookShellDeadline,
+		Hub:               &hubclient.Client{Config: cfg, HTTP: hubclient.HedgedClient()},
+		SuccessionEnabled: cfg.SuccessionEnabledContext,
+		Deadline:          deadline,
+		ShellDeadline:     hookShellDeadline,
 	}.Run()
 	_, _ = stdout.Write(out.Stdout)
 	_, _ = stderr.Write(out.Stderr)

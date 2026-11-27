@@ -1112,7 +1112,7 @@ const crlfFloor = 20
 // The kind is what a stored report may count. The path stays on the machine that holds the file.
 // The longer refusal is listed first so it is not read as the shorter one.
 func observedLocalPath(note string) (kind, path string, ok bool) {
-	for _, kind := range []string{hook.RestoreFloorHubTooOld, hook.DamagedGenerationProof, hook.RestoreFloorRefused, hook.EndedGenerationRefused, hook.BindingGenerationRefused} {
+	for _, kind := range []string{hook.RestoreFloorHubTooOld, hook.DamagedGenerationProof, hook.RestoreFloorRefused, hook.EndedGenerationRefused, hook.BindingGenerationRefused, hook.SessionEvidenceWriteFailed} {
 		if path, ok := strings.CutPrefix(note, kind+" at "); ok {
 			return kind, path, true
 		}

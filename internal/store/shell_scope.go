@@ -35,13 +35,6 @@ func shellCapabilities() []string {
 	return []string{"shell_scope", "file_claims", "succession_proof"}
 }
 
-func capabilities(successionProof bool) []string {
-	if successionProof {
-		return shellCapabilities()
-	}
-	return legacyCapabilities()
-}
-
 // validScope checks a reduced snapshot's scope. The mode is the only one a reduced status runs
 // with: never all, which hides even a submodule commit staged in the superproject. The paths are
 // relative, already clean as git prints them, sorted and unique, so two equal sets have one

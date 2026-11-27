@@ -179,6 +179,10 @@ func (m fileMemory) cleanupExpiredEnd(prefix string, ended int, deadline time.Ti
 }
 
 func (m fileMemory) inspectEvidenceDeadline(client, session string, callerDeadline time.Time, successionEnabled, cleanExpired bool) (sessionproof.Snapshot, error) {
+	return m.inspectEvidenceWithTouch(client, session, callerDeadline, successionEnabled, cleanExpired, false)
+}
+
+func (m fileMemory) inspectEvidenceWithTouch(client, session string, callerDeadline time.Time, successionEnabled, cleanExpired, touchValid bool) (sessionproof.Snapshot, error) {
 	if client == "" || session == "" {
 		return sessionproof.Snapshot{}, nil
 	}
@@ -241,6 +245,9 @@ func (m fileMemory) inspectEvidenceDeadline(client, session string, callerDeadli
 		case current > 0:
 			snap.Generation = current
 			snap.GenerationState = sessionproof.FileValid
+			if touchValid && snap.EndedState != sessionproof.FileDamaged && (snap.EndedState != sessionproof.FileValid || current > snap.Ended) {
+				m.touchGeneration(prefix)
+			}
 		default:
 			snap.GenerationState = sessionproof.FileAbsent
 		}
